@@ -13,8 +13,8 @@ use crate::runtime::fuel::UsageKind;
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::staking::{address as staking_address, api::wave::set_sigma_min_call_expr};
 use crate::runtime::token::api as token;
-use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
+use crate::runtime::wit::{Signer, StorageRows};
 use crate::runtime::{
     ContractAddress, Decimal, ExecutionError, MAX_UNTRUSTED_GAS_LIMIT, Runtime, TransactionContext,
 };
@@ -30,6 +30,7 @@ mod guest_memory_failure;
 mod holder_errors;
 mod preparation_fees;
 mod results;
+mod sequential_chains;
 mod wave_costs;
 
 async fn funded(runtime: &mut Runtime) -> Result<Signer> {
@@ -573,6 +574,23 @@ async fn invocation_tables_drop_resources_without_invalidating_parent_handles() 
                 funded_in_store(&mut invocation, store, target, &actor, payment, expr).await?;
             assert_eq!(result.is_ok(), succeeds, "{target}: {expr}: {result:?}");
             assert!(runtime.stack.is_empty().await);
+            if succeeds && expr == "primitive-entries()" && target == &chain[0] {
+                // Inspect before Store teardown, which would also clean up a
+                // leaked iterator and conceal a broken guest destructor.
+                assert_eq!(
+                    store
+                        .data()
+                        .table
+                        .lock()
+                        .await
+                        .iter_mut()
+                        .filter(|(_, resource)| resource.is::<StorageRows>())
+                        .count(),
+                    0,
+                    "guest must drop its completed storage iterators"
+                );
+                assert_eq!(Arc::strong_count(&payload), 2);
+            }
             drop(invocation);
             drop(store);
             assert!(

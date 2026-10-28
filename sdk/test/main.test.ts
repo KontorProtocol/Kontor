@@ -143,9 +143,9 @@ world root {
     use kontor:built-in/context.{proc-context, view-context, contract};
     use kontor:built-in/error.{error};
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get-value: async func(ctx: borrow<view-context>) -> string;
-    export set-value: async func(ctx: borrow<proc-context>, val: string) -> result<_, error>;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get-value: func(ctx: borrow<view-context>) -> string;
+    export set-value: func(ctx: borrow<proc-context>, val: string) -> result<_, error>;
 }
 `;
   const result = validateWit(wit);
@@ -159,7 +159,7 @@ package root:component;
 world root {
     include kontor:built-in/built-in;
 
-    export bad-func: async func(val: string) -> string;
+    export bad-func: func(val: string) -> string;
 }
 `;
   const result = validateWit(wit);
@@ -170,7 +170,7 @@ world root {
   }
 });
 
-test("validateWit invalid - sync export", () => {
+test("validateWit invalid - async export", () => {
   const wit = `
 package root:component;
 
@@ -178,13 +178,15 @@ world root {
     include kontor:built-in/built-in;
     use kontor:built-in/context.{view-context};
 
-    export bad-func: func(ctx: borrow<view-context>) -> string;
+    export bad-func: async func(ctx: borrow<view-context>) -> string;
 }
 `;
   const result = validateWit(wit);
   expect(result.tag).toBe("validation-errors");
   if (result.tag === "validation-errors") {
-    expect(result.val.some((e) => e.message.includes("async"))).toBe(true);
+    expect(result.val.some((e) => e.message.includes("synchronous"))).toBe(
+      true,
+    );
   }
 });
 
@@ -192,28 +194,28 @@ test("SDK validation checks functions inside exported interfaces", () => {
   const wit = `package root:component;
 interface api {
     use kontor:built-in/context.{view-context};
-    get: func(ctx: borrow<view-context>) -> string;
+    get: async func(ctx: borrow<view-context>) -> string;
 }
 world root {
     include kontor:built-in/built-in;
     use kontor:built-in/context.{proc-context, contract};
-    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export init: func(ctx: borrow<proc-context>) -> contract;
     export api;
     export inline: interface {
         use kontor:built-in/context.{view-context};
-        get: func(ctx: borrow<view-context>) -> string;
+        get: async func(ctx: borrow<view-context>) -> string;
     }
 }`;
   const result = validateWit(wit);
   expect(result.tag).toBe("validation-errors");
   if (result.tag === "validation-errors") {
     expect(
-      result.val.filter((e) => e.message.includes("must be async")),
+      result.val.filter((e) => e.message.includes("must be synchronous")),
     ).toHaveLength(2);
   }
   const codec = new Wit(wit);
   expect(() => codec.encodeCall("init", "{}")).toThrow(/WIT validation/);
-  expect(validateWit(wit.replaceAll("get: func", "get: async func")).tag).toBe(
+  expect(validateWit(wit.replaceAll("get: async func", "get: func")).tag).toBe(
     "ok",
   );
 });
@@ -226,7 +228,7 @@ test("validateWit parse error", () => {
 
 // Real Kontor contracts include the built-in world (which brings in
 // proc-context, view-context, error), export an `init` function, and
-// declare each export as `async func(ctx: borrow<...>, ...args)`.
+// declare each export as `func(ctx: borrow<...>, ...args)`.
 // wit_validator enforces this shape at Wit construction; encode_call
 // skips the ctx param.
 const KONTOR_HEADER = `package root:component;
@@ -236,12 +238,12 @@ world root {
     use kontor:built-in/context.{proc-context, view-context, contract};
     use kontor:built-in/error.{error};
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export init: func(ctx: borrow<proc-context>) -> contract;
 `;
 
 test("Wit.encodeCall renders a single bool arg (skipping ctx)", () => {
   const wit = `${KONTOR_HEADER}
-    export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
+    export set-flag: func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
 }`;
   const w = new Wit(wit);
 
@@ -252,7 +254,7 @@ test("Wit.encodeCall renders a single bool arg (skipping ctx)", () => {
 test("Wit construction rejects WIT that fails validation", () => {
   // Missing the `borrow<context>` first param — validator rejects.
   const badWit = `${KONTOR_HEADER}
-    export bad-func: async func(val: string) -> string;
+    export bad-func: func(val: string) -> string;
 }`;
   const w = new Wit(badWit);
   expect(() => w.encodeCall("bad-func", "{}")).toThrow(/WIT validation/);
@@ -265,7 +267,7 @@ test("Wit construction rejects malformed WIT", () => {
 
 test("Wit.encodeCall errors when function missing", () => {
   const wit = `${KONTOR_HEADER}
-    export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
+    export set-flag: func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
 }`;
   const w = new Wit(wit);
 
@@ -274,7 +276,7 @@ test("Wit.encodeCall errors when function missing", () => {
 
 test("Wit.encodeCall errors when bool arg has wrong JSON type", () => {
   const wit = `${KONTOR_HEADER}
-    export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
+    export set-flag: func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
 }`;
   const w = new Wit(wit);
 
@@ -288,7 +290,7 @@ test("Wit.encodeCall renders u64 from a quoted-decimal JSON string", () => {
   // JSON strings holding decimal digits. The WAVE output is just the
   // unquoted decimal — the WIT type system carries the precision lift.
   const wit = `${KONTOR_HEADER}
-    export add: async func(ctx: borrow<view-context>, x: u64) -> u64;
+    export add: func(ctx: borrow<view-context>, x: u64) -> u64;
 }`;
   const w = new Wit(wit);
 
@@ -300,7 +302,7 @@ test("Wit.encodeCall renders u64 from a quoted-decimal JSON string", () => {
 
 test("Wit.encodeCall errors when u64 arg isn't a string", () => {
   const wit = `${KONTOR_HEADER}
-    export add: async func(ctx: borrow<view-context>, x: u64) -> u64;
+    export add: func(ctx: borrow<view-context>, x: u64) -> u64;
 }`;
   const w = new Wit(wit);
 
@@ -311,7 +313,7 @@ test("Wit.encodeCall errors when u64 arg isn't a string", () => {
 
 test("Wit.decodeResult parses a u64 WAVE return into a quoted-decimal JSON string", () => {
   const wit = `${KONTOR_HEADER}
-    export add: async func(ctx: borrow<view-context>, x: u64) -> u64;
+    export add: func(ctx: borrow<view-context>, x: u64) -> u64;
 }`;
   const w = new Wit(wit);
 
@@ -324,7 +326,7 @@ test("Wit.decodeResult parses a u64 WAVE return into a quoted-decimal JSON strin
 
 test("Wit.decodeResult parses a bool WAVE return into a JSON bool", () => {
   const wit = `${KONTOR_HEADER}
-    export is-ready: async func(ctx: borrow<view-context>) -> bool;
+    export is-ready: func(ctx: borrow<view-context>) -> bool;
 }`;
   const w = new Wit(wit);
 
@@ -337,7 +339,7 @@ test("Wit u64 round-trips through encodeCall + decodeResult", () => {
   // must equal the original. This is the test that proves the FFI
   // bigint-quoting story actually preserves precision.
   const wit = `${KONTOR_HEADER}
-    export echo: async func(ctx: borrow<view-context>, x: u64) -> u64;
+    export echo: func(ctx: borrow<view-context>, x: u64) -> u64;
 }`;
   const w = new Wit(wit);
 
@@ -360,7 +362,7 @@ test("Wit u64 round-trips through encodeCall + decodeResult", () => {
 
 test("Wit s64 round-trips with quoted decimal strings (max and min)", () => {
   const wit = `${KONTOR_HEADER}
-    export echo: async func(ctx: borrow<view-context>, x: s64) -> s64;
+    export echo: func(ctx: borrow<view-context>, x: s64) -> s64;
 }`;
   const w = new Wit(wit);
   const cases = ["9223372036854775807", "-9223372036854775808", "0"];
@@ -377,7 +379,7 @@ test("Wit s64 round-trips with quoted decimal strings (max and min)", () => {
 
 test("Wit option<string> round-trips with null for none, value for some", () => {
   const wit = `${KONTOR_HEADER}
-    export echo: async func(ctx: borrow<view-context>, x: option<string>) -> option<string>;
+    export echo: func(ctx: borrow<view-context>, x: option<string>) -> option<string>;
 }`;
   const w = new Wit(wit);
 
@@ -392,7 +394,7 @@ test("Wit option<string> round-trips with null for none, value for some", () => 
 
 test("Wit option<u64> round-trips preserving bigint-quoting", () => {
   const wit = `${KONTOR_HEADER}
-    export echo: async func(ctx: borrow<view-context>, x: option<u64>) -> option<u64>;
+    export echo: func(ctx: borrow<view-context>, x: option<u64>) -> option<u64>;
 }`;
   const w = new Wit(wit);
 
@@ -420,7 +422,7 @@ test("Wit variant round-trips: unit cases as {kind}, payload cases as {kind,valu
         retry,
         failed(u64),
     }
-    export run: async func(ctx: borrow<proc-context>, o: outcome) -> outcome;
+    export run: func(ctx: borrow<proc-context>, o: outcome) -> outcome;
 }`;
   const w = new Wit(wit);
 
@@ -451,7 +453,7 @@ test("Wit variant round-trips: unit cases as {kind}, payload cases as {kind,valu
 test("Wit variant rejects unknown case names", () => {
   const wit = `${KONTOR_HEADER}
     variant outcome { ok, oops }
-    export run: async func(ctx: borrow<proc-context>, o: outcome) -> outcome;
+    export run: func(ctx: borrow<proc-context>, o: outcome) -> outcome;
 }`;
   const w = new Wit(wit);
   expect(() => w.encodeCall("run", '{"o": {"kind": "nope"}}')).toThrow(
@@ -465,7 +467,7 @@ test("Wit variant rejects shape mismatches (value on unit case, missing value on
         unit,
         with-payload(string),
     }
-    export run: async func(ctx: borrow<proc-context>, o: outcome) -> outcome;
+    export run: func(ctx: borrow<proc-context>, o: outcome) -> outcome;
 }`;
   const w = new Wit(wit);
   expect(() =>
@@ -485,7 +487,7 @@ test("Wit result<string, error> decodes both arms with built-in error variant pa
   // variant ({message(string), overflow(string), ...}). This test
   // exercises result + nested variant decoding in one go.
   const wit = `${KONTOR_HEADER}
-    export run: async func(ctx: borrow<proc-context>, msg: string) -> result<string, error>;
+    export run: func(ctx: borrow<proc-context>, msg: string) -> result<string, error>;
 }`;
   const w = new Wit(wit);
 
@@ -505,7 +507,7 @@ test("Wit result<string, error> decodes both arms with built-in error variant pa
 
 test("Wit result<_, error> decodes ok unit case (no value field) + err variant", () => {
   const wit = `${KONTOR_HEADER}
-    export run: async func(ctx: borrow<proc-context>) -> result<_, error>;
+    export run: func(ctx: borrow<proc-context>) -> result<_, error>;
 }`;
   const w = new Wit(wit);
 
@@ -525,7 +527,7 @@ test("Wit list<u8> round-trips as JSON array of numbers", () => {
   // list<u8> is the only u8 form allowed by Kontor's validator —
   // common for byte arrays (addresses, BLS keys, etc.).
   const wit = `${KONTOR_HEADER}
-    export echo: async func(ctx: borrow<view-context>, bytes: list<u8>) -> list<u8>;
+    export echo: func(ctx: borrow<view-context>, bytes: list<u8>) -> list<u8>;
 }`;
   const w = new Wit(wit);
   const bytes = [0, 1, 127, 255];
@@ -537,7 +539,7 @@ test("Wit list<u8> round-trips as JSON array of numbers", () => {
 
 test("Wit list<string> round-trips with proper escaping", () => {
   const wit = `${KONTOR_HEADER}
-    export echo: async func(ctx: borrow<view-context>, xs: list<string>) -> list<string>;
+    export echo: func(ctx: borrow<view-context>, xs: list<string>) -> list<string>;
 }`;
   const w = new Wit(wit);
   const xs = ["hello", 'with "quotes"', "👋"];
@@ -548,7 +550,7 @@ test("Wit list<string> round-trips with proper escaping", () => {
 
 test("Wit list<u64> round-trips quoted-decimal items", () => {
   const wit = `${KONTOR_HEADER}
-    export echo: async func(ctx: borrow<view-context>, xs: list<u64>) -> list<u64>;
+    export echo: func(ctx: borrow<view-context>, xs: list<u64>) -> list<u64>;
 }`;
   const w = new Wit(wit);
   const xs = ["0", "12345", "18446744073709551615"];
@@ -560,7 +562,7 @@ test("Wit list<u64> round-trips quoted-decimal items", () => {
 
 test("Wit empty list round-trips", () => {
   const wit = `${KONTOR_HEADER}
-    export echo: async func(ctx: borrow<view-context>, xs: list<string>) -> list<string>;
+    export echo: func(ctx: borrow<view-context>, xs: list<string>) -> list<string>;
 }`;
   const w = new Wit(wit);
   expect(w.encodeCall("echo", '{"xs": []}')).toBe("echo([])");
@@ -574,7 +576,7 @@ test("Wit empty list round-trips", () => {
 test("Wit enum round-trips as a plain JSON string", () => {
   const wit = `${KONTOR_HEADER}
     enum traffic-light { red, yellow, green }
-    export step: async func(ctx: borrow<proc-context>, current: traffic-light) -> traffic-light;
+    export step: func(ctx: borrow<proc-context>, current: traffic-light) -> traffic-light;
 }`;
   const w = new Wit(wit);
   for (const case_ of ["red", "yellow", "green"]) {
@@ -587,7 +589,7 @@ test("Wit enum round-trips as a plain JSON string", () => {
 test("Wit enum rejects unknown case names", () => {
   const wit = `${KONTOR_HEADER}
     enum traffic-light { red, yellow, green }
-    export step: async func(ctx: borrow<proc-context>, current: traffic-light) -> traffic-light;
+    export step: func(ctx: borrow<proc-context>, current: traffic-light) -> traffic-light;
 }`;
   const w = new Wit(wit);
   expect(() => w.encodeCall("step", '{"current": "purple"}')).toThrow(
@@ -604,7 +606,7 @@ test("Wit enum rejects unknown case names", () => {
 
 test("Wit string round-trips, including escape characters", () => {
   const wit = `${KONTOR_HEADER}
-    export echo: async func(ctx: borrow<view-context>, s: string) -> string;
+    export echo: func(ctx: borrow<view-context>, s: string) -> string;
 }`;
   const w = new Wit(wit);
   const cases = ["hello", 'with "quotes"', "back\\slash", "unicode: 👋"];
@@ -681,8 +683,8 @@ world root {
     use kontor:built-in/context.{proc-context, view-context, contract};
     use kontor:built-in/error.{error};
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export set-flag: func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
 }`;
   const w = new Wit(cleanWit);
 

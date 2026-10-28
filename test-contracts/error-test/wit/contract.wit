@@ -2,36 +2,40 @@ package root:component;
 
 world root {
 	include kontor:built-in/built-in;
-	use kontor:built-in/context.{view-context, proc-context, contract};
+	use kontor:built-in/context.{view-context, proc-context, core-context, contract};
 	use kontor:built-in/error.{error};
 
-	export init: async func(ctx: borrow<proc-context>) -> contract;
+	export init: func(ctx: borrow<proc-context>) -> contract;
 
 	// Case 1: Normal success
-	export succeed: async func(ctx: borrow<view-context>) -> u64;
-	export result-payload: async func(ctx: borrow<view-context>, count: u32) -> string;
-	export write-result-payload: async func(ctx: borrow<proc-context>, count: u32) -> string;
+	export succeed: func(ctx: borrow<view-context>) -> u64;
+	export result-payload: func(ctx: borrow<view-context>, count: u32) -> string;
+	export write-result-payload: func(ctx: borrow<proc-context>, count: u32) -> string;
 
 	// Case 1b: Contract returns an error
-	export contract-error: async func(ctx: borrow<view-context>) -> result<u64, error>;
+	export contract-error: func(ctx: borrow<view-context>) -> result<u64, error>;
 
 	// Case 2: WASM trap (division by zero)
-	export trap-div-zero: async func(ctx: borrow<proc-context>);
+	export trap-div-zero: func(ctx: borrow<proc-context>);
 
 	// Case 2b: Contract panic (becomes unreachable trap in WASM)
-	export trap-panic: async func(ctx: borrow<proc-context>);
+	export trap-panic: func(ctx: borrow<proc-context>);
 
-	export storage-state: async func(ctx: borrow<view-context>) -> list<u64>;
-	export invalid-storage-read: async func(ctx: borrow<proc-context>, %case: u32, scan: bool);
-	export primitive-entries: async func(ctx: borrow<proc-context>);
-	export scan-compound: async func(ctx: borrow<proc-context>, descending: bool);
+	export storage-state: func(ctx: borrow<view-context>) -> list<u64>;
+	export invalid-storage-read: func(ctx: borrow<proc-context>, %case: u32, scan: bool);
+	export primitive-entries: func(ctx: borrow<proc-context>);
+	export scan-compound: func(ctx: borrow<proc-context>, descending: bool);
 
 	// Case 3: Infinite loop — runs out of fuel (real wasmtime Trap::OutOfFuel)
-	export trap-out-of-fuel: async func(ctx: borrow<proc-context>);
+	export trap-out-of-fuel: func(ctx: borrow<proc-context>);
 
 	// Case 3: Host function returns Err (simulates infrastructure failure)
-	export host-error: async func(ctx: borrow<proc-context>);
+	export host-error: func(ctx: borrow<proc-context>);
 
 	// Case 4: Host function panic (non-deterministic)
-	export host-panic: async func(ctx: borrow<proc-context>);
+	export chain-probe: func(ctx: borrow<proc-context>, fail: bool) -> u64;
+	export view-chain-probe: func(ctx: borrow<view-context>, fail: bool) -> u64;
+	export core-chain-probe: func(ctx: borrow<core-context>, fail: bool) -> u64;
+
+	export host-panic: func(ctx: borrow<proc-context>);
 }

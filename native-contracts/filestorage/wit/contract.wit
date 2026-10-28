@@ -12,9 +12,9 @@ world root {
   // Output/Storage Types
   // ─────────────────────────────────────────────────────────────────
 
-  export accrue-storage-rewards: async func(ctx: borrow<core-context>) -> result<decimal, error>;
-  export claim-rewards: async func(ctx: borrow<proc-context>) -> result<decimal, error>;
-  export reward-balance: async func(ctx: borrow<view-context>, node-id: u64) -> result<decimal, error>;
+  export accrue-storage-rewards: func(ctx: borrow<core-context>) -> result<decimal, error>;
+  export claim-rewards: func(ctx: borrow<proc-context>) -> result<decimal, error>;
+  export reward-balance: func(ctx: borrow<view-context>, node-id: u64) -> result<decimal, error>;
 
   record node-info {
     node-id: u64,
@@ -93,91 +93,91 @@ world root {
   // Functions
   // ─────────────────────────────────────────────────────────────────
 
-  export init: async func(ctx: borrow<proc-context>) -> contract;
+  export init: func(ctx: borrow<proc-context>) -> contract;
 
   // Agreement management
-  export create-agreement: async func(
+  export create-agreement: func(
     ctx: borrow<proc-context>,
     descriptor: raw-file-descriptor
   ) -> result<create-agreement-result, error>;
 
-  export get-agreement: async func(
+  export get-agreement: func(
     ctx: borrow<view-context>,
     agreement-id: string
   ) -> option<agreement-data>;
 
-  export agreement-count: async func(ctx: borrow<view-context>) -> u64;
+  export agreement-count: func(ctx: borrow<view-context>) -> u64;
 
-  export get-all-active-agreements: async func(
+  export get-all-active-agreements: func(
     ctx: borrow<view-context>
   ) -> list<agreement-data>;
 
   // Node participation
   // The node identity is the signer (one slot per signer per agreement); it is
   // not a caller-supplied parameter.
-  export join-agreement: async func(
+  export join-agreement: func(
     ctx: borrow<proc-context>,
     agreement-id: string
   ) -> result<join-agreement-result, error>;
 
-  export leave-agreement: async func(
+  export leave-agreement: func(
     ctx: borrow<proc-context>,
     agreement-id: string
   ) -> result<leave-agreement-result, error>;
 
   // Node queries
   // Includes live memberships and unresolved challenges after a node leaves.
-  export has-storage-obligations: async func(
+  export has-storage-obligations: func(
     ctx: borrow<view-context>,
     node-id: u64
   ) -> bool;
 
-  export get-node-reservation: async func(
+  export get-node-reservation: func(
     ctx: borrow<view-context>,
     node-id: u64
   ) -> decimal;
 
-  export is-bond-cleanup-pending: async func(ctx: borrow<view-context>, node-id: u64) -> bool;
+  export is-bond-cleanup-pending: func(ctx: borrow<view-context>, node-id: u64) -> bool;
 
-  export get-agreement-nodes: async func(
+  export get-agreement-nodes: func(
     ctx: borrow<view-context>,
     agreement-id: string
   ) -> list<node-info>;
 
-  export is-node-in-agreement: async func(
+  export is-node-in-agreement: func(
     ctx: borrow<view-context>,
     agreement-id: string,
     node-id: u64
   ) -> bool;
 
   // Protocol parameters
-  export get-min-nodes: async func(ctx: borrow<view-context>) -> u64;
-  export get-c-target: async func(ctx: borrow<view-context>) -> u64;
-  export get-blocks-per-year: async func(ctx: borrow<view-context>) -> u64;
-  export get-s-chal: async func(ctx: borrow<view-context>) -> u64;
+  export get-min-nodes: func(ctx: borrow<view-context>) -> u64;
+  export get-c-target: func(ctx: borrow<view-context>) -> u64;
+  export get-blocks-per-year: func(ctx: borrow<view-context>) -> u64;
+  export get-s-chal: func(ctx: borrow<view-context>) -> u64;
 
   // ─────────────────────────────────────────────────────────────────
   // Challenge Management
   // ─────────────────────────────────────────────────────────────────
 
-  export get-challenge: async func(
+  export get-challenge: func(
     ctx: borrow<view-context>,
     challenge-id: string
   ) -> option<challenge-data>;
 
-  export get-active-challenges: async func(
+  export get-active-challenges: func(
     ctx: borrow<view-context>
   ) -> list<challenge-data>;
 
-  export expire-challenges: async func(
+  export expire-challenges: func(
     ctx: borrow<core-context>,
     current-height: u64
   ) -> u64;
 
   // Bounded penalty/cleanup work; all nested effects are atomic with this call.
-  export settle-expired-challenges: async func(ctx: borrow<core-context>) -> result<u64, error>;
+  export settle-expired-challenges: func(ctx: borrow<core-context>) -> result<u64, error>;
 
-  export generate-challenges-for-block: async func(
+  export generate-challenges-for-block: func(
     ctx: borrow<core-context>,
     block-height: u64,
     block-hash: list<u8>
@@ -186,12 +186,12 @@ world root {
   // Per-block core hook: recompute & record the aggregated ledger root for the
   // block's file-set changes (no-op if none). Keeps create-agreement O(1) and
   // unbilled; run after the block's transactions.
-  export record-block-root: async func(
+  export record-block-root: func(
     ctx: borrow<core-context>
   ) -> result<_, error>;
 
   // Create a challenge for a specific agreement and prover (deterministic, for testing)
-  export create-challenge-for-agreement: async func(
+  export create-challenge-for-agreement: func(
     ctx: borrow<proc-context>,
     agreement-id: string,
     prover-id: u64,
@@ -210,7 +210,7 @@ world root {
   // The SNARK binds both, so a wrong/extra/missing challenge id makes
   // verification fail — the submitter cannot get credit for challenges the
   // proof doesn't actually answer.
-  export verify-proof: async func(
+  export verify-proof: func(
     ctx: borrow<proc-context>,
     proof-bytes: list<u8>,
     challenge-ids: list<string>

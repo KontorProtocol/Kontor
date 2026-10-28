@@ -2,7 +2,7 @@ use anyhow::{Error, Result};
 use bitcoin::hashes::Hash;
 use futures_util::StreamExt;
 use serde::Deserialize;
-use wasmtime::component::{Accessor, Resource};
+use wasmtime::component::{Access, Resource};
 use wasmtime::{AsContext, Trap};
 
 use crate::database::queries::Error as StorageError;
@@ -15,7 +15,10 @@ use crate::runtime::wit::{
 use crate::runtime::{ExecutionError, Runtime, fuel::Fuel, hash_bytes};
 
 impl Runtime {
-    pub(super) async fn _generate_id<T>(&self, accessor: &Accessor<T, Self>) -> Result<String> {
+    pub(super) async fn _generate_id<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+    ) -> Result<String> {
         Fuel::CryptoGenerateId.consume(accessor)?;
         let count = self.id_generation_counter.get().await;
         self.id_generation_counter.increment().await;
@@ -37,7 +40,7 @@ impl Runtime {
 
     pub(super) async fn _signer_to_string<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<Signer>,
     ) -> Result<String> {
         Fuel::SignerToString.consume(accessor)?;
@@ -46,7 +49,7 @@ impl Runtime {
 
     pub(super) async fn _proc_signer<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Signer>> {
         Fuel::ProcSigner.consume(accessor)?;
@@ -57,7 +60,7 @@ impl Runtime {
 
     pub(super) async fn _proc_payer<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Holder>> {
         Fuel::ProcPayer.consume(accessor)?;
@@ -73,7 +76,7 @@ impl Runtime {
     /// caller picks the right `Fuel` variant for the cost model.
     pub(super) async fn _contract<C, T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<C>,
         fuel: Fuel,
     ) -> Result<Resource<Contract>>
@@ -97,7 +100,7 @@ impl Runtime {
 
     pub(super) async fn _proc_contract_signer<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Signer>> {
         Fuel::ProcContractSigner.consume(accessor)?;
@@ -117,7 +120,7 @@ impl Runtime {
 
     pub(super) async fn _proc_transaction<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         _: Resource<ProcContext>,
     ) -> Result<Resource<Transaction>> {
         Fuel::ProcTransaction.consume(accessor)?;
@@ -127,7 +130,7 @@ impl Runtime {
 
     pub(super) async fn _proc_view_context<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<ViewContext>> {
         Fuel::ProcViewContext.consume(accessor)?;
@@ -138,7 +141,7 @@ impl Runtime {
 
     pub(super) async fn _proc_view_storage<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<ProcStorage>,
     ) -> Result<Resource<ViewStorage>> {
         Fuel::ProcViewContext.consume(accessor)?;
@@ -149,7 +152,7 @@ impl Runtime {
 
     pub(super) async fn _view_storage<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<ViewContext>,
     ) -> Result<Resource<ViewStorage>> {
         Fuel::ViewStorage.consume(accessor)?;
@@ -160,7 +163,7 @@ impl Runtime {
 
     pub(super) async fn _proc_storage<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<ProcStorage>> {
         Fuel::ProcStorage.consume(accessor)?;
@@ -171,7 +174,7 @@ impl Runtime {
 
     pub(super) async fn _next<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<Keys>,
     ) -> Result<Option<Vec<u8>>> {
         Fuel::StorageScan.consume(accessor)?;
@@ -194,11 +197,11 @@ impl Runtime {
 
     pub(super) async fn _next_storage_row<T, V: for<'de> Deserialize<'de>>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<StorageRows>,
     ) -> Result<Option<(Vec<u8>, V)>> {
         Fuel::StorageScan.consume(accessor)?;
-        let fuel = accessor.with(|access| access.as_context().get_fuel())?;
+        let fuel = accessor.as_context().get_fuel()?;
         let max_bytes = fuel / Fuel::KeysNext(1).cost();
         let item = self
             .table
@@ -230,7 +233,7 @@ impl Runtime {
 
     pub(super) async fn _fall_signer<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Option<Resource<Signer>>> {
         Fuel::FallSigner.consume(accessor)?;
@@ -245,7 +248,7 @@ impl Runtime {
 
     pub(super) async fn _fall_payer<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Option<Resource<Holder>>> {
         Fuel::FallPayer.consume(accessor)?;
@@ -260,7 +263,7 @@ impl Runtime {
 
     pub(super) async fn _fall_proc_context<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Option<Resource<ProcContext>>> {
         Fuel::FallProcContext.consume(accessor)?;
@@ -286,7 +289,7 @@ impl Runtime {
 
     pub(super) async fn _fall_view_context<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Resource<ViewContext>> {
         Fuel::FallViewContext.consume(accessor)?;
@@ -297,7 +300,7 @@ impl Runtime {
 
     pub(super) async fn _core_proc_context<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<ProcContext>> {
         Fuel::CoreProcContext.consume(accessor)?;
@@ -317,7 +320,7 @@ impl Runtime {
 
     pub(super) async fn _core_signer<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<Signer>> {
         Fuel::CoreProcContext.consume(accessor)?;
@@ -329,7 +332,7 @@ impl Runtime {
 
     pub(super) async fn _core_signer_proc_context<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<ProcContext>> {
         Fuel::CoreProcContext.consume(accessor)?;
@@ -353,7 +356,7 @@ impl Runtime {
 
     pub(super) async fn _signer_as_holder<T>(
         &self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         self_: Resource<Signer>,
     ) -> Result<Resource<Holder>> {
         Fuel::SignerAsHolder.consume(accessor)?;

@@ -1,6 +1,6 @@
 (component
     (import "kontor:built-in/crypto" (instance $crypto
-        (export "sha256" (func async (param "input" (list u8)) (result (list u8))))))
+        (export "sha256" (func (param "input" (list u8)) (result (list u8))))))
     (alias export $crypto "sha256" (func $hash))
     (core module $memory
         (memory (export "memory") 1)
@@ -20,4 +20,4 @@
         (with "host" (instance
             (export "memory" (memory $memory "memory"))
             (export "hash" (func $hash))))))
-    (func (export "run") async (result u32) (canon lift (core func $guest "run"))))
+    (func (export "run") (result u32) (canon lift (core func $guest "run"))))

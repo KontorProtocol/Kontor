@@ -9,7 +9,7 @@ use stdlib::{KeyElement, subtree_end};
 use wasmtime::Store;
 use wasmtime::component::Resource;
 
-use super::{BUDGET, KeysHost, RowsHost, StorageHost, host};
+use super::{BUDGET, KeysHost, RowsHost, StorageHost, host, reborrow};
 use crate::runtime::Runtime;
 use crate::runtime::wit::ProcStorage;
 use crate::test_utils::test_runtime;
@@ -166,7 +166,7 @@ async fn call(
         Operation::Point => json!(
             host(store, async |accessor| {
                 <Runtime as StorageHost<Runtime>>::get_list_u8(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(rep),
                     path(root, Some(0)),
                 )
@@ -177,7 +177,7 @@ async fn call(
         Operation::Exists => json!(
             host(store, async |accessor| {
                 <Runtime as StorageHost<Runtime>>::exists(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(rep),
                     path(root, None),
                 )
@@ -188,7 +188,7 @@ async fn call(
         Operation::Variant => {
             let cursor = host(store, async |accessor| {
                 <Runtime as StorageHost<Runtime>>::get_keys(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(rep),
                     path(root, None),
                     None,
@@ -199,8 +199,11 @@ async fn call(
             })
             .await?;
             let next = host(store, async |accessor| {
-                <Runtime as KeysHost<Runtime>>::next(accessor, Resource::new_borrow(cursor.rep()))
-                    .await
+                <Runtime as KeysHost<Runtime>>::next(
+                    reborrow(accessor),
+                    Resource::new_borrow(cursor.rep()),
+                )
+                .await
             })
             .await?;
             store.data().table.lock().await.delete(cursor)?;
@@ -213,7 +216,7 @@ async fn call(
         Operation::Keys(descending) => {
             let cursor = host(store, async |accessor| {
                 <Runtime as StorageHost<Runtime>>::get_keys(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(rep),
                     path(root, None),
                     None,
@@ -227,7 +230,7 @@ async fn call(
             for _ in 0..LIMIT {
                 let next = host(store, async |accessor| {
                     <Runtime as KeysHost<Runtime>>::next(
-                        accessor,
+                        reborrow(accessor),
                         Resource::new_borrow(cursor.rep()),
                     )
                     .await
@@ -242,7 +245,7 @@ async fn call(
         Operation::Rows(descending) => {
             let cursor = host(store, async |accessor| {
                 <Runtime as StorageHost<Runtime>>::get_storage_rows(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(rep),
                     path(root, None),
                     None,
@@ -256,7 +259,7 @@ async fn call(
             for _ in 0..LIMIT {
                 let next = host(store, async |accessor| {
                     <Runtime as RowsHost<Runtime>>::next_list_u8(
-                        accessor,
+                        reborrow(accessor),
                         Resource::new_borrow(cursor.rep()),
                     )
                     .await

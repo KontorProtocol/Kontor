@@ -158,8 +158,8 @@ world root {
     use kontor:built-in/context.{proc-context, view-context, holder-ref, contract};
     use kontor:built-in/numbers.{decimal};
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export floor: async func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export floor: func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
 }"#;
         // User surface can't resolve `built-in-native`/`deposit` → parse error.
         assert!(Validator::validate_str(native_contract).is_err());
@@ -176,9 +176,9 @@ world root {
     fn test_valid_basic() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get-value: async func(ctx: borrow<view-context>) -> string;
-    export set-value: async func(ctx: borrow<proc-context>, val: string) -> result<_, error>;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get-value: func(ctx: borrow<view-context>) -> string;
+    export set-value: func(ctx: borrow<proc-context>, val: string) -> result<_, error>;
 "#,
         );
         assert!(result.is_valid(), "Expected valid, got errors: {}", result);
@@ -194,7 +194,7 @@ interface api {
 world root {
     include kontor:built-in/built-in;
     use kontor:built-in/context.{proc-context, contract};
-    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export init: func(ctx: borrow<proc-context>) -> contract;
     export api;
     export inline: interface {
         use kontor:built-in/context.{view-context};
@@ -202,40 +202,34 @@ world root {
     }
 }"#;
         for (body, expected) in [
+            ("get: func(ctx: borrow<view-context>) -> string;", None),
             (
                 "get: async func(ctx: borrow<view-context>) -> string;",
-                None,
+                Some("must be synchronous"),
             ),
+            ("get: func() -> string;", Some("context parameter")),
             (
-                "get: func(ctx: borrow<view-context>) -> string;",
-                Some("must be async"),
-            ),
-            ("get: async func() -> string;", Some("context parameter")),
-            (
-                "get: async func(ctx: string) -> string;",
+                "get: func(ctx: string) -> string;",
                 Some("borrow of a context"),
             ),
             (
-                "get: async func(ctx: borrow<view-context>, value: f64);",
+                "get: func(ctx: borrow<view-context>, value: f64);",
                 Some("floating point"),
             ),
             (
-                "get: async func(ctx: borrow<view-context>) -> f64;",
+                "get: func(ctx: borrow<view-context>) -> f64;",
                 Some("floating point"),
             ),
             (
-                "get: async func(ctx: borrow<view-context>) -> stream<u8>;",
+                "get: func(ctx: borrow<view-context>) -> stream<u8>;",
                 Some("stream types"),
             ),
             (
-                "get: async func(ctx: borrow<view-context>, value: future<string>);",
+                "get: func(ctx: borrow<view-context>, value: future<string>);",
                 Some("future types"),
             ),
-            ("init: async func(ctx: borrow<view-context>) -> bool;", None),
-            (
-                "fallback: async func(ctx: borrow<view-context>) -> bool;",
-                None,
-            ),
+            ("init: func(ctx: borrow<view-context>) -> bool;", None),
+            ("fallback: func(ctx: borrow<view-context>) -> bool;", None),
         ] {
             let wit = template.replace("BODY", body);
             let (result, _) = Validator::validate_str(&wit).expect("parse interface WIT");
@@ -263,12 +257,12 @@ interface api {
     use kontor:built-in/context.{proc-context, view-context};
     use kontor:built-in/pagination.{cursor-request};
     record page { items: list<u64>, next: option<string> }
-    entries: async func(ctx: borrow<CONTEXT>, pagination: cursor-request) -> page;
+    entries: func(ctx: borrow<CONTEXT>, pagination: cursor-request) -> page;
 }
 world root {
     include kontor:built-in/built-in;
     use kontor:built-in/context.{proc-context, contract};
-    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export init: func(ctx: borrow<proc-context>) -> contract;
     export api;
 }"#;
         let (result, _) = Validator::validate_str(&template.replace("CONTEXT", "view-context"))
@@ -295,7 +289,7 @@ world root {
     include kontor:built-in/built-in;
     use kontor:built-in/context.{proc-context, contract};
     import service;
-    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export init: func(ctx: borrow<proc-context>) -> contract;
 }"#;
         let (result, _) = Validator::validate_str(wit).expect("parse imported interface");
         assert!(result.is_valid(), "{result}");
@@ -312,8 +306,8 @@ world root {
         value: u64,
     }
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get-data: async func(ctx: borrow<view-context>) -> integer;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get-data: func(ctx: borrow<view-context>) -> integer;
 "#,
         );
         assert!(result.has_errors());
@@ -337,8 +331,8 @@ world root {
             r#"
     type decimal = u64;
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get-data: async func(ctx: borrow<view-context>) -> decimal;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get-data: func(ctx: borrow<view-context>) -> decimal;
 "#,
         );
         assert!(result.has_errors());
@@ -361,8 +355,8 @@ world root {
         name: string,
     }
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get-data: async func(ctx: borrow<view-context>) -> my-data;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get-data: func(ctx: borrow<view-context>) -> my-data;
 "#,
         );
         assert!(
@@ -376,8 +370,8 @@ world root {
     fn test_invalid_no_context_parameter() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export bad-func: async func() -> string;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad-func: func() -> string;
 "#,
         );
         assert!(result.has_errors());
@@ -390,8 +384,8 @@ world root {
             r#"
     resource my-context {}
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export bad-func: async func(ctx: borrow<my-context>) -> string;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad-func: func(ctx: borrow<my-context>) -> string;
 "#,
         );
         assert!(result.has_errors());
@@ -407,10 +401,10 @@ world root {
     fn test_invalid_resource_param() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export init: func(ctx: borrow<proc-context>) -> contract;
     resource gadget {}
 
-    export bad-func: async func(ctx: borrow<proc-context>, s: borrow<gadget>) -> string;
+    export bad-func: func(ctx: borrow<proc-context>, s: borrow<gadget>) -> string;
 "#,
         );
         assert!(result.has_errors());
@@ -426,10 +420,10 @@ world root {
     fn test_invalid_resource_return() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export init: func(ctx: borrow<proc-context>) -> contract;
     resource widget {}
 
-    export bad-func: async func(ctx: borrow<view-context>) -> widget;
+    export bad-func: func(ctx: borrow<view-context>) -> widget;
 "#,
         );
         assert!(result.has_errors());
@@ -447,8 +441,8 @@ world root {
             r#"
     record empty {}
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get: async func(ctx: borrow<view-context>) -> empty;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> empty;
 "#,
         );
         let error = Validator::validate_str(&wit).unwrap_err();
@@ -483,8 +477,8 @@ world root {
             r#"
     record my-error { msg: string }
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export bad: async func(ctx: borrow<proc-context>) -> result<string, my-error>;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad: func(ctx: borrow<proc-context>) -> result<string, my-error>;
 "#,
         );
         assert!(result.has_errors());
@@ -495,8 +489,8 @@ world root {
     fn test_invalid_nested_list() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export bad: async func(ctx: borrow<view-context>) -> list<list<string>>;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad: func(ctx: borrow<view-context>) -> list<list<string>>;
 "#,
         );
         assert!(result.has_errors());
@@ -514,8 +508,8 @@ world root {
             r#"
     record page { names: list<string>, next: option<string> }
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get: async func(ctx: borrow<view-context>) -> page;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> page;
 "#,
         );
         assert!(!result.has_errors(), "{:?}", result.errors);
@@ -525,8 +519,8 @@ world root {
     fn test_invalid_result_in_param() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export bad: async func(ctx: borrow<proc-context>, r: result<string, error>) -> string;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad: func(ctx: borrow<proc-context>, r: result<string, error>) -> string;
 "#,
         );
         assert!(result.has_errors());
@@ -542,8 +536,8 @@ world root {
     fn test_invalid_float() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export bad: async func(ctx: borrow<view-context>) -> f64;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad: func(ctx: borrow<view-context>) -> f64;
 "#,
         );
         assert!(result.has_errors());
@@ -561,8 +555,8 @@ world root {
             r#"
     flags perms { read, write, exec }
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get: async func(ctx: borrow<view-context>) -> perms;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> perms;
 "#,
         );
         assert!(result.has_errors());
@@ -575,8 +569,8 @@ world root {
             r#"
     record node { value: string, next: node }
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get: async func(ctx: borrow<view-context>) -> node;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> node;
 "#,
         ));
         assert!(result.is_err(), "Expected parse error for cyclic type");
@@ -584,24 +578,29 @@ world root {
     }
 
     #[test]
-    fn test_invalid_sync_export() {
+    fn test_invalid_async_export() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export bad: func(ctx: borrow<view-context>) -> string;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad: async func(ctx: borrow<view-context>) -> string;
 "#,
         );
         assert!(result.has_errors());
-        assert!(result.errors.iter().any(|e| e.message.contains("async")));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("synchronous"))
+        );
     }
 
     #[test]
     fn test_valid_init_fallback() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export fallback: async func(ctx: borrow<fall-context>, expr: string) -> string;
-    export get-value: async func(ctx: borrow<view-context>) -> string;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export fallback: func(ctx: borrow<fall-context>, expr: string) -> string;
+    export get-value: func(ctx: borrow<view-context>) -> string;
 "#,
         );
         assert!(result.is_valid(), "Expected valid, got errors: {}", result);
@@ -611,7 +610,7 @@ world root {
     fn test_invalid_init_wrong_context() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<view-context>);
+    export init: func(ctx: borrow<view-context>);
 "#,
         );
         assert!(result.has_errors());
@@ -627,7 +626,7 @@ world root {
     fn test_invalid_init_has_return() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> string;
+    export init: func(ctx: borrow<proc-context>) -> string;
 "#,
         );
         assert!(result.has_errors());
@@ -638,8 +637,8 @@ world root {
     fn test_invalid_fallback_wrong_context() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export fallback: async func(ctx: borrow<proc-context>, expr: string) -> string;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export fallback: func(ctx: borrow<proc-context>, expr: string) -> string;
 "#,
         );
         assert!(result.has_errors());
@@ -655,8 +654,8 @@ world root {
     fn test_invalid_fallback_wrong_return() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export fallback: async func(ctx: borrow<fall-context>, expr: string) -> u64;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export fallback: func(ctx: borrow<fall-context>, expr: string) -> u64;
 "#,
         );
         assert!(result.has_errors());
@@ -667,8 +666,8 @@ world root {
     fn test_render_includes_source_location() {
         let wit = wrap(
             r#"
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export bad: func(ctx: borrow<view-context>) -> string;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad: async func(ctx: borrow<view-context>) -> string;
 "#,
         );
         let mut resolve = Resolve::new();
@@ -684,7 +683,7 @@ world root {
         let error = &result.errors[0];
         assert_eq!(
             error.render(&resolve),
-            "contract.wit:10:12: error: exported functions must be async"
+            "contract.wit:10:12: error: exported functions must be synchronous"
         );
     }
 
@@ -692,7 +691,7 @@ world root {
     fn test_invalid_missing_init() {
         let result = validate(
             r#"
-    export get-value: async func(ctx: borrow<view-context>) -> string;
+    export get-value: func(ctx: borrow<view-context>) -> string;
 "#,
         );
         assert!(result.has_errors());
@@ -733,8 +732,8 @@ world root {
     record wrapper { data: my-variant }
     variant my-variant { some(wrapper), none }
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get: async func(ctx: borrow<view-context>) -> wrapper;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> wrapper;
 "#,
         ));
         assert!(result.is_err() || result.unwrap().0.has_errors());
@@ -746,8 +745,8 @@ world root {
             r#"
     variant tree { leaf(string), branch(tree) }
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get: async func(ctx: borrow<view-context>) -> tree;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> tree;
 "#,
         ));
         assert!(result.is_err() || result.unwrap().0.has_errors());
@@ -761,8 +760,8 @@ world root {
     record b { c-field: c }
     record c { a-field: a }
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get: async func(ctx: borrow<view-context>) -> a;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> a;
 "#,
         ));
         assert!(result.is_err() || result.unwrap().0.has_errors());

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use wasmtime::component::{Accessor, Resource};
+use wasmtime::component::{Access, Resource};
 
 use crate::runtime::Runtime;
 use crate::runtime::fuel::Fuel;
@@ -8,100 +8,100 @@ use crate::runtime::wit::{
     Contract, Holder, ProcContext, ProcStorage, Signer, Transaction, ViewContext,
 };
 
-impl built_in::context::HostProcContext for Runtime {}
-
-impl<T> built_in::context::HostProcContextWithStore<T> for Runtime {
-    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<ProcContext>) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._drop(rep)
-            .await
+impl built_in::context::HostProcContext for Runtime {
+    async fn drop(&mut self, rep: Resource<ProcContext>) -> Result<()> {
+        self._drop(rep).await
     }
+}
 
+impl<T: Send> built_in::context::HostProcContextWithStore<T> for Runtime {
     async fn signer(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Signer>> {
         accessor
-            .with(|mut access| access.get().clone())
-            ._proc_signer(accessor, self_)
+            .get()
+            .clone()
+            ._proc_signer(&mut accessor, self_)
             .await
     }
 
     async fn payer(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Holder>> {
         accessor
-            .with(|mut access| access.get().clone())
-            ._proc_payer(accessor, self_)
+            .get()
+            .clone()
+            ._proc_payer(&mut accessor, self_)
             .await
     }
 
     async fn contract_signer(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Signer>> {
         accessor
-            .with(|mut access| access.get().clone())
-            ._proc_contract_signer(accessor, self_)
+            .get()
+            .clone()
+            ._proc_contract_signer(&mut accessor, self_)
             .await
     }
 
     async fn transaction(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Transaction>> {
         accessor
-            .with(|mut access| access.get().clone())
-            ._proc_transaction(accessor, self_)
+            .get()
+            .clone()
+            ._proc_transaction(&mut accessor, self_)
             .await
     }
 
     async fn view_context(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<ViewContext>> {
         accessor
-            .with(|mut access| access.get().clone())
-            ._proc_view_context(accessor, self_)
+            .get()
+            .clone()
+            ._proc_view_context(&mut accessor, self_)
             .await
     }
 
     async fn generate_id(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         _self: Resource<ProcContext>,
     ) -> Result<String> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._generate_id(accessor)
-            .await
+        accessor.get().clone()._generate_id(&mut accessor).await
     }
 
     async fn storage(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<ProcStorage>> {
         accessor
-            .with(|mut access| access.get().clone())
-            ._proc_storage(accessor, self_)
+            .get()
+            .clone()
+            ._proc_storage(&mut accessor, self_)
             .await
     }
 
     async fn block_height(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         _self: Resource<ProcContext>,
     ) -> Result<u64> {
-        Fuel::BlockHeight.consume(accessor)?;
-        Ok(accessor.with(|mut access| access.get().storage.height))
+        Fuel::BlockHeight.consume(&mut accessor)?;
+        Ok(accessor.get().storage.height)
     }
 
     async fn network(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         _self: Resource<ProcContext>,
     ) -> Result<built_in::context::Network> {
-        Fuel::Network.consume(accessor)?;
-        let network = accessor.with(|mut access| access.get().network);
+        Fuel::Network.consume(&mut accessor)?;
+        let network = accessor.get().network;
         // `bitcoin::Network` is `#[non_exhaustive]`; fold Testnet4 and any
         // future test network into `testnet`.
         Ok(match network {
@@ -113,12 +113,13 @@ impl<T> built_in::context::HostProcContextWithStore<T> for Runtime {
     }
 
     async fn contract(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Contract>> {
         accessor
-            .with(|mut access| access.get().clone())
-            ._contract(accessor, self_, Fuel::ProcContract)
+            .get()
+            .clone()
+            ._contract(&mut accessor, self_, Fuel::ProcContract)
             .await
     }
 }

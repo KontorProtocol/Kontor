@@ -62,53 +62,53 @@ interface context {
     /// boundary the host drains it to a `contract-address` record for
     /// WAVE serialization; integrity is in-execution only.
     resource contract {
-        address: async func() -> contract-address;
+        address: func() -> contract-address;
     }
 
 
     resource holder {
-        key: async func() -> string;
-        from-ref: static async func(ref: holder-ref) -> result<holder, error>;
-        as-ref: async func() -> holder-ref;
+        key: func() -> string;
+        from-ref: static func(ref: holder-ref) -> result<holder, error>;
+        as-ref: func() -> holder-ref;
     }
 
     resource signer {
-        key: async func() -> string;
-        as-holder: async func() -> holder;
-        as-ref: async func() -> holder-ref;
+        key: func() -> string;
+        as-holder: func() -> holder;
+        as-ref: func() -> holder-ref;
     }
 
 
 
     resource transaction {
-        id: async func() -> string;
-        out-point: async func() -> out-point;
+        id: func() -> string;
+        out-point: func() -> out-point;
         // The raw OP_RETURN payload (bytes after `OP_RETURN`), if any. Contracts
         // own decoding; the host does not interpret it.
-        op-return-data: async func() -> option<list<u8>>;
+        op-return-data: func() -> option<list<u8>>;
     }
 
     resource keys {
-        next: async func() -> option<list<u8>>;
+        next: func() -> option<list<u8>>;
     }
 
     // Each method advances the same cursor, decoding the value exactly like the
     // corresponding storage getter. Compound children and incompatible values
     // fail deterministically. none = end; each returned row is metered.
     resource storage-rows {
-        next-str: async func() -> option<tuple<list<u8>, string>>;
-        next-u64: async func() -> option<tuple<list<u8>, u64>>;
-        next-s64: async func() -> option<tuple<list<u8>, s64>>;
-        next-bool: async func() -> option<tuple<list<u8>, bool>>;
-        next-list-u8: async func() -> option<tuple<list<u8>, list<u8>>>;
+        next-str: func() -> option<tuple<list<u8>, string>>;
+        next-u64: func() -> option<tuple<list<u8>, u64>>;
+        next-s64: func() -> option<tuple<list<u8>, s64>>;
+        next-bool: func() -> option<tuple<list<u8>, bool>>;
+        next-list-u8: func() -> option<tuple<list<u8>, list<u8>>>;
     }
 
     resource view-storage {
-        get-str: async func(path: list<u8>) -> option<string>;
-        get-u64: async func(path: list<u8>) -> option<u64>;
-        get-s64: async func(path: list<u8>) -> option<s64>;
-        get-bool: async func(path: list<u8>) -> option<bool>;
-        get-list-u8: async func(path: list<u8>) -> option<list<u8>>;
+        get-str: func(path: list<u8>) -> option<string>;
+        get-u64: func(path: list<u8>) -> option<u64>;
+        get-s64: func(path: list<u8>) -> option<s64>;
+        get-bool: func(path: list<u8>) -> option<bool>;
+        get-list-u8: func(path: list<u8>) -> option<list<u8>>;
         // Distinct child keys under `path`, as a lazy cursor over the half-open byte
         // range `[lo, hi)` (FDB-style `get-range`). `lo`/`hi` are child-element bytes
         // (relative to `path`); the guest computes them from its `RangeBounds` via
@@ -120,108 +120,108 @@ interface context {
         // ORDER — the `[lo, hi)` range is identical either way — so a `.rev()` scan
         // yields highest-first. The guest bounds how far it iterates (`take(n)`/early-
         // break, or for procs running out of gas).
-        get-keys: async func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> keys;
+        get-keys: func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> keys;
         // Same bounds/direction as get-keys, returning direct leaves and values.
-        get-storage-rows: async func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> storage-rows;
-        exists: async func(path: list<u8>) -> bool;
+        get-storage-rows: func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> storage-rows;
+        exists: func(path: list<u8>) -> bool;
 
     }
 
     resource proc-storage {
-        get-str: async func(path: list<u8>) -> option<string>;
-        get-u64: async func(path: list<u8>) -> option<u64>;
-        get-s64: async func(path: list<u8>) -> option<s64>;
-        get-bool: async func(path: list<u8>) -> option<bool>;
-        get-list-u8: async func(path: list<u8>) -> option<list<u8>>;
+        get-str: func(path: list<u8>) -> option<string>;
+        get-u64: func(path: list<u8>) -> option<u64>;
+        get-s64: func(path: list<u8>) -> option<s64>;
+        get-bool: func(path: list<u8>) -> option<bool>;
+        get-list-u8: func(path: list<u8>) -> option<list<u8>>;
         // See view-storage::get-keys.
-        get-keys: async func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> keys;
+        get-keys: func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> keys;
         // See view-storage::get-storage-rows.
-        get-storage-rows: async func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> storage-rows;
-        exists: async func(path: list<u8>) -> bool;
+        get-storage-rows: func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> storage-rows;
+        exists: func(path: list<u8>) -> bool;
 
-        set-str: async func(path: list<u8>, value: string);
-        set-u64: async func(path: list<u8>, value: u64);
-        set-s64: async func(path: list<u8>, value: s64);
-        set-bool: async func(path: list<u8>, value: bool);
-        set-list-u8: async func(path: list<u8>, value: list<u8>);
-        set-void: async func(path: list<u8>);
+        set-str: func(path: list<u8>, value: string);
+        set-u64: func(path: list<u8>, value: u64);
+        set-s64: func(path: list<u8>, value: s64);
+        set-bool: func(path: list<u8>, value: bool);
+        set-list-u8: func(path: list<u8>, value: list<u8>);
+        set-void: func(path: list<u8>);
         // Tombstone a path AND its whole subtree (every live descendant
         // `path.field…`), height-versioned. A struct/map value persists under
         // child paths, so removing one map entry must clear all of them, not just
         // the exact path. Returns true if any live row was tombstoned.
-        delete: async func(path: list<u8>) -> bool;
-        view-storage: async func() -> view-storage;
+        delete: func(path: list<u8>) -> bool;
+        view-storage: func() -> view-storage;
     }
 
     resource view-context {
-        storage: async func() -> view-storage;
+        storage: func() -> view-storage;
         /// See `proc-context.contract`. View functions may also need
         /// to know which contract they're running in (e.g. for self-
         /// referential lookups).
-        contract: async func() -> contract;
+        contract: func() -> contract;
     }
 
 
     resource proc-context {
-        signer: async func() -> signer;
+        signer: func() -> signer;
         /// Who pays this op's gas. A `holder` (not a `signer`) by design —
         /// contracts can credit the payer's balance but cannot spend on
         /// their behalf, since the payer only consented to pay this op's
         /// gas. Equals `signer.as-holder()` by default; redirected by a
         /// previous-input `Sponsor` Inst (direct context) or by
         /// `AggregateSigner.sponsored = true` (aggregate context).
-        payer: async func() -> holder;
-        contract-signer: async func() -> signer;
-        view-context: async func() -> view-context;
-        generate-id: async func() -> string;
-        storage: async func() -> proc-storage;
-        transaction: async func() -> transaction;
-        block-height: async func() -> u64;
+        payer: func() -> holder;
+        contract-signer: func() -> signer;
+        view-context: func() -> view-context;
+        generate-id: func() -> string;
+        storage: func() -> proc-storage;
+        transaction: func() -> transaction;
+        block-height: func() -> u64;
         /// The chain's Bitcoin network — a genesis-fixed constant, safe to
         /// branch consensus state on (e.g. network-specific defaults in `init`).
-        network: async func() -> network;
+        network: func() -> network;
         /// The executing contract's own identity as a `contract` resource —
         /// the only way for the contract to obtain one pointing at itself.
         /// Returned from `init` so the new contract's address surfaces on
         /// the publish op's result row; usable by any proc-context method
         /// that needs to assert "I am the contract at <address>."
-        contract: async func() -> contract;
+        contract: func() -> contract;
     }
 
     resource fall-context {
-        signer: async func() -> option<signer>;
+        signer: func() -> option<signer>;
         /// See `proc-context.payer`. `none` when `signer` is also `none`
         /// (a fall context with no acting signer has no payer either).
-        payer: async func() -> option<holder>;
-        proc-context: async func() -> option<proc-context>;
-        view-context: async func() -> view-context;
+        payer: func() -> option<holder>;
+        proc-context: func() -> option<proc-context>;
+        view-context: func() -> view-context;
     }
 
     resource core-context {
-        proc-context: async func() -> proc-context;
-        signer-proc-context: async func() -> proc-context;
-        core-signer: async func() -> signer;
+        proc-context: func() -> proc-context;
+        signer-proc-context: func() -> proc-context;
+        core-signer: func() -> signer;
         /// See `proc-context.contract`. Native contracts running as core
         /// also need an integrity-bound handle to their own identity.
-        contract: async func() -> contract;
+        contract: func() -> contract;
     }
 }
 interface foreign {
     use context.{signer};
     use context-types.{contract-address};
 
-    call: async func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
+    call: func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
 }
 interface crypto {
     /// Raw SHA-256 of arbitrary bytes (32-byte digest). For deriving multiple
     /// INDEPENDENT values from one seed, prefer `hkdf-derive` (domain-separated).
-    sha256: async func(input: list<u8>) -> list<u8>;
+    sha256: func(input: list<u8>) -> list<u8>;
 
     /// HKDF-SHA256 (RFC 5869): derive a strong value from input keying material.
     /// `info` is a domain-separation label — the same `ikm` with different `info`
     /// yields INDEPENDENT outputs (e.g. per-draw / per-purpose randomness from one
     /// block seed). NOT a password KDF (input must already be high-entropy).
-    hkdf-derive: async func(
+    hkdf-derive: func(
         ikm: list<u8>,
         salt: list<u8>,
         info: list<u8>
@@ -233,7 +233,7 @@ interface crypto {
     /// abstracted: the value is opaque entropy — derive randomness from it via
     /// `hkdf-derive`. Reading the CURRENT block is grindable by that block's miner;
     /// for unpredictable draws, COMMIT a future height and resolve from it later.
-    block-entropy: async func(height: u64) -> option<list<u8>>;
+    block-entropy: func(height: u64) -> option<list<u8>>;
 }
 interface error {
     variant error {
@@ -283,41 +283,41 @@ interface numbers {
     use error.{error};
     use numbers-types.{sign, integer, decimal, ordering};
 
-    u64-to-integer: async func(i: u64) -> integer;
-    s64-to-integer: async func(i: s64) -> integer;
-    string-to-integer: async func(s: string) -> result<integer, error>;
-    integer-to-string: async func(i: integer) -> string;
-    eq-integer: async func(a: integer, b: integer) -> bool;
-    cmp-integer: async func(a: integer, b: integer) -> ordering;
-    add-integer: async func(a: integer, b: integer) -> result<integer, error>;
-    sub-integer: async func(a: integer, b: integer) -> result<integer, error>;
-    mul-integer: async func(a: integer, b: integer) -> result<integer, error>;
-    div-integer: async func(a: integer, b: integer) -> result<integer, error>;
+    u64-to-integer: func(i: u64) -> integer;
+    s64-to-integer: func(i: s64) -> integer;
+    string-to-integer: func(s: string) -> result<integer, error>;
+    integer-to-string: func(i: integer) -> string;
+    eq-integer: func(a: integer, b: integer) -> bool;
+    cmp-integer: func(a: integer, b: integer) -> ordering;
+    add-integer: func(a: integer, b: integer) -> result<integer, error>;
+    sub-integer: func(a: integer, b: integer) -> result<integer, error>;
+    mul-integer: func(a: integer, b: integer) -> result<integer, error>;
+    div-integer: func(a: integer, b: integer) -> result<integer, error>;
     /// Floor and remainder of (a * b + carry) / divisor, with a wide intermediate.
     /// All inputs must be nonnegative; divisor must be positive.
-    mul-add-div-rem-integer: async func(a: integer, b: integer, carry: integer, divisor: integer) -> result<tuple<integer, integer>, error>;
-    sqrt-integer: async func(i: integer) -> result<integer, error>;
+    mul-add-div-rem-integer: func(a: integer, b: integer, carry: integer, divisor: integer) -> result<tuple<integer, integer>, error>;
+    sqrt-integer: func(i: integer) -> result<integer, error>;
 
-    integer-to-decimal: async func(i: integer) -> result<decimal, error>;
-    decimal-to-integer: async func(d: decimal) -> result<integer, error>;
-    u64-to-decimal: async func(i: u64) -> result<decimal, error>;
-    s64-to-decimal: async func(i: s64) -> result<decimal, error>;
-    f64-to-decimal: async func(f: f64) -> result<decimal, error>;
-    string-to-decimal: async func(s: string) -> result<decimal, error>;
-    decimal-to-string: async func(d: decimal) -> string;
-    eq-decimal: async func(a: decimal, b: decimal) -> result<bool, error>;
-    cmp-decimal: async func(a: decimal, b: decimal) -> ordering;
-    add-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
-    sub-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
-    mul-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
-    div-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
-    log10-decimal: async func(a: decimal) -> result<decimal, error>;
+    integer-to-decimal: func(i: integer) -> result<decimal, error>;
+    decimal-to-integer: func(d: decimal) -> result<integer, error>;
+    u64-to-decimal: func(i: u64) -> result<decimal, error>;
+    s64-to-decimal: func(i: s64) -> result<decimal, error>;
+    f64-to-decimal: func(f: f64) -> result<decimal, error>;
+    string-to-decimal: func(s: string) -> result<decimal, error>;
+    decimal-to-string: func(d: decimal) -> string;
+    eq-decimal: func(a: decimal, b: decimal) -> result<bool, error>;
+    cmp-decimal: func(a: decimal, b: decimal) -> ordering;
+    add-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
+    sub-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
+    mul-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
+    div-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
+    log10-decimal: func(a: decimal) -> result<decimal, error>;
 }
 interface testing {
     /// Always returns an error. Used to test host function error propagation.
-    host-error: async func() -> string;
+    host-error: func() -> string;
     /// Always panics. Used to test host function panic propagation.
-    host-panic: async func() -> string;
+    host-panic: func() -> string;
 }
 
 // Plain data types that appear in cross-contract ABIs (e.g. filestorage's

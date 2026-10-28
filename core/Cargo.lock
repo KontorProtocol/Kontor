@@ -3921,6 +3921,7 @@ dependencies = [
  "wasm-wave",
  "wasmparser",
  "wasmtime",
+ "wat",
  "wit-component",
  "wit-validator",
  "zmq",

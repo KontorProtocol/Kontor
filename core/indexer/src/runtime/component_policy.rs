@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use wasmparser::{
-    CanonicalFunction, ComponentDefinedType, ComponentType, ComponentTypeDeclaration,
-    InstanceTypeDeclaration, Parser, Payload,
+    CanonicalFunction, CanonicalOption, ComponentDefinedType, ComponentType,
+    ComponentTypeDeclaration, InstanceTypeDeclaration, Parser, Payload,
 };
 
 use super::ExecutionError;
@@ -43,7 +43,23 @@ fn validate_features(bytes: &[u8]) -> Result<()> {
                         | CanonicalFunction::FutureDropWritable { .. } => {
                             bail!("future operations are not supported in user contracts");
                         }
-                        _ => {}
+                        CanonicalFunction::Lift { options, .. }
+                        | CanonicalFunction::Lower { options, .. } => {
+                            if options.iter().any(|option| {
+                                matches!(
+                                    option,
+                                    CanonicalOption::Async | CanonicalOption::Callback(_)
+                                )
+                            }) {
+                                bail!("async canonical ABI is not supported in user contracts");
+                            }
+                        }
+                        CanonicalFunction::ResourceNew { .. }
+                        | CanonicalFunction::ResourceDrop { .. }
+                        | CanonicalFunction::ResourceRep { .. } => {}
+                        _ => bail!(
+                            "non-sequential canonical operations are not supported in user contracts"
+                        ),
                     }
                 }
             }
@@ -55,6 +71,9 @@ fn validate_features(bytes: &[u8]) -> Result<()> {
 
 fn validate_type(ty: &ComponentType<'_>) -> Result<()> {
     match ty {
+        ComponentType::Func(function) if function.async_ => {
+            bail!("async functions are not supported in user contracts");
+        }
         ComponentType::Defined(ComponentDefinedType::Stream(_)) => {
             bail!("stream types are not supported in user contracts");
         }
@@ -173,21 +192,18 @@ mod tests {
     }
 
     #[test]
-    fn permits_async_functions_and_core_modules() {
+    fn permits_synchronous_functions_and_core_modules() {
         let mut types = ComponentTypeSection::new();
         types
             .function()
-            .async_(true)
+            .async_(false)
             .params([("value", PrimitiveValType::String)])
             .result(None);
-        let mut functions = CanonicalFunctionSection::new();
-        functions.task_return(None, []);
         let mut component = Component::new();
         component.section(&ModuleSection(&Module::new()));
         component.section(&types);
-        component.section(&functions);
         validate(component.as_slice())
-            .expect("ordinary async component features must remain allowed");
+            .expect("synchronous component functions and core modules must remain allowed");
     }
 
     #[test]

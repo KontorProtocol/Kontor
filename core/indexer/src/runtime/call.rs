@@ -6,7 +6,7 @@ use futures_util::future::OptionFuture;
 use wasmtime::{
     AsContext, AsContextMut, GcHeapOutOfMemory, Store, Trap,
     component::{
-        Accessor, Func, Resource, Type, Val,
+        Access, Func, Resource, Type, Val,
         wasm_wave::{
             to_string as to_wave_string, untyped::UntypedFuncCall, value::Value as WaveValue,
         },
@@ -664,16 +664,16 @@ impl Runtime {
 
     pub(crate) async fn _call<T>(
         &mut self,
-        accessor: &Accessor<T, Self>,
+        accessor: &mut Access<'_, T, Self>,
         signer: Option<Resource<Signer>>,
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        let starting_fuel = accessor.with(|mut access| {
-            let remaining = access.as_context().get_fuel()?;
-            access.get().record_fuel(remaining)?;
-            Ok::<_, anyhow::Error>(remaining)
-        })?;
+        let starting_fuel = {
+            let remaining = accessor.as_context().get_fuel()?;
+            accessor.get().record_fuel(remaining)?;
+            remaining
+        };
 
         let signer =
             OptionFuture::from(signer.map(async |s| self.table.lock().await.get(&s).cloned()))
@@ -690,12 +690,11 @@ impl Runtime {
                 Some(starting_fuel),
             )
             .await?;
-        accessor.with(|mut access| {
-            access.as_context_mut().set_fuel(outcome.remaining_fuel)?;
+        {
+            accessor.as_context_mut().set_fuel(outcome.remaining_fuel)?;
             // The child already measured this fuel; only subsequent parent work counts.
-            access.get().fuel_checkpoint = outcome.remaining_fuel;
-            Ok::<_, anyhow::Error>(())
-        })?;
+            accessor.get().fuel_checkpoint = outcome.remaining_fuel;
+        }
         outcome.result.map_err(Into::into)
     }
 }

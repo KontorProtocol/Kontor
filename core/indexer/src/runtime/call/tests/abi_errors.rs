@@ -2,7 +2,7 @@ use std::char::{CharTryFromError, DecodeUtf16Error, decode_utf16};
 use std::str::{Utf8Error, from_utf8};
 
 use anyhow::{Result, anyhow};
-use wasmtime::component::{Accessor, Component, ComponentType, Lift, Linker, Val};
+use wasmtime::component::{Access, Component, ComponentType, Lift, Linker, Val};
 use wasmtime::{Error, OutOfMemory};
 
 use crate::runtime::{ExecutionError, Runtime};
@@ -31,10 +31,7 @@ const CONVERSION_MESSAGES: &[&str] = &[
 #[tokio::test]
 async fn actual_wasmtime_conversion_errors_match_the_compatibility_adapter() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
-    for fixture in [
-        include_str!("fixtures/abi-string-return.wat"),
-        include_str!("fixtures/abi-async-string-return.wat"),
-    ] {
+    for fixture in [include_str!("fixtures/abi-string-return.wat")] {
         for (encoding, ptr, len, allowance, expected) in [
             ("", 0, 8, 8, "valid"),
             ("", 0, 8, 7, ALLOCATION_ERROR),
@@ -130,10 +127,7 @@ async fn assert_conversion_result(
 #[tokio::test]
 async fn malformed_list_results_are_contract_failures() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
-    for fixture in [
-        include_str!("fixtures/abi-string-return.wat"),
-        include_str!("fixtures/abi-async-string-return.wat"),
-    ] {
+    for fixture in [include_str!("fixtures/abi-string-return.wat")] {
         let wat = fixture.replace("(result string)", "(result (list u32))");
         for (ptr, len, expected) in [
             (0, 1, "valid"),
@@ -190,6 +184,10 @@ async fn malformed_return_pointers_are_contract_failures() -> Result<()> {
                     (canon lift (core func $code "run") (memory (core memory $code "memory")))))"#
             )
         };
+        if asynchronous {
+            assert!(Component::new(&runtime.engine, &wat).is_err());
+            continue;
+        }
         for (ptr, expected) in [
             (0, "valid"),
             (65536 - 17 * 4, "valid"),
@@ -288,6 +286,10 @@ async fn malformed_tags_and_characters_are_contract_failures() -> Result<()> {
                         (canon lift (core func $code "run") (memory (core memory $code "memory")))))"#
                 )
             };
+            if asynchronous {
+                assert!(Component::new(&runtime.engine, &wat).is_err());
+                continue;
+            }
             assert_conversion_result(&runtime, &wat, &[Val::U32(0)], "valid").await?;
             assert_conversion_result(&runtime, &wat, &[Val::U32(tag)], expected).await?;
         }
@@ -298,10 +300,7 @@ async fn malformed_tags_and_characters_are_contract_failures() -> Result<()> {
 #[tokio::test]
 async fn malformed_guest_allocator_results_are_contract_failures() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
-    for fixture in [
-        include_str!("fixtures/abi-realloc.wat"),
-        include_str!("fixtures/abi-async-realloc.wat"),
-    ] {
+    for fixture in [include_str!("fixtures/abi-realloc.wat")] {
         for (ptr, expected) in [
             (64, "valid"),
             (1, "realloc return: result not aligned"),
@@ -410,15 +409,15 @@ async fn typed_tag_conversions_are_contract_failures() -> Result<()> {
 }
 
 wasmtime::component::bindgen!({
-    inline: "package test:abi; world abi-host-errors { import fail: async func(kind: u32); }",
+    inline: "package test:abi; world abi-host-errors { import fail: func(kind: u32); }",
     anyhow: true,
     imports: { default: async | store | trappable },
 });
 
 impl AbiHostErrorsImports for Runtime {}
 
-impl<T> AbiHostErrorsImportsWithStore<T> for Runtime {
-    async fn fail(_accessor: &Accessor<T, Self>, kind: u32) -> Result<()> {
+impl<T: Send> AbiHostErrorsImportsWithStore<T> for Runtime {
+    async fn fail(_accessor: Access<'_, T, Self>, kind: u32) -> Result<()> {
         tokio::task::yield_now().await;
         if let Some(message) = CONVERSION_MESSAGES.get(kind as usize) {
             return Err(anyhow!("{message}"));

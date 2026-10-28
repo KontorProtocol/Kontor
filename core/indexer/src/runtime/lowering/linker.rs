@@ -1,11 +1,10 @@
 use std::future::Future;
 use std::ops::Deref;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use wasmtime::component::{
-    Accessor, ComponentNamedList, Lift, Linker as WasmtimeLinker,
-    LinkerInstance as WasmtimeLinkerInstance, Lower, ResourceType,
+    ComponentNamedList, Lift, Linker as WasmtimeLinker, LinkerInstance as WasmtimeLinkerInstance,
+    Lower, ResourceType,
 };
 use wasmtime::{AsContextMut, Engine, Error, Result, StoreContextMut};
 
@@ -126,37 +125,15 @@ impl<T: 'static> LinkerInstance<'_, T> {
         })
     }
 
-    pub fn func_wrap_concurrent<Params, Return, F>(&mut self, name: &str, f: F) -> Result<()>
-    where
-        F: Fn(&Accessor<T>, Params) -> Pin<Box<dyn Future<Output = Result<Return>> + Send + '_>>
-            + Send
-            + Sync
-            + 'static,
-        Params: ComponentNamedList + Lift + 'static,
-        Return: ComponentNamedList + Lower + Lowering + 'static,
-    {
-        let charge = self.charge;
-        self.inner
-            .func_wrap_concurrent(name, move |accessor, params| {
-                let future = f(accessor, params);
-                Box::pin(async move {
-                    let value = future.await?;
-                    let bytes = value.lowering_bytes().map_err(Error::from_anyhow)?;
-                    accessor.with(|mut access| charge(access.as_context_mut(), bytes))?;
-                    Ok(value)
-                })
-            })
-    }
-
-    pub fn resource_concurrent<F>(&mut self, name: &str, ty: ResourceType, dtor: F) -> Result<()>
+    pub fn resource_async<F>(&mut self, name: &str, ty: ResourceType, dtor: F) -> Result<()>
     where
         T: Send,
-        F: Fn(&Accessor<T>, u32) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>
+        F: Fn(StoreContextMut<'_, T>, u32) -> Box<dyn Future<Output = Result<()>> + Send + '_>
             + Send
             + Sync
             + 'static,
     {
-        self.inner.resource_concurrent(name, ty, dtor)
+        self.inner.resource_async(name, ty, dtor)
     }
 }
 

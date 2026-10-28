@@ -5,32 +5,32 @@ world root {
 	use kontor:built-in/context.{view-context, proc-context, contract};
 	use kontor:built-in/error.{error};
 
-	export init: async func(ctx: borrow<proc-context>) -> contract;
+	export init: func(ctx: borrow<proc-context>) -> contract;
 
-	export increment: async func(ctx: borrow<proc-context>);
+	export increment: func(ctx: borrow<proc-context>);
 
-	export get: async func(ctx: borrow<view-context>) -> u64;
+	export get: func(ctx: borrow<view-context>) -> u64;
 
-	export get-blob: async func(ctx: borrow<view-context>) -> string;
+	export get-blob: func(ctx: borrow<view-context>) -> string;
 
 	// Write an `n`-byte value into one storage row, built internally from a small
 	// arg (so the op expr stays tiny). Deposit scales with the bytes written; a
 	// large enough `n` over-budgets the op's gas.
-	export fill-blob: async func(ctx: borrow<proc-context>, n: u32);
+	export fill-blob: func(ctx: borrow<proc-context>, n: u32);
 
 	// Write the value, then deterministically fail — exercises deposit
 	// discard-on-revert (the rolled-back write must lock no deposit).
-	export set-blob-then-fail: async func(ctx: borrow<proc-context>, data: string) -> result<_, error>;
+	export set-blob-then-fail: func(ctx: borrow<proc-context>, data: string) -> result<_, error>;
 
 	// Write one map entry under `key`; its deposit is stamped to the op's signer.
-	export set-entry: async func(ctx: borrow<proc-context>, key: string, val: string);
+	export set-entry: func(ctx: borrow<proc-context>, key: string, val: string);
 
 	// Write an `n`-byte value under `key` (built guest-side); accumulates footprint.
-	export fill-entry: async func(ctx: borrow<proc-context>, key: string, n: u32);
+	export fill-entry: func(ctx: borrow<proc-context>, key: string, n: u32);
 
 	// Delete one map entry — drops that key from its setter's footprint. Targeted
 	// on purpose: regtest tests share one published instance (each publish costs a
 	// block confirmation), each owning its own keys — a whole-map clear would free
 	// other tests' rows mid-flight.
-	export remove-entry: async func(ctx: borrow<proc-context>, key: string);
+	export remove-entry: func(ctx: borrow<proc-context>, key: string);
 }

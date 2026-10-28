@@ -4,15 +4,15 @@ This document describes the validation rules that Kontor enforces on WIT (WebAss
 
 ## 1. Function Signature Rules
 
-- Contract functions must be exported directly by the world or belong to an exported interface. The async, context, parameter, return type, and pagination rules apply to both forms. Imported host interface functions retain their host signatures.
-- Functions **must** be `async` (standard WIT allows sync functions)
+- Contract functions must be exported directly by the world or belong to an exported interface. The synchronous-function, context, parameter, return type, and pagination rules apply to both forms. Imported host interface functions retain their host signatures.
+- Functions **must** be synchronous `func` declarations. Host implementations may suspend for asynchronous I/O; the guest resumes only after the host call completes.
 - First parameter **must** be `ctx: borrow<proc-context|view-context|core-context|fall-context>` (standard WIT allows any parameters)
 - Context types `proc-context`, `view-context`, `core-context`, `fall-context` are required Kontor resources (these don't exist in standard WIT)
 
 ### Valid Function Signature Format
 
 ```wit
-export <name>: async func(ctx: borrow<proc-context|view-context|core-context|fall-context>, ...params) -> <return>;
+export <name>: func(ctx: borrow<proc-context|view-context|core-context|fall-context>, ...params) -> <return>;
 ```
 
 ### Special Functions: `init` and `fallback`
@@ -21,10 +21,10 @@ The directly exported `init` and `fallback` functions have fixed signatures. Int
 
 ```wit
 // init - called once when contract is deployed (REQUIRED)
-export init: async func(ctx: borrow<proc-context>) -> contract;
+export init: func(ctx: borrow<proc-context>) -> contract;
 
 // fallback - called when no matching function is found (optional)
-export fallback: async func(ctx: borrow<fall-context>, expr: string) -> string;
+export fallback: func(ctx: borrow<fall-context>, expr: string) -> string;
 ```
 
 - `init` is **required** - every contract must export it
@@ -36,20 +36,20 @@ export fallback: async func(ctx: borrow<fall-context>, expr: string) -> string;
 
 ```wit
 // Valid
-export transfer: async func(ctx: borrow<proc-context>, dst: string, amt: decimal) -> result<transfer, error>;
-export balance: async func(ctx: borrow<view-context>, acc: string) -> option<decimal>;
+export transfer: func(ctx: borrow<proc-context>, dst: string, amt: decimal) -> result<transfer, error>;
+export balance: func(ctx: borrow<view-context>, acc: string) -> option<decimal>;
 
 // Invalid - missing export
-transfer: async func(ctx: borrow<proc-context>, dst: string) -> result<transfer, error>;
+transfer: func(ctx: borrow<proc-context>, dst: string) -> result<transfer, error>;
 
 // Invalid - missing context parameter
-export transfer: async func(dst: string, amt: decimal) -> result<transfer, error>;
+export transfer: func(dst: string, amt: decimal) -> result<transfer, error>;
 
 // Invalid - wrong context type
-export transfer: async func(ctx: borrow<my-context>, dst: string) -> result<transfer, error>;
+export transfer: func(ctx: borrow<my-context>, dst: string) -> result<transfer, error>;
 
-// Invalid - not async
-export transfer: func(ctx: borrow<proc-context>, dst: string) -> result<transfer, error>;
+// Invalid - asynchronous contract function
+export transfer: async func(ctx: borrow<proc-context>, dst: string) -> result<transfer, error>;
 ```
 
 ---
@@ -61,7 +61,7 @@ A view explicitly opts into generated cursor iteration by importing
 
 ```wit
 use kontor:built-in/pagination.{cursor-request};
-export balances: async func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
+export balances: func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
 ```
 
 - The request must be the imported built-in type, including through aliases.
@@ -83,7 +83,7 @@ extraction; it requires no separate pagination metadata.
 
 - `result<T, E>` must have **exactly 2** type parameters (standard WIT allows `result<T>` with 1 param)
 - `result<T, E>` error type **must be `error`** (standard WIT allows any error type)
-- User publication also rejects stream and future type definitions and canonical operations throughout the encoded component, including nested components and nested type declarations. Internal features are checked independently of the extracted WIT. Ordinary async functions remain supported.
+- User publication also rejects stream and future type definitions and canonical operations throughout the encoded component, including nested components and nested type declarations. Internal features are checked independently of the extracted WIT. Guest async functions, async canonical operations, threading and stack switching are also disabled by the runtime engine, including inside nested components. Native test and client APIs remain asynchronous.
 - Only these generics are recognized: `borrow`, `list`, `option`, `result` (standard WIT also has `own`, `stream`, `future`, `tuple`)
 
 ### Examples
@@ -273,7 +273,7 @@ storage type. Directly nested lists are still unsupported.
 ```wit
 record page { items: list<my-record>, next: option<string> }
 variant response { page(page), missing }
-export get-page: async func(ctx: borrow<view-context>) -> response;
+export get-page: func(ctx: borrow<view-context>) -> response;
 ```
 
 ### `option<T>`

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use wasmtime::component::{Accessor, Resource};
+use wasmtime::component::{Access, Resource};
 
 use crate::runtime::Runtime;
 use crate::runtime::fuel::Fuel;
@@ -8,26 +8,23 @@ use crate::runtime::wit::kontor::built_in;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::wit::kontor::built_in::error::Error as WitError;
 
-impl built_in::context::HostHolder for Runtime {}
-
-impl<T> built_in::context::HostHolderWithStore<T> for Runtime {
-    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<Holder>) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._drop(rep)
-            .await
+impl built_in::context::HostHolder for Runtime {
+    async fn drop(&mut self, rep: Resource<Holder>) -> Result<()> {
+        self._drop(rep).await
     }
+}
 
-    async fn key(accessor: &Accessor<T, Self>, self_: Resource<Holder>) -> Result<String> {
-        let runtime = accessor.with(|mut access| access.get().clone());
-        Fuel::HolderKey.consume(accessor)?;
+impl<T: Send> built_in::context::HostHolderWithStore<T> for Runtime {
+    async fn key(mut accessor: Access<'_, T, Self>, self_: Resource<Holder>) -> Result<String> {
+        let runtime = accessor.get().clone();
+        Fuel::HolderKey.consume(&mut accessor)?;
         let table = runtime.table.lock().await;
         let holder = table.get(&self_)?;
         Ok(holder.holder_ref.to_string())
     }
 
     async fn from_ref(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         ref_: HolderRef,
     ) -> Result<Result<Resource<Holder>, WitError>> {
         let bytes = match &ref_ {
@@ -40,8 +37,8 @@ impl<T> built_in::context::HostHolderWithStore<T> for Runtime {
             | HolderRef::StoragePool => 0,
         };
         // Invalid references also incur ABI conversion and validation work.
-        Fuel::HolderFromRef(bytes as u64).consume(accessor)?;
-        let runtime = accessor.with(|mut access| access.get().clone());
+        Fuel::HolderFromRef(bytes as u64).consume(&mut accessor)?;
+        let runtime = accessor.get().clone();
         let holder = match Holder::from_holder_ref(ref_, &runtime).await? {
             Ok(h) => h,
             Err(e) => {
@@ -58,9 +55,12 @@ impl<T> built_in::context::HostHolderWithStore<T> for Runtime {
         Ok(Ok(table.push(holder)?))
     }
 
-    async fn as_ref(accessor: &Accessor<T, Self>, self_: Resource<Holder>) -> Result<HolderRef> {
-        let runtime = accessor.with(|mut access| access.get().clone());
-        Fuel::HolderAsRef.consume(accessor)?;
+    async fn as_ref(
+        mut accessor: Access<'_, T, Self>,
+        self_: Resource<Holder>,
+    ) -> Result<HolderRef> {
+        let runtime = accessor.get().clone();
+        Fuel::HolderAsRef.consume(&mut accessor)?;
         let table = runtime.table.lock().await;
         let holder = table.get(&self_)?;
         Ok(holder.holder_ref.clone())

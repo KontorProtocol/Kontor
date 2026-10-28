@@ -7,7 +7,7 @@ use bitcoin::OutPoint;
 use futures_util::{TryStreamExt, stream};
 use libsql::{AuthAction, AuthContext, Authorization};
 use serde::{Serialize, Serializer, ser::SerializeSeq};
-use wasmtime::component::{Accessor, Resource};
+use wasmtime::component::{Access, Resource};
 use wasmtime::{AsContextMut, Store, Trap};
 
 use super::{Fuel, FuelDiscriminants, FuelGauge};
@@ -40,19 +40,18 @@ mod metadata;
 
 async fn host<R: Lowering>(
     store: &mut Store<Runtime>,
-    call: impl AsyncFnOnce(&Accessor<Runtime, Runtime>) -> Result<R>,
+    call: impl AsyncFnOnce(&mut Access<'_, Runtime, Runtime>) -> Result<R>,
 ) -> Result<R> {
-    store
-        .run_concurrent(async |accessor| {
-            let accessor = accessor.with_getter::<Runtime>(|runtime| runtime);
-            let value = call(&accessor).await?;
-            // These tests call handlers directly, so apply the shared return
-            // boundary that the metered linker supplies to guest calls.
-            let bytes = value.lowering_bytes()?;
-            accessor.with(|mut access| charge(access.as_context_mut(), bytes))?;
-            Ok(value)
-        })
-        .await?
+    let mut access = Access::new(store.as_context_mut(), |runtime| runtime);
+    let value = call(&mut access).await?;
+    // Direct handler tests still need the return charge supplied by the linker.
+    let bytes = value.lowering_bytes()?;
+    charge(access.as_context_mut(), bytes)?;
+    Ok(value)
+}
+
+fn reborrow<'a>(access: &'a mut Access<'_, Runtime, Runtime>) -> Access<'a, Runtime, Runtime> {
+    Access::new(access.as_context_mut(), |runtime| runtime)
 }
 
 fn assert_exhausted(error: Error) {
@@ -94,8 +93,12 @@ async fn point_read_budget_rejects_value_before_fetching() -> Result<()> {
         .conn
         .authorizer(Some(Arc::new(deny_storage_value_reads)))?;
     let result = host(&mut store, async |accessor| {
-        <Runtime as StorageHost<Runtime>>::get_list_u8(accessor, Resource::new_borrow(rep), path)
-            .await
+        <Runtime as StorageHost<Runtime>>::get_list_u8(
+            reborrow(accessor),
+            Resource::new_borrow(rep),
+            path,
+        )
+        .await
     })
     .await;
     runtime.storage.conn.authorizer(None)?;
@@ -124,7 +127,7 @@ async fn row_budget_rejects_value_before_fetching() -> Result<()> {
         .rep();
     let cursor = host(&mut store, async |accessor| {
         <Runtime as StorageHost<Runtime>>::get_storage_rows(
-            accessor,
+            reborrow(accessor),
             Resource::new_borrow(rep),
             root,
             None,
@@ -144,8 +147,11 @@ async fn row_budget_rejects_value_before_fetching() -> Result<()> {
         .authorizer(Some(Arc::new(deny_storage_value_reads)))?;
     let (result, copied) =
         traversal_probe::measure_value_bytes(host(&mut store, async |accessor| {
-            <Runtime as RowsHost<Runtime>>::next_list_u8(accessor, Resource::new_borrow(cursor))
-                .await
+            <Runtime as RowsHost<Runtime>>::next_list_u8(
+                reborrow(accessor),
+                Resource::new_borrow(cursor),
+            )
+            .await
         }))
         .await;
     runtime.storage.conn.authorizer(None)?;
@@ -178,8 +184,11 @@ async fn row_budget_is_refreshed_between_advances() -> Result<()> {
         .rep();
     assert_eq!(
         host(&mut store, async |accessor| {
-            <Runtime as RowsHost<Runtime>>::next_list_u8(accessor, Resource::new_borrow(cursor))
-                .await
+            <Runtime as RowsHost<Runtime>>::next_list_u8(
+                reborrow(accessor),
+                Resource::new_borrow(cursor),
+            )
+            .await
         })
         .await?,
         Some((0u64.encode(), vec![7u8; 128]))
@@ -191,8 +200,11 @@ async fn row_budget_is_refreshed_between_advances() -> Result<()> {
         .authorizer(Some(Arc::new(deny_storage_value_reads)))?;
     let (result, copied) =
         traversal_probe::measure_value_bytes(host(&mut store, async |accessor| {
-            <Runtime as RowsHost<Runtime>>::next_list_u8(accessor, Resource::new_borrow(cursor))
-                .await
+            <Runtime as RowsHost<Runtime>>::next_list_u8(
+                reborrow(accessor),
+                Resource::new_borrow(cursor),
+            )
+            .await
         }))
         .await;
     assert_exhausted(result.unwrap_err());
@@ -232,7 +244,7 @@ async fn row_budget_includes_key_and_framing_at_exact_boundary() -> Result<()> {
             let (result, copied) =
                 traversal_probe::measure_value_bytes(host(&mut store, async |accessor| {
                     <Runtime as RowsHost<Runtime>>::next_list_u8(
-                        accessor,
+                        reborrow(accessor),
                         Resource::new_borrow(cursor),
                     )
                     .await
@@ -249,7 +261,7 @@ async fn row_budget_includes_key_and_framing_at_exact_boundary() -> Result<()> {
                 assert!(
                     host(&mut store, async |accessor| {
                         <Runtime as RowsHost<Runtime>>::next_list_u8(
-                            accessor,
+                            reborrow(accessor),
                             Resource::new_borrow(cursor),
                         )
                         .await
@@ -289,7 +301,7 @@ async fn write_budget_preserves_encoding_and_rollback_at_exact_boundary() -> Res
             store.set_fuel(budget)?;
             let result = host(&mut store, async |accessor| {
                 <Runtime as StorageHost<Runtime>>::set_list_u8(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(rep),
                     path.clone(),
                     value.clone(),
@@ -344,7 +356,7 @@ async fn write_budget_stops_serialization_before_finishing() -> Result<()> {
         .rep();
     let visited = AtomicUsize::new(0);
     let result = host(&mut store, async |accessor| {
-        let runtime = accessor.with(|mut access| access.get().clone());
+        let runtime = accessor.get().clone();
         runtime
             ._set_primitive(
                 accessor,
@@ -380,7 +392,7 @@ async fn missing_reads_consume_fuel_on_every_attempt() -> Result<()> {
         assert_eq!(
             host(&mut store, async |accessor| {
                 <Runtime as StorageHost<Runtime>>::get_u64(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(rep),
                     vec![],
                 )
@@ -403,8 +415,12 @@ async fn exhausted_read_rejects_before_resource_or_database_access() -> Result<(
     let (runtime, _dir, _name) = test_runtime().await?;
     let mut store = runtime.make_store(0)?;
     let error = host(&mut store, async |accessor| {
-        <Runtime as StorageHost<Runtime>>::get_u64(accessor, Resource::new_borrow(u32::MAX), vec![])
-            .await
+        <Runtime as StorageHost<Runtime>>::get_u64(
+            reborrow(accessor),
+            Resource::new_borrow(u32::MAX),
+            vec![],
+        )
+        .await
     })
     .await
     .unwrap_err();
@@ -452,11 +468,14 @@ async fn cursor_polls_require_fuel_even_at_end_of_stream() -> Result<()> {
         store.set_fuel(0)?;
         let error = host(&mut store, async |accessor| {
             if rows {
-                <Runtime as RowsHost<Runtime>>::next_u64(accessor, Resource::new_borrow(u32::MAX))
-                    .await
-                    .map(|_| ())
+                <Runtime as RowsHost<Runtime>>::next_u64(
+                    reborrow(accessor),
+                    Resource::new_borrow(u32::MAX),
+                )
+                .await
+                .map(|_| ())
             } else {
-                <Runtime as KeysHost<Runtime>>::next(accessor, Resource::new_borrow(rep))
+                <Runtime as KeysHost<Runtime>>::next(reborrow(accessor), Resource::new_borrow(rep))
                     .await
                     .map(|_| ())
             }
@@ -476,7 +495,7 @@ async fn cursor_polls_require_fuel_even_at_end_of_stream() -> Result<()> {
                 if rows {
                     assert!(
                         <Runtime as RowsHost<Runtime>>::next_u64(
-                            accessor,
+                            reborrow(accessor),
                             Resource::new_borrow(rep)
                         )
                         .await?
@@ -484,9 +503,12 @@ async fn cursor_polls_require_fuel_even_at_end_of_stream() -> Result<()> {
                     );
                 } else {
                     assert!(
-                        <Runtime as KeysHost<Runtime>>::next(accessor, Resource::new_borrow(rep))
-                            .await?
-                            .is_none()
+                        <Runtime as KeysHost<Runtime>>::next(
+                            reborrow(accessor),
+                            Resource::new_borrow(rep)
+                        )
+                        .await?
+                        .is_none()
                     );
                 }
                 Ok(())
@@ -538,37 +560,37 @@ async fn context_and_transaction_accessors_charge_each_call() -> Result<()> {
             store.set_fuel(budget)?;
             let result = host(&mut store, async |accessor| match operation {
                 0 => <Runtime as ContextHost<Runtime>>::block_height(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(context),
                 )
                 .await
                 .map(|_| ()),
                 1 => <Runtime as ContextHost<Runtime>>::network(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(context),
                 )
                 .await
                 .map(|_| ()),
                 2 => <Runtime as TransactionHost<Runtime>>::id(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(transaction),
                 )
                 .await
                 .map(|_| ()),
                 3 => <Runtime as TransactionHost<Runtime>>::out_point(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(transaction),
                 )
                 .await
                 .map(|_| ()),
                 4 => <Runtime as TransactionHost<Runtime>>::op_return_data(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(transaction),
                 )
                 .await
                 .map(|_| ()),
                 _ => <Runtime as DepositHost<Runtime>>::storage_floor(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(holder),
                 )
                 .await
@@ -587,33 +609,45 @@ async fn context_and_transaction_accessors_charge_each_call() -> Result<()> {
 }
 
 async fn malformed_storage_call(
-    accessor: &Accessor<Runtime, Runtime>,
+    accessor: &mut Access<'_, Runtime, Runtime>,
     rep: u32,
     operation: usize,
     path: Vec<u8>,
 ) -> Result<()> {
     let resource = Resource::new_borrow(rep);
     match operation {
-        0 => <Runtime as StorageHost<Runtime>>::get_u64(accessor, resource, path)
+        0 => <Runtime as StorageHost<Runtime>>::get_u64(reborrow(accessor), resource, path)
             .await
             .map(|_| ()),
-        1 => <Runtime as StorageHost<Runtime>>::exists(accessor, resource, path)
+        1 => <Runtime as StorageHost<Runtime>>::exists(reborrow(accessor), resource, path)
             .await
             .map(|_| ()),
-        2 => {
-            <Runtime as StorageHost<Runtime>>::get_keys(accessor, resource, path, None, None, false)
-                .await
-                .map(|_| ())
-        }
-        3 => <Runtime as StorageHost<Runtime>>::get_storage_rows(
-            accessor, resource, path, None, None, false,
+        2 => <Runtime as StorageHost<Runtime>>::get_keys(
+            reborrow(accessor),
+            resource,
+            path,
+            None,
+            None,
+            false,
         )
         .await
         .map(|_| ()),
-        4 => <Runtime as StorageHost<Runtime>>::delete(accessor, resource, path)
+        3 => <Runtime as StorageHost<Runtime>>::get_storage_rows(
+            reborrow(accessor),
+            resource,
+            path,
+            None,
+            None,
+            false,
+        )
+        .await
+        .map(|_| ()),
+        4 => <Runtime as StorageHost<Runtime>>::delete(reborrow(accessor), resource, path)
             .await
             .map(|_| ()),
-        _ => <Runtime as StorageHost<Runtime>>::set_u64(accessor, resource, path, 1).await,
+        _ => {
+            <Runtime as StorageHost<Runtime>>::set_u64(reborrow(accessor), resource, path, 1).await
+        }
     }
 }
 
@@ -727,7 +761,7 @@ async fn transaction_data_charges_by_size_and_preserves_contents() -> Result<()>
         store.set_fuel(BUDGET)?;
         let result = host(&mut store, async |accessor| {
             <Runtime as TransactionHost<Runtime>>::op_return_data(
-                accessor,
+                reborrow(accessor),
                 Resource::new_borrow(rep),
             )
             .await
@@ -744,7 +778,7 @@ async fn transaction_data_charges_by_size_and_preserves_contents() -> Result<()>
             store.set_fuel(budget)?;
             let result = host(&mut store, async |accessor| {
                 <Runtime as TransactionHost<Runtime>>::op_return_data(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(rep),
                 )
                 .await
@@ -778,7 +812,7 @@ async fn storage_read_budget_includes_base_and_encoded_value() -> Result<()> {
     assert!(
         host(&mut store, async |accessor| {
             <Runtime as StorageHost<Runtime>>::get_list_u8(
-                accessor,
+                reborrow(accessor),
                 Resource::new_borrow(rep),
                 vec![],
             )
@@ -798,7 +832,7 @@ async fn storage_read_budget_includes_base_and_encoded_value() -> Result<()> {
             store.set_fuel(budget)?;
             let result = host(&mut store, async |accessor| {
                 <Runtime as StorageHost<Runtime>>::get_list_u8(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(rep),
                     vec![],
                 )
@@ -835,7 +869,8 @@ async fn invalid_scalar_cursor_target_still_pays_for_polling() -> Result<()> {
         })?
         .rep();
     let error = host(&mut store, async |accessor| {
-        <Runtime as RowsHost<Runtime>>::next_u64(accessor, Resource::new_borrow(rep)).await
+        <Runtime as RowsHost<Runtime>>::next_u64(reborrow(accessor), Resource::new_borrow(rep))
+            .await
     })
     .await
     .unwrap_err();
@@ -903,9 +938,13 @@ async fn delete_discovery_stops_when_its_budget_runs_out() -> Result<()> {
     let entry = Fuel::StorageDelete.cost() + Fuel::Path(root.len() as u64).cost();
     store.set_fuel(entry + 100)?;
     let (result, visited) = traversal_probe::measure(host(&mut store, async |accessor| {
-        <Runtime as StorageHost<Runtime>>::delete(accessor, Resource::new_borrow(rep), root.clone())
-            .await
-            .map(|_| ())
+        <Runtime as StorageHost<Runtime>>::delete(
+            reborrow(accessor),
+            Resource::new_borrow(rep),
+            root.clone(),
+        )
+        .await
+        .map(|_| ())
     }))
     .await;
     assert_exhausted(result.unwrap_err());
@@ -994,7 +1033,7 @@ async fn subtree_delete_preserves_deposits_at_the_budget_boundary() -> Result<()
         let changes = conn.total_changes();
         let result = host(&mut store, async |accessor| {
             <Runtime as StorageHost<Runtime>>::delete(
-                accessor,
+                reborrow(accessor),
                 Resource::new_borrow(rep),
                 root.clone(),
             )
@@ -1089,7 +1128,7 @@ async fn subtree_seeks_preserve_ranges_and_fuel_across_pruning() -> Result<()> {
                 store.set_fuel(BUDGET)?;
                 let keys = host(&mut store, async |accessor| {
                     <Runtime as StorageHost<Runtime>>::get_keys(
-                        accessor,
+                        reborrow(accessor),
                         Resource::new_borrow(rep),
                         root.clone(),
                         bounded.then(|| "a".to_string().encode()),
@@ -1101,8 +1140,11 @@ async fn subtree_seeks_preserve_ranges_and_fuel_across_pruning() -> Result<()> {
                 .await?;
                 let mut actual = Vec::new();
                 while let Some(key) = host(&mut store, async |accessor| {
-                    <Runtime as KeysHost<Runtime>>::next(accessor, Resource::new_borrow(keys.rep()))
-                        .await
+                    <Runtime as KeysHost<Runtime>>::next(
+                        reborrow(accessor),
+                        Resource::new_borrow(keys.rep()),
+                    )
+                    .await
                 })
                 .await?
                 {
@@ -1131,7 +1173,7 @@ async fn subtree_seeks_preserve_ranges_and_fuel_across_pruning() -> Result<()> {
         assert!(
             host(&mut store, async |accessor| {
                 <Runtime as StorageHost<Runtime>>::delete(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(rep),
                     root.clone(),
                 )
@@ -1171,7 +1213,7 @@ async fn subtree_delete_preserves_escaped_siblings_with_long_prefixes() -> Resul
     assert!(
         host(&mut store, async |accessor| {
             <Runtime as StorageHost<Runtime>>::delete(
-                accessor,
+                reborrow(accessor),
                 Resource::new_borrow(rep),
                 [root.as_slice(), a.as_slice()].concat(),
             )
@@ -1193,7 +1235,7 @@ async fn subtree_delete_preserves_escaped_siblings_with_long_prefixes() -> Resul
     assert!(
         host(&mut store, async |accessor| {
             <Runtime as StorageHost<Runtime>>::delete(
-                accessor,
+                reborrow(accessor),
                 Resource::new_borrow(rep),
                 root.clone(),
             )

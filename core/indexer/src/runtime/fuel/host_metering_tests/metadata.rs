@@ -1,9 +1,12 @@
 use anyhow::Result;
 use wasmtime::component::Resource;
 
-use super::{assert_exhausted, host};
+use super::{assert_exhausted, host, reborrow};
 use crate::runtime::wit::kontor::built_in::{
-    context::{HostContractWithStore as ContractHost, HostViewContextWithStore as ViewHost},
+    context::{
+        HostContract, HostContractWithStore as ContractHost, HostViewContext,
+        HostViewContextWithStore as ViewHost,
+    },
     error::Error as WitError,
     file_registry::{HostProofWithStore as ProofHost, HostWithStore as FileHost},
 };
@@ -42,7 +45,7 @@ async fn contract_address_charges_name_bytes_on_every_copy() -> Result<()> {
         for remaining in [cost, 0] {
             let copied = host(&mut store, async |accessor| {
                 <Runtime as ContractHost<Runtime>>::address(
-                    accessor,
+                    reborrow(accessor),
                     Resource::new_borrow(resource.rep()),
                 )
                 .await
@@ -54,7 +57,7 @@ async fn contract_address_charges_name_bytes_on_every_copy() -> Result<()> {
         store.set_fuel(cost - 1)?;
         let result = host(&mut store, async |accessor| {
             <Runtime as ContractHost<Runtime>>::address(
-                accessor,
+                reborrow(accessor),
                 Resource::new_borrow(resource.rep()),
             )
             .await
@@ -66,7 +69,7 @@ async fn contract_address_charges_name_bytes_on_every_copy() -> Result<()> {
             address
         );
         host(&mut store, async |accessor| {
-            <Runtime as ContractHost<Runtime>>::drop(accessor, resource).await
+            <Runtime as HostContract>::drop(accessor.get(), resource).await
         })
         .await?;
     }
@@ -112,7 +115,7 @@ async fn aggregate_inputs_charge_even_bytes_after_an_invalid_root() -> Result<()
         for remaining in [cost, 0] {
             let result = host(&mut store, async |accessor| {
                 <Runtime as FileHost<Runtime>>::aggregate_root(
-                    accessor,
+                    reborrow(accessor),
                     vec![(vec![], 1, 0), (vec![0; bytes], 1, 1)],
                 )
                 .await
@@ -124,7 +127,7 @@ async fn aggregate_inputs_charge_even_bytes_after_an_invalid_root() -> Result<()
         store.set_fuel(cost - 1)?;
         let result = host(&mut store, async |accessor| {
             <Runtime as FileHost<Runtime>>::aggregate_root(
-                accessor,
+                reborrow(accessor),
                 vec![(vec![], 1, 0), (vec![0; bytes], 1, 1)],
             )
             .await
@@ -148,7 +151,7 @@ async fn frontier_peaks_and_roots_pay_before_validation() -> Result<()> {
         let mut store = runtime.make_store(cost)?;
         let result = host(&mut store, async |accessor| {
             <Runtime as FileHost<Runtime>>::frontier_append(
-                accessor,
+                reborrow(accessor),
                 0,
                 vec![0; peaks],
                 vec![(vec![0; root], 1, 0)],
@@ -164,7 +167,7 @@ async fn frontier_peaks_and_roots_pay_before_validation() -> Result<()> {
         store.set_fuel(cost - 1)?;
         let result = host(&mut store, async |accessor| {
             <Runtime as FileHost<Runtime>>::frontier_append(
-                accessor,
+                reborrow(accessor),
                 0,
                 vec![0; peaks],
                 vec![(vec![0; root], 1, 0)],
@@ -208,7 +211,7 @@ async fn challenge_metadata_includes_every_variable_field() -> Result<()> {
         for remaining in [cost, 0] {
             let result = host(&mut store, async |accessor| {
                 <Runtime as FileHost<Runtime>>::compute_challenge_id(
-                    accessor,
+                    reborrow(accessor),
                     file.clone(),
                     1,
                     1,
@@ -223,8 +226,15 @@ async fn challenge_metadata_includes_every_variable_field() -> Result<()> {
         }
         store.set_fuel(cost - 1)?;
         let result = host(&mut store, async |accessor| {
-            <Runtime as FileHost<Runtime>>::compute_challenge_id(accessor, file, 1, 1, seed, 1)
-                .await
+            <Runtime as FileHost<Runtime>>::compute_challenge_id(
+                reborrow(accessor),
+                file,
+                1,
+                1,
+                seed,
+                1,
+            )
+            .await
         })
         .await;
         assert_exhausted(result.unwrap_err());
@@ -277,7 +287,7 @@ async fn proof_metadata_pays_before_resource_access_including_empty_entries() ->
         let mut store = runtime.make_store(cost - 1)?;
         let result = host(&mut store, async |accessor| {
             <Runtime as ProofHost<Runtime>>::verify(
-                accessor,
+                reborrow(accessor),
                 Resource::new_borrow(u32::MAX),
                 vec![challenge.clone()],
                 vec![root.clone()],
@@ -290,7 +300,7 @@ async fn proof_metadata_pays_before_resource_access_including_empty_entries() ->
         store.set_fuel(cost)?;
         let result = host(&mut store, async |accessor| {
             <Runtime as ProofHost<Runtime>>::verify(
-                accessor,
+                reborrow(accessor),
                 Resource::new_borrow(u32::MAX),
                 vec![challenge],
                 vec![root],
@@ -328,16 +338,22 @@ async fn context_contract_resource_charges_the_fetched_name() -> Result<()> {
         .await
         .push(ViewContext { contract_id })?;
     let result = host(&mut store, async |accessor| {
-        <Runtime as ViewHost<Runtime>>::contract(accessor, Resource::new_borrow(context.rep()))
-            .await
+        <Runtime as ViewHost<Runtime>>::contract(
+            reborrow(accessor),
+            Resource::new_borrow(context.rep()),
+        )
+        .await
     })
     .await;
     assert_exhausted(result.unwrap_err());
     store.set_fuel(2 * cost)?;
     for remaining in [cost, 0] {
         let contract = host(&mut store, async |accessor| {
-            <Runtime as ViewHost<Runtime>>::contract(accessor, Resource::new_borrow(context.rep()))
-                .await
+            <Runtime as ViewHost<Runtime>>::contract(
+                reborrow(accessor),
+                Resource::new_borrow(context.rep()),
+            )
+            .await
         })
         .await?;
         assert_eq!(
@@ -346,12 +362,12 @@ async fn context_contract_resource_charges_the_fetched_name() -> Result<()> {
         );
         assert_eq!(store.get_fuel()?, remaining);
         host(&mut store, async |accessor| {
-            <Runtime as ContractHost<Runtime>>::drop(accessor, contract).await
+            <Runtime as HostContract>::drop(accessor.get(), contract).await
         })
         .await?;
     }
     host(&mut store, async |accessor| {
-        <Runtime as ViewHost<Runtime>>::drop(accessor, context).await
+        <Runtime as HostViewContext>::drop(accessor.get(), context).await
     })
     .await?;
     Ok(())
@@ -364,14 +380,14 @@ async fn metered_native_metadata_preserves_valid_results() -> Result<()> {
     let aggregate_cost = 1000 + 200 * 2 + 2 * (50 + 10 * 32) + 32;
     let mut store = runtime.make_store(aggregate_cost)?;
     let root = host(&mut store, async |accessor| {
-        <Runtime as FileHost<Runtime>>::aggregate_root(accessor, files.clone()).await
+        <Runtime as FileHost<Runtime>>::aggregate_root(reborrow(accessor), files.clone()).await
     })
     .await?
     .unwrap();
     assert_eq!(store.get_fuel()?, 0);
     store.set_fuel(aggregate_cost + 50 + 32)?;
     let (count, peaks, appended_root) = host(&mut store, async |accessor| {
-        <Runtime as FileHost<Runtime>>::frontier_append(accessor, 0, vec![], files).await
+        <Runtime as FileHost<Runtime>>::frontier_append(reborrow(accessor), 0, vec![], files).await
     })
     .await?
     .unwrap();
@@ -394,7 +410,7 @@ async fn metered_native_metadata_preserves_valid_results() -> Result<()> {
         ids.push(
             host(&mut store, async |accessor| {
                 <Runtime as FileHost<Runtime>>::compute_challenge_id(
-                    accessor,
+                    reborrow(accessor),
                     file.clone(),
                     1,
                     1,

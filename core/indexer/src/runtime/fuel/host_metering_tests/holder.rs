@@ -1,13 +1,13 @@
 use anyhow::Result;
 use wasmtime::component::Resource;
 
-use super::{assert_exhausted, host};
+use super::{assert_exhausted, host, reborrow};
 use crate::database::queries::get_identity;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::Runtime;
 use crate::runtime::wit::Holder;
 use crate::runtime::wit::kontor::built_in::context::{
-    HolderRef, HostHolderWithStore as HolderHost, OutPoint,
+    HolderRef, HostHolder, HostHolderWithStore as HolderHost, OutPoint,
 };
 use crate::runtime::wit::kontor::built_in::error::Error as WitError;
 use crate::test_utils::test_runtime;
@@ -31,7 +31,8 @@ async fn invalid_holder_references_charge_bytes_on_every_attempt() -> Result<()>
         ] {
             let mut store = runtime.make_store(1_000_000)?;
             let error = host(&mut store, async |accessor| {
-                <Runtime as HolderHost<Runtime>>::from_ref(accessor, reference.clone()).await
+                <Runtime as HolderHost<Runtime>>::from_ref(reborrow(accessor), reference.clone())
+                    .await
             })
             .await?
             .unwrap_err();
@@ -43,21 +44,27 @@ async fn invalid_holder_references_charge_bytes_on_every_attempt() -> Result<()>
             store.set_fuel(cost * 2)?;
             for remaining in [cost, 0] {
                 let result = host(&mut store, async |accessor| {
-                    <Runtime as HolderHost<Runtime>>::from_ref(accessor, reference.clone()).await
+                    <Runtime as HolderHost<Runtime>>::from_ref(
+                        reborrow(accessor),
+                        reference.clone(),
+                    )
+                    .await
                 })
                 .await?;
                 assert!(matches!(result, Err(WitError::Validation(_))));
                 assert_eq!(store.get_fuel()?, remaining);
             }
             let result = host(&mut store, async |accessor| {
-                <Runtime as HolderHost<Runtime>>::from_ref(accessor, reference.clone()).await
+                <Runtime as HolderHost<Runtime>>::from_ref(reborrow(accessor), reference.clone())
+                    .await
             })
             .await;
             assert_exhausted(result.unwrap_err());
 
             store.set_fuel(cost - 1)?;
             let result = host(&mut store, async |accessor| {
-                <Runtime as HolderHost<Runtime>>::from_ref(accessor, reference.clone()).await
+                <Runtime as HolderHost<Runtime>>::from_ref(reborrow(accessor), reference.clone())
+                    .await
             })
             .await;
             assert_exhausted(result.unwrap_err());
@@ -85,7 +92,7 @@ async fn holder_references_preserve_values_and_resource_cleanup() -> Result<()> 
     ] {
         let mut store = runtime.make_store(cost)?;
         let holder = host(&mut store, async |accessor| {
-            <Runtime as HolderHost<Runtime>>::from_ref(accessor, reference.clone()).await
+            <Runtime as HolderHost<Runtime>>::from_ref(reborrow(accessor), reference.clone()).await
         })
         .await?
         .expect("valid holder reference");
@@ -96,15 +103,18 @@ async fn holder_references_preserve_values_and_resource_cleanup() -> Result<()> 
         };
         store.set_fuel(50 + 3 * output_bytes)?;
         let roundtrip = host(&mut store, async |accessor| {
-            <Runtime as HolderHost<Runtime>>::as_ref(accessor, Resource::new_borrow(holder.rep()))
-                .await
+            <Runtime as HolderHost<Runtime>>::as_ref(
+                reborrow(accessor),
+                Resource::new_borrow(holder.rep()),
+            )
+            .await
         })
         .await?;
         assert_eq!(roundtrip, reference);
         assert_eq!(store.get_fuel()?, 0);
         let rep = holder.rep();
         host(&mut store, async |accessor| {
-            <Runtime as HolderHost<Runtime>>::drop(accessor, holder).await
+            <Runtime as HostHolder>::drop(accessor.get(), holder).await
         })
         .await?;
         assert!(
@@ -127,8 +137,11 @@ async fn holder_reference_budget_precedes_identity_creation() -> Result<()> {
     let conn = runtime.get_storage_conn();
     let mut store = runtime.make_store(739)?;
     let result = host(&mut store, async |accessor| {
-        <Runtime as HolderHost<Runtime>>::from_ref(accessor, HolderRef::XOnlyPubkey(pubkey.clone()))
-            .await
+        <Runtime as HolderHost<Runtime>>::from_ref(
+            reborrow(accessor),
+            HolderRef::XOnlyPubkey(pubkey.clone()),
+        )
+        .await
     })
     .await;
     assert_exhausted(result.unwrap_err());
@@ -137,7 +150,7 @@ async fn holder_reference_budget_precedes_identity_creation() -> Result<()> {
     store.set_fuel(740)?;
     let holder = host(&mut store, async |accessor| {
         <Runtime as HolderHost<Runtime>>::from_ref(
-            accessor,
+            reborrow(accessor),
             HolderRef::XOnlyPubkey(pubkey.to_uppercase()),
         )
         .await
@@ -153,7 +166,7 @@ async fn holder_reference_budget_precedes_identity_creation() -> Result<()> {
         HolderRef::SignerId(identity.signer_id())
     );
     host(&mut store, async |accessor| {
-        <Runtime as HolderHost<Runtime>>::drop(accessor, holder).await
+        <Runtime as HostHolder>::drop(accessor.get(), holder).await
     })
     .await?;
     Ok(())

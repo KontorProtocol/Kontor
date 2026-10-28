@@ -518,8 +518,11 @@ F1 final-review carry-forward (receipt 5463eaacf940bd74c44a7c48c0a754a3): K1
 also intersects Rust-mangled and anonymous compiler symbols across graphs to
 detect metadata mistakes, with any false-positive exemption explicitly scoped.
 The version/source identity guard must be enforced by code, not documentation.
-K2b includes real canon-lift-async contracts; F1's async API test is a sync-lifted
-component called through call_async and does not establish that coverage.
+This async-guest acceptance item is superseded by the approved S1-2 amendment:
+K2b rejects async-lift/async-lower and guest-concurrency components, and positively
+qualifies synchronous guest components using asynchronous host I/O. F1's earlier
+async/JIT proof is historical prerequisite evidence, not qualification of the
+final synchronous/Pulley baseline.
 
 ## Approved F2 native-crypto scope amendment
 
@@ -602,8 +605,9 @@ Agreed with the reviewer in Interlink receipt
 - Expose a separate `./tools/kontor protocol-bundles` command over a reusable
   builder module. Keep the existing contract/SDK generator's fixed-platform
   behavior unchanged.
-- Check in two independently resolved manifests and lockfiles. Pin Wasmtime
-  baseline `bfdee9ba9a483915dc95432708cf7db8281adbc1` (reserved 51.0.0-dev) and
+- The original K1 development proof checked in two independently resolved
+  manifests and lockfiles with the following Wasmtime pins. The approved Pulley
+  fork amendment below supersedes these pins for the final proof pair. Baseline `bfdee9ba9a483915dc95432708cf7db8281adbc1` (reserved 51.0.0-dev) and
   F1 merge `525ffedef9bc8babdd9c0b3bd703a5ba5793fcb8` (51.0.0-kontor.1).
   Pin the verified F3 merge for both real managed consensus implementations.
   Combine VM, consensus and native crypto inside each graph, with conflicting
@@ -636,7 +640,7 @@ helper names from the package version; those helpers interact with graph-private
 Rust trap/TLS/unwinder state. Byte-identical helpers cannot use the generic shared
 runtime exemption. A future protocol reusing VM code must receive a version-only
 fork release with a new immutable recorded source identity (for example,
-51.0.0-kontor.2). K1 rejects duplicate versions and duplicate normalized prefixes.
+a new unclaimed version). K1 rejects duplicate versions and duplicate normalized prefixes.
 This procedure remains mandatory until a separate graph-namespace mechanism is
 reviewed. Interlink agreement: `363896efaf026401cd8dd6fa2c1de9c2`.
 
@@ -742,3 +746,49 @@ shape rejection behavior. Complete both reviews, appropriate local checks,
 current-head CI and verified merge. Rebase K2a on the correction and include
 these sites in its retained error-classification inventory. Later phases keep
 their agreed scope.
+
+
+## Approved S1 sequential-contract prerequisite
+
+S1-2 in [sequential-contracts-s1.md](sequential-contracts-s1.md), SHA256
+`3ced8fbd90a328da713be08ac165df99e9856762de5fe9b59575fcea8b0fad8a`, was
+approved by the lead in Interlink `a20f975f127926c9450bde3bf8e35da2` and the
+independent reviewer in `9860218ad942fcca4c7ef630d0d55b59`. The independent
+subagent approved the same revision. S1 implementation starts from main
+`ca0e6a768a841a8dfee8a3f8cc3565f4570af97b` and preserves asynchronous host I/O
+and native APIs while admitting only synchronous sequential guest components.
+S1 alone must not be deployed or frozen as P1. S2 stack/capacity/performance and
+OWNERSHIP-1 remain separate exact-revision approval gates before their production
+changes. No later protocol-upgrade phase or final acceptance gate is removed.
+
+
+## Approved Pulley logical-stack fork prerequisites
+
+The lead, independent subagent, and Interlink reviewer agreed
+[pulley-logical-stack-fork-proposal-v3.md](pulley-logical-stack-fork-proposal-v3.md),
+SHA256 `83e618b5c303cec66d023b9c10b106ad8c9bd4d6d01cde3ad7ea14766cd9f997`.
+Lead agreement: `637d8be538d9e2acdae3eed1707a823a`; reviewer agreement:
+`c759ef1961ea20af31e46174fb8b23d9`.
+
+- Fork PR A implements the bounded logical-stack fix on F1
+  `525ffedef9bc8babdd9c0b3bd703a5ba5793fcb8`, with a new immutable
+  `51.0.0-kontor.2` identity for final P1.
+- Fork PR B follows A's reviewed merge and changes only versions, internal
+  constraints and necessary lock references to `51.0.0-kontor.3` for the second
+  proof graph. Both final graphs select Pulley. Recheck version availability
+  before each publication; a collision requires a newly reviewed reservation.
+- The earlier `bfdee9ba` / `51.0.0-dev` and F1 / `.1` identities remain reserved
+  development history. They are not the final retained P1. S2/K2a creates and
+  requalifies the new proof pair, preserving the old evidence as history.
+- Only packages inheriting Wasmtime's workspace version, including
+  `pulley-interpreter`, change version. Independently versioned packages keep
+  their versions, sources and checksums. Work stays in the user's fork; no
+  upstream Bytecode Alliance PR, issue or comment is authorized.
+- Bundle identity and attestation include `max_wasm_stack` and 16-byte logical
+  rounding. Final synchronous artifacts must pass the strengthened six-cell
+  qualification for both bundles. S2's native reentry bounds, capacity and
+  performance gates, and OWNERSHIP-1, remain separately unapproved.
+
+This records plan agreement, not implementation completion or qualification.
+Each fork PR still requires the lead's review, an independent subagent review,
+Interlink review, current-head green CI and verified merge.

@@ -9,7 +9,7 @@ use rustix::mm::{MapFlags, MprotectFlags, ProtFlags, mmap_anonymous, mprotect, m
 use rustix::param::page_size;
 use wasmtime::component::Component;
 use wasmtime::{
-    Config, Engine, Error, GcHeapOutOfMemory, Instance, InstanceAllocationStrategy, LinearMemory,
+    Engine, Error, GcHeapOutOfMemory, Instance, InstanceAllocationStrategy, LinearMemory,
     MemoryCreator, MemoryType, Module, Result as WasmtimeResult, Store,
 };
 
@@ -117,10 +117,9 @@ unsafe impl MemoryCreator for FailingCreator {
 }
 
 fn failure_engine(kind: Kind, failures: Arc<AtomicUsize>) -> Result<Engine> {
-    let mut config = Config::new();
+    let mut config = Runtime::new_engine()?.config().clone();
     config
         .with_host_memory(Arc::new(FailingCreator { kind, failures }))
-        .wasm_component_model_async(true)
         .consume_fuel(true)
         .allocation_strategy(InstanceAllocationStrategy::OnDemand)
         .wasm_custom_page_sizes(false)
@@ -207,7 +206,7 @@ async fn swallowed_gc_backing_failure_aborts_before_result_persistence() -> Resu
               i32.const 100000 array.new_default $a array.len drop
               i64.const 42))
           (core instance $code (instantiate $code))
-          (func (export "succeed") async
+          (func (export "succeed")
             (param "ctx" (borrow $proc-context)) (result u64)
             (canon lift (core func $code "succeed"))))
     "#;

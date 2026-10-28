@@ -96,6 +96,7 @@ prost = { workspace = true }
 sha3 = { workspace = true }
 
 [dev-dependencies]
+wat = "=1.262.0"
 wasm-encoder = { workspace = true }
 wasmtime = { workspace = true, features = ["call-hook"] }
 testlib = { path = "../testlib" }

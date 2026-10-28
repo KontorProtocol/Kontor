@@ -14,6 +14,8 @@ pub mod nft;
 pub mod numerics;
 pub mod pool;
 pub mod pricing;
+#[cfg(test)]
+mod sequential_tests;
 mod stack;
 pub mod staking;
 mod storage;
@@ -324,7 +326,14 @@ pub struct Runtime {
 impl Runtime {
     pub fn new_engine() -> Result<Engine> {
         let mut config = Config::new();
-        config.wasm_component_model_async(true);
+        config.wasm_component_model_async(false);
+        config.wasm_component_model_more_async_builtins(false);
+        config.wasm_component_model_async_stackful(false);
+        config.wasm_component_model_threading(false);
+        config.wasm_component_model_error_context(false);
+        config.wasm_shared_everything_threads(false);
+        config.wasm_stack_switching(false);
+        config.concurrency_support(false);
         config.consume_fuel(true);
         config.consume_lifting_fuel(Some(LiftingPrices {
             lift_value: 512,
@@ -522,6 +531,20 @@ impl Runtime {
         for (name, bytes) in NATIVE_CONTRACTS {
             self.publish(&core_signer, payment.clone(), name, bytes, &provenance)
                 .await?;
+            // Existing genesis rows bypass publication. Validate their stored
+            // artifacts before startup can proceed under this engine policy.
+            let address = ContractAddress {
+                name: name.to_string(),
+                height: 0,
+                tx_index: 0,
+            };
+            let contract_id = self
+                .storage
+                .contract_id(&address)
+                .await?
+                .ok_or_else(|| anyhow!("native contract missing after publication: {name}"))?;
+            let component = self.load_component(contract_id).await?;
+            self.linkers.native.instantiate_pre(&component)?;
         }
         // Zero is uninitialized, never a valid configured floor. This also
         // resumes an interrupted bootstrap after the contract was published.
@@ -748,7 +771,7 @@ impl Runtime {
     ///    Catches a user contract reaching for `file-registry`/`system`.
     /// 3. **WIT rule check** (user contracts only): the extracted WIT must
     ///    satisfy the Kontor rules the linker can't see — `init` exists with the
-    ///    right shape, exports are `async`, valid context/return types, no
+    ///    right shape, exports are synchronous, valid context/return types, no
     ///    floats/flags/nested-lists/cycles, etc. Native contracts use the
     ///    privileged surface (core-context, file-registry) and are validated at
     ///    compile time, so the user-surface validator is skipped for them.
@@ -815,8 +838,8 @@ impl Runtime {
     }
 
     /// Run the Kontor WIT rules over a user contract's extracted WIT (validated
-    /// against the user-land built-in surface). A rule violation — missing
-    /// `init`, sync export, bad context/return type, floats, etc. — is a
+    /// against the user-land built-in surface). A rule violation (missing
+    /// `init`, async export, bad context/return type, floats, etc.) is a
     /// Deterministic rejection. Pure function of the WIT string.
     fn validate_user_wit(wit: &str) -> Result<(), ExecutionError> {
         match WitValidator::validate_str(wit) {
@@ -1024,7 +1047,14 @@ impl Runtime {
 
     pub async fn load_component(&self, contract_id: u64) -> Result<Component> {
         Ok(match self.component_cache.get(&contract_id).await {
-            Some(component) => component,
+            Some(component) => {
+                if !Engine::same(component.engine(), &self.engine) {
+                    return Err(anyhow!(
+                        "cached component belongs to a different execution engine"
+                    ));
+                }
+                component
+            }
             None => self.component_bytes_and_compiled(contract_id).await?.1,
         })
     }
@@ -1344,7 +1374,7 @@ mod tests {
             world root {\n\
               include kontor:built-in/built-in;\n\
               use kontor:built-in/context.{view-context};\n\
-              export get-value: async func(ctx: borrow<view-context>) -> string;\n\
+              export get-value: func(ctx: borrow<view-context>) -> string;\n\
             }\n";
         let err = super::Runtime::validate_user_wit(wit)
             .expect_err("a contract with no init must be rejected");

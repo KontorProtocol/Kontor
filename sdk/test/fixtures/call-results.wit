@@ -13,11 +13,11 @@ world root {
     type reply = result<option<u64>, error>;
     type aliased-reply = reply;
 
-    export init: async func(ctx: borrow<proc-context>) -> contract;
-    export maybe-value: async func(ctx: borrow<view-context>) -> aliased-reply;
-    export set-flag: async func(ctx: borrow<proc-context>) -> result<_, error>;
-    export check-flag: async func(ctx: borrow<view-context>) -> result<_, error>;
-    export outcome: async func(ctx: borrow<view-context>) -> outcome;
-    export wrapped-outcome: async func(ctx: borrow<view-context>) -> result<outcome, error>;
-    export echo-outcome: async func(ctx: borrow<proc-context>, value: outcome) -> outcome;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export maybe-value: func(ctx: borrow<view-context>) -> aliased-reply;
+    export set-flag: func(ctx: borrow<proc-context>) -> result<_, error>;
+    export check-flag: func(ctx: borrow<view-context>) -> result<_, error>;
+    export outcome: func(ctx: borrow<view-context>) -> outcome;
+    export wrapped-outcome: func(ctx: borrow<view-context>) -> result<outcome, error>;
+    export echo-outcome: func(ctx: borrow<proc-context>, value: outcome) -> outcome;
 }

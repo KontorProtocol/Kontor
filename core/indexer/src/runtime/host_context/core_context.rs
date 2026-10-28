@@ -1,58 +1,59 @@
 use anyhow::Result;
-use wasmtime::component::{Accessor, Resource};
+use wasmtime::component::{Access, Resource};
 
 use crate::runtime::Runtime;
 use crate::runtime::fuel::Fuel;
 use crate::runtime::wit::kontor::built_in;
 use crate::runtime::wit::{Contract, CoreContext, ProcContext, Signer};
 
-impl built_in::context::HostCoreContext for Runtime {}
-
-impl<T> built_in::context::HostCoreContextWithStore<T> for Runtime {
-    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<CoreContext>) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._drop(rep)
-            .await
+impl built_in::context::HostCoreContext for Runtime {
+    async fn drop(&mut self, rep: Resource<CoreContext>) -> Result<()> {
+        self._drop(rep).await
     }
+}
 
+impl<T: Send> built_in::context::HostCoreContextWithStore<T> for Runtime {
     async fn proc_context(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<ProcContext>> {
         accessor
-            .with(|mut access| access.get().clone())
-            ._core_proc_context(accessor, self_)
+            .get()
+            .clone()
+            ._core_proc_context(&mut accessor, self_)
             .await
     }
 
     async fn signer_proc_context(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<ProcContext>> {
         accessor
-            .with(|mut access| access.get().clone())
-            ._core_signer_proc_context(accessor, self_)
+            .get()
+            .clone()
+            ._core_signer_proc_context(&mut accessor, self_)
             .await
     }
 
     async fn core_signer(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<Signer>> {
         accessor
-            .with(|mut access| access.get().clone())
-            ._core_signer(accessor, self_)
+            .get()
+            .clone()
+            ._core_signer(&mut accessor, self_)
             .await
     }
 
     async fn contract(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<Contract>> {
         accessor
-            .with(|mut access| access.get().clone())
-            ._contract(accessor, self_, Fuel::CoreContract)
+            .get()
+            .clone()
+            ._contract(&mut accessor, self_, Fuel::CoreContract)
             .await
     }
 }

@@ -7,13 +7,12 @@ macro_rules! storage_methods {
         fn $name:ident($($arg:ident: $arg_ty:ty),*) -> $ret:ty => $target:ident;
     )*) => {$(
         async fn $name(
-            accessor: &Accessor<$state, Self>,
+            mut accessor: Access<'_, $state, Self>,
             self_: Resource<$resource>,
             $($arg: $arg_ty),*
         ) -> Result<$ret> {
-            accessor
-                .with(|mut access| access.get().clone())
-                .$target(accessor, self_, $($arg),*)
+            accessor.get().clone()
+                .$target(&mut accessor, self_, $($arg),*)
                 .await
         }
     )*};
