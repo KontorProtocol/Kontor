@@ -8,7 +8,7 @@ on:
       - "tools/native-stack/**"
       - ".github/workflows/native-stack.yml"
   push:
-    branches: [main]
+    branches: [main, investigate/wasm-native-stack]
     paths:
       - "core/**"
       - "test-contracts/**"
