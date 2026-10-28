@@ -159,7 +159,8 @@ not satisfy the six-cell qualification gate.
 chains in paid, view and Core modes through a measured two-worker Tokio runtime.
 Each case and stack configuration has a fresh child process and three attempts
 with actual invocation-reservation peaks, fuel, receipts, persistent-state
-digests, rollback and resource cleanup checks. The 65 Store cases must reject
+digests, exact normalized balance transitions, rollback and resource cleanup
+checks. The 65 Store cases must reject
 with the typed invocation limit after a measured peak of 64. Six additional
 children run success, typed trap, success for each call mode and stack
 configuration through the same measured worker path, engine and fixed fixture.

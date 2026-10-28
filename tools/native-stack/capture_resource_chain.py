@@ -29,6 +29,11 @@ CHAIN_MODES = ("paid", "view", "core")
 STACK_MODES = ("reduced", "production")
 CHAIN_STORES = (33, 63, 64, 65)
 CROSS_MODE_FIXTURE_REASONS = {}
+BALANCE_KEYS = {
+    "before", "after", "restored", "burned_before", "burned_after",
+    "supply_before", "supply_after", "floor_before", "floor_after",
+    "floor_restored",
+}
 PHASE_PAIRS = (
     ("preparation", "chain_preparation_entry", "chain_preparation_exit"),
     ("operation", "chain_operation_entry", "chain_operation_exit"),
@@ -198,6 +203,16 @@ def measured_trace(trace, runtime, mode, stores, process_id, chain_mode="paid",
     return attempts
 
 
+def balance_amounts(values, case_id):
+    require(isinstance(values, dict) and set(values) == BALANCE_KEYS
+            and all(isinstance(value, str) for value in values.values()),
+            f"{case_id}: balance transitions are incomplete")
+    try:
+        return {key: Fraction(Decimal(value)) for key, value in values.items()}
+    except (InvalidOperation, OverflowError, TypeError, ValueError) as error:
+        raise ValueError(f"{case_id}: invalid balance amount") from error
+
+
 def observation_from_trial(trial, case_id, expected_outcome, schema, sample_key="target"):
     identity = re.fullmatch(r"chain_(33|63|64|65)_(paid|view|core)", case_id)
     require(identity is not None and expected_outcome in {
@@ -230,17 +245,8 @@ def observation_from_trial(trial, case_id, expected_outcome, schema, sample_key=
     encoded = json.dumps(balances, sort_keys=True, separators=(",", ":")).encode()
     require(hashlib.sha256(encoded).hexdigest() == trial["balances_sha256"],
             f"{case_id}: balance snapshot digest differs")
-    balance_values = trial.get("balances")
-    balance_keys = {
-        "before", "after", "restored", "burned_before", "burned_after",
-        "supply_before", "supply_after", "floor_before", "floor_after",
-        "floor_restored",
-    }
-    require(isinstance(balance_values, dict) and set(balance_values) == balance_keys
-            and all(isinstance(value, str) for value in balance_values.values()),
-            f"{case_id}: balance transitions are incomplete")
+    amounts = balance_amounts(trial.get("balances"), case_id)
     try:
-        amounts = {key: Fraction(Decimal(value)) for key, value in balance_values.items()}
         baseline = {key: Fraction(Decimal(value)) for key, value in balances.items()}
     except (InvalidOperation, OverflowError, TypeError, ValueError) as error:
         raise ValueError(f"{case_id}: invalid balance amount") from error
@@ -356,13 +362,19 @@ def parse_worker(path, mode, stores, pid, manifest, schema, chain_mode="paid",
     observations = [observation_from_trial(
         trial, case_id, outcome, schema, sample_key,
     ) for trial, outcome, sample_key in zip(trials, outcomes, sample_keys, strict=True)]
+    # The shared observation schema keeps only the balance baseline digest.
+    transitions = [{key: str(value) for key, value in
+                    balance_amounts(trial["balances"], case_id).items()}
+                   for trial in trials]
     require(observations[0] == observations[2]
-            and (trap_control or observations[0] == observations[1]),
+            and transitions[0] == transitions[2]
+            and (trap_control or (observations[0] == observations[1]
+                                  and transitions[0] == transitions[1])),
             f"{label}: repeated observations diverge")
     return {
         "id": case_id, "parameters": expected["parameters"],
         "trap_control": trap_control, "report": report,
-        "observations": observations,
+        "observations": observations, "balance_transitions": transitions,
         "worker_execution": {"whole_operation_spawned": True,
                              "source_sha256": manifest["worker_runner"]["sha256"],
                              "attempts": attempts},
@@ -398,12 +410,16 @@ def check_run_consistency(captured, case_id, mode, trap_control, detail):
     name = f"{case_id}_{'trap_control_' if trap_control else ''}{mode}"
     if mode == "production":
         reduced_name = f"{case_id}_{'trap_control_' if trap_control else ''}reduced"
-        require(detail["observations"] == captured[reduced_name]["observations"],
+        require(detail["observations"] == captured[reduced_name]["observations"]
+                and detail["balance_transitions"] ==
+                    captured[reduced_name]["balance_transitions"],
                 f"{name}: full observations differ across worker stack modes")
     if trap_control:
-        target = captured[f"{case_id}_{mode}"]["observations"][0]
-        require(detail["observations"][0] == target
-                and detail["observations"][2] == target,
+        target = captured[f"{case_id}_{mode}"]
+        require(detail["observations"][0] == target["observations"][0]
+                and detail["observations"][2] == target["observations"][0]
+                and detail["balance_transitions"][0] == target["balance_transitions"][0]
+                and detail["balance_transitions"][2] == target["balance_transitions"][0],
                 f"{name}: 64-Store target and control prestate or success differs")
 
 
@@ -425,6 +441,11 @@ def cross_mode_initial_states(captured, fixture_reasons):
                                       "fixture_reason": None if equal else reason}
         summaries[str(stores)] = {"digests": digests, "comparisons": references}
     return summaries
+
+
+def run_signature(run, index):
+    return {"observation": run["observations"][index],
+            "balance_transitions": run["balance_transitions"][index]}
 
 
 def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
@@ -500,14 +521,14 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
                 destination.write("\n")
             raise
     try:
-        signatures = {f"chain_{stores}_{chain_mode}":
-                      captured[f"chain_{stores}_{chain_mode}_reduced"]["observations"][0]
-                      for chain_mode in CHAIN_MODES for stores in CHAIN_STORES}
+        signatures = {
+            f"chain_{stores}_{chain_mode}":
+                run_signature(captured[f"chain_{stores}_{chain_mode}_reduced"], 0)
+            for chain_mode in CHAIN_MODES for stores in CHAIN_STORES}
         trap_signatures = {
             chain_mode:
-                captured[f"chain_64_{chain_mode}_trap_control_reduced"]["observations"][1]
-            for chain_mode in CHAIN_MODES
-        }
+                run_signature(captured[f"chain_64_{chain_mode}_trap_control_reduced"], 1)
+            for chain_mode in CHAIN_MODES}
         initial_states = cross_mode_initial_states(captured, CROSS_MODE_FIXTURE_REASONS)
         identities = [(item["process"]["pid"], item["process"]["started_unix_ns"])
                       for item in captured.values()]
