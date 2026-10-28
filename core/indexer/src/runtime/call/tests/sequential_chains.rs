@@ -5,6 +5,8 @@ use std::time::Duration;
 use anyhow::Result;
 use indexer_types::Payment;
 use libsql::params;
+use serde_json::json;
+use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use tokio::sync::Notify;
 use tokio::time::timeout;
@@ -28,7 +30,8 @@ const CHILD: &str = "runtime::call::tests::sequential_chains::chain_probe_child"
 #[tokio::test]
 async fn deep_sequential_chains_survive_in_separate_processes() -> Result<()> {
     for mode in ["paid", "view", "core"] {
-        for depth in [32, 64] {
+        for stores in [33_u32, 63, 64, 65] {
+            let depth = stores - 1;
             // An abort must fail this parent test instead of taking down the suite.
             let output = timeout(
                 Duration::from_secs(120),
@@ -42,13 +45,15 @@ async fn deep_sequential_chains_survive_in_separate_processes() -> Result<()> {
             .await??;
             assert!(
                 output.status.success(),
-                "{mode} depth={depth}: {}\n{}\n{}",
+                "{mode} stores={stores}: {}\n{}\n{}",
                 output.status,
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
             let stdout = String::from_utf8_lossy(&output.stdout);
             assert!(stdout.contains("CHAIN_PROBE_COMPLETE"), "{stdout}");
+            print!("{stdout}");
+            println!("CHAIN_CELL_COMPLETE mode={mode} stores={stores}");
         }
     }
     Ok(())
@@ -120,7 +125,8 @@ async fn chain_probe_child() -> Result<()> {
     let mode = env::var("KONTOR_CHAIN_MODE")?;
     let depth: u32 = env::var("KONTOR_CHAIN_DEPTH")?.parse()?;
     assert!(matches!(mode.as_str(), "paid" | "view" | "core"));
-    assert!(matches!(depth, 32 | 64));
+    assert!(matches!(depth, 32 | 62 | 63 | 64));
+    let over_cap = depth == 64;
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let actor = funded(&mut runtime).await?;
     let chain = publish_chain(&mut runtime, &actor, depth).await?;
@@ -148,8 +154,14 @@ async fn chain_probe_child() -> Result<()> {
     let root = chain.last().unwrap().clone();
     let root_id = runtime.storage.contract_id(&root).await?.unwrap();
     let baseline_resources = runtime.table.lock().await.iter_mut().count();
+    let mut over_cap_observation = None;
+    let mut trials = Vec::new();
 
-    for fail in [false, true, false] {
+    for fail in if over_cap {
+        [false, false, false]
+    } else {
+        [false, true, false]
+    } {
         runtime.storage.savepoint().await?;
         conn.execute("DELETE FROM contract_results", ()).await?;
         let saved = runtime.storage.savepoint_stack.peek().await;
@@ -186,39 +198,59 @@ async fn chain_probe_child() -> Result<()> {
                 .await;
             (runtime, result)
         });
-        timeout(Duration::from_secs(30), entered.notified()).await?;
-        assert!(!task.is_finished());
-        assert_eq!(tokio::spawn(async { 42 }).await?, 42);
-        release.notify_one();
+        let mut host_io_suspended = false;
+        let leaf_callback_seen = if !over_cap {
+            timeout(Duration::from_secs(30), entered.notified()).await?;
+            host_io_suspended = !task.is_finished();
+            assert!(host_io_suspended);
+            assert_eq!(tokio::spawn(async { 42 }).await?, 42);
+            release.notify_one();
+            true
+        } else {
+            false
+        };
         let (returned, result) = timeout(Duration::from_secs(30), task).await??;
         runtime = returned;
         let usage = runtime.finish_usage(previous)?;
-        if fail {
+        let savepoint_restored = runtime.storage.savepoint_stack.peek().await == saved;
+        let value = if over_cap {
+            assert!(
+                matches!(result, Err(ExecutionError::Deterministic(_))),
+                "{result:?}"
+            );
+            assert!(format!("{result:?}").contains("live invocation limit"));
+            assert!(
+                timeout(Duration::from_millis(25), entered.notified())
+                    .await
+                    .is_err()
+            );
+            None
+        } else if fail {
             assert!(
                 matches!(result, Err(ExecutionError::Deterministic(ref error))
                 if error.chain().any(|cause| cause.downcast_ref::<Trap>() == Some(&Trap::UnreachableCodeReached))),
                 "{result:?}"
             );
+            None
         } else {
-            assert_eq!(result?, "42");
-        }
-        assert!(runtime.stack.is_empty().await);
-        assert_eq!(runtime.storage.savepoint_stack.peek().await, saved);
-        assert_eq!(
-            runtime.table.lock().await.iter_mut().count(),
-            baseline_resources
-        );
-        let expected_state = if fail || mode == "view" {
+            let value = result?;
+            assert_eq!(value, "42");
+            Some(value)
+        };
+        let stack_empty = runtime.stack.is_empty().await;
+        assert!(stack_empty);
+        assert!(savepoint_restored);
+        let resource_count = runtime.table.lock().await.iter_mut().count();
+        assert_eq!(resource_count, baseline_resources);
+        let expected_state = if fail || over_cap || mode == "view" {
             "[0, 0, 0, 0]"
         } else {
             "[2, 0, 0, 0]"
         };
-        assert_eq!(
-            runtime
-                .execute(None, None, &chain[0], "storage-state()")
-                .await?,
-            expected_state
-        );
+        let storage_state = runtime
+            .execute(None, None, &chain[0], "storage-state()")
+            .await?;
+        assert_eq!(storage_state, expected_state);
         let mut receipts = conn
             .query(
                 "SELECT status, gas FROM contract_results WHERE contract_id = ? ORDER BY id",
@@ -226,13 +258,33 @@ async fn chain_probe_child() -> Result<()> {
             )
             .await?;
         let receipt = receipts.next().await?;
-        if mode == "view" {
+        let receipt = if mode == "view" {
             assert!(receipt.is_none());
+            None
         } else {
             let receipt = receipt.expect("one root receipt");
-            assert_eq!(receipt.get::<String>(0)?, if fail { "Other" } else { "Ok" });
-            assert!(receipt.get::<u64>(1)? > 0);
+            let status = receipt.get::<String>(0)?;
+            assert_eq!(status, if fail || over_cap { "Other" } else { "Ok" });
+            let gas = receipt.get::<u64>(1)?;
+            assert!(gas > 0);
             assert!(receipts.next().await?.is_none());
+            Some(json!({ "status": status, "gas": gas }))
+        };
+        let receipt_gas = receipt
+            .as_ref()
+            .map_or(0, |value| value["gas"].as_u64().unwrap());
+        if over_cap {
+            let observation = (
+                usage.user_fuel,
+                usage.system_fuel,
+                usage.deposit_fuel,
+                receipt_gas,
+            );
+            if let Some(expected) = over_cap_observation {
+                assert_eq!(observation, expected);
+            } else {
+                over_cap_observation = Some(observation);
+            }
         }
         let mut rows = conn.query(
             "SELECT count(*) FROM contract_results WHERE contract_id IN (SELECT id FROM contracts WHERE name IN ('deep-errors', 'deep-proxy'))",
@@ -243,30 +295,25 @@ async fn chain_probe_child() -> Result<()> {
             receipt_count,
             if mode == "view" {
                 0
-            } else if fail {
+            } else if fail || over_cap {
                 1
             } else {
                 u64::from(depth) + 1
             }
         );
-        let paid = sub_decimal(
-            before,
-            balance(&mut runtime, HolderRef::from(&actor)).await?,
-        )?;
-        let burned = sub_decimal(
-            balance(&mut runtime, HolderRef::Burner).await?,
-            burned_before,
-        )?;
+        let after = balance(&mut runtime, HolderRef::from(&actor)).await?;
+        let burned_after = balance(&mut runtime, HolderRef::Burner).await?;
+        let supply_after = token::total_supply(&mut runtime).await?;
+        let paid = sub_decimal(before, after)?;
+        let burned = sub_decimal(burned_after, burned_before)?;
+        let supply_delta = sub_decimal(supply_before, supply_after)?;
         assert_eq!(paid, burned);
-        assert_eq!(
-            sub_decimal(supply_before, token::total_supply(&mut runtime).await?)?,
-            burned
-        );
+        assert_eq!(supply_delta, burned);
         let floor_after = token::floor(&mut runtime, HolderRef::from(&actor)).await?;
         let live_deposit = live_deposit_gas_sum(&conn, actor.signer_id().unwrap()).await?;
         assert_eq!(floor_after, Pricing::storage_collateral(live_deposit)?);
         // A successful Core write removes the previous user's deposit ownership.
-        if mode == "core" && !fail {
+        if mode == "core" && !fail && !over_cap {
             assert!(floor_after < floor_before);
         } else {
             assert_eq!(floor_after, floor_before);
@@ -279,16 +326,68 @@ async fn chain_probe_child() -> Result<()> {
             assert_eq!(paid, Decimal::default());
         }
         runtime.storage.rollback().await?;
-        assert!(runtime.storage.savepoint_stack.is_empty().await);
-        assert_eq!(
-            token::floor(&mut runtime, HolderRef::from(&actor)).await?,
-            floor_before
-        );
-        assert_eq!(
-            balance(&mut runtime, HolderRef::from(&actor)).await?,
-            before
-        );
+        let restored = balance(&mut runtime, HolderRef::from(&actor)).await?;
+        let floor_restored = token::floor(&mut runtime, HolderRef::from(&actor)).await?;
+        let rollback_clean = runtime.storage.savepoint_stack.is_empty().await
+            && restored == before
+            && floor_restored == floor_before
+            && balance(&mut runtime, HolderRef::Burner).await? == burned_before
+            && token::total_supply(&mut runtime).await? == supply_before
+            && runtime
+                .execute(None, None, &chain[0], "storage-state()")
+                .await?
+                == "[0, 0, 0, 0]";
+        assert!(rollback_clean);
+        trials.push(json!({
+            "outcome": if over_cap { "invocation_limit" } else if fail { "trap" } else { "ok" },
+            "value": value,
+            "fuel": {
+                "user": usage.user_fuel,
+                "system": usage.system_fuel,
+                "deposit": usage.deposit_fuel,
+            },
+            "receipt": receipt,
+            "storage_state": storage_state,
+            "rolled_back": rollback_clean,
+            "resource_count": resource_count,
+            "baseline_resource_count": baseline_resources,
+            "savepoint_restored": savepoint_restored,
+            "stack_empty": stack_empty,
+            "host_io_suspended": host_io_suspended,
+            "leaf_callback_seen": leaf_callback_seen,
+            "balances": {
+                "before": before.to_string(),
+                "after": after.to_string(),
+                "restored": restored.to_string(),
+                "burned_before": burned_before.to_string(),
+                "burned_after": burned_after.to_string(),
+                "supply_before": supply_before.to_string(),
+                "supply_after": supply_after.to_string(),
+                "floor_before": floor_before.to_string(),
+                "floor_after": floor_after.to_string(),
+                "floor_restored": floor_restored.to_string(),
+            },
+            "receipt_count": receipt_count,
+            "rollback_clean": rollback_clean,
+        }));
     }
-    println!("CHAIN_PROBE_COMPLETE mode={mode} depth={depth}");
+    println!(
+        "CHAIN_PROBE_REPORT:{}",
+        json!({
+            "mode": mode,
+            "stores": depth + 1,
+            "trials": trials,
+            "component_sha256": {
+                "error_test": hex::encode(Sha256::digest(include_bytes!("../../../../../../test-contracts/binaries/error_test.wasm.br"))),
+                "proxy": hex::encode(Sha256::digest(include_bytes!("../../../../../../test-contracts/binaries/proxy.wasm.br"))),
+            },
+            "engine_target": runtime.engine.get_target(),
+            "max_wasm_stack": runtime.engine.get_max_wasm_stack(),
+            "async_stack_size": runtime.engine.get_async_stack_size(),
+            "target_os": env::consts::OS,
+            "target_arch": env::consts::ARCH,
+        })
+    );
+    println!("CHAIN_PROBE_COMPLETE mode={mode} stores={}", depth + 1);
     Ok(())
 }

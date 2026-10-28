@@ -484,6 +484,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "stack-probe"
+version = "0.1.0"
+dependencies = [
+ "built-in-types",
+ "stdlib",
+]
+
+[[package]]
 name = "stdlib"
 version = "0.1.0"
 dependencies = [

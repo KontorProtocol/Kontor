@@ -20,6 +20,7 @@ use crate::database::native_contracts::{TOKEN_CONTRACT_ID, is_native_contract_id
 use super::{
     ContractAddress, MAX_UNTRUSTED_GAS_LIMIT, Runtime,
     fuel::{Fuel, UsageKind, record_fuel},
+    invocation::{InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS},
     stack::CallFrame,
     wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
@@ -58,6 +59,13 @@ struct PreparedCall {
 pub(super) struct CallOutcome {
     pub result: Result<String, ExecutionError>,
     pub remaining_fuel: u64,
+}
+
+fn invocation_limit_outcome(fuel_limit: u64) -> CallOutcome {
+    CallOutcome {
+        result: Err(ExecutionError::Deterministic(InvocationLimitReached.into())),
+        remaining_fuel: fuel_limit,
+    }
 }
 
 impl Runtime {
@@ -199,7 +207,21 @@ impl Runtime {
         fuel_limit: u64,
         nested: bool,
     ) -> Result<CallOutcome, ExecutionError> {
-        let mut store = self.make_store(fuel_limit)?;
+        if self.invocation_depth >= MAX_LIVE_INVOCATIONS
+            || self
+                .invocation_budget
+                .as_ref()
+                .is_some_and(|budget| budget.live() >= MAX_LIVE_INVOCATIONS)
+        {
+            return Ok(invocation_limit_outcome(fuel_limit));
+        }
+        let mut store = match self.make_store(fuel_limit) {
+            Ok(store) => store,
+            Err(error) if error.is::<InvocationLimitReached>() => {
+                return Ok(invocation_limit_outcome(fuel_limit));
+            }
+            Err(error) => return Err(error.into()),
+        };
         if !nested {
             store.data_mut().usage_kind = match signer {
                 Some(signer) if !signer.is_core() => UsageKind::User,
@@ -219,13 +241,13 @@ impl Runtime {
 
     async fn invoke_in_store(
         &mut self,
-        mut store: Store<Runtime>,
+        mut store: InvocationStore,
         contract_address: &ContractAddress,
         signer: Option<&Signer>,
         payment: Option<&Payment>,
         expr: &str,
         nested: bool,
-    ) -> Result<(Result<String, ExecutionError>, Store<Runtime>), ExecutionError> {
+    ) -> Result<(Result<String, ExecutionError>, InvocationStore), ExecutionError> {
         let starting_fuel = store.get_fuel().map_err(anyhow::Error::from)?;
         let prepared = self
             .prepare_in_store(&mut store, contract_address, signer, payment, expr, nested)
@@ -541,12 +563,12 @@ impl Runtime {
     /// Returns (call_result, store) — the store is always returned for gas accounting.
     async fn call_guest(
         &self,
-        mut store: Store<Runtime>,
+        mut store: InvocationStore,
         func: Func,
         params: Vec<Val>,
         mut results: Vec<Val>,
         is_fallback: bool,
-    ) -> Result<(Result<String, ExecutionError>, Store<Runtime>)> {
+    ) -> Result<(Result<String, ExecutionError>, InvocationStore)> {
         let (result, results, mut store) = tokio::spawn(async move {
             match std::panic::AssertUnwindSafe(func.call_async(&mut store, &params, &mut results))
                 .catch_unwind()

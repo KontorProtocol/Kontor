@@ -26,7 +26,14 @@ too_many_arguments = "allow"
 
 [workspace.dependencies]
 # Keep our WIT tools aligned with wit-bindgen; Wasmtime owns its internal versions.
-wasmtime = { git = "https://github.com/wilfreddenton/wasmtime", rev = "bfdee9ba9a483915dc95432708cf7db8281adbc1", features = ["wave", "component-model-async"] }
+# Pulley is not in Wasmtime's defaults. Keep the execution feature closure
+# explicit so cache, profiling, and debug builtins stay absent. The threads
+# feature exposes the setter needed to assert guest threads are disabled.
+wasmtime = { git = "https://github.com/wilfreddenton/wasmtime", rev = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7", version = "=51.0.0-kontor.2", default-features = false, features = [
+    "anyhow", "async", "backtrace", "component-model", "component-model-async",
+    "cranelift", "gc-copying", "gc-drc", "gc-null", "pooling-allocator",
+    "pulley", "runtime", "std", "threads", "wat", "wave", "wit-parser",
+] }
 wit-bindgen = "=0.63.0"
 wit-bindgen-core = "=0.63.0"
 wit-bindgen-rust = "=0.63.0"

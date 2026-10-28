@@ -11,7 +11,7 @@ const COMPONENT_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct ComponentCache {
-    inner: Cache<u64, (Component, u32)>,
+    inner: Cache<u64, (Component, u32, bool)>,
 }
 
 impl ComponentCache {
@@ -20,27 +20,43 @@ impl ComponentCache {
             inner: Cache::builder()
                 // Weight 0 would make an entry invisible to the bound —
                 // floor at 1.
-                .weigher(|_key, (_component, size): &(Component, u32)| (*size).max(1))
+                .weigher(
+                    |_key, (_component, size, _admitted): &(Component, u32, bool)| (*size).max(1),
+                )
                 .max_capacity(COMPONENT_CACHE_MAX_BYTES)
                 .build(),
         }
     }
 
-    pub async fn get(&self, key: &u64) -> Option<Component> {
-        self.inner.get(key).await.map(|(component, _)| component)
+    #[cfg(test)]
+    pub(crate) async fn get(&self, key: &u64) -> Option<Component> {
+        self.inner.get(key).await.map(|(component, _, _)| component)
+    }
+
+    pub(crate) async fn get_admitted(&self, key: &u64) -> Option<Component> {
+        self.inner
+            .get(key)
+            .await
+            .and_then(|(component, _, admitted)| admitted.then_some(component))
     }
 
     /// Entry with its recorded weight — for callers that re-`put` entries into
     /// another cache and must preserve the weight (test prewarming).
-    pub async fn get_weighted(&self, key: &u64) -> Option<(Component, u32)> {
+    pub(crate) async fn get_weighted(&self, key: &u64) -> Option<(Component, u32, bool)> {
         self.inner.get(key).await
     }
 
-    /// Cache a compiled component, weighed by `size_bytes` — the encoded
-    /// component binary length the caller already has in hand.
-    pub async fn put(&self, key: u64, value: Component, size_bytes: usize) {
+    /// Only call after `validate_no_starts`: this bit is the cache hit's proof
+    /// that the component passed the current guest-entry admission rule.
+    pub(crate) async fn put_admitted(&self, key: u64, value: Component, size_bytes: usize) {
         let weight = u32::try_from(size_bytes).unwrap_or(u32::MAX);
-        self.inner.insert(key, (value, weight)).await
+        self.inner.insert(key, (value, weight, true)).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn put_unchecked(&self, key: u64, value: Component, size_bytes: usize) {
+        let weight = u32::try_from(size_bytes).unwrap_or(u32::MAX);
+        self.inner.insert(key, (value, weight, false)).await
     }
 
     /// Drop a cached component. Used when a publish rolls back: the contract id

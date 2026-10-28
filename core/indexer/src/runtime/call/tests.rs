@@ -3,9 +3,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use indexer_types::Payment;
 use libsql::params;
-use wasmtime::{Store, Trap};
+use wasmtime::Trap;
 
-use super::CallOutcome;
+use super::{CallOutcome, InvocationStore};
 
 use crate::database::types::Identity;
 use crate::reg_tester::random_x_only_pubkey;
@@ -21,6 +21,7 @@ use crate::runtime::{
 use crate::test_utils::test_runtime;
 
 mod abi_errors;
+mod cancelled_owner;
 mod conversion;
 mod conversion_work;
 mod errors;
@@ -28,6 +29,7 @@ mod guest_memory;
 #[cfg(target_os = "linux")]
 mod guest_memory_failure;
 mod holder_errors;
+mod native_stack;
 mod preparation_fees;
 mod results;
 mod sequential_chains;
@@ -610,16 +612,16 @@ async fn invocation_tables_drop_resources_without_invalidating_parent_handles() 
     Ok(())
 }
 
-// Retain a caller-supplied Store for exact-fuel and resource-lifetime assertions,
+// Retain a caller-supplied Store owner for exact-fuel and resource-lifetime assertions,
 // while exercising the same payment boundary as a normal top-level invocation.
 async fn funded_in_store(
     runtime: &mut Runtime,
-    store: Store<Runtime>,
+    store: InvocationStore,
     target: &ContractAddress,
     signer: &Signer,
     payment: Option<&Payment>,
     expr: &str,
-) -> Result<(Result<String, ExecutionError>, Store<Runtime>), ExecutionError> {
+) -> Result<(Result<String, ExecutionError>, InvocationStore), ExecutionError> {
     if !signer.is_core()
         && let Some(payment) = payment
     {

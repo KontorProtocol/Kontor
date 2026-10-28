@@ -6,6 +6,18 @@ use wasmparser::{
 
 use super::ExecutionError;
 
+pub(super) fn validate_no_starts(bytes: &[u8]) -> Result<()> {
+    for payload in Parser::new(0).parse_all(bytes) {
+        match payload? {
+            Payload::StartSection { .. } | Payload::ComponentStartSection { .. } => {
+                bail!("contract component contains a start section");
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn validate(bytes: &[u8]) -> Result<(), ExecutionError> {
     validate_features(bytes).map_err(|error| {
         ExecutionError::Deterministic(error.context("contract component failed feature policy"))
@@ -102,12 +114,44 @@ fn validate_type(ty: &ComponentType<'_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use wasm_encoder::{
-        CanonicalFunctionSection, CanonicalOption, Component,
+        CanonicalFunctionSection, CanonicalOption, Component, ComponentStartSection,
         ComponentType as EncodedComponentType, ComponentTypeSection, InstanceType, Module,
-        ModuleSection, NestedComponentSection, PrimitiveValType,
+        ModuleSection, NestedComponentSection, PrimitiveValType, StartSection,
     };
 
-    use super::{ExecutionError, validate};
+    use super::{ExecutionError, validate, validate_no_starts};
+
+    #[test]
+    fn rejects_starts_in_embedded_modules_and_nested_components() {
+        let mut module = Module::new();
+        module.section(&StartSection { function_index: 0 });
+        let mut component = Component::new();
+        component.section(&ModuleSection(&module));
+        assert!(validate_no_starts(component.as_slice()).is_err());
+
+        let mut nested = Component::new();
+        nested.section(&ModuleSection(&module));
+        let mut outer = Component::new();
+        outer.section(&NestedComponentSection(&nested));
+        assert!(validate_no_starts(outer.as_slice()).is_err());
+
+        let start = ComponentStartSection {
+            function_index: 0,
+            args: [0],
+            results: 0,
+        };
+        let mut component = Component::new();
+        component.section(&start);
+        assert!(validate_no_starts(component.as_slice()).is_err());
+        assert!(validate_no_starts(b"invalid component").is_err());
+    }
+
+    #[test]
+    fn permits_start_free_embedded_modules() {
+        let mut component = Component::new();
+        component.section(&ModuleSection(&Module::new()));
+        validate_no_starts(component.as_slice()).expect("start-free component must be admitted");
+    }
 
     fn assert_rejected(component: &Component, expected: &str) {
         let error = validate(component.as_slice()).expect_err("policy must reject component");

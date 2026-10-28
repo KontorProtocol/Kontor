@@ -389,7 +389,7 @@ async fn shared_test_engine() -> (wasmtime::Engine, Vec<PrewarmedComponent>) {
         // `Runtime::publish_native_contracts`.
         let mut components = Vec::new();
         for id in 1..=NATIVE_CONTRACTS.len() as u64 {
-            if let Some((component, size)) = cache.get_weighted(&id).await {
+            if let Some((component, size, true)) = cache.get_weighted(&id).await {
                 components.push((id, component, size));
             }
         }
@@ -457,7 +457,9 @@ pub async fn test_runtime_with_genesis_config(
     let (engine, prewarmed) = shared_test_engine().await;
     let cache = ComponentCache::new();
     for (id, component, size) in &prewarmed {
-        cache.put(*id, component.clone(), *size as usize).await;
+        cache
+            .put_admitted(*id, component.clone(), *size as usize)
+            .await;
     }
     let linkers = Runtime::new_linkers(&engine)?;
     let mut runtime = Runtime::new_with(engine, linkers, cache, storage).await?;
