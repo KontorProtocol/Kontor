@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::{Error, Result, anyhow, bail, ensure};
 use brotli::CompressorReader;
 use libsql::params;
+use serde_json::to_string;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 use wasm_encoder::{
@@ -13,7 +14,7 @@ use wasm_encoder::{
     StartSection,
 };
 use wasmparser::{BinaryReader, CodeSectionReader, Parser, Payload, TypeRef, Validator};
-use wasmtime::component::{Component, Val};
+use wasmtime::component::{Component, ResourceType, Val};
 use wasmtime::{Engine, ExternType, Linker as WasmtimeLinker, Module, Store, Trap};
 
 use super::component_policy;
@@ -25,7 +26,8 @@ use super::stack::CallFrame;
 use super::storage::ComponentDecodeError;
 use super::wit::Signer;
 use super::{
-    ComponentCache, ContractAddress, ExecutionError, Runtime, TransactionContext, native_provenance,
+    ComponentCache, ContractAddress, ExecutionError, Linkers, Runtime, TransactionContext,
+    native_provenance,
 };
 use crate::test_utils::{test_genesis, test_runtime};
 
@@ -42,6 +44,41 @@ fn compressed_core_start() -> Result<Vec<u8>> {
     let mut compressed = Vec::new();
     CompressorReader::new(bytes.as_slice(), 4096, 5, 22).read_to_end(&mut compressed)?;
     Ok(compressed)
+}
+
+async fn install_admitted_component_fixture(
+    runtime: &mut Runtime,
+    name: &str,
+    wat: &str,
+    tx_index: u32,
+) -> Result<ContractAddress> {
+    let bytes = wat::parse_str(wat)?;
+    component_policy::validate_no_starts(&bytes)?;
+    let component = Component::new(&runtime.engine, &bytes)?;
+    runtime
+        .set_context(
+            1,
+            Some(TransactionContext::builder().tx_index(tx_index).build()),
+            None,
+            None,
+        )
+        .await;
+    let core = wat::parse_str("(module)")?;
+    let mut compressed = Vec::new();
+    CompressorReader::new(core.as_slice(), 4096, 5, 22).read_to_end(&mut compressed)?;
+    // Address resolution uses the row; the admitted cache supplies component
+    // fixtures whose canonical callbacks cannot be encoded from a plain module.
+    let id = runtime.storage.insert_contract(name, &compressed).await?;
+    runtime
+        .component_cache
+        .put_admitted(id, component, bytes.len())
+        .await;
+    runtime.set_context(1, None, None, None).await;
+    Ok(ContractAddress {
+        name: name.into(),
+        height: 1,
+        tx_index,
+    })
 }
 
 fn host_importing_start(bytes: &[u8], module_name: &str, import_name: &str) -> Result<Vec<u8>> {
@@ -176,6 +213,279 @@ fn generated_startup_does_not_call_imported_host_function() -> Result<()> {
     let error = linker.instantiate(&mut store, &valid).unwrap_err();
     assert_eq!(error.downcast_ref::<Trap>(), Some(&Trap::OutOfFuel));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let callback_calls = Arc::new(AtomicUsize::new(0));
+    let mut user = runtime.linkers.user.clone();
+    let observed = callback_calls.clone();
+    user.root().func_wrap("sentinel", move |_, (): ()| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })?;
+    runtime.linkers = Arc::new(Linkers {
+        user,
+        native: runtime.linkers.native.clone(),
+    });
+    let post_return = r#"(component
+        (import "kontor:built-in/context" (instance $context
+            (export "view-context" (type (sub resource)))))
+        (alias export $context "view-context" (type $view-context))
+        (import "sentinel" (func $sentinel))
+        (core func $lower (canon lower (func $sentinel)))
+        (core func $drop (canon resource.drop $view-context))
+        (core module $code
+            (import "" "" (func $host))
+            (import "" "drop" (func $drop (param i32)))
+            (func (export "run") (param i32)
+                (call $drop (local.get 0)))
+            (func (export "post-return") (call $host)))
+        (core instance $code (instantiate $code
+            (with "" (instance
+                (export "" (func $lower))
+                (export "drop" (func $drop))))))
+        (func (export "run") (param "ctx" (borrow $view-context))
+            (canon lift (core func $code "run")
+                (post-return (core func $code "post-return")))))"#;
+    let realloc = r#"(component
+        (import "kontor:built-in/context" (instance $context
+            (export "view-context" (type (sub resource)))))
+        (alias export $context "view-context" (type $view-context))
+        (core func $drop (canon resource.drop $view-context))
+        (core module $code
+            (import "" "drop" (func $drop (param i32)))
+            (memory (export "memory") 1)
+            (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+                unreachable)
+            (func (export "run") (param i32 i32 i32)
+                (call $drop (local.get 0))))
+        (core instance $code (instantiate $code
+            (with "" (instance (export "drop" (func $drop))))))
+        (func (export "run") (param "ctx" (borrow $view-context)) (param "text" string)
+            (canon lift (core func $code "run")
+                (memory (core memory $code "memory"))
+                (realloc (core func $code "realloc")))))"#;
+    let large_input = format!("run({})", to_string(&"x".repeat(16 * 1024))?);
+    for (index, name, wat, expression, trap) in [
+        (
+            0,
+            "post-return",
+            post_return,
+            "run()",
+            Trap::CannotLeaveComponent,
+        ),
+        (
+            1,
+            "realloc",
+            realloc,
+            large_input.as_str(),
+            Trap::UnreachableCodeReached,
+        ),
+    ] {
+        let address = install_admitted_component_fixture(&mut runtime, name, wat, index).await?;
+        let resources_before = runtime.table.lock().await.iter_mut().count();
+        let conn = runtime.get_storage_conn();
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM contract_results", ())
+            .await?;
+        let receipts_before: u64 = rows.next().await?.unwrap().get(0)?;
+        for _ in 0..2 {
+            let previous = runtime.start_usage();
+            let error = runtime
+                .execute(None, None, &address, expression)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, ExecutionError::Deterministic(ref cause)
+                    if cause.chain().any(|item| item.downcast_ref::<Trap>() == Some(&trap))),
+                "{name}: {error:?}"
+            );
+            let usage = runtime.finish_usage(previous)?;
+            assert!(usage.system_fuel > 0, "{name}");
+            assert!(runtime.stack.is_empty().await, "{name}");
+            assert!(runtime.storage.savepoint_stack.is_empty().await, "{name}");
+            assert_eq!(
+                runtime.table.lock().await.iter_mut().count(),
+                resources_before
+            );
+            assert_eq!(callback_calls.load(Ordering::SeqCst), 0);
+            let mut rows = conn
+                .query("SELECT COUNT(*) FROM contract_results", ())
+                .await?;
+            let receipts_after: u64 = rows.next().await?.unwrap().get(0)?;
+            assert_eq!(receipts_after, receipts_before, "{name}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn partial_instantiation_does_not_invoke_registered_destructors() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let guest_calls = Arc::new(AtomicUsize::new(0));
+    let host_drops = Arc::new(AtomicUsize::new(0));
+    let mut user = runtime.linkers.user.clone();
+    let observed_guest = guest_calls.clone();
+    user.root()
+        .func_wrap("guest-dtor-sentinel", move |_, (): ()| {
+            observed_guest.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })?;
+    let observed_host = host_drops.clone();
+    user.root()
+        .resource_async("host-resource", ResourceType::host::<u64>(), move |_, _| {
+            let observed_host = observed_host.clone();
+            Box::new(async move {
+                observed_host.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        })?;
+    runtime.linkers = Arc::new(Linkers {
+        user,
+        native: runtime.linkers.native.clone(),
+    });
+    let component = r#"(component
+        (import "guest-dtor-sentinel" (func $sentinel))
+        (import "host-resource" (type $host-resource (sub resource)))
+        (core func $lower (canon lower (func $sentinel)))
+        (core module $dtor-code
+            (import "" "" (func $host))
+            (func (export "dtor") (param i32) (call $host)))
+        (core instance $dtor-code (instantiate $dtor-code
+            (with "" (instance (export "" (func $lower))))))
+        (type $guest-resource
+            (resource (rep i32) (dtor (core func $dtor-code "dtor"))))
+        (export "guest-resource" (type $guest-resource))
+        (core module $fail
+            (memory 1)
+            (data (i32.const 65536) "x"))
+        (core instance $fail (instantiate $fail)))"#;
+    let address =
+        install_admitted_component_fixture(&mut runtime, "failed-init", component, 0).await?;
+    let budget = Arc::new(InvocationBudget::default());
+    runtime.invocation_budget = Some(budget.clone());
+    let resources_before = runtime.table.lock().await.iter_mut().count();
+    let conn = runtime.get_storage_conn();
+    let mut rows = conn
+        .query("SELECT COUNT(*) FROM contract_results", ())
+        .await?;
+    let receipts_before: u64 = rows.next().await?.unwrap().get(0)?;
+    for _ in 0..2 {
+        let result = runtime.execute(None, None, &address, "run()").await;
+        assert!(
+            matches!(result, Err(ExecutionError::Deterministic(_))),
+            "{result:?}"
+        );
+        assert_eq!(budget.live(), 0);
+        assert!(runtime.stack.is_empty().await);
+        assert!(runtime.storage.savepoint_stack.is_empty().await);
+        assert_eq!(
+            runtime.table.lock().await.iter_mut().count(),
+            resources_before
+        );
+        assert_eq!(guest_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(host_drops.load(Ordering::SeqCst), 0);
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM contract_results", ())
+            .await?;
+        let receipts_after: u64 = rows.next().await?.unwrap().get(0)?;
+        assert_eq!(receipts_after, receipts_before);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_guest_resource_drop_invokes_host_callback_and_cleans_up() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let callback_calls = Arc::new(AtomicUsize::new(0));
+    let mut user = runtime.linkers.user.clone();
+    let observed = callback_calls.clone();
+    user.root()
+        .func_wrap("destructor-callback", move |_, (): ()| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })?;
+    runtime.linkers = Arc::new(Linkers {
+        user,
+        native: runtime.linkers.native.clone(),
+    });
+    let component = r#"(component
+        (import "kontor:built-in/context" (instance $context
+            (export "view-context" (type (sub resource)))))
+        (alias export $context "view-context" (type $view-context))
+        (import "destructor-callback" (func $callback))
+        (core func $callback (canon lower (func $callback)))
+        (core module $dtor-code
+            (import "" "callback" (func $callback))
+            (func (export "dtor") (param i32) (call $callback)))
+        (core instance $dtor-code (instantiate $dtor-code
+            (with "" (instance (export "callback" (func $callback))))))
+        (type $guest-resource
+            (resource (rep i32) (dtor (core func $dtor-code "dtor"))))
+        (core func $new (canon resource.new $guest-resource))
+        (core func $drop-resource (canon resource.drop $guest-resource))
+        (core func $drop-context (canon resource.drop $view-context))
+        (core module $code
+            (import "" "new" (func $new (param i32) (result i32)))
+            (import "" "drop-resource" (func $drop-resource (param i32)))
+            (import "" "drop-context" (func $drop-context (param i32)))
+            (func $run (param $ctx i32) (param $fail i32)
+                (call $drop-resource (call $new (i32.const 7)))
+                (call $drop-context (local.get $ctx))
+                (if (local.get $fail) (then unreachable)))
+            (func (export "success") (param i32)
+                (call $run (local.get 0) (i32.const 0)))
+            (func (export "trap") (param i32)
+                (call $run (local.get 0) (i32.const 1))))
+        (core instance $code (instantiate $code
+            (with "" (instance
+                (export "new" (func $new))
+                (export "drop-resource" (func $drop-resource))
+                (export "drop-context" (func $drop-context))))))
+        (func (export "success") (param "ctx" (borrow $view-context))
+            (canon lift (core func $code "success")))
+        (func (export "trap") (param "ctx" (borrow $view-context))
+            (canon lift (core func $code "trap"))))"#;
+    let address =
+        install_admitted_component_fixture(&mut runtime, "explicit-drop", component, 0).await?;
+    let budget = Arc::new(InvocationBudget::default());
+    runtime.invocation_budget = Some(budget.clone());
+    let resources_before = runtime.table.lock().await.iter_mut().count();
+    let conn = runtime.get_storage_conn();
+    let mut rows = conn
+        .query("SELECT COUNT(*) FROM contract_results", ())
+        .await?;
+    let receipts_before: u64 = rows.next().await?.unwrap().get(0)?;
+    for (index, expression) in ["success()", "trap()", "success()"].into_iter().enumerate() {
+        let previous = runtime.start_usage();
+        let result = runtime.execute(None, None, &address, expression).await;
+        if expression == "trap()" {
+            assert!(
+                matches!(result, Err(ExecutionError::Deterministic(ref error))
+                if error.chain().any(|cause| cause.downcast_ref::<Trap>() == Some(&Trap::UnreachableCodeReached))),
+                "{result:?}"
+            );
+        } else {
+            assert!(result.is_ok(), "{result:?}");
+        }
+        assert!(runtime.finish_usage(previous)?.system_fuel > 0);
+        assert_eq!(callback_calls.load(Ordering::SeqCst), index + 1);
+        assert_eq!(budget.live(), 0);
+        assert!(runtime.stack.is_empty().await);
+        assert!(runtime.storage.savepoint_stack.is_empty().await);
+        assert_eq!(
+            runtime.table.lock().await.iter_mut().count(),
+            resources_before
+        );
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM contract_results", ())
+            .await?;
+        let receipts_after: u64 = rows.next().await?.unwrap().get(0)?;
+        assert_eq!(receipts_after, receipts_before);
+    }
     Ok(())
 }
 

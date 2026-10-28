@@ -144,6 +144,8 @@ impl Fixture {
     async fn observe(&mut self, depth: u32, role: &str) -> Result<String> {
         let sample_index = self.samples.len();
         let sample_id = format!("{role}:{}:{sample_index:04}", self.kind);
+        // conversion_probe is the only call-hook install site in this runtime.
+        // Reaudit this sentinel if another install path is added.
         let call_hook_installed = self.runtime.conversion_probe.is_some();
         ensure!(!call_hook_installed, "call hook installed in {sample_id}");
         let total_start = Instant::now();
