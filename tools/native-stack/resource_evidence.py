@@ -524,7 +524,7 @@ def check_build_artifact(report, manifest, directory):
             and wasmtime.get("id") == f"{source_prefix}#51.0.0-kontor.2"
             and isinstance(wasmtime.get("dependencies"), list)
             and any(dependency.get("name") == "wasmtime-internal-fiber"
-                    and dependency.get("source") == source_prefix
+                    and dependency.get("source") == source
                     and dependency.get("req") == "=51.0.0-kontor.2"
                     for dependency in wasmtime["dependencies"] if isinstance(dependency, dict))
             and fiber.get("version") == "51.0.0-kontor.2"

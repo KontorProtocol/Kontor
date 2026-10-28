@@ -251,7 +251,8 @@ def synthetic_report(directory):
              "source": f"{source_prefix}#{manifest['wasmtime_revision']}",
              "manifest_path": str(checkout / "crates/wasmtime/Cargo.toml"),
              "dependencies": [{"name": "wasmtime-internal-fiber",
-                               "source": source_prefix, "req": "=51.0.0-kontor.2"}]},
+                               "source": f"{source_prefix}#{manifest['wasmtime_revision']}",
+                               "req": "=51.0.0-kontor.2"}]},
             {"name": "wasmtime-internal-fiber", "id": fiber_id,
              "version": "51.0.0-kontor.2",
              "source": f"{source_prefix}#{manifest['wasmtime_revision']}",
@@ -334,7 +335,8 @@ class ResourceReportControls(unittest.TestCase):
                          "claimed_source_sha",
                          "child_executable_hash", "child_source_sha",
                          "fiber_source_bytes", "fiber_source_claim",
-                         "wrong_fiber_source", "wrong_fiber_edge", "wrong_fiber_artifact"):
+                         "wrong_fiber_source", "wrong_fiber_dependency_source",
+                         "wrong_fiber_edge", "wrong_fiber_artifact"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 manifest, manifest_path, report = synthetic_report(directory)
@@ -360,6 +362,7 @@ class ResourceReportControls(unittest.TestCase):
                     "fiber_source_bytes": "raw log hash mismatch",
                     "fiber_source_claim": "fiber allocator source differs from pinned fork",
                     "wrong_fiber_source": "package identity differs from frozen build",
+                    "wrong_fiber_dependency_source": "package identity differs from frozen build",
                     "wrong_fiber_edge": "does not resolve Wasmtime to the pinned fiber crate",
                     "wrong_fiber_artifact": "unique indexer, Wasmtime, or fiber artifacts",
                 }[mutation]
@@ -369,11 +372,15 @@ class ResourceReportControls(unittest.TestCase):
                     digest = resource_evidence.sha256(path)
                     closure["cargo_metadata_log"]["sha256"] = digest
                     closure["cargo_metadata_sha256"] = digest
-                elif mutation in {"wrong_fiber_source", "wrong_fiber_edge"}:
+                elif mutation in {"wrong_fiber_source", "wrong_fiber_dependency_source",
+                                  "wrong_fiber_edge"}:
                     path = directory / closure["cargo_metadata_log"]["path"]
                     metadata = json.loads(path.read_text())
                     if mutation == "wrong_fiber_source":
                         metadata["packages"][2]["source"] = "git+https://example.com/fiber#other"
+                    elif mutation == "wrong_fiber_dependency_source":
+                        metadata["packages"][1]["dependencies"][0]["source"] = (
+                            metadata["packages"][2]["source"].split("#")[0])
                     else:
                         metadata["resolve"]["nodes"][1]["deps"][0]["pkg"] += "-other"
                     path.write_text(json.dumps(metadata))

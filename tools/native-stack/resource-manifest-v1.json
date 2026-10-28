@@ -102,7 +102,7 @@
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "ed53a07b3af854166e7ee73b59c4d6490b2c1a8d7749ebe16866063541dc58e9"
+      "sha256": "d07e16cf27c874bdc859be4d729eb2bbf20a6ec5ba34b75c957541d6fa35e91b"
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
