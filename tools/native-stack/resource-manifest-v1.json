@@ -22,7 +22,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "8004ee055b55179b08016ca1731e7c0dd58236cb58bf9dcd5d138a27dbac9234"
+      "sha256": "fad87ed324459e059706fe4902df665da571902757cb09f62322860ba8039b12"
     },
     "core_lockfile": {
       "path": "core/Cargo.lock",
@@ -86,7 +86,7 @@
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
-      "sha256": "de962ae000c13cc81b5ae6923d32e3372b9ce7bc2eb28f584bf2d2dbc385197b"
+      "sha256": "483331fca7e9b792c63832646389cab0e6472941f28b1a2df73336366abad52d"
     },
     "resource_comparator_source": {
       "path": "tools/native-stack/compare_resource.py",
@@ -126,7 +126,7 @@
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
-      "sha256": "3893c7c7956ecb55d3188187169725c3137c9e92ef44ebba6c4c5befcba14d46"
+      "sha256": "48ed4901e83e95cec2fd0d928bbe3c06993f916ab0be5398fe84107d8802a69e"
     },
     "stack_probe": {
       "path": "test-contracts/binaries/stack_probe.wasm.br",

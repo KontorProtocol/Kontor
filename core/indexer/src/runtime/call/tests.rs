@@ -38,11 +38,12 @@ mod sequential_chains;
 mod wave_costs;
 
 async fn funded(runtime: &mut Runtime) -> Result<Signer> {
-    let signer = Signer::Id(
-        runtime
-            .get_or_create_identity(&random_x_only_pubkey())
-            .await?,
-    );
+    let pubkey = random_x_only_pubkey();
+    funded_with_pubkey(runtime, &pubkey).await
+}
+
+async fn funded_with_pubkey(runtime: &mut Runtime, pubkey: &str) -> Result<Signer> {
+    let signer = Signer::Id(runtime.get_or_create_identity(pubkey).await?);
     token::issue_to(
         runtime,
         &Signer::Core(Box::new(Signer::Nobody)),

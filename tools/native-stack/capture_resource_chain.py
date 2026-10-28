@@ -230,17 +230,6 @@ def observation_from_trial(trial, case_id, expected_outcome, schema):
     return observation
 
 
-def paired_signature(observation):
-    state = observation["state"].copy()
-    before = state.pop("before_sha256")
-    after = state.pop("after_sha256")
-    require(before == after, "chain persistent rollback digest differs")
-    # The fixture funds a random signer in each child, so whole-database
-    # baselines differ even when the paid call has identical behavior.
-    state["persistent_rollback_verified"] = True
-    return {**observation, "state": state}
-
-
 def parse_worker(path, mode, stores, pid, manifest, schema):
     label = f"chain_{stores}_paid/{mode}"
     lines = path.read_text().splitlines()
@@ -399,11 +388,9 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
             case_id = f"chain_{stores}_paid"
             reduced = captured[f"{case_id}_reduced"]["observations"]
             production = captured[f"{case_id}_production"]["observations"]
-            reduced_signatures = [paired_signature(item) for item in reduced]
-            production_signatures = [paired_signature(item) for item in production]
-            require(reduced_signatures == production_signatures,
+            require(reduced == production,
                     f"{case_id}: paid observations differ across worker stack modes")
-            signatures[case_id] = reduced_signatures[0]
+            signatures[case_id] = reduced[0]
         identities = [(item["process"]["pid"], item["process"]["started_unix_ns"])
                       for item in captured.values()]
         identities.append((control["guard_control"]["process"]["pid"],

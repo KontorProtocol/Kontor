@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from capture_resource_chain import (measured_trace, observation_from_trial,
-                                    paired_signature, verify_final_closure)
+                                    verify_final_closure)
 from resource_manifest import ROOT
 
 
@@ -70,31 +70,6 @@ class ChainObservationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "resource manifest changed"):
                 verify_final_closure(control, Path("unused"), Path("unused"),
                                      Path("unused"), "0" * 64)
-
-    def test_paired_signature_keeps_call_semantics_and_local_rollback(self):
-        observation = {
-            "state": {"before_sha256": "a" * 64, "after_sha256": "a" * 64,
-                      "marker": "[2, 0, 0, 0]", "balances_sha256": "c" * 64},
-            "fuel": {"user": 100}, "receipts": [{"gas": 50}],
-        }
-        other_process = copy.deepcopy(observation)
-        other_process["state"]["before_sha256"] = "b" * 64
-        other_process["state"]["after_sha256"] = "b" * 64
-        self.assertEqual(paired_signature(observation), paired_signature(other_process))
-        self.assertTrue(paired_signature(observation)["state"]["persistent_rollback_verified"])
-        for field in ("fuel", "receipts", "state"):
-            changed = copy.deepcopy(other_process)
-            if field == "fuel":
-                changed[field]["user"] += 1
-            elif field == "receipts":
-                changed[field][0]["gas"] += 1
-            else:
-                changed[field]["marker"] = "[0, 0, 0, 0]"
-            with self.subTest(field=field):
-                self.assertNotEqual(paired_signature(observation), paired_signature(changed))
-        other_process["state"]["after_sha256"] = "d" * 64
-        with self.assertRaisesRegex(ValueError, "rollback digest differs"):
-            paired_signature(other_process)
 
     def test_peak_and_rollback_must_be_observed(self):
         balances = {"actor": "100", "burner": "0", "floor": "0", "supply": "1000"}

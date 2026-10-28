@@ -13,7 +13,7 @@ use tokio::time::timeout;
 use wasmtime::Trap;
 
 use super::native_stack::persistent_digest;
-use super::{balance, funded};
+use super::{balance, funded, funded_with_pubkey};
 use crate::database::queries::live_deposit_gas_sum;
 use crate::runtime::invocation::{
     InvocationBudget, InvocationCapacityExhausted, InvocationLimitReached, MAX_LIVE_INVOCATIONS,
@@ -31,6 +31,8 @@ use crate::runtime::{
 use crate::test_utils::{test_runtime, test_runtime_with_engine};
 
 const CHILD: &str = "runtime::call::tests::sequential_chains::chain_probe_child";
+const RESOURCE_CHAIN_SIGNER_X_ONLY_PUBKEY: &str =
+    "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 
 #[tokio::test]
 async fn deep_sequential_chains_survive_in_separate_processes() -> Result<()> {
@@ -286,7 +288,11 @@ async fn run_chain_probe(
         }
         None => test_runtime().await?,
     };
-    let actor = funded(&mut runtime).await?;
+    let actor = if target_only {
+        funded_with_pubkey(&mut runtime, RESOURCE_CHAIN_SIGNER_X_ONLY_PUBKEY).await?
+    } else {
+        funded(&mut runtime).await?
+    };
     let chain = publish_chain(&mut runtime, &actor, depth).await?;
     assert!(runtime.conversion_probe.is_none());
     let entered = Arc::new(Notify::new());
