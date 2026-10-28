@@ -1,0 +1,853 @@
+{
+  "amendment": {
+    "path": "docs/design/protocol-upgrades/native-stack-s2-resource-amendment-v1.md",
+    "sha256": "923f6ddf0e5646e140242d11fc48995f69e2929d34930609a82ac13a4fce337c"
+  },
+  "artifacts": {
+    "callback_tests": {
+      "path": "core/indexer/src/runtime/sequential_tests.rs",
+      "sha256": "b94b1c620d2593820a85ba63a9cb90cf4396adbc60c9eeea3fa2d93c807e5260"
+    },
+    "chain_tests": {
+      "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
+      "sha256": "870746780b4f352b54295fcace21d7a2d95266068afefff2482d8d33ed98225a"
+    },
+    "error_test": {
+      "path": "test-contracts/binaries/error_test.wasm.br",
+      "sha256": "8610f85f6abdd1bdeb0d32c0916cf154493535299d2c4d8fa0e053f0ee2df875"
+    },
+    "guest_error_tests": {
+      "path": "core/indexer/src/runtime/call/tests/canonical_guest_errors.rs",
+      "sha256": "8973f4adc00a1062fe2c1c40e797f7cd94c885b1a55ddae9da142fff3b819f07"
+    },
+    "nft_pages": {
+      "path": "core/indexer/src/runtime/nft/query_tests.rs",
+      "sha256": "e9d5b03f7402e85f61fd61548af87587cbd0a8d49b93d6967fdd6cc7b71c26e1"
+    },
+    "proxy": {
+      "path": "test-contracts/binaries/proxy.wasm.br",
+      "sha256": "e44ced451f07e33041c6f411cf60cd77ba7cc6661ee0e0d996c7eff2ee84a190"
+    },
+    "stack_probe": {
+      "path": "test-contracts/binaries/stack_probe.wasm.br",
+      "sha256": "e396317b4eb14c9a29d47acbe8a9f7b0e29770d47e7df53e4bed12d5c5bfce50"
+    },
+    "stack_probe_source": {
+      "path": "test-contracts/stack-probe/src/lib.rs",
+      "sha256": "88b00501cfe0b47935a3d36072893e205ef53f78fcee074f83df2c50500a09e2"
+    },
+    "stack_probe_tests": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
+      "sha256": "cb24521a9fa119922d1f7c124d07f7b027df80714ad4ef74d76380551baed136"
+    },
+    "stack_sweep": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
+      "sha256": "3d75704a3cbfe8273eeb83ad15dd687b07639ee5650de091f22e0ca34c36851b"
+    },
+    "token_pages": {
+      "path": "core/indexer/src/runtime/token/query_tests.rs",
+      "sha256": "41717ccc31cc3ec99971ff1469c95cbe2fbe2bf25eea1eac95368d7b1f9c6f48"
+    }
+  },
+  "cases": [
+    {
+      "existing_unpaired_binding": "runtime::sequential_tests::hostile_canonical_callbacks_are_framed_and_clean_up",
+      "family": "canonical_abi",
+      "fixtures": [
+        "callback_tests"
+      ],
+      "id": "canonical_lift_lower",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "repeats": 2,
+        "shape": "string_and_resource"
+      },
+      "sample_keys": [
+        "success",
+        "failure"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::sequential_tests::paid_post_return_callback_work_charges_fuel_gas_and_burn",
+      "family": "canonical_abi",
+      "fixtures": [
+        "callback_tests"
+      ],
+      "id": "canonical_post_return",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "callback_loop_iterations": 16384,
+        "repeats": 2
+      },
+      "sample_keys": [
+        "light",
+        "heavy"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::sequential_tests::hostile_canonical_callbacks_are_framed_and_clean_up",
+      "family": "canonical_abi",
+      "fixtures": [
+        "callback_tests"
+      ],
+      "id": "canonical_realloc",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "repeats": 2,
+        "string_bytes": 16384
+      },
+      "sample_keys": [
+        "success_lowering",
+        "realloc_trap",
+        "forbidden_import"
+      ]
+    },
+    {
+      "existing_unpaired_binding": null,
+      "family": "canonical_abi",
+      "fixtures": [],
+      "id": "canonical_type_value_recursion",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "shapes": [
+          "nested_record",
+          "nested_variant",
+          "list_of_records",
+          "large_result"
+        ],
+        "wave_expression_max_depth": 64,
+        "wave_string_literal_max_bytes": 16384
+      },
+      "sample_keys": [
+        "nested_record",
+        "nested_variant",
+        "list_of_records",
+        "large_result"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
+      "family": "distinct_contract_chain",
+      "fixtures": [
+        "error_test",
+        "proxy",
+        "chain_tests"
+      ],
+      "id": "chain_33_core",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "failure_expected": false,
+        "mode": "core",
+        "repeats": 3,
+        "root_included": true,
+        "simultaneous_stores": 33
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
+      "family": "distinct_contract_chain",
+      "fixtures": [
+        "error_test",
+        "proxy",
+        "chain_tests"
+      ],
+      "id": "chain_33_paid",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "failure_expected": false,
+        "mode": "paid",
+        "repeats": 3,
+        "root_included": true,
+        "simultaneous_stores": 33
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
+      "family": "distinct_contract_chain",
+      "fixtures": [
+        "error_test",
+        "proxy",
+        "chain_tests"
+      ],
+      "id": "chain_33_view",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "failure_expected": false,
+        "mode": "view",
+        "repeats": 3,
+        "root_included": true,
+        "simultaneous_stores": 33
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
+      "family": "distinct_contract_chain",
+      "fixtures": [
+        "error_test",
+        "proxy",
+        "chain_tests"
+      ],
+      "id": "chain_63_core",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "failure_expected": false,
+        "mode": "core",
+        "repeats": 3,
+        "root_included": true,
+        "simultaneous_stores": 63
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
+      "family": "distinct_contract_chain",
+      "fixtures": [
+        "error_test",
+        "proxy",
+        "chain_tests"
+      ],
+      "id": "chain_63_paid",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "failure_expected": false,
+        "mode": "paid",
+        "repeats": 3,
+        "root_included": true,
+        "simultaneous_stores": 63
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
+      "family": "distinct_contract_chain",
+      "fixtures": [
+        "error_test",
+        "proxy",
+        "chain_tests"
+      ],
+      "id": "chain_63_view",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "failure_expected": false,
+        "mode": "view",
+        "repeats": 3,
+        "root_included": true,
+        "simultaneous_stores": 63
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
+      "family": "distinct_contract_chain",
+      "fixtures": [
+        "error_test",
+        "proxy",
+        "chain_tests"
+      ],
+      "id": "chain_64_core",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "failure_expected": false,
+        "mode": "core",
+        "repeats": 3,
+        "root_included": true,
+        "simultaneous_stores": 64
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
+      "family": "distinct_contract_chain",
+      "fixtures": [
+        "error_test",
+        "proxy",
+        "chain_tests"
+      ],
+      "id": "chain_64_paid",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "failure_expected": false,
+        "mode": "paid",
+        "repeats": 3,
+        "root_included": true,
+        "simultaneous_stores": 64
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
+      "family": "distinct_contract_chain",
+      "fixtures": [
+        "error_test",
+        "proxy",
+        "chain_tests"
+      ],
+      "id": "chain_64_view",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "failure_expected": false,
+        "mode": "view",
+        "repeats": 3,
+        "root_included": true,
+        "simultaneous_stores": 64
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
+      "family": "distinct_contract_chain",
+      "fixtures": [
+        "error_test",
+        "proxy",
+        "chain_tests"
+      ],
+      "id": "chain_65_core",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "failure_expected": true,
+        "mode": "core",
+        "repeats": 3,
+        "root_included": true,
+        "simultaneous_stores": 65
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
+      "family": "distinct_contract_chain",
+      "fixtures": [
+        "error_test",
+        "proxy",
+        "chain_tests"
+      ],
+      "id": "chain_65_paid",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "failure_expected": true,
+        "mode": "paid",
+        "repeats": 3,
+        "root_included": true,
+        "simultaneous_stores": 65
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
+      "family": "distinct_contract_chain",
+      "fixtures": [
+        "error_test",
+        "proxy",
+        "chain_tests"
+      ],
+      "id": "chain_65_view",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "failure_expected": true,
+        "mode": "view",
+        "repeats": 3,
+        "root_included": true,
+        "simultaneous_stores": 65
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": null,
+      "family": "pulley_host_callback",
+      "fixtures": [],
+      "id": "deepest_frame_host_call",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "depth": "last_success_from_plain_boundary",
+        "host_call_at_leaf": true
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::sequential_tests::explicit_guest_resource_drop_invokes_host_callback_and_cleans_up",
+      "family": "resource_lifecycle",
+      "fixtures": [
+        "callback_tests"
+      ],
+      "id": "explicit_resource_drop",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "success_trap_success": true
+      },
+      "sample_keys": [
+        "success_before_trap",
+        "trap",
+        "success_after_trap"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::sequential_tests::partial_instantiation_does_not_invoke_registered_destructors",
+      "family": "resource_lifecycle",
+      "fixtures": [
+        "callback_tests"
+      ],
+      "id": "failed_instantiation_cleanup",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "out_of_bounds_data": true,
+        "repeats": 2
+      },
+      "sample_keys": [
+        "failed_init",
+        "valid_control"
+      ]
+    },
+    {
+      "existing_unpaired_binding": null,
+      "family": "initialization",
+      "fixtures": [
+        "callback_tests"
+      ],
+      "id": "generated_initialization",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "active_data": true,
+        "active_element": true,
+        "fuel_failure": true,
+        "out_of_bounds_variants": true,
+        "repeats": 2,
+        "start_free": true
+      },
+      "sample_keys": [
+        "active_data_success",
+        "active_element_success",
+        "active_data_oob",
+        "active_element_oob",
+        "fuel_failure"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::native_stack::qualification_probe",
+      "family": "large_frame",
+      "fixtures": [
+        "stack_probe",
+        "stack_probe_source",
+        "stack_probe_tests",
+        "stack_sweep"
+      ],
+      "id": "large_frame_paid",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "live_u64_values": 256,
+        "mode": "paid",
+        "repeats": 3
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::native_stack::qualification_probe",
+      "family": "paid_limit",
+      "fixtures": [
+        "stack_probe",
+        "stack_probe_tests"
+      ],
+      "id": "max_gas_paid",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "gas_limit": 100000,
+        "repeats": 2
+      },
+      "sample_keys": [
+        "target"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::sequential_tests::pending_host_io_suspends_guest_and_leaves_executor_available",
+      "family": "suspension",
+      "fixtures": [
+        "callback_tests"
+      ],
+      "id": "pending_host_io",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "pending_import": true,
+        "repeats": 2
+      },
+      "sample_keys": [
+        "suspended",
+        "resumed"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::native_stack::qualification_probe",
+      "family": "pulley_boundary",
+      "fixtures": [
+        "stack_probe",
+        "stack_probe_source",
+        "stack_probe_tests",
+        "stack_sweep"
+      ],
+      "id": "pulley_plain_core",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "adjacent_boundary": true,
+        "mode": "core",
+        "repeats": 3,
+        "shape": "plain"
+      },
+      "sample_keys": [
+        "last_success",
+        "first_failure"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::native_stack::qualification_probe",
+      "family": "pulley_boundary",
+      "fixtures": [
+        "stack_probe",
+        "stack_probe_source",
+        "stack_probe_tests",
+        "stack_sweep"
+      ],
+      "id": "pulley_plain_paid",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "adjacent_boundary": true,
+        "mode": "paid",
+        "repeats": 3,
+        "shape": "plain"
+      },
+      "sample_keys": [
+        "last_success",
+        "first_failure"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::native_stack::qualification_probe",
+      "family": "pulley_boundary",
+      "fixtures": [
+        "stack_probe",
+        "stack_probe_source",
+        "stack_probe_tests",
+        "stack_sweep"
+      ],
+      "id": "pulley_plain_system",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "adjacent_boundary": true,
+        "mode": "system",
+        "repeats": 3,
+        "shape": "plain"
+      },
+      "sample_keys": [
+        "last_success",
+        "first_failure"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::native_stack::qualification_probe",
+      "family": "pulley_boundary",
+      "fixtures": [
+        "stack_probe",
+        "stack_probe_source",
+        "stack_probe_tests",
+        "stack_sweep"
+      ],
+      "id": "pulley_plain_view",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "adjacent_boundary": true,
+        "mode": "view",
+        "repeats": 3,
+        "shape": "plain"
+      },
+      "sample_keys": [
+        "last_success",
+        "first_failure"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::native_stack::qualification_probe",
+      "family": "pulley_boundary",
+      "fixtures": [
+        "stack_probe",
+        "stack_probe_source",
+        "stack_probe_tests",
+        "stack_sweep"
+      ],
+      "id": "pulley_wide_core",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "adjacent_boundary": true,
+        "mode": "core",
+        "repeats": 3,
+        "shape": "wide"
+      },
+      "sample_keys": [
+        "last_success",
+        "first_failure"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::native_stack::qualification_probe",
+      "family": "pulley_boundary",
+      "fixtures": [
+        "stack_probe",
+        "stack_probe_source",
+        "stack_probe_tests",
+        "stack_sweep"
+      ],
+      "id": "pulley_wide_paid",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "adjacent_boundary": true,
+        "mode": "paid",
+        "repeats": 3,
+        "shape": "wide"
+      },
+      "sample_keys": [
+        "last_success",
+        "first_failure"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::native_stack::qualification_probe",
+      "family": "pulley_boundary",
+      "fixtures": [
+        "stack_probe",
+        "stack_probe_source",
+        "stack_probe_tests",
+        "stack_sweep"
+      ],
+      "id": "pulley_wide_system",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "adjacent_boundary": true,
+        "mode": "system",
+        "repeats": 3,
+        "shape": "wide"
+      },
+      "sample_keys": [
+        "last_success",
+        "first_failure"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::call::tests::native_stack::qualification_probe",
+      "family": "pulley_boundary",
+      "fixtures": [
+        "stack_probe",
+        "stack_probe_source",
+        "stack_probe_tests",
+        "stack_sweep"
+      ],
+      "id": "pulley_wide_view",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "adjacent_boundary": true,
+        "mode": "view",
+        "repeats": 3,
+        "shape": "wide"
+      },
+      "sample_keys": [
+        "last_success",
+        "first_failure"
+      ]
+    },
+    {
+      "existing_unpaired_binding": null,
+      "family": "native_core",
+      "fixtures": [],
+      "id": "real_native_core",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "mode": "core",
+        "repeats": 2
+      },
+      "sample_keys": [
+        "success",
+        "failure"
+      ]
+    },
+    {
+      "existing_unpaired_binding": null,
+      "family": "sqlite",
+      "fixtures": [],
+      "id": "sqlite_large_values",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "value_bytes": [
+          16384,
+          1048576
+        ]
+      },
+      "sample_keys": [
+        "16k",
+        "1m"
+      ]
+    },
+    {
+      "existing_unpaired_binding": "runtime::token::query_tests::balance_pages_cover_the_ledger_and_bound_scan_work",
+      "family": "sqlite",
+      "fixtures": [
+        "token_pages",
+        "nft_pages"
+      ],
+      "id": "sqlite_pagination",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "page_sizes": [
+          1,
+          7,
+          100
+        ],
+        "rows": 1024
+      },
+      "sample_keys": [
+        "first",
+        "middle",
+        "final"
+      ]
+    },
+    {
+      "existing_unpaired_binding": null,
+      "family": "sqlite",
+      "fixtures": [],
+      "id": "sqlite_ranges",
+      "paired_worker_status": "missing",
+      "parameters": {
+        "range_lengths": [
+          0,
+          1,
+          256,
+          1024
+        ],
+        "rows": 1024
+      },
+      "sample_keys": [
+        "empty",
+        "single",
+        "page",
+        "full"
+      ]
+    }
+  ],
+  "cells": [
+    "Linux-X64/dev",
+    "Linux-X64/release",
+    "Linux-ARM64/dev",
+    "Linux-ARM64/release",
+    "macOS-ARM64/dev",
+    "macOS-ARM64/release"
+  ],
+  "claim_status": "preflight_only",
+  "configurations": {
+    "production": {
+      "fiber_requested_bytes": 2097152,
+      "pulley_stack_bytes": 524288,
+      "test_only": false
+    },
+    "reduced": {
+      "fiber_requested_bytes": 1048576,
+      "pulley_stack_bytes": 524288,
+      "test_only": true
+    }
+  },
+  "memory_profiles": [
+    {
+      "id": "suspended_64",
+      "production_capacity_only": true,
+      "reactor_roots": 1,
+      "simultaneous_stores": 64,
+      "view_roots": 0
+    },
+    {
+      "id": "overlap_2cpu_12gib",
+      "production_capacity_only": true,
+      "reactor_roots": 1,
+      "reference_cpus": 2,
+      "reference_memory_bytes": 12884901888,
+      "view_roots": 8
+    },
+    {
+      "id": "overlap_8cpu_16gib",
+      "production_capacity_only": true,
+      "reactor_roots": 1,
+      "reference_cpus": 8,
+      "reference_memory_bytes": 17179869184,
+      "view_roots": 8
+    }
+  ],
+  "required_observation_fields": [
+    "case_id",
+    "sample_key",
+    "outcome",
+    "error_class",
+    "trap",
+    "value",
+    "fuel",
+    "receipts",
+    "state",
+    "rollback",
+    "live_stores",
+    "reservations",
+    "resource_cleanup",
+    "fresh_store",
+    "suspended",
+    "reused"
+  ],
+  "runtime": {
+    "capacity_fields": [
+      "requested_bytes",
+      "mapped_bytes",
+      "guard_bytes",
+      "usable_bytes",
+      "measurement_api",
+      "thread_id",
+      "thread_category"
+    ],
+    "flavor": "multi_thread",
+    "production_to_reduced_worker_usable_min_ratio": 2,
+    "reduced_worker_stack_requested_bytes": 1048576,
+    "thread_categories": [
+      "tokio_worker",
+      "blocking_pool",
+      "block_on_caller"
+    ],
+    "worker_count": 2
+  },
+  "schema_version": 1,
+  "source_baseline_commit": "67a52fed58a893ce2c1c05483f86f4fffa02a675",
+  "type_value_limits": {
+    "canonical_result_type_depth": "unproven",
+    "canonical_result_value_bytes": "unproven",
+    "wave_expression_depth": 64,
+    "wave_string_literal_bytes": 16384
+  },
+  "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+}

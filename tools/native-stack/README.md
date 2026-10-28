@@ -1,5 +1,32 @@
 # Native Wasm stack qualification
 
+## Resource amendment preflight
+
+`resource_manifest.py` freezes the mandatory case list, six cells, capacity
+settings, memory profiles, and hashes of existing fixture inputs for the S2
+resource amendment. Run `python3 tools/native-stack/resource_manifest.py` to
+check the committed manifest against the current source. The manifest currently
+marks every case as missing its paired worker binding. This is intentional:
+the old stack tests run on a current-thread harness and cannot satisfy the
+amendment's worker and capacity evidence.
+
+`resource-evidence-schema-v1.json` defines the required raw process, engine,
+thread, per-case, and production-only memory records. `resource_evidence.py`
+checks one paired cell and `compare_resource.py` requires all six cells and
+equal execution observations across them. Both reject the current preflight
+manifest for acceptance. A case may be marked ready only after its complete
+operation runs on the explicit multithread Tokio workers in both independent
+child processes, with actual capacity observations and raw logs. Missing
+native Core, deepest-frame host-call, SQLite range/large-value, and canonical
+result-shape fixtures are visible in the manifest and remain open work.
+
+The amendment is copied unchanged into
+`docs/design/protocol-upgrades/native-stack-s2-resource-amendment-v1.md`.
+Neither the manifest nor schema is a resource measurement or a change to the
+production stack configuration. The memory profiles require separate
+uninstrumented production-capacity runs and preserve actual host hardware and
+OS field definitions alongside the reference profiles.
+
 `qualify.py` invokes one worker process and one fresh control process per probe kind. Each process funds and publishes the synchronous `stack-probe` fixture through the normal user contract path, then executes it through `Runtime::execute` or `Runtime::execute_system_view`. Publication populates the compiled component cache once per process. Each observation uses fresh invocation Stores. These measurements describe warm compiled-cache execution, not cold compilation or loading.
 
 After each call, the worker checks guest cleanup before attempting any harness reset. It then rolls back an outer savepoint and verifies the persistent-state digest, balances, collateral floor, token supply, resource count, call stack, savepoints, and actual live invocation leases. A reset failure fails the entire kind. The separate control process builds the same fixture and exercises both discovered boundary depths, or the single bounded large-frame case. Its execution observations must match the worker, including fuel and receipts.
