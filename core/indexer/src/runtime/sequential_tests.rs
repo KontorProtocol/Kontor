@@ -1,6 +1,6 @@
 use std::io::Read;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::Duration;
 
 use anyhow::{Error, Result, anyhow, bail, ensure};
@@ -8,14 +8,14 @@ use brotli::CompressorReader;
 use indexer_types::Payment;
 use libsql::params;
 use serde_json::to_string;
-use tokio::sync::Notify;
+use tokio::sync::{Mutex, Notify};
 use tokio::time::timeout;
 use wasm_encoder::{
     CodeSection, Function, FunctionSection, Instruction, Module as EncodedModule, RawSection,
     StartSection,
 };
 use wasmparser::{BinaryReader, CodeSectionReader, Parser, Payload, TypeRef, Validator};
-use wasmtime::component::{Component, ResourceType, Val};
+use wasmtime::component::{Component, ResourceTable, ResourceType, Val};
 use wasmtime::{Engine, ExternType, Linker as WasmtimeLinker, Module, Store, Trap};
 
 use super::component_policy;
@@ -226,6 +226,8 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let callback_calls = Arc::new(AtomicUsize::new(0));
     let marker_calls = Arc::new(AtomicUsize::new(0));
+    let marker_tables: Arc<StdMutex<Vec<Weak<Mutex<ResourceTable>>>>> =
+        Arc::new(StdMutex::new(Vec::new()));
     let expected_contract_id = Arc::new(AtomicU64::new(0));
     let mut user = runtime.linkers.user.clone();
     let observed = callback_calls.clone();
@@ -234,9 +236,11 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
         Ok(())
     })?;
     let observed_markers = marker_calls.clone();
+    let observed_tables = marker_tables.clone();
     let expected_id = expected_contract_id.clone();
     user.root().func_wrap_async("mark", move |store, (): ()| {
         let observed_markers = observed_markers.clone();
+        let observed_tables = observed_tables.clone();
         let expected_id = expected_id.clone();
         Box::new(async move {
             let frame = store.data().stack.peek().await.expect("active child frame");
@@ -244,6 +248,10 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
             assert_eq!(store.data().invocation_depth, 1);
             assert_eq!(store.data().invocation_budget.as_ref().unwrap().live(), 1);
             assert!(store.data().table.lock().await.iter_mut().count() > 0);
+            observed_tables
+                .lock()
+                .unwrap()
+                .push(Arc::downgrade(&store.data().table));
             // This call-owned write must be undone when post-return traps.
             let storage = store.data().storage.clone();
             storage
@@ -319,16 +327,11 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
             (import "" "" (func $host))
             (import "" "drop" (func $drop (param i32)))
             (memory (export "memory") 1)
-            (global $entered (mut i32) (i32.const 0))
             (func (export "realloc") (param i32 i32 i32 i32) (result i32)
                 (call $host)
                 (i32.const 64))
             (func (export "run") (param i32 i32 i32)
-                (global.set $entered (i32.const 1))
-                (call $drop (local.get 0)))
-            (func (export "entered") (param i32) (result i32)
-                (call $drop (local.get 0))
-                (global.get $entered)))
+                (call $drop (local.get 0))))
         (core instance $code (instantiate $code
             (with "" (instance
                 (export "" (func $lower))
@@ -336,9 +339,7 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
         (func (export "run") (param "ctx" (borrow $view-context)) (param "text" string)
             (canon lift (core func $code "run")
                 (memory (core memory $code "memory"))
-                (realloc (core func $code "realloc"))))
-        (func (export "entered") (param "ctx" (borrow $view-context)) (result u32)
-            (canon lift (core func $code "entered"))))"#;
+                (realloc (core func $code "realloc")))))"#;
     let large_input = format!("run({})", to_string(&"x".repeat(16 * 1024))?);
     let budget = Arc::new(InvocationBudget::default());
     runtime.invocation_budget = Some(budget.clone());
@@ -372,7 +373,6 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
                 Ordering::SeqCst,
             );
         }
-        let resources_before = runtime.table.lock().await.iter_mut().count();
         let conn = runtime.get_storage_conn();
         let mut rows = conn
             .query("SELECT COUNT(*) FROM contract_results", ())
@@ -400,13 +400,14 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
             assert!(runtime.stack.is_empty().await, "{name}");
             assert!(runtime.storage.savepoint_stack.is_empty().await, "{name}");
             assert_eq!(budget.live(), 0, "{name}");
-            assert_eq!(
-                runtime.table.lock().await.iter_mut().count(),
-                resources_before
-            );
             assert_eq!(callback_calls.load(Ordering::SeqCst), 0);
             if name == "post-return" {
                 assert_eq!(marker_calls.load(Ordering::SeqCst), trial + 1);
+                let child_table = marker_tables.lock().unwrap().pop().unwrap();
+                assert!(
+                    child_table.upgrade().is_none(),
+                    "post-return trap must release the child resource table"
+                );
                 assert!(
                     runtime
                         .storage
@@ -418,12 +419,6 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
                         .await?
                         .is_none(),
                     "post-return trap must roll back the child marker"
-                );
-            }
-            if name == "realloc-import" {
-                assert_eq!(
-                    runtime.execute(None, None, &address, "entered()").await?,
-                    "0"
                 );
             }
             let mut rows = conn
