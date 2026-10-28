@@ -792,3 +792,30 @@ Lead agreement: `637d8be538d9e2acdae3eed1707a823a`; reviewer agreement:
 This records plan agreement, not implementation completion or qualification.
 Each fork PR still requires the lead's review, an independent subagent review,
 Interlink review, current-head green CI and verified merge.
+
+## S1 and fork A completed, K1-REPIN agreed
+
+S1 merged in Kontor PR #609 as
+`208480b7cd10d0bc1eebc3f1e6e35a577b84e6e6`. Its tree equals reviewed head
+`18637a8a4de9389a03f14127fe9ba1b77d92f829`. All 19 applicable CI checks
+passed, with three main-only Docker jobs skipped. Parent, independent
+subagent and Interlink reviews were completed and addressed. This completes
+S1 only; S2 and OWNERSHIP still gate deployment and the final P1 baseline.
+
+Fork A merged in `wilfreddenton/wasmtime` PR #2 as
+`0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7`, with the same tree as reviewed
+head `8416d4673d0d4bf5b6cab35c75194c64817d8073`. All ten push jobs and ten
+PR jobs passed. Its `.2` logical-stack implementation is complete. Version-only
+fork B is PR #3, head `58a60e34b69a75131e8593088dc7e30c5f972c48`, with
+all three source/local-evidence reviews complete and exact-head CI pending.
+
+The lead, independent subagent and Interlink reviewer agreed
+[K1-REPIN v2](pulley-proof-bundles-plan-v2.md), SHA256
+`9f4649f45845ed453fce206f8c16c5ebb7e408c67bd5a0086b502d398b662ef1`.
+Lead agreement is recorded in Interlink `3dfab746679e08633708a70755c4a7a4`;
+reviewer agreement is `55c88e5cd8ccee89e9072bdef799b333`. This separate
+Kontor PR preserves historical manifests and locks, creates the `.2`/`.3`
+Pulley proof pair, and requalifies actual bundle ownership and attestations.
+It starts after B's verified merge. It does not change the node runtime.
+S2 independently qualifies the single production `.2` runtime after its own
+plan agreement; K2b retains the final both-bundle semantic qualification.
