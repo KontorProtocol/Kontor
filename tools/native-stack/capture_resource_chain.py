@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture actual paired 64/65-Store paid-chain worker evidence."""
+"""Capture all paired distinct-contract chain cases and measured trap controls."""
 
 import argparse
 import hashlib
@@ -9,6 +9,8 @@ import re
 import shutil
 import subprocess
 import sys
+from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -22,8 +24,10 @@ from resource_evidence import (file_evidence, load_json_strict, require, sha256,
 from resource_manifest import MANIFEST, ROOT, build_manifest
 
 
-WORKER_TEST = "runtime::call::tests::native_stack_resource::paid_chain_worker_case"
-TRAP_CONTROL_TEST = "runtime::call::tests::sequential_chains::chain_probe_child"
+WORKER_TEST = "runtime::call::tests::native_stack_resource::chain_worker_case"
+CHAIN_MODES = ("paid", "view", "core")
+STACK_MODES = ("reduced", "production")
+CHAIN_STORES = (33, 63, 64, 65)
 PHASE_PAIRS = (
     ("preparation", "chain_preparation_entry", "chain_preparation_exit"),
     ("operation", "chain_operation_entry", "chain_operation_exit"),
@@ -53,28 +57,39 @@ def harness_position(lines, label):
     return positions[0]
 
 
-def measured_trace(trace, runtime, mode, stores, process_id):
+def measured_trace(trace, runtime, mode, stores, process_id, chain_mode="paid",
+                   trap_control=False, sample_keys=("target", "target", "target")):
     require(isinstance(runtime, dict) and set(runtime) == {
-        "scope", "mode", "stores", "pid", "flavor", "worker_count",
+        "scope", "mode", "stores", "chain_mode", "trap_control", "pid",
+        "flavor", "worker_count",
         "worker_requested_bytes", "thread_observations",
         "blocking_pool_observed", "block_on_caller_observed",
-    } and runtime["scope"] == "paired_chain_target"
+    } and runtime["scope"] == "paired_chain_worker"
             and runtime["mode"] == mode and runtime["stores"] == stores
+            and runtime["chain_mode"] == chain_mode
+            and runtime["trap_control"] is trap_control
             and runtime["pid"] == process_id,
             "chain runtime identity differs from child process")
     capacities = {key: value for key, value in runtime.items()
-                  if key not in {"scope", "mode", "stores", "pid"}}
+                  if key not in {"scope", "mode", "stores", "chain_mode",
+                                 "trap_control", "pid"}}
     by_category = thread_capacities(capacities, mode, os.sysconf("SC_PAGE_SIZE"),
                                     "linux", process_id)
     workers = {item["thread_id"]: item["os_thread_id"]
                for item in by_category["tokio_worker"]}
     blocking = {item["thread_id"]: item["os_thread_id"]
                 for item in by_category["blocking_pool"]}
-    require(isinstance(trace, dict) and set(trace) == {"scope", "mode", "stores", "events"}
-            and trace["scope"] == "paired_chain_target"
+    require(isinstance(trace, dict) and set(trace) == {
+        "scope", "mode", "stores", "chain_mode", "trap_control", "events",
+    } and trace["scope"] == "paired_chain_worker"
             and trace["mode"] == mode and trace["stores"] == stores
+            and trace["chain_mode"] == chain_mode
+            and trace["trap_control"] is trap_control
             and isinstance(trace["events"], list),
             "chain trace identity differs from runtime")
+    require(tuple(sample_keys) == (("target", "trap_control", "target")
+                                    if trap_control else ("target",) * 3),
+            "chain attempt sample order differs")
     events = trace["events"]
     for event in events:
         require(isinstance(event, dict) and set(event) == {
@@ -137,6 +152,22 @@ def measured_trace(trace, runtime, mode, stores, process_id):
                     for index, event in enumerate(segment)
                     if event["name"] in CONVERSION_NAMES),
                 f"chain {repeat_index}: conversion escaped named worker phases")
+        open_conversions = {}
+        for event in segment:
+            name = event["name"]
+            if name not in CONVERSION_NAMES:
+                continue
+            kind, boundary = name.rsplit("_", 1)
+            key = kind, event["thread_id"]
+            if boundary == "entry":
+                require(key not in open_conversions,
+                        f"chain {repeat_index}: overlapping canonical conversion")
+                open_conversions[key] = event["os_thread_id"]
+            else:
+                require(open_conversions.pop(key, None) == event["os_thread_id"],
+                        f"chain {repeat_index}: unmatched canonical conversion")
+        require(not open_conversions,
+                f"chain {repeat_index}: unclosed canonical conversion")
         conversion_positions = [index for index, event in enumerate(segment)
                                 if positions[2] < index < positions[3]
                                 and event["name"] in CONVERSION_NAMES]
@@ -147,13 +178,14 @@ def measured_trace(trace, runtime, mode, stores, process_id):
                     conversion_names.count("canonical_input_exit") > 0
                 and conversion_names.count("canonical_output_entry") ==
                     conversion_names.count("canonical_output_exit")
-                and (stores == 65 or conversion_names.count("canonical_output_entry") > 0),
+                and (stores == 65 or sample_keys[repeat_index] == "trap_control"
+                     or conversion_names.count("canonical_output_entry") > 0),
                 f"chain {repeat_index}: canonical conversion was not observed on workers")
         phase_threads["conversion"] = sorted(set(conversions))
         require(all(phase_threads.values()),
                 f"chain {repeat_index}: a phase lacks worker evidence")
         attempts.append({
-            "sample_key": "target", "repeat_index": repeat_index,
+            "sample_key": sample_keys[repeat_index], "repeat_index": repeat_index,
             "phase_threads": phase_threads,
             "blocking_thread_ids": sorted({event["thread_id"] for event in segment
                                            if event["category"] == "blocking_pool"}),
@@ -165,17 +197,26 @@ def measured_trace(trace, runtime, mode, stores, process_id):
     return attempts
 
 
-def observation_from_trial(trial, case_id, expected_outcome, schema):
-    require(isinstance(trial, dict) and trial.get("sample_key") == "target"
+def observation_from_trial(trial, case_id, expected_outcome, schema, sample_key="target"):
+    identity = re.fullmatch(r"chain_(33|63|64|65)_(paid|view|core)", case_id)
+    require(identity is not None and expected_outcome in {
+        "ok", "trap", "invocation_limit",
+    }, f"{case_id}: unknown chain case or outcome")
+    stores, mode = int(identity.group(1)), identity.group(2)
+    expected_error = None if expected_outcome == "ok" else "deterministic"
+    expected_trap = "UnreachableCodeReached" if expected_outcome == "trap" else None
+    require(isinstance(trial, dict) and trial.get("sample_key") == sample_key
             and trial.get("outcome") == expected_outcome
+            and trial.get("error_class") == expected_error
+            and trial.get("trap") == expected_trap
             and trial.get("live_stores_before") == trial.get("live_stores_after") == 0
-            and trial.get("live_store_peak") == 64
+            and trial.get("live_store_peak") == min(stores, 64)
             and trial.get("rolled_back") is True
             and trial.get("savepoint_restored") is True
             and trial.get("stack_empty") is True
             and trial.get("rollback_clean") is True
             and trial.get("resource_count") == trial.get("baseline_resource_count"),
-            f"{case_id}: chain trial did not reach peak64 or clean up")
+            f"{case_id}: chain trial peak, typed outcome, or cleanup differs")
     before = trial["state_before_sha256"]
     after = trial["state_after_sha256"]
     require(before == after and re.fullmatch(r"[0-9a-f]{64}", before),
@@ -188,26 +229,68 @@ def observation_from_trial(trial, case_id, expected_outcome, schema):
     encoded = json.dumps(balances, sort_keys=True, separators=(",", ":")).encode()
     require(hashlib.sha256(encoded).hexdigest() == trial["balances_sha256"],
             f"{case_id}: balance snapshot digest differs")
+    balance_values = trial.get("balances")
+    balance_keys = {
+        "before", "after", "restored", "burned_before", "burned_after",
+        "supply_before", "supply_after", "floor_before", "floor_after",
+        "floor_restored",
+    }
+    require(isinstance(balance_values, dict) and set(balance_values) == balance_keys
+            and all(isinstance(value, str) for value in balance_values.values()),
+            f"{case_id}: balance transitions are incomplete")
+    try:
+        amounts = {key: Fraction(Decimal(value)) for key, value in balance_values.items()}
+        baseline = {key: Fraction(Decimal(value)) for key, value in balances.items()}
+    except (InvalidOperation, OverflowError, TypeError, ValueError) as error:
+        raise ValueError(f"{case_id}: invalid balance amount") from error
+    require(amounts["before"] == baseline["actor"]
+            and amounts["burned_before"] == baseline["burner"]
+            and amounts["floor_before"] == baseline["floor"]
+            and amounts["supply_before"] == baseline["supply"]
+            and amounts["restored"] == amounts["before"]
+            and amounts["floor_restored"] == amounts["floor_before"],
+            f"{case_id}: balance baseline or rollback differs")
+    debit = amounts["before"] - amounts["after"]
+    burned = amounts["burned_after"] - amounts["burned_before"]
+    supply_delta = amounts["supply_before"] - amounts["supply_after"]
+    require(debit == burned == supply_delta
+            and (debit > 0 if mode == "paid" else debit == 0)
+            and (amounts["floor_after"] < amounts["floor_before"]
+                 if mode == "core" and expected_outcome == "ok"
+                 else amounts["floor_after"] == amounts["floor_before"]),
+            f"{case_id}: paid, view, or Core balance transition differs")
+    fuel = trial.get("fuel")
+    require(isinstance(fuel, dict) and set(fuel) == {"user", "system", "deposit"}
+            and all(type(value) is int and value >= 0 for value in fuel.values())
+            and (fuel["user"] > 0 if mode == "paid" else fuel["system"] > 0),
+            f"{case_id}: fuel allocation differs")
     receipt = trial["receipt"]
-    require(isinstance(receipt, dict) and set(receipt) ==
-            {"contract_id", "status", "gas", "value"}
-            and type(receipt["contract_id"]) is int and receipt["contract_id"] > 0
-            and type(receipt["gas"]) is int and receipt["gas"] > 0
-            and receipt["status"] == ("Ok" if expected_outcome == "ok" else "Other"),
-            f"{case_id}: root receipt is missing or misclassified")
-    require(trial["receipt_count"] == (64 if expected_outcome == "ok" else 1)
+    if mode == "view":
+        require(receipt is None and trial["receipt_count"] == 0,
+                f"{case_id}: view created receipts")
+    else:
+        require(isinstance(receipt, dict) and set(receipt) ==
+                {"contract_id", "status", "gas", "value"}
+                and type(receipt["contract_id"]) is int and receipt["contract_id"] > 0
+                and type(receipt["gas"]) is int and receipt["gas"] > 0
+                and receipt["status"] == ("Ok" if expected_outcome == "ok" else "Other")
+                and receipt["value"] == trial["value"]
+                and trial["receipt_count"] == (
+                    stores if expected_outcome == "ok" else 1),
+                f"{case_id}: root receipt is missing or misclassified")
+    require((expected_outcome != "trap") == (sample_key == "target")
             and trial["value"] == ("42" if expected_outcome == "ok" else None)
-            and receipt["value"] == trial["value"]
-            and trial["storage_state"] == ("[2, 0, 0, 0]" if expected_outcome == "ok"
-                                           else "[0, 0, 0, 0]")
-            and trial["host_io_suspended"] is (expected_outcome == "ok")
-            and trial["leaf_callback_seen"] is (expected_outcome == "ok"),
+            and trial["storage_state"] == (
+                "[2, 0, 0, 0]" if expected_outcome == "ok" and mode != "view"
+                else "[0, 0, 0, 0]")
+            and trial["host_io_suspended"] is (expected_outcome != "invocation_limit")
+            and trial["leaf_callback_seen"] is (expected_outcome != "invocation_limit"),
             f"{case_id}: root-inclusive call or rejection differs")
     observation = {
-        "case_id": case_id, "sample_key": "target", "outcome": expected_outcome,
-        "error_class": None if expected_outcome == "ok" else "deterministic",
-        "trap": None, "value": trial["value"], "fuel": trial["fuel"],
-        "receipts": [receipt],
+        "case_id": case_id, "sample_key": sample_key, "outcome": expected_outcome,
+        "error_class": expected_error,
+        "trap": expected_trap, "value": trial["value"], "fuel": fuel,
+        "receipts": [] if receipt is None else [receipt],
         "state": {"before_sha256": before, "after_sha256": after,
                   "marker": trial["storage_state"],
                   "balances_sha256": trial["balances_sha256"]},
@@ -230,22 +313,24 @@ def observation_from_trial(trial, case_id, expected_outcome, schema):
     return observation
 
 
-def parse_worker(path, mode, stores, pid, manifest, schema):
-    label = f"chain_{stores}_paid/{mode}"
+def parse_worker(path, mode, stores, pid, manifest, schema, chain_mode="paid",
+                 trap_control=False):
+    case_id = f"chain_{stores}_{chain_mode}"
+    label = f"{case_id}/{mode}" + (" trap control" if trap_control else "")
     lines = path.read_text().splitlines()
     harness = harness_position(lines, label)
     report_pos, report = one_marker(lines, "CHAIN_PROBE_REPORT:")
     runtime_pos, runtime = one_marker(lines, "KONTOR_CHAIN_WORKER_RUNTIME=")
     trace_pos, trace = one_marker(lines, "KONTOR_CHAIN_WORKER_TRACE=")
     completed = [index for index, line in enumerate(lines)
-                 if line.strip() == f"CHAIN_PROBE_COMPLETE mode=paid stores={stores}"]
+                 if line.strip() == f"CHAIN_PROBE_COMPLETE mode={chain_mode} stores={stores}"]
     require(len(completed) == 1 and report_pos < completed[0] < runtime_pos < trace_pos < harness,
             f"{label}: child terminal markers are missing or out of order")
-    case_id = f"chain_{stores}_paid"
     expected = next(case for case in manifest["cases"] if case["id"] == case_id)
     require(isinstance(report, dict) and report.get("case_id") == case_id
-            and report.get("mode") == "paid" and report.get("stores") == stores
-            and report.get("resource_mode") == mode and report.get("target_only") is True
+            and report.get("mode") == chain_mode and report.get("stores") == stores
+            and report.get("resource_mode") == mode
+            and report.get("target_only") is (not trap_control)
             and report.get("call_hook_installed") is False
             and report.get("engine_target") == "pulley64-unknown-unknown-elf"
             and report.get("max_wasm_stack") == manifest["configurations"][mode]["pulley_stack_bytes"]
@@ -254,18 +339,28 @@ def parse_worker(path, mode, stores, pid, manifest, schema):
                 "error_test": manifest["artifacts"]["error_test"]["sha256"],
                 "proxy": manifest["artifacts"]["proxy"]["sha256"],
             }, f"{label}: chain fixture or engine settings differ")
-    attempts = measured_trace(trace, runtime, mode, stores, pid)
     trials = report.get("trials")
+    sample_keys = (("target", "trap_control", "target") if trap_control
+                   else ("target",) * 3)
+    outcomes = (("ok", "trap", "ok") if trap_control
+                else (expected["expected_outcomes"]["target"],) * 3)
     require(isinstance(trials, list) and len(trials) == 3
-            and [trial.get("repeat_index") for trial in trials] == [0, 1, 2],
-            f"{label}: three ordered target trials are missing")
+            and all(isinstance(trial, dict) for trial in trials)
+            and [trial.get("repeat_index") for trial in trials] == [0, 1, 2]
+            and [trial.get("sample_key") for trial in trials] == list(sample_keys)
+            and [trial.get("outcome") for trial in trials] == list(outcomes),
+            f"{label}: three ordered trials are missing")
+    attempts = measured_trace(trace, runtime, mode, stores, pid, chain_mode,
+                              trap_control, sample_keys)
     observations = [observation_from_trial(
-        trial, case_id, expected["expected_outcomes"]["target"], schema,
-    ) for trial in trials]
-    require(all(observation == observations[0] for observation in observations),
-            f"{label}: repeated target observations diverge")
+        trial, case_id, outcome, schema, sample_key,
+    ) for trial, outcome, sample_key in zip(trials, outcomes, sample_keys, strict=True)]
+    require(observations[0] == observations[2]
+            and (trap_control or observations[0] == observations[1]),
+            f"{label}: repeated observations diverge")
     return {
         "id": case_id, "parameters": expected["parameters"],
+        "trap_control": trap_control, "report": report,
         "observations": observations,
         "worker_execution": {"whole_operation_spawned": True,
                              "source_sha256": manifest["worker_runner"]["sha256"],
@@ -298,6 +393,19 @@ def verify_final_closure(control, binary, control_dir, control_copy, control_sha
         file_evidence(control_dir, entry)
 
 
+def check_run_consistency(captured, case_id, mode, trap_control, detail):
+    name = f"{case_id}_{'trap_control_' if trap_control else ''}{mode}"
+    if mode == "production":
+        reduced_name = f"{case_id}_{'trap_control_' if trap_control else ''}reduced"
+        require(detail["observations"] == captured[reduced_name]["observations"],
+                f"{name}: full observations differ across worker stack modes")
+    if trap_control:
+        target = captured[f"{case_id}_{mode}"]["observations"][0]
+        require(detail["observations"][0] == target
+                and detail["observations"][2] == target,
+                f"{name}: 64-Store target and control prestate or success differs")
+
+
 def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
     require(sys.platform == "linux", "paired chain worker capture is Linux-only")
     manifest = build_manifest()
@@ -325,24 +433,23 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
     require(sha256(control_copy) == control_sha256, "control capture changed in archive")
     captured = {}
     failure_path = evidence_dir / "resource-chain-failure.json"
-    runs = [(stores, mode) for stores in (64, 65) for mode in ("reduced", "production")]
-    runs.append((64, "trap_control"))
-    for stores, mode in runs:
-        trap_control = mode == "trap_control"
-        command = ([str(binary), "--ignored", "--exact", TRAP_CONTROL_TEST, "--nocapture"]
-                   if trap_control else
-                   [str(binary), "--ignored", "--exact", WORKER_TEST, "--nocapture"])
+    runs = [(stores, chain_mode, mode, False)
+            for chain_mode in CHAIN_MODES for stores in CHAIN_STORES
+            for mode in STACK_MODES]
+    runs.extend((64, chain_mode, mode, True)
+                for chain_mode in CHAIN_MODES for mode in STACK_MODES)
+    for stores, chain_mode, mode, trap_control in runs:
+        command = [str(binary), "--ignored", "--exact", WORKER_TEST, "--nocapture"]
         environment = os.environ.copy()
-        if trap_control:
-            environment["KONTOR_CHAIN_MODE"] = "paid"
-            environment["KONTOR_CHAIN_DEPTH"] = "63"
-        else:
-            environment["KONTOR_RESOURCE_MODE"] = mode
-            environment["KONTOR_CHAIN_STORES"] = str(stores)
+        environment["KONTOR_RESOURCE_MODE"] = mode
+        environment["KONTOR_CHAIN_MODE"] = chain_mode
+        environment["KONTOR_CHAIN_STORES"] = str(stores)
+        environment["KONTOR_CHAIN_TRAP_CONTROL"] = "1" if trap_control else "0"
         child, started, ended, output, timed_out = run_bounded_process(
             command, timeout_seconds, environment,
         )
-        name = f"chain_{stores}_paid_{mode}"
+        case_id = f"chain_{stores}_{chain_mode}"
+        name = f"{case_id}_{'trap_control_' if trap_control else ''}{mode}"
         raw_path = evidence_dir / f"{name}.log"
         with raw_path.open("xb") as destination:
             destination.write(output)
@@ -358,22 +465,11 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
         try:
             require(not timed_out and child.returncode == 0,
                     f"{name}: Rust child failed or timed out")
-            if trap_control:
-                lines = raw_path.read_text().splitlines()
-                harness_position(lines, name)
-                _, report = one_marker(lines, "CHAIN_PROBE_REPORT:")
-                require(report.get("mode") == "paid" and report.get("stores") == 64
-                        and report.get("target_only") is False
-                        and [trial.get("outcome") for trial in report.get("trials", [])]
-                            == ["ok", "trap", "ok"]
-                        and all(trial.get("rollback_clean") is True
-                                for trial in report["trials"]),
-                        "separate chain trap control differs from fixture")
-                detail = {"report": report}
-            else:
-                detail = parse_worker(raw_path, mode, stores, child.pid, manifest, schema)
+            detail = parse_worker(raw_path, mode, stores, child.pid, manifest,
+                                  schema, chain_mode, trap_control)
             require(sha256(binary) == control["binary_sha256"],
                     f"{name}: test binary changed during capture")
+            check_run_consistency(captured, case_id, mode, trap_control, detail)
             captured[name] = {"process": process, "raw_log": raw, **detail}
         except Exception as error:
             with failure_path.open("x") as destination:
@@ -383,14 +479,14 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
                 destination.write("\n")
             raise
     try:
-        signatures = {}
-        for stores in (64, 65):
-            case_id = f"chain_{stores}_paid"
-            reduced = captured[f"{case_id}_reduced"]["observations"]
-            production = captured[f"{case_id}_production"]["observations"]
-            require(reduced == production,
-                    f"{case_id}: paid observations differ across worker stack modes")
-            signatures[case_id] = reduced[0]
+        signatures = {f"chain_{stores}_{chain_mode}":
+                      captured[f"chain_{stores}_{chain_mode}_reduced"]["observations"][0]
+                      for chain_mode in CHAIN_MODES for stores in CHAIN_STORES}
+        trap_signatures = {
+            chain_mode:
+                captured[f"chain_64_{chain_mode}_trap_control_reduced"]["observations"][1]
+            for chain_mode in CHAIN_MODES
+        }
         identities = [(item["process"]["pid"], item["process"]["started_unix_ns"])
                       for item in captured.values()]
         identities.append((control["guard_control"]["process"]["pid"],
@@ -416,6 +512,7 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
                             "sha256": control_sha256},
         "runs": captured,
         "paired_signatures": signatures,
+        "paired_trap_signatures": trap_signatures,
         "remaining_case_bindings": [case["id"] for case in manifest["cases"]
                                     if case["id"] not in signatures],
         "unmet_requirements": {

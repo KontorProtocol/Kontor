@@ -268,6 +268,14 @@ pub(super) async fn resource_chain_probe(mode: String, depth: u32, reduced: bool
     run_chain_probe(mode, depth, Some(reduced), true).await
 }
 
+pub(super) async fn resource_chain_trap_control(
+    mode: String,
+    depth: u32,
+    reduced: bool,
+) -> Result<()> {
+    run_chain_probe(mode, depth, Some(reduced), false).await
+}
+
 async fn run_chain_probe(
     mode: String,
     depth: u32,
@@ -288,7 +296,7 @@ async fn run_chain_probe(
         }
         None => test_runtime().await?,
     };
-    let actor = if target_only {
+    let actor = if diagnostic_reduced.is_some() {
         funded_with_pubkey(&mut runtime, RESOURCE_CHAIN_SIGNER_X_ONLY_PUBKEY).await?
     } else {
         funded(&mut runtime).await?
@@ -555,6 +563,8 @@ async fn run_chain_probe(
             "repeat_index": repeat_index,
             "sample_key": if fail { "trap_control" } else { "target" },
             "outcome": if over_cap { "invocation_limit" } else if fail { "trap" } else { "ok" },
+            "error_class": if over_cap || fail { Some("deterministic") } else { None },
+            "trap": if fail { Some("UnreachableCodeReached") } else { None },
             "value": value,
             "fuel": {
                 "user": usage.user_fuel,

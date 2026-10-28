@@ -22,7 +22,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "fad87ed324459e059706fe4902df665da571902757cb09f62322860ba8039b12"
+      "sha256": "f2031f4ee8a4b1505e8d2549debf87acd72c20fabe2033f1d715f766f3b92c62"
     },
     "core_lockfile": {
       "path": "core/Cargo.lock",
@@ -86,7 +86,7 @@
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
-      "sha256": "483331fca7e9b792c63832646389cab0e6472941f28b1a2df73336366abad52d"
+      "sha256": "882102d4629999e1621f7d446816dd938e437f2b6188757ade1f016c4064f97d"
     },
     "resource_comparator_source": {
       "path": "tools/native-stack/compare_resource.py",
@@ -122,7 +122,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "2142d2544251118c0e90d65c7b38f376579c3d3eba55616c6b911877311f150c"
+      "sha256": "c7366d2c465c86c412093d3771bba29c02c96a0cd0d1801ea6e3578ffb0f69b0"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -1504,7 +1504,7 @@
     "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
   },
   "guard_control_runner": {
-    "source_sha256": "2142d2544251118c0e90d65c7b38f376579c3d3eba55616c6b911877311f150c",
+    "source_sha256": "c7366d2c465c86c412093d3771bba29c02c96a0cd0d1801ea6e3578ffb0f69b0",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1656,7 +1656,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "2142d2544251118c0e90d65c7b38f376579c3d3eba55616c6b911877311f150c",
+    "sha256": "c7366d2c465c86c412093d3771bba29c02c96a0cd0d1801ea6e3578ffb0f69b0",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

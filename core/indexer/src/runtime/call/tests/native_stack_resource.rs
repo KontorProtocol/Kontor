@@ -285,7 +285,7 @@ fn attest_resource_threads(events: &[ThreadEvent], workers: &[ThreadId], mode: &
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "run through the bounded resource child driver"]
-fn paid_chain_worker_case() -> Result<()> {
+fn chain_worker_case() -> Result<()> {
     let mode = env::var("KONTOR_RESOURCE_MODE")?;
     ensure!(
         matches!(mode.as_str(), "reduced" | "production"),
@@ -293,8 +293,22 @@ fn paid_chain_worker_case() -> Result<()> {
     );
     let stores: u32 = env::var("KONTOR_CHAIN_STORES")?.parse()?;
     ensure!(
-        matches!(stores, 64 | 65),
+        matches!(stores, 33 | 63 | 64 | 65),
         "unsupported resource chain count"
+    );
+    let chain_mode = env::var("KONTOR_CHAIN_MODE")?;
+    ensure!(
+        matches!(chain_mode.as_str(), "paid" | "view" | "core"),
+        "unknown resource chain call mode"
+    );
+    let trap_control = match env::var("KONTOR_CHAIN_TRAP_CONTROL").as_deref() {
+        Ok("1") => true,
+        Ok("0") => false,
+        _ => bail!("invalid resource chain control selection"),
+    };
+    ensure!(
+        !trap_control || stores == 64,
+        "trap control requires 64 Stores"
     );
     let reduced = mode == "reduced";
     let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
@@ -317,11 +331,25 @@ fn paid_chain_worker_case() -> Result<()> {
         "chain worker, blocking, and caller thread categories overlap"
     );
     resource_diagnostics::start_chain();
+    let task_chain_mode = chain_mode.clone();
     let result = runtime.block_on(async {
         tokio::spawn(async move {
             let start = std::thread::current().id();
-            super::sequential_chains::resource_chain_probe("paid".to_string(), stores - 1, reduced)
+            if trap_control {
+                super::sequential_chains::resource_chain_trap_control(
+                    task_chain_mode,
+                    stores - 1,
+                    reduced,
+                )
                 .await?;
+            } else {
+                super::sequential_chains::resource_chain_probe(
+                    task_chain_mode,
+                    stores - 1,
+                    reduced,
+                )
+                .await?;
+            }
             Ok::<_, anyhow::Error>((start, std::thread::current().id()))
         })
         .await
@@ -364,9 +392,11 @@ fn paid_chain_worker_case() -> Result<()> {
     println!(
         "KONTOR_CHAIN_WORKER_RUNTIME={}",
         json!({
-            "scope": "paired_chain_target",
+            "scope": "paired_chain_worker",
             "mode": mode,
             "stores": stores,
+            "chain_mode": chain_mode,
+            "trap_control": trap_control,
             "pid": std::process::id(),
             "flavor": "multi_thread",
             "worker_count": workers.len(),
@@ -384,9 +414,11 @@ fn paid_chain_worker_case() -> Result<()> {
     println!(
         "KONTOR_CHAIN_WORKER_TRACE={}",
         json!({
-            "scope": "paired_chain_target",
+            "scope": "paired_chain_worker",
             "mode": mode,
             "stores": stores,
+            "chain_mode": chain_mode,
+            "trap_control": trap_control,
             "events": events.iter().map(|event| json!({
                 "name": event.name,
                 "thread_id": format!("{:?}", event.thread_id),

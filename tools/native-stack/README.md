@@ -155,15 +155,18 @@ This bundle is diagnostic. It records missing paired workload bindings,
 macOS guard evidence, and production memory profiles explicitly, and it does
 not satisfy the six-cell qualification gate.
 
-`capture_resource_chain.py` runs root-inclusive 64 and 65 Store paid-chain
-targets through the measured two-worker Tokio runtime in separate reduced and
-production children. Each target has three identical attempts with actual
-invocation-reservation peaks, fuel, receipts, persistent-state digests, and
-rollback and resource cleanup checks. The 65 Store case must reject with the
-typed invocation limit after a measured peak of 64. A separate existing
-single-thread child preserves the success, trap, success control. The driver
-requires a fresh guard/source capture for the same committed binary and copies
-the complete control closure into its evidence directory:
+`capture_resource_chain.py` runs the root-inclusive 33, 63, 64 and 65 Store
+chains in paid, view and Core modes through a measured two-worker Tokio runtime.
+Each case and stack configuration has a fresh child process and three attempts
+with actual invocation-reservation peaks, fuel, receipts, persistent-state
+digests, rollback and resource cleanup checks. The 65 Store cases must reject
+with the typed invocation limit after a measured peak of 64. Six additional
+children run success, typed trap, success for each call mode and stack
+configuration through the same measured worker path, engine and fixed fixture.
+The 64 Store target and its trap control must start from the same full state
+and have identical successful observations. The driver requires a fresh
+guard/source capture for the same committed binary and copies the complete
+control closure into its evidence directory:
 
 ```sh
 python3 tools/native-stack/capture_resource_chain.py \
@@ -172,8 +175,8 @@ python3 tools/native-stack/capture_resource_chain.py \
   --evidence-dir path/to/new-chain-evidence
 ```
 
-The resulting bundle is a candidate actual binding for two cases. The other
-39 cases, production memory profiles, and macOS guard remain missing. The
+The resulting bundle is a candidate actual binding for 12 cases. The other
+29 cases, production memory profiles, and macOS guard remain missing. The
 full six-cell validator still fails closed until those inputs are proven.
 
 Cold publish function size, branch-table size and control nesting remain

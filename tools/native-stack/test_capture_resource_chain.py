@@ -1,4 +1,4 @@
-"""Reject chain evidence that does not prove the 64-Store boundary."""
+"""Reject incomplete paired chain and measured trap-control evidence."""
 
 import copy
 import hashlib
@@ -8,12 +8,71 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from capture_resource_chain import (measured_trace, observation_from_trial,
-                                    verify_final_closure)
+from capture_resource_chain import (check_run_consistency, measured_trace,
+                                    observation_from_trial, verify_final_closure)
 from resource_manifest import ROOT
 
 
+def trial_fixture(mode, stores, outcome, sample_key="target"):
+    balances = {"actor": "100", "burner": "0", "floor": "5", "supply": "1000"}
+    digest = hashlib.sha256(json.dumps(
+        balances, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    paid = mode == "paid"
+    success = outcome == "ok"
+    return {
+        "sample_key": sample_key, "outcome": outcome,
+        "error_class": None if success else "deterministic",
+        "trap": "UnreachableCodeReached" if outcome == "trap" else None,
+        "live_stores_before": 0, "live_stores_after": 0,
+        "live_store_peak": min(stores, 64), "rolled_back": True,
+        "savepoint_restored": True, "stack_empty": True,
+        "rollback_clean": True, "resource_count": 0,
+        "baseline_resource_count": 0, "state_before_sha256": "1" * 64,
+        "state_after_sha256": "1" * 64, "balances_snapshot": balances,
+        "balances_sha256": digest,
+        "balances": {"before": "100", "after": "90" if paid else "100",
+                     "restored": "100", "burned_before": "0",
+                     "burned_after": "10" if paid else "0",
+                     "supply_before": "1000", "supply_after": "990" if paid else "1000",
+                     "floor_before": "5",
+                     "floor_after": "4" if mode == "core" and success else "5",
+                     "floor_restored": "5"},
+        "receipt": None if mode == "view" else {
+            "contract_id": 70, "status": "Ok" if success else "Other",
+            "gas": 1, "value": "42" if success else None,
+        },
+        "receipt_count": 0 if mode == "view" else stores if success else 1,
+        "value": "42" if success else None,
+        "storage_state": "[2, 0, 0, 0]" if success and mode != "view"
+                         else "[0, 0, 0, 0]",
+        "host_io_suspended": outcome != "invocation_limit",
+        "leaf_callback_seen": outcome != "invocation_limit",
+        "fuel": {"user": 1 if paid else 0, "system": 0 if paid else 1,
+                 "deposit": 0},
+    }
+
+
 class ChainObservationTests(unittest.TestCase):
+    def test_control_requires_same_full_prestate_as_paired_target(self):
+        success = {"state": {"before_sha256": "a" * 64}, "fuel": {"user": 10}}
+        trap = {"outcome": "trap", "trap": "UnreachableCodeReached"}
+        captured = {"chain_64_paid_reduced": {
+            "observations": [copy.deepcopy(success) for _ in range(3)],
+        }}
+        control = {"observations": [copy.deepcopy(success), trap, copy.deepcopy(success)]}
+        check_run_consistency(captured, "chain_64_paid", "reduced", True, control)
+        changed = copy.deepcopy(control)
+        changed["observations"][0]["state"]["before_sha256"] = "b" * 64
+        with self.assertRaisesRegex(ValueError, "target and control prestate"):
+            check_run_consistency(captured, "chain_64_paid", "reduced", True, changed)
+        captured["chain_64_paid_trap_control_reduced"] = control
+        captured["chain_64_paid_production"] = captured["chain_64_paid_reduced"]
+        changed = copy.deepcopy(control)
+        changed["observations"][1]["trap"] = None
+        with self.assertRaisesRegex(ValueError, "full observations differ"):
+            check_run_consistency(captured, "chain_64_paid", "production", True, changed)
+
     def test_conversion_evidence_must_occur_inside_target_operation(self):
         names = (
             "chain_attempt_start", "chain_preparation_entry", "chain_preparation_exit",
@@ -30,9 +89,11 @@ class ChainObservationTests(unittest.TestCase):
         events = [{"name": name, "thread_id": "worker-1", "os_thread_id": 201,
                    "category": "tokio_worker"}
                   for _ in range(3) for name in names]
-        trace = {"scope": "paired_chain_target", "mode": "reduced",
-                 "stores": 64, "events": events}
-        runtime = {"scope": "paired_chain_target", "mode": "reduced", "stores": 64,
+        trace = {"scope": "paired_chain_worker", "mode": "reduced",
+                 "stores": 64, "chain_mode": "paid", "trap_control": False,
+                 "events": events}
+        runtime = {"scope": "paired_chain_worker", "mode": "reduced", "stores": 64,
+                   "chain_mode": "paid", "trap_control": False,
                    "pid": 100, "flavor": "multi_thread", "worker_count": 2,
                    "worker_requested_bytes": 1_048_576,
                    "thread_observations": [], "blocking_pool_observed": True,
@@ -57,6 +118,21 @@ class ChainObservationTests(unittest.TestCase):
             ]
             with self.assertRaisesRegex(ValueError, "conversion escaped named worker phases"):
                 measured_trace(escaped, runtime, "reduced", 64, 100)
+            migrated = copy.deepcopy(trace)
+            migrated["events"][6]["thread_id"] = "worker-2"
+            migrated["events"][6]["os_thread_id"] = 202
+            with self.assertRaisesRegex(ValueError, "unmatched canonical conversion"):
+                measured_trace(migrated, runtime, "reduced", 64, 100)
+            control = copy.deepcopy(trace)
+            control["trap_control"] = True
+            control_runtime = {**runtime, "trap_control": True}
+            control["events"] = [event for index, event in enumerate(control["events"])
+                                 if index // len(names) != 1
+                                 or index % len(names) not in (7, 8)]
+            self.assertEqual([attempt["sample_key"] for attempt in measured_trace(
+                control, control_runtime, "reduced", 64, 100, "paid", True,
+                ("target", "trap_control", "target"),
+            )], ["target", "trap_control", "target"])
 
     def test_final_closure_rejects_source_and_manifest_drift(self):
         control = {"source_sha": "1" * 40, "manifest_sha256": "0" * 64}
@@ -72,26 +148,7 @@ class ChainObservationTests(unittest.TestCase):
                                      Path("unused"), "0" * 64)
 
     def test_peak_and_rollback_must_be_observed(self):
-        balances = {"actor": "100", "burner": "0", "floor": "0", "supply": "1000"}
-        digest = hashlib.sha256(json.dumps(
-            balances, sort_keys=True, separators=(",", ":"),
-        ).encode()).hexdigest()
-        state = "1" * 64
-        trial = {
-            "sample_key": "target", "outcome": "invocation_limit",
-            "live_stores_before": 0, "live_stores_after": 0,
-            "live_store_peak": 64, "rolled_back": True,
-            "savepoint_restored": True, "stack_empty": True,
-            "rollback_clean": True, "resource_count": 0,
-            "baseline_resource_count": 0, "state_before_sha256": state,
-            "state_after_sha256": state, "balances_snapshot": balances,
-            "balances_sha256": digest,
-            "receipt": {"contract_id": 70, "status": "Other", "gas": 1, "value": None},
-            "receipt_count": 1, "value": None,
-            "storage_state": "[0, 0, 0, 0]", "host_io_suspended": False,
-            "leaf_callback_seen": False,
-            "fuel": {"user": 1, "system": 0, "deposit": 0},
-        }
+        trial = trial_fixture("paid", 65, "invocation_limit")
         schema = json.loads((ROOT / "tools/native-stack/resource-evidence-schema-v1.json").read_text())
         observed = observation_from_trial(trial, "chain_65_paid", "invocation_limit", schema)
         self.assertEqual(observed["live_stores"]["during"], 64)
@@ -99,11 +156,31 @@ class ChainObservationTests(unittest.TestCase):
         self.assertIsNone(observed["resource_cleanup"]["invocation_table_released"])
         for key, value in (("live_store_peak", 63),
                            ("state_after_sha256", "2" * 64),
-                           ("rollback_clean", False)):
+                           ("rollback_clean", False),
+                           ("trap", "UnreachableCodeReached")):
             changed = copy.deepcopy(trial)
             changed[key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
                 observation_from_trial(changed, "chain_65_paid", "invocation_limit", schema)
+
+    def test_view_core_and_trap_economics_are_checked(self):
+        schema = json.loads((ROOT / "tools/native-stack/resource-evidence-schema-v1.json").read_text())
+        for mode in ("view", "core"):
+            trial = trial_fixture(mode, 64, "ok")
+            observation = observation_from_trial(trial, f"chain_64_{mode}", "ok", schema)
+            self.assertEqual(len(observation["receipts"]), 0 if mode == "view" else 1)
+            changed = copy.deepcopy(trial)
+            changed["balances"]["after"] = "99"
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "balance transition"):
+                observation_from_trial(changed, f"chain_64_{mode}", "ok", schema)
+        trap = trial_fixture("paid", 64, "trap", "trap_control")
+        observation = observation_from_trial(
+            trap, "chain_64_paid", "trap", schema, "trap_control",
+        )
+        self.assertEqual(observation["trap"], "UnreachableCodeReached")
+        trap["trap"] = None
+        with self.assertRaisesRegex(ValueError, "typed outcome"):
+            observation_from_trial(trap, "chain_64_paid", "trap", schema, "trap_control")
 
 
 if __name__ == "__main__":
