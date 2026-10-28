@@ -53,6 +53,7 @@ INPUTS = {
     "production_qualification": "tools/native-stack/compare.py",
     "resource_manifest_source": "tools/native-stack/resource_manifest.py",
     "fiber_source_capture": "tools/native-stack/capture_fiber_source.py",
+    "resource_control_capture": "tools/native-stack/capture_resource_control.py",
     "resource_validator_source": "tools/native-stack/resource_evidence.py",
     "resource_schema": "tools/native-stack/resource-evidence-schema-v1.json",
     "resource_comparator_source": "tools/native-stack/compare_resource.py",

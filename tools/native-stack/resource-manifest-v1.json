@@ -84,9 +84,13 @@
       "path": "tools/native-stack/compare_resource.py",
       "sha256": "ee7eeb730de1c6a371d88b37688e4395df69dfa7402b702b7c1778201ac00a44"
     },
+    "resource_control_capture": {
+      "path": "tools/native-stack/capture_resource_control.py",
+      "sha256": "c4698b3606a6c6295a34545d298d2e41d18e837088f8e0e7f90179f63597c563"
+    },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "bb670eb4e840733a7e29381a92c06d12ed00b62345acc646993de02c8715eba0"
+      "sha256": "5d7334b77c158ceed1fd8b85a1067a52e4933a07cbfdbf188193632899e33922"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",

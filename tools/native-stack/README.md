@@ -113,7 +113,25 @@ source path assumes no custom stack creator and no sanitizer allocation path.
 `capture_fiber_source.py` reads Cargo metadata, verifies the checkout revision
 and these six file hashes from their resolved package roots, then archives
 the files under `wasmtime-source/`.
-The runner does not yet invoke this helper, so its attestation status stays
+`capture_resource_control.py` binds the selected indexer test executable to
+one successful Cargo JSON artifact stream, requires a clean checkout at the
+explicit source revision, runs the Linux guard control with a process deadline,
+validates its complete raw transcript, and archives the Cargo inputs and six
+pinned fiber source files. Run it with the artifact stream from the exact
+`cargo test --no-run --message-format=json` build and `cargo metadata` from
+the same checkout:
+
+```sh
+python3 tools/native-stack/capture_resource_control.py \
+  --cargo-artifacts path/to/cargo-artifacts.jsonl \
+  --metadata path/to/cargo-metadata.json \
+  --source-sha COMMITTED_HEAD_SHA \
+  --evidence-dir path/to/new-evidence-directory
+```
+
+The capture refuses an occupied output directory. A failed process preserves
+its raw log and failure JSON. The helper does not populate the six workload
+cells or the macOS guard observation, so full resource qualification remains
 missing. Pthread measurements describe the Tokio and caller stacks only.
 
 Cold publish function size, branch-table size and control nesting remain
