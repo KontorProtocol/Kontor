@@ -64,6 +64,23 @@ fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
         .iter()
         .map(|worker| worker.thread_id)
         .collect::<Vec<_>>();
+    #[cfg(target_os = "linux")]
+    let blocking = runtime
+        .block_on(async { tokio::task::spawn_blocking(current_linux_stack_range).await })?
+        .context("blocking pool stack capacity")?;
+    #[cfg(target_os = "linux")]
+    let caller = current_linux_stack_range().context("block_on caller stack capacity")?;
+    #[cfg(target_os = "linux")]
+    ensure!(
+        workers.iter().all(|worker| {
+            worker.thread_id != blocking.thread_id
+                && worker.thread_id != caller.thread_id
+                && worker.os_thread_id != blocking.os_thread_id
+                && worker.os_thread_id != caller.os_thread_id
+        }) && blocking.thread_id != caller.thread_id
+            && blocking.os_thread_id != caller.os_thread_id,
+        "measured worker, blocking, and caller thread categories overlap"
+    );
     #[cfg(not(target_os = "linux"))]
     let (runtime, worker_ids) = {
         let (sender, receiver) = channel();
@@ -121,6 +138,26 @@ fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
         }
     }
     attest_resource_threads(&events, &worker_ids, &mode)?;
+    #[cfg(target_os = "linux")]
+    println!(
+        "KONTOR_RESOURCE_RUNTIME={}",
+        json!({
+            "scope": "diagnostic_only",
+            "mode": mode,
+            "pid": std::process::id(),
+            "flavor": "multi_thread",
+            "worker_count": workers.len(),
+            "worker_requested_bytes": reduced.then_some(1024 * 1024),
+            "thread_observations": [
+                linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
+                linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+                linux_thread_observation(&blocking, "blocking_pool", None),
+                linux_thread_observation(&caller, "block_on_caller", None),
+            ],
+            "blocking_pool_observed": true,
+            "block_on_caller_observed": true,
+        })
+    );
     Ok(())
 }
 
@@ -459,6 +496,45 @@ struct LinuxStackRange {
     guard_end: usize,
     guard_bytes: usize,
     guard_treatment: &'static str,
+}
+
+#[cfg(target_os = "linux")]
+fn linux_thread_observation(
+    stack: &LinuxStackRange,
+    category: &str,
+    requested_bytes: Option<usize>,
+) -> JsonValue {
+    let guard_verification = match stack.guard_treatment {
+        "guard protected inside pthread stack range"
+        | "guard protected below pthread stack range" => "linux_maps_prot_none",
+        "inaccessible interval verified below pthread stack range by /proc/self/mem EIO" => {
+            "linux_proc_self_mem_eio"
+        }
+        "pthread reports no guard" => "pthread_reports_none",
+        _ => unreachable!("current_linux_stack_range returned unknown guard treatment"),
+    };
+    json!({
+        "thread_category": category,
+        "thread_id": format!("{:?}", stack.thread_id),
+        "process_id": stack.process_id,
+        "os_thread_id": stack.os_thread_id,
+        "identity_api": "linux_gettid",
+        "page_size_bytes": stack.page_size_bytes,
+        "requested_bytes": requested_bytes,
+        "mapped_bytes": stack.mapped_end - stack.mapped_start,
+        "guard_bytes": stack.guard_bytes,
+        "guard_start": stack.guard_start,
+        "guard_end": stack.guard_end,
+        "guard_verification": guard_verification,
+        "usable_bytes": stack.usable_end - stack.usable_start,
+        "mapped_start": stack.mapped_start,
+        "mapped_end": stack.mapped_end,
+        "usable_start": stack.usable_start,
+        "usable_end": stack.usable_end,
+        "measurement_api": "pthread_getattr_np,pthread_attr_getstack,pthread_attr_getguardsize,/proc/self/maps,/proc/self/mem",
+        "guard_treatment": stack.guard_treatment,
+        "guard_verified": true,
+    })
 }
 
 #[cfg(target_os = "linux")]

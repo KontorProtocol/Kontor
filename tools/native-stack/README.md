@@ -132,7 +132,28 @@ python3 tools/native-stack/capture_resource_control.py \
 The capture refuses an occupied output directory. A failed process preserves
 its raw log and failure JSON. The helper does not populate the six workload
 cells or the macOS guard observation, so full resource qualification remains
-missing. Pthread measurements describe the Tokio and caller stacks only.
+missing. The paired diagnostic below adds pthread measurements for the Tokio
+workers, one blocking pool thread, and the block-on caller.
+
+`capture_resource_diagnostic.py` takes a guard/source capture from the same
+clean source revision and binary, then runs the real paid large-frame call in
+separate reduced and production test processes. It archives the complete
+process transcripts, measured Tokio worker, blocking pool, and block-on caller
+stack ranges, and ordered compiler and Brotli thread events. Each trace worker
+must match a measured worker thread and kernel thread ID. The output reports
+blocking trace threads without a matching capacity measurement as unresolved.
+Use a fresh output directory:
+
+```sh
+python3 tools/native-stack/capture_resource_diagnostic.py \
+  --control-capture path/to/guard-evidence/resource-control-capture.json \
+  --control-sha256 SHA256_OF_CONTROL_CAPTURE \
+  --evidence-dir path/to/new-diagnostic-directory
+```
+
+This bundle is diagnostic. It records missing paired workload bindings,
+macOS guard evidence, and production memory profiles explicitly, and it does
+not satisfy the six-cell qualification gate.
 
 Cold publish function size, branch-table size and control nesting remain
 unverified accepted fixtures. The wasmparser source limits alone do not prove

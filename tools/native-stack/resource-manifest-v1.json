@@ -86,11 +86,15 @@
     },
     "resource_control_capture": {
       "path": "tools/native-stack/capture_resource_control.py",
-      "sha256": "2e4bab6d3dfc84688408f7f5b59209af8d9fe571c3cf3e634146cbfd599648e1"
+      "sha256": "631315ad1c400d6f8c060637e1d937158a7ea85c0de2ab94ade424e43c5cf7c8"
+    },
+    "resource_diagnostic_capture": {
+      "path": "tools/native-stack/capture_resource_diagnostic.py",
+      "sha256": "e44c7945a42ad50efcde646c488a31009989e51f0c24aa670c88097e9612bd5c"
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "5d7334b77c158ceed1fd8b85a1067a52e4933a07cbfdbf188193632899e33922"
+      "sha256": "369cba275747af1d59f0538a7e955fda191898c74582291c711955631b21bf46"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -110,7 +114,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "602aed1939336255db1ba404efb97f88e958b29ee6fcadeb580c852617af7908"
+      "sha256": "3a3205606775006e4a7816c75a6b8dcc32b29e2787b2fddfef31cbe61000cb72"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -1492,7 +1496,7 @@
     "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
   },
   "guard_control_runner": {
-    "source_sha256": "602aed1939336255db1ba404efb97f88e958b29ee6fcadeb580c852617af7908",
+    "source_sha256": "3a3205606775006e4a7816c75a6b8dcc32b29e2787b2fddfef31cbe61000cb72",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1644,7 +1648,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "602aed1939336255db1ba404efb97f88e958b29ee6fcadeb580c852617af7908",
+    "sha256": "3a3205606775006e4a7816c75a6b8dcc32b29e2787b2fddfef31cbe61000cb72",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

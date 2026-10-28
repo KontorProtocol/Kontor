@@ -9,7 +9,7 @@ import time
 import unittest
 from pathlib import Path
 
-from capture_resource_control import run_guard_control, selected_binary
+from capture_resource_control import run_bounded_process, selected_binary
 
 
 class ResourceControlCaptureTests(unittest.TestCase):
@@ -52,7 +52,7 @@ class ResourceControlCaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             pid_path = Path(directory) / "descendant-pid"
             start = time.monotonic()
-            parent, _, _, output, timed_out = run_guard_control(
+            parent, _, _, output, timed_out = run_bounded_process(
                 [sys.executable, "-c", script, str(pid_path)], 0.3,
             )
             descendant_pid = int(pid_path.read_text())

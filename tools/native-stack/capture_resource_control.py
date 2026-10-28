@@ -52,10 +52,10 @@ def selected_binary(artifacts_path, metadata):
     return binary.resolve(), selected[0]
 
 
-def run_guard_control(command, timeout_seconds):
+def run_bounded_process(command, timeout_seconds, env=None):
     started = time.time_ns()
     child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             start_new_session=True)
+                             start_new_session=True, env=env)
     timed_out = False
     try:
         output, _ = child.communicate(timeout=timeout_seconds)
@@ -120,7 +120,7 @@ def capture(artifacts_path, metadata_path, source_sha, evidence_dir, timeout_sec
     failure_path = evidence_dir / "resource-control-failure.json"
     command = [str(binary), "--exact", manifest["guard_control_runner"]["test_name"],
                "--ignored", "--nocapture"]
-    child, started, ended, output, timed_out = run_guard_control(command, timeout_seconds)
+    child, started, ended, output, timed_out = run_bounded_process(command, timeout_seconds)
     with raw_path.open("xb") as raw:
         raw.write(output)
     page_size = os.sysconf("SC_PAGE_SIZE")
