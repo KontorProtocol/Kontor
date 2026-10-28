@@ -284,6 +284,126 @@ fn attest_resource_threads(events: &[ThreadEvent], workers: &[ThreadId], mode: &
 
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "run through the bounded resource child driver"]
+fn paid_chain_worker_case() -> Result<()> {
+    let mode = env::var("KONTOR_RESOURCE_MODE")?;
+    ensure!(
+        matches!(mode.as_str(), "reduced" | "production"),
+        "unknown resource mode"
+    );
+    let stores: u32 = env::var("KONTOR_CHAIN_STORES")?.parse()?;
+    ensure!(
+        matches!(stores, 64 | 65),
+        "unsupported resource chain count"
+    );
+    let reduced = mode == "reduced";
+    let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    let blocking = runtime
+        .block_on(async { tokio::task::spawn_blocking(current_linux_stack_range).await })?
+        .context("blocking pool stack capacity")?;
+    let caller = current_linux_stack_range().context("block_on caller stack capacity")?;
+    let worker_ids = workers
+        .iter()
+        .map(|worker| worker.thread_id)
+        .collect::<Vec<_>>();
+    ensure!(
+        workers.iter().all(|worker| {
+            worker.thread_id != blocking.thread_id
+                && worker.thread_id != caller.thread_id
+                && worker.os_thread_id != blocking.os_thread_id
+                && worker.os_thread_id != caller.os_thread_id
+        }) && blocking.thread_id != caller.thread_id
+            && blocking.os_thread_id != caller.os_thread_id,
+        "chain worker, blocking, and caller thread categories overlap"
+    );
+    resource_diagnostics::start_chain();
+    let result = runtime.block_on(async {
+        tokio::spawn(async move {
+            let start = std::thread::current().id();
+            super::sequential_chains::resource_chain_probe("paid".to_string(), stores - 1, reduced)
+                .await?;
+            Ok::<_, anyhow::Error>((start, std::thread::current().id()))
+        })
+        .await
+    });
+    let events = resource_diagnostics::finish();
+    let (start, end) = result??;
+    ensure!(
+        worker_ids.contains(&start) && worker_ids.contains(&end),
+        "chain case began or ended outside measured Tokio workers"
+    );
+    for event in &events {
+        if let Some(worker) = workers
+            .iter()
+            .find(|worker| worker.thread_id == event.thread_id)
+        {
+            ensure!(
+                event.os_thread_id == worker.os_thread_id,
+                "chain worker Rust/kernel thread identity differs: {event:?}"
+            );
+        } else {
+            ensure!(
+                event.name.starts_with("blocking_decode_")
+                    && workers
+                        .iter()
+                        .all(|worker| worker.os_thread_id != event.os_thread_id),
+                "chain event escaped worker or blocking category: {event:?}"
+            );
+        }
+    }
+    ensure!(
+        events
+            .iter()
+            .any(|event| event.name == "canonical_input_entry")
+            && (stores == 65
+                || events
+                    .iter()
+                    .any(|event| event.name == "canonical_output_entry")),
+        "chain case did not observe required input or result conversion"
+    );
+    println!(
+        "KONTOR_CHAIN_WORKER_RUNTIME={}",
+        json!({
+            "scope": "paired_chain_target",
+            "mode": mode,
+            "stores": stores,
+            "pid": std::process::id(),
+            "flavor": "multi_thread",
+            "worker_count": workers.len(),
+            "worker_requested_bytes": reduced.then_some(1024 * 1024),
+            "thread_observations": [
+                linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
+                linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+                linux_thread_observation(&blocking, "blocking_pool", None),
+                linux_thread_observation(&caller, "block_on_caller", None),
+            ],
+            "blocking_pool_observed": true,
+            "block_on_caller_observed": true,
+        })
+    );
+    println!(
+        "KONTOR_CHAIN_WORKER_TRACE={}",
+        json!({
+            "scope": "paired_chain_target",
+            "mode": mode,
+            "stores": stores,
+            "events": events.iter().map(|event| json!({
+                "name": event.name,
+                "thread_id": format!("{:?}", event.thread_id),
+                "os_thread_id": event.os_thread_id,
+                "category": if worker_ids.contains(&event.thread_id) {
+                    "tokio_worker"
+                } else {
+                    "blocking_pool"
+                },
+            })).collect::<Vec<_>>(),
+        })
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 #[ignore = "run explicitly to verify worker guards in isolated child processes"]
 fn linux_worker_guard_fault_control() -> Result<()> {
     let binary = env::current_exe()?;

@@ -12,6 +12,7 @@ use tokio::sync::Notify;
 use tokio::time::timeout;
 use wasmtime::Trap;
 
+use super::native_stack::persistent_digest;
 use super::{balance, funded};
 use crate::database::queries::live_deposit_gas_sum;
 use crate::runtime::invocation::{
@@ -19,6 +20,7 @@ use crate::runtime::invocation::{
 };
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::pricing::Pricing;
+use crate::runtime::resource_diagnostics;
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -26,7 +28,7 @@ use crate::runtime::{
     ContractAddress, Decimal, ExecutionError, Linkers, MAX_UNTRUSTED_GAS_LIMIT, Runtime,
     TransactionContext, native_provenance, to_wave_expr,
 };
-use crate::test_utils::test_runtime;
+use crate::test_utils::{test_runtime, test_runtime_with_engine};
 
 const CHILD: &str = "runtime::call::tests::sequential_chains::chain_probe_child";
 
@@ -257,15 +259,36 @@ async fn nested_depth_rejection_preserves_the_typed_limit_marker() -> Result<()>
 async fn chain_probe_child() -> Result<()> {
     let mode = env::var("KONTOR_CHAIN_MODE")?;
     let depth: u32 = env::var("KONTOR_CHAIN_DEPTH")?.parse()?;
+    run_chain_probe(mode, depth, None, false).await
+}
+
+pub(super) async fn resource_chain_probe(mode: String, depth: u32, reduced: bool) -> Result<()> {
+    run_chain_probe(mode, depth, Some(reduced), true).await
+}
+
+async fn run_chain_probe(
+    mode: String,
+    depth: u32,
+    diagnostic_reduced: Option<bool>,
+    target_only: bool,
+) -> Result<()> {
     assert!(matches!(mode.as_str(), "paid" | "view" | "core"));
     assert!(matches!(depth, 32 | 62 | 63 | 64));
     let over_cap = depth == 64;
-    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let (mut runtime, _dir, _name) = match diagnostic_reduced {
+        Some(reduced) => {
+            let engine = if reduced {
+                Runtime::new_resource_diagnostic_engine()?
+            } else {
+                Runtime::new_engine()?
+            };
+            test_runtime_with_engine(engine).await?
+        }
+        None => test_runtime().await?,
+    };
     let actor = funded(&mut runtime).await?;
     let chain = publish_chain(&mut runtime, &actor, depth).await?;
     assert!(runtime.conversion_probe.is_none());
-    let budget = Arc::new(InvocationBudget::default());
-    runtime.invocation_budget = Some(budget.clone());
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let mut user = runtime.linkers.user.clone();
@@ -293,11 +316,22 @@ async fn chain_probe_child() -> Result<()> {
     let mut over_cap_observation = None;
     let mut trials = Vec::new();
 
-    for fail in if over_cap {
+    for (repeat_index, fail) in (if over_cap || target_only {
         [false, false, false]
     } else {
         [false, true, false]
-    } {
+    })
+    .into_iter()
+    .enumerate()
+    {
+        if diagnostic_reduced.is_some() {
+            resource_diagnostics::record("chain_attempt_start");
+            resource_diagnostics::record("chain_preparation_entry");
+        }
+        let budget = Arc::new(InvocationBudget::default());
+        runtime.invocation_budget = Some(budget.clone());
+        assert_eq!(budget.live(), 0);
+        let state_before_sha256 = persistent_digest(&conn).await?;
         assert!(runtime.conversion_probe.is_none());
         runtime.storage.savepoint().await?;
         conn.execute("DELETE FROM contract_results", ()).await?;
@@ -323,8 +357,13 @@ async fn chain_probe_child() -> Result<()> {
             ),
             _ => (None, None, "view-chain-probe"),
         };
+        if diagnostic_reduced.is_some() {
+            resource_diagnostics::record("chain_preparation_exit");
+            resource_diagnostics::record("chain_operation_entry");
+        }
         let target = root.clone();
         let task = tokio::spawn(async move {
+            resource_diagnostics::record("chain_guest_task_entry");
             let result = runtime
                 .execute(
                     signer.as_ref(),
@@ -333,6 +372,7 @@ async fn chain_probe_child() -> Result<()> {
                     &format!("{function}({fail})"),
                 )
                 .await;
+            resource_diagnostics::record("chain_guest_task_exit");
             (runtime, result)
         });
         let mut host_io_suspended = false;
@@ -349,7 +389,13 @@ async fn chain_probe_child() -> Result<()> {
         };
         let (returned, result) = timeout(Duration::from_secs(30), task).await??;
         runtime = returned;
+        if diagnostic_reduced.is_some() {
+            resource_diagnostics::record("chain_operation_exit");
+            resource_diagnostics::record("chain_postcall_entry");
+        }
         assert_eq!(budget.live(), 0);
+        let live_store_peak = budget.peak();
+        assert_eq!(live_store_peak, (depth + 1).min(MAX_LIVE_INVOCATIONS));
         let usage = runtime.finish_usage(previous)?;
         let savepoint_restored = runtime.storage.savepoint_stack.peek().await == saved;
         let value = if over_cap {
@@ -393,7 +439,7 @@ async fn chain_probe_child() -> Result<()> {
         assert_eq!(storage_state, expected_state);
         let mut receipts = conn
             .query(
-                "SELECT status, gas FROM contract_results WHERE contract_id = ? ORDER BY id",
+                "SELECT contract_id, status, gas, value FROM contract_results WHERE contract_id = ? ORDER BY id",
                 params![root_id],
             )
             .await?;
@@ -403,12 +449,20 @@ async fn chain_probe_child() -> Result<()> {
             None
         } else {
             let receipt = receipt.expect("one root receipt");
-            let status = receipt.get::<String>(0)?;
+            let contract_id = receipt.get::<u64>(0)?;
+            assert_eq!(contract_id, root_id);
+            let status = receipt.get::<String>(1)?;
             assert_eq!(status, if fail || over_cap { "Other" } else { "Ok" });
-            let gas = receipt.get::<u64>(1)?;
+            let gas = receipt.get::<u64>(2)?;
+            let value = receipt.get::<Option<String>>(3)?;
             assert!(gas > 0);
             assert!(receipts.next().await?.is_none());
-            Some(json!({ "status": status, "gas": gas }))
+            Some(json!({
+                "contract_id": contract_id,
+                "status": status,
+                "gas": gas,
+                "value": value,
+            }))
         };
         let receipt_gas = receipt
             .as_ref()
@@ -465,7 +519,13 @@ async fn chain_probe_child() -> Result<()> {
             assert!(usage.system_fuel > 0);
             assert_eq!(paid, Decimal::default());
         }
+        if diagnostic_reduced.is_some() {
+            resource_diagnostics::record("chain_postcall_exit");
+            resource_diagnostics::record("chain_teardown_entry");
+        }
         runtime.storage.rollback().await?;
+        let state_after_sha256 = persistent_digest(&conn).await?;
+        assert_eq!(state_before_sha256, state_after_sha256);
         let restored = balance(&mut runtime, HolderRef::from(&actor)).await?;
         let floor_restored = token::floor(&mut runtime, HolderRef::from(&actor)).await?;
         let rollback_clean = runtime.storage.savepoint_stack.is_empty().await
@@ -478,7 +538,16 @@ async fn chain_probe_child() -> Result<()> {
                 .await?
                 == "[0, 0, 0, 0]";
         assert!(rollback_clean);
+        let balances_snapshot = json!({
+            "actor": before.to_string(),
+            "burner": burned_before.to_string(),
+            "floor": floor_before.to_string(),
+            "supply": supply_before.to_string(),
+        });
+        let balances_sha256 = hex::encode(Sha256::digest(serde_json::to_vec(&balances_snapshot)?));
         trials.push(json!({
+            "repeat_index": repeat_index,
+            "sample_key": if fail { "trap_control" } else { "target" },
             "outcome": if over_cap { "invocation_limit" } else if fail { "trap" } else { "ok" },
             "value": value,
             "fuel": {
@@ -487,6 +556,13 @@ async fn chain_probe_child() -> Result<()> {
                 "deposit": usage.deposit_fuel,
             },
             "receipt": receipt,
+            "state_before_sha256": state_before_sha256,
+            "state_after_sha256": state_after_sha256,
+            "balances_sha256": balances_sha256,
+            "balances_snapshot": balances_snapshot,
+            "live_store_peak": live_store_peak,
+            "live_stores_before": 0,
+            "live_stores_after": budget.live(),
             "storage_state": storage_state,
             "rolled_back": rollback_clean,
             "resource_count": resource_count,
@@ -510,11 +586,18 @@ async fn chain_probe_child() -> Result<()> {
             "receipt_count": receipt_count,
             "rollback_clean": rollback_clean,
         }));
+        if diagnostic_reduced.is_some() {
+            resource_diagnostics::record("chain_teardown_exit");
+            resource_diagnostics::record("chain_attempt_end");
+        }
     }
     println!(
         "CHAIN_PROBE_REPORT:{}",
         json!({
+            "case_id": format!("chain_{}_{}", depth + 1, mode),
             "mode": mode,
+            "resource_mode": diagnostic_reduced.map(|reduced| if reduced { "reduced" } else { "production" }),
+            "target_only": target_only,
             "call_hook_installed": runtime.conversion_probe.is_some(),
             "stores": depth + 1,
             "trials": trials,

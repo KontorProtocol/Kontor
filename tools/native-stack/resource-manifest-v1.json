@@ -10,7 +10,7 @@
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "9b83893e46c04c9e03edcb18fe694cdf74ea99b66acc90a6ecbafd4ddb26a41d"
+      "sha256": "69f619b9085c221e5a2170ee0ff8312eaaa4cdbdb211a03f5a47f406e57ab248"
     },
     "call_output": {
       "path": "core/indexer/src/runtime/call/result.rs",
@@ -22,7 +22,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "870746780b4f352b54295fcace21d7a2d95266068afefff2482d8d33ed98225a"
+      "sha256": "8004ee055b55179b08016ca1731e7c0dd58236cb58bf9dcd5d138a27dbac9234"
     },
     "core_lockfile": {
       "path": "core/Cargo.lock",
@@ -52,6 +52,10 @@
       "path": "core/indexer/build.rs",
       "sha256": "182fc2714a0772379cd74e8025f02d7841732b38e69788ac0d9fc5e55abe519d"
     },
+    "invocation_budget": {
+      "path": "core/indexer/src/runtime/invocation.rs",
+      "sha256": "9db6e0d1a137fbf7d5df922d7aebbff9b4c1f368a08eb7bd528c9fb4d2495db1"
+    },
     "native_filestorage": {
       "path": "native-contracts/filestorage/src/lib.rs",
       "sha256": "b13919f9d9abe52ceb801ddc697887f60cfc5e1e99be3dced2c311cc882fb698"
@@ -80,6 +84,10 @@
       "path": ".github/workflows/native-stack.yml",
       "sha256": "99daf43c2d08947b25f86fc2eee866c0a0f9dac18cc6377189fde5ecd3f64d3d"
     },
+    "resource_chain_capture": {
+      "path": "tools/native-stack/capture_resource_chain.py",
+      "sha256": "2e25173fa9ade19b84d9df34198f5ded1471251d522a08571aec94944745146e"
+    },
     "resource_comparator_source": {
       "path": "tools/native-stack/compare_resource.py",
       "sha256": "ee7eeb730de1c6a371d88b37688e4395df69dfa7402b702b7c1778201ac00a44"
@@ -94,7 +102,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "369cba275747af1d59f0538a7e955fda191898c74582291c711955631b21bf46"
+      "sha256": "1b06379cdf465d0727b20587bdec366eed1fc367932c52978f1212bad18a265f"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -106,7 +114,7 @@
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
-      "sha256": "0724be31fd1652f1ff7247c39672fa1f4ed61bbeda0683e5b8fbd70d29ff73be"
+      "sha256": "9651453c7ec342745556ed00939c61536dd5934e85ace17a6b7198af17c88e58"
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
@@ -114,7 +122,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "3a3205606775006e4a7816c75a6b8dcc32b29e2787b2fddfef31cbe61000cb72"
+      "sha256": "2142d2544251118c0e90d65c7b38f376579c3d3eba55616c6b911877311f150c"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -130,11 +138,11 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "b2802efeb697e590390cc787f6d427d4ac3f8f32ee502ed4c43412071b282603"
+      "sha256": "bfcfd2334370ef95aeb75d9ab51fe8980d7cf3b86672b313ca26e71a66b4ed75"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "d225141abd45c74a80bab4f831f60cee37d4f7f819b80829ec245c560e5d1724"
+      "sha256": "d220b42521bfe7b1adfe60209c8519173c96836362e35c4b6238aa0b313cf63c"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -1496,7 +1504,7 @@
     "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
   },
   "guard_control_runner": {
-    "source_sha256": "3a3205606775006e4a7816c75a6b8dcc32b29e2787b2fddfef31cbe61000cb72",
+    "source_sha256": "2142d2544251118c0e90d65c7b38f376579c3d3eba55616c6b911877311f150c",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1648,7 +1656,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "3a3205606775006e4a7816c75a6b8dcc32b29e2787b2fddfef31cbe61000cb72",
+    "sha256": "2142d2544251118c0e90d65c7b38f376579c3d3eba55616c6b911877311f150c",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

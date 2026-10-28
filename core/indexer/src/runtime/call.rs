@@ -1,6 +1,8 @@
 use anyhow::{Result, anyhow};
 
 use super::ExecutionError;
+#[cfg(test)]
+use super::resource_diagnostics;
 use futures_util::FutureExt;
 use futures_util::future::OptionFuture;
 use wasmtime::{
@@ -418,8 +420,14 @@ impl Runtime {
         let func_ctx_param_type = func_param_types.next().ok_or_else(|| {
             ExecutionError::Deterministic(anyhow!("Context/signer parameter not found"))
         })?;
-        let mut params =
-            input::params(&call, func_param_types, store).map_err(ExecutionError::Deterministic)?;
+        let mut params = {
+            #[cfg(test)]
+            let _conversion = resource_diagnostics::conversion_scope(
+                "canonical_input_entry",
+                "canonical_input_exit",
+            );
+            input::params(&call, func_param_types, store).map_err(ExecutionError::Deterministic)?
+        };
         let resource_type = match func_ctx_param_type {
             Type::Borrow(t) => Ok(t),
             _ => Err(ExecutionError::Deterministic(anyhow!(
@@ -632,6 +640,11 @@ impl Runtime {
         let result = if let Err(e) = result {
             Err(e)
         } else {
+            #[cfg(test)]
+            let _conversion = resource_diagnostics::conversion_scope(
+                "canonical_output_entry",
+                "canonical_output_exit",
+            );
             result::encode(results, is_fallback, store).await
         };
 

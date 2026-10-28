@@ -23,6 +23,8 @@ const COMPONENT: &[u8] =
 
 mod sweep;
 
+pub(super) use sweep::persistent_digest;
+
 pub(super) async fn resource_smoke(reduced: bool) -> Result<()> {
     sweep::resource_smoke(reduced).await
 }

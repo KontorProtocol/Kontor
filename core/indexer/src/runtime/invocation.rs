@@ -20,11 +20,18 @@ pub(super) const MAX_LIVE_INVOCATIONS: u32 = 64;
 #[derive(Default)]
 pub(super) struct InvocationBudget {
     live: AtomicU32,
+    #[cfg(test)]
+    peak: AtomicU32,
 }
 
 impl InvocationBudget {
     pub(super) fn live(&self) -> u32 {
         self.live.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(super) fn peak(&self) -> u32 {
+        self.peak.load(Ordering::SeqCst)
     }
 
     pub(super) fn reserve(
@@ -42,6 +49,8 @@ impl InvocationBudget {
                 Ordering::SeqCst,
             ) {
                 Ok(_) => {
+                    #[cfg(test)]
+                    self.peak.fetch_max(live + 1, Ordering::SeqCst);
                     return Ok(InvocationLease {
                         budget: self.clone(),
                     });

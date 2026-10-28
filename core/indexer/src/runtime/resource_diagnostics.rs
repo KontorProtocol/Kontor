@@ -12,46 +12,88 @@ pub(crate) struct ThreadEvent {
     pub os_thread_id: i32,
 }
 
-static TRACE: OnceLock<Mutex<Option<Vec<ThreadEvent>>>> = OnceLock::new();
+struct TraceState {
+    events: Vec<ThreadEvent>,
+    conversion_enabled: bool,
+}
+
+static TRACE: OnceLock<Mutex<Option<TraceState>>> = OnceLock::new();
 
 pub(crate) struct ScopeGuard {
     exit: &'static str,
+    conversion_only: bool,
 }
 
 impl Drop for ScopeGuard {
     fn drop(&mut self) {
-        record(self.exit);
+        if self.conversion_only {
+            record_conversion(self.exit);
+        } else {
+            record(self.exit);
+        }
     }
 }
 
 pub(crate) fn scope(entry: &'static str, exit: &'static str) -> ScopeGuard {
     record(entry);
-    ScopeGuard { exit }
+    ScopeGuard {
+        exit,
+        conversion_only: false,
+    }
+}
+
+pub(crate) fn conversion_scope(entry: &'static str, exit: &'static str) -> ScopeGuard {
+    record_conversion(entry);
+    ScopeGuard {
+        exit,
+        conversion_only: true,
+    }
 }
 
 pub(crate) fn start() {
+    start_with_conversion(false);
+}
+
+pub(crate) fn start_chain() {
+    start_with_conversion(true);
+}
+
+fn start_with_conversion(conversion_enabled: bool) {
     let trace = TRACE.get_or_init(|| Mutex::new(None));
     let mut current = trace.lock().expect("resource diagnostic trace lock");
     assert!(
         current.is_none(),
         "resource diagnostic trace is already active"
     );
-    *current = Some(Vec::new());
+    *current = Some(TraceState {
+        events: Vec::new(),
+        conversion_enabled,
+    });
 }
 
-pub(crate) fn record(name: &'static str) {
+fn push(name: &'static str, conversion_only: bool) {
     let Some(trace) = TRACE.get() else {
         return;
     };
     let mut current = trace.lock().expect("resource diagnostic trace lock");
-    if let Some(events) = current.as_mut() {
-        events.push(ThreadEvent {
+    if let Some(state) = current.as_mut()
+        && (!conversion_only || state.conversion_enabled)
+    {
+        state.events.push(ThreadEvent {
             name,
             thread_id: std::thread::current().id(),
             #[cfg(target_os = "linux")]
             os_thread_id: unsafe { gettid() },
         });
     }
+}
+
+pub(crate) fn record(name: &'static str) {
+    push(name, false);
+}
+
+fn record_conversion(name: &'static str) {
+    push(name, true);
 }
 
 pub(crate) fn finish() -> Vec<ThreadEvent> {
@@ -62,4 +104,5 @@ pub(crate) fn finish() -> Vec<ThreadEvent> {
         .expect("resource diagnostic trace lock")
         .take()
         .expect("resource diagnostic trace was not active")
+        .events
 }
