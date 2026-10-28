@@ -118,12 +118,12 @@ class ResourceManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "manifest.json"
             blocked = copy.deepcopy(ready)
-            blocked["attestation_status"]["wasmtime_fiber_stack_range"] = "unimplemented"
+            blocked["attestation_status"]["wasmtime_fiber_effective_capacity"] = "missing"
             path.write_text(json.dumps(blocked))
             with patch.object(resource_evidence, "MANIFEST", path), patch.object(
                 resource_evidence, "build_manifest", return_value=blocked
             ):
-                with self.assertRaisesRegex(ValueError, "Wasmtime fiber attestation is missing"):
+                with self.assertRaisesRegex(ValueError, "Wasmtime fiber source attestation is missing"):
                     resource_evidence.validate({}, path.parent)
             path.write_text(json.dumps(ready))
             with patch.object(resource_evidence, "MANIFEST", path), patch.object(

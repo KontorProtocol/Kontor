@@ -32,6 +32,10 @@
       "path": "test-contracts/binaries/error_test.wasm.br",
       "sha256": "8610f85f6abdd1bdeb0d32c0916cf154493535299d2c4d8fa0e053f0ee2df875"
     },
+    "fiber_source_capture": {
+      "path": "tools/native-stack/capture_fiber_source.py",
+      "sha256": "21acb8f9c4c91d7bb78938df07a62212d9974f28d0bdca2164268c49ec465ea7"
+    },
     "filestorage_costs": {
       "path": "core/indexer/src/runtime/filestorage/reward_costs.rs",
       "sha256": "9da818b03737e7e10e47050c848396412736702f35708622d1c3f57d9a6baa78"
@@ -82,7 +86,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "f648a4cc4568eec28f0a1b4be04dcaf08f8c990f37d67a03dd3ffa12db5d922f"
+      "sha256": "e673ece5c32e5bbf59e9b28b734746d5859de37c5334a76eca1537aa8bd06e04"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -90,7 +94,7 @@
     },
     "resource_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v1.json",
-      "sha256": "2d1bf2cbb72de94724792b2504c489d6f3ea3d4596b37f5f3e24e6c783a6f516"
+      "sha256": "fdcd225c9b881bc426ad9be00e3e1b80706e6565e16b160cd9b305de6853d186"
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
@@ -98,7 +102,7 @@
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "50802afb30540991745f760203ab270201ebcc8936a98ce1fbb85c7eddebbe13"
+      "sha256": "3b587574867a37662d98b72f2f28e39f93a683e6467cc9940a052365911ad773"
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
@@ -142,7 +146,7 @@
     "macos_thread_guard_capacity": "unimplemented",
     "per_cell_guard_fault_control": "missing",
     "source_revision_capture": "unimplemented",
-    "wasmtime_fiber_stack_range": "unimplemented"
+    "wasmtime_fiber_effective_capacity": "missing"
   },
   "build_policy": {
     "cargo_features": [],
@@ -1467,6 +1471,19 @@
       "pulley_stack_bytes": 524288,
       "test_only": true
     }
+  },
+  "fiber_source_proof": {
+    "allocation_path": "on_demand_without_custom_stack_creator",
+    "effective_writable_rule": "round_up_requested_bytes_to_host_page",
+    "guard_rule": "one_separate_inaccessible_host_page",
+    "sanitizer_path": "none",
+    "source_files": {
+      "crates/fiber/src/lib.rs": "1d747766d66be57bc530917505a2469993a0dabb64c28a3cc4fe38fd597991b7",
+      "crates/fiber/src/unix.rs": "83121bc6a5becaeae393b99848f6c1fd169e44c1b7857b3b862f74c64b950c4c",
+      "crates/wasmtime/src/config.rs": "681d6d278c7c0da051672c2c0acf0e658cab8338a5d461dba5f1596978336b8a",
+      "crates/wasmtime/src/runtime/vm/instance/allocator/on_demand.rs": "b2399776ffd454560d13182c410ed9cb280b22a9278a2ed94c009e4d350b4867"
+    },
+    "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
   },
   "memory_profiles": [
     {

@@ -168,6 +168,13 @@ def thread_capacities(runtime, mode, page_size, os_name, process_id):
 
 def engine_capacity(engine, manifest, mode):
     expected = manifest["configurations"][mode]
+    source_proof = manifest["fiber_source_proof"]
+    require(source_proof["wasmtime_revision"] == manifest["wasmtime_revision"]
+            and source_proof["allocation_path"] == "on_demand_without_custom_stack_creator"
+            and source_proof["sanitizer_path"] == "none"
+            and source_proof["effective_writable_rule"] == "round_up_requested_bytes_to_host_page"
+            and source_proof["guard_rule"] == "one_separate_inaccessible_host_page",
+            f"{mode}: pinned fiber allocation source argument changed")
     require(engine["wasmtime_revision"] == manifest["wasmtime_revision"],
             f"{mode}: wrong Wasmtime revision")
     require(engine["target"] == "pulley64-unknown-unknown-elf", f"{mode}: wrong engine target")
@@ -513,6 +520,17 @@ def check_build_artifact(report, manifest, directory):
             and wasmtime.get("source") == source
             and isinstance(wasmtime.get("id"), str),
             "Cargo metadata package identity differs from frozen build")
+    source_files = closure["wasmtime_source_files"]
+    pinned_files = manifest["fiber_source_proof"]["source_files"]
+    require(set(source_files) == set(pinned_files),
+            "Wasmtime fiber allocator source files are incomplete")
+    for source_path, pinned_sha256 in pinned_files.items():
+        archived = source_files[source_path]
+        require(archived["path"] == f"wasmtime-source/{source_path}",
+                "Wasmtime fiber source archive path differs from pinned fork")
+        file_evidence(directory, archived)
+        require(archived["sha256"] == pinned_sha256,
+                "Wasmtime fiber allocator source differs from pinned fork")
     resolve = metadata.get("resolve")
     require(isinstance(resolve, dict) and isinstance(resolve.get("nodes"), list),
             "Cargo metadata lacks a resolved dependency graph")
@@ -603,7 +621,7 @@ def validate(report, directory):
                 "verified",
             "cold publication accepted boundaries are unverified")
     require(all(status == "ready" for status in manifest["attestation_status"].values()),
-            "build/source capture, per-cell guard fault, macOS stack, or Wasmtime fiber attestation is missing")
+            "build/source capture, per-cell guard fault, macOS stack, or Wasmtime fiber source attestation is missing")
     schema = load_json_strict(SCHEMA)
     Draft202012Validator.check_schema(schema)
     errors = Draft202012Validator(schema).iter_errors(report)
@@ -640,6 +658,7 @@ def validate(report, directory):
                              "cargo_command", "cargo_cwd", "rustc_log", "binary_artifact",
                              "git_head_log", "git_status_log",
                              "wasmtime_features", "wasmtime_feature_logs",
+                             "wasmtime_source_files",
                              "cargo_metadata_sha256", "compile_env_sha256",
                              "build_log_sha256", "build_log", "cargo_metadata_log",
                              "compile_env_log"}

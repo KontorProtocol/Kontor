@@ -14,6 +14,12 @@ MANIFEST = Path(__file__).with_name("resource-manifest-v1.json")
 AMENDMENT = "docs/design/protocol-upgrades/native-stack-s2-resource-amendment-v1.md"
 AMENDMENT_SHA256 = "923f6ddf0e5646e140242d11fc48995f69e2929d34930609a82ac13a4fce337c"
 WASMTIME_REVISION = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+FIBER_SOURCE_FILES = {
+    "crates/wasmtime/src/config.rs": "681d6d278c7c0da051672c2c0acf0e658cab8338a5d461dba5f1596978336b8a",
+    "crates/wasmtime/src/runtime/vm/instance/allocator/on_demand.rs": "b2399776ffd454560d13182c410ed9cb280b22a9278a2ed94c009e4d350b4867",
+    "crates/fiber/src/lib.rs": "1d747766d66be57bc530917505a2469993a0dabb64c28a3cc4fe38fd597991b7",
+    "crates/fiber/src/unix.rs": "83121bc6a5becaeae393b99848f6c1fd169e44c1b7857b3b862f74c64b950c4c",
+}
 BASE_COMMIT = "67a52fed58a893ce2c1c05483f86f4fffa02a675"
 INPUTS = {
     "core_lockfile": "core/Cargo.lock",
@@ -44,6 +50,7 @@ INPUTS = {
     "native_filestorage": "native-contracts/filestorage/src/lib.rs",
     "production_qualification": "tools/native-stack/compare.py",
     "resource_manifest_source": "tools/native-stack/resource_manifest.py",
+    "fiber_source_capture": "tools/native-stack/capture_fiber_source.py",
     "resource_validator_source": "tools/native-stack/resource_evidence.py",
     "resource_schema": "tools/native-stack/resource-evidence-schema-v1.json",
     "resource_comparator_source": "tools/native-stack/compare_resource.py",
@@ -295,7 +302,15 @@ def build_manifest():
             "source_revision_capture": "unimplemented",
             "per_cell_guard_fault_control": "missing",
             "macos_thread_guard_capacity": "unimplemented",
-            "wasmtime_fiber_stack_range": "unimplemented",
+            "wasmtime_fiber_effective_capacity": "missing",
+        },
+        "fiber_source_proof": {
+            "wasmtime_revision": WASMTIME_REVISION,
+            "source_files": FIBER_SOURCE_FILES,
+            "allocation_path": "on_demand_without_custom_stack_creator",
+            "sanitizer_path": "none",
+            "effective_writable_rule": "round_up_requested_bytes_to_host_page",
+            "guard_rule": "one_separate_inaccessible_host_page",
         },
         "workload_plan": {"status": "awaiting_frozen_workload_plan",
                           "path": "tools/native-stack/resource-workload-plan-v1.json",

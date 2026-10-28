@@ -15,6 +15,7 @@ GIB = 1024**3
 
 def raw_log(directory, name, text):
     path = directory / name
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     return {"path": name, "sha256": resource_evidence.sha256(path)}
 
@@ -212,6 +213,12 @@ def synthetic_report(directory):
     plan_path.write_text(json.dumps(plan))
     manifest["workload_plan"] = {"status": "ready", "path": plan_path.name,
                                  "sha256": resource_evidence.sha256(plan_path)}
+    source_logs = {}
+    for source_path in manifest["fiber_source_proof"]["source_files"]:
+        entry = raw_log(directory, f"wasmtime-source/{source_path}",
+                        f"synthetic pinned source: {source_path}\n")
+        manifest["fiber_source_proof"]["source_files"][source_path] = entry["sha256"]
+        source_logs[source_path] = entry
     manifest_path = directory / "manifest.json"
     manifest_path.write_text(json.dumps(manifest))
     policy = manifest["build_policy"]
@@ -278,6 +285,7 @@ def synthetic_report(directory):
                                             "--target", target],
                           "wasmtime_features": manifest["wasmtime_features"],
                           "wasmtime_feature_logs": feature_logs,
+                          "wasmtime_source_files": source_logs,
                           "cargo_metadata_sha256": metadata["sha256"],
                           "compile_env_sha256": compile_env["sha256"],
                           "build_log_sha256": build_log["sha256"],
@@ -308,7 +316,8 @@ class ResourceReportControls(unittest.TestCase):
                          "cargo_target", "rustc_log", "process_command",
                          "binary_bytes", "binary_sha", "git_head", "dirty_tree",
                          "claimed_source_sha",
-                         "child_executable_hash", "child_source_sha"):
+                         "child_executable_hash", "child_source_sha",
+                         "fiber_source_bytes", "fiber_source_claim"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 manifest, manifest_path, report = synthetic_report(directory)
@@ -331,6 +340,8 @@ class ResourceReportControls(unittest.TestCase):
                     "claimed_source_sha": "terminal status differs",
                     "child_executable_hash": "terminal status differs",
                     "child_source_sha": "terminal status differs",
+                    "fiber_source_bytes": "raw log hash mismatch",
+                    "fiber_source_claim": "fiber allocator source differs from pinned fork",
                 }[mutation]
                 if mutation == "metadata":
                     path = directory / closure["cargo_metadata_log"]["path"]
@@ -376,6 +387,12 @@ class ResourceReportControls(unittest.TestCase):
                     (directory / closure["binary_artifact"]["path"]).write_text("other bytes")
                 elif mutation == "binary_sha":
                     report["binary_sha256"] = "0" * 64
+                elif mutation in {"fiber_source_bytes", "fiber_source_claim"}:
+                    entry = next(iter(closure["wasmtime_source_files"].values()))
+                    path = directory / entry["path"]
+                    path.write_text("changed source\n")
+                    if mutation == "fiber_source_claim":
+                        entry["sha256"] = resource_evidence.sha256(path)
                 elif mutation in {"git_head", "dirty_tree"}:
                     key = "git_head_log" if mutation == "git_head" else "git_status_log"
                     path = directory / closure[key]["path"]
