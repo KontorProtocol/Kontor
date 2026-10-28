@@ -324,6 +324,10 @@ pub struct Runtime {
 impl Runtime {
     pub fn new_engine() -> Result<Engine> {
         let mut config = Config::new();
+        #[cfg(test)]
+        if std::env::var_os("KONTOR_STACK_PULLEY").is_some() {
+            config.target("pulley64")?;
+        }
         config.wasm_component_model_async(true);
         config.consume_fuel(true);
         config.consume_lifting_fuel(Some(LiftingPrices {

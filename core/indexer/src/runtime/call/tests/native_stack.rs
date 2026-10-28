@@ -228,6 +228,7 @@ async fn qualification_probe() -> Result<()> {
         "gas_to_fuel_multiplier": runtime.gas_to_fuel_multiplier,
         "max_wasm_stack": max_wasm_stack,
         "async_stack_size": async_stack_size,
+        "engine_target": runtime.engine.get_target(),
         "component_sha256": hex::encode(Sha256::digest(COMPONENT)),
         "target_os": env::consts::OS,
         "target_arch": env::consts::ARCH,

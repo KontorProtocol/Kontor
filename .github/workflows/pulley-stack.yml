@@ -1,0 +1,108 @@
+name: Pulley Wasm stack qualification
+
+on:
+  push:
+    branches: [investigate/wasm-native-stack]
+    paths:
+      - "core/**"
+      - "test-contracts/**"
+      - "tools/native-stack/**"
+      - ".github/workflows/pulley-stack.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    name: Pulley stack (${{ matrix.os }}, ${{ matrix.profile }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        profile: [dev, release]
+        include:
+          - os: ubuntu-latest
+            arch: X64
+          - os: ubuntu-24.04-arm
+            arch: ARM64
+          - os: macos-latest
+            arch: ARM64
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.1"
+      RUSTC_WRAPPER: ""
+      CCACHE_DISABLE: "1"
+      CARGO_BUILD_JOBS: "2"
+      KONTOR_STACK_PULLEY: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Check runner architecture
+        run: test "$RUNNER_ARCH" = "${{ matrix.arch }}"
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libzmq3-dev libboost-all-dev libevent-dev
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install boost libevent zeromq
+      - name: Compile Pulley qualification test
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          mkdir -p target/pulley-stack-evidence
+          flags=()
+          if [[ "$PROFILE" == release ]]; then flags+=(--release); fi
+          cargo test --locked --manifest-path core/Cargo.toml -p indexer --features wasmtime/pulley --lib --no-run --message-format=json -j2 "${flags[@]}" > target/pulley-stack-evidence/cargo.json
+          jq -r 'select(.reason == "compiler-artifact" and .target.name == "indexer" and .executable != null) | .executable' target/pulley-stack-evidence/cargo.json | tail -1 > target/pulley-stack-evidence/binary-path
+          test -s target/pulley-stack-evidence/binary-path
+      - name: Measure Pulley stack boundaries
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          binary=$(cat target/pulley-stack-evidence/binary-path)
+          python3 tools/native-stack/qualify.py --binary "$binary" --output "target/pulley-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$PROFILE"
+      - name: Run real call tests with Pulley
+        if: matrix.os == 'ubuntu-24.04-arm' && matrix.profile == 'dev'
+        run: |
+          binary=$(cat target/pulley-stack-evidence/binary-path)
+          "$binary" runtime::call::tests --test-threads=2 --nocapture
+      - name: Preserve Pulley evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pulley-stack-${{ matrix.os }}-${{ matrix.profile }}
+          path: target/pulley-stack-evidence/${{ runner.os }}-${{ runner.arch }}/${{ matrix.profile }}/
+          if-no-files-found: error
+          retention-days: 30
+
+  compare:
+    name: Compare Pulley stack outcomes
+    needs: qualify
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: pulley-stack-*
+          path: target/pulley-stack-compare
+      - name: Require Pulley target in every report
+        run: |
+          jq -s -e '[.[].cases[] | .observations[]? | .engine_target] | unique == ["pulley64-unknown-unknown-elf"]' target/pulley-stack-compare/*/qualification.json
+      - name: Compare six variants
+        run: |
+          python3 tools/native-stack/compare.py --directory target/pulley-stack-compare --output target/pulley-stack-comparison.json
+      - name: Preserve comparison
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pulley-stack-comparison
+          path: target/pulley-stack-comparison.json
+          if-no-files-found: error
