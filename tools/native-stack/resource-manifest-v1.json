@@ -78,7 +78,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "208155d8f5187b17d6054782c75d9fc33ec0547c8a4a2fb70c2192bb8c2d5f85"
+      "sha256": "6e6357f81224556e28aa73926d7999cf025d457a0dc60bf9d2ab5e6bdd0d6283"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -106,15 +106,19 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "cb24521a9fa119922d1f7c124d07f7b027df80714ad4ef74d76380551baed136"
+      "sha256": "b2802efeb697e590390cc787f6d427d4ac3f8f32ee502ed4c43412071b282603"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "3d75704a3cbfe8273eeb83ad15dd687b07639ee5650de091f22e0ca34c36851b"
+      "sha256": "d3b00aa09c24347f97674cd6415b55221979c9334ea344e7768f5382d41f2e67"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
       "sha256": "32378420a60b94c4fea214933e28f56a1d2fd91194a47577f8a3ab4c9fe3ab1f"
+    },
+    "test_runtime_setup": {
+      "path": "core/indexer/src/test_utils.rs",
+      "sha256": "f196f24ab8ae02c29a80fc424db92053b00dc4a254d72577c5249723dc2a3304"
     },
     "token_pages": {
       "path": "core/indexer/src/runtime/token/query_tests.rs",
@@ -1600,7 +1604,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "f178496d5526715280855d8171847ad31e087e24cc4e3000ffe8bb57f12a17cc",
+    "sha256": "5459eeda56382a390f33d103e3a8215e88dd7eeb8e19bae1d23f9ecba14119a4",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

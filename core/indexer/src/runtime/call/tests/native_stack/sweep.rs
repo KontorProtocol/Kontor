@@ -22,7 +22,7 @@ use crate::runtime::{
     ContractAddress, Decimal, ExecutionError, MAX_UNTRUSTED_GAS_LIMIT, Runtime, TransactionContext,
     native_provenance,
 };
-use crate::test_utils::test_runtime;
+use crate::test_utils::{test_runtime, test_runtime_with_engine};
 
 const ACTOR_PUBKEY: &str = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 
@@ -54,9 +54,13 @@ struct Fixture {
 }
 
 impl Fixture {
-    async fn new(kind: String) -> Result<Self> {
+    async fn new(kind: String, reduced: bool) -> Result<Self> {
         let setup_start = Instant::now();
-        let (mut runtime, dir, _name) = test_runtime().await?;
+        let (mut runtime, dir, _name) = if reduced {
+            test_runtime_with_engine(Runtime::new_resource_diagnostic_engine()?).await?
+        } else {
+            test_runtime().await?
+        };
         let setup_ms = setup_start.elapsed().as_millis();
         let funding_start = Instant::now();
         let signer = Signer::Id(runtime.get_or_create_identity(ACTOR_PUBKEY).await?);
@@ -458,6 +462,15 @@ fn expression(kind: &str, depth: u32, address: &ContractAddress) -> Result<Strin
     })
 }
 
+pub(super) async fn resource_smoke(reduced: bool) -> Result<()> {
+    let mut fixture = Fixture::new("paid_huge".to_string(), reduced).await?;
+    ensure!(
+        fixture.observe(0, "resource_smoke").await? == "ok",
+        "large-frame paid contract call failed on the Tokio worker"
+    );
+    Ok(())
+}
+
 async fn persistent_digest(conn: &Connection) -> Result<String> {
     let mut rows = conn
         .query(
@@ -607,7 +620,7 @@ pub(super) async fn run(role: &str) -> Result<()> {
         "unknown sweep role {role}"
     );
     let kind = env::var("KONTOR_STACK_KIND").context("KONTOR_STACK_KIND is required")?;
-    let mut fixture = Fixture::new(kind.clone()).await?;
+    let mut fixture = Fixture::new(kind.clone(), false).await?;
     let boundaries = if role == "worker" {
         if kind == "paid_huge" {
             ensure!(

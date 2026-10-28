@@ -33,6 +33,7 @@ INPUTS = {
     "call_input": "core/indexer/src/runtime/call.rs",
     "call_output": "core/indexer/src/runtime/call/result.rs",
     "runner_module": "core/indexer/src/runtime/call/tests.rs",
+    "test_runtime_setup": "core/indexer/src/test_utils.rs",
     "staking_costs": "core/indexer/src/runtime/staking/transition_costs.rs",
     "filestorage_costs": "core/indexer/src/runtime/filestorage/reward_costs.rs",
     "filestorage_settlement": "core/indexer/src/runtime/filestorage/settlement_tests.rs",

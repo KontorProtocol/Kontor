@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use tokio::time::{Duration, sleep};
+use wasmtime::Engine;
 
 use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::database::queries::insert_block;
@@ -431,6 +432,24 @@ pub async fn test_runtime_with_genesis_config(
     genesis: &GenesisParameters,
     network: bitcoin::Network,
 ) -> Result<(Runtime, TempDir, String)> {
+    test_runtime_with_genesis_config_and_engine(genesis, network, None).await
+}
+
+#[cfg(test)]
+pub async fn test_runtime_with_engine(engine: Engine) -> Result<(Runtime, TempDir, String)> {
+    test_runtime_with_genesis_config_and_engine(
+        &test_genesis(&[]),
+        bitcoin::Network::Regtest,
+        Some(engine),
+    )
+    .await
+}
+
+async fn test_runtime_with_genesis_config_and_engine(
+    genesis: &GenesisParameters,
+    network: bitcoin::Network,
+    alternate_engine: Option<Engine>,
+) -> Result<(Runtime, TempDir, String)> {
     let (_reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let conn = writer.connection();
 
@@ -454,7 +473,12 @@ pub async fn test_runtime_with_genesis_config(
     .await?;
 
     let storage = Storage::builder().height(1).conn(conn).build();
-    let (engine, prewarmed) = shared_test_engine().await;
+    let (engine, prewarmed) = match alternate_engine {
+        // Components compiled for the shared engine cannot be installed in a
+        // cache used by the reduced-capacity diagnostic engine.
+        Some(engine) => (engine, Vec::new()),
+        None => shared_test_engine().await,
+    };
     let cache = ComponentCache::new();
     for (id, component, size) in &prewarmed {
         cache

@@ -23,6 +23,10 @@ const COMPONENT: &[u8] =
 
 mod sweep;
 
+pub(super) async fn resource_smoke(reduced: bool) -> Result<()> {
+    sweep::resource_smoke(reduced).await
+}
+
 #[tokio::test]
 #[ignore = "run through tools/native-stack/qualify.py so process aborts are observable"]
 async fn qualification_probe() -> Result<()> {

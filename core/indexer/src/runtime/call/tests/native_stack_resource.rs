@@ -1,4 +1,7 @@
-use anyhow::Result;
+use std::env;
+
+use anyhow::{Result, ensure};
+use tokio::runtime::Builder;
 
 #[cfg(target_os = "linux")]
 use std::fs::{File, read_to_string};
@@ -16,16 +19,58 @@ use std::thread::ThreadId;
 use std::time::Duration;
 
 #[cfg(target_os = "linux")]
-use anyhow::{Context, ensure};
+use anyhow::Context;
 #[cfg(target_os = "linux")]
 use libc::{
     _SC_PAGESIZE, EIO, c_void, gettid, pthread_attr_destroy, pthread_attr_getguardsize,
     pthread_attr_getstack, pthread_attr_t, pthread_getattr_np, pthread_self, sysconf,
 };
 #[cfg(target_os = "linux")]
-use tokio::runtime::{Builder, Runtime as TokioRuntime};
+use tokio::runtime::Runtime as TokioRuntime;
 
 use crate::runtime::Runtime;
+
+#[test]
+#[ignore = "run explicitly to isolate a real paid call in a multithread worker"]
+fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
+    let mode = env::var("KONTOR_RESOURCE_MODE").unwrap_or_else(|_| "reduced".to_string());
+    ensure!(
+        matches!(mode.as_str(), "production" | "reduced"),
+        "unknown resource mode"
+    );
+    let reduced = mode == "reduced";
+    #[cfg(target_os = "linux")]
+    let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    #[cfg(not(target_os = "linux"))]
+    let runtime = {
+        let mut builder = Builder::new_multi_thread();
+        builder.worker_threads(2).enable_all();
+        if reduced {
+            builder.thread_stack_size(1024 * 1024);
+        }
+        builder.build()?
+    };
+    let (start, end) = runtime.block_on(async {
+        tokio::spawn(async move {
+            let start = std::thread::current().id();
+            super::native_stack::resource_smoke(reduced).await?;
+            Ok::<_, anyhow::Error>((start, std::thread::current().id()))
+        })
+        .await
+    })??;
+    #[cfg(target_os = "linux")]
+    ensure!(
+        workers.iter().any(|worker| worker.thread_id == start)
+            && workers.iter().any(|worker| worker.thread_id == end),
+        "real paid call began or ended outside measured Tokio workers"
+    );
+    #[cfg(not(target_os = "linux"))]
+    ensure!(
+        start != std::thread::current().id() && end != std::thread::current().id(),
+        "real paid call began or ended on the block_on caller"
+    );
+    Ok(())
+}
 
 #[cfg(target_os = "linux")]
 #[derive(Debug)]

@@ -51,6 +51,15 @@ sample's preparation, operation, conversion and teardown worker IDs must be
 bound before acceptance. A successful preflight schema check is not a resource
 qualification result.
 
+The ignored `real_paid_large_frame_on_tokio_worker` test is an initial real
+call diagnostic. Run it in separate child processes with
+`KONTOR_RESOURCE_MODE=reduced` and `KONTOR_RESOURCE_MODE=production`. It uses
+two explicit Tokio workers and the existing paid 256-value frame fixture,
+including normal publication, receipt and post-call reset checks. Linux
+checks that the task begins and ends on measured workers. It does not yet emit
+the per-phase, fiber, guard-fault, build or memory evidence required by the
+resource comparator.
+
 Thread records must confirm a protected guard region, not only repeat
 `pthread_attr_getguardsize`'s reported size. An unverified guard fails the
 resource evidence schema. On Linux, the diagnostic accepts a protected
