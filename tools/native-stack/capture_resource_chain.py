@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from capture_resource_control import run_bounded_process
 from capture_resource_diagnostic import one_marker, validate_control
 from resource_evidence import (file_evidence, load_json_strict, require, sha256,
                                thread_capacities)
-from resource_manifest import MANIFEST, build_manifest
+from resource_manifest import MANIFEST, ROOT, build_manifest
 
 
 WORKER_TEST = "runtime::call::tests::native_stack_resource::paid_chain_worker_case"
@@ -128,17 +129,25 @@ def measured_trace(trace, runtime, mode, stores, process_id):
                 and positions[2] < names.index("chain_guest_task_entry")
                 < names.index("chain_guest_task_exit") < positions[3],
                 f"chain {repeat_index}: guest task escaped operation phase")
+        phase_intervals = ((positions[0], positions[1]),
+                           (positions[2], positions[3]),
+                           (post_entry, post_exit),
+                           (positions[4], positions[5]))
+        require(all(any(begin < index < finish for begin, finish in phase_intervals)
+                    for index, event in enumerate(segment)
+                    if event["name"] in CONVERSION_NAMES),
+                f"chain {repeat_index}: conversion escaped named worker phases")
         conversion_positions = [index for index, event in enumerate(segment)
-                                if event["name"] in CONVERSION_NAMES]
+                                if positions[2] < index < positions[3]
+                                and event["name"] in CONVERSION_NAMES]
         conversions = [segment[index]["thread_id"] for index in conversion_positions]
-        require(conversions and all(positions[2] < index < positions[3]
-                                    for index in conversion_positions)
-                and all(thread in workers for thread in conversions)
-                and names.count("canonical_input_entry") ==
-                    names.count("canonical_input_exit") > 0
-                and names.count("canonical_output_entry") ==
-                    names.count("canonical_output_exit")
-                and (stores == 65 or names.count("canonical_output_entry") > 0),
+        conversion_names = [segment[index]["name"] for index in conversion_positions]
+        require(conversions and all(thread in workers for thread in conversions)
+                and conversion_names.count("canonical_input_entry") ==
+                    conversion_names.count("canonical_input_exit") > 0
+                and conversion_names.count("canonical_output_entry") ==
+                    conversion_names.count("canonical_output_exit")
+                and (stores == 65 or conversion_names.count("canonical_output_entry") > 0),
                 f"chain {repeat_index}: canonical conversion was not observed on workers")
         phase_threads["conversion"] = sorted(set(conversions))
         require(all(phase_threads.values()),
@@ -210,7 +219,7 @@ def observation_from_trial(trial, case_id, expected_outcome, schema):
             "table_after": trial["resource_count"],
             "savepoint_restored": trial["savepoint_restored"],
             "stack_empty": trial["stack_empty"],
-            "invocation_table_released": trial["live_stores_after"] == 0,
+            "invocation_table_released": None,
         },
         "fresh_store": True, "suspended": trial["host_io_suspended"],
         "reused": False, "observed_depth": None,
@@ -263,6 +272,30 @@ def parse_worker(path, mode, stores, pid, manifest, schema):
                              "attempts": attempts},
         "runtime": runtime, "thread_trace": trace,
     }
+
+
+def verify_final_closure(control, binary, control_dir, control_copy, control_sha256):
+    head = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    dirty = subprocess.run(
+        ["git", "-C", str(ROOT), "status", "--porcelain"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    require(head == control["source_sha"] and not dirty,
+            "chain source revision changed during capture")
+    require(sha256(MANIFEST) == control["manifest_sha256"]
+            and load_json_strict(MANIFEST) == build_manifest(),
+            "chain resource manifest changed during capture")
+    require(sha256(binary) == control["binary_sha256"],
+            "chain test binary changed during capture")
+    require(sha256(control_copy) == control_sha256,
+            "chain control capture changed in archive")
+    for entry in (control["cargo_artifacts"], control["cargo_metadata"],
+                  control["guard_control"]["raw_log"],
+                  *control["wasmtime_source_files"].values()):
+        file_evidence(control_dir, entry)
 
 
 def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
@@ -364,6 +397,8 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
                            control["guard_control"]["process"]["started_unix_ns"]))
         require(len(set(identities)) == len(identities),
                 "guard, chain targets, or trap control reused a process record")
+        verify_final_closure(control, binary, control_dir, control_copy,
+                             control_sha256)
     except Exception as error:
         with failure_path.open("x") as destination:
             json.dump({"error": str(error), "completed_runs": captured},
@@ -376,7 +411,7 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
         "source_sha": control["source_sha"],
         "binary_path": str(binary),
         "binary_sha256": control["binary_sha256"],
-        "manifest_sha256": sha256(MANIFEST),
+        "manifest_sha256": control["manifest_sha256"],
         "control_capture": {"path": "control/resource-control-capture.json",
                             "sha256": control_sha256},
         "runs": captured,
