@@ -28,6 +28,19 @@ class ResourceManifestTests(unittest.TestCase):
         self.assertTrue(all(item["sample_keys"] and
                             len(item["sample_keys"]) == len(set(item["sample_keys"]))
                             for item in cases.values()))
+        self.assertTrue(all(set(item["expected_outcomes"]) == set(item["sample_keys"])
+                            and set(item["expected_traps"]) == set(item["sample_keys"])
+                            for item in cases.values()))
+        self.assertEqual(cases["canonical_post_return"]["expected_traps"],
+                         {"light": "CannotLeaveComponent", "heavy": "CannotLeaveComponent"})
+        self.assertEqual(cases["canonical_post_return"]["expected_outcomes"],
+                         {"light": "trap", "heavy": "trap"})
+        self.assertEqual(cases["canonical_lift_lower"]["expected_traps"]["failure"],
+                         "CannotLeaveComponent")
+        self.assertEqual(cases["canonical_realloc"]["expected_traps"],
+                         {"success_lowering": None,
+                          "realloc_trap": "UnreachableCodeReached",
+                          "forbidden_import": "CannotLeaveComponent"})
         generated = cases["generated_initialization"]
         self.assertIsNone(generated["existing_unpaired_binding"])
         self.assertEqual(set(generated["sample_keys"]), {
@@ -56,7 +69,7 @@ class ResourceManifestTests(unittest.TestCase):
         self.assertEqual(self.manifest["type_value_limits"]["wave_result_value_depth"], 64)
         self.assertEqual(self.manifest["workload_plan"]["status"],
                          "awaiting_frozen_workload_plan")
-        self.assertEqual(self.manifest["worker_runner"]["status"], "missing")
+        self.assertEqual(self.manifest["worker_runner"]["status"], "smoke_only")
         for stores in (33, 63, 64, 65):
             for mode in ("paid", "view", "core"):
                 self.assertIn(f"chain_{stores}_{mode}", cases)
@@ -91,6 +104,15 @@ class ResourceManifestTests(unittest.TestCase):
         ready = copy.deepcopy(self.manifest)
         for item in ready["cases"]:
             item["paired_worker_status"] = "ready"
+            if item["family"] == "native_core":
+                item["parameters"]["exact_budget_status"] = "frozen"
+            if item["family"] == "cold_compile":
+                item["parameters"]["fixture_admission_status"] = "verified"
+                for key, value in item["parameters"].items():
+                    if key.startswith("fixture_") and value is None:
+                        item["parameters"][key] = 1000
+        ready["publication_constraints"]["near_boundary_accepted_fixture"] = "verified"
+        ready["publication_constraints"]["serialized_transaction_and_wit_admission"] = "verified"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "manifest.json"
             path.write_text(json.dumps(ready))
@@ -146,7 +168,7 @@ class ResourceManifestTests(unittest.TestCase):
                         observation = {
                             "case_id": case_id, "sample_key": sample, "outcome": outcome,
                             "error_class": None if outcome == "ok" else "deterministic",
-                            "trap": "trap" if outcome in {"trap", "stack_overflow", "out_of_fuel"} else None,
+                            "trap": definition["expected_traps"][sample],
                             "value": None, "fuel": {"user": 0, "system": 0, "deposit": 0},
                             "receipts": [], "state": {"before_sha256": "0" * 64,
                                 "after_sha256": "0" * 64, "marker": None,
@@ -167,7 +189,9 @@ class ResourceManifestTests(unittest.TestCase):
                             "phase_threads": {phase: ["worker"] for phase in
                                               ("preparation", "operation", "conversion", "teardown")},
                             "blocking_thread_ids": ["blocking"] if
-                                definition["family"] == "blocking_decode" else []}
+                                definition["family"] == "blocking_decode" else [],
+                            "cache_state": "cold" if definition["family"] == "cold_compile"
+                                else "warm"}
                         observations.append(observation)
                         attempts.append(attempt)
                         transcript[(case_id, sample, index)] = {
@@ -205,14 +229,22 @@ class ResourceManifestTests(unittest.TestCase):
 
     def test_worker_range_must_match_actual_measured_capacity(self):
         def thread(category, identifier):
+            index = {"worker-1": 1, "worker-2": 2, "blocking-1": 3,
+                     "caller-1": 4}[identifier]
+            base = index * 4_194_304
             return {
                 "thread_category": category, "thread_id": identifier,
+                "process_id": 100, "os_thread_id": 1000 + index,
+                "identity_api": "linux_gettid", "page_size_bytes": 4096,
                 "requested_bytes": 1_048_576 if category == "tokio_worker" else None,
                 "mapped_bytes": 1_048_576, "guard_bytes": 4_096,
-                "usable_bytes": 1_044_480, "mapped_start": 1_000_000,
-                "mapped_end": 2_048_576, "usable_start": 1_004_096,
-                "usable_end": 2_048_576, "measurement_api": "pthread stack attributes",
+                "guard_start": base, "guard_end": base + 4096,
+                "guard_verification": "linux_maps_prot_none",
+                "usable_bytes": 1_044_480, "mapped_start": base,
+                "mapped_end": base + 1_048_576, "usable_start": base + 4096,
+                "usable_end": base + 1_048_576, "measurement_api": "pthread stack attributes",
                 "guard_treatment": "guard excluded from usable interval",
+                "guard_verified": True,
             }
 
         runtime = {
@@ -226,10 +258,10 @@ class ResourceManifestTests(unittest.TestCase):
             ],
             "blocking_pool_observed": True, "block_on_caller_observed": True,
         }
-        resource_evidence.thread_capacities(runtime, "reduced")
+        resource_evidence.thread_capacities(runtime, "reduced", 4096, "linux", 100)
         runtime["thread_observations"][0]["usable_end"] -= 1
         with self.assertRaisesRegex(ValueError, "actual usable worker range"):
-            resource_evidence.thread_capacities(runtime, "reduced")
+            resource_evidence.thread_capacities(runtime, "reduced", 4096, "linux", 100)
 
     def test_removed_case_or_changed_hash_blocks_acceptance(self):
         with tempfile.TemporaryDirectory() as directory:

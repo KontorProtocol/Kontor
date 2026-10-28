@@ -31,6 +31,7 @@ INPUTS = {
     "brotli_path": "core/indexer/src/runtime/storage.rs",
     "call_input": "core/indexer/src/runtime/call.rs",
     "call_output": "core/indexer/src/runtime/call/result.rs",
+    "runner_module": "core/indexer/src/runtime/call/tests.rs",
     "staking_costs": "core/indexer/src/runtime/staking/transition_costs.rs",
     "filestorage_costs": "core/indexer/src/runtime/filestorage/reward_costs.rs",
     "filestorage_settlement": "core/indexer/src/runtime/filestorage/settlement_tests.rs",
@@ -42,6 +43,7 @@ INPUTS = {
     "resource_schema": "tools/native-stack/resource-evidence-schema-v1.json",
     "resource_comparator_source": "tools/native-stack/compare_resource.py",
     "resource_python_requirements": "tools/native-stack/requirements-resource.txt",
+    "qualification_workflow": ".github/workflows/native-stack.yml",
 }
 CELLS = (
     "Linux-X64/dev",
@@ -53,9 +55,11 @@ CELLS = (
 )
 THREAD_CATEGORIES = ("tokio_worker", "blocking_pool", "block_on_caller")
 CAPACITY_FIELDS = (
-    "requested_bytes", "mapped_bytes", "guard_bytes", "usable_bytes",
+    "thread_category", "thread_id", "process_id", "os_thread_id", "identity_api",
+    "page_size_bytes", "requested_bytes", "mapped_bytes", "guard_bytes",
+    "guard_start", "guard_end", "guard_verification", "usable_bytes",
     "mapped_start", "mapped_end", "usable_start", "usable_end",
-    "measurement_api", "thread_id", "thread_category",
+    "measurement_api", "guard_treatment", "guard_verified",
 )
 OBSERVATION_FIELDS = (
     "case_id", "sample_key", "outcome", "error_class", "trap", "value", "fuel",
@@ -73,14 +77,16 @@ def sha256(path):
 
 
 def case(case_id, family, parameters, fixtures, binding=None, sample_keys=("target",),
-         expected_outcomes=None):
+         expected_outcomes=None, expected_traps=None):
     expected_outcomes = expected_outcomes or {}
+    expected_traps = expected_traps or {}
     return {
         "id": case_id,
         "family": family,
         "parameters": parameters,
         "sample_keys": list(sample_keys),
         "expected_outcomes": {key: expected_outcomes.get(key, "ok") for key in sample_keys},
+        "expected_traps": {key: expected_traps.get(key) for key in sample_keys},
         "fixtures": fixtures,
         "existing_unpaired_binding": binding,
         "paired_worker_status": "missing",
@@ -98,6 +104,7 @@ def cases():
                 "runtime::call::tests::native_stack::qualification_probe",
                 ("last_success", "first_failure"),
                 {"first_failure": "stack_overflow"},
+                {"first_failure": "StackOverflow"},
             ))
     result.append(case(
         "large_frame_paid", "large_frame",
@@ -136,14 +143,18 @@ def cases():
              sample_keys=("expiry", "penalty", "cleanup")),
         case("canonical_lift_lower", "canonical_abi", {"shape": "string_and_resource", "repeats": 2},
              ["callback_tests"], "runtime::sequential_tests::hostile_canonical_callbacks_are_framed_and_clean_up",
-             ("success", "failure")),
+             ("success", "failure"), {"failure": "trap"},
+             {"failure": "CannotLeaveComponent"}),
         case("canonical_realloc", "canonical_abi", {"string_bytes": 16_384, "repeats": 2},
              ["callback_tests"], "runtime::sequential_tests::hostile_canonical_callbacks_are_framed_and_clean_up",
              ("success_lowering", "realloc_trap", "forbidden_import"),
-             {"realloc_trap": "trap", "forbidden_import": "deterministic_error"}),
+             {"realloc_trap": "trap", "forbidden_import": "trap"},
+             {"realloc_trap": "UnreachableCodeReached",
+              "forbidden_import": "CannotLeaveComponent"}),
         case("canonical_post_return", "canonical_abi", {"callback_loop_iterations": 16_384, "repeats": 2},
              ["callback_tests"], "runtime::sequential_tests::paid_post_return_callback_work_charges_fuel_gas_and_burn",
-             ("light", "heavy")),
+             ("light", "heavy"), {"light": "trap", "heavy": "trap"},
+             {"light": "CannotLeaveComponent", "heavy": "CannotLeaveComponent"}),
         case("generated_initialization", "initialization",
              {"start_free": True, "active_data": True, "active_element": True,
               "out_of_bounds_variants": True, "fuel_failure": True, "repeats": 2},
@@ -152,10 +163,12 @@ def cases():
                           "active_element_oob", "fuel_failure"),
              expected_outcomes={"active_data_oob": "deterministic_error",
                                 "active_element_oob": "deterministic_error",
-                                "fuel_failure": "out_of_fuel"}),
+                                "fuel_failure": "out_of_fuel"},
+             expected_traps={"fuel_failure": "OutOfFuel"}),
         case("explicit_resource_drop", "resource_lifecycle", {"success_trap_success": True},
              ["callback_tests"], "runtime::sequential_tests::explicit_guest_resource_drop_invokes_host_callback_and_cleans_up",
-             ("success_before_trap", "trap", "success_after_trap"), {"trap": "trap"}),
+             ("success_before_trap", "trap", "success_after_trap"), {"trap": "trap"},
+             {"trap": "UnreachableCodeReached"}),
         case("failed_instantiation_cleanup", "resource_lifecycle", {"out_of_bounds_data": True, "repeats": 2},
              ["callback_tests"], "runtime::sequential_tests::partial_instantiation_does_not_invoke_registered_destructors",
              ("failed_init", "valid_control"), {"failed_init": "deterministic_error"}),
@@ -193,15 +206,22 @@ def cases():
                                 "print_depth_65_rejected": "deterministic_error"}),
         case("cold_publish_large_function", "cold_compile",
              {"source_function_size_limit_bytes": 7_654_321,
-              "fixture_function_size_bytes": 65_536, "cold_cache": True, "repeats": 2},
+              "fixture_function_size_bytes": None,
+              "fixture_admission_status": "unverified",
+              "cold_cache": True, "repeats": 2},
              ["publish_path"], sample_keys=("accepted", "over_limit_rejected"),
              expected_outcomes={"over_limit_rejected": "deterministic_error"}),
         case("cold_publish_control_nesting", "cold_compile",
-             {"fixture_control_depth": 1_000, "cold_cache": True, "repeats": 2},
+             {"source_effective_depth_limit": "unresolved",
+              "fixture_control_depth": None,
+              "fixture_admission_status": "unverified",
+              "cold_cache": True, "repeats": 2},
              ["publish_path"], sample_keys=("accepted",)),
         case("cold_publish_br_table", "cold_compile",
              {"source_br_table_limit_entries": 7_654_321,
-              "fixture_br_table_entries": 4_096, "cold_cache": True, "repeats": 2},
+              "fixture_br_table_entries": None,
+              "fixture_admission_status": "unverified",
+              "cold_cache": True, "repeats": 2},
              ["publish_path"], sample_keys=("accepted", "over_limit_rejected"),
              expected_outcomes={"over_limit_rejected": "deterministic_error"}),
         case("brotli_raw_ceiling", "blocking_decode",
@@ -227,6 +247,14 @@ def build_manifest():
         "wasmtime_revision": WASMTIME_REVISION,
         "wasmtime_features": {"production": sorted(PRODUCTION_FEATURES),
                               "qualification": sorted(QUALIFICATION_FEATURES)},
+        "build_policy": {"rustc_release": "1.99.1", "cargo_features": [],
+                         "rustflags": [], "rustc_wrapper": "",
+                         "stack_probing_configuration":
+                         "target default; native probe coverage not verified by disassembly",
+                         "compile_env": {"RUSTUP_TOOLCHAIN": "1.99.1",
+                                         "RUSTC_WRAPPER": "", "CCACHE_DISABLE": "1",
+                                         "RUSTFLAGS": "", "CARGO_ENCODED_RUSTFLAGS": "",
+                                         "CARGO_BUILD_RUSTFLAGS": ""}},
         "cells": list(CELLS),
         "configurations": {
             "production": {"pulley_stack_bytes": 524_288, "fiber_requested_bytes": 2_097_152,
@@ -249,12 +277,19 @@ def build_manifest():
                                          "all permitted list lengths and element values",
                                          "all 100-deep type graphs with shallow values"],
         },
+        "publication_constraints": {
+            "decompressed_component_bytes": 67_108_864,
+            "function_body_bytes": 7_654_321,
+            "br_table_entries": 7_654_321,
+            "serialized_transaction_and_wit_admission": "unresolved",
+            "near_boundary_accepted_fixture": "unverified",
+        },
         "workload_plan": {"status": "awaiting_frozen_workload_plan",
                           "path": "tools/native-stack/resource-workload-plan-v1.json",
                           "sha256": None},
-        "worker_runner": {"status": "missing", "path":
+        "worker_runner": {"status": "smoke_only", "path":
                           "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-                          "sha256": None},
+                          "sha256": sha256(ROOT / "core/indexer/src/runtime/call/tests/native_stack_resource.rs")},
         "memory_profiles": [
             {"id": "suspended_64", "simultaneous_stores": 64, "view_roots": 0,
              "reactor_roots": 1, "production_capacity_only": True},

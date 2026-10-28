@@ -72,7 +72,7 @@ def file_evidence(directory, entry):
     require(sha256(path) == entry["sha256"], f"raw log hash mismatch: {relative}")
 
 
-def thread_capacities(runtime, mode):
+def thread_capacities(runtime, mode, page_size, os_name, process_id):
     require(runtime["flavor"] == "multi_thread", f"{mode}: runtime is not multithreaded")
     require(type(runtime["worker_count"]) is int and runtime["worker_count"] >= 2,
             f"{mode}: invalid worker count")
@@ -83,13 +83,22 @@ def thread_capacities(runtime, mode):
     require(isinstance(observations, list), f"{mode}: missing thread observations")
     by_category = {category: [] for category in THREAD_CATEGORIES}
     for thread in observations:
-        require(set(thread) == {"thread_category", "thread_id", "requested_bytes",
-                                "mapped_bytes", "guard_bytes", "usable_bytes",
+        require(set(thread) == {"thread_category", "thread_id", "process_id",
+                                "os_thread_id", "identity_api", "page_size_bytes",
+                                "requested_bytes", "mapped_bytes", "guard_bytes",
+                                "guard_start", "guard_end", "guard_verification", "usable_bytes",
                                 "mapped_start", "mapped_end", "usable_start", "usable_end",
-                                "measurement_api", "guard_treatment"},
+                                "measurement_api", "guard_treatment", "guard_verified"},
                 f"{mode}: thread capacity record is incomplete")
         category = thread["thread_category"]
         require(category in by_category, f"{mode}: unknown thread category")
+        require(isinstance(thread["thread_id"], str) and thread["thread_id"]
+                and type(thread["process_id"]) is int and thread["process_id"] == process_id
+                and type(thread["os_thread_id"]) is int and thread["os_thread_id"] > 0
+                and thread["identity_api"] == ("linux_gettid" if os_name == "linux"
+                                               else "macos_pthread_threadid_np")
+                and thread["page_size_bytes"] == page_size,
+                f"{mode}: thread identity or page size is unverified")
         require(type(thread["mapped_bytes"]) is int and thread["mapped_bytes"] > 0,
                 f"{mode}: invalid mapped stack")
         require(type(thread["guard_bytes"]) is int and thread["guard_bytes"] >= 0,
@@ -107,13 +116,36 @@ def thread_capacities(runtime, mode):
         require(isinstance(thread["measurement_api"], str) and thread["measurement_api"],
                 f"{mode}: missing stack measurement API")
         require(isinstance(thread["guard_treatment"], str) and
-                thread["guard_treatment"] not in {"", "unknown"},
+                thread["guard_treatment"] not in {"", "unknown"}
+                and thread["guard_verified"] is True,
                 f"{mode}: unresolved thread guard treatment")
+        guard = thread["guard_bytes"]
+        guard_start = thread["guard_start"]
+        guard_end = thread["guard_end"]
+        verification = thread["guard_verification"]
+        if guard == 0:
+            require(category != "tokio_worker" and guard_start == guard_end == 0
+                    and verification == "pthread_reports_none",
+                    f"{mode}: worker guard is absent or guard range is inconsistent")
+        else:
+            methods = ({"linux_maps_prot_none", "linux_proc_self_mem_eio"}
+                       if os_name == "linux" else {"macos_mach_vm_region_prot_none"})
+            require(verification in methods and
+                    all(type(value) is int and value >= 0 for value in
+                        (guard_start, guard_end)) and
+                    guard_end - guard_start >= guard and
+                    guard_start % page_size == guard_end % page_size == 0 and
+                    ((guard_start == thread["mapped_start"] and
+                      guard_end == thread["usable_start"]) or
+                     guard_end == thread["mapped_start"]),
+                    f"{mode}: thread guard interval is unverified")
         by_category[category].append(thread)
     require(len({item["thread_id"] for item in by_category["tokio_worker"]})
             >= runtime["worker_count"], f"{mode}: not all workers measured")
     require(len({item["thread_id"] for item in observations}) == len(observations),
             f"{mode}: duplicate thread capacity record")
+    require(len({item["os_thread_id"] for item in observations}) == len(observations),
+            f"{mode}: duplicate kernel thread identity")
     require(all(item["requested_bytes"] == runtime["worker_requested_bytes"]
                 for item in by_category["tokio_worker"]),
             f"{mode}: worker request differs from runtime settings")
@@ -183,14 +215,17 @@ def check_cases(configuration, manifest, mode, directory, transcript):
             require(key in expected_attempts and key not in seen_attempts,
                     f"{mode}: duplicate or unknown worker attempt: {case_id}/{key}")
             seen_attempts.add(key)
+            require(expected[case_id]["family"] != "cold_compile"
+                    or attempt["cache_state"] == "cold",
+                    f"{mode}: cold publication attempt used a warm component: {case_id}/{key}")
             phase_threads = attempt["phase_threads"]
             require(set(phase_threads) == {"preparation", "operation", "conversion", "teardown"}
                     and all(isinstance(ids, list) and ids and set(ids) <= worker_ids
                             for ids in phase_threads.values()),
                     f"{mode}: operation phase escaped measured workers: {case_id}/{key}")
             require(set(attempt["blocking_thread_ids"]) <= blocking_ids
-                    and (bool(attempt["blocking_thread_ids"]) ==
-                         (expected[case_id]["family"] == "blocking_decode")),
+                    and (expected[case_id]["family"] != "blocking_decode"
+                         or bool(attempt["blocking_thread_ids"])),
                     f"{mode}: blocking-pool execution is unverified: {case_id}/{key}")
             event = transcript.get((case_id, key[0], key[1]))
             require(event is not None and event["worker_attempt"] == attempt,
@@ -224,9 +259,8 @@ def check_cases(configuration, manifest, mode, directory, transcript):
                     f"{mode}: wrong error classification: {case_id}/{sample_key}")
             require(observation["trap"] is None or isinstance(observation["trap"], str),
                     f"{mode}: invalid trap: {case_id}/{sample_key}")
-            require((observation["trap"] is not None) ==
-                    (expected_outcome in {"trap", "stack_overflow", "out_of_fuel"}),
-                    f"{mode}: trap evidence differs from expected outcome: {case_id}/{sample_key}")
+            require(observation["trap"] == expected[case_id]["expected_traps"][sample_key],
+                    f"{mode}: typed trap differs from expected fixture: {case_id}/{sample_key}")
             require(observation["value"] is None or isinstance(observation["value"], str),
                     f"{mode}: invalid value: {case_id}/{sample_key}")
             require(set(observation["fuel"]) == {"user", "system", "deposit"} and
@@ -341,7 +375,7 @@ def check_cases(configuration, manifest, mode, directory, transcript):
     return signatures
 
 
-def check_memory_profiles(profiles, manifest, plan, directory):
+def check_memory_profiles(profiles, manifest, plan, host, directory):
     expected = {profile["id"]: profile for profile in manifest["memory_profiles"]}
     require(isinstance(profiles, list) and len(profiles) == len(expected),
             "production memory profiles are incomplete")
@@ -365,14 +399,19 @@ def check_memory_profiles(profiles, manifest, plan, directory):
         require(profile["production_capacity_only"] is True
                 and profile["uninstrumented"] is True,
                 f"{profile_id}: memory run used reduced/instrumented capacity")
+        require(profile["actual_cpus"] == host["cpu_count"]
+                and profile["actual_memory_bytes"] == host["memory_bytes"],
+                f"{profile_id}: actual host hardware differs from report header")
         for key in ("view_roots", "reactor_roots"):
             require(profile[key] == reference[key], f"{profile_id}: root overlap changed")
         if "reference_cpus" in reference:
             require(profile["reference_cpus"] == reference["reference_cpus"]
                     and profile["reference_memory_bytes"] == reference["reference_memory_bytes"]
-                    and profile["actual_cpus"] == reference["reference_cpus"]
-                    and profile["actual_memory_bytes"] == reference["reference_memory_bytes"],
-                    f"{profile_id}: reference profile changed")
+                    and profile["enforced_cpus"] == reference["reference_cpus"]
+                    and profile["enforced_memory_bytes"] == reference["reference_memory_bytes"]
+                    and profile["cpu_enforcement_field"]
+                    and profile["memory_enforcement_field"],
+                    f"{profile_id}: reference resource enforcement was not verified")
         if profile_id == "suspended_64":
             require(profile["peak"]["live_stores"] == 64
                     and profile["peak"]["reservations"] == 64,
@@ -412,6 +451,18 @@ def validate(report, directory):
             "resource manifest changed or source hashes drifted")
     require(all(item["paired_worker_status"] == "ready" for item in manifest["cases"]),
             "manifest still contains mandatory cases without paired worker bindings")
+    require(all(item["parameters"].get("exact_budget_status") == "frozen"
+                for item in manifest["cases"] if item["family"] == "native_core"),
+            "native Core workload budgets are not frozen")
+    require(all(item["parameters"].get("fixture_admission_status") == "verified"
+                and any(type(value) is int and value > 0 for key, value in
+                        item["parameters"].items() if key.startswith("fixture_"))
+                for item in manifest["cases"] if item["family"] == "cold_compile")
+            and manifest["publication_constraints"]["near_boundary_accepted_fixture"] ==
+                "verified"
+            and manifest["publication_constraints"]["serialized_transaction_and_wit_admission"] ==
+                "verified",
+            "cold publication accepted boundaries are unverified")
     schema = load_json_strict(SCHEMA)
     Draft202012Validator.check_schema(schema)
     errors = Draft202012Validator(schema).iter_errors(report)
@@ -436,6 +487,11 @@ def validate(report, directory):
     require(report["compiler"]["rustc_verbose"]
             and report["compiler"]["stack_probing_configuration"],
             "compiler or stack probing identity is missing")
+    require(report["compiler"]["rustc_verbose"].startswith(
+                f"rustc {manifest['build_policy']['rustc_release']} ")
+            and report["compiler"]["stack_probing_configuration"] ==
+                manifest["build_policy"]["stack_probing_configuration"],
+            "compiler release or probing policy differs from frozen build")
     closure = report["build_closure"]
     require(set(closure) == {"profile", "target_triple", "cargo_features", "rustflags",
                              "wasmtime_features", "wasmtime_feature_logs",
@@ -444,9 +500,8 @@ def validate(report, directory):
                              "compile_env_log"}
             and closure["profile"] == report["cell"].split("/")[1]
             and closure["target_triple"] == report["target"]
-            and isinstance(closure["cargo_features"], list)
-            and closure["cargo_features"] == sorted(set(closure["cargo_features"]))
-            and all(isinstance(flag, str) for flag in closure["rustflags"])
+            and closure["cargo_features"] == manifest["build_policy"]["cargo_features"]
+            and closure["rustflags"] == manifest["build_policy"]["rustflags"]
             and all(re.fullmatch(r"[0-9a-f]{64}", closure[field]) for field in
                     ("cargo_metadata_sha256", "build_log_sha256", "compile_env_sha256")),
             "build feature/flag closure is incomplete")
@@ -457,6 +512,9 @@ def validate(report, directory):
         file_evidence(directory, closure[f"{name}_log"])
         require(closure[f"{name}_log"]["sha256"] == closure[f"{name}_sha256"],
                 f"{name} identity differs from build closure")
+    require(load_json_strict(directory / closure["compile_env_log"]["path"]) ==
+            manifest["build_policy"]["compile_env"],
+            "compile environment differs from frozen build policy")
     require(closure["wasmtime_features"] == manifest["wasmtime_features"],
             "resolved Wasmtime feature closure differs from production qualification")
     for graph, feature_log in closure["wasmtime_feature_logs"].items():
@@ -473,6 +531,8 @@ def validate(report, directory):
     require((report["host"]["os"], report["host"]["architecture"], report["target"]) ==
             (os_name, architecture, target_triple),
             "cell label differs from actual host/target identity")
+    require(f"host: {target_triple}" in report["compiler"]["rustc_verbose"].splitlines(),
+            "compiler host triple differs from cell target")
     require(manifest["workload_plan"]["status"] == "ready"
             and manifest["worker_runner"]["status"] == "ready",
             "frozen workload plan or worker runner is missing")
@@ -514,7 +574,10 @@ def validate(report, directory):
         engine_capacity(configuration["engine"], manifest, mode)
         require(configuration["runtime"]["worker_count"] == manifest["runtime"]["worker_count"],
                 f"{mode}: worker count differs from frozen runtime settings")
-        workers[mode] = thread_capacities(configuration["runtime"], mode)["tokio_worker"]
+        workers[mode] = thread_capacities(
+            configuration["runtime"], mode,
+            configuration["engine"]["page_size_bytes"], os_name, process["pid"]
+        )["tokio_worker"]
         for log in configuration["raw_logs"]:
             file_evidence(directory, log)
         require(configuration["process_log"] in configuration["raw_logs"],
@@ -534,7 +597,8 @@ def validate(report, directory):
             "paired configurations ran in one child process")
     require(signatures["production"] == signatures["reduced"],
             "paired execution observations differ")
-    check_memory_profiles(report["memory_profiles"], manifest, plan, directory)
+    check_memory_profiles(report["memory_profiles"], manifest, plan,
+                          report["host"], directory)
     return signatures["production"]
 
 

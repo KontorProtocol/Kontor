@@ -18,6 +18,10 @@ its terminal record. Application-state before/after hashes exclude the
 separately reported fee and receipt accounting, so failure rollback is checked
 without hiding paid-call charges. Resolved Wasmtime feature logs must match the
 production and qualification closures already used by the existing stack gate.
+The build policy pins Rust 1.99.1, empty custom Rust flags and Cargo feature
+arguments, and the exact compile-environment record. It records default
+target stack probing as unverified by disassembly. Memory profiles record
+physical host CPU/RAM separately from enforced CPU and memory limits.
 
 `resource-evidence-schema-v1.json` defines the required raw process, build
 closure, engine, actual thread ranges, per-attempt worker phases, per-case,
@@ -36,6 +40,23 @@ values frozen before measurements. The worker runner's source hash and each
 sample's preparation, operation, conversion and teardown worker IDs must be
 bound before acceptance. A successful preflight schema check is not a resource
 qualification result.
+
+Thread records must confirm a protected guard region, not only repeat
+`pthread_attr_getguardsize`'s reported size. An unverified guard fails the
+resource evidence schema. On Linux, the diagnostic accepts a protected
+`---p` VMA or page-by-page `EIO` reads from `/proc/self/mem` below the usable
+stack. [glibc 2.42's lightweight guard implementation](https://sourceware.org/pipermail/glibc-cvs/2025q1/087326.html)
+can retain an `rw-p` VMA in `/proc/self/maps`, so the VMA listing alone cannot
+disprove guard protection. Each thread record includes the measured page size,
+process and kernel thread IDs, and the protected guard interval. The local
+Linux ARM64 smoke test runs on 16 KiB pages; it does not stand in for the
+4 KiB page qualification cells. The macOS guard observation remains unbound.
+
+Cold publish function size, branch-table size and control nesting remain
+unverified accepted fixtures. The wasmparser source limits alone do not prove
+that a component with that shape passes WIT, serialized transaction and
+publication admission. The validator keeps those gates open until near-boundary
+accepted fixtures and reject controls are frozen and source reviewed.
 
 The amendment is copied unchanged into
 `docs/design/protocol-upgrades/native-stack-s2-resource-amendment-v1.md`.

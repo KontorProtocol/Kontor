@@ -62,7 +62,11 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "915a7a8948818ca59911dfc8e4cfaf85ac98540fa7fc44845d0eb0acf5445301"
+      "sha256": "f39c39ad40174a132a6bbdb094e34e990b599c32e9ed9c18c4e3e19195d7456c"
+    },
+    "qualification_workflow": {
+      "path": ".github/workflows/native-stack.yml",
+      "sha256": "99daf43c2d08947b25f86fc2eee866c0a0f9dac18cc6377189fde5ecd3f64d3d"
     },
     "resource_comparator_source": {
       "path": "tools/native-stack/compare_resource.py",
@@ -70,7 +74,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "cc4e4e5d7ebcd7775c1f39d83ad9c2d5e3343a86f0fd888a6018b411eac0d13a"
+      "sha256": "d67bfd39e6d0c382f6f90ce4a55605157d096e718659962831189b9f634fa923"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -78,11 +82,15 @@
     },
     "resource_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v1.json",
-      "sha256": "41248977970b79c468cf80d132f4baba839215065c1d2cbf9c0aae0a1d3d317f"
+      "sha256": "30c76bb27f15216924f6c67763aaba1d5d2f7c55e8ec805b4319683fddec5909"
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "ba5dfe2d14b1ad86cfd23ec37c096279542be6ee9c5cf27d9d64d8da4a686ad0"
+      "sha256": "0aac0b0b4ea80119023c8dc0450b9a9a6733411afbed9c73278639bf9be46bb7"
+    },
+    "runner_module": {
+      "path": "core/indexer/src/runtime/call/tests.rs",
+      "sha256": "3893c7c7956ecb55d3188187169725c3137c9e92ef44ebba6c4c5befcba14d46"
     },
     "stack_probe": {
       "path": "test-contracts/binaries/stack_probe.wasm.br",
@@ -109,12 +117,31 @@
       "sha256": "41717ccc31cc3ec99971ff1469c95cbe2fbe2bf25eea1eac95368d7b1f9c6f48"
     }
   },
+  "build_policy": {
+    "cargo_features": [],
+    "compile_env": {
+      "CARGO_BUILD_RUSTFLAGS": "",
+      "CARGO_ENCODED_RUSTFLAGS": "",
+      "CCACHE_DISABLE": "1",
+      "RUSTC_WRAPPER": "",
+      "RUSTFLAGS": "",
+      "RUSTUP_TOOLCHAIN": "1.99.1"
+    },
+    "rustc_release": "1.99.1",
+    "rustc_wrapper": "",
+    "rustflags": [],
+    "stack_probing_configuration": "target default; native probe coverage not verified by disassembly"
+  },
   "cases": [
     {
       "existing_unpaired_binding": null,
       "expected_outcomes": {
         "at_ceiling": "ok",
         "one_byte_over_rejected": "deterministic_error"
+      },
+      "expected_traps": {
+        "at_ceiling": null,
+        "one_byte_over_rejected": null
       },
       "family": "blocking_decode",
       "fixtures": [
@@ -135,8 +162,12 @@
     {
       "existing_unpaired_binding": "runtime::sequential_tests::hostile_canonical_callbacks_are_framed_and_clean_up",
       "expected_outcomes": {
-        "failure": "ok",
+        "failure": "trap",
         "success": "ok"
+      },
+      "expected_traps": {
+        "failure": "CannotLeaveComponent",
+        "success": null
       },
       "family": "canonical_abi",
       "fixtures": [
@@ -156,8 +187,12 @@
     {
       "existing_unpaired_binding": "runtime::sequential_tests::paid_post_return_callback_work_charges_fuel_gas_and_burn",
       "expected_outcomes": {
-        "heavy": "ok",
-        "light": "ok"
+        "heavy": "trap",
+        "light": "trap"
+      },
+      "expected_traps": {
+        "heavy": "CannotLeaveComponent",
+        "light": "CannotLeaveComponent"
       },
       "family": "canonical_abi",
       "fixtures": [
@@ -177,9 +212,14 @@
     {
       "existing_unpaired_binding": "runtime::sequential_tests::hostile_canonical_callbacks_are_framed_and_clean_up",
       "expected_outcomes": {
-        "forbidden_import": "deterministic_error",
+        "forbidden_import": "trap",
         "realloc_trap": "trap",
         "success_lowering": "ok"
+      },
+      "expected_traps": {
+        "forbidden_import": "CannotLeaveComponent",
+        "realloc_trap": "UnreachableCodeReached",
+        "success_lowering": null
       },
       "family": "canonical_abi",
       "fixtures": [
@@ -206,6 +246,14 @@
         "nested_variant": "ok",
         "result_depth_64": "ok",
         "result_depth_65_rejected": "deterministic_error"
+      },
+      "expected_traps": {
+        "large_result": null,
+        "list_of_records": null,
+        "nested_record": null,
+        "nested_variant": null,
+        "result_depth_64": null,
+        "result_depth_65_rejected": null
       },
       "family": "canonical_abi",
       "fixtures": [
@@ -241,6 +289,9 @@
       "expected_outcomes": {
         "target": "ok"
       },
+      "expected_traps": {
+        "target": null
+      },
       "family": "distinct_contract_chain",
       "fixtures": [
         "error_test",
@@ -264,6 +315,9 @@
       "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
       "expected_outcomes": {
         "target": "ok"
+      },
+      "expected_traps": {
+        "target": null
       },
       "family": "distinct_contract_chain",
       "fixtures": [
@@ -289,6 +343,9 @@
       "expected_outcomes": {
         "target": "ok"
       },
+      "expected_traps": {
+        "target": null
+      },
       "family": "distinct_contract_chain",
       "fixtures": [
         "error_test",
@@ -312,6 +369,9 @@
       "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
       "expected_outcomes": {
         "target": "ok"
+      },
+      "expected_traps": {
+        "target": null
       },
       "family": "distinct_contract_chain",
       "fixtures": [
@@ -337,6 +397,9 @@
       "expected_outcomes": {
         "target": "ok"
       },
+      "expected_traps": {
+        "target": null
+      },
       "family": "distinct_contract_chain",
       "fixtures": [
         "error_test",
@@ -360,6 +423,9 @@
       "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
       "expected_outcomes": {
         "target": "ok"
+      },
+      "expected_traps": {
+        "target": null
       },
       "family": "distinct_contract_chain",
       "fixtures": [
@@ -385,6 +451,9 @@
       "expected_outcomes": {
         "target": "ok"
       },
+      "expected_traps": {
+        "target": null
+      },
       "family": "distinct_contract_chain",
       "fixtures": [
         "error_test",
@@ -408,6 +477,9 @@
       "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
       "expected_outcomes": {
         "target": "ok"
+      },
+      "expected_traps": {
+        "target": null
       },
       "family": "distinct_contract_chain",
       "fixtures": [
@@ -433,6 +505,9 @@
       "expected_outcomes": {
         "target": "ok"
       },
+      "expected_traps": {
+        "target": null
+      },
       "family": "distinct_contract_chain",
       "fixtures": [
         "error_test",
@@ -456,6 +531,9 @@
       "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
       "expected_outcomes": {
         "target": "invocation_limit"
+      },
+      "expected_traps": {
+        "target": null
       },
       "family": "distinct_contract_chain",
       "fixtures": [
@@ -481,6 +559,9 @@
       "expected_outcomes": {
         "target": "invocation_limit"
       },
+      "expected_traps": {
+        "target": null
+      },
       "family": "distinct_contract_chain",
       "fixtures": [
         "error_test",
@@ -504,6 +585,9 @@
       "existing_unpaired_binding": "runtime::call::tests::sequential_chains::chain_probe_child",
       "expected_outcomes": {
         "target": "invocation_limit"
+      },
+      "expected_traps": {
+        "target": null
       },
       "family": "distinct_contract_chain",
       "fixtures": [
@@ -530,6 +614,10 @@
         "accepted": "ok",
         "over_limit_rejected": "deterministic_error"
       },
+      "expected_traps": {
+        "accepted": null,
+        "over_limit_rejected": null
+      },
       "family": "cold_compile",
       "fixtures": [
         "publish_path"
@@ -538,7 +626,8 @@
       "paired_worker_status": "missing",
       "parameters": {
         "cold_cache": true,
-        "fixture_br_table_entries": 4096,
+        "fixture_admission_status": "unverified",
+        "fixture_br_table_entries": null,
         "repeats": 2,
         "source_br_table_limit_entries": 7654321
       },
@@ -552,6 +641,9 @@
       "expected_outcomes": {
         "accepted": "ok"
       },
+      "expected_traps": {
+        "accepted": null
+      },
       "family": "cold_compile",
       "fixtures": [
         "publish_path"
@@ -560,8 +652,10 @@
       "paired_worker_status": "missing",
       "parameters": {
         "cold_cache": true,
-        "fixture_control_depth": 1000,
-        "repeats": 2
+        "fixture_admission_status": "unverified",
+        "fixture_control_depth": null,
+        "repeats": 2,
+        "source_effective_depth_limit": "unresolved"
       },
       "sample_keys": [
         "accepted"
@@ -573,6 +667,10 @@
         "accepted": "ok",
         "over_limit_rejected": "deterministic_error"
       },
+      "expected_traps": {
+        "accepted": null,
+        "over_limit_rejected": null
+      },
       "family": "cold_compile",
       "fixtures": [
         "publish_path"
@@ -581,7 +679,8 @@
       "paired_worker_status": "missing",
       "parameters": {
         "cold_cache": true,
-        "fixture_function_size_bytes": 65536,
+        "fixture_admission_status": "unverified",
+        "fixture_function_size_bytes": null,
         "repeats": 2,
         "source_function_size_limit_bytes": 7654321
       },
@@ -594,6 +693,9 @@
       "existing_unpaired_binding": null,
       "expected_outcomes": {
         "target": "ok"
+      },
+      "expected_traps": {
+        "target": null
       },
       "family": "pulley_host_callback",
       "fixtures": [],
@@ -613,6 +715,11 @@
         "success_after_trap": "ok",
         "success_before_trap": "ok",
         "trap": "trap"
+      },
+      "expected_traps": {
+        "success_after_trap": null,
+        "success_before_trap": null,
+        "trap": "UnreachableCodeReached"
       },
       "family": "resource_lifecycle",
       "fixtures": [
@@ -634,6 +741,10 @@
       "expected_outcomes": {
         "failed_init": "deterministic_error",
         "valid_control": "ok"
+      },
+      "expected_traps": {
+        "failed_init": null,
+        "valid_control": null
       },
       "family": "resource_lifecycle",
       "fixtures": [
@@ -659,6 +770,14 @@
         "literal_16385_rejected": "deterministic_error",
         "print_depth_64": "ok",
         "print_depth_65_rejected": "deterministic_error"
+      },
+      "expected_traps": {
+        "depth_64": null,
+        "depth_65_rejected": null,
+        "literal_16384": null,
+        "literal_16385_rejected": null,
+        "print_depth_64": null,
+        "print_depth_65_rejected": null
       },
       "family": "foreign_call",
       "fixtures": [
@@ -691,6 +810,13 @@
         "active_element_success": "ok",
         "fuel_failure": "out_of_fuel"
       },
+      "expected_traps": {
+        "active_data_oob": null,
+        "active_data_success": null,
+        "active_element_oob": null,
+        "active_element_success": null,
+        "fuel_failure": "OutOfFuel"
+      },
       "family": "initialization",
       "fixtures": [
         "callback_tests"
@@ -718,6 +844,9 @@
       "expected_outcomes": {
         "target": "ok"
       },
+      "expected_traps": {
+        "target": null
+      },
       "family": "large_frame",
       "fixtures": [
         "stack_probe",
@@ -741,6 +870,9 @@
       "expected_outcomes": {
         "target": "ok"
       },
+      "expected_traps": {
+        "target": null
+      },
       "family": "paid_limit",
       "fixtures": [
         "stack_probe",
@@ -762,6 +894,11 @@
         "cleanup": "ok",
         "expiry": "ok",
         "penalty": "ok"
+      },
+      "expected_traps": {
+        "cleanup": null,
+        "expiry": null,
+        "penalty": null
       },
       "family": "native_core",
       "fixtures": [
@@ -799,6 +936,12 @@
         "population_32": "ok",
         "population_4": "ok"
       },
+      "expected_traps": {
+        "population_0": null,
+        "population_128": null,
+        "population_32": null,
+        "population_4": null
+      },
       "family": "native_core",
       "fixtures": [
         "staking_costs",
@@ -832,6 +975,10 @@
         "resumed": "ok",
         "suspended": "ok"
       },
+      "expected_traps": {
+        "resumed": null,
+        "suspended": null
+      },
       "family": "suspension",
       "fixtures": [
         "callback_tests"
@@ -852,6 +999,10 @@
       "expected_outcomes": {
         "first_failure": "stack_overflow",
         "last_success": "ok"
+      },
+      "expected_traps": {
+        "first_failure": "StackOverflow",
+        "last_success": null
       },
       "family": "pulley_boundary",
       "fixtures": [
@@ -879,6 +1030,10 @@
         "first_failure": "stack_overflow",
         "last_success": "ok"
       },
+      "expected_traps": {
+        "first_failure": "StackOverflow",
+        "last_success": null
+      },
       "family": "pulley_boundary",
       "fixtures": [
         "stack_probe",
@@ -904,6 +1059,10 @@
       "expected_outcomes": {
         "first_failure": "stack_overflow",
         "last_success": "ok"
+      },
+      "expected_traps": {
+        "first_failure": "StackOverflow",
+        "last_success": null
       },
       "family": "pulley_boundary",
       "fixtures": [
@@ -931,6 +1090,10 @@
         "first_failure": "stack_overflow",
         "last_success": "ok"
       },
+      "expected_traps": {
+        "first_failure": "StackOverflow",
+        "last_success": null
+      },
       "family": "pulley_boundary",
       "fixtures": [
         "stack_probe",
@@ -956,6 +1119,10 @@
       "expected_outcomes": {
         "first_failure": "stack_overflow",
         "last_success": "ok"
+      },
+      "expected_traps": {
+        "first_failure": "StackOverflow",
+        "last_success": null
       },
       "family": "pulley_boundary",
       "fixtures": [
@@ -983,6 +1150,10 @@
         "first_failure": "stack_overflow",
         "last_success": "ok"
       },
+      "expected_traps": {
+        "first_failure": "StackOverflow",
+        "last_success": null
+      },
       "family": "pulley_boundary",
       "fixtures": [
         "stack_probe",
@@ -1009,6 +1180,10 @@
         "first_failure": "stack_overflow",
         "last_success": "ok"
       },
+      "expected_traps": {
+        "first_failure": "StackOverflow",
+        "last_success": null
+      },
       "family": "pulley_boundary",
       "fixtures": [
         "stack_probe",
@@ -1034,6 +1209,10 @@
       "expected_outcomes": {
         "first_failure": "stack_overflow",
         "last_success": "ok"
+      },
+      "expected_traps": {
+        "first_failure": "StackOverflow",
+        "last_success": null
       },
       "family": "pulley_boundary",
       "fixtures": [
@@ -1064,6 +1243,14 @@
         "value_16384_page_1": "ok",
         "value_16384_page_100": "ok",
         "value_16384_page_7": "ok"
+      },
+      "expected_traps": {
+        "value_1048576_page_1": null,
+        "value_1048576_page_100": null,
+        "value_1048576_page_7": null,
+        "value_16384_page_1": null,
+        "value_16384_page_100": null,
+        "value_16384_page_7": null
       },
       "family": "sqlite",
       "fixtures": [],
@@ -1110,6 +1297,26 @@
         "token_7_final": "ok",
         "token_7_first": "ok",
         "token_7_middle": "ok"
+      },
+      "expected_traps": {
+        "nft_100_final": null,
+        "nft_100_first": null,
+        "nft_100_middle": null,
+        "nft_1_final": null,
+        "nft_1_first": null,
+        "nft_1_middle": null,
+        "nft_7_final": null,
+        "nft_7_first": null,
+        "nft_7_middle": null,
+        "token_100_final": null,
+        "token_100_first": null,
+        "token_100_middle": null,
+        "token_1_final": null,
+        "token_1_first": null,
+        "token_1_middle": null,
+        "token_7_final": null,
+        "token_7_first": null,
+        "token_7_middle": null
       },
       "family": "sqlite",
       "fixtures": [
@@ -1162,6 +1369,20 @@
         "page_7_range_1": "ok",
         "page_7_range_1024": "ok",
         "page_7_range_256": "ok"
+      },
+      "expected_traps": {
+        "page_100_range_0": null,
+        "page_100_range_1": null,
+        "page_100_range_1024": null,
+        "page_100_range_256": null,
+        "page_1_range_0": null,
+        "page_1_range_1": null,
+        "page_1_range_1024": null,
+        "page_1_range_256": null,
+        "page_7_range_0": null,
+        "page_7_range_1": null,
+        "page_7_range_1024": null,
+        "page_7_range_256": null
       },
       "family": "sqlite",
       "fixtures": [],
@@ -1243,6 +1464,13 @@
       "view_roots": 8
     }
   ],
+  "publication_constraints": {
+    "br_table_entries": 7654321,
+    "decompressed_component_bytes": 67108864,
+    "function_body_bytes": 7654321,
+    "near_boundary_accepted_fixture": "unverified",
+    "serialized_transaction_and_wit_admission": "unresolved"
+  },
   "required_observation_fields": [
     "case_id",
     "sample_key",
@@ -1264,17 +1492,26 @@
   ],
   "runtime": {
     "capacity_fields": [
+      "thread_category",
+      "thread_id",
+      "process_id",
+      "os_thread_id",
+      "identity_api",
+      "page_size_bytes",
       "requested_bytes",
       "mapped_bytes",
       "guard_bytes",
+      "guard_start",
+      "guard_end",
+      "guard_verification",
       "usable_bytes",
       "mapped_start",
       "mapped_end",
       "usable_start",
       "usable_end",
       "measurement_api",
-      "thread_id",
-      "thread_category"
+      "guard_treatment",
+      "guard_verified"
     ],
     "flavor": "multi_thread",
     "production_to_reduced_worker_usable_min_ratio": 2,
@@ -1350,8 +1587,8 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": null,
-    "status": "missing"
+    "sha256": "7ed24a388848aeeb1f063ce966f3eea7b14d64a9e0c24722a46d2f6c1deaf400",
+    "status": "smoke_only"
   },
   "workload_plan": {
     "path": "tools/native-stack/resource-workload-plan-v1.json",

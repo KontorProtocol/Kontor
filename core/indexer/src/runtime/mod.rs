@@ -331,10 +331,19 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new_engine() -> Result<Engine> {
+        Self::engine_with_async_stack_size(2 * 1024 * 1024)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_resource_diagnostic_engine() -> Result<Engine> {
+        Self::engine_with_async_stack_size(1024 * 1024)
+    }
+
+    fn engine_with_async_stack_size(async_stack_size: usize) -> Result<Engine> {
         let mut config = Config::new();
         config.target("pulley64-unknown-unknown-elf")?;
         config.max_wasm_stack(512 * 1024);
-        config.async_stack_size(2 * 1024 * 1024);
+        config.async_stack_size(async_stack_size);
         config.wasm_component_model_async(false);
         config.wasm_component_model_more_async_builtins(false);
         config.wasm_component_model_async_stackful(false);
@@ -372,7 +381,7 @@ impl Runtime {
             "unexpected Pulley logical stack size"
         );
         anyhow::ensure!(
-            engine.get_async_stack_size() == 2 * 1024 * 1024,
+            engine.get_async_stack_size() == async_stack_size,
             "unexpected async fiber stack size"
         );
         Ok(engine)

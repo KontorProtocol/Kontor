@@ -3828,6 +3828,7 @@ dependencies = [
  "indexmap",
  "kontor-build",
  "kontor-crypto",
+ "libc",
  "libsql",
  "macros",
  "metrics",

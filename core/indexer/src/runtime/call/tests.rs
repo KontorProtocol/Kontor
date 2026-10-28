@@ -31,6 +31,7 @@ mod guest_memory;
 mod guest_memory_failure;
 mod holder_errors;
 mod native_stack;
+mod native_stack_resource;
 mod preparation_fees;
 mod results;
 mod sequential_chains;
