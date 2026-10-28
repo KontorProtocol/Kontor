@@ -74,6 +74,8 @@ jobs:
           cargo audit
           cargo audit --file ../protocol-bundles/first/Cargo.lock
           cargo audit --file ../protocol-bundles/second/Cargo.lock
+          cargo audit --file ../protocol-bundles/pulley-first/Cargo.lock
+          cargo audit --file ../protocol-bundles/pulley-second/Cargo.lock
         working-directory: ./core
 
   test:

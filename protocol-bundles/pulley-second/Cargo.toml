@@ -1,0 +1,41 @@
+[package]
+name = "kontor-proof-second"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+path = "../proof/lib.rs"
+
+[features]
+default = ["kontor"]
+kontor = []
+
+[dependencies]
+wasmtime = { git = "https://github.com/wilfreddenton/wasmtime", rev = "0dbc68b31c0bcf1a05c93122f1939fb8784e4e48", version = "=51.0.0-kontor.3", default-features = false, features = ["addr2line", "anyhow", "async", "backtrace", "compile-time-builtins", "component-model", "component-model-async", "coredump", "cranelift", "debug", "demangle", "gc", "gc-copying", "gc-drc", "gc-null", "parallel-compilation", "pooling-allocator", "pulley", "runtime", "std", "threads", "wat", "wave", "wit-parser"] }
+malachite = { package = "arc-malachitebft-app-channel", git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1" }
+malachite-test = { package = "arc-malachitebft-test", git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1" }
+itoa = "=1.0.15"
+tokio = { version = "=1.53.3", features = ["rt", "time", "sync", "net"] }
+serde_json = { version = "=1.0.149", features = ["preserve_order"] }
+blst = "=0.3.17"
+ring = "=0.17.14"
+secp256k1 = { version = "=0.29.1", features = ["recovery"] }
+
+[patch.crates-io]
+blst = { path = "../../core/vendor/blst" }
+ring = { path = "../../core/vendor/ring" }
+secp256k1-sys = { path = "../../core/vendor/secp256k1-sys" }
+if-watch = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=3.2.2" }
+
+[profile.release]
+debug = 1
+lto = false
+panic = "unwind"
+
+[profile.dev]
+opt-level = 1
+debug = 1
+panic = "unwind"
