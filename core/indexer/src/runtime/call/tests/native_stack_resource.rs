@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::env;
 use std::sync::mpsc::channel;
 use std::thread::ThreadId;
@@ -113,8 +113,8 @@ fn attest_resource_threads(events: &[ThreadEvent], workers: &[ThreadId], mode: &
         "sample_preparation_exit",
         "operation_entry",
         "operation_exit",
-        "conversion_entry",
-        "conversion_exit",
+        "postcall_observation_entry",
+        "postcall_observation_exit",
         "teardown_entry",
         "teardown_exit",
     ];
@@ -168,17 +168,23 @@ fn attest_resource_threads(events: &[ThreadEvent], workers: &[ThreadId], mode: &
             !entries.is_empty() && entries.len() == exits.len(),
             "unpaired {entry}/{exit} events: entries={entries:?}, exits={exits:?}"
         );
-        let mut in_flight = HashSet::new();
+        let mut in_flight = HashMap::new();
         for event in events {
             if event.name == entry {
                 ensure!(
-                    in_flight.insert(event.thread_id),
+                    in_flight.insert(event.thread_id, event).is_none(),
                     "overlapping {entry} events on one thread: {event:?}"
                 );
             } else if event.name == exit {
+                let start = in_flight.remove(&event.thread_id);
                 ensure!(
-                    in_flight.remove(&event.thread_id),
+                    start.is_some(),
                     "{exit} has no matching entry on this thread: {event:?}"
+                );
+                #[cfg(target_os = "linux")]
+                ensure!(
+                    start.unwrap().os_thread_id == event.os_thread_id,
+                    "{entry}/{exit} changed kernel thread identity: {event:?}"
                 );
             } else {
                 continue;

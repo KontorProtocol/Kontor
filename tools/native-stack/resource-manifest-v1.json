@@ -118,7 +118,7 @@
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "47bc4123e45cef07f83543f977943295a68d61aec3b38151b7189ea0a7f3ea2f"
+      "sha256": "d225141abd45c74a80bab4f831f60cee37d4f7f819b80829ec245c560e5d1724"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -1612,7 +1612,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "ceaa2cce59ff970f81669b62267579e92f40e603e3938699e93399825326cf9d",
+    "sha256": "6df5eeb8dfee203b2c35dc452299ca1d8ecbaf3f4f5dc728875bca70714cf66f",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

@@ -60,7 +60,7 @@ publication, receipt and post-call reset checks. Linux
 checks that the task begins and ends on measured workers. It does not yet emit
 the fiber, guard-fault, build or memory evidence required by the resource
 comparator. Its test-only thread trace checks that fixture preparation,
-publication, the paid operation, conversion and teardown phase boundaries run
+publication, the paid operation, post-call observations and teardown phase boundaries run
 on the measured Tokio workers. It checks that the caller of synchronous
 Wasmtime compilation runs on a worker and that Brotli decoding runs on a
 separate blocking-pool thread. The resolved Wasmtime feature closure excludes
@@ -68,7 +68,8 @@ separate blocking-pool thread. The resolved Wasmtime feature closure excludes
 needed to rule out internal compiler workers. The trace itself does not
 observe Wasmtime internals. These phase markers do not prove that every
 awaited suboperation stayed on one worker or supply the comparator's per-case
-thread bindings.
+thread bindings. Canonical ABI and WAVE conversions inside the operation need
+their own cases and remain open in the manifest.
 
 Thread records must confirm a protected guard region, not only repeat
 `pthread_attr_getguardsize`'s reported size. An unverified guard fails the

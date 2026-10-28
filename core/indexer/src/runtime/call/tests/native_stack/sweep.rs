@@ -215,7 +215,7 @@ impl Fixture {
         resource_diagnostics::record("operation_exit");
         let execution_ms = execution_start.elapsed().as_millis();
         let postcall_start = Instant::now();
-        resource_diagnostics::record("conversion_entry");
+        resource_diagnostics::record("postcall_observation_entry");
         // Observe the tested call before diagnostic views can touch its context.
         let pre_live = self.budget.live();
         let pre_stack_empty = self.runtime.stack.is_empty().await;
@@ -320,7 +320,7 @@ impl Fixture {
             failure_rolled_back != Some(false),
             "failed call changed state in {sample_id}"
         );
-        resource_diagnostics::record("conversion_exit");
+        resource_diagnostics::record("postcall_observation_exit");
 
         resource_diagnostics::record("teardown_entry");
         self.runtime.storage.rollback().await?;
