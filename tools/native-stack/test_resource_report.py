@@ -307,6 +307,7 @@ class ResourceReportControls(unittest.TestCase):
                          "compiled_features", "profile", "failed_build",
                          "cargo_target", "rustc_log", "process_command",
                          "binary_bytes", "binary_sha", "git_head", "dirty_tree",
+                         "claimed_source_sha",
                          "child_executable_hash", "child_source_sha"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
@@ -327,6 +328,7 @@ class ResourceReportControls(unittest.TestCase):
                     "binary_sha": "executed binary path or captured artifact hash",
                     "git_head": "source checkout revision is stale or dirty",
                     "dirty_tree": "source checkout revision is stale or dirty",
+                    "claimed_source_sha": "terminal status differs",
                     "child_executable_hash": "terminal status differs",
                     "child_source_sha": "terminal status differs",
                 }[mutation]
@@ -380,6 +382,11 @@ class ResourceReportControls(unittest.TestCase):
                     path.write_text("0" * 40 + "\n" if mutation == "git_head"
                                     else " M core/indexer/src/lib.rs\n")
                     closure[key]["sha256"] = resource_evidence.sha256(path)
+                elif mutation == "claimed_source_sha":
+                    report["source_sha"] = "2" * 40
+                    path = directory / closure["git_head_log"]["path"]
+                    path.write_text(report["source_sha"] + "\n")
+                    closure["git_head_log"]["sha256"] = resource_evidence.sha256(path)
                 else:
                     path = directory / report["configurations"]["production"]["process_log"]["path"]
                     events = [json.loads(line) for line in path.read_text().splitlines()]
