@@ -41,6 +41,41 @@ const ASYNC_COMPONENTS: &[&str] = &[
     include_str!("call/tests/fixtures/abi-async-realloc.wat"),
 ];
 
+const POST_RETURN_CALLBACK: &str = r#"(component
+    (import "kontor:built-in/context" (instance $context
+        (export "view-context" (type (sub resource)))))
+    (alias export $context "view-context" (type $view-context))
+    (import "sentinel" (func $sentinel))
+    (import "mark" (func $mark))
+    (core func $lower (canon lower (func $sentinel)))
+    (core func $mark (canon lower (func $mark)))
+    (core func $drop (canon resource.drop $view-context))
+    (core module $code
+        (import "" "" (func $host))
+        (import "" "mark" (func $mark))
+        (import "" "drop" (func $drop (param i32)))
+        (func (export "run") (param i32)
+            (call $mark)
+            (call $drop (local.get 0)))
+        (func (export "post-light") (call $host))
+        (func (export "post-heavy")
+            (local $i i32)
+            (loop $work
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br_if $work (i32.lt_u (local.get $i) (i32.const 16384))))
+            (call $host)))
+    (core instance $code (instantiate $code
+        (with "" (instance
+            (export "" (func $lower))
+            (export "mark" (func $mark))
+            (export "drop" (func $drop))))))
+    (func (export "run-light") (param "ctx" (borrow $view-context))
+        (canon lift (core func $code "run")
+            (post-return (core func $code "post-light"))))
+    (func (export "run-heavy") (param "ctx" (borrow $view-context))
+        (canon lift (core func $code "run")
+            (post-return (core func $code "post-heavy")))))"#;
+
 // Preserved from ca0e6a76 to exercise actual pre-S1 encoded WIT and loading.
 const LEGACY_SYSTEM: &[u8] = include_bytes!("call/tests/fixtures/legacy-async-system.wasm.br");
 
@@ -225,6 +260,7 @@ fn generated_startup_does_not_call_imported_host_function() -> Result<()> {
 async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let callback_calls = Arc::new(AtomicUsize::new(0));
+    let body_calls = Arc::new(AtomicUsize::new(0));
     let marker_calls = Arc::new(AtomicUsize::new(0));
     let marker_tables: Arc<StdMutex<Vec<Weak<Mutex<ResourceTable>>>>> =
         Arc::new(StdMutex::new(Vec::new()));
@@ -233,6 +269,11 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
     let observed = callback_calls.clone();
     user.root().func_wrap("sentinel", move |_, (): ()| {
         observed.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })?;
+    let observed_body = body_calls.clone();
+    user.root().func_wrap("body-entered", move |_, (): ()| {
+        observed_body.fetch_add(1, Ordering::SeqCst);
         Ok(())
     })?;
     let observed_markers = marker_calls.clone();
@@ -273,31 +314,7 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
         user,
         native: runtime.linkers.native.clone(),
     });
-    let post_return = r#"(component
-        (import "kontor:built-in/context" (instance $context
-            (export "view-context" (type (sub resource)))))
-        (alias export $context "view-context" (type $view-context))
-        (import "sentinel" (func $sentinel))
-        (import "mark" (func $mark))
-        (core func $lower (canon lower (func $sentinel)))
-        (core func $mark (canon lower (func $mark)))
-        (core func $drop (canon resource.drop $view-context))
-        (core module $code
-            (import "" "" (func $host))
-            (import "" "mark" (func $mark))
-            (import "" "drop" (func $drop (param i32)))
-            (func (export "run") (param i32)
-                (call $mark)
-                (call $drop (local.get 0)))
-            (func (export "post-return") (call $host)))
-        (core instance $code (instantiate $code
-            (with "" (instance
-                (export "" (func $lower))
-                (export "mark" (func $mark))
-                (export "drop" (func $drop))))))
-        (func (export "run") (param "ctx" (borrow $view-context))
-            (canon lift (core func $code "run")
-                (post-return (core func $code "post-return")))))"#;
+    let post_return = POST_RETURN_CALLBACK;
     let realloc = r#"(component
         (import "kontor:built-in/context" (instance $context
             (export "view-context" (type (sub resource)))))
@@ -321,20 +338,26 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
             (export "view-context" (type (sub resource)))))
         (alias export $context "view-context" (type $view-context))
         (import "sentinel" (func $sentinel))
+        (import "body-entered" (func $body-entered))
         (core func $lower (canon lower (func $sentinel)))
+        (core func $body (canon lower (func $body-entered)))
         (core func $drop (canon resource.drop $view-context))
         (core module $code
             (import "" "" (func $host))
+            (import "" "body" (func $body))
             (import "" "drop" (func $drop (param i32)))
             (memory (export "memory") 1)
             (func (export "realloc") (param i32 i32 i32 i32) (result i32)
-                (call $host)
+                (if (i32.eq (local.get 3) (i32.const 16384))
+                    (then (call $host)))
                 (i32.const 64))
             (func (export "run") (param i32 i32 i32)
+                (call $body)
                 (call $drop (local.get 0))))
         (core instance $code (instantiate $code
             (with "" (instance
                 (export "" (func $lower))
+                (export "body" (func $body))
                 (export "drop" (func $drop))))))
         (func (export "run") (param "ctx" (borrow $view-context)) (param "text" string)
             (canon lift (core func $code "run")
@@ -348,7 +371,7 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
             0,
             "post-return",
             post_return,
-            "run()",
+            "run-light()",
             Trap::CannotLeaveComponent,
         ),
         (
@@ -373,6 +396,17 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
                 Ordering::SeqCst,
             );
         }
+        if name == "realloc-import" {
+            assert!(
+                runtime
+                    .execute(None, None, &address, "run(\"ok\")")
+                    .await
+                    .is_ok()
+            );
+            assert_eq!(body_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(budget.live(), 0);
+        }
+        let body_before = body_calls.load(Ordering::SeqCst);
         let conn = runtime.get_storage_conn();
         let mut rows = conn
             .query("SELECT COUNT(*) FROM contract_results", ())
@@ -401,6 +435,7 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
             assert!(runtime.storage.savepoint_stack.is_empty().await, "{name}");
             assert_eq!(budget.live(), 0, "{name}");
             assert_eq!(callback_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(body_calls.load(Ordering::SeqCst), body_before);
             if name == "post-return" {
                 assert_eq!(marker_calls.load(Ordering::SeqCst), trial + 1);
                 let child_table = marker_tables.lock().unwrap().pop().unwrap();
@@ -426,6 +461,61 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
                 .await?;
             let receipts_after: u64 = rows.next().await?.unwrap().get(0)?;
             assert_eq!(receipts_after, receipts_before, "{name}");
+        }
+        if name == "post-return" {
+            let light_fuel = expected_fuel.unwrap();
+            let mut heavy_fuel = None;
+            for trial in 0..2 {
+                let previous = runtime.start_usage();
+                let error = runtime
+                    .execute(None, None, &address, "run-heavy()")
+                    .await
+                    .unwrap_err();
+                assert!(
+                    matches!(error, ExecutionError::Deterministic(ref cause)
+                        if cause.chain().any(|item| item.downcast_ref::<Trap>()
+                            == Some(&Trap::CannotLeaveComponent))),
+                    "{error:?}"
+                );
+                let fuel = runtime.finish_usage(previous)?.system_fuel;
+                // The pinned engine charges each BrIf backedge at least one fuel.
+                assert!(fuel >= light_fuel + 16_384);
+                if let Some(expected) = heavy_fuel {
+                    assert_eq!(fuel, expected);
+                } else {
+                    heavy_fuel = Some(fuel);
+                }
+                assert_eq!(marker_calls.load(Ordering::SeqCst), trial + 3);
+                assert_eq!(callback_calls.load(Ordering::SeqCst), 0);
+                assert!(
+                    marker_tables
+                        .lock()
+                        .unwrap()
+                        .pop()
+                        .unwrap()
+                        .upgrade()
+                        .is_none()
+                );
+                assert!(
+                    runtime
+                        .storage
+                        .get(
+                            16,
+                            expected_contract_id.load(Ordering::SeqCst),
+                            b"callback-marker",
+                        )
+                        .await?
+                        .is_none()
+                );
+                assert!(runtime.stack.is_empty().await);
+                assert!(runtime.storage.savepoint_stack.is_empty().await);
+                assert_eq!(budget.live(), 0);
+                let mut rows = conn
+                    .query("SELECT COUNT(*) FROM contract_results", ())
+                    .await?;
+                let receipts_after: u64 = rows.next().await?.unwrap().get(0)?;
+                assert_eq!(receipts_after, receipts_before);
+            }
         }
     }
     Ok(())
@@ -560,10 +650,17 @@ async fn partial_instantiation_does_not_invoke_registered_destructors() -> Resul
 async fn explicit_guest_resource_drop_invokes_host_callback_and_cleans_up() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let callback_calls = Arc::new(AtomicUsize::new(0));
+    let callback_tables: Arc<StdMutex<Vec<Weak<Mutex<ResourceTable>>>>> =
+        Arc::new(StdMutex::new(Vec::new()));
     let mut user = runtime.linkers.user.clone();
     let observed = callback_calls.clone();
+    let observed_tables = callback_tables.clone();
     user.root()
-        .func_wrap("destructor-callback", move |_, (): ()| {
+        .func_wrap("destructor-callback", move |store, (): ()| {
+            observed_tables
+                .lock()
+                .unwrap()
+                .push(Arc::downgrade(&store.data().table));
             observed.fetch_add(1, Ordering::SeqCst);
             Ok(())
         })?;
@@ -612,7 +709,6 @@ async fn explicit_guest_resource_drop_invokes_host_callback_and_cleans_up() -> R
         install_admitted_component_fixture(&mut runtime, "explicit-drop", component, 0).await?;
     let budget = Arc::new(InvocationBudget::default());
     runtime.invocation_budget = Some(budget.clone());
-    let resources_before = runtime.table.lock().await.iter_mut().count();
     let conn = runtime.get_storage_conn();
     let mut rows = conn
         .query("SELECT COUNT(*) FROM contract_results", ())
@@ -632,13 +728,18 @@ async fn explicit_guest_resource_drop_invokes_host_callback_and_cleans_up() -> R
         }
         assert!(runtime.finish_usage(previous)?.system_fuel > 0);
         assert_eq!(callback_calls.load(Ordering::SeqCst), index + 1);
+        assert!(
+            callback_tables
+                .lock()
+                .unwrap()
+                .pop()
+                .unwrap()
+                .upgrade()
+                .is_none()
+        );
         assert_eq!(budget.live(), 0);
         assert!(runtime.stack.is_empty().await);
         assert!(runtime.storage.savepoint_stack.is_empty().await);
-        assert_eq!(
-            runtime.table.lock().await.iter_mut().count(),
-            resources_before
-        );
         let mut rows = conn
             .query("SELECT COUNT(*) FROM contract_results", ())
             .await?;
@@ -691,7 +792,6 @@ async fn paid_hostile_realloc_charges_one_root_receipt_and_preserves_state() -> 
     let expression = format!("run({})", to_string(&"x".repeat(16 * 1024))?);
     let budget = Arc::new(InvocationBudget::default());
     runtime.invocation_budget = Some(budget.clone());
-    let resources_before = runtime.table.lock().await.iter_mut().count();
     let floor_before = token::floor(&mut runtime, HolderRef::from(&actor)).await?;
     let conn = runtime.get_storage_conn();
     let mut rows = conn
@@ -723,10 +823,8 @@ async fn paid_hostile_realloc_charges_one_root_receipt_and_preserves_state() -> 
         assert_eq!(budget.live(), 0);
         assert!(runtime.stack.is_empty().await);
         assert!(runtime.storage.savepoint_stack.is_empty().await);
-        assert_eq!(
-            runtime.table.lock().await.iter_mut().count(),
-            resources_before
-        );
+        // Canonical realloc denies host callbacks before the guest body. The
+        // outer table cannot observe this invocation's child table teardown.
         assert!(
             runtime
                 .storage
@@ -773,6 +871,171 @@ async fn paid_hostile_realloc_charges_one_root_receipt_and_preserves_state() -> 
             repeated = Some(observation);
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn paid_post_return_callback_work_charges_fuel_gas_and_burn() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let mark_calls = Arc::new(AtomicUsize::new(0));
+    let sentinel_calls = Arc::new(AtomicUsize::new(0));
+    let mark_tables: Arc<StdMutex<Vec<Weak<Mutex<ResourceTable>>>>> =
+        Arc::new(StdMutex::new(Vec::new()));
+    let mut user = runtime.linkers.user.clone();
+    let observed_sentinel = sentinel_calls.clone();
+    user.root().func_wrap("sentinel", move |_, (): ()| {
+        observed_sentinel.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })?;
+    let observed_marks = mark_calls.clone();
+    let observed_tables = mark_tables.clone();
+    user.root().func_wrap_async("mark", move |store, (): ()| {
+        let observed_marks = observed_marks.clone();
+        let observed_tables = observed_tables.clone();
+        Box::new(async move {
+            let frame = store.data().stack.peek().await.expect("active paid frame");
+            observed_tables
+                .lock()
+                .unwrap()
+                .push(Arc::downgrade(&store.data().table));
+            let storage = store.data().storage.clone();
+            storage
+                .set(frame.contract_id, b"callback-marker", b"set", None, None)
+                .await
+                .expect("marker write");
+            observed_marks.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    })?;
+    runtime.linkers = Arc::new(Linkers {
+        user,
+        native: runtime.linkers.native.clone(),
+    });
+    let paid_component = POST_RETURN_CALLBACK.replace("view-context", "proc-context");
+    let address =
+        install_admitted_component_fixture(&mut runtime, "paid-post-return", &paid_component, 0)
+            .await?;
+    let contract_id = runtime.storage.contract_id(&address).await?.unwrap();
+    let actor = Signer::Id(
+        runtime
+            .get_or_create_identity(&random_x_only_pubkey())
+            .await?,
+    );
+    token::issue_to(
+        &mut runtime,
+        &Signer::Core(Box::new(Signer::Nobody)),
+        HolderRef::from(&actor),
+        Decimal::from("100"),
+    )
+    .await??;
+    let payment = Payment {
+        signer_id: actor.signer_id().unwrap(),
+        gas_limit: MAX_UNTRUSTED_GAS_LIMIT,
+    };
+    let budget = Arc::new(InvocationBudget::default());
+    runtime.invocation_budget = Some(budget.clone());
+    let floor_before = token::floor(&mut runtime, HolderRef::from(&actor)).await?;
+    let conn = runtime.get_storage_conn();
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_results WHERE contract_id = ?",
+            params![contract_id],
+        )
+        .await?;
+    let receipts_before: u64 = rows.next().await?.unwrap().get(0)?;
+    let mut observations = Vec::new();
+    for (variant, expression) in ["run-light()", "run-heavy()"].into_iter().enumerate() {
+        let mut repeated = None;
+        for trial in 0..2 {
+            let actor_before = token::balance(&mut runtime, HolderRef::from(&actor))
+                .await?
+                .unwrap_or_default();
+            let burner_before = token::balance(&mut runtime, HolderRef::Burner)
+                .await?
+                .unwrap_or_default();
+            let previous = runtime.start_usage();
+            let error = runtime
+                .execute(Some(&actor), Some(payment.clone()), &address, expression)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, ExecutionError::Deterministic(ref cause)
+                    if cause.chain().any(|item| item.downcast_ref::<Trap>()
+                        == Some(&Trap::CannotLeaveComponent))),
+                "{expression}: {error:?}"
+            );
+            let usage = runtime.finish_usage(previous)?;
+            assert!(usage.user_fuel > 0);
+            assert_eq!(mark_calls.load(Ordering::SeqCst), variant * 2 + trial + 1);
+            assert_eq!(sentinel_calls.load(Ordering::SeqCst), 0);
+            assert!(
+                mark_tables
+                    .lock()
+                    .unwrap()
+                    .pop()
+                    .unwrap()
+                    .upgrade()
+                    .is_none()
+            );
+            assert_eq!(budget.live(), 0);
+            assert!(runtime.stack.is_empty().await);
+            assert!(runtime.storage.savepoint_stack.is_empty().await);
+            assert!(
+                runtime
+                    .storage
+                    .get(16, contract_id, b"callback-marker")
+                    .await?
+                    .is_none()
+            );
+            let mut rows = conn
+                .query(
+                    "SELECT status, gas FROM contract_results WHERE contract_id = ? ORDER BY id DESC LIMIT 1",
+                    params![contract_id],
+                )
+                .await?;
+            let receipt = rows.next().await?.expect("one root result");
+            assert_eq!(receipt.get::<String>(0)?, "Trap");
+            let gas: u64 = receipt.get(1)?;
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM contract_results WHERE contract_id = ?",
+                    params![contract_id],
+                )
+                .await?;
+            let receipts_after: u64 = rows.next().await?.unwrap().get(0)?;
+            assert_eq!(
+                receipts_after,
+                receipts_before + (variant * 2 + trial + 1) as u64
+            );
+            let actor_after = token::balance(&mut runtime, HolderRef::from(&actor))
+                .await?
+                .unwrap_or_default();
+            let burner_after = token::balance(&mut runtime, HolderRef::Burner)
+                .await?
+                .unwrap_or_default();
+            let paid = sub_decimal(actor_before, actor_after)?;
+            let burned = sub_decimal(burner_after, burner_before)?;
+            assert_eq!(paid, burned);
+            assert!(paid > Decimal::default());
+            assert_eq!(
+                token::floor(&mut runtime, HolderRef::from(&actor)).await?,
+                floor_before
+            );
+            let observation = (usage.user_fuel, gas, paid);
+            if let Some(expected) = &repeated {
+                assert_eq!(&observation, expected);
+            } else {
+                repeated = Some(observation.clone());
+            }
+        }
+        observations.push(repeated.unwrap());
+    }
+    let light = &observations[0];
+    let heavy = &observations[1];
+    // The pinned engine charges at least one fuel for each BrIf backedge.
+    assert!(heavy.0 >= light.0 + 16_384);
+    assert!(heavy.1 > light.1);
+    assert!(heavy.2 > light.2);
     Ok(())
 }
 
