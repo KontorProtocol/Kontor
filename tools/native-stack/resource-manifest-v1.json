@@ -86,7 +86,7 @@
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
-      "sha256": "483331fca7e9b792c63832646389cab0e6472941f28b1a2df73336366abad52d"
+      "sha256": "de962ae000c13cc81b5ae6923d32e3372b9ce7bc2eb28f584bf2d2dbc385197b"
     },
     "resource_comparator_source": {
       "path": "tools/native-stack/compare_resource.py",
