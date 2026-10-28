@@ -24,6 +24,10 @@
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
       "sha256": "870746780b4f352b54295fcace21d7a2d95266068afefff2482d8d33ed98225a"
     },
+    "core_lockfile": {
+      "path": "core/Cargo.lock",
+      "sha256": "37e2f362d03fabb42688347ebf7fcbaeb273447c1dcdd3d37708facdb77e72e4"
+    },
     "error_test": {
       "path": "test-contracts/binaries/error_test.wasm.br",
       "sha256": "8610f85f6abdd1bdeb0d32c0916cf154493535299d2c4d8fa0e053f0ee2df875"
@@ -74,7 +78,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "d67bfd39e6d0c382f6f90ce4a55605157d096e718659962831189b9f634fa923"
+      "sha256": "0501668f8bdd036b671c692337c4937e61da193d3023f52e40b31efa85b2cb32"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -82,11 +86,11 @@
     },
     "resource_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v1.json",
-      "sha256": "30c76bb27f15216924f6c67763aaba1d5d2f7c55e8ec805b4319683fddec5909"
+      "sha256": "3a775fdf188203487fec44dcacded4fbaa1eabf80b9eae58405330659e679707"
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "0aac0b0b4ea80119023c8dc0450b9a9a6733411afbed9c73278639bf9be46bb7"
+      "sha256": "e1d8e921be67b5b6667cfc5d12b30d1d387cda12cbd15844e4c8fe1b9e42e7c9"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -117,12 +121,19 @@
       "sha256": "41717ccc31cc3ec99971ff1469c95cbe2fbe2bf25eea1eac95368d7b1f9c6f48"
     }
   },
+  "attestation_status": {
+    "macos_thread_guard_capacity": "unimplemented",
+    "per_cell_guard_fault_control": "missing",
+    "wasmtime_fiber_stack_range": "unimplemented"
+  },
   "build_policy": {
     "cargo_features": [],
     "compile_env": {
+      "CARGO_BUILD_RUSTC": "",
       "CARGO_BUILD_RUSTFLAGS": "",
       "CARGO_ENCODED_RUSTFLAGS": "",
       "CCACHE_DISABLE": "1",
+      "RUSTC": "",
       "RUSTC_WRAPPER": "",
       "RUSTFLAGS": "",
       "RUSTUP_TOOLCHAIN": "1.99.1"
@@ -1587,8 +1598,9 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "7ed24a388848aeeb1f063ce966f3eea7b14d64a9e0c24722a46d2f6c1deaf400",
-    "status": "smoke_only"
+    "sha256": "f178496d5526715280855d8171847ad31e087e24cc4e3000ffe8bb57f12a17cc",
+    "status": "smoke_only",
+    "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },
   "workload_plan": {
     "path": "tools/native-stack/resource-workload-plan-v1.json",

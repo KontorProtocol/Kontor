@@ -113,8 +113,18 @@ class ResourceManifestTests(unittest.TestCase):
                         item["parameters"][key] = 1000
         ready["publication_constraints"]["near_boundary_accepted_fixture"] = "verified"
         ready["publication_constraints"]["serialized_transaction_and_wit_admission"] = "verified"
+        ready["attestation_status"] = {name: "ready" for name in
+                                       ready["attestation_status"]}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "manifest.json"
+            blocked = copy.deepcopy(ready)
+            blocked["attestation_status"]["wasmtime_fiber_stack_range"] = "unimplemented"
+            path.write_text(json.dumps(blocked))
+            with patch.object(resource_evidence, "MANIFEST", path), patch.object(
+                resource_evidence, "build_manifest", return_value=blocked
+            ):
+                with self.assertRaisesRegex(ValueError, "Wasmtime fiber attestation is missing"):
+                    resource_evidence.validate({}, path.parent)
             path.write_text(json.dumps(ready))
             with patch.object(resource_evidence, "MANIFEST", path), patch.object(
                 resource_evidence, "build_manifest", return_value=ready
@@ -131,13 +141,17 @@ class ResourceManifestTests(unittest.TestCase):
             attempt = {"kind": "attempt", "case_id": "sample", "sample_key": "target",
                        "repeat_index": 0, "observation": {}, "worker_attempt": {}}
             terminal = {"kind": "terminal", "pid": 123, "case_count": 1,
-                        "attempt_count": 1, "complete": True, "test_harness_passed": True}
+                        "attempt_count": 1, "complete": True, "test_harness_passed": True,
+                        "executable_path": "/tmp/indexer-test",
+                        "executable_sha256": "0" * 64}
             path.write_text(json.dumps(attempt) + "\n" + json.dumps(terminal) + "\n")
-            resource_evidence.read_process_events(path, {"pid": 123}, 1)
+            resource_evidence.read_process_events(path, {"pid": 123}, 1,
+                                                  "/tmp/indexer-test", "0" * 64)
             terminal["complete"] = False
             path.write_text(json.dumps(attempt) + "\n" + json.dumps(terminal) + "\n")
             with self.assertRaisesRegex(ValueError, "terminal status"):
-                resource_evidence.read_process_events(path, {"pid": 123}, 1)
+                resource_evidence.read_process_events(path, {"pid": 123}, 1,
+                                                      "/tmp/indexer-test", "0" * 64)
 
     def test_expected_results_and_boundaries_reject_matching_wrong_runs(self):
         with tempfile.TemporaryDirectory() as directory:

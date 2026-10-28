@@ -16,6 +16,7 @@ AMENDMENT_SHA256 = "923f6ddf0e5646e140242d11fc48995f69e2929d34930609a82ac13a4fce
 WASMTIME_REVISION = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
 BASE_COMMIT = "67a52fed58a893ce2c1c05483f86f4fffa02a675"
 INPUTS = {
+    "core_lockfile": "core/Cargo.lock",
     "stack_probe": "test-contracts/binaries/stack_probe.wasm.br",
     "stack_probe_source": "test-contracts/stack-probe/src/lib.rs",
     "error_test": "test-contracts/binaries/error_test.wasm.br",
@@ -252,7 +253,8 @@ def build_manifest():
                          "stack_probing_configuration":
                          "target default; native probe coverage not verified by disassembly",
                          "compile_env": {"RUSTUP_TOOLCHAIN": "1.99.1",
-                                         "RUSTC_WRAPPER": "", "CCACHE_DISABLE": "1",
+                                         "RUSTC_WRAPPER": "", "RUSTC": "",
+                                         "CARGO_BUILD_RUSTC": "", "CCACHE_DISABLE": "1",
                                          "RUSTFLAGS": "", "CARGO_ENCODED_RUSTFLAGS": "",
                                          "CARGO_BUILD_RUSTFLAGS": ""}},
         "cells": list(CELLS),
@@ -284,11 +286,17 @@ def build_manifest():
             "serialized_transaction_and_wit_admission": "unresolved",
             "near_boundary_accepted_fixture": "unverified",
         },
+        "attestation_status": {
+            "per_cell_guard_fault_control": "missing",
+            "macos_thread_guard_capacity": "unimplemented",
+            "wasmtime_fiber_stack_range": "unimplemented",
+        },
         "workload_plan": {"status": "awaiting_frozen_workload_plan",
                           "path": "tools/native-stack/resource-workload-plan-v1.json",
                           "sha256": None},
         "worker_runner": {"status": "smoke_only", "path":
                           "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
+                          "test_name": "runtime::call::tests::native_stack_resource::resource_qualification",
                           "sha256": sha256(ROOT / "core/indexer/src/runtime/call/tests/native_stack_resource.rs")},
         "memory_profiles": [
             {"id": "suspended_64", "simultaneous_stores": 64, "view_roots": 0,

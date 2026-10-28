@@ -22,6 +22,14 @@ The build policy pins Rust 1.99.1, empty custom Rust flags and Cargo feature
 arguments, and the exact compile-environment record. It records default
 target stack probing as unverified by disassembly. Memory profiles record
 physical host CPU/RAM separately from enforced CPU and memory limits.
+The resource evidence gate parses full Cargo metadata and the JSON build log,
+including the exact indexer test artifact, compiled Wasmtime features, target,
+profile and successful build completion. It requires an archived copy of the
+test executable with a matching SHA-256, a raw `rustc -vV` record, and child
+transcripts that report the executable path and SHA-256 observed by each child.
+The child command must name that Cargo artifact and the pinned resource test.
+The resource runner and workflow do not emit this evidence yet, so the gate
+remains blocked.
 
 `resource-evidence-schema-v1.json` defines the required raw process, build
 closure, engine, actual thread ranges, per-attempt worker phases, per-case,
@@ -47,10 +55,15 @@ resource evidence schema. On Linux, the diagnostic accepts a protected
 `---p` VMA or page-by-page `EIO` reads from `/proc/self/mem` below the usable
 stack. [glibc 2.42's lightweight guard implementation](https://sourceware.org/pipermail/glibc-cvs/2025q1/087326.html)
 can retain an `rw-p` VMA in `/proc/self/maps`, so the VMA listing alone cannot
-disprove guard protection. Each thread record includes the measured page size,
+disprove guard protection. `EIO` proves the interval is inaccessible; it does
+not identify which kernel mechanism made it inaccessible. A separate faulting
+child control is still required in each qualification cell. Each thread record
+includes the measured page size,
 process and kernel thread IDs, and the protected guard interval. The local
 Linux ARM64 smoke test runs on 16 KiB pages; it does not stand in for the
 4 KiB page qualification cells. The macOS guard observation remains unbound.
+Actual Wasmtime fiber stack ranges also remain unbound; pthread measurements
+describe the Tokio and caller stacks only.
 
 Cold publish function size, branch-table size and control nesting remain
 unverified accepted fixtures. The wasmparser source limits alone do not prove

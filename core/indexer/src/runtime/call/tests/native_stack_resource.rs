@@ -168,7 +168,7 @@ fn current_linux_stack_range() -> Result<LinuxStackRange> {
         (
             guard_start,
             mapped_start,
-            "lightweight guard verified below pthread stack range",
+            "inaccessible interval verified below pthread stack range by /proc/self/mem EIO",
         )
     };
     ensure!(

@@ -5,7 +5,7 @@
   "additionalProperties": false,
   "required": [
     "schema_version", "manifest_sha256", "cell", "source_sha", "lockfile_sha256",
-    "binary_sha256", "compiler", "build_closure", "target", "host", "configurations", "memory_profiles"
+    "binary_path", "binary_sha256", "compiler", "build_closure", "target", "host", "configurations", "memory_profiles"
   ],
   "properties": {
     "schema_version": {"const": 1},
@@ -13,11 +13,14 @@
     "cell": {"enum": ["Linux-X64/dev", "Linux-X64/release", "Linux-ARM64/dev", "Linux-ARM64/release", "macOS-ARM64/dev", "macOS-ARM64/release"]},
     "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "lockfile_sha256": {"$ref": "#/$defs/sha256"},
+    "binary_path": {"type": "string", "minLength": 1},
     "binary_sha256": {"$ref": "#/$defs/sha256"},
     "compiler": {"type": "object", "required": ["rustc_verbose", "stack_probing_configuration"], "additionalProperties": false,
       "properties": {"rustc_verbose": {"type": "string", "minLength": 1}, "stack_probing_configuration": {"type": "string", "minLength": 1}}},
-    "build_closure": {"type": "object", "required": ["profile", "target_triple", "cargo_features", "rustflags", "wasmtime_features", "wasmtime_feature_logs", "cargo_metadata_sha256", "compile_env_sha256", "build_log_sha256", "build_log", "cargo_metadata_log", "compile_env_log"], "additionalProperties": false,
+    "build_closure": {"type": "object", "required": ["profile", "target_triple", "cargo_features", "rustflags", "cargo_command", "cargo_cwd", "wasmtime_features", "wasmtime_feature_logs", "cargo_metadata_sha256", "compile_env_sha256", "build_log_sha256", "build_log", "cargo_metadata_log", "compile_env_log", "rustc_log", "binary_artifact"], "additionalProperties": false,
       "properties": {"profile": {"enum": ["dev", "release"]}, "target_triple": {"type": "string", "minLength": 1},
+        "cargo_command": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "cargo_cwd": {"type": "string", "minLength": 1},
         "cargo_features": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
         "rustflags": {"type": "array", "items": {"type": "string"}},
         "wasmtime_features": {"type": "object", "required": ["production", "qualification"], "additionalProperties": false,
@@ -28,7 +31,8 @@
             "qualification": {"$ref": "#/$defs/raw_log"}}},
         "cargo_metadata_sha256": {"$ref": "#/$defs/sha256"}, "compile_env_sha256": {"$ref": "#/$defs/sha256"},
         "build_log_sha256": {"$ref": "#/$defs/sha256"}, "build_log": {"$ref": "#/$defs/raw_log"},
-        "cargo_metadata_log": {"$ref": "#/$defs/raw_log"}, "compile_env_log": {"$ref": "#/$defs/raw_log"}}},
+        "cargo_metadata_log": {"$ref": "#/$defs/raw_log"}, "compile_env_log": {"$ref": "#/$defs/raw_log"},
+        "rustc_log": {"$ref": "#/$defs/raw_log"}, "binary_artifact": {"$ref": "#/$defs/raw_log"}}},
     "target": {"type": "string", "minLength": 1},
     "host": {"type": "object", "required": ["os", "architecture", "cpu_count", "memory_bytes", "storage", "resource_enforcement"], "additionalProperties": false,
       "properties": {"os": {"type": "string"}, "architecture": {"type": "string"}, "cpu_count": {"type": "integer", "minimum": 1},

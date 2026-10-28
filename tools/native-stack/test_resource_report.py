@@ -10,7 +10,6 @@ import resource_manifest
 
 
 ZERO = "0" * 64
-ONE = "1" * 64
 GIB = 1024**3
 
 
@@ -69,7 +68,7 @@ def observation(definition, sample):
     }
 
 
-def configuration(directory, manifest, mode, pid):
+def configuration(directory, manifest, mode, pid, binary_path, binary_sha256):
     size = 2_097_152 if mode == "production" else 1_048_576
     requested = size
     runtime = {
@@ -83,7 +82,8 @@ def configuration(directory, manifest, mode, pid):
         ],
         "blocking_pool_observed": True, "block_on_caller_observed": True,
     }
-    process = {"pid": pid, "command": ["indexer-test", mode],
+    process = {"pid": pid, "command": [binary_path, "--ignored", "--exact",
+                                       manifest["worker_runner"]["test_name"], "--nocapture"],
                "started_unix_ns": pid * 1000, "ended_unix_ns": pid * 1000 + 1,
                "exit_code": 0, "signal": None, "timed_out": False,
                "complete": True, "test_harness_passed": True}
@@ -117,7 +117,9 @@ def configuration(directory, manifest, mode, pid):
                                            "attempts": attempts}})
     events.append({"kind": "terminal", "pid": pid, "case_count": len(cases),
                    "attempt_count": len(events), "complete": True,
-                   "test_harness_passed": True})
+                   "test_harness_passed": True,
+                   "executable_path": binary_path,
+                   "executable_sha256": binary_sha256})
     transcript = raw_log(directory, f"{mode}.jsonl",
                          "".join(json.dumps(event) + "\n" for event in events))
     for case in cases:
@@ -189,9 +191,12 @@ def synthetic_report(directory):
                     case["parameters"][key] = 1000
     manifest["publication_constraints"]["near_boundary_accepted_fixture"] = "verified"
     manifest["publication_constraints"]["serialized_transaction_and_wit_admission"] = "verified"
+    manifest["attestation_status"] = {name: "ready" for name in
+                                      manifest["attestation_status"]}
     runner = directory / "runner.rs"
     runner.write_text("synthetic source, not a qualification runner\n")
     manifest["worker_runner"] = {"status": "ready", "path": runner.name,
+                                 "test_name": manifest["worker_runner"]["test_name"],
                                  "sha256": resource_evidence.sha256(runner)}
     plan = {"memory_profiles": {definition["id"]: {
         "reference_cpus": definition.get("reference_cpus"),
@@ -209,31 +214,73 @@ def synthetic_report(directory):
     manifest_path.write_text(json.dumps(manifest))
     policy = manifest["build_policy"]
     compile_env = raw_log(directory, "compile-env.json", json.dumps(policy["compile_env"]))
-    metadata = raw_log(directory, "cargo-metadata.json", "{}")
-    build_log = raw_log(directory, "cargo.jsonl", "synthetic build control\n")
+    target = "x86_64-unknown-linux-gnu"
+    workspace = directory / "core"
+    target_dir = directory / "target"
+    binary_path = str(target_dir / target / "debug/deps/indexer-synthetic")
+    binary_artifact = raw_log(directory, "indexer-synthetic", "synthetic executable bytes\n")
+    rustc_verbose = "rustc 1.99.1 (synthetic)\nhost: x86_64-unknown-linux-gnu\n"
+    rustc_log = raw_log(directory, "rustc-vv.txt", rustc_verbose)
+    indexer_id = f"path+file://{workspace}/indexer#0.2.0"
+    source_prefix = ("git+https://github.com/wilfreddenton/wasmtime?rev="
+                     f"{manifest['wasmtime_revision']}")
+    wasmtime_id = f"{source_prefix}#51.0.0-kontor.2"
+    metadata_json = {
+        "version": 1, "workspace_root": str(workspace),
+        "target_directory": str(target_dir),
+        "packages": [
+            {"name": "indexer", "id": indexer_id,
+             "manifest_path": str(workspace / "indexer/Cargo.toml"),
+             "targets": [{"name": "indexer", "kind": ["lib"]}],
+             "dependencies": [{"name": "wasmtime", "source": source_prefix}]},
+            {"name": "wasmtime", "id": wasmtime_id, "version": "51.0.0-kontor.2",
+             "source": f"{source_prefix}#{manifest['wasmtime_revision']}"},
+        ],
+    }
+    metadata = raw_log(directory, "cargo-metadata.json", json.dumps(metadata_json))
+    build_messages = [
+        {"reason": "compiler-artifact", "package_id": indexer_id,
+         "target": {"name": "indexer", "kind": ["lib"]},
+         "profile": {"test": True, "opt_level": "0", "debug_assertions": True},
+         "features": [], "executable": binary_path},
+        {"reason": "compiler-artifact", "package_id": wasmtime_id,
+         "target": {"name": "wasmtime", "kind": ["lib"]},
+         "features": manifest["wasmtime_features"]["qualification"]},
+        {"reason": "build-finished", "success": True},
+    ]
+    build_log = raw_log(directory, "cargo.jsonl",
+                        "".join(json.dumps(message) + "\n" for message in build_messages))
     feature_logs = {graph: raw_log(directory, f"{graph}-features.txt",
                                    ",".join(features) + "\n") for graph, features in
                     manifest["wasmtime_features"].items()}
     report = {
         "schema_version": 1, "manifest_sha256": resource_evidence.sha256(manifest_path),
         "cell": "Linux-X64/dev", "source_sha": "1" * 40,
-        "lockfile_sha256": ONE, "binary_sha256": ONE,
-        "compiler": {"rustc_verbose": "rustc 1.99.1 (synthetic)\nhost: x86_64-unknown-linux-gnu",
+        "lockfile_sha256": manifest["artifacts"]["core_lockfile"]["sha256"],
+        "binary_path": binary_path, "binary_sha256": binary_artifact["sha256"],
+        "compiler": {"rustc_verbose": rustc_verbose,
                      "stack_probing_configuration": policy["stack_probing_configuration"]},
-        "build_closure": {"profile": "dev", "target_triple": "x86_64-unknown-linux-gnu",
+        "build_closure": {"profile": "dev", "target_triple": target,
                           "cargo_features": [], "rustflags": [],
+                          "cargo_cwd": str(directory),
+                          "cargo_command": ["cargo", "test", "--locked", "--manifest-path",
+                                            "core/Cargo.toml", "-p", "indexer", "--lib",
+                                            "--no-run", "--message-format=json", "-j2",
+                                            "--target", target],
                           "wasmtime_features": manifest["wasmtime_features"],
                           "wasmtime_feature_logs": feature_logs,
                           "cargo_metadata_sha256": metadata["sha256"],
                           "compile_env_sha256": compile_env["sha256"],
                           "build_log_sha256": build_log["sha256"],
                           "build_log": build_log, "cargo_metadata_log": metadata,
-                          "compile_env_log": compile_env},
-        "target": "x86_64-unknown-linux-gnu",
+                          "compile_env_log": compile_env, "rustc_log": rustc_log,
+                          "binary_artifact": binary_artifact},
+        "target": target,
         "host": {"os": "linux", "architecture": "x86_64", "cpu_count": 16,
                  "memory_bytes": 32 * GIB, "storage": "synthetic",
                  "resource_enforcement": "synthetic cgroup"},
-        "configurations": {mode: configuration(directory, manifest, mode, pid)
+        "configurations": {mode: configuration(directory, manifest, mode, pid,
+                                                binary_path, binary_artifact["sha256"])
                            for mode, pid in (("production", 101), ("reduced", 102))},
         "memory_profiles": [memory_profile(directory, definition,
                                            manifest["workload_plan"]["sha256"])
@@ -243,6 +290,82 @@ def synthetic_report(directory):
 
 
 class ResourceReportControls(unittest.TestCase):
+    def test_build_artifact_and_child_identity_mutations(self):
+        for mutation in ("metadata", "indexer_package", "artifact_path",
+                         "compiled_features", "profile", "failed_build",
+                         "cargo_target", "rustc_log", "process_command",
+                         "binary_bytes", "binary_sha", "child_executable_hash"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                manifest, manifest_path, report = synthetic_report(directory)
+                closure = report["build_closure"]
+                expected = {
+                    "metadata": "Cargo metadata is incomplete",
+                    "indexer_package": "unique indexer test or Wasmtime artifacts",
+                    "artifact_path": "Cargo artifact path, profile, or compiled features",
+                    "compiled_features": "Cargo artifact path, profile, or compiled features",
+                    "profile": "Cargo artifact path, profile, or compiled features",
+                    "failed_build": "Cargo JSON build did not complete",
+                    "cargo_target": "Cargo build command differs",
+                    "rustc_log": "rustc identity differs from raw compiler log",
+                    "process_command": "child process command differs",
+                    "binary_bytes": "raw log hash mismatch",
+                    "binary_sha": "executed binary path or captured artifact hash",
+                    "child_executable_hash": "terminal status differs",
+                }[mutation]
+                if mutation == "metadata":
+                    path = directory / closure["cargo_metadata_log"]["path"]
+                    path.write_text("{}")
+                    digest = resource_evidence.sha256(path)
+                    closure["cargo_metadata_log"]["sha256"] = digest
+                    closure["cargo_metadata_sha256"] = digest
+                elif mutation in {"indexer_package", "artifact_path", "compiled_features",
+                                  "profile", "failed_build"}:
+                    path = directory / closure["build_log"]["path"]
+                    entries = [json.loads(line) for line in path.read_text().splitlines()]
+                    if mutation == "indexer_package":
+                        entries[0]["package_id"] += "-other"
+                    elif mutation == "artifact_path":
+                        entries[0]["executable"] += "-other"
+                    elif mutation == "compiled_features":
+                        entries[1]["features"].append("profiling")
+                    elif mutation == "profile":
+                        entries[0]["profile"]["opt_level"] = "3"
+                    else:
+                        entries[-1]["success"] = False
+                    path.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+                    digest = resource_evidence.sha256(path)
+                    closure["build_log"]["sha256"] = digest
+                    closure["build_log_sha256"] = digest
+                elif mutation == "cargo_target":
+                    closure["cargo_command"][-1] = "aarch64-unknown-linux-gnu"
+                elif mutation == "rustc_log":
+                    path = directory / closure["rustc_log"]["path"]
+                    path.write_text("rustc 1.99.1 (other)\nhost: x86_64-unknown-linux-gnu\n")
+                    closure["rustc_log"]["sha256"] = resource_evidence.sha256(path)
+                elif mutation == "process_command":
+                    report["configurations"]["production"]["process"]["command"][0] += "-other"
+                elif mutation == "binary_bytes":
+                    (directory / closure["binary_artifact"]["path"]).write_text("other bytes")
+                elif mutation == "binary_sha":
+                    report["binary_sha256"] = "0" * 64
+                else:
+                    path = directory / report["configurations"]["production"]["process_log"]["path"]
+                    events = [json.loads(line) for line in path.read_text().splitlines()]
+                    events[-1]["executable_sha256"] = "0" * 64
+                    path.write_text("".join(json.dumps(event) + "\n" for event in events))
+                    digest = resource_evidence.sha256(path)
+                    production = report["configurations"]["production"]
+                    production["process_log"]["sha256"] = digest
+                    production["raw_logs"][0]["sha256"] = digest
+                    for case in production["cases"]:
+                        case["raw_log"]["sha256"] = digest
+                with patch.object(resource_evidence, "ROOT", directory), patch.object(
+                    resource_evidence, "MANIFEST", manifest_path
+                ), patch.object(resource_evidence, "build_manifest", return_value=manifest):
+                    with self.assertRaisesRegex(ValueError, expected):
+                        resource_evidence.validate(report, directory)
+
     def test_complete_synthetic_report_and_downstream_mutations(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

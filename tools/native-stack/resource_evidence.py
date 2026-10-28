@@ -32,7 +32,7 @@ def load_json_strict(path):
                       parse_constant=no_nonfinite_constants)
 
 
-def read_process_events(path, process, expected_case_count):
+def read_process_events(path, process, expected_case_count, binary_path, binary_sha256):
     lines = path.read_text().splitlines()
     require(lines and all(line.strip() for line in lines),
             "process transcript is empty or contains incomplete lines")
@@ -41,7 +41,9 @@ def read_process_events(path, process, expected_case_count):
     terminal = events.pop()
     require(terminal == {"kind": "terminal", "pid": process["pid"],
                          "case_count": expected_case_count, "attempt_count": len(events),
-                         "complete": True, "test_harness_passed": True},
+                         "complete": True, "test_harness_passed": True,
+                         "executable_path": binary_path,
+                         "executable_sha256": binary_sha256},
             "process transcript terminal status differs from process record")
     attempts = {}
     for event in events:
@@ -60,7 +62,11 @@ def require(condition, message):
 
 
 def sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def file_evidence(directory, entry):
@@ -68,6 +74,8 @@ def file_evidence(directory, entry):
     relative = Path(entry["path"])
     require(not relative.is_absolute() and ".." not in relative.parts, "raw log escapes evidence directory")
     path = directory / relative
+    require(path.resolve().is_relative_to(directory.resolve()),
+            "raw log resolves outside evidence directory")
     require(path.is_file(), f"missing raw log {relative}")
     require(sha256(path) == entry["sha256"], f"raw log hash mismatch: {relative}")
 
@@ -445,6 +453,115 @@ def check_memory_profiles(profiles, manifest, plan, host, directory):
         file_evidence(directory, profile["raw_os_log"])
 
 
+def check_build_artifact(report, manifest, directory):
+    closure = report["build_closure"]
+    binary = Path(report["binary_path"])
+    require(binary.is_absolute() and binary.name.startswith("indexer-")
+            and closure["binary_artifact"]["sha256"] == report["binary_sha256"]
+            and Path(closure["binary_artifact"]["path"]).name == binary.name,
+            "executed binary path or captured artifact hash is unverified")
+    file_evidence(directory, closure["binary_artifact"])
+    file_evidence(directory, closure["rustc_log"])
+    require((directory / closure["rustc_log"]["path"]).read_text() ==
+            report["compiler"]["rustc_verbose"],
+            "rustc identity differs from raw compiler log")
+
+    metadata = load_json_strict(directory / closure["cargo_metadata_log"]["path"])
+    require(isinstance(metadata, dict) and metadata.get("version") == 1
+            and isinstance(metadata.get("packages"), list)
+            and isinstance(metadata.get("workspace_root"), str)
+            and isinstance(metadata.get("target_directory"), str),
+            "Cargo metadata is incomplete")
+    workspace = Path(metadata["workspace_root"])
+    target_dir = Path(metadata["target_directory"])
+    cargo_cwd = Path(closure["cargo_cwd"])
+    require(workspace.is_absolute() and target_dir.is_absolute()
+            and cargo_cwd.is_absolute() and workspace == cargo_cwd / "core",
+            "Cargo working directory differs from metadata workspace")
+    indexer = [package for package in metadata["packages"]
+               if isinstance(package, dict) and package.get("name") == "indexer"]
+    wasmtime = [package for package in metadata["packages"]
+                if isinstance(package, dict) and package.get("name") == "wasmtime"]
+    require(len(indexer) == len(wasmtime) == 1,
+            "Cargo metadata lacks unique indexer or Wasmtime packages")
+    indexer = indexer[0]
+    wasmtime = wasmtime[0]
+    source_prefix = ("git+https://github.com/wilfreddenton/wasmtime?rev="
+                     f"{manifest['wasmtime_revision']}")
+    source = f"{source_prefix}#{manifest['wasmtime_revision']}"
+    require(indexer.get("manifest_path") == str(workspace / "indexer/Cargo.toml")
+            and isinstance(indexer.get("id"), str)
+            and isinstance(indexer.get("targets"), list)
+            and any(target.get("name") == "indexer"
+                    and isinstance(target.get("kind"), list)
+                    and "lib" in target["kind"]
+                    for target in indexer.get("targets", []) if isinstance(target, dict))
+            and isinstance(indexer.get("dependencies"), list)
+            and any(dependency.get("name") == "wasmtime"
+                    and dependency.get("source") == source_prefix
+                    for dependency in indexer.get("dependencies", [])
+                    if isinstance(dependency, dict))
+            and wasmtime.get("version") == "51.0.0-kontor.2"
+            and wasmtime.get("source") == source
+            and isinstance(wasmtime.get("id"), str),
+            "Cargo metadata package identity differs from frozen build")
+
+    profile = "release" if closure["profile"] == "release" else "debug"
+    expected_command = [
+        "cargo", "test", "--locked", "--manifest-path", "core/Cargo.toml",
+        "-p", "indexer", "--lib", "--no-run", "--message-format=json", "-j2",
+        "--target", report["target"],
+    ] + (["--release"] if profile == "release" else [])
+    require(closure["cargo_command"] == expected_command,
+            "Cargo build command differs from frozen profile/target/features")
+    try:
+        artifact_parts = binary.relative_to(target_dir).parts
+    except ValueError as error:
+        raise ValueError("Cargo executable lies outside target directory") from error
+    require(artifact_parts[:3] == (report["target"], profile, "deps"),
+            "Cargo executable path differs from target/profile")
+
+    raw_lines = (directory / closure["build_log"]["path"]).read_text().splitlines()
+    require(raw_lines and all(line.strip() for line in raw_lines),
+            "Cargo JSON build log is incomplete")
+    messages = [json.loads(line, object_pairs_hook=no_duplicate_keys,
+                           parse_constant=no_nonfinite_constants) for line in raw_lines]
+    require(all(isinstance(message, dict) for message in messages),
+            "Cargo JSON build log contains a non-object message")
+    finished = [message for message in messages if message.get("reason") == "build-finished"]
+    require(len(finished) == 1 and finished[0].get("success") is True
+            and messages[-1] == finished[0],
+            "Cargo JSON build did not complete successfully")
+    artifacts = [message for message in messages if message.get("reason") == "compiler-artifact"]
+    indexer_artifacts = [item for item in artifacts
+                         if isinstance(item.get("target"), dict)
+                         and isinstance(item.get("profile"), dict)
+                         and item.get("package_id") == indexer["id"]
+                         and item["target"].get("name") == "indexer"
+                         and isinstance(item["target"].get("kind"), list)
+                         and "lib" in item["target"]["kind"]
+                         and item["profile"].get("test") is True
+                         and item.get("executable") is not None]
+    wasmtime_artifacts = [item for item in artifacts
+                          if isinstance(item.get("target"), dict)
+                          and item.get("package_id") == wasmtime["id"]
+                          and item["target"].get("name") == "wasmtime"
+                          and isinstance(item["target"].get("kind"), list)
+                          and "lib" in item["target"]["kind"]]
+    require(len(indexer_artifacts) == len(wasmtime_artifacts) == 1,
+            "Cargo JSON build lacks unique indexer test or Wasmtime artifacts")
+    indexer_artifact = indexer_artifacts[0]
+    wasmtime_artifact = wasmtime_artifacts[0]
+    require(indexer_artifact["executable"] == report["binary_path"]
+            and indexer_artifact.get("features") == closure["cargo_features"]
+            and indexer_artifact["profile"].get("opt_level") ==
+                ("3" if profile == "release" else "0")
+            and indexer_artifact["profile"].get("debug_assertions") is (profile == "debug")
+            and wasmtime_artifact.get("features") ==
+                closure["wasmtime_features"]["qualification"],
+            "Cargo artifact path, profile, or compiled features differ from report")
+
+
 def validate(report, directory):
     manifest = build_manifest()
     require(MANIFEST.is_file() and load_json_strict(MANIFEST) == manifest,
@@ -463,6 +580,8 @@ def validate(report, directory):
             and manifest["publication_constraints"]["serialized_transaction_and_wit_admission"] ==
                 "verified",
             "cold publication accepted boundaries are unverified")
+    require(all(status == "ready" for status in manifest["attestation_status"].values()),
+            "per-cell guard fault, macOS stack, or Wasmtime fiber attestation is missing")
     schema = load_json_strict(SCHEMA)
     Draft202012Validator.check_schema(schema)
     errors = Draft202012Validator(schema).iter_errors(report)
@@ -472,7 +591,7 @@ def validate(report, directory):
             f"{first_error.message if first_error else ''}")
     required = {
         "schema_version", "manifest_sha256", "cell", "source_sha", "lockfile_sha256",
-        "binary_sha256", "compiler", "build_closure", "target", "host",
+        "binary_path", "binary_sha256", "compiler", "build_closure", "target", "host",
         "configurations", "memory_profiles",
     }
     require(set(report) == required, "evidence header is incomplete or has unknown fields")
@@ -484,6 +603,8 @@ def validate(report, directory):
     for field in ("lockfile_sha256", "binary_sha256"):
         require(re.fullmatch(r"[0-9a-f]{64}", report[field]) is not None,
                 f"invalid {field}")
+    require(report["lockfile_sha256"] == manifest["artifacts"]["core_lockfile"]["sha256"],
+            "recorded lockfile differs from frozen source")
     require(report["compiler"]["rustc_verbose"]
             and report["compiler"]["stack_probing_configuration"],
             "compiler or stack probing identity is missing")
@@ -494,6 +615,7 @@ def validate(report, directory):
             "compiler release or probing policy differs from frozen build")
     closure = report["build_closure"]
     require(set(closure) == {"profile", "target_triple", "cargo_features", "rustflags",
+                             "cargo_command", "cargo_cwd", "rustc_log", "binary_artifact",
                              "wasmtime_features", "wasmtime_feature_logs",
                              "cargo_metadata_sha256", "compile_env_sha256",
                              "build_log_sha256", "build_log", "cargo_metadata_log",
@@ -533,6 +655,7 @@ def validate(report, directory):
             "cell label differs from actual host/target identity")
     require(f"host: {target_triple}" in report["compiler"]["rustc_verbose"].splitlines(),
             "compiler host triple differs from cell target")
+    check_build_artifact(report, manifest, directory)
     require(manifest["workload_plan"]["status"] == "ready"
             and manifest["worker_runner"]["status"] == "ready",
             "frozen workload plan or worker runner is missing")
@@ -571,6 +694,10 @@ def validate(report, directory):
                 process["test_harness_passed"] is True,
                 f"{mode}: process failed or transcript incomplete")
         processes[mode] = process
+        require(process["command"] == [
+            report["binary_path"], "--ignored", "--exact",
+            manifest["worker_runner"]["test_name"], "--nocapture",
+        ], f"{mode}: child process command differs from compiled resource test")
         engine_capacity(configuration["engine"], manifest, mode)
         require(configuration["runtime"]["worker_count"] == manifest["runtime"]["worker_count"],
                 f"{mode}: worker count differs from frozen runtime settings")
@@ -583,7 +710,8 @@ def validate(report, directory):
         require(configuration["process_log"] in configuration["raw_logs"],
                 f"{mode}: process transcript is not in raw log manifest")
         transcript = read_process_events(directory / configuration["process_log"]["path"],
-                                         process, len(manifest["cases"]))
+                                         process, len(manifest["cases"]),
+                                         report["binary_path"], report["binary_sha256"])
         require(configuration["source_artifact_sha256"] == {
             name: identity["sha256"] for name, identity in manifest["artifacts"].items()
         }, f"{mode}: fixture source hash mismatch")
