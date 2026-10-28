@@ -21,28 +21,28 @@ world root {
     value: u64
   }
 
-  export init: async func(ctx: borrow<proc-context>) -> contract;
+  export init: func(ctx: borrow<proc-context>) -> contract;
 
-  export eval: async func(ctx: borrow<proc-context>, x: u64, op: op) -> arith-return;
+  export eval: func(ctx: borrow<proc-context>, x: u64, op: op) -> arith-return;
 
-  export last-op: async func(ctx: borrow<view-context>) -> option<op>;
+  export last-op: func(ctx: borrow<view-context>) -> option<op>;
 
-  export put-numbers: async func(ctx: borrow<proc-context>, key: u64, integer: string, decimal: string);
-  export change-integer: async func(ctx: borrow<proc-context>, key: u64, integer: string);
-  export remove-numbers: async func(ctx: borrow<proc-context>, key: u64);
-  export stored-numbers: async func(ctx: borrow<view-context>, key: u64) -> option<list<string>>;
-  export optional-integer: async func(ctx: borrow<view-context>) -> option<string>;
-  export number-entries: async func(ctx: borrow<view-context>, lower: option<u64>, upper: option<u64>, descending: bool, limit: u64, integers: bool) -> list<string>;
-  export number-keys: async func(ctx: borrow<view-context>) -> list<u64>;
-  export number-index: async func(ctx: borrow<view-context>, integer: string) -> list<string>;
-  export decimal-index: async func(ctx: borrow<view-context>, decimal: string) -> list<u64>;
+  export put-numbers: func(ctx: borrow<proc-context>, key: u64, integer: string, decimal: string);
+  export change-integer: func(ctx: borrow<proc-context>, key: u64, integer: string);
+  export remove-numbers: func(ctx: borrow<proc-context>, key: u64);
+  export stored-numbers: func(ctx: borrow<view-context>, key: u64) -> option<list<string>>;
+  export optional-integer: func(ctx: borrow<view-context>) -> option<string>;
+  export number-entries: func(ctx: borrow<view-context>, lower: option<u64>, upper: option<u64>, descending: bool, limit: u64, integers: bool) -> list<string>;
+  export number-keys: func(ctx: borrow<view-context>) -> list<u64>;
+  export number-index: func(ctx: borrow<view-context>, integer: string) -> list<string>;
+  export decimal-index: func(ctx: borrow<view-context>, decimal: string) -> list<u64>;
 
-  export checked-sub: async func(ctx: borrow<view-context>, x: string, y: string) -> result<u64, error>;
+  export checked-sub: func(ctx: borrow<view-context>, x: string, y: string) -> result<u64, error>;
 
-  export mul-add-div-rem: async func(ctx: borrow<view-context>, a: string, b: string, carry: string, divisor: string) -> result<list<string>, error>;
+  export mul-add-div-rem: func(ctx: borrow<view-context>, a: string, b: string, carry: string, divisor: string) -> result<list<string>, error>;
 
-  export integer-ops: async func(ctx: borrow<view-context>, a: string, b: string) -> result<list<string>, error>;
-  export decimal-units: async func(ctx: borrow<view-context>, value: string) -> list<string>;
+  export integer-ops: func(ctx: borrow<view-context>, a: string, b: string) -> result<list<string>, error>;
+  export decimal-units: func(ctx: borrow<view-context>, value: string) -> list<string>;
 
-  export fib: async func(ctx: borrow<proc-context>, contract-address: contract-address, n: u64) -> u64;
+  export fib: func(ctx: borrow<proc-context>, contract-address: contract-address, n: u64) -> u64;
 }

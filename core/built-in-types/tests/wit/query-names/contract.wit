@@ -7,7 +7,7 @@ world root {
   record cursor-query { value: u64 }
   record async-cursor-query { value: u64 }
 
-  export init: async func(ctx: borrow<proc-context>) -> contract;
-  export query: async func(ctx: borrow<view-context>) -> cursor-query;
-  export async-query: async func(ctx: borrow<view-context>) -> async-cursor-query;
+  export init: func(ctx: borrow<proc-context>) -> contract;
+  export query: func(ctx: borrow<view-context>) -> cursor-query;
+  export async-query: func(ctx: borrow<view-context>) -> async-cursor-query;
 }

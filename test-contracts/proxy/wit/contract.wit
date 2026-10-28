@@ -5,11 +5,11 @@ world root {
   use kontor:built-in/context.{fall-context, proc-context, view-context, signer, contract};
   use kontor:built-in/foreign.{contract-address};
 
-  export fallback: async func(ctx: borrow<fall-context>, expr: string) -> string;
+  export fallback: func(ctx: borrow<fall-context>, expr: string) -> string;
 
-  export init: async func(ctx: borrow<proc-context>) -> contract;
+  export init: func(ctx: borrow<proc-context>) -> contract;
 
-  export get-contract-address: async func(ctx: borrow<view-context>) -> option<contract-address>;
+  export get-contract-address: func(ctx: borrow<view-context>) -> option<contract-address>;
 
-  export set-contract-address: async func(ctx: borrow<proc-context>, contract-address: contract-address);
+  export set-contract-address: func(ctx: borrow<proc-context>, contract-address: contract-address);
 }

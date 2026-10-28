@@ -1,20 +1,17 @@
 use anyhow::Result;
-use wasmtime::component::{Accessor, Resource};
+use wasmtime::component::{Access, Resource};
 
 use crate::runtime::Runtime;
 use crate::runtime::wit::kontor::built_in;
 use crate::runtime::wit::{Keys, StorageRows, ViewStorage};
 
-impl built_in::context::HostViewStorage for Runtime {}
-
-impl<T> built_in::context::HostViewStorageWithStore<T> for Runtime {
-    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<ViewStorage>) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._drop(rep)
-            .await
+impl built_in::context::HostViewStorage for Runtime {
+    async fn drop(&mut self, rep: Resource<ViewStorage>) -> Result<()> {
+        self._drop(rep).await
     }
+}
 
+impl<T: Send> built_in::context::HostViewStorageWithStore<T> for Runtime {
     storage_methods! {T, ViewStorage;
         fn get_str(path: Vec<u8>) -> Option<String> => _get_primitive;
         fn get_u64(path: Vec<u8>) -> Option<u64> => _get_primitive;

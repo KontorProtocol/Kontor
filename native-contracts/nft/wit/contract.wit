@@ -39,7 +39,7 @@ world root {
     value: string,
   }
 
-  export init: async func(ctx: borrow<proc-context>) -> contract;
+  export init: func(ctx: borrow<proc-context>) -> contract;
 
   /// Mint a new NFT backed by a filestorage agreement created from `file-descriptor`.
   ///
@@ -59,32 +59,32 @@ world root {
   /// On success the returned `agreement-id` is the agreement id created by
   /// filestorage (which equals `file-descriptor.file-id`) and is stored
   /// alongside the NFT as a link to the underlying file.
-  export mint: async func(
+  export mint: func(
     ctx: borrow<proc-context>,
     nft-id: string,
     attributes: list<attribute>,
     file-descriptor: raw-file-descriptor
   ) -> result<nft-info, error>;
 
-  export transfer: async func(
+  export transfer: func(
     ctx: borrow<proc-context>,
     nft-id: string,
     new-owner: holder-ref
   ) -> result<nft-transfer, error>;
 
-  export attach: async func(
+  export attach: func(
     ctx: borrow<proc-context>,
     nft-id: string,
     vout: u32
   ) -> result<nft-transfer, error>;
 
-  export detach: async func(
+  export detach: func(
     ctx: borrow<proc-context>,
     nft-id: string
   ) -> result<nft-transfer, error>;
 
-  export get-info: async func(ctx: borrow<view-context>, nft-id: string) -> option<nft-info>;
-  export total-minted: async func(ctx: borrow<view-context>) -> u64;
+  export get-info: func(ctx: borrow<view-context>, nft-id: string) -> option<nft-info>;
+  export total-minted: func(ctx: borrow<view-context>) -> u64;
 
   /// List NFTs in lexicographic NFT-id order, strictly after `after` when set.
   /// Start with after = none; pass the returned next cursor to continue.
@@ -92,33 +92,33 @@ world root {
   /// Each call reads current state, not a snapshot spanning all pages. Inserts
   /// before the cursor and transfers between holder buckets may change later pages.
   /// The cursor need not identify an existing NFT.
-  export list-nfts: async func(
+  export list-nfts: func(
     ctx: borrow<view-context>,
     pagination: cursor-request
   ) -> nft-page;
 
   /// Same cursor and limit rules as list-nfts, restricted to the immutable creator.
   /// An invalid or unknown holder reference returns an empty page.
-  export list-nfts-by-creator: async func(
+  export list-nfts-by-creator: func(
     ctx: borrow<view-context>,
     creator: holder-ref,
     pagination: cursor-request
   ) -> nft-page;
 
-  export count-nfts-by-creator: async func(
+  export count-nfts-by-creator: func(
     ctx: borrow<view-context>,
     creator: holder-ref
   ) -> u64;
 
   /// Same cursor and limit rules as list-nfts, restricted to the current holder.
   /// Transfers change this bucket. Invalid or unknown references return an empty page.
-  export list-nfts-by-holder: async func(
+  export list-nfts-by-holder: func(
     ctx: borrow<view-context>,
     holder: holder-ref,
     pagination: cursor-request
   ) -> nft-page;
 
-  export count-nfts-by-holder: async func(
+  export count-nfts-by-holder: func(
     ctx: borrow<view-context>,
     holder: holder-ref
   ) -> u64;
@@ -126,12 +126,12 @@ world root {
   /// List a creator's agreement ids using the same NFT-id cursor as list-nfts.
   /// Pass next back unchanged; it is not an agreement id. Same limit/input rules
   /// as list-nfts-by-creator. Reads the covering index without fetching NFT records.
-  export agreement-ids-by-creator: async func(
+  export agreement-ids-by-creator: func(
     ctx: borrow<view-context>,
     creator: holder-ref,
     pagination: cursor-request
   ) -> agreement-page;
 
-  export get-attributes: async func(ctx: borrow<view-context>, nft-id: string) -> list<attribute>;
-  export get-attribute: async func(ctx: borrow<view-context>, nft-id: string, key: string) -> option<string>;
+  export get-attributes: func(ctx: borrow<view-context>, nft-id: string) -> list<attribute>;
+  export get-attribute: func(ctx: borrow<view-context>, nft-id: string, key: string) -> option<string>;
 }

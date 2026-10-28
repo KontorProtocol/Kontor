@@ -17,14 +17,14 @@ world root {
 		value: integer,
 	}
 
-	export init: async func(ctx: borrow<proc-context>) -> contract;
+	export init: func(ctx: borrow<proc-context>) -> contract;
 
-	export mint: async func(ctx: borrow<proc-context>, n: integer) -> result<_, error>;
-	export burn: async func(ctx: borrow<proc-context>, n: integer) -> result<_, error>;
-	export transfer: async func(ctx: borrow<proc-context>, to: string, n: integer) -> result<_, error>;
-	export balance: async func(ctx: borrow<view-context>, acc: string) -> option<integer>;
-  export count-balances: async func(ctx: borrow<view-context>, max: u32) -> result<u64, error>;
-  export count-native-balances: async func(ctx: borrow<view-context>, max: u32) -> result<u64, error>;
-	export balances: async func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
-	export total-supply: async func(ctx: borrow<view-context>) -> integer;
+	export mint: func(ctx: borrow<proc-context>, n: integer) -> result<_, error>;
+	export burn: func(ctx: borrow<proc-context>, n: integer) -> result<_, error>;
+	export transfer: func(ctx: borrow<proc-context>, to: string, n: integer) -> result<_, error>;
+	export balance: func(ctx: borrow<view-context>, acc: string) -> option<integer>;
+  export count-balances: func(ctx: borrow<view-context>, max: u32) -> result<u64, error>;
+  export count-native-balances: func(ctx: borrow<view-context>, max: u32) -> result<u64, error>;
+	export balances: func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
+	export total-supply: func(ctx: borrow<view-context>) -> integer;
 }

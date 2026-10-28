@@ -4,15 +4,15 @@ world root {
   include kontor:built-in/built-in;
   use kontor:built-in/context.{view-context, proc-context, contract};
 
-  export init: async func(ctx: borrow<proc-context>) -> contract;
+  export init: func(ctx: borrow<proc-context>) -> contract;
 
-  export sha256: async func(ctx: borrow<view-context>, input: list<u8>) -> list<u8>;
+  export sha256: func(ctx: borrow<view-context>, input: list<u8>) -> list<u8>;
 
-  export block-entropy: async func(ctx: borrow<view-context>, height: u64) -> option<list<u8>>;
+  export block-entropy: func(ctx: borrow<view-context>, height: u64) -> option<list<u8>>;
 
-  export generate-id: async func(ctx: borrow<proc-context>) -> string;
+  export generate-id: func(ctx: borrow<proc-context>) -> string;
 
-  export set-hash: async func(ctx: borrow<proc-context>, input: string) -> list<u8>;
+  export set-hash: func(ctx: borrow<proc-context>, input: string) -> list<u8>;
 
-  export get-hash: async func(ctx: borrow<view-context>) -> option<list<u8>>;
+  export get-hash: func(ctx: borrow<view-context>) -> option<list<u8>>;
 }

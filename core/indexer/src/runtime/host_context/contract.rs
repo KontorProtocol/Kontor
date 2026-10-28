@@ -1,5 +1,5 @@
 use anyhow::Result;
-use wasmtime::component::{Accessor, Resource};
+use wasmtime::component::{Access, Resource};
 
 use crate::runtime::ContractAddress;
 use crate::runtime::Runtime;
@@ -7,25 +7,22 @@ use crate::runtime::fuel::Fuel;
 use crate::runtime::wit::Contract;
 use crate::runtime::wit::kontor::built_in;
 
-impl built_in::context::HostContract for Runtime {}
-
-impl<T> built_in::context::HostContractWithStore<T> for Runtime {
-    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<Contract>) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._drop(rep)
-            .await
+impl built_in::context::HostContract for Runtime {
+    async fn drop(&mut self, rep: Resource<Contract>) -> Result<()> {
+        self._drop(rep).await
     }
+}
 
+impl<T: Send> built_in::context::HostContractWithStore<T> for Runtime {
     async fn address(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<Contract>,
     ) -> Result<ContractAddress> {
-        let runtime = accessor.with(|mut access| access.get().clone());
-        Fuel::ContractAddress.consume(accessor)?;
+        let runtime = accessor.get().clone();
+        Fuel::ContractAddress.consume(&mut accessor)?;
         let table = runtime.table.lock().await;
         let address = &table.get(&self_)?.address;
-        Fuel::ContractNameBytes(address.name.len() as u64).consume(accessor)?;
+        Fuel::ContractNameBytes(address.name.len() as u64).consume(&mut accessor)?;
         Ok(address.clone())
     }
 }

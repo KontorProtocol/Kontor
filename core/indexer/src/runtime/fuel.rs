@@ -1,6 +1,6 @@
 use anyhow::Result;
 use strum::{EnumDiscriminants, EnumIter};
-use wasmtime::{AsContextMut, Trap, component::Accessor};
+use wasmtime::{AsContextMut, Trap, component::Access};
 
 use crate::runtime::Runtime;
 
@@ -214,14 +214,12 @@ impl Fuel {
         }
     }
 
-    pub fn consume<T>(&self, accessor: &Accessor<T, Runtime>) -> Result<u64> {
-        accessor.with(|mut access| {
-            let result = self.subtract(access.as_context_mut());
-            if let Some(gauge) = &access.get().gauge {
-                gauge.track(self, result.is_ok())?;
-            }
-            result
-        })
+    pub fn consume<T>(&self, access: &mut Access<'_, T, Runtime>) -> Result<u64> {
+        let result = self.subtract(access.as_context_mut());
+        if let Some(gauge) = &access.get().gauge {
+            gauge.track(self, result.is_ok())?;
+        }
+        result
     }
 
     pub fn consume_with_store(&self, store: &mut impl AsContextMut<Data = Runtime>) -> Result<u64> {

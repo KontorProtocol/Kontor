@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use wasmtime::component::{Component, Val};
-use wasmtime::{AsContext, AsContextMut, Trap};
+use wasmtime::{AsContextMut, Trap};
 
 use super::{Linker, Lowering, charge};
 use crate::runtime::fuel::{FuelDiscriminants, FuelGauge};
@@ -10,8 +10,6 @@ use crate::runtime::{Error, Runtime};
 use crate::test_utils::test_runtime;
 
 fn component(import: &str, ty: &str, encoding: &str, trap: bool, count: u32) -> String {
-    // "get" models async built-ins; the other fixtures use synchronous WIT imports.
-    let async_ = if import == "get" { "async" } else { "" };
     let allocate = if trap {
         "unreachable"
     } else {
@@ -24,7 +22,7 @@ fn component(import: &str, ty: &str, encoding: &str, trap: bool, count: u32) -> 
     };
     format!(
         r#"(component
-            (import "{import}" (func $get {async_} (result {ty})))
+            (import "{import}" (func $get (result {ty})))
             (core module $memory
                 (memory (export "memory") 1)
                 (func (export "realloc") (param i32 i32 i32 i32) (result i32)
@@ -46,7 +44,7 @@ fn component(import: &str, ty: &str, encoding: &str, trap: bool, count: u32) -> 
                 (with "host" (instance
                     (export "memory" (memory $memory "memory"))
                     (export "get" (func $get))))))
-            (func (export "run") {async_} (result u32) (canon lift (core func $guest "run"))))"#
+            (func (export "run") (result u32) (canon lift (core func $guest "run"))))"#
     )
 }
 
@@ -93,14 +91,13 @@ async fn string_reservations_precede_allocator_and_survive_its_failure() -> Resu
         let observed = entered.clone();
         linker
             .root()
-            .func_wrap_concurrent("get", move |accessor, (): ()| {
+            .func_wrap_async("get", move |mut store, (): ()| {
                 let text = text.clone();
                 let observed = observed.clone();
-                Box::pin(async move {
+                Box::new(async move {
                     tokio::task::yield_now().await;
-                    let accessor = accessor.with_getter::<Runtime>(|runtime| runtime);
                     *observed.lock().unwrap() = true;
-                    accessor.with(|mut access| access.as_context_mut().set_fuel(budget))?;
+                    store.set_fuel(budget)?;
                     Ok((text,))
                 })
             })?;
@@ -139,18 +136,15 @@ async fn repeated_async_returns_share_fuel_with_allocator_for_all_string_encodin
         let mut linker = Linker::<Runtime>::new(&runtime.engine);
         let charges = Arc::new(Mutex::new(Vec::new()));
         let observed = charges.clone();
-        linker
-            .root()
-            .func_wrap_concurrent("get", move |accessor, (): ()| {
-                let observed = observed.clone();
-                Box::pin(async move {
-                    tokio::task::yield_now().await;
-                    let accessor = accessor.with_getter::<Runtime>(|runtime| runtime);
-                    let before = accessor.with(|access| access.as_context().get_fuel())?;
-                    observed.lock().unwrap().push(before);
-                    Ok(("aé𝄞".to_string(),))
-                })
-            })?;
+        linker.root().func_wrap_async("get", move |store, (): ()| {
+            let observed = observed.clone();
+            Box::new(async move {
+                tokio::task::yield_now().await;
+                let before = store.get_fuel()?;
+                observed.lock().unwrap().push(before);
+                Ok(("aé𝄞".to_string(),))
+            })
+        })?;
         let component = Component::new(
             &runtime.engine,
             component(

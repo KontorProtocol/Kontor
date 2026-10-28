@@ -145,9 +145,9 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
 fn validate_function_signature(resolve: &Resolve, func: &Function) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
-    if !func.kind.is_async() {
+    if func.kind.is_async() {
         errors.push(ValidationError::new(
-            "exported functions must be async",
+            "exported functions must be synchronous",
             func.span,
         ));
     }
@@ -206,7 +206,7 @@ fn validate_function_signature(resolve: &Resolve, func: &Function) -> Vec<Valida
 }
 
 /// Validate the `init` function signature.
-/// Must be: `async func(ctx: borrow<proc-context>) -> contract`
+/// Must be: `func(ctx: borrow<proc-context>) -> contract`
 ///
 /// The `contract` return is the executing contract's own identity as a
 /// host-issued resource — the only way to obtain one is `ctx.self()`.
@@ -216,8 +216,8 @@ fn validate_function_signature(resolve: &Resolve, func: &Function) -> Vec<Valida
 fn validate_init_function(resolve: &Resolve, func: &wit_parser::Function) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
-    if !func.kind.is_async() {
-        errors.push(ValidationError::new("init must be async", func.span));
+    if func.kind.is_async() {
+        errors.push(ValidationError::new("init must be synchronous", func.span));
     }
 
     if func.params.len() != 1 {
@@ -256,15 +256,18 @@ fn validate_init_function(resolve: &Resolve, func: &wit_parser::Function) -> Vec
 }
 
 /// Validate the `fallback` function signature.
-/// Must be: `async func(ctx: borrow<fall-context>, expr: string) -> string`
+/// Must be: `func(ctx: borrow<fall-context>, expr: string) -> string`
 fn validate_fallback_function(
     resolve: &Resolve,
     func: &wit_parser::Function,
 ) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
-    if !func.kind.is_async() {
-        errors.push(ValidationError::new("fallback must be async", func.span));
+    if func.kind.is_async() {
+        errors.push(ValidationError::new(
+            "fallback must be synchronous",
+            func.span,
+        ));
     }
 
     if func.params.len() != 2 {

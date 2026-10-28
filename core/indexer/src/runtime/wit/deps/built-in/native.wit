@@ -21,7 +21,7 @@ interface file-registry {
     // independent of any sort. A `root` that is not a valid field element errors
     // (this doubles as validation). The contract recomputes this on each file
     // registration and records the result as a valid root.
-    aggregate-root: async func(files: list<tuple<list<u8>, u64, u64>>) -> result<list<u8>, error>;
+    aggregate-root: func(files: list<tuple<list<u8>, u64, u64>>) -> result<list<u8>, error>;
 
     // Incrementally fold this block's newly-registered files into the persisted
     // append-only ledger frontier (kontor-crypto `LedgerFrontier`) and return the
@@ -36,14 +36,14 @@ interface file-registry {
     // ledger-index)` in ascending `ledger-index` order, each slot exactly contiguous
     // with `count`; a gap, a reorder, a wrong peak count, or a `root` that is not a
     // valid field element errors. Returns `(new-count, new-peaks, new-root)`.
-    frontier-append: async func(
+    frontier-append: func(
         count: u64,
         peaks: list<u8>,
         new-files: list<tuple<list<u8>, u64, u64>>
     ) -> result<tuple<u64, list<u8>, list<u8>>, error>;
 
     // Deterministic challenge id for a file + challenge parameters.
-    compute-challenge-id: async func(
+    compute-challenge-id: func(
         file: raw-file-descriptor,
         block-height: u64,
         num-challenges: u64,
@@ -60,7 +60,7 @@ interface file-registry {
     // `raw-file-descriptor`, so the nested-record storage model resolves.
 
     resource proof {
-        from-bytes: static async func(bytes: list<u8>) -> result<proof, error>;
+        from-bytes: static func(bytes: list<u8>) -> result<proof, error>;
         // `valid-roots` is the contract's accepted aggregated-root set
         // ({current} ∪ recent history). `files` is the contract's file-registry
         // snapshot: each `(file-id, root, padded-len, ledger-index)` is the data
@@ -70,7 +70,7 @@ interface file-registry {
         // challenge set (from `challenges`) and the registry (from `files`); the
         // SNARK binds them, so a prover cannot lie about which files/slots it
         // proved. Stateless — no host ledger.
-        verify: async func(
+        verify: func(
             challenges: list<challenge-input>,
             valid-roots: list<list<u8>>,
             files: list<tuple<string, list<u8>, u64, u64>>
@@ -83,13 +83,13 @@ interface system {
     /// scope); this call meters the caller for the operation so the fuel
     /// accounting matches reality. Traps on insufficient fuel — aborts
     /// the enclosing contract call.
-    register-bls-key: async func();
+    register-bls-key: func();
 
     /// Consume fuel for an UpdateProvenance operation. The reactor performs
     /// the owner authz check and appends to the provenance log outside the
     /// contract's fuel scope; this call meters the caller so fuel accounting
     /// matches reality. Traps on insufficient fuel.
-    update-provenance: async func();
+    update-provenance: func();
 }
 
 interface deposit {
@@ -106,7 +106,7 @@ interface deposit {
     /// (footprint x D locked as a spendable reserve). Takes a RESOLVED `holder` (the
     /// caller resolves a holder-ref via `holder.from-ref` — the one canonical signer-id
     /// resolution path); returns 0 for non-signer holders (core/burner/utxo).
-    storage-floor: async func(holder: borrow<holder>) -> decimal;
+    storage-floor: func(holder: borrow<holder>) -> decimal;
 }
 
 world built-in-native {

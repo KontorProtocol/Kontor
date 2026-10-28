@@ -37,8 +37,21 @@ wasmtime::component::bindgen!({
     },
     additional_derives: [stdlib::Wavey, serde::Deserialize],
     imports: {
-        // async func in wits automatically makes them "async | store"
-        // but we still need this here from implicit built-ins like resource drops.
-        default:  async | store | trappable,
+        // Drops need async host I/O but no Store access. STORE would select the
+        // concurrent destructor API even with synchronous WIT.
+        default: async | store | trappable,
+        "kontor:built-in/context.[drop]signer": async | trappable,
+        "kontor:built-in/context.[drop]view-context": async | trappable,
+        "kontor:built-in/context.[drop]proc-context": async | trappable,
+        "kontor:built-in/context.[drop]fall-context": async | trappable,
+        "kontor:built-in/context.[drop]core-context": async | trappable,
+        "kontor:built-in/context.[drop]view-storage": async | trappable,
+        "kontor:built-in/context.[drop]proc-storage": async | trappable,
+        "kontor:built-in/context.[drop]keys": async | trappable,
+        "kontor:built-in/context.[drop]storage-rows": async | trappable,
+        "kontor:built-in/context.[drop]holder": async | trappable,
+        "kontor:built-in/context.[drop]contract": async | trappable,
+        "kontor:built-in/context.[drop]transaction": async | trappable,
+        "kontor:built-in/file-registry.[drop]proof": async | trappable,
     }
 });

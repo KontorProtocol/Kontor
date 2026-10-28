@@ -49,18 +49,18 @@ world root {
     storage-unminted: decimal,
   }
 
-  export storage-emission-budget: async func(ctx: borrow<view-context>) -> option<decimal>;
-  export last-emission-height: async func(ctx: borrow<view-context>) -> option<u64>;
-  export mint: async func(ctx: borrow<proc-context>, amt: decimal) -> result<mint, error>;
-  export burn: async func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;
-  export transfer: async func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
-  export balance: async func(ctx: borrow<view-context>, acc: holder-ref) -> option<decimal>;
-  export floor: async func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
-  export balances: async func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
-  export total-supply: async func(ctx: borrow<view-context>) -> decimal;
-  export dev-mint-enabled: async func(ctx: borrow<view-context>) -> bool;
-  export attach: async func(ctx: borrow<proc-context>, vout: u32, amt: decimal) -> result<transfer, error>;
-  export detach: async func(ctx: borrow<proc-context>) -> result<transfer, error>;
+  export storage-emission-budget: func(ctx: borrow<view-context>) -> option<decimal>;
+  export last-emission-height: func(ctx: borrow<view-context>) -> option<u64>;
+  export mint: func(ctx: borrow<proc-context>, amt: decimal) -> result<mint, error>;
+  export burn: func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;
+  export transfer: func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
+  export balance: func(ctx: borrow<view-context>, acc: holder-ref) -> option<decimal>;
+  export floor: func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
+  export balances: func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
+  export total-supply: func(ctx: borrow<view-context>) -> decimal;
+  export dev-mint-enabled: func(ctx: borrow<view-context>) -> bool;
+  export attach: func(ctx: borrow<proc-context>, vout: u32, amt: decimal) -> result<transfer, error>;
+  export detach: func(ctx: borrow<proc-context>) -> result<transfer, error>;
 }
 "#;
 

@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use futures_util::{Stream, StreamExt};
 use postcard::{Error as EncodingError, ser_flavors::Flavor, serialize_with_flavor};
 use serde::{Deserialize, Serialize};
-use wasmtime::component::{Accessor, Resource};
+use wasmtime::component::{Access, Resource};
 use wasmtime::{AsContext, Trap};
 
 use crate::database::native_contracts::is_deposit_exempt;
@@ -42,7 +42,7 @@ fn validate_path(path: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn meter_path<T>(accessor: &Accessor<T, Runtime>, path: &[u8]) -> Result<()> {
+fn meter_path<T>(accessor: &mut Access<'_, T, Runtime>, path: &[u8]) -> Result<()> {
     Fuel::Path(path.len() as u64).consume(accessor)?;
     validate_path(path)
 }
@@ -50,7 +50,7 @@ fn meter_path<T>(accessor: &Accessor<T, Runtime>, path: &[u8]) -> Result<()> {
 /// Keep only paid-for metadata; exhausting discovery cannot mutate state. The
 /// stream is dropped before callers write, so no SQL cursor survives mutation.
 async fn collect_delete_rows<T>(
-    accessor: &Accessor<T, Runtime>,
+    accessor: &mut Access<'_, T, Runtime>,
     rows: impl Stream<Item = Result<LiveRow, StorageError>>,
 ) -> Result<Vec<LiveRow>> {
     let mut rows = Box::pin(rows);
@@ -125,13 +125,13 @@ fn encode_storage_value<T: Serialize>(value: &T, max_bytes: u64) -> Result<Vec<u
 impl Runtime {
     pub(crate) async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
         &self,
-        accessor: &Accessor<S, Self>,
+        accessor: &mut Access<'_, S, Self>,
         self_: Resource<T>,
         path: Vec<u8>,
     ) -> Result<Option<R>> {
         Fuel::StorageRead.consume(accessor)?;
         meter_path(accessor, &path)?;
-        let fuel = accessor.with(|access| access.as_context().get_fuel())?;
+        let fuel = accessor.as_context().get_fuel()?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         // Apply the byte price after the base/path charges, before copying the
         // stored blob out of SQL. Budget exhaustion must retain its Wasm trap type.
@@ -157,7 +157,7 @@ impl Runtime {
 
     pub(crate) async fn _get_keys<S, T: HasContractId>(
         &self,
-        accessor: &Accessor<S, Self>,
+        accessor: &mut Access<'_, S, Self>,
         resource: Resource<T>,
         path: Vec<u8>,
         lo: Option<Vec<u8>>,
@@ -192,7 +192,7 @@ impl Runtime {
     /// stored bytes before decoding through the same helper as point reads.
     pub(crate) async fn _get_storage_rows<S, T: HasContractId>(
         &self,
-        accessor: &Accessor<S, Self>,
+        accessor: &mut Access<'_, S, Self>,
         resource: Resource<T>,
         path: Vec<u8>,
         lo: Option<Vec<u8>>,
@@ -218,7 +218,7 @@ impl Runtime {
 
     pub(crate) async fn _exists<S, T: HasContractId>(
         &self,
-        accessor: &Accessor<S, Self>,
+        accessor: &mut Access<'_, S, Self>,
         resource: Resource<T>,
         path: Vec<u8>,
     ) -> Result<bool> {
@@ -235,7 +235,7 @@ impl Runtime {
     /// paid for before mutation. Returns true if a live value was removed.
     pub(crate) async fn _delete<S, T: HasContractId>(
         &self,
-        accessor: &Accessor<S, Self>,
+        accessor: &mut Access<'_, S, Self>,
         self_: Resource<T>,
         path: Vec<u8>,
     ) -> Result<bool> {
@@ -253,7 +253,7 @@ impl Runtime {
 
     pub(crate) async fn _set_primitive<S, T: HasContractId, V: Serialize>(
         &self,
-        accessor: &Accessor<S, Self>,
+        accessor: &mut Access<'_, S, Self>,
         resource: Resource<T>,
         path: Vec<u8>,
         value: V,
@@ -261,7 +261,7 @@ impl Runtime {
         Fuel::StorageWrite.consume(accessor)?;
         meter_path(accessor, &path)?;
         let contract_id = self.table.lock().await.get(&resource)?.get_contract_id();
-        let fuel = accessor.with(|access| access.as_context().get_fuel())?;
+        let fuel = accessor.as_context().get_fuel()?;
         let bs = &encode_storage_value(&value, fuel / Fuel::Set(1).cost())?;
         Fuel::Set(bs.len() as u64).consume(accessor)?;
         // Stamp the op's payer (from the current call frame) as this row's

@@ -225,6 +225,24 @@ impl Guest for ErrorTest {
         let _result = testing::host_error();
     }
 
+    fn chain_probe(ctx: &ProcContext, fail: bool) -> u64 {
+        ctx.model().set_marker(1);
+        let _ = testing::host_error();
+        assert!(!fail, "deep chain failure");
+        ctx.model().set_marker(2);
+        42
+    }
+
+    fn view_chain_probe(_ctx: &ViewContext, fail: bool) -> u64 {
+        let _ = testing::host_error();
+        assert!(!fail, "deep chain failure");
+        42
+    }
+
+    fn core_chain_probe(ctx: &CoreContext, fail: bool) -> u64 {
+        Self::chain_probe(&ctx.proc_context(), fail)
+    }
+
     fn host_panic(_ctx: &ProcContext) {
         let _result = testing::host_panic();
     }

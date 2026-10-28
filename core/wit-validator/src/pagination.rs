@@ -171,8 +171,8 @@ world root {{
  type entries = list<u64>;
  record response {{ {fields} }}
  type reply = result<response, error>;
- export init: async func(ctx: borrow<proc-context>) -> contract;
- export entries: async func(ctx: borrow<{context}>, {params}) -> {result};
+ export init: func(ctx: borrow<proc-context>) -> contract;
+ export entries: func(ctx: borrow<{context}>, {params}) -> {result};
 }}"#
         )
     }

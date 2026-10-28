@@ -1,20 +1,17 @@
 use anyhow::Result;
-use wasmtime::component::{Accessor, Resource};
+use wasmtime::component::{Access, Resource};
 
 use crate::runtime::Runtime;
 use crate::runtime::wit::kontor::built_in;
 use crate::runtime::wit::{Keys, ProcStorage, StorageRows, ViewStorage};
 
-impl built_in::context::HostProcStorage for Runtime {}
-
-impl<T> built_in::context::HostProcStorageWithStore<T> for Runtime {
-    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<ProcStorage>) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._drop(rep)
-            .await
+impl built_in::context::HostProcStorage for Runtime {
+    async fn drop(&mut self, rep: Resource<ProcStorage>) -> Result<()> {
+        self._drop(rep).await
     }
+}
 
+impl<T: Send> built_in::context::HostProcStorageWithStore<T> for Runtime {
     storage_methods! {T, ProcStorage;
         fn get_str(path: Vec<u8>) -> Option<String> => _get_primitive;
         fn get_u64(path: Vec<u8>) -> Option<u64> => _get_primitive;
@@ -34,13 +31,14 @@ impl<T> built_in::context::HostProcStorageWithStore<T> for Runtime {
     }
 
     async fn set_void(
-        accessor: &Accessor<T, Self>,
+        mut accessor: Access<'_, T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
     ) -> Result<()> {
         accessor
-            .with(|mut access| access.get().clone())
-            ._set_primitive(accessor, self_, path, ())
+            .get()
+            .clone()
+            ._set_primitive(&mut accessor, self_, path, ())
             .await
     }
 }

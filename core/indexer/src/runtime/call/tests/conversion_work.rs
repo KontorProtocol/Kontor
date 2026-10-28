@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
-use wasmtime::component::{Component, Linker, Val};
-use wasmtime::{Error as WasmtimeError, Trap};
+use wasmtime::component::{Access, Component, Linker, Val};
+use wasmtime::{AsContextMut, Error as WasmtimeError, Trap};
 
 use crate::runtime::fuel::Fuel;
 use crate::runtime::{ExecutionError, Runtime};
@@ -26,18 +26,21 @@ async fn repeated_conversion_charges_lifting_and_host_work() -> Result<()> {
                 let bytes = Arc::new(AtomicUsize::new(0));
                 let seen = bytes.clone();
                 let mut linker = Linker::<Runtime>::new(&runtime.engine);
-                linker.root().func_wrap_concurrent(
+                linker.root().func_wrap_async(
                     "accept",
-                    move |accessor, (input,): (String,)| {
+                    move |mut store, (input,): (String,)| {
                         let seen = seen.clone();
-                        Box::pin(async move {
+                        Box::new(async move {
                             tokio::task::yield_now().await;
                             seen.fetch_add(input.len(), Ordering::Relaxed);
                             if hash {
-                                let accessor = accessor.with_getter::<Runtime>(|runtime| runtime);
-                                let runtime = accessor.with(|mut access| access.get().clone());
+                                let mut access = Access::<Runtime, Runtime>::new(
+                                    store.as_context_mut(),
+                                    |runtime| runtime,
+                                );
+                                let runtime = access.get().clone();
                                 runtime
-                                    ._sha256(&accessor, input.into_bytes())
+                                    ._sha256(&mut access, input.into_bytes())
                                     .await
                                     .map_err(WasmtimeError::from_anyhow)?;
                             }
@@ -95,13 +98,14 @@ async fn lifting_and_host_tariffs_fail_at_their_respective_boundaries() -> Resul
         let mut linker = Linker::<Runtime>::new(&runtime.engine);
         linker
             .root()
-            .func_wrap_concurrent("accept", move |accessor, (input,): (String,)| {
+            .func_wrap_async("accept", move |mut store, (input,): (String,)| {
                 let seen = seen.clone();
-                Box::pin(async move {
-                    let accessor = accessor.with_getter::<Runtime>(|runtime| runtime);
+                Box::new(async move {
+                    let mut access =
+                        Access::<Runtime, Runtime>::new(store.as_context_mut(), |runtime| runtime);
                     seen.fetch_add(input.len(), Ordering::Relaxed);
                     Fuel::CryptoHash(input.len() as u64)
-                        .consume(&accessor)
+                        .consume(&mut access)
                         .map_err(WasmtimeError::from_anyhow)?;
                     Ok(())
                 })
@@ -147,27 +151,19 @@ async fn record_fields_consume_structural_fuel_before_output_encoding() -> Resul
             .map(|i| format!(r#"(field "field{i:04}" (option u32))"#))
             .collect::<Vec<_>>()
             .join(" ");
-        // All cases exceed the async flattening limit. The guest returns the
+        // All cases require an indirect result. The guest returns the
         // same pointer into zeroed memory, independently of the record's width.
         let wat = format!(
             r#"(component
                 (type $inner (record {fields}))
                 (export $record "record" (type $inner))
-                (core module $memory (memory (export "memory") 1))
-                (core instance $memory (instantiate $memory))
-                (core func $return
-                    (canon task.return (result $record) (memory (core memory $memory "memory"))))
                 (core module $code
-                    (import "host" "return" (func $return (param i32)))
-                    (func (export "run") (result i32)
-                        i32.const 0 call $return i32.const 0)
-                    (func (export "callback") (param i32 i32 i32) (result i32)
-                        i32.const 0))
-                (core instance $code (instantiate $code
-                    (with "host" (instance (export "return" (func $return))))))
-                (func (export "run") async (result $record)
-                    (canon lift (core func $code "run") async
-                        (memory (core memory $memory "memory")) (callback (core func $code "callback")))))"#
+                    (memory (export "memory") 1)
+                    (func (export "run") (result i32) i32.const 0))
+                (core instance $code (instantiate $code))
+                (func (export "run") (result $record)
+                    (canon lift (core func $code "run")
+                        (memory (core memory $code "memory")))))"#
         );
         let component = Component::new(&runtime.engine, wat)?;
         let mut store = runtime.make_store(BUDGET)?;

@@ -12,8 +12,8 @@ world root {
   use kontor:built-in/context.{proc-context, view-context, contract};
   use kontor:built-in/pagination.{cursor-request};
   record response { ${fields} }
-  export init: async func(ctx: borrow<proc-context>) -> contract;
-  export entries: async func(ctx: borrow<${context}>, ${parameters}) -> response;
+  export init: func(ctx: borrow<proc-context>) -> contract;
+  export entries: func(ctx: borrow<${context}>, ${parameters}) -> response;
 }`;
 }
 

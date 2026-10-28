@@ -7,17 +7,17 @@ world root {
   use kontor:built-in/foreign.{contract-address};
   use kontor:built-in/numbers-types.{integer, decimal};
 
-  export init: async func(ctx: borrow<proc-context>) -> contract;
+  export init: func(ctx: borrow<proc-context>) -> contract;
 
-  export open: async func(ctx: borrow<proc-context>, token: contract-address, n: integer, other-tenants: list<string>) -> result<string, error>;
+  export open: func(ctx: borrow<proc-context>, token: contract-address, n: integer, other-tenants: list<string>) -> result<string, error>;
 
-  export deposit: async func(ctx: borrow<proc-context>, token: contract-address, account-id: string, n: integer) -> result<_, error>;
+  export deposit: func(ctx: borrow<proc-context>, token: contract-address, account-id: string, n: integer) -> result<_, error>;
 
-  export withdraw: async func(ctx: borrow<proc-context>, token: contract-address, account-id: string, n: integer) -> result<_, error>;
+  export withdraw: func(ctx: borrow<proc-context>, token: contract-address, account-id: string, n: integer) -> result<_, error>;
 
-  export balance: async func(ctx: borrow<view-context>, account-id: string) -> option<integer>;
+  export balance: func(ctx: borrow<view-context>, account-id: string) -> option<integer>;
 
-  export token-balance: async func(ctx: borrow<view-context>, token: contract-address, holder: string) -> option<integer>;
+  export token-balance: func(ctx: borrow<view-context>, token: contract-address, holder: string) -> option<integer>;
 
-  export tenants: async func(ctx: borrow<view-context>, account-id: string) -> option<list<string>>;
+  export tenants: func(ctx: borrow<view-context>, account-id: string) -> option<list<string>>;
 }
