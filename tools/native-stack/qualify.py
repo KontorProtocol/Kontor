@@ -145,6 +145,7 @@ def main():
     parser.add_argument("--initial-depth", type=int, default=1024)
     parser.add_argument("--timeout", type=int, default=600)
     args = parser.parse_args()
+    args.binary = args.binary.absolute()
     if args.initial_depth < 1 or args.max_depth < 0 or args.max_reentry_depth < 0:
         parser.error("depth limits must be nonnegative and initial depth must be positive")
     if args.cell not in {
