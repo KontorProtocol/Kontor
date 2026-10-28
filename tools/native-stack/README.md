@@ -55,7 +55,8 @@ The ignored `real_paid_large_frame_on_tokio_worker` test is an initial real
 call diagnostic. Run it in separate child processes with
 `KONTOR_RESOURCE_MODE=reduced` and `KONTOR_RESOURCE_MODE=production`. It uses
 two explicit Tokio workers and the existing paid 256-value frame fixture,
-including normal publication, receipt and post-call reset checks. Linux
+including fresh engines and component caches in both modes, normal
+publication, receipt and post-call reset checks. Linux
 checks that the task begins and ends on measured workers. It does not yet emit
 the fiber, guard-fault, build or memory evidence required by the resource
 comparator. Its test-only thread trace checks that fixture preparation,

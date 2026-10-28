@@ -23,7 +23,7 @@ use crate::runtime::{
     ContractAddress, Decimal, ExecutionError, MAX_UNTRUSTED_GAS_LIMIT, Runtime, TransactionContext,
     native_provenance,
 };
-use crate::test_utils::{test_runtime, test_runtime_with_engine};
+use crate::test_utils::test_runtime_with_engine;
 
 const ACTOR_PUBKEY: &str = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 
@@ -58,11 +58,12 @@ impl Fixture {
     async fn new(kind: String, reduced: bool) -> Result<Self> {
         resource_diagnostics::record("fixture_preparation_entry");
         let setup_start = Instant::now();
-        let (mut runtime, dir, _name) = if reduced {
-            test_runtime_with_engine(Runtime::new_resource_diagnostic_engine()?).await?
+        let engine = if reduced {
+            Runtime::new_resource_diagnostic_engine()?
         } else {
-            test_runtime().await?
+            Runtime::new_engine()?
         };
+        let (mut runtime, dir, _name) = test_runtime_with_engine(engine).await?;
         let setup_ms = setup_start.elapsed().as_millis();
         let funding_start = Instant::now();
         let signer = Signer::Id(runtime.get_or_create_identity(ACTOR_PUBKEY).await?);
