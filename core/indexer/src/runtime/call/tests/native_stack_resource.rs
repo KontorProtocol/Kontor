@@ -4,21 +4,30 @@ use std::sync::mpsc::channel;
 use std::thread::ThreadId;
 use std::time::Duration;
 
-use anyhow::{Context, Result, ensure};
-use serde_json::json;
+use anyhow::{Context, Result, bail, ensure};
+use serde_json::{Value as JsonValue, from_str, json};
 use tokio::runtime::Builder;
 
 #[cfg(target_os = "linux")]
 use libc::{
-    _SC_PAGESIZE, EIO, c_void, gettid, pthread_attr_destroy, pthread_attr_getguardsize,
-    pthread_attr_getstack, pthread_attr_t, pthread_getattr_np, pthread_self, sysconf,
+    _SC_PAGESIZE, EIO, RLIMIT_CORE, SIGABRT, SIGSEGV, c_void, gettid, pthread_attr_destroy,
+    pthread_attr_getguardsize, pthread_attr_getstack, pthread_attr_t, pthread_getattr_np,
+    pthread_self, rlimit, setrlimit, sysconf,
 };
 #[cfg(target_os = "linux")]
+use std::arch::asm;
+#[cfg(target_os = "linux")]
 use std::fs::{File, read_to_string};
+#[cfg(target_os = "linux")]
+use std::io::Write;
 #[cfg(target_os = "linux")]
 use std::mem::MaybeUninit;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::FileExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::ExitStatusExt;
+#[cfg(target_os = "linux")]
+use std::process::{Command, Stdio};
 #[cfg(target_os = "linux")]
 use std::ptr::null_mut;
 #[cfg(target_os = "linux")]
@@ -222,6 +231,164 @@ fn attest_resource_threads(events: &[ThreadEvent], workers: &[ThreadId], mode: &
         })
     );
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "run explicitly to verify worker guards in isolated child processes"]
+fn linux_worker_guard_fault_control() -> Result<()> {
+    let binary = env::current_exe()?;
+    for mode in ["reduced", "production"] {
+        let child = Command::new(&binary)
+            .args([
+                "--exact",
+                "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("KONTOR_RESOURCE_GUARD_FAULT_CHILD", "1")
+            .env("KONTOR_RESOURCE_MODE", mode)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let process_id = child.id();
+        let output = child.wait_with_output()?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let signal = output.status.signal();
+        ensure!(
+            signal == Some(SIGSEGV)
+                || (signal == Some(SIGABRT)
+                    && stderr.contains("has overflowed its stack")
+                    && stderr.contains("fatal runtime error: stack overflow")),
+            "{mode} guard child did not report a guard fault: status={:?}, stderr={}",
+            output.status,
+            stderr
+        );
+        let stdout = String::from_utf8(output.stdout)?;
+        let targets = stdout
+            .lines()
+            .filter_map(|line| {
+                line.split_once("KONTOR_RESOURCE_GUARD_TARGET=")
+                    .map(|(_, value)| value)
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            targets.len() == 1,
+            "{mode} child did not report exactly one guard target"
+        );
+        let target: JsonValue = from_str(targets[0])?;
+        let guard_start = target["guard_start"]
+            .as_u64()
+            .context("missing guard start")?;
+        let guard_end = target["guard_end"].as_u64().context("missing guard end")?;
+        let address = target["address"]
+            .as_u64()
+            .context("missing fault address")?;
+        let page_size = target["page_size_bytes"]
+            .as_u64()
+            .context("missing page size")?;
+        let os_thread_id = target["os_thread_id"]
+            .as_i64()
+            .context("missing kernel thread ID")?;
+        ensure!(
+            target["mode"].as_str() == Some(mode)
+                && target["process_id"].as_u64() == Some(u64::from(process_id))
+                && os_thread_id > 0
+                && page_size.is_power_of_two()
+                && guard_end
+                    .checked_sub(guard_start)
+                    .is_some_and(|bytes| bytes >= page_size)
+                && guard_start <= address
+                && address < guard_end
+                && matches!(
+                    target["guard_verification"].as_str(),
+                    Some("guard protected inside pthread stack range")
+                        | Some("guard protected below pthread stack range")
+                        | Some(
+                            "inaccessible interval verified below pthread stack range by /proc/self/mem EIO"
+                        )
+                ),
+            "{mode} child reported an invalid guard target: {target}"
+        );
+        if signal == Some(SIGABRT) {
+            ensure!(
+                stderr.contains(&format!("({os_thread_id}) has overflowed its stack")),
+                "{mode} stack-overflow abort was reported for a different thread"
+            );
+        }
+        println!(
+            "KONTOR_RESOURCE_GUARD_CONTROL={}",
+            json!({
+                "mode": mode,
+                "signal": signal,
+                "target": target,
+                "child_binary": binary,
+                "child_stdout": stdout,
+                "child_stderr": String::from_utf8_lossy(&output.stderr),
+            })
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "run only as a faulting child of linux_worker_guard_fault_control"]
+fn linux_worker_guard_fault_child() -> Result<()> {
+    ensure!(
+        env::var("KONTOR_RESOURCE_GUARD_FAULT_CHILD").as_deref() == Ok("1"),
+        "guard fault child requires its isolated parent"
+    );
+    let mode = env::var("KONTOR_RESOURCE_MODE")?;
+    ensure!(
+        matches!(mode.as_str(), "reduced" | "production"),
+        "unknown guard mode"
+    );
+    let limit = rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    ensure!(
+        unsafe { setrlimit(RLIMIT_CORE, &limit) } == 0,
+        "could not disable core dump"
+    );
+    let (runtime, _) = measured_tokio_runtime((mode == "reduced").then_some(1024 * 1024))?;
+    runtime.block_on(async move {
+        tokio::spawn(async move {
+            let stack = current_linux_stack_range()?;
+            ensure!(stack.guard_bytes > 0, "worker has no reported guard");
+            let address = stack.guard_start + stack.page_size_bytes / 2;
+            ensure!(
+                address < stack.guard_end,
+                "guard target is outside protected interval"
+            );
+            println!(
+                "KONTOR_RESOURCE_GUARD_TARGET={}",
+                json!({
+                    "mode": mode,
+                    "process_id": stack.process_id,
+                    "os_thread_id": stack.os_thread_id,
+                    "page_size_bytes": stack.page_size_bytes,
+                    "guard_start": stack.guard_start,
+                    "guard_end": stack.guard_end,
+                    "guard_verification": stack.guard_treatment,
+                    "address": address,
+                })
+            );
+            std::io::stdout().flush()?;
+            // A machine store probes the guard without creating a Rust reference
+            // to an inaccessible address in this deliberately faulting child.
+            unsafe {
+                #[cfg(target_arch = "x86_64")]
+                asm!("mov byte ptr [{address}], 0", address = in(reg) address, options(nostack));
+                #[cfg(target_arch = "aarch64")]
+                asm!("strb wzr, [{address}]", address = in(reg) address, options(nostack));
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+        .await
+    })??;
+    bail!("worker guard access did not fault")
 }
 
 #[cfg(target_os = "linux")]

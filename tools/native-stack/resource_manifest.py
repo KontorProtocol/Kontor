@@ -24,6 +24,7 @@ INPUTS = {
     "proxy": "test-contracts/binaries/proxy.wasm.br",
     "stack_probe_tests": "core/indexer/src/runtime/call/tests/native_stack.rs",
     "stack_sweep": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
+    "resource_worker_diagnostic": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
     "chain_tests": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
     "callback_tests": "core/indexer/src/runtime/sequential_tests.rs",
     "guest_error_tests": "core/indexer/src/runtime/call/tests/canonical_guest_errors.rs",

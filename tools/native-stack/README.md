@@ -71,6 +71,15 @@ awaited suboperation stayed on one worker or supply the comparator's per-case
 thread bindings. Canonical ABI and WAVE conversions inside the operation need
 their own cases and remain open in the manifest.
 
+On Linux, the ignored `linux_worker_guard_fault_control` runs two additional
+test-binary children, one at each worker stack request. Each child verifies its
+own worker guard interval, prints the fault address, then makes a single store
+to that address. The parent requires `SIGSEGV`, or Rust's `SIGABRT` with its
+stack-overflow diagnostic, and the child's exact target record. This control is
+diagnostic until its raw child output and status are
+bound to every qualification cell. The macOS worker guard and fault control
+remain unimplemented.
+
 Thread records must confirm a protected guard region, not only repeat
 `pthread_attr_getguardsize`'s reported size. An unverified guard fails the
 resource evidence schema. On Linux, the diagnostic accepts a protected
