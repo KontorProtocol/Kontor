@@ -569,6 +569,31 @@ class ResourceReportControls(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "violates schema"):
                     resource_evidence.validate(bad, directory)
 
+                for mutation, expected_error in (
+                    ("missing_key", "violates schema"),
+                    ("extra_key", "violates schema"),
+                    ("noncanonical", "noncanonical balance transition"),
+                    ("numeric", "violates schema"),
+                    ("missing_field", "invalid state evidence"),
+                ):
+                    with self.subTest(balance_transition_mutation=mutation):
+                        bad = copy.deepcopy(report)
+                        chain = next(case for case in bad["configurations"]["reduced"]["cases"]
+                                     if case["id"] == "chain_64_paid")
+                        state = chain["observations"][0]["state"]
+                        if mutation == "missing_field":
+                            del state["balance_transitions"]
+                        elif mutation == "missing_key":
+                            del state["balance_transitions"]["after"]
+                        elif mutation == "extra_key":
+                            state["balance_transitions"]["unexpected"] = "0"
+                        elif mutation == "noncanonical":
+                            state["balance_transitions"]["after"] = "1.20"
+                        else:
+                            state["balance_transitions"]["after"] = 1
+                        with self.assertRaisesRegex(ValueError, expected_error):
+                            resource_evidence.validate(bad, directory)
+
                 bad = copy.deepcopy(report)
                 bad["build_closure"]["rustflags"] = ["-Ctarget-feature=+avx2"]
                 with self.assertRaisesRegex(ValueError, "build feature/flag closure"):

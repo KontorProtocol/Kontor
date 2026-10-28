@@ -19,7 +19,8 @@ sys.dont_write_bytecode = True
 
 from capture_resource_control import run_bounded_process
 from capture_resource_diagnostic import one_marker, validate_control
-from resource_evidence import (file_evidence, load_json_strict, require, sha256,
+from resource_evidence import (canonical_decimal_amount as canonical_decimal,
+                               file_evidence, load_json_strict, require, sha256,
                                thread_capacities)
 from resource_manifest import MANIFEST, ROOT, build_manifest
 
@@ -201,21 +202,6 @@ def measured_trace(trace, runtime, mode, stores, process_id, chain_mode="paid",
                 for event in events[:starts[0]] + events[ends[-1] + 1:]),
             "chain trace contains unpaired attempt markers")
     return attempts
-
-
-def canonical_decimal(value, case_id):
-    require(isinstance(value, str) and 0 < len(value) <= 128,
-            f"{case_id}: invalid balance amount")
-    try:
-        amount = Decimal(value)
-    except InvalidOperation as error:
-        raise ValueError(f"{case_id}: invalid balance amount") from error
-    require(amount.is_finite() and abs(amount.as_tuple().exponent) <= 128,
-            f"{case_id}: invalid balance amount")
-    if amount.is_zero():
-        return "0"
-    encoded = format(amount, "f")
-    return encoded.rstrip("0").rstrip(".") if "." in encoded else encoded
 
 
 def balance_amounts(values, case_id):
@@ -559,6 +545,7 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
     bundle = {
         "status": "candidate_actual_binding",
         "qualification_status": "missing",
+        "timeout_seconds": timeout_seconds,
         "source_sha": control["source_sha"],
         "binary_path": str(binary),
         "binary_sha256": control["binary_sha256"],

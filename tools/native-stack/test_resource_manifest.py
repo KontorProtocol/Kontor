@@ -202,6 +202,10 @@ class ResourceManifestTests(unittest.TestCase):
                                        sample == "success_after_trap"),
                             "observed_depth": depth,
                         }
+                        if definition["family"] == "distinct_contract_chain":
+                            observation["state"]["balance_transitions"] = {
+                                field: "0" for field in
+                                resource_evidence.BALANCE_TRANSITION_FIELDS}
                         attempt = {"sample_key": sample, "repeat_index": index,
                             "phase_threads": {phase: ["worker"] for phase in
                                               ("preparation", "operation", "conversion", "teardown")},

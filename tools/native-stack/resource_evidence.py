@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import signal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -20,6 +21,21 @@ BALANCE_TRANSITION_FIELDS = {
     "floor_restored",
 }
 DECIMAL_AMOUNT_PATTERN = r"-?(0|[1-9][0-9]*)([.][0-9]+)?"
+
+
+def canonical_decimal_amount(value, label):
+    require(isinstance(value, str) and 0 < len(value) <= 128,
+            f"{label}: invalid balance amount")
+    try:
+        amount = Decimal(value)
+    except InvalidOperation as error:
+        raise ValueError(f"{label}: invalid balance amount") from error
+    require(amount.is_finite() and abs(amount.as_tuple().exponent) <= 128,
+            f"{label}: invalid balance amount")
+    if amount.is_zero():
+        return "0"
+    encoded = format(amount, "f")
+    return encoded.rstrip("0").rstrip(".") if "." in encoded else encoded
 
 
 def no_duplicate_keys(pairs):
@@ -303,7 +319,9 @@ def check_cases(configuration, manifest, mode, directory, transcript):
                         (receipt["value"] is None or isinstance(receipt["value"], str)),
                         f"{mode}: invalid receipt: {case_id}/{sample_key}")
             state = observation["state"]
-            require(set(state) in (STATE_KEYS, STATE_KEYS | {"balance_transitions"})
+            chain_case = expected[case_id]["family"] == "distinct_contract_chain"
+            require((set(state) == STATE_KEYS | {"balance_transitions"} if chain_case else
+                     set(state) in (STATE_KEYS, STATE_KEYS | {"balance_transitions"}))
                     and all(re.fullmatch(r"[0-9a-f]{64}", state[key]) for key in
                             ("before_sha256", "after_sha256", "balances_sha256")) and
                     (state["marker"] is None or isinstance(state["marker"], str)),
@@ -316,6 +334,9 @@ def check_cases(configuration, manifest, mode, directory, transcript):
                                 and re.fullmatch(DECIMAL_AMOUNT_PATTERN, value)
                                 for value in transitions.values()),
                         f"{mode}: invalid balance transitions: {case_id}/{sample_key}")
+                require(all(canonical_decimal_amount(value, case_id) == value
+                            for value in transitions.values()),
+                        f"{mode}: noncanonical balance transition: {case_id}/{sample_key}")
             require(type(observation["rollback"]) is bool and
                     all(type(observation[key]) is bool for key in
                         ("fresh_store", "suspended", "reused")),
