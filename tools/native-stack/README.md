@@ -261,6 +261,28 @@ the full returned foreign WAVE string, including the nested record value, and
 requires both caller and target Stores to close on every attempt. This fixture
 does not exercise paid-call accounting or arbitrary third-party WIT shapes.
 
+At source `b9405164a29a1872edb57bb7ec579b2d4d386748`, the Linux ARM64
+development foreign WAVE capture completed four isolated child processes and
+48 attempts. Each child ran the six boundary samples twice through the
+published caller and target. Full returned WAVE strings, deterministic error
+kinds, fuel, and reset state matched across observed and probe-off roles and
+reduced and production stack settings. The two observed children recorded 48
+closed Store lifecycles in total, with zero live invocations after each attempt.
+The standalone validator and three evidence reviews accepted the capture.
+The exact-source build attestation SHA-256 is
+`c09ea40a24f7a7fa368a3c086718c7084e78f3145a9dc7a066079b487df5eeba`;
+the test binary SHA-256 is
+`5c505e2433e8086b567d90907d94adc41a5fbba8b23ffbb8e258a27328137531`.
+The guard control SHA-256 is
+`dfb5dad7937171958310b0995a7294b19122cbcadc66bac118396d349fa77891`,
+and the capture SHA-256 is
+`0d235dcb74a0ade9521b7789af3f720c2282ef902ab966a2fa874b2c23132256`.
+This is one local diagnostic cell with `qualification_status: missing`. The
+fixture uses unsigned views and system fuel. It provides no paid-call,
+cancellation, guest-write, or trap-unwind proof; the typed trap field is null.
+The other five cells and remaining case families are required for S2
+qualification.
+
 At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
 development canonical capture completed 12 child processes, 56 attempts, and
 268 closed Store lifecycles. The standalone validator accepted all 12 runs.
