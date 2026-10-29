@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::process;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -9,14 +10,15 @@ use indexer_types::Payment;
 use libsql::{Connection, Value as SqlValue, params};
 use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
-use stdlib::{KeyPath, to_wave_expr};
+use stdlib::{KeyPath, from_wave_expr, to_wave_expr};
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use tokio::time::timeout;
-use wasmtime::Trap;
+use wasmtime::component::Access;
+use wasmtime::{AsContextMut, Error as WasmtimeError, Trap};
 
 use super::super::balance;
-use super::{COMPONENT, SYSTEM_FUEL_CEILING};
+use super::{COMPONENT, CRYPTO_COMPONENT, SYSTEM_FUEL_CEILING};
 use crate::database::queries::live_deposit_gas_sum;
 use crate::runtime::invocation::{
     InvocationBudget, InvocationLimitReached, ResourceProbePhase, ResourceTeardownRecorder,
@@ -102,6 +104,11 @@ impl Fixture {
             gas_limit: MAX_UNTRUSTED_GAS_LIMIT,
         };
         let fixture_contracts = if kind == "paid_reenter" { 65 } else { 1 };
+        let (name, component) = if kind == "view_crypto" {
+            ("crypto", CRYPTO_COMPONENT)
+        } else {
+            ("stack-probe", COMPONENT)
+        };
         let publication_start = Instant::now();
         resource_diagnostics::record("publication_entry");
         for tx_index in 0..fixture_contracts {
@@ -117,8 +124,8 @@ impl Fixture {
                 .publish(
                     &signer,
                     payment.clone(),
-                    "stack-probe",
-                    COMPONENT,
+                    name,
+                    component,
                     &native_provenance()?,
                 )
                 .await
@@ -128,7 +135,7 @@ impl Fixture {
         runtime.set_context(1, None, None, None).await;
         let publication_ms = publication_start.elapsed().as_millis();
         let address = ContractAddress {
-            name: "stack-probe".into(),
+            name: name.into(),
             height: 1,
             tx_index: 0,
         };
@@ -151,8 +158,11 @@ impl Fixture {
         let baseline_live_deposit_gas =
             live_deposit_gas_sum(&conn, signer.signer_id().unwrap()).await?;
         ensure!(
-            baseline_live_deposit_gas == 3 * u64::from(fixture_contracts)
-                && baseline_floor == Pricing::storage_collateral(baseline_live_deposit_gas)?,
+            (if kind == "view_crypto" {
+                baseline_live_deposit_gas > 0
+            } else {
+                baseline_live_deposit_gas == 3 * u64::from(fixture_contracts)
+            }) && baseline_floor == Pricing::storage_collateral(baseline_live_deposit_gas)?,
             "boundary fixture baseline storage deposit changed"
         );
         let baseline_supply = token::total_supply(&mut runtime).await?;
@@ -355,11 +365,14 @@ impl Fixture {
         } else {
             None
         };
-        let last_depth = self
-            .runtime
-            .execute(None, None, &self.address, "last-depth()")
-            .await?
-            .parse::<u32>()?;
+        let last_depth = if self.kind == "view_crypto" {
+            0
+        } else {
+            self.runtime
+                .execute(None, None, &self.address, "last-depth()")
+                .await?
+                .parse::<u32>()?
+        };
         let live_deposit_gas_after = if self.resource_probe.is_some() {
             Some(live_deposit_gas_sum(&conn, self.signer.signer_id().unwrap()).await?)
         } else {
@@ -507,7 +520,7 @@ impl Fixture {
             "max_wasm_stack": self.runtime.engine.get_max_wasm_stack(),
             "async_stack_size": self.runtime.engine.get_async_stack_size(),
             "engine_target": self.runtime.engine.get_target(),
-            "component_sha256": hex::encode(Sha256::digest(COMPONENT)),
+            "component_sha256": hex::encode(Sha256::digest(if self.kind == "view_crypto" { CRYPTO_COMPONENT } else { COMPONENT })),
             "target_os": env::consts::OS,
             "target_arch": env::consts::ARCH,
             "reset": {
@@ -626,6 +639,7 @@ fn expression(kind: &str, depth: u32, address: &ContractAddress) -> Result<Strin
                 ..address.clone()
             })
         ),
+        "view_crypto" => format!("sha256({})", to_wave_expr(b"native-stack-pending".to_vec())),
         _ => bail!("unknown probe kind {kind}"),
     })
 }
@@ -698,6 +712,146 @@ pub(super) async fn run_resource_finite_paid(
         "complete": true,
     });
     println!("FINITE_STACK_SUMMARY:{summary}");
+    Ok(summary)
+}
+
+pub(super) async fn run_resource_pending_host_io(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    ensure!(
+        matches!(configuration, "reduced" | "production"),
+        "unknown pending host I/O configuration"
+    );
+    ensure!(
+        matches!(process_role, "target_observed" | "probe_off_control"),
+        "unknown pending host I/O role"
+    );
+    let mut current = Fixture::new("view_crypto".to_owned(), configuration == "reduced").await?;
+    current.resource_probe = Some(process_role == "target_observed");
+    let gate = LeafGate {
+        entered: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut user = current.runtime.linkers.user.clone();
+    user.allow_shadowing(true)
+        .instance("kontor:built-in/crypto")?
+        .func_wrap_async("sha256", {
+            let entered = gate.entered.clone();
+            let release = gate.release.clone();
+            let calls = calls.clone();
+            move |mut store, (input,): (Vec<u8>,)| {
+                let entered = entered.clone();
+                let release = release.clone();
+                let calls = calls.clone();
+                Box::new(async move {
+                    if input != b"native-stack-pending" {
+                        return Err(WasmtimeError::msg("unexpected pending host input"));
+                    }
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    entered.notify_one();
+                    release.notified().await;
+                    let mut access =
+                        Access::<Runtime, Runtime>::new(store.as_context_mut(), |runtime| runtime);
+                    let runtime = access.get().clone();
+                    let digest = runtime
+                        ._sha256(&mut access, input)
+                        .await
+                        .map_err(WasmtimeError::from_anyhow)?;
+                    Ok((digest,))
+                })
+            }
+        })?;
+    current.runtime.linkers = Arc::new(Linkers {
+        user,
+        native: current.runtime.linkers.native.clone(),
+    });
+    let mut fixture = Some(current);
+    for repeat_index in 0..2 {
+        resource_diagnostics::record("finite_stack_attempt_start");
+        let mut current = fixture
+            .take()
+            .context("pending host fixture was consumed")?;
+        let role = process_role.to_owned();
+        let mut task = tokio::spawn(async move {
+            let outcome = current.observe(0, &role).await?;
+            Ok::<_, anyhow::Error>((current, outcome))
+        });
+        tokio::select! {
+            () = gate.entered.notified() => {},
+            result = &mut task => {
+                let _ = result??;
+                bail!("pending host call completed before suspension");
+            },
+            () = tokio::time::sleep(Duration::from_secs(30)) => bail!("pending host import did not enter"),
+        }
+        ensure!(
+            !task.is_finished() && calls.load(Ordering::SeqCst) == repeat_index + 1,
+            "guest was not suspended at exactly one production host import"
+        );
+        ensure!(
+            tokio::spawn(async { 42 }).await? == 42,
+            "Tokio executor did not progress while guest was suspended"
+        );
+        println!(
+            "PENDING_HOST_IO_ATTEMPT:{}",
+            json!({
+                "case_id": "pending_host_io",
+                "configuration": configuration,
+                "process_role": process_role,
+                "sample_key": "suspended",
+                "repeat_index": repeat_index,
+                "pid": process::id(),
+                "host_import": "kontor:built-in/crypto.sha256",
+                "host_entered": true,
+                "guest_task_pending": true,
+                "other_task_progressed": true,
+                "observation": JsonValue::Null,
+            })
+        );
+        gate.release.notify_one();
+        let (mut current, outcome) = timeout(Duration::from_secs(30), task).await???;
+        ensure!(outcome == "ok", "pending host call failed: {outcome}");
+        let observation = current
+            .last_report
+            .take()
+            .context("resumed host call lacks semantic observation")?;
+        let value = observation["value"]
+            .as_str()
+            .context("missing crypto view value")?;
+        ensure!(
+            from_wave_expr::<Vec<u8>>(value) == Sha256::digest(b"native-stack-pending").to_vec(),
+            "resumed host result differs from production SHA-256"
+        );
+        println!(
+            "PENDING_HOST_IO_ATTEMPT:{}",
+            json!({
+                "case_id": "pending_host_io",
+                "configuration": configuration,
+                "process_role": process_role,
+                "sample_key": "resumed",
+                "repeat_index": repeat_index,
+                "pid": process::id(),
+                "host_import": "kontor:built-in/crypto.sha256",
+                "host_entered": true,
+                "guest_task_pending": false,
+                "other_task_progressed": true,
+                "observation": observation,
+            })
+        );
+        resource_diagnostics::record("finite_stack_attempt_end");
+        fixture = Some(current);
+    }
+    let summary = json!({
+        "case_id": "pending_host_io",
+        "configuration": configuration,
+        "process_role": process_role,
+        "sample_count": 4,
+        "host_calls": calls.load(Ordering::SeqCst),
+        "complete": true,
+    });
+    println!("PENDING_HOST_IO_SUMMARY:{summary}");
     Ok(summary)
 }
 

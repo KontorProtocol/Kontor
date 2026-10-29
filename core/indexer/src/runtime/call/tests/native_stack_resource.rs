@@ -645,8 +645,11 @@ fn finite_stack_worker_case() -> Result<()> {
     );
     let case_id = env::var("KONTOR_FINITE_STACK_CASE")?;
     ensure!(
-        matches!(case_id.as_str(), "large_frame_paid" | "max_gas_paid"),
-        "unknown finite paid stack case"
+        matches!(
+            case_id.as_str(),
+            "large_frame_paid" | "max_gas_paid" | "pending_host_io"
+        ),
+        "unknown finite stack case"
     );
     let process_role = env::var("KONTOR_FINITE_STACK_ROLE")?;
     let probe = env::var("KONTOR_RESOURCE_TEARDOWN_PROBE")?;
@@ -694,12 +697,17 @@ fn finite_stack_worker_case() -> Result<()> {
     let result = runtime.block_on(async {
         tokio::spawn(async move {
             let start = std::thread::current().id();
-            let summary = super::native_stack::resource_finite_paid(
-                &task_case_id,
-                &task_configuration,
-                &task_role,
-            )
-            .await?;
+            let summary = if task_case_id == "pending_host_io" {
+                super::native_stack::resource_pending_host_io(&task_configuration, &task_role)
+                    .await?
+            } else {
+                super::native_stack::resource_finite_paid(
+                    &task_case_id,
+                    &task_configuration,
+                    &task_role,
+                )
+                .await?
+            };
             Ok::<_, anyhow::Error>((summary, start, std::thread::current().id()))
         })
         .await

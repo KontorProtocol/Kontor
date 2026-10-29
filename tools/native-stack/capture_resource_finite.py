@@ -22,7 +22,10 @@ from resource_finite_evidence import (CASES, CONFIGURATIONS, ROLES, WORKER_TEST,
 from resource_manifest import MANIFEST, build_manifest
 
 
-def capture(cell, control_path, control_sha256, evidence_dir, timeout_seconds):
+def capture(cell, control_path, control_sha256, evidence_dir, timeout_seconds,
+            *, case_ids=None, make_run_name=run_name,
+            make_case_env=expected_case_env, parse_log=parse_worker_log,
+            validate=validate_bundle, output_prefix="finite-stack"):
     require(sys.platform in {"linux", "darwin"},
             "finite stack child capture requires a supported guard control")
     require(1 <= timeout_seconds <= 1200, "finite stack timeout must be 1 to 1200 seconds")
@@ -43,19 +46,19 @@ def capture(cell, control_path, control_sha256, evidence_dir, timeout_seconds):
     control_dir, control_copy = copy_control(
         control_path, control_sha256, evidence_dir, control)
     runs = {}
-    failure_path = evidence_dir / "finite-stack-failure.json"
+    failure_path = evidence_dir / f"{output_prefix}-failure.json"
     active_name = None
     active_process = None
     active_log = None
     try:
-        for case_id in sorted(CASES):
+        for case_id in sorted(CASES if case_ids is None else case_ids):
             for role in ROLES:
                 for configuration in CONFIGURATIONS:
-                    name = run_name(case_id, role, configuration)
+                    name = make_run_name(case_id, role, configuration)
                     active_name = name
                     active_process = None
                     active_log = None
-                    case_env = expected_case_env(case_id, role, configuration)
+                    case_env = make_case_env(case_id, role, configuration)
                     environment = {key: value for key, value in os.environ.items()
                                    if not key.startswith("KONTOR_")}
                     environment.update(case_env)
@@ -82,7 +85,7 @@ def capture(cell, control_path, control_sha256, evidence_dir, timeout_seconds):
                     require(before == after == control["binary_sha256"],
                             f"{name}: binary changed during child")
                     require(process["complete"], f"{name}: child failed or timed out")
-                    parsed = parse_worker_log(raw_path)
+                    parsed = parse_log(raw_path)
                     runs[name] = {
                         "run_id": name, "case_id": case_id,
                         "process_role": role, "configuration": configuration,
@@ -110,11 +113,11 @@ def capture(cell, control_path, control_sha256, evidence_dir, timeout_seconds):
             },
             "runs": runs,
         }
-        destination = evidence_dir / "finite-stack-capture.json"
+        destination = evidence_dir / f"{output_prefix}-capture.json"
         with destination.open("x") as output:
             json.dump(bundle, output, indent=2, sort_keys=True)
             output.write("\n")
-        validate_bundle(bundle, evidence_dir)
+        validate(bundle, evidence_dir)
     except Exception as error:
         with failure_path.open("x") as output:
             json.dump({"error": str(error), "active_run": active_name,

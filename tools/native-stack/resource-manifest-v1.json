@@ -28,6 +28,18 @@
       "path": "core/Cargo.lock",
       "sha256": "6e7ea3f1f76c383f267f9b00125a86dc01de45f7f3a2e5082da89598265b525f"
     },
+    "crypto_component": {
+      "path": "test-contracts/binaries/crypto.wasm.br",
+      "sha256": "cb191cf025e572978574e7069bc425ccd5d26db528eec5eabcc01345a1ea0c8d"
+    },
+    "crypto_source": {
+      "path": "test-contracts/crypto/src/lib.rs",
+      "sha256": "ae99c74c0dc19a1f441879e9866f78867e5c27d86581d0d6e9cc8f78c91f1869"
+    },
+    "crypto_wit": {
+      "path": "test-contracts/crypto/wit/contract.wit",
+      "sha256": "be6f886de3779f77a412c23a41b5247bdfe781bf65aaa961df45e3b17f8ef686"
+    },
     "error_test": {
       "path": "test-contracts/binaries/error_test.wasm.br",
       "sha256": "8610f85f6abdd1bdeb0d32c0916cf154493535299d2c4d8fa0e053f0ee2df875"
@@ -50,7 +62,7 @@
     },
     "finite_stack_capture": {
       "path": "tools/native-stack/capture_resource_finite.py",
-      "sha256": "ef8afc484d5cb50778ec267aa6fdff6de68843c4aaadc27aaf79b654b9adcf47"
+      "sha256": "fcdc7247b6574f494996a514b403dd45aa510ad3001201b733ff0cedd48b42a3"
     },
     "finite_stack_control_copy": {
       "path": "tools/native-stack/capture_resource_chain_v2.py",
@@ -100,6 +112,18 @@
       "path": "core/indexer/src/runtime/nft/query_tests.rs",
       "sha256": "e9d5b03f7402e85f61fd61548af87587cbd0a8d49b93d6967fdd6cc7b71c26e1"
     },
+    "pending_host_capture": {
+      "path": "tools/native-stack/capture_resource_pending.py",
+      "sha256": "476586e9e804fda34fe110ea922916de5760dbbb7c4a0a032be6d28df564ebe6"
+    },
+    "pending_host_tests": {
+      "path": "tools/native-stack/test_resource_pending_evidence.py",
+      "sha256": "a105a0d00952e061ee3852456cca61148dd3f9d28cb6e1bbc6d21471c689fbdd"
+    },
+    "pending_host_validator": {
+      "path": "tools/native-stack/resource_pending_evidence.py",
+      "sha256": "35d4d3ebf0e909dcc49d6cb55e441563aeb913e05416e8d1b0d4068746f7824a"
+    },
     "production_qualification": {
       "path": "tools/native-stack/compare.py",
       "sha256": "ef5fd32508cd35c07a77bacdf6871c5f342f0d9cd33cbe0e6175d067bde2e387"
@@ -134,7 +158,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "4f0fd262c6f2cafc8c6314918307bdc1e4190e804b704449529a4ffbf5285269"
+      "sha256": "a0406d520aa716bc56873657617c48360318286dd02076e01f226e8e30ece68d"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -154,7 +178,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "e82b125585d4799b7da2815662ab24667ebe6f91907e13f2d51ff4e2e7879cb5"
+      "sha256": "580a7c081354ec58c2d76b6257fd4871e1d803139b04a272fd3031cae280e45d"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -170,11 +194,11 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "8c88f52f7df774901e819e4e674e6255185ac31730239e6cf5118a34e1b0c395"
+      "sha256": "da9259b640cd9e879b32126c156b9b5cef641b87accd71e20a7d71ba54666b9f"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "9ddfa4faac13826463cde2f0175d42291af3438d3cece61cd5c94f98b8c31a2a"
+      "sha256": "a4ae50d2871cc90120df8e45c74aca0e026483fabf2ac5370606b283ae45c20f"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -1067,7 +1091,7 @@
       ]
     },
     {
-      "existing_unpaired_binding": "runtime::sequential_tests::pending_host_io_suspends_guest_and_leaves_executor_available",
+      "existing_unpaired_binding": "runtime::call::tests::native_stack_resource::finite_stack_worker_case",
       "expected_outcomes": {
         "resumed": "ok",
         "suspended": "ok"
@@ -1078,7 +1102,15 @@
       },
       "family": "suspension",
       "fixtures": [
-        "callback_tests"
+        "crypto_component",
+        "crypto_source",
+        "crypto_wit",
+        "stack_probe_tests",
+        "stack_sweep",
+        "resource_worker_diagnostic",
+        "pending_host_capture",
+        "pending_host_validator",
+        "pending_host_tests"
       ],
       "id": "pending_host_io",
       "paired_worker_status": "missing",
@@ -1553,7 +1585,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "e82b125585d4799b7da2815662ab24667ebe6f91907e13f2d51ff4e2e7879cb5",
+    "source_sha256": "580a7c081354ec58c2d76b6257fd4871e1d803139b04a272fd3031cae280e45d",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1705,7 +1737,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "e82b125585d4799b7da2815662ab24667ebe6f91907e13f2d51ff4e2e7879cb5",
+    "sha256": "580a7c081354ec58c2d76b6257fd4871e1d803139b04a272fd3031cae280e45d",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

@@ -20,6 +20,8 @@ use crate::test_utils::test_runtime;
 
 const COMPONENT: &[u8] =
     include_bytes!("../../../../../../test-contracts/binaries/stack_probe.wasm.br");
+const CRYPTO_COMPONENT: &[u8] =
+    include_bytes!("../../../../../../test-contracts/binaries/crypto.wasm.br");
 
 mod sweep;
 
@@ -44,6 +46,20 @@ pub(super) async fn resource_finite_paid(
     process_role: &str,
 ) -> Result<JsonValue> {
     sweep::run_resource_finite_paid(case_id, configuration, process_role).await
+}
+
+pub(super) async fn resource_pending_host_io(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    sweep::run_resource_pending_host_io(configuration, process_role).await
+}
+
+#[tokio::test]
+#[ignore = "run through the bounded resource child driver"]
+async fn pending_host_io_diagnostic() -> Result<()> {
+    resource_pending_host_io("production", "target_observed").await?;
+    Ok(())
 }
 
 #[tokio::test]
