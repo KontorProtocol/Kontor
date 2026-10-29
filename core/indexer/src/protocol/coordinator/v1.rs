@@ -3,6 +3,12 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bitcoin::{Transaction, Txid};
 
+mod finality;
+mod replay;
+
+pub(crate) use finality::build_finality_events;
+pub(crate) use replay::build_replay_queue;
+
 pub const FINALITY_WINDOW: u64 = 6;
 
 /// Bitcoin height by which a batch anchored at `anchor_height` must have its
