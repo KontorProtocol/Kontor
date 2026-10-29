@@ -221,12 +221,31 @@ impl Before {
         ).await?;
             let usage_row = usage.next().await?.context("missing paid usage")?;
             let transaction_deposit: u64 = usage_row.get(0)?;
+            let transaction_user: u64 = usage_row.get(1)?;
             ensure!(transaction_deposit.is_multiple_of(1000));
+            let transaction_roots = root_receipts(rows, txid)?;
+            let transaction_gas = transaction_roots.iter().try_fold(0u64, |sum, row| {
+                sum.checked_add(row.gas).context("transaction gas overflow")
+            })?;
+            let transaction_rounded = transaction_user
+                .checked_add(transaction_deposit)
+                .context("transaction fuel overflow")?
+                .div_ceil(1000);
+            // Aggregate equality alone would miss fuel attributed to the wrong
+            // transaction when two errors cancel each other out.
+            ensure!(
+                transaction_gas >= transaction_rounded
+                    && transaction_gas
+                        <= transaction_rounded
+                            .checked_add(u64::try_from(transaction_roots.len() - 1)?)
+                            .context("transaction rounding bound overflow")?,
+                "transaction receipts and persisted fuel disagree: {txid}"
+            );
             deposit = deposit
                 .checked_add(transaction_deposit)
                 .context("deposit overflow")?;
             user = user
-                .checked_add(usage_row.get::<u64>(1)?)
+                .checked_add(transaction_user)
                 .context("user fuel overflow")?;
             ensure!(usage.next().await?.is_none(), "duplicate transaction usage");
         }
