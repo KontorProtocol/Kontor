@@ -25,7 +25,8 @@ const PAGE_SIZES: [usize; 3] = [1, 7, 100];
 const RANGE_LENGTHS: [usize; 4] = [0, 1, 256, 1_024];
 const ACTOR_PUBKEY: &str = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 const ACTOR_SIGNER_ID: u64 = 7;
-const COMPONENT: &[u8] = include_bytes!("../../../../../../test-contracts/binaries/arith.wasm.br");
+const COMPONENT: &[u8] =
+    include_bytes!("../../../../../../../test-contracts/binaries/arith.wasm.br");
 
 async fn receipt_count(conn: &Connection) -> Result<u64> {
     let mut rows = conn

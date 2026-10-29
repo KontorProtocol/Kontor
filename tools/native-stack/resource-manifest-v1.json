@@ -342,7 +342,7 @@
     },
     "sqlite_ranges_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_ranges.rs",
-      "sha256": "bf5f32f80df593c4126473a2a7afaaa2e8c785be857e1fd4e14a1141a7ffcf68"
+      "sha256": "46571f3ed4b7993ae14e56eb64e4ebc1a4d6ee9bf540cd76692087f5de440a34"
     },
     "sqlite_ranges_capture": {
       "path": "tools/native-stack/capture_resource_sqlite_ranges.py",
