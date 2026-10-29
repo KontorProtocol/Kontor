@@ -103,6 +103,33 @@ def parse_worker_log(path):
     return records
 
 
+def validate_paid_accounting(fuel, receipt, balances, balance_digest,
+                             gas_limit, multiplier):
+    require(fuel["deposit"] == 0 and multiplier == 1000,
+            "canonical paid fixture used deposit fuel or changed gas scale")
+    expected_gas = max(1, (fuel["user"] + multiplier - 1) // multiplier)
+    require(receipt["gas"] == expected_gas and receipt["gas"] <= gas_limit,
+            "canonical paid receipt gas differs from measured user fuel")
+    validate_balance_transitions(balances, "paid", "other_trap", 0,
+                                 balance_digest)
+    amounts = {key: Decimal(normalized_boundary_amount(value))
+               for key, value in balances.items()}
+    expected_fee = Decimal(expected_gas) / Decimal(10**9)
+    require(amounts["before"] - amounts["after"] == expected_fee
+            and amounts["burned_after"] - amounts["burned_before"] == expected_fee
+            and amounts["supply_before"] - amounts["supply_after"] == expected_fee,
+            "canonical paid debit, burn, or supply differs from priced gas")
+    return expected_fee
+
+
+def validate_post_return_delta(light, heavy):
+    require(heavy["fuel"]["user"] >= light["fuel"]["user"] + 16_384
+            and heavy["receipt"]["gas"] > light["receipt"]["gas"]
+            and Decimal(heavy["execution_fee"]) >
+                Decimal(light["execution_fee"]),
+            "canonical heavy post-return work or fee was not charged")
+
+
 def validate_observation(attempt, case_id, role, configuration, cell):
     sample_key, repeat_index = attempt["sample_key"], attempt["repeat_index"]
     spec = next((item for item in CASES[case_id] if item[0] == sample_key), None)
@@ -180,8 +207,14 @@ def validate_observation(attempt, case_id, role, configuration, cell):
                 (None if outcome == "ok" else True),
             "canonical full persistent state or resources did not reset")
     balances, live_gas = value["balance_transitions"], value["live_deposit_gas"]
-    validate_balance_transitions(balances, "paid" if paid else "view",
-                                 outcome, 0, value["balance_transitions_sha256"])
+    if paid:
+        fee = validate_paid_accounting(
+            fuel, receipt, balances, value["balance_transitions_sha256"],
+            value["gas_limit"], value["gas_to_fuel_multiplier"])
+    else:
+        validate_balance_transitions(balances, "view", outcome, 0,
+                                     value["balance_transitions_sha256"])
+        fee = Decimal(0)
     encoded = json.dumps(live_gas, sort_keys=True, separators=(",", ":")).encode()
     require(set(live_gas) == {"before", "after", "restored"}
             and all(type(amount) is int and amount == 0
@@ -208,6 +241,7 @@ def validate_observation(attempt, case_id, role, configuration, cell):
         "kind": kind, "component_sha256": value["component_sha256"],
         "outcome": outcome, "trap": trap, "value": value["value"],
         "fuel": fuel, "receipt": receipt, "state_before_sha256": digest,
+        "execution_fee": str(fee),
         "state_after_sha256": post["persistent_digest_sha256"],
         "balances": balances, "live_deposit_gas": live_gas,
     }
@@ -286,9 +320,7 @@ def validate_run(run, bundle, manifest, directory):
     signatures = [validate_observation(attempt, case_id, role, configuration,
                                        bundle["cell"]) for attempt in attempts]
     if case_id == "canonical_post_return":
-        require(signatures[2]["fuel"]["user"] >=
-                signatures[0]["fuel"]["user"] + 16_384,
-                "canonical heavy post-return work was not charged")
+        validate_post_return_delta(signatures[0], signatures[2])
     return signatures
 
 

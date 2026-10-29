@@ -42,11 +42,11 @@
     },
     "canonical_validator": {
       "path": "tools/native-stack/resource_canonical_evidence.py",
-      "sha256": "3135cd87557c3180e219f5a310d7b3ab3ef1d60a1ff9b518d4fc9d5973f0f94e"
+      "sha256": "6e1c419f3ff8ab588085da44ff8a167169f657db4a5d79b3c1eeb709c0a96c99"
     },
     "canonical_validator_tests": {
       "path": "tools/native-stack/test_resource_canonical_evidence.py",
-      "sha256": "0dede31d34a6eb3b74f311816fd1e466513345c85d4a038bd092294143b784d4"
+      "sha256": "a1288b73866c8787a6a1b55efa15efff8c15975b65f0b334c0294c84f53e60b4"
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
@@ -71,6 +71,10 @@
     "error_test": {
       "path": "test-contracts/binaries/error_test.wasm.br",
       "sha256": "8610f85f6abdd1bdeb0d32c0916cf154493535299d2c4d8fa0e053f0ee2df875"
+    },
+    "fee_settlement": {
+      "path": "core/indexer/src/runtime/fees.rs",
+      "sha256": "f744a02e4049b55876b5be4edf79f1ca94afd62c88f24bea63a06f4ce8c7540f"
     },
     "fiber_source_capture": {
       "path": "tools/native-stack/capture_fiber_source.py",
@@ -152,6 +156,10 @@
       "path": "tools/native-stack/resource_pending_evidence.py",
       "sha256": "4ffe4cf1e539f546588cfc7b9db0c59299395b13981bfd13b0fd2008cdc43547"
     },
+    "pricing_source": {
+      "path": "core/indexer/src/runtime/pricing.rs",
+      "sha256": "592072830264b77d1e0f0e53112257701dccf861d065e09eb570bb8baed855c1"
+    },
     "production_qualification": {
       "path": "tools/native-stack/compare.py",
       "sha256": "ef5fd32508cd35c07a77bacdf6871c5f342f0d9cd33cbe0e6175d067bde2e387"
@@ -186,7 +194,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "4084d1dec83f3fbb22b553d13568d68b24742b6f6228300247adb6d73636261b"
+      "sha256": "adf298a6f30b8255e00bc6ff772771b4a1f947ffd6814d686787d0c3c869b38d"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -326,7 +334,9 @@
         "canonical_probe_tests",
         "canonical_capture",
         "canonical_validator",
-        "canonical_validator_tests"
+        "canonical_validator_tests",
+        "fee_settlement",
+        "pricing_source"
       ],
       "id": "canonical_lift_lower",
       "paired_worker_status": "missing",
@@ -357,7 +367,9 @@
         "canonical_probe_tests",
         "canonical_capture",
         "canonical_validator",
-        "canonical_validator_tests"
+        "canonical_validator_tests",
+        "fee_settlement",
+        "pricing_source"
       ],
       "id": "canonical_post_return",
       "paired_worker_status": "missing",
@@ -390,7 +402,9 @@
         "canonical_probe_tests",
         "canonical_capture",
         "canonical_validator",
-        "canonical_validator_tests"
+        "canonical_validator_tests",
+        "fee_settlement",
+        "pricing_source"
       ],
       "id": "canonical_realloc",
       "paired_worker_status": "missing",
