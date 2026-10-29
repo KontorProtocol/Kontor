@@ -375,3 +375,40 @@ run and unresolved S2 lints. Interlink receipt
 history and binary continuity across the retry are recorded execution metadata;
 raw logs independently establish the guard failure and subsequent test result.
 All parent checks are terminal and the single build slot is released.
+
+## Real batch execution followed by confirmation
+
+Source `d62f8fd1d6045c8d1409946651b51deb21d821e6`, based on `fb12d0b8`, adds
+a second delivery mode to the populated workload runner. Two independent restores
+execute the same signed reveal through `process_decided_batch` at anchor 101,
+then confirm it through the real `handle_block` at 102. The batch must execute,
+initially retaining an unconfirmed transaction and three paid receipts. After
+confirmation, the transaction row ID, execution anchor, batch height, complete
+paid receipts and persisted fuel must remain unchanged. The legacy joined ordinal
+changes to zero, while the separate raw Bitcoin confirmation index is two.
+A direct count across all receipt heights rejects extra or hidden paid receipts.
+
+The existing independent fee, supply, reward and validator-transition oracle,
+useful-pruning assertions, successful effects and failed-write rollback checks
+remain active. Complete final database projections must match between restores;
+observation calls must not mutate state. The combined anchor and block receipts
+are ordered by persisted ID. Empty certificates exercise an already-decided
+execution path, not certificate authorization, consensus or finality validation.
+
+Parent and both independent source reviews accepted the exact commit, including
+Interlink receipt `c08840931e7eb634f7e82f8f3a332058`. The locked, offline, two-job
+no-run build passed in 55.18 seconds. Development binary SHA-256:
+`406511f27d9b4ecb7d93f7b34190db96617916134cfdf74b32afac073b82ec91`.
+Both explicitly enabled tests, batch-confirmation and the existing fresh populated
+block replay, passed in 106.91 seconds. This elapsed time includes setup and is
+not a performance qualification measurement.
+
+Clippy still reports exactly the six inherited S2 findings above, with no new
+workload finding. No suppression or runtime change was made. The local evidence
+record `.build-cache/workload-reconcile/batch-confirmation-validation.json`
+preserves commands, terminal results and hashes of all three logs. Parent and both
+independent reviewers accepted the bounded evidence and documentation, including
+Interlink receipt `49afd2f9f8e484760f5dddd9327896b2`. Commands and terminal exit
+codes are parent-recorded metadata consistent with the independently read logs.
+Full operational mixes, arrival traces, simulations,
+population selection, frozen manifests and performance qualification remain open.
