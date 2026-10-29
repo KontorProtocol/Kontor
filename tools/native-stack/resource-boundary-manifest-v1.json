@@ -164,7 +164,7 @@
     },
     "composition_tests": {
       "path": "tools/native-stack/test_resource_boundary_composition.py",
-      "sha256": "8b9f79264d4685a1c6dd4ff57b2049e7b1ce36a27c88cac82280ad27e8db66d4"
+      "sha256": "667d9253fecf644e672e842d673def9378f55b25e6c32faa1c25bbbe07f2ec37"
     },
     "depths": {
       "path": "tools/native-stack/resource-boundary-depths-v1.json",
@@ -204,11 +204,11 @@
     },
     "tests": {
       "path": "tools/native-stack/test_resource_boundary_evidence.py",
-      "sha256": "4a1cd43074c7c23f4a62680425caef20cc04562813d5c0fc66793ef78874db5e"
+      "sha256": "5c29c198c2693dab7b1b122c43047c4c6765716d9b5644498fa0b46fa3fbf50e"
     },
     "validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "cff70da286440bc7a073d313aa42c57aac2e4e612ac87750e900ccef2c8de3a3"
+      "sha256": "73d8646306610234bc9b18f40cde7f1b5f8620069920b446bdbd6c30c5512d64"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",

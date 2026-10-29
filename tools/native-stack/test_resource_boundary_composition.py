@@ -296,6 +296,8 @@ class BoundaryCompositionTests(unittest.TestCase):
             runtime = root / "core/indexer/src/runtime/mod.rs"
             runtime.parent.mkdir(parents=True)
             runtime.write_text("stable frame source\n")
+            indexer_manifest = root / "core/indexer/Cargo.toml"
+            indexer_manifest.write_text("[package]\nname = 'indexer'\n")
             discovery_sha = commit("discovery source")
 
             evidence = base / "evidence"
@@ -303,7 +305,8 @@ class BoundaryCompositionTests(unittest.TestCase):
             binary = evidence / "discovery-indexer-test"
             binary.write_bytes(b"historical selected test artifact")
             binary_sha = sha256(binary)
-            original_binary = str(root / "core/target/indexer-test")
+            archived_workspace = Path("/remote/arm-build/core")
+            original_binary = str(archived_workspace / "target/indexer-test")
             component_sha = sha256(fixture)
             cases = [case["case_id"] for case in old_manifest["boundary_cases"]]
             cases.append(old_manifest["leaf_case"]["case_id"])
@@ -334,8 +337,11 @@ class BoundaryCompositionTests(unittest.TestCase):
                                      json.dumps({"reason": "build-finished",
                                                  "success": True}) + "\n")
             metadata = control_file("cargo-metadata.json", json.dumps({
-                "workspace_root": str(root / "core"),
-                "packages": [{"name": "indexer", "id": "indexer-package"}],
+                "workspace_root": str(archived_workspace),
+                "target_directory": str(archived_workspace / "target"),
+                "packages": [{"name": "indexer", "id": "indexer-package",
+                              "manifest_path": str(archived_workspace /
+                                                   "indexer/Cargo.toml")}],
             }) + "\n")
             guard = guard_control(control_dir, build_manifest(),
                                   original_binary, binary_sha, discovery_sha)
@@ -406,6 +412,32 @@ class BoundaryCompositionTests(unittest.TestCase):
                                                 sha256(archive_path),
                                                 final_manifest, final_sha)
                 binary.write_bytes(b"historical selected test artifact")
+                metadata_path = control_dir / metadata["path"]
+                valid_metadata = metadata_path.read_text()
+                for field, wrong_path in (
+                    ("manifest_path", str(archived_workspace /
+                                          "other/Cargo.toml")),
+                    ("target_directory", "/remote/other-target"),
+                ):
+                    with self.subTest(archive_path_field=field):
+                        wrong_metadata = json.loads(valid_metadata)
+                        if field == "manifest_path":
+                            wrong_metadata["packages"][0][field] = wrong_path
+                        else:
+                            wrong_metadata[field] = wrong_path
+                        metadata_path.write_text(json.dumps(wrong_metadata) + "\n")
+                        bad_control = copy.deepcopy(control)
+                        bad_control["cargo_metadata"]["sha256"] = sha256(metadata_path)
+                        control_path.write_text(json.dumps(bad_control) + "\n")
+                        archive["control_capture"]["sha256"] = sha256(control_path)
+                        archive_path.write_text(json.dumps(archive) + "\n")
+                        bad_manifest = copy.deepcopy(final_manifest)
+                        bad_manifest["reviewed_discovery_sha256"] = sha256(archive_path)
+                        with self.assertRaises(ValueError):
+                            validate_reviewed_discovery(archive_path,
+                                                        sha256(archive_path),
+                                                        bad_manifest, final_sha)
+                metadata_path.write_text(valid_metadata)
                 bad_control = copy.deepcopy(control)
                 bad_control["cargo_artifact"]["profile"]["opt_level"] = "3"
                 control_path.write_text(json.dumps(bad_control) + "\n")

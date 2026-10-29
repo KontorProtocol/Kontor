@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -17,7 +18,8 @@ sys.dont_write_bytecode = True
 
 from capture_resource_chain import harness_position
 from capture_resource_diagnostic import validate_control
-from resource_evidence import (check_guard_control, file_evidence,
+from resource_evidence import (canonical_decimal_amount,
+                               check_guard_control, file_evidence,
                                load_json_strict, no_duplicate_keys,
                                no_nonfinite_constants, require, sha256,
                                thread_capacities)
@@ -332,10 +334,15 @@ def validate_balance_transitions(balances, mode, outcome, depth, digest):
         "floor_restored",
     }, "boundary balance transition fields are incomplete")
     try:
-        amounts = {key: Decimal(value) for key, value in balances.items()}
-    except (InvalidOperation, TypeError, ValueError) as error:
+        require(all(isinstance(value, str)
+                    and canonical_decimal_amount(value, "boundary") == value
+                    for value in balances.values()),
+                "boundary balance amount is noncanonical")
+        amounts = {key: Fraction(Decimal(value))
+                   for key, value in balances.items()}
+    except (InvalidOperation, OverflowError, TypeError, ValueError) as error:
         raise ValueError("boundary balance amount is invalid") from error
-    require(all(amount.is_finite() and amount >= 0 for amount in amounts.values())
+    require(all(amount >= 0 for amount in amounts.values())
             and amounts["restored"] == amounts["before"]
             and amounts["floor_restored"] == amounts["floor_before"]
             and (amounts["before"] - amounts["after"] ==
@@ -786,12 +793,19 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
                 f"reviewed discovery fiber source differs: {relative}")
     metadata = load_json_strict(control_dir /
                                 archived_control["cargo_metadata"]["path"])
-    require(metadata["workspace_root"] == str(ROOT / "core"),
-            "reviewed discovery Cargo workspace differs from source")
     indexers = [package for package in metadata["packages"]
                 if package.get("name") == "indexer"]
     require(len(indexers) == 1,
             "reviewed discovery Cargo metadata lacks indexer")
+    workspace = Path(metadata["workspace_root"])
+    target_directory = Path(metadata["target_directory"])
+    require(workspace.is_absolute() and workspace.name == "core"
+            and target_directory.is_absolute()
+            and Path(indexers[0]["manifest_path"]) ==
+            workspace / "indexer/Cargo.toml"
+            and Path(archive["binary_path"]).is_relative_to(target_directory),
+            "reviewed discovery Cargo workspace or artifact paths disagree")
+    historical_file(source_sha, "core/indexer/Cargo.toml")
     records = [json.loads(line, object_pairs_hook=no_duplicate_keys,
                           parse_constant=no_nonfinite_constants)
                for line in (control_dir /

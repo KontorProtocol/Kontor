@@ -127,7 +127,15 @@ class BoundaryEvidenceTests(unittest.TestCase):
                                      digest(balances))
         false_burn = {**balances, "burned_after": "1"}
         false_supply = {**balances, "supply_after": "99"}
-        for altered in (false_burn, false_supply):
+        rounded_mismatch = {
+            **balances,
+            "after": "98.9999999999999999999999999999",
+            "burned_after": "1.0000000000000000000000000002",
+            "supply_after": "98.9999999999999999999999999997",
+        }
+        noncanonical = {**balances, "burned_after": "1.0"}
+        for altered in (false_burn, false_supply, rounded_mismatch,
+                        noncanonical):
             with self.assertRaises(ValueError):
                 validate_balance_transitions(altered, "paid", "ok", 100,
                                              digest(altered))
