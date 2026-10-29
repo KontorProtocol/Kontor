@@ -2,6 +2,8 @@ extern crate alloc;
 
 mod confirmation;
 pub use confirmation::{InspectedOp, ResultInfo, TransactionInfo};
+mod receipt_stream;
+pub use receipt_stream::{ReceiptStreamResponse, StreamReceipt, StreamResetReason};
 
 use anyhow::Result;
 use bitcoin::hex::DisplayHex;
@@ -789,7 +791,7 @@ pub struct Info {
     /// The last 10 indexed blocks, height-descending. The SDK compares
     /// these against its local block-hash cache for reorg detection.
     pub recent_blocks: Vec<RecentBlock>,
-    /// Hash of `last_result_id` + `recent_blocks`. Pass back as
+    /// Opaque token including the receipt lineage and rollback generation. Pass back as
     /// `?since=` to the long-poll endpoint; the request blocks until
     /// this value changes.
     pub signature: String,

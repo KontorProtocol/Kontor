@@ -23,10 +23,10 @@ use tracing::{Level, Span, error, field, info, span};
 
 use crate::api::handlers::{
     get_block_transactions, get_blocks, get_contract, get_contract_provenance, get_contracts,
-    get_fees, get_healthz_live, get_healthz_ready, get_index, get_metrics, get_result, get_results,
-    get_signer, get_signer_footprint, get_status, get_transaction, get_transaction_inspect,
-    get_transactions, post_compose, post_contract, post_simulate, post_transaction_broadcast,
-    post_transaction_hex_inspect,
+    get_fees, get_healthz_live, get_healthz_ready, get_index, get_metrics, get_receipt_stream,
+    get_result, get_results, get_signer, get_signer_footprint, get_status, get_transaction,
+    get_transaction_inspect, get_transactions, post_compose, post_contract, post_simulate,
+    post_transaction_broadcast, post_transaction_hex_inspect,
 };
 
 use super::{
@@ -179,6 +179,7 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
                 .route("/", get(get_results))
                 .route("/{id}", get(get_result)),
         )
+        .route("/receipt-stream", get(get_receipt_stream))
         .route("/checkpoints/{height}", get(get_checkpoint))
         .route("/signers/{identifier}", get(get_signer))
         .route("/signers/{identifier}/footprint", get(get_signer_footprint))
