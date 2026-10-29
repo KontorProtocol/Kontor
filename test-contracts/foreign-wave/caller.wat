@@ -37,6 +37,5 @@
     call $foreign
     local.get $ctx
     call $drop-view
-    i32.const 40004
-    i32.load)
+    i32.const 40000)
 )

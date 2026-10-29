@@ -19,8 +19,6 @@ EVENTS = [
 
 def attempt(sample, repeat=0):
     outcome, error_kind, result = EXPECTED[sample]
-    if sample == "print_depth_64":
-        result = "513"
     expr = expression(sample)
     return {"case_id": "foreign_wave_parse_print", "configuration": "production",
             "process_role": "target_observed", "sample_key": sample,
@@ -84,6 +82,16 @@ class ForeignWaveEvidenceTests(unittest.TestCase):
         baseline["observation"]["teardown_events"].pop()
         with self.assertRaises(ValueError):
             self.validate(baseline)
+
+    def test_rejects_equal_length_wrong_foreign_result(self):
+        for sample in ("depth_64", "literal_16384", "print_depth_64"):
+            with self.subTest(sample=sample):
+                item = attempt(sample)
+                original = item["observation"]["result_value"]
+                item["observation"]["result_value"] = original[:-2] + "8\""
+                self.assertEqual(len(original), len(item["observation"]["result_value"]))
+                with self.assertRaises(ValueError):
+                    self.validate(item)
 
     def test_rejects_outer_only_parse_trace(self):
         def event(name, blocking=False):

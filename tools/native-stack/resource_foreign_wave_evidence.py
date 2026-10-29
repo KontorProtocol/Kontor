@@ -21,11 +21,11 @@ CASE_ID = "foreign_wave_parse_print"
 SAMPLES = ("depth_64", "depth_65_rejected", "literal_16384",
            "literal_16385_rejected", "print_depth_64", "print_depth_65_rejected")
 EXPECTED = {
-    "depth_64": ("ok", None, "1"),
+    "depth_64": ("ok", None, json.dumps("1")),
     "depth_65_rejected": ("deterministic_error", "expression_depth", None),
-    "literal_16384": ("ok", None, "5"),
+    "literal_16384": ("ok", None, json.dumps("16384")),
     "literal_16385_rejected": ("deterministic_error", "string_literal_bytes", None),
-    "print_depth_64": ("ok", None, None),
+    "print_depth_64": ("ok", None, json.dumps("{child: " * 64 + "7" + "}" * 64)),
     "print_depth_65_rejected": ("deterministic_error", "result_value_depth", None),
 }
 OBSERVATION_KEYS = {
@@ -93,11 +93,7 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
             and value["outcome"] == expected_outcome
             and value["error_kind"] == expected_error
             and value["typed_trap"] is None
-            and (value["result_value"] == expected_result if sample !=
-                 "print_depth_64" else
-                 isinstance(value["result_value"], str) and
-                 value["result_value"].isdigit() and
-                 400 <= int(value["result_value"]) < 1024)
+            and value["result_value"] == expected_result
             and value["inner_expression_bytes"] == len(expr.encode())
             and value["inner_expression_sha256"] ==
                 hashlib.sha256(expr.encode()).hexdigest()

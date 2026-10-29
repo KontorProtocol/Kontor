@@ -8,6 +8,7 @@ use brotli::CompressorReader;
 use libsql::Connection;
 use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
+use stdlib::to_wave_expr;
 use wasmtime::Trap;
 use wit_component::{StringEncoding, embed_component_metadata};
 use wit_validator::Validator;
@@ -56,6 +57,16 @@ fn expression(sample: &str) -> Result<String> {
         "print_depth_65_rejected" => Ok("print-depth65()".into()),
         _ => bail!("unknown foreign WAVE sample {sample}"),
     }
+}
+
+fn expected_result(sample: &str) -> Option<String> {
+    let inner = match sample {
+        "depth_64" => "1".to_string(),
+        "literal_16384" => "16384".to_string(),
+        "print_depth_64" => format!("{}7{}", "{child: ".repeat(64), "}".repeat(64)),
+        _ => return None,
+    };
+    Some(to_wave_expr(inner.as_str()))
 }
 
 fn caller_wat() -> Result<String> {
@@ -235,17 +246,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
             };
             let result_value = result.ok();
             ensure!(
-                actual_error_kind == expected_error_kind
-                    && match sample {
-                        "depth_64" => result_value.as_deref() == Some("1"),
-                        "literal_16384" => result_value.as_deref() == Some("5"),
-                        "print_depth_64" => result_value.as_ref().is_some_and(|value| {
-                            value
-                                .parse::<usize>()
-                                .is_ok_and(|length| (400..1024).contains(&length))
-                        }),
-                        _ => result_value.is_none(),
-                    },
+                actual_error_kind == expected_error_kind && result_value == expected_result(sample),
                 "foreign WAVE {sample} returned wrong result or error: \
                  {actual_error_kind:?} {typed_trap:?} {result_value:?}"
             );

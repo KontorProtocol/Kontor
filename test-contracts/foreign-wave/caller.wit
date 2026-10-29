@@ -6,5 +6,5 @@ world root {
   use kontor:built-in/context.{proc-context, view-context, contract};
 
   export init: func(ctx: borrow<proc-context>) -> contract;
-  export run: func(ctx: borrow<view-context>, sample: u32) -> u32;
+  export run: func(ctx: borrow<view-context>, sample: u32) -> string;
 }

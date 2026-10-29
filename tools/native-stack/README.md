@@ -256,7 +256,8 @@ expression boundary and a 16,384-byte string literal. The adjacent rejected
 inputs have 64 nested records or a 16,385-byte literal. Separate target
 exports return 64- and 65-level record values to exercise bounded result
 printing. The validator distinguishes inner parser rejection from result
-visitor rejection using error kinds and canonical conversion events, and
+visitor rejection using error kinds and canonical conversion events. It checks
+the full returned foreign WAVE string, including the nested record value, and
 requires both caller and target Stores to close on every attempt. This fixture
 does not exercise paid-call accounting or arbitrary third-party WIT shapes.
 

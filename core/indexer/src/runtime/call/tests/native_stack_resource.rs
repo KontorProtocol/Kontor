@@ -726,8 +726,7 @@ fn finite_stack_worker_case() -> Result<()> {
                 )
                 .await?
             } else if task_case_id == "foreign_wave_parse_print" {
-                super::native_stack::resource_foreign_wave(&task_configuration, &task_role)
-                    .await?
+                super::native_stack::resource_foreign_wave(&task_configuration, &task_role).await?
             } else if task_case_id.starts_with("canonical_") {
                 super::native_stack::resource_canonical(
                     &task_case_id,
