@@ -28,70 +28,70 @@
   "boundary_cases": [
     {
       "case_id": "pulley_plain_core",
-      "first_failure": null,
-      "last_success": null,
+      "first_failure": 8188,
+      "last_success": 8187,
       "mode": "core",
       "repeats": 3,
       "shape": "plain"
     },
     {
       "case_id": "pulley_plain_paid",
-      "first_failure": null,
-      "last_success": null,
+      "first_failure": 8187,
+      "last_success": 8186,
       "mode": "paid",
       "repeats": 3,
       "shape": "plain"
     },
     {
       "case_id": "pulley_plain_system",
-      "first_failure": null,
-      "last_success": null,
+      "first_failure": 8188,
+      "last_success": 8187,
       "mode": "system",
       "repeats": 3,
       "shape": "plain"
     },
     {
       "case_id": "pulley_plain_view",
-      "first_failure": null,
-      "last_success": null,
+      "first_failure": 8188,
+      "last_success": 8187,
       "mode": "view",
       "repeats": 3,
       "shape": "plain"
     },
     {
       "case_id": "pulley_wide_core",
-      "first_failure": null,
-      "last_success": null,
+      "first_failure": 1723,
+      "last_success": 1722,
       "mode": "core",
       "repeats": 3,
       "shape": "wide"
     },
     {
       "case_id": "pulley_wide_paid",
-      "first_failure": null,
-      "last_success": null,
+      "first_failure": 1723,
+      "last_success": 1722,
       "mode": "paid",
       "repeats": 3,
       "shape": "wide"
     },
     {
       "case_id": "pulley_wide_system",
-      "first_failure": null,
-      "last_success": null,
+      "first_failure": 1723,
+      "last_success": 1722,
       "mode": "system",
       "repeats": 3,
       "shape": "wide"
     },
     {
       "case_id": "pulley_wide_view",
-      "first_failure": null,
-      "last_success": null,
+      "first_failure": 1723,
+      "last_success": 1722,
       "mode": "view",
       "repeats": 3,
       "shape": "wide"
     }
   ],
-  "claim_status": "pending_discovery",
+  "claim_status": "candidate_only",
   "configurations": [
     "reduced",
     "production"
@@ -109,8 +109,8 @@
   ],
   "leaf_case": {
     "case_id": "deepest_frame_host_call",
-    "first_failure": null,
-    "last_success": null,
+    "first_failure": 8181,
+    "last_success": 8180,
     "own_adjacent_boundary": true,
     "repeats": 2
   },
@@ -153,7 +153,7 @@
     "six_cell_qualification": "missing",
     "workload_plan": "awaiting_frozen_workload_plan"
   },
-  "reviewed_discovery_sha256": null,
+  "reviewed_discovery_sha256": "9c04b001175fc2bc39b7b535f7c184662ea39c6457ac222c132a2c6b28a474f6",
   "schema_sha256": "36023c14bd0faa5e35df8525dda3a4293ccdaa46a4829781239a0f310c8cf96f",
   "schema_version": 1,
   "source_baseline_commit": "67a52fed58a893ce2c1c05483f86f4fffa02a675",
@@ -168,7 +168,7 @@
     },
     "depths": {
       "path": "tools/native-stack/resource-boundary-depths-v1.json",
-      "sha256": "d1c4a02a03b751be2557e8273fe4e9bda64c98c9ae30a405c31b148bd551c5fd"
+      "sha256": "bf08438df438b6e1c3037240e7a72f54166ff003cb5b532ce4da017fe70501af"
     },
     "fixture_binary": {
       "path": "test-contracts/binaries/stack_probe.wasm.br",
