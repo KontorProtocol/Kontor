@@ -605,3 +605,58 @@ Parent and both independent reviewers accepted this evidence and documentation,
 including Interlink receipt `f45d28841b53f7fc3eebc17141ad37a0`. Historical binary
 identity, commands and terminal exit codes are parent-recorded observations
 consistent with the logs; reviewers did not rerun the shared binary after release.
+
+
+## Bounded storage cursor workload
+
+The pagination variant adds a dedicated `workload-storage` contract. It leaves
+all existing contract binaries, their provenance, and the shared counter source
+byte-identical to `e154e995`. Only this variant publishes the new contract and
+seeds 257 entries through Core before taking its state and accounting baseline.
+Core publication and seeding are prepared state, not signed setup transactions.
+
+The 100-operation mixed workload replaces five storage-read slots with calls to
+the new contract. Forward pages contain entries 0..127, 128..255 and 256; reverse
+pages contain 256..129 and 128..1. Every returned key and value is checked against
+an independent expected sequence. Fixed-width string keys preserve numeric
+ordering under the storage codec. Cursor bounds are exclusive. Additional
+observation views check the final reverse entry, exhausted cursors in both
+directions and zero-length pages. The guest uses a bounded row iterator, with
+128 entries per page at most. These are contract-level cursor pages, not a claim
+that SQLite internally fetches rows in batches of 128.
+
+The test retains mixed-operation receipts, rollback, fee and collateral
+accounting, validator/storage lifecycle checks, pruning, and two independent
+snapshot restores. The final database projection includes all seeded entries.
+Resource ownership was traced through the iterator and host row resource;
+this case adds no separate lifecycle-counter measurement. It is a bounded
+257-row development diagnostic, not the planned 10,000/100,000-key populations,
+load testing, or full six-cell qualification.
+
+Final source `6a9857832f73459551ddb6f256992b712835f2e9` passed all three source
+reviews, including Interlink `ed8e6480f8652e2619be6d3c64928d52`. The pinned
+`tools/kontor build test --runtime podman -j 2` and its `--check` rerun passed.
+New compressed artifact SHA-256:
+`af367f8fb004d62f15ab83c5c46656394157ac1ce6f814d08c799491484f9a03`.
+The first two generation attempts failed because the new crate lacked the WIT
+dependency link and because exported tuples are unsupported. The final crate
+uses the conventional built-in WIT symlink and a named `entry` record. Both
+failed logs are preserved alongside the successful results.
+
+The locked offline two-job node build passed in 54.41 seconds. Binary SHA-256:
+`6f45aeaddd10ddc7ba8b6259d1cf0072c79f6985ca85c45603c74fe0311a90f8`.
+Pagination, plain mixed operations, multi-input sponsorship and sponsored BLS
+all passed in 237.63 seconds on that binary. The fresh-block, batch, simulation,
+50-transaction and 500-transaction modes last passed at `a8ccf3e8`; they were not
+rerun at this head. This duration includes setup and
+is not performance qualification. Clippy reports the same six inherited S2
+findings, with no new workload finding. Their native-branch fixes await
+integration, so this is not a green merge candidate; no lint was suppressed.
+
+The ignored `.build-cache/workload-reconcile/pagination-validation.json` records
+source and artifact identities, commands, terminal outcomes and hashes of seven
+logs, including both initial generation failures. Parent and both independent
+reviewers accepted this evidence and documentation, including Interlink receipt
+`bc6391def8be7719071ee84ca84c4373`. Historical binary identity, commands and
+terminal exits are parent-recorded metadata consistent with the logs; reviewers
+did not rerun the shared binary after the build slot was released.
