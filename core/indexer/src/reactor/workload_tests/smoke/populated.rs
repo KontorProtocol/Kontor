@@ -26,10 +26,18 @@ use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{ComponentCache, Decimal, Runtime, Storage, TransactionContext};
 
+mod batch;
 mod oracle;
 mod pruning;
 
+use batch::BatchProof;
 use pruning::PruningProof;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Delivery {
+    FreshBlock,
+    BatchThenConfirmation,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -112,12 +120,30 @@ fn workload_population_configuration_rejects_ambiguous_or_invalid_input() -> Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires local bitcoind; populated development replay, not performance acceptance"]
 async fn workload_populated_block_replays_transitions_and_rewards() -> Result<()> {
-    replay(PopulationConfig {
-        active_validators: 4,
-        replacements: 2,
-        agreements: 2,
-        members_per_agreement: 3,
-    })
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::FreshBlock,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; real batch/confirmation replay, not performance acceptance"]
+async fn workload_batch_confirmation_preserves_execution_and_charges() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::BatchThenConfirmation,
+    )
     .await
 }
 
@@ -128,12 +154,13 @@ async fn workload_configured_population_replays_transitions_and_rewards() -> Res
         &std::env::var("KONTOR_WORKLOAD_POPULATION")
             .context("configured replay requires KONTOR_WORKLOAD_POPULATION")?,
     )?;
-    replay(config).await
+    replay(config, Delivery::FreshBlock).await
 }
 
-async fn replay(config: PopulationConfig) -> Result<()> {
+async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let config = config.validate()?;
     eprintln!("workload_population={}", serde_json::to_string(&config)?);
+    eprintln!("workload_delivery={delivery:?}");
     let bitcoin_dir = TempDir::new()?;
     let (child, client) = workload_bitcoin(bitcoin_dir.path()).await?;
     let mut bitcoin = BitcoinProcess(child);
@@ -291,10 +318,21 @@ async fn replay(config: PopulationConfig) -> Result<()> {
             database_projection(&trial.db_conn()).await? == projection_before,
             "reactor startup changed restored state"
         );
+        let batch = if delivery == Delivery::BatchThenConfirmation {
+            Some(BatchProof::execute(&mut trial, &reveal).await?)
+        } else {
+            None
+        };
         apply(&mut trial, block.clone()).await?;
         let projection = database_projection(&trial.db_conn()).await?;
         pruning.check(&trial.db_conn()).await?;
-        let rows = receipts(&trial.db_conn(), SMOKE_HEIGHT).await?;
+        let mut rows = receipts(&trial.db_conn(), SMOKE_HEIGHT).await?;
+        if let Some(batch) = batch {
+            // Execution remains at the batch anchor. Only confirmation metadata
+            // moves to the new block, whose lifecycle still runs exactly once.
+            rows.extend(batch.check(&trial).await?);
+            rows.sort_by_key(|row| row.id);
+        }
         let paid: Vec<_> = rows
             .iter()
             .filter(|row| row.txid.as_deref() == Some(&txid))
@@ -305,6 +343,14 @@ async fn replay(config: PopulationConfig) -> Result<()> {
                 .all(|row| row.txid.is_none() || row.txid.as_deref() == Some(&txid))
         );
         for (index, row) in paid.iter().enumerate() {
+            ensure!(
+                row.height
+                    == if delivery == Delivery::BatchThenConfirmation {
+                        ANCHOR_HEIGHT
+                    } else {
+                        SMOKE_HEIGHT
+                    }
+            );
             // Stored receipt positions currently use the filtered transaction index.
             ensure!(
                 row.tx_index == Some(0)
