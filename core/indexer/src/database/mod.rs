@@ -1,5 +1,5 @@
-pub mod connection;
 pub mod confirmation;
+pub mod connection;
 pub mod init;
 pub mod native_contracts;
 mod pool;
