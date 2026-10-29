@@ -660,3 +660,53 @@ reviewers accepted this evidence and documentation, including Interlink receipt
 `bc6391def8be7719071ee84ca84c4373`. Historical binary identity, commands and
 terminal exits are parent-recorded metadata consistent with the logs; reviewers
 did not rerun the shared binary after the build slot was released.
+
+
+## Signed file registration and block registry append
+
+The signed-file variant combines the bounded pagination workload with five
+`create-agreement` operations. Each round replaces the second staking call with
+one file registration, keeping 100 paid operations. This leaves 100 root receipts
+and 20 nested receipts, with total new stake 0.005. Descriptor bytes are prepared
+locally using `prepare_file` and deterministic nonces, but the agreements do not
+exist in the baseline. Real payer-signed Bitcoin operations create them.
+
+Each receipt's agreement ID and every stored descriptor field are checked.
+New agreements occupy the next five ledger indices, remain inactive, and have
+no members or active challenge. Weight and collateral are exact cross-checks
+of the pinned native `compute_collateral` formula. They are not an independent
+pricing oracle. Inactive registrations leave the active count and total weight
+unchanged, although their increasing indices change the rank.
+
+The real block lifecycle must produce exactly one successful `record-block-root`
+receipt. Checks cover the unchanged active-file cursor, two retained root-history
+entries, an empty append queue, frontier count and next ledger index. A full
+`aggregate_root_from_files` over the baseline plus new files must match the
+persisted incremental frontier and newest root. The earlier root remains intact.
+The existing reward, host-obligation, challenge, fee/collateral, pruning and
+whole-database replay checks remain enabled. Each mode executes twice from
+independent snapshot restores.
+
+Source `fec1d174f280a4568d8e4d1e1b8b98aaf3e7342a`, based on `ee3764fe`, passed
+all three source reviews, including Interlink `854ff914906ef80f6e9151cc9a27e68c`.
+The final source follow-up only explains the mirrored collateral calculation.
+The locked offline two-job build passed in 48.91 seconds. Binary SHA-256:
+`f001150cd576460ab2d94a9156a576ab35e3afec6ca3808c9c93b9008579bbae`.
+Signed files and the pagination regression both passed in 123.27 seconds.
+Plain mixed operations, multi-input sponsorship and BLS last passed at `6a985783`;
+fresh-block, batch, simulation, 50-transaction and 500-transaction modes last
+passed at `a8ccf3e8`. Those eight other modes were not rerun at this head.
+Clippy still reports only the six inherited S2 findings; their native-branch
+fixes await integration, and this is not a green merge candidate.
+
+This evidence covers five successful inactive registrations and one block's
+ledger append. It does not qualify malformed or duplicate descriptors, joins,
+activation, proofs, cleanup backlog, large registries, operational performance,
+or the final six-cell campaign. Setup and elapsed test time are not performance
+measurements. No contract artifact changed in this addition.
+The ignored `.build-cache/workload-reconcile/files-validation.json` records
+commands, source/binary identities, terminal outcomes and three raw-log hashes.
+Parent and both independent reviewers accepted this evidence and documentation,
+including Interlink receipt `3777a2c91aaef3463d9a30cdcde426aa`. Historical binary
+identity, commands and terminal exits are parent-recorded metadata consistent
+with the logs; reviewers did not rerun the shared binary after slot release.
