@@ -29,14 +29,17 @@ use crate::runtime::{ComponentCache, Decimal, Runtime, Storage, TransactionConte
 mod batch;
 mod oracle;
 mod pruning;
+mod simulation;
 
 use batch::BatchProof;
 use pruning::PruningProof;
+use simulation::SimulationProof;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Delivery {
     FreshBlock,
     BatchThenConfirmation,
+    SimulationsThenBatch,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -143,6 +146,21 @@ async fn workload_batch_confirmation_preserves_execution_and_charges() -> Result
             members_per_agreement: 3,
         },
         Delivery::BatchThenConfirmation,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; simulation rollback then canonical replay, not API load qualification"]
+async fn workload_simulations_rollback_before_batch_confirmation() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::SimulationsThenBatch,
     )
     .await
 }
@@ -318,7 +336,12 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             database_projection(&trial.db_conn()).await? == projection_before,
             "reactor startup changed restored state"
         );
-        let batch = if delivery == Delivery::BatchThenConfirmation {
+        let simulations = if delivery == Delivery::SimulationsThenBatch {
+            Some(SimulationProof::execute(&mut trial, &reveal).await?)
+        } else {
+            None
+        };
+        let batch = if delivery != Delivery::FreshBlock {
             Some(BatchProof::execute(&mut trial, &reveal).await?)
         } else {
             None
@@ -338,6 +361,9 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             .filter(|row| row.txid.as_deref() == Some(&txid))
             .collect();
         ensure!(paid.len() == 3);
+        if let Some(simulations) = simulations {
+            simulations.check(&paid)?;
+        }
         ensure!(
             rows.iter()
                 .all(|row| row.txid.is_none() || row.txid.as_deref() == Some(&txid))
@@ -345,7 +371,7 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         for (index, row) in paid.iter().enumerate() {
             ensure!(
                 row.height
-                    == if delivery == Delivery::BatchThenConfirmation {
+                    == if delivery != Delivery::FreshBlock {
                         ANCHOR_HEIGHT
                     } else {
                         SMOKE_HEIGHT
