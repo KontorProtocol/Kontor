@@ -51,6 +51,9 @@ impl FileWorkload {
             total_weight = add_decimal(total_weight, file.storage_weight)?;
         }
         let baseline_root = aggregate_root_from_files(&roots)?.to_vec();
+        // Mirrors compute_collateral in native-contracts/filestorage/src/lib.rs.
+        // New registrations stay inactive, so active count and total weight
+        // remain constant while each new ledger index changes the rank.
         let growth = mul_decimal(
             log10_decimal(add_decimal(
                 Decimal::from("1"),
