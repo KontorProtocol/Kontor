@@ -28,70 +28,70 @@
   "boundary_cases": [
     {
       "case_id": "pulley_plain_core",
-      "first_failure": 8188,
-      "last_success": 8187,
+      "first_failure": null,
+      "last_success": null,
       "mode": "core",
       "repeats": 3,
       "shape": "plain"
     },
     {
       "case_id": "pulley_plain_paid",
-      "first_failure": 8187,
-      "last_success": 8186,
+      "first_failure": null,
+      "last_success": null,
       "mode": "paid",
       "repeats": 3,
       "shape": "plain"
     },
     {
       "case_id": "pulley_plain_system",
-      "first_failure": 8188,
-      "last_success": 8187,
+      "first_failure": null,
+      "last_success": null,
       "mode": "system",
       "repeats": 3,
       "shape": "plain"
     },
     {
       "case_id": "pulley_plain_view",
-      "first_failure": 8188,
-      "last_success": 8187,
+      "first_failure": null,
+      "last_success": null,
       "mode": "view",
       "repeats": 3,
       "shape": "plain"
     },
     {
       "case_id": "pulley_wide_core",
-      "first_failure": 1723,
-      "last_success": 1722,
+      "first_failure": null,
+      "last_success": null,
       "mode": "core",
       "repeats": 3,
       "shape": "wide"
     },
     {
       "case_id": "pulley_wide_paid",
-      "first_failure": 1723,
-      "last_success": 1722,
+      "first_failure": null,
+      "last_success": null,
       "mode": "paid",
       "repeats": 3,
       "shape": "wide"
     },
     {
       "case_id": "pulley_wide_system",
-      "first_failure": 1723,
-      "last_success": 1722,
+      "first_failure": null,
+      "last_success": null,
       "mode": "system",
       "repeats": 3,
       "shape": "wide"
     },
     {
       "case_id": "pulley_wide_view",
-      "first_failure": 1723,
-      "last_success": 1722,
+      "first_failure": null,
+      "last_success": null,
       "mode": "view",
       "repeats": 3,
       "shape": "wide"
     }
   ],
-  "claim_status": "candidate_only",
+  "claim_status": "pending_discovery",
   "configurations": [
     "reduced",
     "production"
@@ -109,12 +109,12 @@
   ],
   "leaf_case": {
     "case_id": "deepest_frame_host_call",
-    "first_failure": 8181,
-    "last_success": 8180,
+    "first_failure": null,
+    "last_success": null,
     "own_adjacent_boundary": true,
     "repeats": 2
   },
-  "parent_manifest_sha256": "3c47d1ba4610a907694ceb50abba6fb7641d57e41c224f1c68778565854fb0b0",
+  "parent_manifest_sha256": "90bc1f32f45763a17bded00739da6a5952b92b5576137bce14d4ed1004d50bc1",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -153,7 +153,7 @@
     "six_cell_qualification": "missing",
     "workload_plan": "awaiting_frozen_workload_plan"
   },
-  "reviewed_discovery_sha256": "9c04b001175fc2bc39b7b535f7c184662ea39c6457ac222c132a2c6b28a474f6",
+  "reviewed_discovery_sha256": null,
   "schema_sha256": "36023c14bd0faa5e35df8525dda3a4293ccdaa46a4829781239a0f310c8cf96f",
   "schema_version": 1,
   "source_baseline_commit": "67a52fed58a893ce2c1c05483f86f4fffa02a675",
@@ -168,7 +168,7 @@
     },
     "depths": {
       "path": "tools/native-stack/resource-boundary-depths-v1.json",
-      "sha256": "bf08438df438b6e1c3037240e7a72f54166ff003cb5b532ce4da017fe70501af"
+      "sha256": "14a4cf8804797ad77fe2f6b1dfce9d067c002816db77511475ed4ea71b0e9b68"
     },
     "fixture_binary": {
       "path": "test-contracts/binaries/stack_probe.wasm.br",
@@ -200,7 +200,7 @@
     },
     "synthetic_guard_tests": {
       "path": "tools/native-stack/test_resource_report.py",
-      "sha256": "b20dfa41e4be49d3e417d99faa138053162093d0cd0aec82212ff559a5b0e36e"
+      "sha256": "b59be6b700694cf7d90a521b1e7ce5ca436c3491a2783489653460b6ecec7e6d"
     },
     "tests": {
       "path": "tools/native-stack/test_resource_boundary_evidence.py",

@@ -304,7 +304,8 @@ def synthetic_report(directory):
                           "src_path": str(checkout / "crates/fiber/src/lib.rs")}]},
         ],
         "resolve": {"nodes": [
-            {"id": indexer_id, "deps": [{"name": "wasmtime", "pkg": wasmtime_id}]},
+            {"id": indexer_id, "features": policy["resolved_indexer_test_features"],
+             "deps": [{"name": "wasmtime", "pkg": wasmtime_id}]},
             {"id": wasmtime_id,
              "deps": [{"name": "wasmtime_fiber", "pkg": fiber_id}]},
             {"id": fiber_id, "deps": [], "features": ["std"]},
@@ -315,7 +316,7 @@ def synthetic_report(directory):
         {"reason": "compiler-artifact", "package_id": indexer_id,
          "target": {"name": "indexer", "kind": ["lib"]},
          "profile": {"test": True, "opt_level": "0", "debug_assertions": True},
-         "features": [], "executable": binary_path},
+         "features": policy["resolved_indexer_test_features"], "executable": binary_path},
         {"reason": "compiler-artifact", "package_id": wasmtime_id,
          "target": {"name": "wasmtime", "kind": ["lib"]},
          "features": manifest["wasmtime_features"]["qualification"]},
@@ -427,7 +428,8 @@ class ResourceReportControls(unittest.TestCase):
 
     def test_build_artifact_and_child_identity_mutations(self):
         for mutation in ("metadata", "resolved_fork", "indexer_package", "artifact_path",
-                         "compiled_features", "profile", "failed_build",
+                         "compiled_features", "indexer_artifact_feature",
+                         "indexer_graph_feature", "profile", "failed_build",
                          "cargo_target", "rustc_log", "process_command",
                          "binary_bytes", "binary_sha", "git_head", "dirty_tree",
                          "claimed_source_sha",
@@ -445,6 +447,8 @@ class ResourceReportControls(unittest.TestCase):
                     "indexer_package": "unique indexer, Wasmtime, or fiber artifacts",
                     "artifact_path": "Cargo artifact path, profile, or compiled features",
                     "compiled_features": "Cargo artifact path, profile, or compiled features",
+                    "indexer_artifact_feature": "Cargo artifact path, profile, or compiled features",
+                    "indexer_graph_feature": "does not resolve indexer to the pinned Wasmtime fork",
                     "profile": "Cargo artifact path, profile, or compiled features",
                     "failed_build": "Cargo JSON build did not complete",
                     "cargo_target": "Cargo build command differs",
@@ -485,15 +489,19 @@ class ResourceReportControls(unittest.TestCase):
                     digest = resource_evidence.sha256(path)
                     closure["cargo_metadata_log"]["sha256"] = digest
                     closure["cargo_metadata_sha256"] = digest
-                elif mutation == "resolved_fork":
+                elif mutation in {"resolved_fork", "indexer_graph_feature"}:
                     path = directory / closure["cargo_metadata_log"]["path"]
                     metadata = json.loads(path.read_text())
-                    metadata["resolve"]["nodes"][0]["deps"][0]["pkg"] += "-other"
+                    if mutation == "resolved_fork":
+                        metadata["resolve"]["nodes"][0]["deps"][0]["pkg"] += "-other"
+                    else:
+                        metadata["resolve"]["nodes"][0]["features"].append("profiling")
                     path.write_text(json.dumps(metadata))
                     digest = resource_evidence.sha256(path)
                     closure["cargo_metadata_log"]["sha256"] = digest
                     closure["cargo_metadata_sha256"] = digest
                 elif mutation in {"indexer_package", "artifact_path", "compiled_features",
+                                  "indexer_artifact_feature",
                                   "profile", "failed_build", "wrong_fiber_artifact"}:
                     path = directory / closure["build_log"]["path"]
                     entries = [json.loads(line) for line in path.read_text().splitlines()]
@@ -503,6 +511,8 @@ class ResourceReportControls(unittest.TestCase):
                         entries[0]["executable"] += "-other"
                     elif mutation == "compiled_features":
                         entries[1]["features"].append("profiling")
+                    elif mutation == "indexer_artifact_feature":
+                        entries[0]["features"].append("profiling")
                     elif mutation == "wrong_fiber_artifact":
                         entries[2]["package_id"] += "-other"
                     elif mutation == "profile":

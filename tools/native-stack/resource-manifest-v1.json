@@ -52,6 +52,10 @@
       "path": "core/indexer/build.rs",
       "sha256": "182fc2714a0772379cd74e8025f02d7841732b38e69788ac0d9fc5e55abe519d"
     },
+    "indexer_manifest": {
+      "path": "core/indexer/Cargo.toml",
+      "sha256": "8eaa49dfff7d02d4fc67255e2efc9d119710c865451611844fa951daea4df757"
+    },
     "invocation_budget": {
       "path": "core/indexer/src/runtime/invocation.rs",
       "sha256": "4e767d07aa26053467cf8ae24fe38d6da7e66206b2c1180e5a5c7a5918a4ad08"
@@ -102,7 +106,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "5a33103f1910c1a5e3743dafe03ced9c9acbe4e4971d8910737c0186824ddda2"
+      "sha256": "7d9e8e9f657e8823802410a7a90cd28796089ab8a289412e5e8d9c6334166c47"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -118,7 +122,7 @@
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "2a70fda3f7c992d6bf2004cf6887badbdf48ddfb774f8fddf71185bd64ee0637"
+      "sha256": "b6054fae1647eb09335046cef8a3fd96db0e6eb2a22ecf7e569139b58ebd191e"
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
@@ -152,6 +156,14 @@
       "path": "core/indexer/src/test_utils.rs",
       "sha256": "eaf0bda8e242ed339ad5b70181aadf728a5fb80306d16c1908116d815a958a0a"
     },
+    "testing_host_imports": {
+      "path": "core/indexer/src/runtime/host_files.rs",
+      "sha256": "1d8cadee984433d4ed9ea809b82116217ca7f4770b9182bcefcc3ef7c0fafb45"
+    },
+    "testlib_manifest": {
+      "path": "core/testlib/Cargo.toml",
+      "sha256": "ebe96a3b356334376f7d648286b19055d2b16bbeeb52e54ead8357d6408be079"
+    },
     "token_pages": {
       "path": "core/indexer/src/runtime/token/query_tests.rs",
       "sha256": "41717ccc31cc3ec99971ff1469c95cbe2fbe2bf25eea1eac95368d7b1f9c6f48"
@@ -176,10 +188,18 @@
       "RUSTFLAGS": "",
       "RUSTUP_TOOLCHAIN": "1.99.1"
     },
+    "production_indexer_features": [],
+    "resolved_indexer_test_features": [
+      "testing"
+    ],
     "rustc_release": "1.99.1",
     "rustc_wrapper": "",
     "rustflags": [],
-    "stack_probing_configuration": "target default; native probe coverage not verified by disassembly"
+    "stack_probing_configuration": "target default; native probe coverage not verified by disassembly",
+    "testing_host_imports": [
+      "host-error",
+      "host-panic"
+    ]
   },
   "cases": [
     {

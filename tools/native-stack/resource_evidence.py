@@ -616,6 +616,8 @@ def check_build_artifact(report, manifest, directory):
     fiber_nodes = [node for node in resolve["nodes"]
                    if isinstance(node, dict) and node.get("id") == fiber["id"]]
     require(len(indexer_nodes) == len(wasmtime_nodes) == 1
+            and indexer_nodes[0].get("features") ==
+                manifest["build_policy"]["resolved_indexer_test_features"]
             and isinstance(indexer_nodes[0].get("deps"), list)
             and any(isinstance(dependency, dict)
                     and dependency.get("name") == "wasmtime"
@@ -685,7 +687,8 @@ def check_build_artifact(report, manifest, directory):
     wasmtime_artifact = wasmtime_artifacts[0]
     fiber_artifact = fiber_artifacts[0]
     require(indexer_artifact["executable"] == report["binary_path"]
-            and indexer_artifact.get("features") == closure["cargo_features"]
+            and indexer_artifact.get("features") ==
+                manifest["build_policy"]["resolved_indexer_test_features"]
             and indexer_artifact["profile"].get("opt_level") ==
                 ("3" if profile == "release" else "0")
             and indexer_artifact["profile"].get("debug_assertions") is (profile == "debug")

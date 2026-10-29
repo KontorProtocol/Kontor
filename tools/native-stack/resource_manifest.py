@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import tomllib
 from pathlib import Path
 
 from compare import PRODUCTION_FEATURES, QUALIFICATION_FEATURES
@@ -25,6 +26,9 @@ FIBER_SOURCE_FILES = {
 BASE_COMMIT = "67a52fed58a893ce2c1c05483f86f4fffa02a675"
 INPUTS = {
     "core_lockfile": "core/Cargo.lock",
+    "indexer_manifest": "core/indexer/Cargo.toml",
+    "testlib_manifest": "core/testlib/Cargo.toml",
+    "testing_host_imports": "core/indexer/src/runtime/host_files.rs",
     "indexer_build_script": "core/indexer/build.rs",
     "stack_probe": "test-contracts/binaries/stack_probe.wasm.br",
     "stack_probe_source": "test-contracts/stack-probe/src/lib.rs",
@@ -253,6 +257,12 @@ def cases():
 def build_manifest():
     if sha256(ROOT / AMENDMENT) != AMENDMENT_SHA256:
         raise ValueError("approved resource amendment bytes changed")
+    indexer = tomllib.loads((ROOT / INPUTS["indexer_manifest"]).read_text())
+    testlib = tomllib.loads((ROOT / INPUTS["testlib_manifest"]).read_text())
+    if (indexer.get("features", {}).get("testing") != []
+            or indexer.get("features", {}).get("default", []) != []
+            or testlib.get("dependencies", {}).get("indexer", {}).get("features") != ["testing"]):
+        raise ValueError("test-only indexer feature path differs from frozen policy")
     artifacts = {
         name: {"path": path, "sha256": sha256(ROOT / path)}
         for name, path in sorted(INPUTS.items())
@@ -266,6 +276,9 @@ def build_manifest():
         "wasmtime_features": {"production": sorted(PRODUCTION_FEATURES),
                               "qualification": sorted(QUALIFICATION_FEATURES)},
         "build_policy": {"rustc_release": "1.99.1", "cargo_features": [],
+                         "resolved_indexer_test_features": ["testing"],
+                         "production_indexer_features": [],
+                         "testing_host_imports": ["host-error", "host-panic"],
                          "rustflags": [], "rustc_wrapper": "",
                          "stack_probing_configuration":
                          "target default; native probe coverage not verified by disassembly",
