@@ -89,6 +89,15 @@ class SqlitePaginationEvidenceTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         self.validate(item)
 
+    def test_rejects_pre_native_genesis_actor_identity(self):
+        for sample, field in (("token_100_final", "acc"),
+                              ("nft_100_final", "owner")):
+            with self.subTest(sample=sample):
+                item = attempt(sample)
+                item["observation"]["page"]["items"][-1][field] = "2"
+                with self.assertRaises(ValueError):
+                    self.validate(item)
+
     def test_rejects_continuation_cursor_and_store_defects(self):
         baseline = attempt("token_7_middle")
         for path, replacement in (("cursor", "10509"),

@@ -314,7 +314,7 @@
     },
     "sqlite_pagination_validator_tests": {
       "path": "tools/native-stack/test_resource_sqlite_pagination_evidence.py",
-      "sha256": "cece7261edae6b0d06fde67ba22a602030d1bda2c2cc8dde40df2c0ac256dddf"
+      "sha256": "094b88a343013172a4706c1ecd6c9d44861f6281dd88f592ae5ea4807a970985"
     },
     "stack_probe": {
       "path": "test-contracts/binaries/stack_probe.wasm.br",
