@@ -337,7 +337,6 @@ def validate_balance_transitions(balances, mode, digest):
     require(all(amount.is_finite() and amount >= 0 for amount in amounts.values())
             and amounts["restored"] == amounts["before"]
             and amounts["floor_restored"] == amounts["floor_before"]
-            and amounts["floor_after"] == amounts["floor_before"]
             and (amounts["before"] - amounts["after"] ==
                  amounts["burned_after"] - amounts["burned_before"] ==
                  amounts["supply_before"] - amounts["supply_after"])

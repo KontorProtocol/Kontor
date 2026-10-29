@@ -196,11 +196,11 @@
     },
     "tests": {
       "path": "tools/native-stack/test_resource_boundary_evidence.py",
-      "sha256": "7273300e0d8a72784590385ace41b6184693e8838ed1d0467bd02849d935a9ac"
+      "sha256": "d78e6466a78183a4f1f9aa4839c04d9f0e584977b0a8e36179ba4da215e6242d"
     },
     "validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "0d5b3a23ebaaf34f795a4fc229869e57d4f6b9a5e081da250afb4f4a6c12e5b7"
+      "sha256": "8cfcc4eabfbf514c4d47e5d3999f5cbd1c443abaf2cb2a900ae679ad80a1b698"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",

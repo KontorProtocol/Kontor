@@ -135,6 +135,9 @@ class BoundaryEvidenceTests(unittest.TestCase):
                      "supply_after": "100"}
         for mode in ("view", "system", "core"):
             validate_balance_transitions(no_charge, mode, digest(no_charge))
+        core_floor_change = {**no_charge, "floor_after": "1"}
+        validate_balance_transitions(core_floor_change, "core",
+                                     digest(core_floor_change))
 
     def test_cell_rejects_wrong_architecture_or_build_profile(self):
         artifact = {"profile": {
