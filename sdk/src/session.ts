@@ -473,7 +473,9 @@ export class KontorSession {
    * Follow chain events — the indexer-following API. Returns a fresh
    * async iterator over `ChainEvent`s (tx outcomes + reorg signals),
    * attached to the session's already-running poller. Multiple
-   * iterators share that one loop.
+   * iterators share that one loop. A later iterator joins at its current
+   * completed progress and receives subsequent emitted events, without replay
+   * of earlier events. Use a separate session for an independent resume token.
    *
    *     for await (const event of session.events()) {
    *       await store.transaction(async (tx) => {

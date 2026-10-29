@@ -825,3 +825,77 @@ test.each(["origin", "resume"] as const)(
     });
   },
 );
+
+test("last unsubscribe during a page request preserves undelivered progress", async () => {
+  let release!: (value: Response) => void;
+  let requested!: () => void;
+  const started = new Promise<void>((resolve) => {
+    requested = resolve;
+  });
+  const pending = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  const cursors: Array<string | null> = [];
+  const fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (!url.pathname.endsWith("/receipt-stream")) {
+      if (url.searchParams.has("wait")) await sleep(5);
+      return response({ signature: "s1" });
+    }
+    cursors.push(url.searchParams.get("from"));
+    if (cursors.length === 1) {
+      requested();
+      return pending;
+    }
+    return response(page([row(1, "undelivered", 1)]));
+  }) as typeof globalThis.fetch;
+  const poller = new ResultsPoller({
+    baseUrl: "http://test/api",
+    fetch,
+    from: token(0),
+  });
+  openPollers.push(poller);
+  const first = poller.events();
+  poller.start();
+  await started;
+  await first.return!();
+  release(response(page([row(1, "undelivered", 1)])));
+  await poller.ready();
+  const second = poller.events();
+  expect((await second.next()).value).toMatchObject({
+    kind: "tx",
+    txid: "undelivered",
+  });
+  expect(cursors.slice(0, 2)).toEqual([token(0), token(0)]);
+});
+
+test("later iterators join live progress without replaying earlier events", async () => {
+  let release!: (value: Response) => void;
+  const pending = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  const fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (!url.pathname.endsWith("/receipt-stream")) {
+      if (url.searchParams.has("wait")) await sleep(5);
+      return response({ signature: "s1" });
+    }
+    if (url.searchParams.get("from") === token(0))
+      return response(page([row(1, "before", 1)]));
+    if (url.searchParams.get("from") === token(1)) return pending;
+    return response(page([], false, 0, 2));
+  }) as typeof globalThis.fetch;
+  const poller = new ResultsPoller({
+    baseUrl: "http://test/api",
+    fetch,
+    from: token(0),
+  });
+  openPollers.push(poller);
+  const first = poller.events();
+  poller.start();
+  expect((await first.next()).value).toMatchObject({ txid: "before" });
+  const second = poller.events();
+  release(response(page([row(2, "shared", 2)])));
+  expect((await first.next()).value).toMatchObject({ txid: "shared" });
+  expect((await second.next()).value).toMatchObject({ txid: "shared" });
+});

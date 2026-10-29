@@ -140,6 +140,10 @@ The SDK exposes `resumeToken` on both `tx` and `reorg` events. Configure
 current canonical history. The default follows the current tip. Numeric-only
 resume requires an explicit resynchronization. `ReceiptStreamError.reason` names
 terminal failures; the SDK never silently switches nodes or skips to the tip.
+Calling `ready()` before `events()` does not consume receipts. Draining pauses
+while there are no subscribers. Multiple iterators on one session share its
+progress: a later iterator receives subsequent events, without replaying events
+already emitted. Use separate sessions for independent resumable consumers.
 
 Consumers must commit each transaction's derived effects and its token in one
 database transaction. For a reorg, retract effects strictly above `forkHeight`
@@ -166,10 +170,14 @@ when current IDs are supported. Retained executor allocation remains unchanged.
 
 ## Acceptance status
 
-The following evidence predates the durable recovery extension. That extension
-has source reviews for its journal and API, SQL smoke checks and 25 SDK poller
-tests, but still requires generated bindings, Rust execution, CLI integration,
-full SDK/package checks and final reviews before merge.
+The recovery extension passed 10 database/API tests, the same-hash replay wake
+regression, 15 confirmation regressions, and real reactor Bitcoin rollback and
+restart/finality rollback tests. The backfill executable test and both rotation
+executable tests passed, including nonmutating legacy-backup rejection. All 70
+unfiltered indexer-types tests regenerated the SDK declarations. Web and native
+SDK builds, the full SDK suite, and installed-tarball consumer checks passed.
+Final independent review and current-head CI remain required before merge.
+The earlier evidence below predates this recovery extension.
 
 The migration, coordinator, backfill and initial API slices have passed their
 focused Rust tests and independent source reviews. Database, batch, consensus
