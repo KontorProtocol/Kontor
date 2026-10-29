@@ -342,3 +342,63 @@ Parent and both independent reviewers verified this evidence. The subagent
 rehashed the logs and counted unique passes, including all prior baseline cases;
 Interlink accepted both moves in acknowledged receipt
 `a398e302ebef8224b22140f3e20ae5c5`. This closes preparation review only.
+
+## Coordinator rules preparation
+
+Source `716e120af944868d4bba162c8d8023a16905565c` follows `3439d528`.
+`protocol/coordinator/v1.rs` now owns the existing dependency ordering functions
+and finality window arithmetic. `reactor::batches` and
+`consensus::finality_types` retain their existing import paths through re-exports.
+The complete moved sections are identical except for imported `Transaction`
+signatures and crate-local visibility for the ordering helpers. All existing
+batch tests remain unchanged and exercise the same facade as node callers.
+The original tie breaking, duplicate handling, cycle fallback, unchecked deadline
+addition and saturating tracking floor are preserved, not hardened in this move.
+
+Node pruning uses `minimum_prune_retention_blocks()` separately from the selected
+consensus rules. Its value is still six blocks, from the sole retained v1. Both
+rollback-depth validation and state pruning apply this same floor. Before enabling
+any additional coordinator version, include its required rollback window in the
+maximum, and test transitions in both directions. Selecting a smaller current
+window must not allow deletion of history still needed by an older version. This
+floor does not recover history already pruned; the accepted reconstruction policy
+still applies when required undo data is absent.
+
+Parent mechanical comparison is reproducible with
+`.build-cache/k2a-reconcile/coordinator-source-audit.py`. It compares complete
+remaining node files as well as moved rules and unchanged batch tests. Formatting
+and whitespace checks passed. The independent subagent and Interlink reviewer
+approved the exact source; Interlink receipt `db6f6354b784efad5615ad5139e5ea77`
+was acknowledged. After the native capture released the local Cargo slot, all
+46 targeted ordering, replay, finality and body-retention tests passed
+(0.06 seconds after a 51.86-second build). Indexer Clippy with tests and warnings
+denied passed in 8.09 seconds. Both commands terminated with exit code zero.
+Commands, log hashes and limits are recorded in
+`.build-cache/k2a-reconcile/coordinator-validation.json`. These debug checks do not
+replace final release/default-thread CI or full K2a acceptance. Both independent
+reviewers verified log hashes, actual pass names and the boundary inventory below.
+Interlink evidence approval `efa251d69d70481c44ee91b4b4580696` was acknowledged.
+The subagent caught an inaccurate vacuum-test coverage claim; it was removed.
+No vacuum test ran in this invocation, and no vacuum behavior changed.
+
+### Remaining coordinator boundary inventory
+
+These locations are inspected at `716e120a`. They identify required work, not a
+claim that the full coordinator closure has been extracted.
+
+| Rule or operation | Classification and current location | Required versioning work |
+| --- | --- | --- |
+| Parent-before-child proposal validation and deterministic proposer tie breaking | Pure, now `protocol/coordinator/v1::{batch_is_ordered,dependency_sort}` | Route through the manifest-selected coordinator version; preserve independent transaction order rather than imposing a new canonical order. |
+| Six-block deadline and inclusive restart tracking floor | Pure, now `protocol/coordinator/v1::{deadline_for,tracking_floor}` | Retain each batch's applicable rule identity across activation and reorg; do not reinterpret old deadlines with a new window. |
+| Earliest unsettled transaction and unfinalized body floors | Stateful deterministic queries in `database/queries/{transactions,batches}.rs`, consumed by startup rehydration, divergence checks and `prune_finalized_bodies` | Version the finality interpretation of persisted rows. Keep record-only batches in body-retention calculations, and do not substitute the in-memory executed set. |
+| Deadline verdict and settlement ordering | Stateful deterministic, `ConsensusState::check_finality`, `probe_at_deadline`, `build_finality_events` and `Reactor::{advance,settle_finality}` | Preserve `(anchor_height, consensus_height)` evaluation order, probe-before-consuming behavior, durable exclusions before truncation, and repeated drain/settle before permission to start the next height. |
+| Replay exclusion and descendant availability | Deterministic over resolved decisions and exclusions, `build_replay_queue` | Retain execution-position availability separately from queue emission. Current code already sorts availability by `(anchor_height, consensus_height)`; it does not walk availability in node-local queue order. The existing `build_replay_queue_availability_is_anchor_order_not_queue_order` regression remains unchanged. |
+| Replay queue placement and input acquisition | Node-local scheduling and I/O coupled to deterministic application, `resolve_decisions`, `build_replay_queue`, `drain_deferred_decisions` | Replay-first queue order exists for progress while waiting on blocks; it must not change the transaction exclusion set. Preserve certified original bodies when narrowing execution, and bind replay to authenticated history in K4/K9. |
+| Empty batch heartbeat | Node-local event projection in `BatchOutcome::announced_txids`, both immediate and deferred decision paths | Preserve an empty `BatchProcessed` event for empty recorded batches, and silence for nonempty recorded-only skips. It drives API information refresh; it is not proof those skipped transactions executed. |
+| Committee refresh and next-height parameters | Stateful deterministic derivation, node cache and engine coordination in `refresh_validator_set`, `handle_block`, `rollback`, `resume_next_height`, and startup handlers | Derivation is already in `v1::committee`; current refresh follows committed block execution and rollback. Bind snapshots and engine start parameters to the certified height boundary in K4-K8. No historical committee lookup or engine-era activation is implemented by this extraction. |
+| Simulation admission, temporary block, execution and result projection | Node-local admission/rollback with versioned transaction semantics, `Reactor::{simulate,simulate_inner,execute_block}` | Keep one coordinator-issued execution context and selected semantic implementation. Do not move the Reactor into the semantic graph or introduce a semantic-to-Reactor back-reference. OWNERSHIP-1 must preserve cleanup on cancellation. |
+| State pruning and rollback-depth policy | Node-local retention constrained by every retained version, `check_rollback_depth`, `maybe_prune_state` | Use the shared minimum retention floor and add each new version before activation. Archive mode remains unbounded local retention, not a consensus rule. |
+
+Production dispatch, complete scheduling/replay isolation, cross-version floor
+selection, S2/OWNERSHIP reconciliation and final K2a acceptance remain outstanding.
+This source does not freeze P1, change any rule, or establish independent graphs.
