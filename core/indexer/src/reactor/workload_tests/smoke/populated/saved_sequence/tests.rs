@@ -1,7 +1,12 @@
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
+use bitcoin::consensus::{deserialize, serialize};
+use bitcoin::hashes::Hash;
+use bitcoin::{Block as BitcoinBlock, ScriptBuf};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -178,6 +183,12 @@ fn workload_sequence_inventory_and_intermediate_bytes_are_exact() -> Result<()> 
     ensure!(Saved::load(&path, &manifest_digest).is_err());
     fs::write(directory.path().join("block-001.bin"), b"tampered")?;
     ensure!(Saved::load(&path, &manifest_digest).is_err());
+    #[cfg(unix)]
+    {
+        fs::remove_file(directory.path().join("block-001.bin"))?;
+        symlink("initial.json", directory.path().join("block-001.bin"))?;
+        ensure!(Saved::load(&path, &manifest_digest).is_err());
+    }
     Ok(())
 }
 
@@ -253,5 +264,67 @@ async fn workload_saved_sequence_rejects_changed_intermediate_state() -> Result<
         "unexpected replay rejection: {error:#}"
     );
     eprintln!("workload_saved_sequence_negative_control={error:#}");
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a generated two-block saved sequence; structural funding negative control"]
+fn workload_saved_sequence_rejects_reused_initial_funding() -> Result<()> {
+    let (directory, mut manifest) = saved_fixture()?;
+    ensure!(manifest["steps"].as_array().context("missing steps")?.len() == 2);
+    let first: BitcoinBlock = deserialize(&fs::read(directory.path().join("block-000.bin"))?)?;
+    let path = directory.path().join("block-001.bin");
+    let mut second: BitcoinBlock = deserialize(&fs::read(&path)?)?;
+    second.txdata[1].input[0].previous_output = first.txdata[1].input[0].previous_output;
+    second.txdata[2].input[0].previous_output.txid = second.txdata[1].compute_txid();
+    let reveal_txid = second.txdata[2].compute_txid();
+    let reserved = second.txdata[0].input[0]
+        .witness
+        .iter()
+        .next()
+        .context("missing witness reserved value")?;
+    let commitment = BitcoinBlock::compute_witness_commitment(
+        &second.witness_root().context("missing witness root")?,
+        reserved,
+    );
+    let prefix = [0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed];
+    let output = second.txdata[0]
+        .output
+        .iter_mut()
+        .rfind(|output| output.script_pubkey.as_bytes().starts_with(&prefix))
+        .context("missing witness commitment output")?;
+    let mut script = prefix.to_vec();
+    script.extend_from_slice(commitment.as_byte_array());
+    output.script_pubkey = ScriptBuf::from_bytes(script);
+    second.header.merkle_root = second
+        .compute_merkle_root()
+        .context("missing merkle root")?;
+    ensure!(second.check_merkle_root() && second.check_witness_commitment());
+    fs::write(&path, serialize(&second))?;
+    manifest["steps"][1]["block"]["sha256"] = json!(hash_file(&path)?);
+    manifest["steps"][1]["hash"] = json!(second.block_hash());
+    if !manifest["steps"][1]["batches"]
+        .as_array()
+        .context("missing batches")?
+        .is_empty()
+    {
+        manifest["steps"][1]["batches"][0]["transaction_ids"][0] = json!(reveal_txid);
+    }
+    // Repaired commitments let structural decoding reach the funding check.
+    // Signatures and proof of work are deliberately not repaired: this input must
+    // be rejected before Bitcoin import, not treated as a valid double spend.
+    let digest = save_manifest(directory.path(), &manifest)?;
+    let saved = Saved::load(&directory.path().join("manifest.json"), &digest)?;
+    let error = saved
+        .inputs()
+        .err()
+        .context("accepted reused initial funding")?;
+    ensure!(
+        error
+            .to_string()
+            .contains("reused or unknown initial funding"),
+        "unexpected rejection: {error:#}"
+    );
+    eprintln!("workload_saved_sequence_funding_negative={error:#}");
     Ok(())
 }
