@@ -230,9 +230,6 @@ async fn signed_smoke(
     funding: (OutPoint, TxOut),
     addresses: &[ContractAddress; 2],
 ) -> Result<(Transaction, Transaction, JsonValue)> {
-    let secp = Secp256k1::new();
-    let public_key = key.x_only_public_key().0;
-    let address = Address::p2tr(&secp, public_key, None, Network::Regtest);
     let ops = [
         (0, "write-result-payload(1)"),
         (1, "scan-compound(false)"),
@@ -247,6 +244,19 @@ async fn signed_smoke(
         },
     })
     .collect();
+    signed_instructions(client, key, funding, ops).await
+}
+
+async fn signed_instructions(
+    client: &Client,
+    key: &Keypair,
+    funding: (OutPoint, TxOut),
+    ops: Vec<Inst>,
+) -> Result<(Transaction, Transaction, JsonValue)> {
+    ensure!(!ops.is_empty(), "workload reveal must contain operations");
+    let secp = Secp256k1::new();
+    let public_key = key.x_only_public_key().0;
+    let address = Address::p2tr(&secp, public_key, None, Network::Regtest);
     let request = Reveal {
         sat_per_vbyte: Some(2),
         participants: vec![RevealParticipant {

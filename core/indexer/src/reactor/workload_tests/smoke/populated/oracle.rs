@@ -28,6 +28,34 @@ struct Host {
     reservation: Decimal,
 }
 
+#[derive(Default)]
+pub(super) struct PaidEffects {
+    pub(super) transferred: Decimal,
+    pub(super) staked: Decimal,
+}
+
+pub(super) fn root_receipts<'a>(rows: &'a [ResultRow], txid: &str) -> Result<Vec<&'a ResultRow>> {
+    let mut roots: BTreeMap<(u32, u32), &ResultRow> = BTreeMap::new();
+    let mut positions = BTreeSet::new();
+    for row in rows.iter().filter(|row| row.txid.as_deref() == Some(txid)) {
+        let position = (
+            row.input_index.context("paid receipt missing input")?,
+            row.op_index.context("paid receipt missing operation")?,
+        );
+        ensure!(
+            positions.insert((position, row.result_index)),
+            "duplicate paid receipt position"
+        );
+        // Nested calls finish first. The largest result index owns the paid
+        // operation's total gas; adding child gas would charge it twice.
+        let root = roots.entry(position).or_insert(row);
+        if row.result_index > root.result_index {
+            *root = row;
+        }
+    }
+    Ok(roots.into_values().collect())
+}
+
 pub(super) struct Before {
     config: PopulationConfig,
     payer: String,
@@ -164,14 +192,14 @@ impl Before {
         reactor: &mut Reactor<RuntimeExecutor>,
         rows: &[ResultRow],
         txid: &str,
+        effects: &PaidEffects,
     ) -> Result<()> {
         let runtime = &mut reactor.runtime;
-        let gas = rows
-            .iter()
-            .filter(|row| row.txid.as_deref() == Some(txid))
-            .try_fold(0u64, |sum, row| {
-                sum.checked_add(row.gas).context("gas overflow")
-            })?;
+        let roots = root_receipts(rows, txid)?;
+        ensure!(!roots.is_empty());
+        let gas = roots.iter().try_fold(0u64, |sum, row| {
+            sum.checked_add(row.gas).context("gas overflow")
+        })?;
         let mut usage = runtime.get_storage_conn().query(
             "SELECT u.deposit_fuel, u.user_fuel FROM transaction_execution_usage u JOIN transactions t ON t.id = u.tx_id WHERE t.txid = ?", params![txid],
         ).await?;
@@ -188,7 +216,11 @@ impl Before {
             .context("fuel overflow")?
             .div_ceil(1000);
         ensure!(
-            gas >= rounded && gas <= rounded.checked_add(2).context("rounding bound overflow")?
+            gas >= rounded
+                && gas
+                    <= rounded
+                        .checked_add(u64::try_from(roots.len() - 1)?)
+                        .context("rounding bound overflow")?
         );
         let execution = gas
             .checked_sub(deposit / 1000)
@@ -197,7 +229,10 @@ impl Before {
         ensure!(runtime.pricing.execution_fee(execution)? == fee);
         ensure!(
             balance(runtime, HolderRef::XOnlyPubkey(self.payer.clone())).await?
-                == sub_decimal(self.payer_balance, fee)?
+                == sub_decimal(
+                    sub_decimal(sub_decimal(self.payer_balance, fee)?, effects.transferred)?,
+                    effects.staked
+                )?
         );
         ensure!(balance(runtime, HolderRef::Burner).await? == add_decimal(self.burner, fee)?);
         let supply = sub_decimal(self.supply, fee)?;
@@ -320,7 +355,7 @@ impl Before {
         );
         ensure!(
             escrow(runtime, &staking_address()).await?
-                == add_decimal(self.staking_escrow, ordering)?
+                == add_decimal(add_decimal(self.staking_escrow, ordering)?, effects.staked)?
         );
 
         let index_scale = BigInt::from(10u64).pow(36);

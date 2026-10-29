@@ -12,8 +12,8 @@ use super::super::storage::Population as StoragePopulation;
 use super::super::validators::Population as ValidatorPopulation;
 use super::{
     ANCHOR_HEIGHT, BitcoinProcess, EngineCleanup, FUNDING_SEED, GAS_LIMIT, SMOKE_HEIGHT, Snapshot,
-    apply, database_projection, decode_block, reactor, receipts, signed_smoke, state, stop_engine,
-    test_provenance,
+    apply, database_projection, decode_block, reactor, receipts, signed_instructions, signed_smoke,
+    state, stop_engine, test_provenance,
 };
 use crate::bitcoin_client::client::RegtestRpc;
 use crate::bls::taproot_derivation_path;
@@ -27,11 +27,14 @@ use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{ComponentCache, Decimal, Runtime, Storage, TransactionContext};
 
 mod batch;
+mod mixed;
 mod oracle;
 mod pruning;
 mod simulation;
 
 use batch::BatchProof;
+use mixed::MixedWorkload;
+use oracle::{PaidEffects, root_receipts};
 use pruning::PruningProof;
 use simulation::SimulationProof;
 
@@ -40,6 +43,16 @@ enum Delivery {
     FreshBlock,
     BatchThenConfirmation,
     SimulationsThenBatch,
+    MixedBlock,
+}
+
+impl Delivery {
+    fn batched(self) -> bool {
+        matches!(
+            self,
+            Self::BatchThenConfirmation | Self::SimulationsThenBatch
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -175,6 +188,21 @@ async fn workload_configured_population_replays_transitions_and_rewards() -> Res
     replay(config, Delivery::FreshBlock).await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; 100 mixed operations in one reveal, not full W_op qualification"]
+async fn workload_mixed_operations_preserve_accounting_and_rollback() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::MixedBlock,
+    )
+    .await
+}
+
 async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let config = config.validate()?;
     eprintln!("workload_population={}", serde_json::to_string(&config)?);
@@ -283,6 +311,11 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         [81; 32],
     )
     .await?;
+    let mixed = if delivery == Delivery::MixedBlock {
+        Some(MixedWorkload::prepare(&mut history.runtime).await?)
+    } else {
+        None
+    };
     let projection_before = database_projection(&history.db_conn()).await?;
     let pruning = PruningProof::capture(&history.db_conn(), 89, 96).await?;
     let before = oracle::Before::capture(
@@ -303,7 +336,11 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let snapshot =
         Snapshot::export(&history.db_conn(), &directory.path().join("populated.db")).await?;
     stop_engine(&mut history).await?;
-    let (commit, reveal, _) = signed_smoke(&client, &key, funding, &addresses).await?;
+    let (commit, reveal, _) = if let Some(mixed) = &mixed {
+        signed_instructions(&client, &key, funding, mixed.instructions()).await?
+    } else {
+        signed_smoke(&client, &key, funding, &addresses).await?
+    };
     let hash = BlockHash::from_str(&client.generate_to_address(1, &address.to_string()).await?[0])?;
     let raw = client.get_block(&hash).await?;
     ensure!(raw.txdata.len() == 3 && raw.txdata[1] == commit && raw.txdata[2] == reveal);
@@ -341,7 +378,7 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         } else {
             None
         };
-        let batch = if delivery != Delivery::FreshBlock {
+        let batch = if delivery.batched() {
             Some(BatchProof::execute(&mut trial, &reveal).await?)
         } else {
             None
@@ -356,58 +393,67 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             rows.extend(batch.check(&trial).await?);
             rows.sort_by_key(|row| row.id);
         }
-        let paid: Vec<_> = rows
+        let all_paid: Vec<_> = rows
             .iter()
             .filter(|row| row.txid.as_deref() == Some(&txid))
             .collect();
-        ensure!(paid.len() == 3);
-        if let Some(simulations) = simulations {
-            simulations.check(&paid)?;
-        }
         ensure!(
             rows.iter()
                 .all(|row| row.txid.is_none() || row.txid.as_deref() == Some(&txid))
         );
-        for (index, row) in paid.iter().enumerate() {
+        let paid = root_receipts(&rows, &txid)?;
+        let effects = if let Some(mixed) = &mixed {
+            mixed
+                .check(&mut trial.runtime, &all_paid, &paid, payer)
+                .await?;
+            mixed.effects()?
+        } else {
+            ensure!(paid.len() == 3 && all_paid.len() == 3);
+            if let Some(simulations) = simulations {
+                simulations.check(&paid)?;
+            }
+            for (index, row) in paid.iter().enumerate() {
+                ensure!(
+                    row.height
+                        == if delivery.batched() {
+                            ANCHOR_HEIGHT
+                        } else {
+                            SMOKE_HEIGHT
+                        }
+                );
+                // Stored receipt positions currently use the filtered transaction index.
+                ensure!(
+                    row.tx_index == Some(0)
+                        && row.input_index == Some(0)
+                        && row.op_index == Some(index as u32)
+                        && row.result_index == 0
+                );
+                ensure!(row.signer_id == payer && row.payer_signer_id == Some(payer));
+                ensure!(row.contract == addresses[usize::from(index == 1)].to_string());
+                ensure!(
+                    row.func
+                        == if index == 1 {
+                            "scan-compound"
+                        } else {
+                            "write-result-payload"
+                        }
+                );
+                ensure!(row.gas > 0 && row.gas <= GAS_LIMIT);
+            }
             ensure!(
-                row.height
-                    == if delivery != Delivery::FreshBlock {
-                        ANCHOR_HEIGHT
-                    } else {
-                        SMOKE_HEIGHT
-                    }
+                paid.iter().map(|row| row.status).collect::<Vec<_>>()
+                    == [OpStatus::Ok, OpStatus::Other, OpStatus::Ok]
             );
-            // Stored receipt positions currently use the filtered transaction index.
             ensure!(
-                row.tx_index == Some(0)
-                    && row.input_index == Some(0)
-                    && row.op_index == Some(index as u32)
-                    && row.result_index == 0
+                paid[0].value.as_deref() == Some("\"é\\n\"")
+                    && paid[1].value.is_none()
+                    && paid[2].value.as_deref() == Some("\"é\\né\\n\"")
             );
-            ensure!(row.signer_id == payer && row.payer_signer_id == Some(payer));
-            ensure!(row.contract == addresses[usize::from(index == 1)].to_string());
-            ensure!(
-                row.func
-                    == if index == 1 {
-                        "scan-compound"
-                    } else {
-                        "write-result-payload"
-                    }
-            );
-            ensure!(row.gas > 0 && row.gas <= GAS_LIMIT);
-        }
-        ensure!(
-            paid.iter().map(|row| row.status).collect::<Vec<_>>()
-                == [OpStatus::Ok, OpStatus::Other, OpStatus::Ok]
-        );
-        ensure!(
-            paid[0].value.as_deref() == Some("\"é\\n\"")
-                && paid[1].value.is_none()
-                && paid[2].value.as_deref() == Some("\"é\\né\\n\"")
-        );
-        before.check(&mut trial, &rows, &txid).await?;
-        ensure!(state(&mut trial.runtime, &addresses[0]).await? == [1, 0, 0, 1]);
-        ensure!(state(&mut trial.runtime, &addresses[1]).await? == [0, 0, 0, 0]);
+            ensure!(state(&mut trial.runtime, &addresses[0]).await? == [1, 0, 0, 1]);
+            ensure!(state(&mut trial.runtime, &addresses[1]).await? == [0, 0, 0, 0]);
+            PaidEffects::default()
+        };
+        before.check(&mut trial, &rows, &txid, &effects).await?;
         ensure!(
             database_projection(&trial.db_conn()).await? == projection,
             "observations mutated state"
