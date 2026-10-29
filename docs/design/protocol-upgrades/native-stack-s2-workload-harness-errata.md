@@ -783,3 +783,72 @@ head (123.34s combined). Clippy reported exactly the six inherited S2 findings
 already assigned to the native branch, with no workload finding. Other delivery
 modes were not rerun at this head. The seven logs, including the failed sandbox
 attempt, are hashed in `.build-cache/workload-reconcile/configured-validation.json`.
+
+## Saved configured inputs and fresh-process replay
+
+The configured generator can retain its validated inputs by setting
+`KONTOR_WORKLOAD_SAVED_DIR` to a new directory outside the checkout or in an
+ignored path such as `.build-cache`. It refuses an existing directory. Saving
+runs only after both original oracle replays and the unchanged-source-state
+check succeed. The saved files are `snapshot.db`, `block.bin`, `chain.json`,
+`before.json`, `after.json`, and `manifest.json`. The snapshot includes the
+published contract artifacts and existing local metadata. The chain records
+all 101 original ancestor blocks, including the confirmed funding fanout.
+
+The manifest binds every input hash, configuration, Bitcoin version, source,
+Cargo.lock hash, compiler/profile/features and producing executable hash.
+The reader requires the same source/build and executable. This intentionally
+rejects cross-build or S1/S2 comparisons; it does not remove provenance or
+receipt-epoch rows to make a comparison pass. The reader compares every row
+and column returned by the existing projection of all non-SQLite-system
+tables. It does not require byte-identical post-execution SQLite files.
+
+All files refuse overwrites. Metadata and block files use temporary staging;
+the snapshot is copied directly with hash verification and removal on error.
+The manifest is published last. A failed generation leaves its partial directory
+for diagnosis. This provides manifest-last visibility and content integrity,
+not power-loss durability: the containing directory is not explicitly fsynced.
+Output placement is documented rather than rejecting all paths inside the
+checkout, because ignored directories are supported. Dirty source is rejected.
+Both nonblocking review dispositions were accepted explicitly.
+
+Run the ignored `workload_saved_configured_replay` test with
+`KONTOR_WORKLOAD_SAVED_MANIFEST` and
+`KONTOR_WORKLOAD_SAVED_MANIFEST_SHA256`. It refuses extra or missing files,
+changed hashes, paths escaping the fixture directory, and a different binary
+or build identity. It verifies the stored snapshot before opening a private
+copy. A fresh bitcoind imports the original chain and block without mining;
+its version, hashes and returned raw block bytes must match. Two independent
+snapshot copies then undergo real Reactor block application and pruning.
+Their complete logical projections must match before startup, after startup,
+and after execution. The original snapshot is hashed again afterward.
+
+At source 9b92fc9243e7d1352b0de5e53a6c731fea0cd6f6, the no-run build passed
+in 49.71s. Executable SHA-256:
+`0b0a84c4891ef3756410e7987a871c516ed82ba83e9fb657e11aa349a43243e2`.
+A 50-transaction, 10,000-key, six-file fixture passed generation and its two
+oracle replays in 104.28s. Manifest SHA-256:
+`85ceefd2535e76c116871f9162ec795328c86c16a11f24d8c7a93824f96b912e`.
+A separate process imported that fixture and passed two more replays in
+49.11s. Its measured apply intervals were 12,007,473,680ns and 11,848,193,671ns.
+They are explicitly diagnostic-only measurements on the development build,
+not operational service-gate or performance acceptance samples.
+
+This fixture still uses four validators, two replacements, two active
+agreements and three members per agreement. Full W_op populations and
+workloads, operational arrivals, enforced memory profiles, cross-build
+comparisons and final qualification remain outstanding.
+
+Twelve actual-binary negative controls rejected an incorrect manifest digest,
+missing/extra files, changes to each of the five input files, a changed binary
+identity, a changed source identity, a symlink escaping the fixture directory,
+and generation into an existing output directory. Each required a nonzero
+exit and its expected error; the original manifest remained unchanged.
+
+Clippy initially found one new redundant `Ok(...?)` wrapper in directory
+entry parsing. Commit 498270c6 removes that wrapper without changing the
+returned Result. Its Clippy run reports only the same six inherited S2 errors.
+Runtime and saved-input evidence above belongs specifically to 9b92fc92,
+before this lint-only correction; it was not relabeled as a new build. The
+final S2 source will require fresh qualification. Both Clippy logs, the
+control script/results and individual rejection logs are retained.
