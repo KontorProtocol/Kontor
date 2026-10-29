@@ -160,10 +160,10 @@ impl Saved {
         let root = path.parent().context("missing saved directory")?;
         let names = fs::read_dir(root)?
             .map(|entry| {
-                Ok(entry?
+                entry?
                     .file_name()
                     .into_string()
-                    .map_err(|_| anyhow!("non-UTF-8 saved file"))?)
+                    .map_err(|_| anyhow!("non-UTF-8 saved file"))
             })
             .collect::<Result<BTreeSet<_>>>()?;
         ensure!(
