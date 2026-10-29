@@ -852,3 +852,61 @@ Runtime and saved-input evidence above belongs specifically to 9b92fc92,
 before this lint-only correction; it was not relabeled as a new build. The
 final S2 source will require fresh qualification. Both Clippy logs, the
 control script/results and individual rejection logs are retained.
+
+## Retained application history
+
+Configured workloads accept `mixed.historical_rows` (default zero), up to twelve
+versions per live key. When history is nonzero, the existing workload-storage
+component is published at height zero. Real Core guest calls then write prefix-shaped key sets after the
+history reactor processes heights 89 through 100, followed by the complete live
+keyspace at 101. The paid pagination workload reuses this component. History
+setup uses unchanged values and Core payments, not signed historical transactions
+or changing-value workloads. Its rows have no depositor; it does not demonstrate
+paid historical deposit ownership changes.
+
+Checks record exact per-height row counts before and after block application,
+compare every historical row's value and deposit metadata with its live version,
+verify current-state pointers and visibility throughout the retained window, and
+compare every depositor cache entry with a fresh sum of live deposited gas. The
+expected retention follows the pruning rule: newest version per key at or below
+`102 - max(retain_blocks, FINALITY_WINDOW)`, plus every newer version. This cutoff
+is 96 with the fixture settings. Partial prefixes retain the older suffix they
+did not overwrite. Pruning superseded rows must preserve live footprint, not
+charge or refund it. Existing accounting, rollback and full-state replay oracles
+remain enabled.
+
+Source `a6289ce84650ca30665fcfa9aa25a8cafc83f398` built in 45.54s. Both focused
+configuration/history tests passed. Four actual block-application cases each
+passed two independent snapshot restores:
+
+| Live keys | Historical rows | Result and total duration |
+| ---: | ---: | --- |
+| 64 | 150 | Passed, 62.39s; retained 42 versions at 90 and 22 at 91, plus live versions at 101 |
+| 64 | 529 | Passed, 62.31s; retained 64 at 96 and 17 at 97, plus live versions at 101 |
+| 10,000 | 100,000 | Passed, 257.16s; removed 70,000 superseded rows and retained 10,000 each at 96, 97, 98 and 101 |
+| 257 | zero | Existing pagination regression passed, 60.71s |
+
+Durations include setup, assertions and two replays. They are development
+correctness diagnostics, not block service measurements or performance acceptance.
+The first three cases contain 50 real signed reveals with 100 mixed operations
+and five paid file registrations. Native populations remain four validators,
+two replacements, two agreements and three members. The million-row stress case,
+full W_op populations/arrivals, memory profiles and final qualification remain open.
+
+Executable SHA-256:
+`8652f920400aa647a399c84e38334fca039f251cd6f4644f8809cab523bb6984`.
+The large case also saved its six-file input bundle (41,560,737 bytes). Manifest
+SHA-256:
+`a4584e15d825578158d570f07d1e58bde284c20d3fffc14b8f90ca3a8d9837d9`.
+All five input hashes were independently verified. This bundle was not separately
+replayed in a new process at this head; the preceding saved-replay implementation
+has its separately attributed evidence above.
+
+Five additional synthetic SQLite histories passed the actual production pruning
+DELETE statements against independently constructed expected per-key retained
+sets. Those checks support the retention oracle, not runtime execution coverage.
+
+Clippy reported exactly the six inherited S2 findings, with no history-workload
+finding. No suppression was added. They remain assigned to native-branch
+integration. All parent build and runtime processes finished before handing the
+shared build slot back to the native implementer.
