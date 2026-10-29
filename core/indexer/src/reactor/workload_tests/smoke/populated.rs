@@ -35,6 +35,7 @@ mod mixed;
 mod oracle;
 mod pagination;
 mod pruning;
+mod saved;
 mod shapes;
 mod simulation;
 
@@ -330,6 +331,11 @@ async fn workload_signed_files_preserve_registry_and_accounting() -> Result<()> 
 
 async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let config = config.validate()?;
+    let saved = if let Delivery::Configured(mixed) = delivery {
+        saved::Output::from_env(config, mixed)?
+    } else {
+        None
+    };
     eprintln!("workload_population={}", serde_json::to_string(&config)?);
     eprintln!("workload_delivery={delivery:?}");
     let bitcoin_dir = TempDir::new()?;
@@ -743,6 +749,19 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         stop_engine(&mut trial).await?;
     }
     ensure!(database_projection(&history.db_conn()).await? == projection_before);
+    if let Some(saved) = saved {
+        saved
+            .write(
+                &snapshot,
+                &client,
+                &raw,
+                &projection_before,
+                expected_projection
+                    .as_ref()
+                    .context("missing final projection")?,
+            )
+            .await?;
+    }
     bitcoin.0.kill().await?;
     eprintln!(
         "workload_population_replays_passed={}",

@@ -13,7 +13,7 @@ pub(super) struct MixedConfig {
 }
 
 impl MixedConfig {
-    fn validate(self) -> Result<Self> {
+    pub(super) fn validate(self) -> Result<Self> {
         ensure!(
             matches!(self.transactions, 50 | 500),
             "fixture supports 50 or 500 two-operation transactions"
