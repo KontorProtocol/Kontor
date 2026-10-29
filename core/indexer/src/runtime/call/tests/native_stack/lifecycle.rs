@@ -37,16 +37,12 @@ fn fixture_bytes(sample: &str) -> Result<(Vec<u8>, String)> {
         })
         .context("lifecycle fixture package is missing")?;
     let world = resolve.select_world(&[package], Some("root"))?;
-    let (data, start) = match sample {
-        "valid" => (r#"(data (i32.const 0) "x")"#, ""),
-        "failed_init" => (r#"(data (i32.const 65536) "x")"#, ""),
-        "failed_start_resource" => (
-            r#"(data (i32.const 0) "x")"#,
-            "(func $failed-start\n    i32.const 99\n    call $new-gadget\n    drop\n    unreachable)\n  (start $failed-start)",
-        ),
+    let data = match sample {
+        "valid" => r#"(data (i32.const 0) "x")"#,
+        "failed_init" => r#"(data (i32.const 65536) "x")"#,
         _ => bail!("unknown resource lifecycle fixture {sample}"),
     };
-    let mut module = wat::parse_str(WAT.replace("@@DATA@@", data).replace("@@START@@", start))?;
+    let mut module = wat::parse_str(WAT.replace("@@DATA@@", data))?;
     embed_component_metadata(&mut module, &resolve, world, StringEncoding::UTF8, false)?;
     let module_sha256 = hex::encode(Sha256::digest(&module));
     let mut compressed = Vec::new();
@@ -67,6 +63,8 @@ async fn publish_fixture(
     address: &ContractAddress,
     module: &[u8],
 ) -> Result<String, ExecutionError> {
+    let payment = runtime.core_payment();
+    let provenance = native_provenance().map_err(ExecutionError::NonDeterministic)?;
     runtime
         .set_context(
             1,
@@ -81,13 +79,7 @@ async fn publish_fixture(
         .await;
     resource_diagnostics::record("publication_entry");
     let result = runtime
-        .publish(
-            signer,
-            runtime.core_payment(),
-            &address.name,
-            module,
-            &native_provenance().map_err(ExecutionError::NonDeterministic)?,
-        )
+        .publish(signer, payment, &address.name, module, &provenance)
         .await;
     resource_diagnostics::record("publication_exit");
     runtime.set_context(1, None, None, None).await;
@@ -127,7 +119,6 @@ pub(super) async fn run(
     let signer = Signer::Core(Box::new(Signer::Nobody));
     let (valid_module, valid_sha256) = fixture_bytes("valid")?;
     let (invalid_module, invalid_sha256) = fixture_bytes("failed_init")?;
-    let (failed_start_module, failed_start_sha256) = fixture_bytes("failed_start_resource")?;
     let (valid_address, invalid_address) = if case_id == "explicit_resource_drop" {
         (
             ContractAddress {
@@ -169,8 +160,6 @@ pub(super) async fn run(
         vec![
             ("failed_init", 0),
             ("failed_init", 1),
-            ("failed_start_resource", 0),
-            ("failed_start_resource", 1),
             ("valid_control", 0),
             ("valid_control", 1),
         ]
@@ -188,7 +177,7 @@ pub(super) async fn run(
                 "valid lifecycle control failed publication"
             );
         }
-        let failed_instantiation = matches!(sample_key, "failed_init" | "failed_start_resource");
+        let failed_instantiation = sample_key == "failed_init";
         let address = if failed_instantiation {
             invalid_address.as_ref().unwrap()
         } else {
@@ -196,7 +185,6 @@ pub(super) async fn run(
         };
         let (module, module_sha256) = match sample_key {
             "failed_init" => (&invalid_module, &invalid_sha256),
-            "failed_start_resource" => (&failed_start_module, &failed_start_sha256),
             _ => (&valid_module, &valid_sha256),
         };
         resource_diagnostics::record("finite_stack_attempt_start");
@@ -242,7 +230,6 @@ pub(super) async fn run(
         let expected_trap = match sample_key {
             "trap" => Some("UnreachableCodeReached"),
             "failed_init" => Some("MemoryOutOfBounds"),
-            "failed_start_resource" => Some("UnreachableCodeReached"),
             _ => None,
         };
         ensure!(

@@ -14,7 +14,6 @@
   (memory (export "memory") 1)
   (global $dtor-count (mut i32) (i32.const 0))
   @@DATA@@
-  @@START@@
   (func (export "init") (param i32) (result i32)
     local.get 0
     call $contract

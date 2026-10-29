@@ -235,12 +235,14 @@ The resource lifecycle adapter publishes a WIT-encoded guest resource through
 the normal `Runtime::publish` path. A successful view explicitly drops the
 resource and returns its destructor count. The trapping view checks that the
 destructor ran before its distinct `UnreachableCodeReached` trap, then a fresh
-successful call verifies reuse. Failed publication covers both out-of-bounds
-data initialization and a core start function that completes `resource.new`
-before trapping. Both failures repeat, followed by valid control calls. The
-worker records each target Store teardown, receipts, resources, and the full
-persistent digest. The start trap proves allocation completed before failure;
-the fixture does not claim that failure invokes the guest destructor.
+successful call verifies reuse. Failed publication repeats an out-of-bounds
+active data segment, followed by valid control calls. The worker records each
+target Store teardown, receipts, resources, and the full persistent digest.
+The failed initialization case proves that its Store and table lease close
+after an initialization trap. It cannot prove guest resource cleanup because
+the active data trap occurs before guest code can create one. Contract policy
+rejects all start sections before compilation, so no resource constructor
+can run during the admitted component's initialization.
 
 At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
 development canonical capture completed 12 child processes, 56 attempts, and

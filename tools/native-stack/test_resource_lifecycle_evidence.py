@@ -16,14 +16,13 @@ EVENTS = [
 
 
 def attempt(sample, case_id, repeat=0):
-    failed = sample in {"failed_init", "failed_start_resource"}
+    failed = sample == "failed_init"
     address = ("resource-lifecycle-explicit:1:0" if case_id ==
                "explicit_resource_drop" else
                "resource-lifecycle-failed:1:0" if failed else
                "resource-lifecycle-control:1:1")
     trap = {"trap": "UnreachableCodeReached",
-            "failed_init": "MemoryOutOfBounds",
-            "failed_start_resource": "UnreachableCodeReached"}.get(sample)
+            "failed_init": "MemoryOutOfBounds"}.get(sample)
     outcome = ("trap" if sample == "trap" else
                "deterministic_error" if failed else "ok")
     return {"case_id": case_id, "configuration": "production",
@@ -55,21 +54,20 @@ class ResourceLifecycleEvidenceTests(unittest.TestCase):
                                     value["repeat_index"], "target_observed",
                                     "production", 7)
 
-    def test_accepts_explicit_drop_trap_and_resource_start_failure(self):
+    def test_accepts_explicit_drop_trap_and_failed_instantiation(self):
         for case_id, sample in (
             ("explicit_resource_drop", "success_before_trap"),
             ("explicit_resource_drop", "trap"),
             ("explicit_resource_drop", "success_after_trap"),
             ("failed_instantiation_cleanup", "failed_init"),
-            ("failed_instantiation_cleanup", "failed_start_resource"),
             ("failed_instantiation_cleanup", "valid_control"),
         ):
             with self.subTest(sample=sample):
                 self.validate(attempt(sample, case_id))
 
-    def test_rejects_failed_start_that_never_reached_resource_new(self):
-        value = attempt("failed_start_resource", "failed_instantiation_cleanup")
-        value["observation"]["typed_trap"] = "MemoryOutOfBounds"
+    def test_rejects_failure_before_the_active_data_segment(self):
+        value = attempt("failed_init", "failed_instantiation_cleanup")
+        value["observation"]["typed_trap"] = "UnreachableCodeReached"
         with self.assertRaises(ValueError):
             self.validate(value)
 
@@ -89,15 +87,14 @@ class ResourceLifecycleEvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.validate(baseline)
 
-    def test_failed_start_publication_must_be_inside_measured_attempt(self):
+    def test_failed_publication_must_be_inside_measured_attempt(self):
         def event(name, blocking=False):
             return {"name": name, "thread_id": "blocking" if blocking else "worker",
                     "os_thread_id": 2 if blocking else 1,
                     "category": "blocking_pool" if blocking else "tokio_worker"}
 
         events = []
-        samples = ["failed_init", "failed_init", "failed_start_resource",
-                   "failed_start_resource", "valid_control", "valid_control"]
+        samples = ["failed_init", "failed_init", "valid_control", "valid_control"]
 
         def publication():
             events.extend((event("publication_entry"), event("compiler_entry"),
@@ -106,7 +103,7 @@ class ResourceLifecycleEvidenceTests(unittest.TestCase):
                            event("compiler_exit"), event("publication_exit")))
 
         for index, sample in enumerate(samples):
-            if index == 4:
+            if index == 2:
                 publication()
             events.append(event("finite_stack_attempt_start"))
             if sample != "valid_control":

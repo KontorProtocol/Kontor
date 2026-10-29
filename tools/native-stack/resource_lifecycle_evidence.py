@@ -21,7 +21,6 @@ CASES = {
         ("success_before_trap", 0), ("trap", 1), ("success_after_trap", 2)),
     "failed_instantiation_cleanup": (
         ("failed_init", 0), ("failed_init", 1),
-        ("failed_start_resource", 0), ("failed_start_resource", 1),
         ("valid_control", 0), ("valid_control", 1)),
 }
 EXPECTED = {
@@ -29,7 +28,6 @@ EXPECTED = {
     "trap": ("trap", "UnreachableCodeReached", None),
     "success_after_trap": ("ok", None, "1"),
     "failed_init": ("deterministic_error", "MemoryOutOfBounds", None),
-    "failed_start_resource": ("deterministic_error", "UnreachableCodeReached", None),
     "valid_control": ("ok", None, "1"),
 }
 OBSERVATION_KEYS = {
@@ -67,7 +65,7 @@ def validate_observation(attempt, case_id, sample, repeat_index, role,
                          configuration, pid):
     value = attempt["observation"]
     expected_outcome, expected_trap, expected_result = EXPECTED[sample]
-    failed = sample in {"failed_init", "failed_start_resource"}
+    failed = sample == "failed_init"
     address = ("resource-lifecycle-explicit:1:0" if case_id ==
                "explicit_resource_drop" else
                "resource-lifecycle-failed:1:0" if failed else
@@ -172,7 +170,7 @@ def validate_trace(trace, runtime, attempts, os_name):
                     for index, (start, end) in enumerate(zip(starts, ends, strict=True)))
             and names.count("publication_entry") ==
                 names.count("publication_exit") ==
-                (1 if runtime["case_id"] == "explicit_resource_drop" else 5)
+                (1 if runtime["case_id"] == "explicit_resource_drop" else 3)
             and names.count("compiler_entry") >= 1
             and names.count("blocking_decode_entry") >= 1,
             "resource lifecycle publication or attempt intervals changed")
@@ -185,13 +183,13 @@ def validate_trace(trace, runtime, attempts, os_name):
                 "explicit resource fixture was not publicly admitted before execution")
     else:
         require(all(starts[index] < publications[index] <
-                    publication_ends[index] < ends[index] for index in range(4))
-                and ends[3] < publications[4] < publication_ends[4] < starts[4],
+                    publication_ends[index] < ends[index] for index in range(2))
+                and ends[1] < publications[2] < publication_ends[2] < starts[2],
                 "failed instantiation attempts or valid publication changed order")
     for attempt, start, end in zip(attempts, starts, ends, strict=True):
         operation = names[start:end + 1]
         sample = attempt["sample_key"]
-        if sample in {"failed_init", "failed_start_resource"}:
+        if sample == "failed_init":
             require(operation.count("publication_entry") == 1
                     and operation.count("canonical_input_entry") == 0
                     and operation.count("canonical_output_entry") == 0,

@@ -210,7 +210,7 @@
     },
     "resource_lifecycle_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/lifecycle.rs",
-      "sha256": "01d56af7cefd50b13d086c348121f2ed044b93f48ec44f3501d759d27f70ca38"
+      "sha256": "355b0f5d2a7199c40ed98f0f2c48acc885d9a41aadffb6ba356fdfbb2c531fb3"
     },
     "resource_lifecycle_capture": {
       "path": "tools/native-stack/capture_resource_lifecycle.py",
@@ -218,15 +218,15 @@
     },
     "resource_lifecycle_validator": {
       "path": "tools/native-stack/resource_lifecycle_evidence.py",
-      "sha256": "c5050c31cc7e246a925c19e61923cbe2773e2697627c8534c9aaddf55532c720"
+      "sha256": "2514a2d8285c77760f9abcd1c31089ce701b8555bd04743f6f64a1e67c84bf9e"
     },
     "resource_lifecycle_validator_tests": {
       "path": "tools/native-stack/test_resource_lifecycle_evidence.py",
-      "sha256": "8dd7173b1bd815c3b811ce877a71b3af9f5ca9e1cb03c6af1a2f62831761685a"
+      "sha256": "3cf38be376f1ca19e13969dd7ea5d069ff2acd6ec65d57135783d5dd7892c3fe"
     },
     "resource_lifecycle_wat": {
       "path": "test-contracts/resource-lifecycle/fixture.wat",
-      "sha256": "6fa7391092c090b0d52936a74569b5f722390e5c604333abfbd766618cc9b525"
+      "sha256": "47fb7a5b6e413d1b246b5e12c45a81176c54fd01c082a892717258158d14bab1"
     },
     "resource_lifecycle_wit": {
       "path": "test-contracts/resource-lifecycle/wit/contract.wit",
@@ -234,7 +234,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "9bcbe82031d1094373954052836d23c567cc2021d5e2e3c3eed4077042ced631"
+      "sha256": "c02be89134e1fa7f84fc327734026aed8c3565a83a507ae39a60f5781af82104"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -1017,12 +1017,10 @@
       "existing_unpaired_binding": "runtime::sequential_tests::partial_instantiation_does_not_invoke_registered_destructors",
       "expected_outcomes": {
         "failed_init": "deterministic_error",
-        "failed_start_resource": "deterministic_error",
         "valid_control": "ok"
       },
       "expected_traps": {
         "failed_init": "MemoryOutOfBounds",
-        "failed_start_resource": "UnreachableCodeReached",
         "valid_control": null
       },
       "family": "resource_lifecycle",
@@ -1040,12 +1038,10 @@
       "paired_worker_status": "missing",
       "parameters": {
         "out_of_bounds_data": true,
-        "repeats": 2,
-        "resource_new_then_start_trap": true
+        "repeats": 2
       },
       "sample_keys": [
         "failed_init",
-        "failed_start_resource",
         "valid_control"
       ]
     },
