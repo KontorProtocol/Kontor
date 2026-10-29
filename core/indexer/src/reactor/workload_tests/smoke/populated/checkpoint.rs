@@ -1,10 +1,11 @@
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
-use tempfile::{NamedTempFile, TempPath};
+use tempfile::{NamedTempFile, TempDir, TempPath};
 
 #[derive(Clone)]
 pub(super) struct Checkpoint {
@@ -12,8 +13,22 @@ pub(super) struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub(super) fn capture(projection: &Value) -> Result<Self> {
-        let mut file = NamedTempFile::new()?;
+    pub(super) fn directory() -> Result<TempDir> {
+        // /tmp is tmpfs on the development host. Keep the full checkpoint set
+        // in the workspace, whose backing filesystem is recorded with evidence.
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.build-cache/workload-checkpoints");
+        fs::create_dir_all(&root)?;
+        let directory = TempDir::new_in(root)?;
+        eprintln!(
+            "workload_checkpoint_directory={}",
+            directory.path().display()
+        );
+        Ok(directory)
+    }
+
+    pub(super) fn capture(directory: &Path, projection: &Value) -> Result<Self> {
+        let mut file = NamedTempFile::new_in(directory)?;
         {
             let mut writer = BufWriter::new(file.as_file_mut());
             serde_json::to_writer(&mut writer, projection)?;
@@ -78,16 +93,25 @@ impl Checkpoint {
 
 #[test]
 fn workload_sequence_checkpoints_compare_complete_bytes() -> Result<()> {
+    let directory = Checkpoint::directory()?;
     let original = serde_json::json!({"first": "a".repeat(150_000), "last": [1, 2, 3]});
-    let expected = Checkpoint::capture(&original)?;
-    let copy = Checkpoint::capture(&original)?;
+    let expected = Checkpoint::capture(directory.path(), &original)?;
+    let copy = Checkpoint::capture(directory.path(), &original)?;
     copy.check(&expected)?;
     ensure!(copy.load()? == original);
     let mut changed = original.clone();
     changed["last"][1] = serde_json::json!(4);
-    ensure!(Checkpoint::capture(&changed)?.check(&expected).is_err());
+    ensure!(
+        Checkpoint::capture(directory.path(), &changed)?
+            .check(&expected)
+            .is_err()
+    );
     changed["last"] = serde_json::json!([1, 2]);
-    ensure!(Checkpoint::capture(&changed)?.check(&expected).is_err());
+    ensure!(
+        Checkpoint::capture(directory.path(), &changed)?
+            .check(&expected)
+            .is_err()
+    );
     let handle = expected.clone();
     drop(expected);
     copy.check(&handle)?;

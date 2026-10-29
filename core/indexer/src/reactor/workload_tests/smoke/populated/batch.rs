@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::{Context, Result, ensure};
 use bitcoin::Transaction;
 use indexer_types::{ResultRow, TransactionRow};
@@ -34,8 +36,11 @@ impl BatchProof {
     pub(super) async fn execute(
         trial: &mut Reactor<RuntimeExecutor>,
         reveal: &Transaction,
+        checkpoint_directory: &Path,
     ) -> Result<Self> {
-        let proof = Self::execute_many(trial, std::slice::from_ref(reveal), 0).await?;
+        let proof =
+            Self::execute_many(trial, std::slice::from_ref(reveal), 0, checkpoint_directory)
+                .await?;
         ensure!(proof.transactions[0].paid.len() == 3);
         ensure!(proof.transactions[0].usage.deposit_fuel > 0);
         Ok(proof)
@@ -45,6 +50,7 @@ impl BatchProof {
         trial: &mut Reactor<RuntimeExecutor>,
         reveals: &[Transaction],
         operations_per_batch: usize,
+        checkpoint_directory: &Path,
     ) -> Result<Vec<Self>> {
         ensure!(matches!(operations_per_batch, 20 | 40));
         let transactions_per_batch = operations_per_batch / 2;
@@ -56,7 +62,15 @@ impl BatchProof {
                     filter_map((0, reveal.clone())).context("batch fixture did not decode")?;
                 ensure!(decoded.inputs.len() == 1 && decoded.inputs[0].insts.ops.len() == 2);
             }
-            proofs.push(Self::execute_many(trial, chunk, index * transactions_per_batch).await?);
+            proofs.push(
+                Self::execute_many(
+                    trial,
+                    chunk,
+                    index * transactions_per_batch,
+                    checkpoint_directory,
+                )
+                .await?,
+            );
         }
         Ok(proofs)
     }
@@ -65,6 +79,7 @@ impl BatchProof {
         trial: &mut Reactor<RuntimeExecutor>,
         reveals: &[Transaction],
         first_confirmation_index: usize,
+        checkpoint_directory: &Path,
     ) -> Result<Self> {
         ensure!(!reveals.is_empty());
         let height = select_latest_consensus_height(&trial.db_conn())
@@ -135,7 +150,10 @@ impl BatchProof {
         Ok(Self {
             transactions,
             anchor_height,
-            checkpoint: Checkpoint::capture(&database_projection(&conn).await?)?,
+            checkpoint: Checkpoint::capture(
+                checkpoint_directory,
+                &database_projection(&conn).await?,
+            )?,
         })
     }
 

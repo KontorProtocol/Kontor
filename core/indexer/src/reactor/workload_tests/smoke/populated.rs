@@ -726,6 +726,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
             index * 2 + 2
         })?)
     };
+    let checkpoint_directory = Checkpoint::directory()?;
     let mut expected_projection: Option<Vec<Checkpoint>> = None;
     for name in ["first.db", "second.db"] {
         snapshot.copy_to(&directory.path().join(name))?;
@@ -791,11 +792,23 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                 };
                 let batches = match delivery {
                     Delivery::Configured(config) if config.batch_operations > 0 => {
-                        BatchProof::execute_chunks(&mut trial, reveals, config.batch_operations)
-                            .await?
+                        BatchProof::execute_chunks(
+                            &mut trial,
+                            reveals,
+                            config.batch_operations,
+                            checkpoint_directory.path(),
+                        )
+                        .await?
                     }
                     _ if delivery.batched() => {
-                        vec![BatchProof::execute(&mut trial, &reveals[0]).await?]
+                        vec![
+                            BatchProof::execute(
+                                &mut trial,
+                                &reveals[0],
+                                checkpoint_directory.path(),
+                            )
+                            .await?,
+                        ]
                     }
                     _ => Vec::new(),
                 };
@@ -912,7 +925,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                 );
                 Checkpoint::record(
                     &mut projections,
-                    Checkpoint::capture(&projection)?,
+                    Checkpoint::capture(checkpoint_directory.path(), &projection)?,
                     expected_projection.as_deref(),
                 )?;
                 eprintln!(

@@ -18,6 +18,7 @@ use super::super::{
 };
 use super::PopulationConfig;
 use super::batch::BatchProof;
+use super::checkpoint::Checkpoint;
 use super::configuration::MixedConfig;
 use super::replay_identity::ReplayIdentity;
 use super::simulation_requests::SimulationRequests;
@@ -336,6 +337,7 @@ async fn workload_saved_configured_replay() -> Result<()> {
     ensure!(serialize(&client.get_block(&manifest.block_hash).await?) == raw);
     let directory = TempDir::new()?;
     let mut cleanup = EngineCleanup::default();
+    let checkpoint_directory = Checkpoint::directory()?;
     for name in ["saved-one.db", "saved-two.db"] {
         snapshot.copy_to(&directory.path().join(name))?;
         let writer = Writer::new(directory.path(), name).await?;
@@ -380,6 +382,7 @@ async fn workload_saved_configured_replay() -> Result<()> {
                         &mut trial,
                         &reveals,
                         manifest.mixed.batch_operations,
+                        checkpoint_directory.path(),
                     )
                     .await?
                 } else {
