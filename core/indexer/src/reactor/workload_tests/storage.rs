@@ -68,7 +68,7 @@ async fn escrow_holder(runtime: &mut Runtime) -> Result<HolderRef> {
     ))
 }
 
-async fn stored<T: DeserializeOwned>(
+pub(super) async fn stored<T: DeserializeOwned>(
     runtime: &Runtime,
     contract: u64,
     path: &KeyPath,
@@ -81,7 +81,7 @@ async fn stored<T: DeserializeOwned>(
         .transpose()
 }
 
-async fn cursor(runtime: &Runtime, contract: u64, field: u8, end: u8) -> Result<u64> {
+pub(super) async fn cursor(runtime: &Runtime, contract: u64, field: u8, end: u8) -> Result<u64> {
     Ok(stored(
         runtime,
         contract,

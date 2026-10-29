@@ -28,6 +28,7 @@ use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{ComponentCache, Decimal, Runtime, Storage, TransactionContext};
 
 mod batch;
+mod files;
 mod many;
 mod mixed;
 mod oracle;
@@ -53,6 +54,7 @@ enum Delivery {
     MixedMultiInput,
     MixedAggregate,
     MixedPagination,
+    MixedFiles,
 }
 
 impl Delivery {
@@ -61,7 +63,8 @@ impl Delivery {
             Self::MixedBlock
             | Self::MixedMultiInput
             | Self::MixedAggregate
-            | Self::MixedPagination => Some(5),
+            | Self::MixedPagination
+            | Self::MixedFiles => Some(5),
             Self::MixedTransactions(count) => Some(count / 10),
             _ => None,
         }
@@ -298,6 +301,21 @@ async fn workload_pagination_preserves_order_and_boundaries() -> Result<()> {
     .await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; signed file creation and registry append, not full W_op qualification"]
+async fn workload_signed_files_preserve_registry_and_accounting() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::MixedFiles,
+    )
+    .await
+}
+
 async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let config = config.validate()?;
     eprintln!("workload_population={}", serde_json::to_string(&config)?);
@@ -460,8 +478,13 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     ensure!(layout.payer() == payer);
     let mixed = if let Some(rounds) = delivery.mixed_rounds() {
         let workload = MixedWorkload::prepare(&mut history.runtime, payer, rounds).await?;
-        Some(if delivery == Delivery::MixedPagination {
+        let workload = if matches!(delivery, Delivery::MixedPagination | Delivery::MixedFiles) {
             workload.with_pagination(&mut history.runtime).await?
+        } else {
+            workload
+        };
+        Some(if delivery == Delivery::MixedFiles {
+            workload.with_files(&mut history.runtime).await?
         } else {
             workload
         })
@@ -632,6 +655,9 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         let effects = if let Some(mixed) = &mixed {
             mixed
                 .check(&mut trial.runtime, &all_paid, &paid, layout)
+                .await?;
+            mixed
+                .check_file_lifecycle(&mut trial.runtime, &rows)
                 .await?;
             if let Some(shape_signers) = &shape_signers {
                 shape_signers.check(&mut trial.runtime, mixed).await?;

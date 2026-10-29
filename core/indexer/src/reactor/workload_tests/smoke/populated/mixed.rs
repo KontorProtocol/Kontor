@@ -6,11 +6,13 @@ use indexer_types::{ContractAddress, Inst, InstKind, OpStatus, ResultRow};
 use sha2::{Digest, Sha256};
 
 use super::super::{ANCHOR_HEIGHT, GAS_LIMIT, SMOKE_HEIGHT, test_provenance};
+use super::files::FileWorkload;
 use super::oracle::PaidEffects;
 use super::pagination;
 use crate::bls::taproot_derivation_path;
 use crate::database::queries::{get_contract_id_from_address, get_contract_signer_id};
 use crate::reg_tester::derive_taproot_keypair_from_seed;
+use crate::runtime::filestorage::address as storage_address;
 use crate::runtime::numerics::{add_decimal, mul_decimal};
 use crate::runtime::staking::{address as staking_address, api as staking};
 use crate::runtime::token::{address as token_address, api as token};
@@ -82,6 +84,7 @@ pub(super) struct MixedWorkload {
     recipient: u64,
     rounds: usize,
     paginated: Option<ContractAddress>,
+    files: Option<FileWorkload>,
 }
 
 impl MixedWorkload {
@@ -165,6 +168,7 @@ impl MixedWorkload {
             recipient,
             rounds,
             paginated: None,
+            files: None,
         })
     }
 
@@ -172,6 +176,23 @@ impl MixedWorkload {
         ensure!(self.rounds == 5);
         self.paginated = Some(pagination::prepare(runtime).await?);
         Ok(self)
+    }
+
+    pub(super) async fn with_files(mut self, runtime: &mut Runtime) -> Result<Self> {
+        ensure!(self.rounds == 5);
+        self.files = Some(FileWorkload::prepare(runtime, self.rounds).await?);
+        Ok(self)
+    }
+
+    pub(super) async fn check_file_lifecycle(
+        &self,
+        runtime: &mut Runtime,
+        rows: &[ResultRow],
+    ) -> Result<()> {
+        if let Some(files) = &self.files {
+            files.check(runtime, rows).await?;
+        }
+        Ok(())
     }
 
     pub(super) fn instructions(&self) -> Vec<Inst> {
@@ -197,6 +218,10 @@ impl MixedWorkload {
                         "set-blob-then-fail(\"must roll back\")".into(),
                     ),
                     13..=15 => (self.proxy.clone(), "increment()".into()),
+                    17 if self.files.is_some() => (
+                        storage_address(),
+                        self.files.as_ref().expect("file workload").call(round),
+                    ),
                     16..=17 => (
                         staking_address(),
                         staking::wave::add_stake_call_expr(Decimal::from("0.001")),
@@ -224,7 +249,7 @@ impl MixedWorkload {
         let indices = (0..self.rounds * 20).filter(|index| layout.signer(*index) == signer);
         let transfers = indices.clone().filter(|index| index % 20 <= 7).count();
         let stakes = indices
-            .filter(|index| matches!(index % 20, 16..=17))
+            .filter(|index| index % 20 == 16 || (index % 20 == 17 && self.files.is_none()))
             .count();
         Ok((
             mul_decimal(
@@ -245,7 +270,7 @@ impl MixedWorkload {
             payer_staked,
             staked: mul_decimal(
                 Decimal::from("0.001"),
-                Decimal::try_from((self.rounds * 2) as u64)?,
+                Decimal::try_from((self.rounds * if self.files.is_some() { 1 } else { 2 }) as u64)?,
             )?,
         })
     }
@@ -258,7 +283,10 @@ impl MixedWorkload {
         layout: MixedLayout,
     ) -> Result<()> {
         let payer = layout.payer();
-        ensure!(roots.len() == self.rounds * 20 && all.len() == self.rounds * 25);
+        ensure!(
+            roots.len() == self.rounds * 20
+                && all.len() == self.rounds * if self.files.is_some() { 24 } else { 25 }
+        );
         let conn = runtime.get_storage_conn();
         let staking_id = get_contract_id_from_address(&conn, &staking_address())
             .await?
@@ -272,7 +300,7 @@ impl MixedWorkload {
             let (tx_index, input_index, op_index) = layout.position(index)?;
             let slot = index % 20;
             let round = index / 20;
-            let nested = matches!(slot, 13..=17);
+            let nested = matches!(slot, 13..=16) || (slot == 17 && self.files.is_none());
             ensure!(
                 root.height == SMOKE_HEIGHT
                     && root.tx_index == Some(tx_index)
@@ -344,6 +372,16 @@ impl MixedWorkload {
                         && root.func == "fallback"
                         && value.is_empty()
                 ),
+                17 if self.files.is_some() => {
+                    ensure!(
+                        root.contract == storage_address().to_string()
+                            && root.func == "create-agreement"
+                    );
+                    self.files
+                        .as_ref()
+                        .context("missing file workload")?
+                        .check_receipt(round, value)?;
+                }
                 16..=17 => {
                     ensure!(
                         root.contract == staking_address().to_string() && root.func == "add-stake"
