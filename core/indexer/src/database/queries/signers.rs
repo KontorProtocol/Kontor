@@ -1,5 +1,8 @@
 use libsql::{Connection, de::from_row, params};
 
+mod storage_identity_v1;
+pub(crate) use storage_identity_v1::{core_callbacks, identity_callbacks, nonce_callbacks};
+
 use super::Error;
 use super::versioned::{latest_one, max_height_of};
 use crate::database::types::{CORE_SIGNER_ID, Identity, SignerEntry};

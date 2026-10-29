@@ -23,6 +23,13 @@
 //! `[P, subtree_end(P))` — an index seek, not a `LIKE`/`REGEXP` scan — and a child key
 //! is recovered with [`next_element`].
 //!
+mod storage_footprint_v1;
+mod storage_state_v1;
+mod storage_v1;
+pub(crate) use storage_footprint_v1::footprint_callbacks;
+pub(crate) use storage_state_v1::state_callbacks;
+pub(crate) use storage_v1::{key_callbacks, point_callbacks, row_callbacks};
+
 use std::mem::take;
 
 use futures_util::{Stream, StreamExt, TryStreamExt, stream};

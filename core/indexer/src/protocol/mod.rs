@@ -1,0 +1,9 @@
+pub(crate) mod storage_contracts;
+pub(crate) mod storage_footprint;
+pub(crate) mod storage_identity;
+pub(crate) mod storage_keys;
+pub(crate) mod storage_point;
+pub(crate) mod storage_rows;
+pub(crate) mod storage_session;
+pub(crate) mod storage_state;
+pub(crate) mod v1;

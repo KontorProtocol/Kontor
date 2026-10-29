@@ -7,25 +7,29 @@ use futures_util::Stream;
 use futures_util::TryStreamExt;
 use libsql::Connection;
 use regex::bytes::RegexBuilder;
-use std::collections::HashMap;
 use std::io::Read;
 use wit_component::{ComponentEncoder, WitPrinter};
 
+use crate::database::queries::{core_callbacks, identity_callbacks, nonce_callbacks};
+use crate::database::storage_contracts_v1::contract_callbacks;
+use crate::database::storage_session_v1::session_callbacks;
+use crate::protocol::storage_identity::SignerRecord;
+use crate::protocol::v1::storage_contracts;
+use crate::protocol::v1::storage_error::ReadError;
+use crate::protocol::v1::storage_footprint::FootprintCache;
+use crate::protocol::v1::storage_identity::{self, IdentityError};
+use crate::protocol::v1::storage_keys::keys;
+use crate::protocol::v1::storage_point::read_value;
+use crate::protocol::v1::storage_rows::StorageRowCursor;
+use crate::protocol::v1::storage_session;
+use crate::protocol::v1::storage_state::{
+    LiveRow, exists, live_subtree, tombstone_rows, write_value,
+};
 use crate::{
-    database::{
-        queries::{
-            Error as StorageError, FOOTPRINT_BUILT_KEY, LiveRow, StorageRowCursor,
-            create_contract_signer, depositors_affected_by_reorg, exists_contract_state,
-            find_live_subtree, footprint_cache_add, footprint_cache_get, footprint_cache_set,
-            footprint_rebuild_all, get_contract_address_from_id, get_contract_bytes_by_id,
-            get_contract_id_from_address, get_contract_provenance_publisher,
-            get_latest_contract_state_value, get_meta_u64, insert_contract,
-            insert_contract_provenance, insert_contract_result, insert_contract_state,
-            latest_live_deposit, live_deposit_gas_sum, path_prefix_filter_contract_state,
-            prune_contract_state, rollback_to_height, select_block_at_height, set_meta_u64,
-            tombstone_rows,
-        },
-        types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
+    database::queries::{
+        depositors_affected_by_reorg, footprint_callbacks, key_callbacks, point_callbacks,
+        prune_contract_state, rollback_to_height, row_callbacks, select_block_at_height,
+        state_callbacks,
     },
     runtime::{ContractAddress, counter::Counter, stack::Stack},
     test_utils::new_mock_transaction,
@@ -93,100 +97,71 @@ pub struct Storage {
     pub tx_context: Option<TransactionContext>,
 }
 
-/// The eager per-depositor storage-deposit FLOOR cache (`depositor_footprint`),
-/// borrowing a DB connection. Off-checkpoint + reconstructible; maintained
-/// incrementally on the write path (`on_set`/`on_free`) inside the op savepoint, so
-/// it rolls back with the op. Read O(1) (`total_gas`) by the token's per-debit floor
-/// check; built once (`reconstruct`) on first boot/upgrade; recomputed per affected
-/// depositor on reorg (via [`Storage::rollback_with_footprint`]). INVARIANT:
-/// `total_gas` == Σ live `deposited_gas` per depositor on every node — it gates token
-/// debits, so it must stay an exact replica.
-pub struct FootprintCache<'a> {
-    conn: &'a Connection,
-}
-
-impl FootprintCache<'_> {
-    /// The cached floor for `depositor`, in integer GAS — an O(1) read of the eager
-    /// `depositor_footprint` sum (NEAR's `storage_usage`, keyed by depositor). Absent
-    /// ⇒ 0. The host prices it to token (× gas→token) at the `storage_floor` read.
-    pub async fn total_gas(&self, depositor: u64) -> Result<u64> {
-        Ok(footprint_cache_get(self.conn, depositor)
-            .await?
-            .unwrap_or(0))
-    }
-
-    /// Maintain the cache for a `set`: subtract the live row being overwritten (read
-    /// BEFORE the new row is written) from its setter, then add the new row to its
-    /// depositor. A fresh create has no prior live row; an exempt/Core write
-    /// (`depositor = None`) contributes nothing. The displaced-row read is a lean
-    /// latest-by-height point lookup, not a window.
-    pub async fn on_set(
-        &self,
-        contract_id: u64,
-        path: &[u8],
-        new_depositor: Option<u64>,
-        new_gas: Option<u64>,
-    ) -> Result<()> {
-        if let Some(prev) = latest_live_deposit(self.conn, contract_id, path).await? {
-            footprint_cache_add(self.conn, prev.depositor, -(prev.deposited_gas as i64)).await?;
-        }
-        if let (Some(d), Some(g)) = (new_depositor, new_gas) {
-            footprint_cache_add(self.conn, d, g as i64).await?;
-        }
-        Ok(())
-    }
-
-    /// Maintain the cache for freed rows: subtract each row's
-    /// deposit from its setter. The rows were already read for metering, so this adds
-    /// no read; deltas are summed PER DEPOSITOR (a K-row delete is almost always one
-    /// depositor) so it issues ~1 statement, not 2·K.
-    pub async fn on_free(&self, rows: &[LiveRow]) -> Result<()> {
-        let mut deltas: HashMap<u64, i64> = HashMap::new();
-        for row in rows {
-            if let (Some(d), Some(g)) = (row.depositor, row.deposited_gas) {
-                *deltas.entry(d).or_default() -= g as i64;
-            }
-        }
-        for (depositor, delta) in deltas {
-            footprint_cache_add(self.conn, depositor, delta).await?;
-        }
-        Ok(())
-    }
-
-    /// Rebuild the cache from live state — ONCE, on first build (DB upgrade or first
-    /// boot). Gated on a `node_meta` marker: block writes and reorgs both maintain the
-    /// cache atomically, so once built it stays coherent and a clean restart skips the
-    /// O(live-rows) rebuild. One grouped `SUM` pass, not a loop.
-    pub async fn reconstruct(&self) -> Result<()> {
-        if get_meta_u64(self.conn, FOOTPRINT_BUILT_KEY, 0).await? == 1 {
-            return Ok(());
-        }
-        footprint_rebuild_all(self.conn).await?;
-        set_meta_u64(self.conn, FOOTPRINT_BUILT_KEY, 1).await?;
-        Ok(())
-    }
-
-    /// Recompute each given depositor's cached total from the (post-rollback) live
-    /// rows — the cache-recovery half of a reorg. Each is overwritten with a fresh
-    /// `SUM(deposited_gas)` (zero ⇒ row deleted). Bounded by the affected set.
-    pub(crate) async fn recompute(&self, depositors: &[u64]) -> Result<()> {
-        for &depositor in depositors {
-            let total = live_deposit_gas_sum(self.conn, depositor).await?;
-            let stored = (total != 0).then_some(total);
-            footprint_cache_set(self.conn, depositor, stored).await?;
-        }
-        Ok(())
-    }
-}
-
 impl Storage {
+    pub(crate) async fn lookup_identity(&self, pubkey: &str) -> Result<Option<u64>> {
+        identity_callbacks(&self.conn).0(pubkey.to_owned())
+            .await
+            .map_err(|error| anyhow!(error))
+    }
+
+    pub(crate) async fn ensure_identity(&self, pubkey: &str) -> Result<u64, IdentityError> {
+        storage_identity::ensure_identity(identity_callbacks(&self.conn), pubkey, self.height).await
+    }
+
+    pub(crate) async fn create_core_signer(&self) -> Result<u64, IdentityError> {
+        storage_identity::create_core_signer(core_callbacks(&self.conn)).await
+    }
+
+    pub(crate) async fn identity_pubkey(&self, signer_id: u64) -> Result<String, IdentityError> {
+        storage_identity::x_only_pubkey(identity_callbacks(&self.conn), signer_id).await
+    }
+
+    pub(crate) async fn identity_bls_key(&self, signer_id: u64) -> Result<Option<Vec<u8>>> {
+        identity_callbacks(&self.conn).5(signer_id)
+            .await
+            .map_err(|error| anyhow!(error))
+    }
+
+    pub(crate) async fn write_identity_bls_key(&self, signer_id: u64, pubkey: &[u8]) -> Result<()> {
+        identity_callbacks(&self.conn).6(signer_id, pubkey.to_vec(), self.height)
+            .await
+            .map_err(|error| anyhow!(error))
+    }
+
+    pub(crate) async fn contract_signer(&self, contract_id: u64) -> Result<Option<u64>> {
+        identity_callbacks(&self.conn).7(contract_id)
+            .await
+            .map_err(|error| anyhow!(error))
+    }
+
+    pub(crate) async fn signer_entry(&self, signer_id: u64) -> Result<Option<SignerRecord>> {
+        identity_callbacks(&self.conn).8(signer_id)
+            .await
+            .map_err(|error| anyhow!(error))
+    }
+
+    pub(crate) async fn advance_nonce(
+        &self,
+        signer_id: u64,
+        nonce: u64,
+        height: u64,
+    ) -> Result<u64, IdentityError> {
+        storage_identity::advance_nonce(nonce_callbacks(&self.conn), signer_id, nonce, height).await
+    }
+
     pub async fn get(
         &self,
         max_value_bytes: u64,
         contract_id: u64,
         path: &[u8],
     ) -> Result<Option<Vec<u8>>> {
-        Ok(get_latest_contract_state_value(&self.conn, max_value_bytes, contract_id, path).await?)
+        Ok(read_value(
+            point_callbacks(&self.conn),
+            max_value_bytes,
+            contract_id,
+            path,
+        )
+        .await?)
     }
 
     /// Write a live value. `depositor` is the signer who collateralizes this row via
@@ -201,17 +176,12 @@ impl Storage {
         depositor: Option<u64>,
         deposited_gas: Option<u64>,
     ) -> Result<()> {
-        insert_contract_state(
-            &self.conn,
-            ContractStateRow::builder()
-                .contract_id(contract_id)
-                .maybe_tx_id(self.effective_tx_id())
-                .height(self.height)
-                .path(path.to_vec())
-                .value(value.to_vec())
-                .maybe_depositor(depositor)
-                .maybe_deposited_gas(deposited_gas)
-                .build(),
+        write_value(
+            state_callbacks(&self.conn).0,
+            (contract_id, self.height, self.effective_tx_id()),
+            path,
+            value,
+            (depositor, deposited_gas),
         )
         .await?;
         Ok(())
@@ -225,8 +195,8 @@ impl Storage {
         &self,
         contract_id: u64,
         path: &[u8],
-    ) -> Result<impl Stream<Item = Result<LiveRow, StorageError>> + Send + 'static> {
-        Ok(find_live_subtree(&self.conn, contract_id, path).await?)
+    ) -> Result<impl Stream<Item = Result<LiveRow, ReadError>> + Send + 'static> {
+        Ok(live_subtree(state_callbacks(&self.conn), contract_id, path))
     }
 
     /// The write half of a delete: value-less-tombstone the given (already-metered)
@@ -234,18 +204,16 @@ impl Storage {
     /// the freed bytes.
     pub async fn tombstone_rows(&self, contract_id: u64, rows: &[LiveRow]) -> Result<(bool, u64)> {
         Ok(tombstone_rows(
-            &self.conn,
-            contract_id,
-            self.height,
-            self.effective_tx_id(),
+            state_callbacks(&self.conn).0,
+            (contract_id, self.height, self.effective_tx_id()),
             rows,
         )
         .await?)
     }
 
     /// The eager per-depositor storage-deposit FLOOR cache (see [`FootprintCache`]).
-    pub fn footprint(&self) -> FootprintCache<'_> {
-        FootprintCache { conn: &self.conn }
+    pub fn footprint(&self) -> FootprintCache {
+        FootprintCache::new(footprint_callbacks(&self.conn))
     }
 
     /// Reorg rollback that keeps the off-checkpoint footprint cache coherent
@@ -280,43 +248,52 @@ impl Storage {
         author_signer_id: u64,
         provenance: &[u8],
     ) -> Result<()> {
-        insert_contract_provenance(
-            &self.conn,
-            ContractProvenanceRow::builder()
-                .contract_id(contract_id)
-                .author_signer_id(author_signer_id)
-                .height(self.height)
-                .tx_index(
-                    self.tx_context
-                        .as_ref()
-                        .expect("Transaction index is required when inserting provenance")
-                        .tx_index,
-                )
-                .provenance(provenance.to_vec())
-                .build(),
+        Ok(storage_contracts::insert_provenance(
+            contract_callbacks(&self.conn),
+            contract_id,
+            author_signer_id,
+            self.height,
+            self.tx_context.as_ref().map(|context| context.tx_index),
+            provenance,
         )
-        .await?;
-        Ok(())
+        .await?)
     }
 
     pub async fn contract_provenance_publisher(&self, contract_id: u64) -> Result<Option<u64>> {
-        Ok(get_contract_provenance_publisher(&self.conn, contract_id).await?)
+        contract_callbacks(&self.conn).6(contract_id)
+            .await
+            .map_err(|error| anyhow!(error))
     }
 
     pub async fn exists(&self, contract_id: u64, path: &[u8]) -> Result<bool> {
-        Ok(exists_contract_state(&self.conn, contract_id, path).await?)
+        Ok(exists(state_callbacks(&self.conn), contract_id, path).await?)
     }
 
     pub async fn contract_id(&self, contract_address: &ContractAddress) -> Result<Option<u64>> {
-        Ok(get_contract_id_from_address(&self.conn, contract_address).await?)
+        contract_callbacks(&self.conn).2((
+            contract_address.name.clone(),
+            contract_address.height,
+            contract_address.tx_index,
+        ))
+        .await
+        .map_err(|error| anyhow!(error))
     }
 
     pub async fn contract_address(&self, contract_id: u64) -> Result<Option<ContractAddress>> {
-        Ok(get_contract_address_from_id(&self.conn, contract_id).await?)
+        Ok(contract_callbacks(&self.conn).3(contract_id)
+            .await
+            .map_err(|error| anyhow!(error))?
+            .map(|(name, height, tx_index)| ContractAddress {
+                name,
+                height,
+                tx_index,
+            }))
     }
 
     pub async fn contract_bytes(&self, contract_id: u64) -> Result<Option<Vec<u8>>> {
-        Ok(get_contract_bytes_by_id(&self.conn, contract_id).await?)
+        contract_callbacks(&self.conn).4(contract_id)
+            .await
+            .map_err(|error| anyhow!(error))
     }
 
     /// Plain accessor for callers that do not need the failure CLASS — the
@@ -388,54 +365,18 @@ impl Storage {
     }
 
     pub async fn insert_contract(&self, name: &str, bytes: &[u8]) -> Result<u64> {
-        let signer_id = create_contract_signer(&self.conn, self.height).await?;
-        Ok(insert_contract(
-            &self.conn,
-            ContractRow::builder()
-                .height(self.height)
-                .tx_index(
-                    self.tx_context
-                        .as_ref()
-                        .expect("Transaction index is required when inserting contract")
-                        .tx_index,
-                )
-                .name(name.to_string())
-                .bytes(bytes.to_vec())
-                .signer_id(signer_id)
-                .build(),
+        Ok(storage_contracts::insert_contract(
+            contract_callbacks(&self.conn),
+            self.height,
+            self.tx_context.as_ref().map(|context| context.tx_index),
+            name,
+            bytes,
         )
         .await?)
     }
 
     fn effective_tx_id(&self) -> Option<u64> {
         self.tx_context.as_ref().and_then(|c| c.tx_id)
-    }
-
-    pub fn build_contract_result_row(
-        &self,
-        result_index: u32,
-        contract_id: u64,
-        func: String,
-        gas: u64,
-        value: Option<String>,
-        signer_id: u64,
-        payer_signer_id: Option<u64>,
-        status: indexer_types::OpStatus,
-    ) -> ContractResultRow {
-        ContractResultRow::builder()
-            .contract_id(contract_id)
-            .height(self.height)
-            .maybe_tx_id(self.effective_tx_id())
-            .maybe_input_index(self.tx_context.as_ref().map(|c| c.input_index))
-            .maybe_op_index(self.tx_context.as_ref().map(|c| c.op_index))
-            .result_index(result_index)
-            .func(func)
-            .gas(gas)
-            .maybe_value(value)
-            .signer_id(signer_id)
-            .maybe_payer_signer_id(payer_signer_id)
-            .status(status)
-            .build()
     }
 
     pub async fn insert_contract_result(
@@ -449,20 +390,25 @@ impl Storage {
         payer_signer_id: Option<u64>,
         status: indexer_types::OpStatus,
     ) -> Result<u64> {
-        Ok(insert_contract_result(
-            &self.conn,
-            self.build_contract_result_row(
-                result_index,
-                contract_id,
-                func,
-                gas,
-                value,
-                signer_id,
-                payer_signer_id,
-                status,
+        let row = storage_contracts::result_write(
+            (
+                self.height,
+                self.effective_tx_id(),
+                self.tx_context.as_ref().map(|context| context.input_index),
+                self.tx_context.as_ref().map(|context| context.op_index),
             ),
-        )
-        .await?)
+            result_index,
+            contract_id,
+            func,
+            gas,
+            value,
+            signer_id,
+            payer_signer_id,
+            status.as_str(),
+        );
+        contract_callbacks(&self.conn).7(row)
+            .await
+            .map_err(|error| anyhow!(error))
     }
 
     pub async fn keys(
@@ -472,12 +418,15 @@ impl Storage {
         lo: Option<Vec<u8>>,
         hi: Option<Vec<u8>>,
         descending: bool,
-    ) -> Result<impl Stream<Item = Result<Vec<u8>, crate::database::queries::Error>> + Send + 'static>
-    {
-        Ok(
-            path_prefix_filter_contract_state(&self.conn, contract_id, path, lo, hi, descending)
-                .await?,
-        )
+    ) -> Result<impl Stream<Item = Result<Vec<u8>, ReadError>> + Send + 'static> {
+        Ok(keys(
+            key_callbacks(&self.conn),
+            contract_id,
+            path,
+            lo,
+            hi,
+            descending,
+        ))
     }
 
     pub fn storage_rows(
@@ -488,7 +437,14 @@ impl Storage {
         hi: Option<Vec<u8>>,
         descending: bool,
     ) -> StorageRowCursor {
-        StorageRowCursor::new(&self.conn, contract_id, path, lo, hi, descending)
+        StorageRowCursor::new(
+            row_callbacks(&self.conn),
+            contract_id,
+            path,
+            lo,
+            hi,
+            descending,
+        )
     }
 
     /// Canonical per-block entropy (the Bitcoin block hash) at `height`, within the
@@ -541,45 +497,25 @@ impl Storage {
     }
 
     pub async fn savepoint(&self) -> Result<()> {
-        if self.savepoint_stack.is_empty().await {
-            self.conn.execute("BEGIN TRANSACTION", ()).await?;
-            self.savepoint_stack.push(0).await?;
-            self.savepoint_counter.reset().await;
-        } else {
-            let i = self.savepoint_counter.get().await;
-            self.conn.execute(&format!("SAVEPOINT S{}", i), ()).await?;
-            self.savepoint_stack.push(i).await?;
-        }
-        self.savepoint_counter.increment().await;
-        Ok(())
+        storage_session::savepoint(
+            session_callbacks(&self.conn),
+            &self.savepoint_stack,
+            &self.savepoint_counter,
+        )
+        .await
     }
 
     pub async fn commit(&self) -> Result<()> {
-        match self.savepoint_stack.pop().await {
-            Some(0) => self.conn.execute("COMMIT", ()).await?,
-            Some(i) => self.conn.execute(&format!("RELEASE S{}", i), ()).await?,
-            None => 0,
-        };
-        Ok(())
+        storage_session::commit(session_callbacks(&self.conn), &self.savepoint_stack).await
     }
 
     pub async fn rollback_transaction(&self) -> Result<()> {
-        self.savepoint_stack.clear().await;
-        self.conn.execute("ROLLBACK", ()).await?;
-        Ok(())
+        storage_session::rollback_transaction(session_callbacks(&self.conn), &self.savepoint_stack)
+            .await
     }
 
     pub async fn rollback(&self) -> Result<()> {
-        match self.savepoint_stack.pop().await {
-            Some(0) => self.conn.execute("ROLLBACK", ()).await?,
-            Some(i) => {
-                self.conn
-                    .execute(&format!("ROLLBACK TO S{}", i), ())
-                    .await?
-            }
-            None => 0,
-        };
-        Ok(())
+        storage_session::rollback(session_callbacks(&self.conn), &self.savepoint_stack).await
     }
 }
 
@@ -587,7 +523,11 @@ impl Storage {
 mod tests {
     use super::*;
     use crate::database::connection::new_connection;
-    use crate::database::queries::{insert_block, max_block_height};
+    use crate::database::queries::{
+        create_contract_signer, footprint_cache_get, get_meta_u64, insert_block,
+        live_deposit_gas_sum, max_block_height, set_meta_u64,
+    };
+    use crate::protocol::v1::storage_error::ReadError;
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use indexer_types::BlockRow;
     use stdlib::KeyElement;
@@ -638,7 +578,7 @@ mod tests {
             if exhaust_budget {
                 assert!(matches!(
                     cursor.next(0).await,
-                    Err(StorageError::ValueTooLarge)
+                    Err(ReadError::ValueTooLarge)
                 ));
             } else {
                 // Value lookups must share the metadata cursor's pre-update snapshot.

@@ -16,7 +16,7 @@ pub mod pool;
 pub mod pricing;
 #[cfg(test)]
 mod sequential_tests;
-mod stack;
+pub(crate) mod stack;
 pub mod staking;
 mod storage;
 pub mod system;
@@ -126,9 +126,8 @@ use wit_validator::Validator as WitValidator;
 
 use crate::bls::RegistrationProof;
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
-use crate::database;
 use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id};
-use crate::database::types::CORE_SIGNER_ID;
+use crate::database::types::{CORE_SIGNER_ID, Identity};
 use crate::runtime::{
     counter::Counter,
     deposit::DepositMeter,
@@ -521,7 +520,7 @@ impl Runtime {
         // Reserve the Core signer row before publishing any contracts. The
         // returned id is asserted equal to CORE_SIGNER_ID inside the query —
         // callers rely on the constant directly rather than reading it back.
-        database::queries::create_core_signer(&self.get_storage_conn()).await?;
+        self.storage.create_core_signer().await?;
 
         // Publish order matches NATIVE_CONTRACTS and determines contract
         // IDs (1-indexed, assigned in iteration order). Adding a contract
@@ -906,12 +905,14 @@ impl Runtime {
     pub async fn get_or_create_identity(
         &self,
         x_only_pubkey: &str,
-    ) -> Result<database::types::Identity, ExecutionError> {
-        let conn = self.get_storage_conn();
+    ) -> Result<Identity, ExecutionError> {
         if self.is_in_view_context().await {
-            return database::queries::get_identity(&conn, x_only_pubkey)
+            return self
+                .storage
+                .lookup_identity(x_only_pubkey)
                 .await
-                .map_err(|e| ExecutionError::NonDeterministic(e.into()))?
+                .map_err(ExecutionError::NonDeterministic)?
+                .map(Identity::new)
                 .ok_or_else(|| {
                     ExecutionError::Deterministic(anyhow!(
                         "signer not found for x-only-pubkey {x_only_pubkey} \
@@ -919,9 +920,10 @@ impl Runtime {
                     ))
                 });
         }
-        let height = self.storage.height;
-        database::queries::ensure_identity(&conn, x_only_pubkey, height)
+        self.storage
+            .ensure_identity(x_only_pubkey)
             .await
+            .map(Identity::new)
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))
     }
 
@@ -938,11 +940,11 @@ impl Runtime {
             )));
         };
 
-        let conn = self.get_storage_conn();
-        let existing_bls = identity
-            .bls_pubkey(&conn)
+        let existing_bls = self
+            .storage
+            .identity_bls_key(identity.signer_id())
             .await
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+            .map_err(ExecutionError::NonDeterministic)?;
         if let Some(existing) = existing_bls {
             if existing == bls_pubkey {
                 return Ok(());
@@ -952,8 +954,9 @@ impl Runtime {
             )));
         }
 
-        let x_only_pubkey = identity
-            .x_only_pubkey(&conn)
+        let x_only_pubkey = self
+            .storage
+            .identity_pubkey(identity.signer_id())
             .await
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
         let x_only_pk = XOnlyPublicKey::from_str(&x_only_pubkey)
@@ -981,10 +984,10 @@ impl Runtime {
         };
         proof.verify().map_err(ExecutionError::Deterministic)?;
 
-        identity
-            .register_bls_key(&conn, &proof.bls_pubkey, self.storage.height)
+        self.storage
+            .write_identity_bls_key(identity.signer_id(), &proof.bls_pubkey)
             .await
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+            .map_err(ExecutionError::NonDeterministic)?;
 
         Ok(())
     }

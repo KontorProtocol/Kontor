@@ -5,7 +5,7 @@ use serde::Deserialize;
 use wasmtime::component::{Access, Resource};
 use wasmtime::{AsContext, Trap};
 
-use crate::database::queries::Error as StorageError;
+use crate::protocol::v1::storage_error::ReadError;
 use crate::runtime::host_storage::decode_storage_value;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::wit::{
@@ -108,12 +108,11 @@ impl Runtime {
             let table = self.table.lock().await;
             table.get(&self_)?.contract_id
         };
-        let signer_id =
-            crate::database::queries::get_contract_signer_id(&self.get_storage_conn(), contract_id)
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("no signer_id found for contract_id {contract_id}")
-                })?;
+        let signer_id = self
+            .storage
+            .contract_signer(contract_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no signer_id found for contract_id {contract_id}"))?;
         let mut table = self.table.lock().await;
         Ok(table.push(Signer::new_contract(contract_id, signer_id))?)
     }
@@ -213,10 +212,8 @@ impl Runtime {
             .await
             .map_err(|error| -> Error {
                 match error {
-                    StorageError::ValueTooLarge => Trap::OutOfFuel.into(),
-                    StorageError::NonScalarRow => {
-                        ExecutionError::Deterministic(error.into()).into()
-                    }
+                    ReadError::ValueTooLarge => Trap::OutOfFuel.into(),
+                    ReadError::NonScalarRow => ExecutionError::Deterministic(error.into()).into(),
                     other => ExecutionError::NonDeterministic(other.into()).into(),
                 }
             })?;

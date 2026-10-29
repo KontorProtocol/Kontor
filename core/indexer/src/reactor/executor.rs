@@ -11,6 +11,7 @@ use crate::block::{TxWalker, filter_map};
 use crate::bls::{AggregateVerificationError, verify_aggregate};
 use crate::database;
 use crate::database::queries::insert_transaction_execution_usage;
+use crate::protocol::v1::storage_identity::IdentityError;
 use crate::retry::{new_backoff_limited, retry};
 use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
@@ -551,14 +552,13 @@ async fn process_aggregate_input(
         // Every aggregate op advances the signer's nonce. The variant restriction
         // ("Call only") is enforced separately in validate_aggregate_shape; here
         // we just consume the nonce the co-signer committed to in their BLS sig.
-        let conn = runtime.get_storage_conn();
-        let identity = database::types::Identity::new(signer_id);
-        match identity
-            .advance_nonce(&conn, agg_signer.nonce, height)
+        match runtime
+            .storage
+            .advance_nonce(signer_id, agg_signer.nonce, height)
             .await
         {
             Ok(_) => {}
-            Err(database::queries::Error::InvalidData(msg)) => {
+            Err(IdentityError::InvalidData(msg)) => {
                 warn!("aggregate nonce check failed for signer {signer_id}: {msg}");
                 errors.push(Some(anyhow::anyhow!(
                     "nonce check failed for signer {signer_id}: {msg}"
