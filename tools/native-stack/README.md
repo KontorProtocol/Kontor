@@ -120,8 +120,12 @@ validates its complete raw transcript, and archives the Cargo inputs and six
 pinned fiber source files. `build_resource_test.py` runs the pinned test build
 and records the compiler version, lockfile, Cargo command, resolved `testing`
 feature, and compiler environment. The three `RUST_FASTNUM_FMT_*` variables
-are removed from that environment and recorded as explicit null values. A
-build with a different formatter setting or missing attestation fails the
+are removed from that environment and recorded as explicit null values.
+Empty Rust flag and wrapper variables override inherited Cargo settings.
+The builder clears other inherited `CARGO_*` and `RUST*` build options and
+rejects either Cargo config filename in every parent `.cargo` directory or
+the active Cargo home. It records the searched paths for the aggregate gate.
+A build with a different formatter setting or missing attestation fails the
 control gate. Run both commands from the same clean checkout:
 
 ```sh

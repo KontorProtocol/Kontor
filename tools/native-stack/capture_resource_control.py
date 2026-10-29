@@ -20,6 +20,25 @@ from resource_evidence import (check_guard_control, load_json_strict,
 from resource_manifest import MANIFEST, ROOT, build_manifest
 
 
+def ensure_no_cargo_config(core, cargo_home):
+    candidates = []
+    directory = core.resolve()
+    while True:
+        candidates.extend((directory / ".cargo/config.toml",
+                           directory / ".cargo/config"))
+        if directory == directory.parent:
+            break
+        directory = directory.parent
+    home = cargo_home.resolve()
+    candidates.extend((home / "config.toml", home / "config"))
+    unique = list(dict.fromkeys(candidates))
+    present = [path for path in unique if path.exists() or path.is_symlink()]
+    if present:
+        raise ValueError("unreviewed Cargo config source: " +
+                         ", ".join(str(path) for path in present))
+    return [str(path) for path in unique]
+
+
 def selected_binary(artifacts_path, metadata):
     lines = artifacts_path.read_text().splitlines()
     if not lines or any(not line.strip() for line in lines):
@@ -62,7 +81,7 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
         "profile", "rustc_verbose", "compile_env", "cargo_command",
         "cargo_cwd", "cargo_artifacts_sha256", "cargo_metadata_sha256",
         "cargo_build_log_sha256", "binary_path", "binary_sha256",
-        "indexer_artifact_features",
+        "indexer_artifact_features", "cargo_home", "cargo_config_candidates",
     }
     if not isinstance(report, dict) or set(report) != expected_keys:
         raise ValueError("resource build attestation has an invalid schema")
@@ -82,6 +101,18 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
     expected_manifest_sha256 = manifest_sha256 or sha256(MANIFEST)
     expected_core = core_root or ROOT / "core"
     expected_binary_sha256 = binary_sha256 or sha256(binary)
+    cargo_home = Path(report["cargo_home"])
+    if not cargo_home.is_absolute():
+        raise ValueError("resource Cargo home is not absolute")
+    if core_root is None:
+        candidates = ensure_no_cargo_config(expected_core, cargo_home)
+        if report["cargo_config_candidates"] != candidates:
+            raise ValueError("resource Cargo config search path changed")
+    elif (not isinstance(report["cargo_config_candidates"], list)
+          or not report["cargo_config_candidates"]
+          or any(not Path(candidate).is_absolute()
+                 for candidate in report["cargo_config_candidates"])):
+        raise ValueError("historical Cargo config search paths are incomplete")
     if (report["schema_version"] != 1 or report["source_sha"] != source_sha
             or report["manifest_sha256"] != expected_manifest_sha256
             or report["lockfile_sha256"] != manifest["artifacts"]["core_lockfile"]["sha256"]

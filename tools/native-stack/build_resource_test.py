@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-from capture_resource_control import selected_binary
+from capture_resource_control import ensure_no_cargo_config, selected_binary
 from resource_evidence import load_json_strict, sha256
 from resource_manifest import MANIFEST, ROOT, build_manifest
 
@@ -32,6 +32,14 @@ def source_revision():
 def pinned_environment(manifest):
     policy = manifest["build_policy"]["compile_env"]
     environment = os.environ.copy()
+    for name in tuple(environment):
+        if ((name.startswith("CARGO_") and name != "CARGO_HOME")
+                or (name.startswith("RUST") and name != "RUSTUP_HOME")):
+            environment.pop(name)
+    cargo_home = Path(environment.get("CARGO_HOME") or Path.home() / ".cargo")
+    if not cargo_home.is_absolute():
+        raise ValueError("resource Cargo home must be absolute")
+    environment["CARGO_HOME"] = str(cargo_home.resolve())
     for name, value in policy.items():
         if value is None:
             environment.pop(name, None)
@@ -40,7 +48,7 @@ def pinned_environment(manifest):
     actual = {name: environment.get(name) for name in policy}
     if actual != policy:
         raise ValueError("resource compiler environment differs from manifest")
-    return environment, actual
+    return environment, actual, cargo_home.resolve()
 
 
 def build(profile, output_dir):
@@ -55,8 +63,9 @@ def build(profile, output_dir):
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ValueError("resource build output directory is not empty")
     output_dir.mkdir(parents=True, exist_ok=True)
-    environment, compile_env = pinned_environment(manifest)
+    environment, compile_env, cargo_home = pinned_environment(manifest)
     core = ROOT / "core"
+    config_candidates = ensure_no_cargo_config(core, cargo_home)
     rustc = subprocess.run(
         ["rustc", "-vV"], cwd=core, env=environment,
         check=True, capture_output=True, text=True,
@@ -82,6 +91,8 @@ def build(profile, output_dir):
         subprocess.run(command, cwd=core, env=environment, check=True,
                        stdout=stdout, stderr=stderr)
     binary, artifact = selected_binary(artifacts_path, metadata)
+    if ensure_no_cargo_config(core, cargo_home) != config_candidates:
+        raise ValueError("resource Cargo config search path changed during build")
     if source_revision() != head or load_json_strict(MANIFEST) != build_manifest():
         raise ValueError("resource source changed during build")
     report = {
@@ -100,6 +111,8 @@ def build(profile, output_dir):
         "binary_path": str(binary),
         "binary_sha256": sha256(binary),
         "indexer_artifact_features": artifact["features"],
+        "cargo_home": str(cargo_home),
+        "cargo_config_candidates": config_candidates,
     }
     report_path = output_dir / "resource-build-attestation.json"
     with report_path.open("x") as output:

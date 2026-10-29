@@ -464,6 +464,11 @@ class BoundaryCompositionTests(unittest.TestCase):
                     "binary_path": original_binary,
                     "binary_sha256": binary_sha,
                     "indexer_artifact_features": ["testing"],
+                    "cargo_home": "/remote/arm-build/cargo-home",
+                    "cargo_config_candidates": [
+                        "/remote/arm-build/core/.cargo/config.toml",
+                        "/remote/arm-build/cargo-home/config.toml",
+                    ],
                 }) + "\n")
             guard = guard_control(control_dir, build_manifest(),
                                   original_binary, binary_sha, discovery_sha)

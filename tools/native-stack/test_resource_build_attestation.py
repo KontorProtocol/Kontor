@@ -8,7 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from build_resource_test import pinned_environment
-from capture_resource_control import validate_build_attestation
+from capture_resource_control import (ensure_no_cargo_config,
+                                      validate_build_attestation)
 from resource_evidence import sha256
 from resource_manifest import MANIFEST, ROOT, build_manifest
 
@@ -28,6 +29,8 @@ class ResourceBuildAttestationTests(unittest.TestCase):
                            (self.binary, b"test executable\n")):
             path.write_bytes(data)
         self.attestation = self.root / "resource-build-attestation.json"
+        self.cargo_home = self.root / "cargo-home"
+        self.cargo_home.mkdir()
         self.manifest = build_manifest()
         self.source_sha = "a" * 40
         self.artifact = {"features": ["testing"], "profile": {
@@ -49,6 +52,9 @@ class ResourceBuildAttestationTests(unittest.TestCase):
             "binary_path": str(self.binary),
             "binary_sha256": sha256(self.binary),
             "indexer_artifact_features": ["testing"],
+            "cargo_home": str(self.cargo_home),
+            "cargo_config_candidates": ensure_no_cargo_config(ROOT / "core",
+                                                                self.cargo_home),
         }
 
     def validate(self):
@@ -88,6 +94,33 @@ class ResourceBuildAttestationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.validate()
 
+    def test_rejects_cargo_config_injected_formatter_or_flags(self):
+        core = self.root / "project/core"
+        core.mkdir(parents=True)
+        config = core / ".cargo/config.toml"
+        config.parent.mkdir()
+        for content in (
+            '[env]\nRUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD = { value = "1", force = true }\n',
+            '[target.aarch64-unknown-linux-gnu]\nrustflags = ["-C", "target-cpu=native"]\n',
+            '[profile.release]\nopt-level = 1\n',
+        ):
+            with self.subTest(content=content):
+                config.write_text(content)
+                with self.assertRaisesRegex(ValueError, "unreviewed Cargo config source"):
+                    ensure_no_cargo_config(core, self.cargo_home)
+        config.unlink()
+        global_config = self.cargo_home / "config"
+        global_config.write_text('[env]\nRUST_FASTNUM_FMT_MAX_INTEGER_PADDING = "4"\n')
+        with self.assertRaisesRegex(ValueError, "unreviewed Cargo config source"):
+            ensure_no_cargo_config(core, self.cargo_home)
+
+    def test_rejects_config_appearing_after_build(self):
+        self.validate()
+        config = self.cargo_home / "config.toml"
+        config.write_text('[env]\nRUST_FASTNUM_FMT_MAX_INTEGER_PADDING = "4"\n')
+        with self.assertRaisesRegex(ValueError, "unreviewed Cargo config source"):
+            self.validate()
+
     def test_unsets_formatter_variables_for_build(self):
         with patch.dict(os.environ, {
             "RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD": "1",
@@ -95,16 +128,25 @@ class ResourceBuildAttestationTests(unittest.TestCase):
             "RUST_FASTNUM_FMT_MAX_INTEGER_PADDING": "3",
             "RUSTC": "false",
             "RUSTFLAGS": "-C target-cpu=native",
+            "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS": "-C target-cpu=native",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "3",
+            "RUSTC_BOOTSTRAP": "1",
         }):
-            environment, actual = pinned_environment(self.manifest)
+            environment, actual, cargo_home = pinned_environment(self.manifest)
         for name in (
             "RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD",
             "RUST_FASTNUM_FMT_EXPONENTIAL_UPPER_THRESHOLD",
             "RUST_FASTNUM_FMT_MAX_INTEGER_PADDING",
-            "RUSTC", "RUSTFLAGS",
+            "RUSTC", "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+            "CARGO_PROFILE_TEST_OPT_LEVEL", "RUSTC_BOOTSTRAP",
         ):
             self.assertNotIn(name, environment)
-            self.assertIsNone(actual[name])
+            if name in actual:
+                self.assertIsNone(actual[name])
+        self.assertEqual(environment["RUSTFLAGS"], "")
+        self.assertEqual(actual["RUSTFLAGS"], "")
+        self.assertEqual(environment["RUSTC_WRAPPER"], "")
+        self.assertTrue(cargo_home.is_absolute())
 
 
 if __name__ == "__main__":

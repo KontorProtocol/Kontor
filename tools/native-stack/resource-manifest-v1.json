@@ -186,7 +186,7 @@
     },
     "resource_control_capture": {
       "path": "tools/native-stack/capture_resource_control.py",
-      "sha256": "c2018947972dc19b90a3f5a57e6d78d16d6fb34ba2dac8a03efbcdebf795e778"
+      "sha256": "2775f083ad6b7792e3b3590b0c488369241aa191714c956bbda25623dce51aa4"
     },
     "resource_diagnostic_capture": {
       "path": "tools/native-stack/capture_resource_diagnostic.py",
@@ -194,7 +194,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "7da1413980fabab271a67720fd8bb4ab98c1f3ed1b53457fff1c8df13e336283"
+      "sha256": "ef239d3bb7a61733dea4eab2533306e9f8d2350ef0c6fa63d1f529e4d32230e3"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -206,11 +206,11 @@
     },
     "resource_test_builder": {
       "path": "tools/native-stack/build_resource_test.py",
-      "sha256": "ecde9cd6633cef0d4b411b42cac4137fcd0c9558e4fb17458bba545de5c5b8ad"
+      "sha256": "f3cdf986fca07102a31c8c613b27c31e593b9786aebc43a5d78d5ea55906d0d4"
     },
     "resource_test_builder_tests": {
       "path": "tools/native-stack/test_resource_build_attestation.py",
-      "sha256": "5549b88de10f8900d8e8b2de5dc35f170a774e3684fbd37a2cf8ac98e26b1ec0"
+      "sha256": "9fc8e8539b0202d52c432c17743466d7d4330f07e919bcf8212b45febda29486"
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
@@ -276,14 +276,14 @@
     "cargo_features": [],
     "compile_env": {
       "CARGO_BUILD_RUSTC": null,
-      "CARGO_BUILD_RUSTFLAGS": null,
-      "CARGO_ENCODED_RUSTFLAGS": null,
+      "CARGO_BUILD_RUSTFLAGS": "",
+      "CARGO_ENCODED_RUSTFLAGS": "",
       "CARGO_TARGET_DIR": null,
       "CCACHE_DISABLE": "1",
       "RUSTC": null,
-      "RUSTC_WORKSPACE_WRAPPER": null,
-      "RUSTC_WRAPPER": null,
-      "RUSTFLAGS": null,
+      "RUSTC_WORKSPACE_WRAPPER": "",
+      "RUSTC_WRAPPER": "",
+      "RUSTFLAGS": "",
       "RUSTUP_TOOLCHAIN": "1.99.1",
       "RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD": null,
       "RUST_FASTNUM_FMT_EXPONENTIAL_UPPER_THRESHOLD": null,
