@@ -217,7 +217,7 @@ impl Before {
         let mut user = 0u64;
         for txid in txids {
             let mut usage = runtime.get_storage_conn().query(
-            "SELECT u.deposit_fuel, u.user_fuel FROM transaction_execution_usage u JOIN transactions t ON t.id = u.tx_id WHERE t.txid = ?", params![txid],
+            "SELECT u.deposit_fuel, u.user_fuel FROM transaction_execution_usage u JOIN transactions t ON t.id = u.tx_id WHERE t.txid = ?", params![txid.as_str()],
         ).await?;
             let usage_row = usage.next().await?.context("missing paid usage")?;
             let transaction_deposit: u64 = usage_row.get(0)?;

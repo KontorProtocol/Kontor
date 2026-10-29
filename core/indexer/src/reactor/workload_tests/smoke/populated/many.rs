@@ -12,7 +12,6 @@ use sha2::{Digest, Sha256};
 
 use super::super::signed_instructions;
 use crate::bitcoin_client::Client;
-use crate::bitcoin_client::client::RegtestRpc;
 use crate::test_utils::sign_key_spend;
 
 pub(super) async fn fund(
