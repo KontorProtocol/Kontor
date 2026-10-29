@@ -1,25 +1,30 @@
 use std::io::Read;
 use std::process;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use brotli::CompressorReader;
 use libsql::Connection;
 use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
 use wasmtime::Trap;
-use wasmtime::component::Component;
+use wit_component::{StringEncoding, embed_component_metadata};
+use wit_validator::Validator;
 
 use super::sweep::persistent_digest;
+use crate::runtime::fuel::Fuel;
 use crate::runtime::invocation::{InvocationBudget, ResourceProbePhase, ResourceTeardownRecorder};
+use crate::runtime::wit::Signer;
 use crate::runtime::{
-    ContractAddress, ExecutionError, Linkers, Runtime, TransactionContext, component_policy,
+    ContractAddress, ExecutionError, Runtime, TransactionContext, native_provenance,
     resource_diagnostics,
 };
 use crate::test_utils::test_runtime_with_engine;
 
+const WIT: &str =
+    include_str!("../../../../../../../test-contracts/canonical-probe/wit/contract.wit");
+const WAT: &str = include_str!("../../../../../../../test-contracts/canonical-probe/fixture.wat");
 const SAMPLES: [&str; 5] = [
     "active_data_success",
     "active_element_success",
@@ -27,84 +32,50 @@ const SAMPLES: [&str; 5] = [
     "active_element_oob",
     "fuel_failure",
 ];
+const VIEW_EXPRESSION: &str = "view-run(\"\")";
 
-fn component_bytes(sample: &str) -> Result<Vec<u8>> {
+fn fixture_bytes(sample: &str) -> Result<(Vec<u8>, String)> {
     let (data, element) = match sample {
-        "active_data_success" => (r#"(data (i32.const 0) "x")"#, ""),
-        "active_element_success" => ("", "(elem (i32.const 0) func $member)"),
-        "active_data_oob" => (r#"(data (i32.const 65536) "x")"#, ""),
-        "active_element_oob" => ("", "(elem (i32.const 1) func $member)"),
+        "active_data_success" => (r#"(data (i32.const 0) "x")"#.to_string(), ""),
+        "active_element_success" => (String::new(), "(elem (i32.const 0) func $member)"),
+        "active_data_oob" => (r#"(data (i32.const 65536) "x")"#.to_string(), ""),
+        "active_element_oob" => (String::new(), "(elem (i32.const 1) func $member)"),
         "fuel_failure" => (
-            r#"(data (i32.const 0) "x")"#,
-            "(elem (i32.const 0) func $member)",
+            format!(r#"(data (i32.const 0) "{}")"#, "x".repeat(4096)),
+            "",
         ),
         _ => bail!("unknown generated initialization sample {sample}"),
     };
-    let bytes = wat::parse_str(format!(
-        r#"(component
-            (import "kontor:built-in/context" (instance $context
-                (export "view-context" (type (sub resource)))))
-            (alias export $context "view-context" (type $view-context))
-            (import "sentinel" (func $sentinel))
-            (core func $drop (canon resource.drop $view-context))
-            (core func $sentinel-core (canon lower (func $sentinel)))
-            (core module $code
-                (import "" "drop" (func $drop (param i32)))
-                (import "" "sentinel" (func $sentinel))
-                (memory 1)
-                (table 1 funcref)
-                (func $member)
-                {element}
-                {data}
-                (func (export "run") (param i32)
-                    (call $drop (local.get 0))))
-            (core instance $code (instantiate $code
-                (with "" (instance
-                    (export "drop" (func $drop))
-                    (export "sentinel" (func $sentinel-core))))))
-            (func (export "run") (param "ctx" (borrow $view-context))
-                (canon lift (core func $code "run"))))"#
-    ))?;
-    component_policy::validate_no_starts(&bytes)?;
-    Ok(bytes)
-}
-
-async fn install_admitted_component(
-    runtime: &mut Runtime,
-    sample: &str,
-    tx_index: u32,
-) -> Result<(ContractAddress, String)> {
-    let bytes = component_bytes(sample)?;
-    let component_sha256 = hex::encode(Sha256::digest(&bytes));
-    let component = Component::new(&runtime.engine, &bytes)?;
-    runtime
-        .set_context(
-            1,
-            Some(TransactionContext::builder().tx_index(tx_index).build()),
-            None,
-            None,
-        )
-        .await;
-    let core = wat::parse_str("(module)")?;
+    let (validation, resolve) = Validator::validate_str(WIT)?;
+    ensure!(validation.is_valid(), "{validation}");
+    let package = resolve
+        .packages
+        .iter()
+        .find_map(|(id, package)| {
+            (package.name.namespace == "root" && package.name.name == "component").then_some(id)
+        })
+        .context("initialization fixture package is missing")?;
+    let world = resolve.select_world(&[package], Some("root"))?;
+    let wat = WAT
+        .replace("@@REALLOC_BODY@@", "i32.const 64")
+        .replace("@@POST_LIGHT_BODY@@", "")
+        .replace("@@POST_HEAVY_BODY@@", "");
+    let marker = "(memory (export \"memory\") 1)";
+    ensure!(
+        wat.matches(marker).count() == 1,
+        "fixture memory layout changed"
+    );
+    let wat = wat.replacen(
+        marker,
+        &format!("{marker}\n  (table 1 funcref)\n  (func $member)\n  {element}\n  {data}"),
+        1,
+    );
+    let mut module = wat::parse_str(&wat)?;
+    embed_component_metadata(&mut module, &resolve, world, StringEncoding::UTF8, false)?;
+    let module_sha256 = hex::encode(Sha256::digest(&module));
     let mut compressed = Vec::new();
-    CompressorReader::new(core.as_slice(), 4096, 5, 22).read_to_end(&mut compressed)?;
-    // A plain module cannot encode this component's canonical callbacks. The
-    // contract row resolves its address and the admitted cache supplies it.
-    let name = format!("generated-{sample}");
-    let id = runtime.storage.insert_contract(&name, &compressed).await?;
-    runtime
-        .component_cache
-        .put_admitted(id, component, bytes.len())
-        .await;
-    runtime.set_context(1, None, None, None).await;
-    Ok((
-        ContractAddress {
-            name,
-            height: 1,
-            tx_index,
-        },
-        component_sha256,
-    ))
+    CompressorReader::new(module.as_slice(), 4096, 5, 22).read_to_end(&mut compressed)?;
+    Ok((compressed, module_sha256))
 }
 
 async fn receipt_count(conn: &Connection) -> Result<u64> {
@@ -112,6 +83,78 @@ async fn receipt_count(conn: &Connection) -> Result<u64> {
         .query("SELECT COUNT(*) FROM contract_results", ())
         .await?;
     Ok(rows.next().await?.unwrap().get(0)?)
+}
+
+fn trap_name(result: &Result<String, ExecutionError>) -> Result<Option<String>> {
+    match result {
+        Ok(_) => Ok(None),
+        Err(ExecutionError::Deterministic(error)) => Ok(error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<Trap>())
+            .map(|trap| format!("{trap:?}"))),
+        Err(error) => {
+            bail!("generated initialization returned a non-deterministic error: {error:?}")
+        }
+    }
+}
+
+async fn sufficient_fuel_control(
+    runtime: &mut Runtime,
+    address: &ContractAddress,
+    module_sha256: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    let recorder =
+        (process_role == "target_observed").then(|| Arc::new(ResourceTeardownRecorder::default()));
+    let budget = Arc::new(match recorder.as_ref() {
+        Some(recorder) => InvocationBudget::with_teardown_recorder(recorder.clone()),
+        None => InvocationBudget::default(),
+    });
+    runtime.invocation_budget = Some(budget.clone());
+    runtime.resource_probe_phase =
+        Some(ResourceProbePhase::Target(Arc::new(vec![address.clone()])));
+    let conn = runtime.get_storage_conn();
+    let state_before_sha256 = persistent_digest(&conn).await?;
+    let receipts_before = receipt_count(&conn).await?;
+    let resources_before = runtime.table.lock().await.iter_mut().count();
+    let view_fuel_limit = runtime.fuel_limit_for_view()?;
+    let previous = runtime.start_usage();
+    resource_diagnostics::record("fuel_control_entry");
+    let result = runtime.execute(None, None, address, VIEW_EXPRESSION).await;
+    resource_diagnostics::record("fuel_control_exit");
+    let usage = runtime.finish_usage(previous)?;
+    let state_after_sha256 = persistent_digest(&conn).await?;
+    let receipts_after = receipt_count(&conn).await?;
+    let resources_after = runtime.table.lock().await.iter_mut().count();
+    ensure!(
+        result.as_ref().is_ok_and(|value| value.is_empty())
+            && usage.system_fuel > 1_000
+            && usage.user_fuel == 0
+            && usage.deposit_fuel == 0
+            && state_after_sha256 == state_before_sha256
+            && receipts_after == receipts_before
+            && resources_after == resources_before
+            && budget.live() == 0
+            && runtime.stack.is_empty().await
+            && runtime.storage.savepoint_stack.is_empty().await,
+        "sufficient-fuel initialization control failed: {result:?}"
+    );
+    Ok(json!({
+        "component_address": format!("{}:{}:{}", address.name, address.height, address.tx_index),
+        "module_sha256": module_sha256,
+        "result_value": result.ok(),
+        "view_fuel_limit": view_fuel_limit,
+        "system_fuel": usage.system_fuel,
+        "state_before_sha256": state_before_sha256,
+        "state_after_sha256": state_after_sha256,
+        "receipts_before": receipts_before,
+        "receipts_after": receipts_after,
+        "resources_before": resources_before,
+        "resources_after": resources_after,
+        "live_invocations": budget.live(),
+        "teardown_probe_on": recorder.is_some(),
+        "teardown_events": recorder.as_ref().map(|recorder| recorder.events()),
+    }))
 }
 
 pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonValue> {
@@ -126,32 +169,64 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
         Runtime::new_engine()?
     };
     let (mut runtime, _dir, _name) = test_runtime_with_engine(engine).await?;
-    let callback_calls = Arc::new(AtomicUsize::new(0));
-    let observed = callback_calls.clone();
-    let mut user = runtime.linkers.user.clone();
-    user.root().func_wrap("sentinel", move |_, (): ()| {
-        observed.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    })?;
-    runtime.linkers = Arc::new(Linkers {
-        user,
-        native: runtime.linkers.native.clone(),
-    });
+    let signer = Signer::Core(Box::new(Signer::Nobody));
+    let payment = runtime.core_payment();
     let conn = runtime.get_storage_conn();
     let default_view_gas_limit = runtime.view_gas_limit;
     let mut outcomes = Vec::with_capacity(SAMPLES.len() * 2);
     for (sample_index, sample) in SAMPLES.into_iter().enumerate() {
-        let (address, component_sha256) =
-            install_admitted_component(&mut runtime, sample, u32::try_from(sample_index)?).await?;
-        let contract_id = runtime.storage.contract_id(&address).await?.unwrap();
-        ensure!(
+        let (module, module_sha256) = fixture_bytes(sample)?;
+        let address = ContractAddress {
+            name: format!("generated-{}", sample.replace('_', "-")),
+            height: 1,
+            tx_index: u32::try_from(sample_index)?,
+        };
+        let expect_publish_failure = matches!(sample, "active_data_oob" | "active_element_oob");
+        if !expect_publish_failure {
+            runtime.invocation_budget = None;
+            runtime.resource_probe_phase = None;
             runtime
-                .component_cache
-                .get_admitted(&contract_id)
-                .await
-                .is_some(),
-            "generated component was not admitted"
-        );
+                .set_context(
+                    1,
+                    Some(
+                        TransactionContext::builder()
+                            .tx_index(address.tx_index)
+                            .build(),
+                    ),
+                    None,
+                    None,
+                )
+                .await;
+            resource_diagnostics::record("publication_entry");
+            let published = runtime
+                .publish(
+                    &signer,
+                    payment.clone(),
+                    &address.name,
+                    &module,
+                    &native_provenance()?,
+                )
+                .await;
+            resource_diagnostics::record("publication_exit");
+            runtime.set_context(1, None, None, None).await;
+            ensure!(
+                published.is_ok(),
+                "generated initialization publication failed: {published:?}"
+            );
+            ensure!(
+                runtime.storage.contract_id(&address).await?.is_some(),
+                "published generated component has no contract row"
+            );
+        }
+        let fuel_control = if sample == "fuel_failure" {
+            runtime.view_gas_limit = default_view_gas_limit;
+            Some(
+                sufficient_fuel_control(&mut runtime, &address, &module_sha256, process_role)
+                    .await?,
+            )
+        } else {
+            None
+        };
         for repeat_index in 0..2 {
             resource_diagnostics::record("finite_stack_attempt_start");
             let started = Instant::now();
@@ -165,27 +240,64 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
             runtime.resource_probe_phase =
                 Some(ResourceProbePhase::Target(Arc::new(vec![address.clone()])));
             runtime.view_gas_limit = if sample == "fuel_failure" {
-                0
+                1
             } else {
                 default_view_gas_limit
             };
-            let view_fuel_limit = runtime.fuel_limit_for_view()?;
+            let expression = if expect_publish_failure {
+                "init()"
+            } else {
+                VIEW_EXPRESSION
+            };
+            let input_precharge_fuel = Fuel::WaveInputBytes(u64::try_from(expression.len())?)
+                .cost()
+                + Fuel::ContractNameBytes(u64::try_from(address.name.len())?).cost();
+            let view_fuel_limit = (!expect_publish_failure)
+                .then(|| runtime.fuel_limit_for_view())
+                .transpose()?;
+            if sample == "fuel_failure" {
+                ensure!(
+                    view_fuel_limit.unwrap() > input_precharge_fuel
+                        && view_fuel_limit.unwrap() < 4096,
+                    "fuel failure must pass input precharge and exhaust active data startup"
+                );
+            }
             let state_before_sha256 = persistent_digest(&conn).await?;
             let receipts_before = receipt_count(&conn).await?;
             let resources_before = runtime.table.lock().await.iter_mut().count();
+            if expect_publish_failure {
+                runtime
+                    .set_context(
+                        1,
+                        Some(
+                            TransactionContext::builder()
+                                .tx_index(address.tx_index)
+                                .build(),
+                        ),
+                        None,
+                        None,
+                    )
+                    .await;
+            }
             let previous = runtime.start_usage();
-            let result = runtime.execute(None, None, &address, "run()").await;
-            let usage = runtime.finish_usage(previous)?;
-            let typed_trap = match &result {
-                Ok(_) => None,
-                Err(ExecutionError::Deterministic(error)) => error
-                    .chain()
-                    .find_map(|cause| cause.downcast_ref::<Trap>())
-                    .map(|trap| format!("{trap:?}")),
-                Err(error) => {
-                    bail!("generated initialization returned a non-deterministic error: {error:?}")
-                }
+            let result = if expect_publish_failure {
+                runtime
+                    .publish(
+                        &signer,
+                        payment.clone(),
+                        &address.name,
+                        &module,
+                        &native_provenance()?,
+                    )
+                    .await
+            } else {
+                runtime.execute(None, None, &address, expression).await
             };
+            let usage = runtime.finish_usage(previous)?;
+            if expect_publish_failure {
+                runtime.set_context(1, None, None, None).await;
+            }
+            let typed_trap = trap_name(&result)?;
             let outcome = match &result {
                 Ok(_) => "ok",
                 Err(_) if typed_trap.as_deref() == Some("OutOfFuel") => "out_of_fuel",
@@ -202,6 +314,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 outcome == expected_outcome && typed_trap.as_deref() == expected_trap,
                 "generated initialization {sample} returned {outcome:?} {typed_trap:?}: {result:?}"
             );
+            let published = runtime.storage.contract_id(&address).await?.is_some();
             let state_after_sha256 = persistent_digest(&conn).await?;
             let receipts_after = receipt_count(&conn).await?;
             let resources_after = runtime.table.lock().await.iter_mut().count();
@@ -210,7 +323,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
             let live_invocations = budget.live();
             let teardown_events = recorder.as_ref().map(|recorder| recorder.events());
             ensure!(
-                callback_calls.load(Ordering::SeqCst) == 0
+                published == !expect_publish_failure
                     && state_after_sha256 == state_before_sha256
                     && receipts_after == receipts_before
                     && resources_after == resources_before
@@ -224,16 +337,16 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 "outcome": outcome,
                 "typed_trap": typed_trap,
                 "result_value": result.ok(),
-                "component_sha256": component_sha256,
-                "execution_path": "Runtime::execute",
-                "admission_path": "admitted_component_cache",
-                "published": false,
-                "fuel_failure_stage": if sample == "fuel_failure" { Some("input_precharge") } else { None },
+                "module_sha256": module_sha256,
+                "component_address": format!("{}:{}:{}", address.name, address.height, address.tx_index),
+                "execution_path": if expect_publish_failure { "Runtime::publish/init" } else { "Runtime::execute" },
+                "published": published,
+                "input_precharge_fuel": input_precharge_fuel,
                 "view_fuel_limit": view_fuel_limit,
+                "fuel_control": fuel_control.clone(),
                 "user_fuel": usage.user_fuel,
                 "system_fuel": usage.system_fuel,
                 "deposit_fuel": usage.deposit_fuel,
-                "host_callback_count": callback_calls.load(Ordering::SeqCst),
                 "state_before_sha256": state_before_sha256,
                 "state_after_sha256": state_after_sha256,
                 "receipts_before": receipts_before,
@@ -275,6 +388,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
         }
     }
     runtime.resource_probe_phase = None;
+    runtime.invocation_budget = None;
     runtime.view_gas_limit = default_view_gas_limit;
     let summary = json!({
         "case_id": "generated_initialization",

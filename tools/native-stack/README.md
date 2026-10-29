@@ -221,14 +221,15 @@ check fuel-to-gas conversion and exact actor debit, burner credit, and supply
 reduction. The heavy callback must charge more gas and fee than the light one.
 
 The generated initialization adapter uses the production Pulley engine on a
-measured Tokio worker. It calls admitted start-free components through
-`Runtime::execute`, with active data and element segments and out-of-bounds
-variants. A separate zero-fuel call fails at the runtime's input precharge,
-before component initialization. A host sentinel must remain untouched, each Store
-must close, and receipts, resources, and the full persistent digest must remain
-stable. The fixture admits a component through the cache because its canonical
-callbacks cannot be encoded from a plain core module. It establishes the
-runtime call path, but does not establish publication of these components.
+measured Tokio worker. It publishes WIT-encoded components with active data
+and element segments, then calls the valid variants through `Runtime::execute`.
+Out-of-bounds variants trap during publish-time `init()` and must roll back.
+A published component with a 4,096-byte active data segment exhausts a positive
+view budget during instantiation, after input precharge and before canonical
+input conversion. The same published component first succeeds with sufficient
+fuel, and both calls record their Store lifecycle. Each target Store must close,
+while receipts, resources,
+and the full persistent digest remain stable across every trial.
 
 At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
 development canonical capture completed 12 child processes, 56 attempts, and

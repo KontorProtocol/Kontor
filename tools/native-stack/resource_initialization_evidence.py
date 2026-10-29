@@ -25,14 +25,22 @@ EXPECTED = {"active_data_success": ("ok", None),
             "active_element_oob": ("deterministic_error", "TableOutOfBounds"),
             "fuel_failure": ("out_of_fuel", "OutOfFuel")}
 OBSERVATION_KEYS = {
-    "sample_key", "outcome", "typed_trap", "result_value", "component_sha256",
-    "execution_path", "admission_path", "published", "fuel_failure_stage",
-    "view_fuel_limit",
-    "user_fuel", "system_fuel", "deposit_fuel", "host_callback_count",
+    "sample_key", "outcome", "typed_trap", "result_value", "module_sha256",
+    "component_address",
+    "execution_path", "published", "input_precharge_fuel", "view_fuel_limit",
+    "fuel_control",
+    "user_fuel", "system_fuel", "deposit_fuel",
     "state_before_sha256", "state_after_sha256", "receipts_before",
     "receipts_after", "resources_before", "resources_after", "stack_empty",
     "savepoint_empty", "live_invocations", "teardown_probe_on",
     "teardown_events", "engine_target", "max_wasm_stack", "async_stack_size",
+}
+FUEL_CONTROL_KEYS = {
+    "component_address", "module_sha256", "result_value", "view_fuel_limit",
+    "system_fuel", "state_before_sha256",
+    "state_after_sha256", "receipts_before", "receipts_after",
+    "resources_before", "resources_after", "live_invocations",
+    "teardown_probe_on", "teardown_events",
 }
 
 
@@ -63,6 +71,10 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
             and attempt["pid"] == pid,
             "generated initialization attempt identity changed")
     expected_outcome, expected_trap = EXPECTED[sample]
+    publish_failure = sample in {"active_data_oob", "active_element_oob"}
+    expression = "init()" if publish_failure else 'view-run("")'
+    precharge = 10 * (len(expression) + len(f"generated-{sample.replace('_', '-')}"))
+    address = f"generated-{sample.replace('_', '-')}:1:{SAMPLES.index(sample)}"
     require(isinstance(value, dict) and set(value) == OBSERVATION_KEYS
             and value["sample_key"] == sample
             and value["outcome"] == expected_outcome
@@ -71,20 +83,26 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
                   and sample.endswith("success"))
                  or (value["result_value"] is None
                      and not sample.endswith("success")))
-            and isinstance(value["component_sha256"], str)
-            and re.fullmatch(r"[0-9a-f]{64}", value["component_sha256"])
-            and value["execution_path"] == "Runtime::execute"
-            and value["admission_path"] == "admitted_component_cache"
-            and value["published"] is False
-            and value["fuel_failure_stage"] ==
-                ("input_precharge" if sample == "fuel_failure" else None)
-            and type(value["view_fuel_limit"]) is int
-            and (value["view_fuel_limit"] == 0 if sample == "fuel_failure"
-                 else value["view_fuel_limit"] > 0)
+            and isinstance(value["module_sha256"], str)
+            and re.fullmatch(r"[0-9a-f]{64}", value["module_sha256"])
+            and value["component_address"] == address
+            and value["execution_path"] ==
+                ("Runtime::publish/init" if publish_failure else "Runtime::execute")
+            and value["published"] is (not publish_failure)
+            and type(value["input_precharge_fuel"]) is int
+            and value["input_precharge_fuel"] == precharge
+            and (value["view_fuel_limit"] is None if publish_failure else
+                 (type(value["view_fuel_limit"]) is int and
+                  value["view_fuel_limit"] ==
+                    (1_000 if sample == "fuel_failure" else 100_000_000)))
             and all(type(value[key]) is int and value[key] >= 0 for key in
                     ("user_fuel", "system_fuel", "deposit_fuel"))
-            and (sample != "fuel_failure" or value["system_fuel"] == 0)
-            and value["host_callback_count"] == 0
+            and value["user_fuel"] == value["deposit_fuel"] == 0
+            and (value["system_fuel"] == value["input_precharge_fuel"]
+                 if publish_failure else value["system_fuel"] >
+                 value["input_precharge_fuel"])
+            and (sample != "fuel_failure" or
+                 value["system_fuel"] == value["view_fuel_limit"])
             and type(value["receipts_before"]) is int
             and value["receipts_after"] == value["receipts_before"]
             and type(value["resources_before"]) is int
@@ -102,6 +120,31 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
     require(isinstance(before, str) and re.fullmatch(r"[0-9a-f]{64}", before)
             and value["state_after_sha256"] == before,
             "generated initialization changed full persistent state")
+    control = value["fuel_control"]
+    if sample == "fuel_failure":
+        require(isinstance(control, dict) and set(control) == FUEL_CONTROL_KEYS
+                and control["component_address"] == address
+                and control["module_sha256"] == value["module_sha256"]
+                and control["result_value"] == ""
+                and control["view_fuel_limit"] == 100_000_000
+                and type(control["system_fuel"]) is int
+                and 1_000 < control["system_fuel"] < control["view_fuel_limit"]
+                and control["state_before_sha256"] ==
+                    control["state_after_sha256"] == before
+                and control["receipts_before"] ==
+                    control["receipts_after"] == value["receipts_before"]
+                and control["resources_before"] ==
+                    control["resources_after"] == value["resources_before"]
+                and control["live_invocations"] == 0
+                and control["teardown_probe_on"] is (role == "target_observed"),
+                "same-component sufficient-fuel control is incomplete")
+        if role == "target_observed":
+            validate_teardown(control["teardown_events"], 1, 0)
+        else:
+            require(control["teardown_events"] is None,
+                    "probe-off fuel control recorded teardown events")
+    else:
+        require(control is None, "unexpected initialization fuel control")
     if role == "target_observed":
         teardown = validate_teardown(value["teardown_events"], 1, 0)
         require(teardown["created"]["nested_chain"] == 1,
@@ -112,11 +155,14 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
     return {"sample_key": sample, "repeat_index": repeat_index,
             "outcome": value["outcome"], "typed_trap": value["typed_trap"],
             "result_value": value["result_value"],
-            "component_sha256": value["component_sha256"],
+            "module_sha256": value["module_sha256"],
+            "component_address": address,
+            "input_precharge_fuel": value["input_precharge_fuel"],
             "view_fuel_limit": value["view_fuel_limit"],
             "user_fuel": value["user_fuel"],
             "system_fuel": value["system_fuel"],
             "deposit_fuel": value["deposit_fuel"],
+            "control_fuel": control["system_fuel"] if control else None,
             "receipts": value["receipts_before"],
             "resources": value["resources_before"],
             "state_sha256": before}
@@ -145,6 +191,8 @@ def validate_trace(trace, runtime, attempts, os_name):
                 and event["name"] in {"compiler_entry", "compiler_exit",
                                       "finite_stack_attempt_start",
                                       "finite_stack_attempt_end",
+                                      "publication_entry", "publication_exit",
+                                      "fuel_control_entry", "fuel_control_exit",
                                       "canonical_input_entry", "canonical_input_exit",
                                       "canonical_output_entry", "canonical_output_exit",
                                       "blocking_decode_entry", "blocking_decode_exit"},
@@ -167,14 +215,52 @@ def validate_trace(trace, runtime, attempts, os_name):
             and all(start < end and (index == 0 or ends[index - 1] < start)
                     for index, (start, end) in enumerate(zip(starts, ends, strict=True)))
             and names.count("compiler_entry") > 0
-            and names.count("blocking_decode_entry") > 0,
+            and names.count("blocking_decode_entry") > 0
+            and names.count("publication_entry") ==
+                names.count("publication_exit") == 3
+            and names.count("fuel_control_entry") ==
+                names.count("fuel_control_exit") == 1,
             "generated initialization worker attempt intervals are incomplete")
-    for attempt, start, end in zip(attempts, starts, ends, strict=True):
+    publications = [index for index, name in enumerate(names)
+                    if name == "publication_entry"]
+    publication_ends = [index for index, name in enumerate(names)
+                        if name == "publication_exit"]
+    require(all(start < end < starts[attempt_index]
+                and (attempt_index == 0 or ends[attempt_index - 1] < start)
+                for start, end, attempt_index in
+                zip(publications, publication_ends, (0, 2, 8), strict=True)),
+            "generated initialization publication order changed")
+    control_start = names.index("fuel_control_entry")
+    control_end = names.index("fuel_control_exit")
+    control_events = names[control_start:control_end + 1]
+    require(publication_ends[2] < control_start < control_end < starts[8]
+            and control_events.count("canonical_input_entry") == 1
+            and control_events.count("canonical_output_entry") == 1,
+            "sufficient-fuel control did not execute the published component")
+    for index, (attempt, start, end) in enumerate(zip(attempts, starts, ends, strict=True)):
         operation = names[start:end + 1]
         if attempt["observation"]["outcome"] == "ok":
-            require(operation.count("canonical_input_entry") >= 1
-                    and operation.count("canonical_output_entry") >= 1,
+            require(operation.count("canonical_input_entry") == 1
+                    and operation.count("canonical_output_entry") == 1
+                    and operation.count("compiler_entry") == 0
+                    and operation.count("blocking_decode_entry") == 0,
                     "generated initialization success omitted canonical call conversion")
+        elif attempt["sample_key"] in {"active_data_oob", "active_element_oob"}:
+            require(operation.count("compiler_entry") == 1
+                    and operation.count("blocking_decode_entry") == 1
+                    and operation.count("canonical_input_entry") == 0,
+                    "generated initialization publish trap escaped component startup")
+        else:
+            # A published, cached component has cleared the measured input
+            # precharge. With no canonical input event, the fuel trap is in
+            # instantiate_async's metered active-segment startup.
+            require(index in (8, 9)
+                    and all(operation.count(name) == 0 for name in
+                            ("compiler_entry", "blocking_decode_entry",
+                             "canonical_input_entry", "canonical_output_entry"))
+                    and attempt["observation"]["view_fuel_limit"] >
+                        attempt["observation"]["input_precharge_fuel"],
+                    "generated initialization fuel trap did not reach startup")
     for entry, exit_name in (
         ("compiler_entry", "compiler_exit"),
         ("blocking_decode_entry", "blocking_decode_exit"),
