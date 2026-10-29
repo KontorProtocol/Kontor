@@ -2,9 +2,11 @@
 
 import copy
 import unittest
+from unittest.mock import patch
 
 from resource_sqlite_pagination_evidence import (SAMPLES, expected_page,
-                                                 validate_observation)
+                                                 validate_observation,
+                                                 validate_trace)
 
 
 EVENTS = [
@@ -102,6 +104,46 @@ class SqlitePaginationEvidenceTests(unittest.TestCase):
         item["observation"]["teardown_events"].pop()
         with self.assertRaises(ValueError):
             self.validate(item)
+
+    def test_accepts_output_scope_migration_between_measured_workers(self):
+        def event(name, worker=1, category="tokio_worker"):
+            return {"name": name, "thread_id": worker,
+                    "os_thread_id": worker + 10, "category": category}
+
+        events = [event("fixture_preparation_entry"),
+                  event("compiler_entry"), event("compiler_exit"),
+                  event("blocking_decode_entry", 3, "blocking_pool"),
+                  event("blocking_decode_exit", 3, "blocking_pool"),
+                  event("fixture_preparation_exit")]
+        attempts = [{"sample_key": sample} for sample in SAMPLES
+                    for _ in range(2)]
+        for index, _ in enumerate(attempts):
+            if index == 18:
+                events.extend((event("fixture_preparation_entry"),
+                               event("fixture_preparation_exit")))
+            events.extend((event("finite_stack_attempt_start"),
+                           event("canonical_input_entry"),
+                           event("canonical_input_exit"),
+                           event("canonical_output_entry"),
+                           event("canonical_output_exit", 2),
+                           event("finite_stack_attempt_end", 2)))
+        identity = {"scope": "paired_finite_stack_worker",
+                    "configuration": "production", "case_id": "sqlite_pagination",
+                    "process_role": "target_observed"}
+        runtime = {**identity, "pid": 7, "embedded_source_sha": "a" * 64,
+                   "binary_sha256": "b" * 64,
+                   "thread_observations": [{"page_size_bytes": 4096}]}
+        trace = {**identity, "events": events}
+        threads = {"tokio_worker": [{"thread_id": 1, "os_thread_id": 11},
+                                    {"thread_id": 2, "os_thread_id": 12}],
+                   "blocking_pool": [{"thread_id": 3, "os_thread_id": 13}]}
+        with patch("resource_sqlite_pagination_evidence.thread_capacities",
+                   return_value=threads):
+            validate_trace(trace, runtime, attempts, "linux")
+            bad = copy.deepcopy(trace)
+            bad["events"].pop(-2)
+            with self.assertRaises(ValueError):
+                validate_trace(bad, runtime, attempts, "linux")
 
 
 if __name__ == "__main__":

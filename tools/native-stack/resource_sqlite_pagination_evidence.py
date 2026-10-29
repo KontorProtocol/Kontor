@@ -195,6 +195,17 @@ def validate_trace(trace, runtime, attempts, os_name):
                 and segment.count("canonical_output_entry") == 1,
                 f"pagination {attempt['sample_key']} did not reach its query boundary")
     for entry, exit_name in PHASES:
+        if entry == "canonical_output_entry":
+            # Encoding awaits, so its scope can resume on another Tokio worker.
+            depth = 0
+            for event in events:
+                if event["name"] == entry:
+                    depth += 1
+                elif event["name"] == exit_name:
+                    require(depth > 0, "unpaired pagination canonical output exit")
+                    depth -= 1
+            require(depth == 0, "unclosed pagination canonical output entry")
+            continue
         in_flight = {}
         for event in events:
             thread = event["thread_id"]

@@ -310,11 +310,11 @@
     },
     "sqlite_pagination_validator": {
       "path": "tools/native-stack/resource_sqlite_pagination_evidence.py",
-      "sha256": "3f195596320c41e81d0c8e4321ee862bc20dec9eb0642d45ddf1bf99e67a2525"
+      "sha256": "f3cdac38d01a43fcb1cccf8acc87fa17254fa393086100e287c291074b6fcd03"
     },
     "sqlite_pagination_validator_tests": {
       "path": "tools/native-stack/test_resource_sqlite_pagination_evidence.py",
-      "sha256": "7d25994466cdc1ae0e21b27f0e537225a28f1897af352d362ba21b221b6a1b0b"
+      "sha256": "7cf1e3935370e2754cecbdc4a029c8d0330b21a4906a572f070814175abe043a"
     },
     "stack_probe": {
       "path": "test-contracts/binaries/stack_probe.wasm.br",
