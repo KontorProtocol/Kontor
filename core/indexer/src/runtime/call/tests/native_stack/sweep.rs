@@ -943,22 +943,43 @@ async fn resource_attempt(
     let mut current = fixture.take().context("resource fixture was consumed")?;
     let (returned, outcome, host_io_suspended) = if let Some(gate) = leaf_gate {
         let task_role = process_role.to_owned();
-        let task = tokio::spawn(async move {
+        let mut task = tokio::spawn(async move {
             let outcome = current.observe(depth, &task_role).await?;
             Ok::<_, anyhow::Error>((current, outcome))
         });
-        timeout(Duration::from_secs(30), gate.entered.notified()).await?;
-        ensure!(
-            !task.is_finished(),
-            "leaf host import did not suspend the guest"
-        );
-        ensure!(
-            tokio::spawn(async { 42 }).await? == 42,
-            "Tokio worker did not progress while the host import was pending"
-        );
-        gate.release.notify_one();
-        let (current, outcome) = timeout(Duration::from_secs(30), task).await???;
-        (current, outcome, true)
+        let entered = gate.entered.notified();
+        tokio::pin!(entered);
+        let completed = tokio::select! {
+            result = &mut task => Some(result),
+            () = &mut entered => None,
+            () = tokio::time::sleep(Duration::from_secs(30)) => {
+                bail!("leaf host import neither entered nor trapped within 30 seconds");
+            }
+        };
+        if let Some(result) = completed {
+            let (current, outcome) = result??;
+            ensure!(
+                outcome == "stack_overflow",
+                "leaf completed without entering its host import: {outcome}"
+            );
+            (current, outcome, false)
+        } else {
+            ensure!(
+                !task.is_finished(),
+                "leaf host import did not suspend the guest"
+            );
+            ensure!(
+                tokio::spawn(async { 42 }).await? == 42,
+                "Tokio worker did not progress while the host import was pending"
+            );
+            gate.release.notify_one();
+            let (current, outcome) = timeout(Duration::from_secs(30), task).await???;
+            ensure!(
+                outcome == "ok",
+                "leaf trapped after its host import entered"
+            );
+            (current, outcome, true)
+        }
     } else {
         let outcome = current.observe(depth, process_role).await?;
         (current, outcome, false)
@@ -968,7 +989,7 @@ async fn resource_attempt(
         .clone()
         .context("resource observation was not emitted")?;
     observation["host_io_suspended"] = json!(host_io_suspended);
-    observation["leaf_callback_seen"] = json!(leaf_gate.is_some());
+    observation["leaf_callback_seen"] = json!(host_io_suspended);
     let probe_on = returned.resource_probe == Some(true);
     *fixture = Some(returned);
     resource_diagnostics::record("boundary_attempt_end");
@@ -1025,7 +1046,7 @@ pub(super) async fn run_resource_boundary(
     );
     let discovery = process_role == "discovery_production_observed";
     ensure!(
-        !discovery || (configuration == "production" && shape != "leaf"),
+        !discovery || configuration == "production",
         "discovery requires a production Pulley boundary"
     );
     ensure!(
@@ -1087,7 +1108,7 @@ pub(super) async fn run_resource_boundary(
             configuration,
             "calibration",
             attempts,
-            None,
+            leaf_gate.as_ref(),
         )
         .await?;
         ensure!(outcome == "ok", "Pulley depth zero failed");
@@ -1103,7 +1124,7 @@ pub(super) async fn run_resource_boundary(
                 configuration,
                 "calibration",
                 attempts,
-                None,
+                leaf_gate.as_ref(),
             )
             .await?;
             attempts += 1;
@@ -1128,7 +1149,7 @@ pub(super) async fn run_resource_boundary(
                 configuration,
                 "calibration",
                 attempts,
-                None,
+                leaf_gate.as_ref(),
             )
             .await?;
             attempts += 1;

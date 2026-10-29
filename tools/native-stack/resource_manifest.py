@@ -204,7 +204,7 @@ def cases():
              sample_keys=tuple(f"value_{size}_page_{page}" for size in (16_384, 1_048_576)
                                for page in (1, 7, 100))),
         case("deepest_frame_host_call", "pulley_host_callback",
-             {"depth_from_case": "pulley_plain_paid", "host_call_at_leaf": True}, []),
+             {"adjacent_leaf_boundary": True, "host_call_at_leaf": True}, []),
         case("canonical_type_value_recursion", "canonical_abi",
              {"component_type_depth_limit": 100, "wave_result_value_depth_limit": 64,
               "wave_expression_max_depth": 64, "wave_string_literal_max_bytes": 16_384,

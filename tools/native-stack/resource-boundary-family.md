@@ -18,13 +18,17 @@ host import and checks the resumed result. The leaf export and its frame shape
 must be frozen before depth discovery.
 
 Development discovery runs one production-capacity observed child for each of
-the eight boundary cases on Linux ARM64 development, eight children total.
+the eight boundary cases and the leaf host call on Linux ARM64 development,
+nine children total. The leaf call has its own adjacent stack boundary. A
+pre-import typed stack overflow is a failed calibration attempt; each
+successful leaf attempt must enter the host import, suspend, allow another
+Tokio task to progress, and resume after release.
 Each child starts at zero, doubles from 1024 up to 32768, then bisects the
 first typed stack-overflow interval. It emits every calibration attempt,
 including worker phases, full state reset, and Store teardown. The validator
 reconstructs the exact search from the raw transcript. Discovery is not a
 candidate binding. After independent source and evidence review, copy its
-eight adjacent depth pairs and capture SHA-256 into
+nine adjacent depth pairs and capture SHA-256 into
 `resource-boundary-depths-v1.json`, rebuild from that committed source, and
 never rediscover in final or later cells.
 
@@ -34,7 +38,7 @@ the frozen last success and first failure three times in the fixed order
 `success, failure, failure, success, success, failure`. These 32 fresh
 children supply 192 target attempts per cell. The leaf case adds one observed
 and one probe-off child per configuration, two repeated suspended host calls
-per child at the frozen plain-paid last-success depth. Final capture is 36
+per child at the frozen leaf last-success depth. Final capture is 36
 children and 200 target attempts per cell. The observed child is independent
 of discovery and supplies the fresh-process control; a third observed child
 is not part of this gate.
@@ -42,32 +46,52 @@ is not part of this gate.
 Each child has its own process identity, complete raw log, terminal marker,
 allowlisted environment, binary and source identity, two measured Tokio
 workers, blocking-pool and caller stack records, phase and canonical
-conversion trace, and per-attempt timing. Each observed attempt requires its
+conversion trace, and per-attempt timing. The canonical input conversion and
+successful output conversion must occur inside that attempt's operation
+interval. Each observed attempt requires its
 own Store table to die before its lease releases. Probe-off attempts cannot
 claim teardown evidence. Full SQLite rows plus logical schema, canonical
-balance transitions, fuel, receipts, typed traps, and rollback must match
+balance transitions, including debit, burn, and supply conservation, fuel,
+receipts, typed traps, and rollback must match
 across repeats, probe states, and reduced/production configurations. Frozen
 depths and semantic outputs must match across nodes in the eventual six-cell
 gate. No local hardware or timing values enter protocol semantic equality.
 
 The resource boundary manifest intentionally begins with null depths and
-`pending_discovery`. The final capture driver fails closed until all eight
+`pending_discovery`. The final capture driver fails closed until all nine
 depths and the reviewed discovery hash are pinned. Existing source and guard
 capture rules remain mandatory. A fixture or runtime frame-path edit after
 discovery requires new reviewed discovery and a fresh final binary.
+The v1 case contract now records `adjacent_leaf_boundary: true` instead of
+borrowing `pulley_plain_paid` depth. This amends the generated v1 manifest
+hash while retaining all 41 case IDs and the approved resource amendment
+bytes. The historical a355 chain archive remains unchanged. The v1 validator
+requires the leaf observation to equal the reviewed frozen leaf depth.
+
+Final capture takes the complete archived nine-case discovery and its pinned
+SHA-256. It replays validation of each raw discovery transcript against the
+source commit's manifest, checks the archived selected binary bytes against
+the historical control and Cargo artifact, and checks each adjacent pair
+against the frozen values,
+and verifies the discovery commit precedes the final commit. Between those
+commits only the depth record and generated boundary manifest may change.
+The final control still requires the exact clean final source commit and its
+own Cargo binary. All nine frame paths and fixture bytes are thereby held
+fixed across discovery and final capture.
 
 ## Bounded pilot after source review
 
-The development pilot runs plain-paid and wide-paid discovery in two
-production children, then their frozen-in-pilot depths in eight independent
-replay children, two configurations by two roles by two shapes. The replay
+The development pilot runs plain-paid, wide-paid, and leaf discovery in three
+production children, then their frozen-in-pilot depths in twelve independent
+replay children, two configurations by two roles by three cases. The replay
 driver takes the archived pilot discovery capture and its exact SHA-256,
 copies the complete archive, and verifies source, binary, manifest, and
 depth parity. The pilot is diagnostic and never supplies final binding.
 
-Each discovery child has at most 21 target attempts. Each replay child has
-six, so the pilot has at most 90 target attempts in ten children. The full
-eight-case discovery has at most 168. Final capture has 200 per cell, or 1200
+Each discovery child has at most 21 target attempts. The eight boundary replay
+children have six each, while the four leaf replay children have two each.
+The pilot has at most 119 target attempts in fifteen children. Full nine-case
+discovery has at most 189. Final capture has 200 per cell, or 1200
 across six cells, plus fixture setup and observation queries. The existing
 600-second per-child timeout is a failure bound, not a runtime estimate.
 Pilot outputs record whole-child wall time, per-attempt time, and matched
@@ -93,6 +117,13 @@ python3 tools/native-stack/capture_resource_boundary.py \
   --control-capture CONTROL/resource-control-capture.json \
   --control-sha256 CONTROL_SHA256 \
   --evidence-dir PILOT_REPLAY
+python3 tools/native-stack/capture_resource_boundary.py \
+  --phase final --cell Linux-ARM64/dev \
+  --reviewed-discovery-capture DISCOVERY/resource-boundary-capture.json \
+  --reviewed-discovery-sha256 REVIEWED_DISCOVERY_SHA256 \
+  --control-capture FINAL_CONTROL/resource-control-capture.json \
+  --control-sha256 FINAL_CONTROL_SHA256 \
+  --evidence-dir FINAL_EVIDENCE
 ```
 
 No pilot or final capture runs before the source, schema, and validator review

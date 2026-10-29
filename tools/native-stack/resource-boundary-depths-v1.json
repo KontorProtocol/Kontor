@@ -1,6 +1,7 @@
 {
   "discovery_capture_sha256": null,
   "cases": {
+  "deepest_frame_host_call": null,
   "pulley_plain_core": null,
   "pulley_plain_paid": null,
   "pulley_plain_system": null,

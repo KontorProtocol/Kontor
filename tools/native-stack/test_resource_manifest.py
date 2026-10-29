@@ -158,6 +158,16 @@ class ResourceManifestTests(unittest.TestCase):
 
     def test_expected_results_and_boundaries_reject_matching_wrong_runs(self):
         with tempfile.TemporaryDirectory() as directory:
+            leaf_depths = Path(directory) / "leaf-depths.json"
+            leaf_depths.write_text(json.dumps({
+                "discovery_capture_sha256": "1" * 64,
+                "cases": {"deepest_frame_host_call": {
+                    "last_success": 10, "first_failure": 11,
+                }},
+            }))
+            patcher = patch.object(resource_evidence, "BOUNDARY_DEPTHS", leaf_depths)
+            patcher.start()
+            self.addCleanup(patcher.stop)
             raw = Path(directory) / "child.jsonl"
             raw.write_text("test transcript\n")
             log = {"path": raw.name, "sha256": resource_evidence.sha256(raw)}
@@ -229,6 +239,15 @@ class ResourceManifestTests(unittest.TestCase):
             manifest["worker_runner"]["sha256"] = "1" * 64
             resource_evidence.check_cases(configuration, manifest, "production",
                                           Path(directory), transcript)
+            leaf = next(item for item in configuration["cases"]
+                        if item["id"] == "deepest_frame_host_call")
+            for observation in leaf["observations"]:
+                observation["observed_depth"] = 9
+            with self.assertRaisesRegex(ValueError, "reviewed leaf boundary"):
+                resource_evidence.check_cases(configuration, manifest, "production",
+                                              Path(directory), transcript)
+            for observation in leaf["observations"]:
+                observation["observed_depth"] = 10
             case = next(item for item in configuration["cases"] if item["id"] == "large_frame_paid")
             for observation in case["observations"]:
                 observation["outcome"] = "nondeterministic_error"

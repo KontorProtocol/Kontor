@@ -102,7 +102,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "1b06379cdf465d0727b20587bdec366eed1fc367932c52978f1212bad18a265f"
+      "sha256": "5a33103f1910c1a5e3743dafe03ced9c9acbe4e4971d8910737c0186824ddda2"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -118,7 +118,7 @@
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "6233e98c0de386d6e9b5d255820036168c2d9b971970b3c1ff3103a7acc1a9ec"
+      "sha256": "2a70fda3f7c992d6bf2004cf6887badbdf48ddfb774f8fddf71185bd64ee0637"
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
@@ -142,7 +142,7 @@
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "30650b5ecf9a37122b9d5492a589cb5f97a626bb3fa2b09d6be07173956bf754"
+      "sha256": "d5ed3b2f786bdcc750eae0d98cdb2d0323bdb1db8012711fe43291bdfd5cee98"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -751,7 +751,7 @@
       "id": "deepest_frame_host_call",
       "paired_worker_status": "missing",
       "parameters": {
-        "depth_from_case": "pulley_plain_paid",
+        "adjacent_leaf_boundary": true,
         "host_call_at_leaf": true
       },
       "sample_keys": [

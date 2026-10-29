@@ -4,7 +4,9 @@
 import argparse
 import hashlib
 import json
+import platform
 import re
+import subprocess
 import sys
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -98,6 +100,23 @@ def expected_case_env(case_id, role, configuration, depths=None):
         expected["KONTOR_BOUNDARY_LAST_SUCCESS"] = str(depths[0])
         expected["KONTOR_BOUNDARY_FIRST_FAILURE"] = str(depths[1])
     return expected
+
+
+def validate_cell_identity(cell, cargo_artifact, check_host=True):
+    match = re.fullmatch(r"Linux-(ARM64|X64)/(dev|release)", cell)
+    require(match is not None and sys.platform == "linux",
+            "boundary cell OS, architecture, or profile is unsupported")
+    arch, build_profile = match.groups()
+    expected_arch = {"ARM64": "aarch64", "X64": "x86_64"}[arch]
+    require(not check_host or platform.machine() == expected_arch,
+            "boundary cell architecture differs from validation host")
+    profile = cargo_artifact["profile"]
+    require(profile["test"] is True
+            and profile["opt_level"] ==
+            ("0" if build_profile == "dev" else "3")
+            and profile["debug_assertions"] is (build_profile == "dev"),
+            "boundary Cargo test artifact profile differs from cell")
+    return expected_arch
 
 
 def parse_worker_log(path):
@@ -257,7 +276,7 @@ def validate_trace(trace, runtime, attempts):
             < names.index("fixture_preparation_exit")
             < starts[0],
             "boundary fixture preparation or publication escaped worker phases")
-    for start, end in zip(starts, ends, strict=True):
+    for attempt, start, end in zip(attempts, starts, ends, strict=True):
         segment = names[start:end + 1]
         ordered = []
         for entry, exit_name in PHASES:
@@ -265,10 +284,17 @@ def validate_trace(trace, runtime, attempts):
                     and segment.index(entry) < segment.index(exit_name),
                     "boundary attempt lacks a complete worker phase")
             ordered.extend((segment.index(entry), segment.index(exit_name)))
-        require(ordered == sorted(ordered)
-                and segment.count("canonical_input_entry")
-                == segment.count("canonical_input_exit") >= 1,
-                "boundary operation or canonical input conversion is incomplete")
+        require(ordered == sorted(ordered),
+                "boundary attempt phases are reordered")
+        operation = segment[segment.index("operation_entry"):
+                            segment.index("operation_exit") + 1]
+        require(operation.count("canonical_input_entry") ==
+                operation.count("canonical_input_exit") >= 1
+                and operation.count("canonical_output_entry") ==
+                operation.count("canonical_output_exit")
+                and (attempt["observation"]["outcome"] != "ok" or
+                     operation.count("canonical_output_entry") >= 1),
+                "boundary target conversion escaped operation phase")
     compile_counts = {}
     for entry, exit_name in (
         ("compiler_entry", "compiler_exit"),
@@ -298,7 +324,34 @@ def validate_trace(trace, runtime, attempts):
     return compile_counts
 
 
-def validate_observation(attempt, summary, manifest, index):
+def validate_balance_transitions(balances, mode, digest):
+    require(isinstance(balances, dict) and set(balances) == {
+        "before", "after", "restored", "burned_before", "burned_after",
+        "supply_before", "supply_after", "floor_before", "floor_after",
+        "floor_restored",
+    }, "boundary balance transition fields are incomplete")
+    try:
+        amounts = {key: Decimal(value) for key, value in balances.items()}
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise ValueError("boundary balance amount is invalid") from error
+    require(all(amount.is_finite() and amount >= 0 for amount in amounts.values())
+            and amounts["restored"] == amounts["before"]
+            and amounts["floor_restored"] == amounts["floor_before"]
+            and amounts["floor_after"] == amounts["floor_before"]
+            and (amounts["before"] - amounts["after"] ==
+                 amounts["burned_after"] - amounts["burned_before"] ==
+                 amounts["supply_before"] - amounts["supply_after"])
+            and ((amounts["before"] > amounts["after"])
+                 if mode == "paid" else
+                 (amounts["before"] == amounts["after"])),
+            "boundary balance debit, burn, supply, or floor differs")
+    encoded = json.dumps(balances, sort_keys=True,
+                         separators=(",", ":")).encode()
+    require(digest == hashlib.sha256(encoded).hexdigest(),
+            "boundary balance transition digest differs")
+
+
+def validate_observation(attempt, summary, manifest, index, cell):
     require(isinstance(attempt, dict) and set(attempt) == ATTEMPT_KEYS
             and attempt["complete"] is True,
             "boundary attempt has missing or unknown fields")
@@ -326,6 +379,9 @@ def validate_observation(attempt, summary, manifest, index):
             and observation["max_wasm_stack"] == summary["max_wasm_stack"]
             and observation["async_stack_size"] == summary["async_stack_size"]
             and observation["target_os"] == "linux"
+            and observation["target_arch"] ==
+            {"ARM64": "aarch64", "X64": "x86_64"}[
+                cell.split("/", 1)[0].split("-", 1)[1]]
             and observation["child_markers"] == [],
             "boundary observation differs from selected real fixture")
     require(observation["live_store_peak"] == 1,
@@ -404,26 +460,9 @@ def validate_observation(attempt, summary, manifest, index):
             and reset["pre"]["failure_rolled_back"] ==
             (None if outcome == "ok" else True),
             "boundary full rows/schema or resource reset failed")
-    balances = observation["balance_transitions"]
-    require(isinstance(balances, dict) and set(balances) == {
-        "before", "after", "restored", "burned_before", "burned_after",
-        "supply_before", "supply_after", "floor_before", "floor_after",
-        "floor_restored",
-    }, "boundary balance transition fields are incomplete")
-    try:
-        amounts = {key: Decimal(value) for key, value in balances.items()}
-    except (InvalidOperation, TypeError, ValueError) as error:
-        raise ValueError("boundary balance amount is invalid") from error
-    require(all(amount.is_finite() and amount >= 0 for amount in amounts.values())
-            and amounts["restored"] == amounts["before"]
-            and amounts["floor_restored"] == amounts["floor_before"],
-            "boundary balances or floor did not restore")
-    encoded = json.dumps(balances, sort_keys=True,
-                         separators=(",", ":")).encode()
-    require(observation["balance_transitions_sha256"] ==
-            hashlib.sha256(encoded).hexdigest(),
-            "boundary balance transition digest differs")
-    expected_leaf = case_id == "deepest_frame_host_call"
+    validate_balance_transitions(observation["balance_transitions"], mode,
+                                 observation["balance_transitions_sha256"])
+    expected_leaf = case_id == "deepest_frame_host_call" and outcome == "ok"
     require(observation["host_io_suspended"] is expected_leaf
             and observation["leaf_callback_seen"] is expected_leaf,
             "leaf host import was not proven pending and resumed")
@@ -511,12 +550,12 @@ def validate_run(run, bundle, manifest, directory):
         frozen = {case["case_id"]: (case["last_success"],
                                      case["first_failure"])
                   for case in manifest["boundary_cases"]}
-        if case_id == "deepest_frame_host_call":
-            depths = frozen["pulley_plain_paid"]
-        else:
-            depths = frozen[case_id]
+        frozen["deepest_frame_host_call"] = (
+            manifest["leaf_case"]["last_success"],
+            manifest["leaf_case"]["first_failure"],
+        )
+        depths = frozen[case_id]
         if bundle["phase"] == "pilot_replay":
-            depths = tuple(bundle["discovered_depths"][case_id].values())
             entry = bundle["discovered_depths"][case_id]
             depths = (entry["last_success"], entry["first_failure"])
     require(run["case_env"] == expected_case_env(
@@ -559,7 +598,8 @@ def validate_run(run, bundle, manifest, directory):
                 and attempt["pid"] == process["pid"]
                 and attempt["probe_on"] is summary["probe_on"],
                 "boundary attempt escaped its child process")
-        validate_observation(attempt, summary, manifest, index)
+        validate_observation(attempt, summary, manifest, index,
+                             bundle["cell"])
     counts = validate_trace(parsed["thread_trace"], runtime, parsed["attempts"])
     require(len(parsed["timings"]) == len(parsed["attempts"])
             and all(set(timing) == {
@@ -596,6 +636,141 @@ def validate_run(run, bundle, manifest, directory):
     return [semantic_signature(attempt) for attempt in parsed["attempts"]], counts
 
 
+def validate_source_freeze(source_sha, current_source_sha, manifest_sha256):
+    require(re.fullmatch(r"[0-9a-f]{40}", source_sha) is not None,
+            "reviewed discovery source commit is invalid")
+    ancestor = subprocess.run(
+        ["git", "-C", str(ROOT), "merge-base", "--is-ancestor",
+         source_sha, current_source_sha], capture_output=True)
+    require(ancestor.returncode == 0,
+            "reviewed discovery source is not an ancestor of final source")
+    changed = subprocess.run(
+        ["git", "-C", str(ROOT), "diff", "--name-only",
+         source_sha, current_source_sha],
+        check=True, capture_output=True, text=True).stdout.splitlines()
+    require(set(changed) == {
+        "tools/native-stack/resource-boundary-depths-v1.json",
+        "tools/native-stack/resource-boundary-manifest-v1.json",
+    }, "runtime or fixture source changed after reviewed discovery")
+
+    old_manifest_bytes = historical_file(source_sha,
+        "tools/native-stack/resource-boundary-manifest-v1.json")
+    require(hashlib.sha256(old_manifest_bytes).hexdigest() ==
+            manifest_sha256,
+            "reviewed discovery manifest differs from source commit")
+    return json.loads(old_manifest_bytes,
+                      object_pairs_hook=no_duplicate_keys,
+                      parse_constant=no_nonfinite_constants)
+
+
+def historical_file(source_sha, relative):
+    return subprocess.run(
+        ["git", "-C", str(ROOT), "show", f"{source_sha}:{relative}"],
+        check=True, capture_output=True).stdout
+
+
+def validate_frozen_discovery_pairs(archive, manifest):
+    frozen = {case["case_id"]: (case["last_success"],
+                                 case["first_failure"])
+              for case in manifest["boundary_cases"]}
+    frozen[manifest["leaf_case"]["case_id"]] = (
+        manifest["leaf_case"]["last_success"],
+        manifest["leaf_case"]["first_failure"],
+    )
+    require(set(archive["discovered_depths"]) == set(frozen),
+            "reviewed discovery has missing or extra frozen cases")
+    for case_id, pair in sorted(frozen.items()):
+        name = run_name(case_id, DISCOVERY_ROLE, "production")
+        summary = archive["runs"][name]["summary"]
+        observed = (summary["last_success"], summary["first_failure"])
+        require(archive["discovered_depths"][case_id] == {
+            "last_success": observed[0], "first_failure": observed[1],
+        } and observed == pair,
+                f"{case_id}: frozen depths differ from reviewed raw discovery")
+
+
+def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_sha):
+    require(sha256(path) == expected_sha256 ==
+            manifest["reviewed_discovery_sha256"],
+            "reviewed discovery archive differs from pinned hash")
+    archive = load_json_strict(path)
+    schema = load_json_strict(SCHEMA)
+    error = next(Draft202012Validator(schema).iter_errors(archive), None)
+    require(error is None, f"reviewed discovery schema failed: {error}")
+    cases = {case["case_id"] for case in manifest["boundary_cases"]}
+    cases.add(manifest["leaf_case"]["case_id"])
+    require(archive["phase"] == "discovery"
+            and archive["cell"] == DISCOVERY_CELL
+            and archive["qualification_status"] == "missing"
+            and archive["development_discovery"] is None
+            and archive["reviewed_discovery"] is None
+            and archive["discovery_binary"] is not None
+            and set(archive["discovered_depths"]) == cases
+            and set(archive["runs"]) == {
+                run_name(case_id, DISCOVERY_ROLE, "production")
+                for case_id in cases},
+            "reviewed archive lacks nine production discovery children")
+    source_sha = archive["source_sha"]
+    old_manifest = validate_source_freeze(
+        source_sha, current_source_sha, archive["manifest_sha256"])
+    require(old_manifest["claim_status"] == "pending_discovery"
+            and old_manifest["schema_sha256"] == sha256(SCHEMA),
+            "reviewed discovery did not use pending source and schema")
+    file_evidence(path.parent, archive["control_capture"])
+    archived_control = load_json_strict(path.parent /
+                                        archive["control_capture"]["path"])
+    old_v1_sha = hashlib.sha256(historical_file(source_sha,
+        "tools/native-stack/resource-manifest-v1.json")).hexdigest()
+    require(archived_control["source_sha"] == source_sha
+            and archived_control["binary_sha256"] == archive["binary_sha256"]
+            and archived_control["manifest_sha256"] == old_v1_sha,
+            "reviewed discovery control differs from historical source")
+    validate_cell_identity(archive["cell"],
+                           archived_control["cargo_artifact"], check_host=False)
+    file_evidence(path.parent, archive["discovery_binary"])
+    require(archive["discovery_binary"]["sha256"] ==
+            archive["binary_sha256"]
+            and archived_control["binary_path"] == archive["binary_path"],
+            "reviewed discovery binary bytes or path differ from control")
+    control_dir = (path.parent /
+                   archive["control_capture"]["path"]).parent
+    for entry in (archived_control["cargo_artifacts"],
+                  archived_control["cargo_metadata"],
+                  archived_control["guard_control"]["raw_log"],
+                  *archived_control["wasmtime_source_files"].values()):
+        file_evidence(control_dir, entry)
+    metadata = load_json_strict(control_dir /
+                                archived_control["cargo_metadata"]["path"])
+    indexers = [package for package in metadata["packages"]
+                if package.get("name") == "indexer"]
+    require(len(indexers) == 1,
+            "reviewed discovery Cargo metadata lacks indexer")
+    records = [json.loads(line, object_pairs_hook=no_duplicate_keys,
+                          parse_constant=no_nonfinite_constants)
+               for line in (control_dir /
+                            archived_control["cargo_artifacts"]["path"])
+               .read_text().splitlines()]
+    selected = [record for record in records
+                if record.get("reason") == "compiler-artifact"
+                and record.get("package_id") == indexers[0]["id"]
+                and record.get("target", {}).get("name") == "indexer"
+                and record.get("target", {}).get("kind") == ["lib"]
+                and record.get("profile", {}).get("test") is True
+                and record.get("executable") == archive["binary_path"]]
+    require(len(selected) == 1
+            and selected[0] == archived_control["cargo_artifact"]
+            and records[-1].get("reason") == "build-finished"
+            and records[-1].get("success") is True,
+            "reviewed discovery binary lacks exact Cargo artifact identity")
+    for case_id in sorted(cases):
+        name = run_name(case_id, DISCOVERY_ROLE, "production")
+        run = archive["runs"][name]
+        require(run["case_id"] == case_id,
+                "reviewed discovery case registry differs")
+        validate_run(run, archive, old_manifest, path.parent)
+    validate_frozen_discovery_pairs(archive, manifest)
+
+
 def validate_bundle(bundle, directory):
     schema = load_json_strict(SCHEMA)
     error = next(Draft202012Validator(schema).iter_errors(bundle), None)
@@ -610,6 +785,7 @@ def validate_bundle(bundle, directory):
     control, binary = validate_control(
         control_path, bundle["control_capture"]["sha256"],
         build_manifest())
+    validate_cell_identity(bundle["cell"], control["cargo_artifact"])
     require(control["source_sha"] == bundle["source_sha"]
             and control["binary_sha256"] == bundle["binary_sha256"]
             and str(binary) == bundle["binary_path"],
@@ -632,25 +808,48 @@ def validate_bundle(bundle, directory):
     else:
         require(bundle["development_discovery"] is None,
                 "only pilot replay may carry development discovery")
+    if bundle["phase"] == "final":
+        reference = bundle["reviewed_discovery"]
+        require(reference is not None,
+                "final capture lacks its reviewed discovery archive")
+        file_evidence(directory, reference)
+        validate_reviewed_discovery(directory / reference["path"],
+                                    reference["sha256"], manifest,
+                                    bundle["source_sha"])
+    else:
+        require(bundle["reviewed_discovery"] is None,
+                "only final capture may carry reviewed discovery")
+    if bundle["phase"] in ("discovery", "pilot_discovery"):
+        require(bundle["discovery_binary"] is not None,
+                "discovery archive lacks its selected binary bytes")
+        file_evidence(directory, bundle["discovery_binary"])
+        require(bundle["discovery_binary"]["sha256"] ==
+                bundle["binary_sha256"],
+                "discovery binary bytes differ from selected Cargo artifact")
+    else:
+        require(bundle["discovery_binary"] is None,
+                "replay must not claim a discovery binary")
     cases = {case["case_id"] for case in manifest["boundary_cases"]}
+    all_bound_cases = cases | {"deepest_frame_host_call"}
     if bundle["phase"] == "final":
         require(manifest["claim_status"] == "candidate_only"
                 and bundle["discovered_depths"] == {},
                 "final boundary capture lacks reviewed frozen depths")
         expected = {(case_id, role, configuration)
-                    for case_id in (*sorted(cases), "deepest_frame_host_call")
+                    for case_id in all_bound_cases
                     for role in FINAL_ROLES for configuration in CONFIGURATIONS}
     elif bundle["phase"] == "discovery":
         require(bundle["cell"] == DISCOVERY_CELL
-                and set(bundle["discovered_depths"]) == cases,
-                "full discovery lacks all eight production cases")
+                and set(bundle["discovered_depths"]) == all_bound_cases,
+                "full discovery lacks all nine production cases")
         expected = {(case_id, DISCOVERY_ROLE, "production")
-                    for case_id in cases}
+                    for case_id in all_bound_cases}
     else:
         require(bundle["cell"] == DISCOVERY_CELL
                 and set(bundle["discovered_depths"]) ==
-                {"pulley_plain_paid", "pulley_wide_paid"},
-                "pilot lacks the two paid shape depths")
+                {"pulley_plain_paid", "pulley_wide_paid",
+                 "deepest_frame_host_call"},
+                "pilot lacks both paid shapes and the leaf depth")
         if bundle["phase"] == "pilot_discovery":
             expected = {(case_id, DISCOVERY_ROLE, "production")
                         for case_id in bundle["discovered_depths"]}
@@ -689,13 +888,13 @@ def validate_bundle(bundle, directory):
         } for case_id in bundle["discovered_depths"]),
                 "discovered depths differ from raw production children")
     else:
-        checked_cases = (sorted(cases) + ["deepest_frame_host_call"]
+        checked_cases = (sorted(all_bound_cases)
                          if bundle["phase"] == "final"
                          else sorted(bundle["discovered_depths"]))
         validate_final_parity(signatures, runs, checked_cases)
     all_cases = {case["id"] for case in build_manifest()["cases"]
                  if case["family"] != "distinct_contract_chain"}
-    bound = cases | {"deepest_frame_host_call"} if bundle["phase"] == "final" else set()
+    bound = all_bound_cases if bundle["phase"] == "final" else set()
     require(bundle["remaining_case_bindings"] == sorted(all_cases - bound),
             "boundary capture claimed unbound cases")
     return {"signatures": signatures, "compiler_counts": compiles}

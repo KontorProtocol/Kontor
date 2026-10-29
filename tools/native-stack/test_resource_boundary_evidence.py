@@ -1,17 +1,24 @@
 import copy
+import hashlib
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from jsonschema import Draft202012Validator
 
 from resource_boundary_evidence import (parse_worker_log,
+                                        validate_balance_transitions,
+                                        validate_cell_identity,
                                         validate_discovery_sequence,
                                         validate_final_parity,
+                                        validate_frozen_discovery_pairs,
                                         validate_replay_order, validate_trace,
-                                        run_name)
+                                        validate_source_freeze, run_name)
 from resource_boundary_manifest import SCHEMA
+from resource_boundary_manifest import DISCOVERY_ROLE
 from resource_evidence import load_json_strict
 from resource_evidence_v2 import validate_teardown
 
@@ -26,6 +33,131 @@ def attempt(depth, outcome, sample_key="calibration", repeat_index=0):
 
 
 class BoundaryEvidenceTests(unittest.TestCase):
+    def test_reviewed_nine_pairs_include_independent_leaf(self):
+        case_ids = [f"pulley_{shape}_{mode}"
+                    for shape in ("plain", "wide")
+                    for mode in ("paid", "view", "system", "core")]
+        leaf = "deepest_frame_host_call"
+        manifest = {
+            "boundary_cases": [
+                {"case_id": case_id, "last_success": 100 + index,
+                 "first_failure": 101 + index}
+                for index, case_id in enumerate(case_ids)
+            ],
+            "leaf_case": {"case_id": leaf, "last_success": 90,
+                          "first_failure": 91},
+        }
+        archive = {"discovered_depths": {}, "runs": {}}
+        for case in [*manifest["boundary_cases"], manifest["leaf_case"]]:
+            case_id = case["case_id"]
+            pair = {key: case[key] for key in
+                    ("last_success", "first_failure")}
+            archive["discovered_depths"][case_id] = pair
+            archive["runs"][run_name(case_id, DISCOVERY_ROLE,
+                                      "production")] = {"summary": pair}
+        validate_frozen_discovery_pairs(archive, manifest)
+        wrong_leaf = copy.deepcopy(archive)
+        wrong_leaf["discovered_depths"][leaf]["last_success"] = 100
+        with self.assertRaises(ValueError):
+            validate_frozen_discovery_pairs(wrong_leaf, manifest)
+        wrong_boundary = copy.deepcopy(archive)
+        wrong_boundary["runs"][run_name(case_ids[0], DISCOVERY_ROLE,
+                                         "production")]["summary"]["first_failure"] += 1
+        with self.assertRaises(ValueError):
+            validate_frozen_discovery_pairs(wrong_boundary, manifest)
+
+    def test_reviewed_source_freeze_accepts_only_metadata_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args],
+                                      check=True, capture_output=True,
+                                      text=True).stdout.strip()
+
+            git("init", "-q")
+            native = root / "tools/native-stack"
+            native.mkdir(parents=True)
+            manifest = native / "resource-boundary-manifest-v1.json"
+            depths = native / "resource-boundary-depths-v1.json"
+            runtime = root / "core/indexer/src/runtime/mod.rs"
+            runtime.parent.mkdir(parents=True)
+            manifest.write_text('{"claim_status":"pending_discovery"}\n')
+            depths.write_text('{"cases":null}\n')
+            runtime.write_text("stable runtime frame\n")
+            git("add", ".")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "-qm", "discovery source")
+            discovery_sha = git("rev-parse", "HEAD")
+            manifest_sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
+            manifest.write_text('{"claim_status":"candidate_only"}\n')
+            depths.write_text('{"cases":"frozen"}\n')
+            git("add", ".")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "-qm", "freeze depths")
+            final_sha = git("rev-parse", "HEAD")
+            with patch("resource_boundary_evidence.ROOT", root):
+                self.assertEqual(validate_source_freeze(
+                    discovery_sha, final_sha, manifest_sha),
+                    {"claim_status": "pending_discovery"})
+                with self.assertRaises(ValueError):
+                    validate_source_freeze(discovery_sha, final_sha,
+                                           "0" * 64)
+                runtime.write_text("changed runtime frame\n")
+                git("add", ".")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "change runtime frame")
+                with self.assertRaises(ValueError):
+                    validate_source_freeze(discovery_sha, git("rev-parse", "HEAD"),
+                                           manifest_sha)
+
+    def test_balance_conservation_rejects_false_paid_and_nonpaid_charges(self):
+        balances = {
+            "before": "100", "after": "90", "restored": "100",
+            "burned_before": "0", "burned_after": "10",
+            "supply_before": "100", "supply_after": "90",
+            "floor_before": "0", "floor_after": "0", "floor_restored": "0",
+        }
+
+        def digest(value):
+            return hashlib.sha256(json.dumps(value, sort_keys=True,
+                                             separators=(",", ":")).encode()).hexdigest()
+
+        validate_balance_transitions(balances, "paid", digest(balances))
+        false_burn = {**balances, "burned_after": "1"}
+        false_supply = {**balances, "supply_after": "99"}
+        for altered in (false_burn, false_supply):
+            with self.assertRaises(ValueError):
+                validate_balance_transitions(altered, "paid", digest(altered))
+        with self.assertRaises(ValueError):
+            validate_balance_transitions(balances, "view", digest(balances))
+        no_charge = {**balances, "after": "100", "burned_after": "0",
+                     "supply_after": "100"}
+        for mode in ("view", "system", "core"):
+            validate_balance_transitions(no_charge, mode, digest(no_charge))
+
+    def test_cell_rejects_wrong_architecture_or_build_profile(self):
+        artifact = {"profile": {
+            "test": True, "opt_level": "0",
+            "debug_assertions": True,
+        }}
+        with patch("resource_boundary_evidence.platform.machine",
+                   return_value="aarch64"):
+            self.assertEqual(validate_cell_identity(
+                "Linux-ARM64/dev", artifact), "aarch64")
+            with self.assertRaises(ValueError):
+                validate_cell_identity("Linux-X64/dev", artifact)
+            with self.assertRaises(ValueError):
+                validate_cell_identity("Linux-ARM64/release", artifact)
+        release = {"profile": {
+            "test": True, "opt_level": "3",
+            "debug_assertions": False,
+        }}
+        with patch("resource_boundary_evidence.platform.machine",
+                   return_value="aarch64"):
+            self.assertEqual(validate_cell_identity(
+                "Linux-ARM64/release", release), "aarch64")
+
     def test_leaf_requires_cross_configuration_semantics_and_capacity(self):
         case_id = "deepest_frame_host_call"
         signatures = {}
@@ -143,17 +275,29 @@ class BoundaryEvidenceTests(unittest.TestCase):
             "process_role": runtime["process_role"],
             "events": events,
         }
-        self.assertEqual(validate_trace(trace, runtime, [{}])["compiler_entry"], 1)
+        observed = [{"observation": {"outcome": "ok"}}]
+        self.assertEqual(validate_trace(trace, runtime, observed)["compiler_entry"], 1)
         wrong_worker = copy.deepcopy(trace)
         wrong_worker["events"][11]["thread_id"] = "ThreadId(3)"
         wrong_worker["events"][11]["os_thread_id"] = 3
         with self.assertRaises(ValueError):
-            validate_trace(wrong_worker, runtime, [{}])
+            validate_trace(wrong_worker, runtime, observed)
         missing_phase = copy.deepcopy(trace)
         missing_phase["events"] = [item for item in events
                                    if item["name"] != "teardown_exit"]
         with self.assertRaises(ValueError):
-            validate_trace(missing_phase, runtime, [{}])
+            validate_trace(missing_phase, runtime, observed)
+        moved_conversion = copy.deepcopy(trace)
+        conversions = [item for item in moved_conversion["events"]
+                       if item["name"].startswith("canonical_")]
+        moved_conversion["events"] = [item for item in moved_conversion["events"]
+                                      if not item["name"].startswith("canonical_")]
+        postcall = next(index for index, item in
+                        enumerate(moved_conversion["events"])
+                        if item["name"] == "postcall_observation_entry")
+        moved_conversion["events"][postcall + 1:postcall + 1] = conversions
+        with self.assertRaises(ValueError):
+            validate_trace(moved_conversion, runtime, observed)
 
     def test_discovery_reconstructs_exact_adaptive_search(self):
         threshold = 1723

@@ -57,12 +57,13 @@ def frozen_depths():
             "frozen depth record has unexpected fields")
     values = record["cases"]
     cases = boundary_cases()
+    case_ids = {case["id"] for case in cases} | {"deepest_frame_host_call"}
     require(isinstance(values, dict)
-            and set(values) == {case["id"] for case in cases},
+            and set(values) == case_ids,
             "frozen depth map has missing or extra cases")
     frozen = []
-    for case in cases:
-        item = values[case["id"]]
+    for case_id in sorted(case_ids):
+        item = values[case_id]
         if item is None:
             continue
         require(isinstance(item, dict)
@@ -71,18 +72,18 @@ def frozen_depths():
                 and type(item["first_failure"]) is int
                 and 0 < item["last_success"] < 32768
                 and item["first_failure"] == item["last_success"] + 1,
-                f"invalid frozen Pulley depths: {case['id']}")
-        frozen.append(case["id"])
-    require(len(frozen) in (0, 8),
+                f"invalid frozen Pulley depths: {case_id}")
+        frozen.append(case_id)
+    require(len(frozen) in (0, 9),
             "partial boundary freeze cannot become a candidate manifest")
     discovery_sha256 = record["discovery_capture_sha256"]
     require((isinstance(discovery_sha256, str)
              and len(discovery_sha256) == 64
              and all(character in "0123456789abcdef"
                      for character in discovery_sha256))
-            if len(frozen) == 8 else discovery_sha256 is None,
+            if len(frozen) == 9 else discovery_sha256 is None,
             "frozen depths lack one reviewed discovery capture hash")
-    return values, len(frozen) == 8, discovery_sha256
+    return values, len(frozen) == 9, discovery_sha256
 
 
 def build_boundary_manifest():
@@ -91,8 +92,9 @@ def build_boundary_manifest():
     cases = boundary_cases()
     leaf = next(case for case in v1["cases"]
                 if case["id"] == "deepest_frame_host_call")
-    require(leaf["parameters"]["depth_from_case"] == "pulley_plain_paid",
-            "leaf depth parent changed")
+    require(leaf["parameters"] == {"adjacent_leaf_boundary": True,
+                                   "host_call_at_leaf": True},
+            "leaf host call requirement changed")
     return {
         "schema_version": 1,
         "claim_status": "candidate_only" if all_frozen else "pending_discovery",
@@ -122,8 +124,12 @@ def build_boundary_manifest():
         } for case in cases],
         "leaf_case": {
             "case_id": leaf["id"],
-            "depth_from_case": "pulley_plain_paid",
+            "own_adjacent_boundary": True,
             "repeats": 2,
+            "last_success": None if values[leaf["id"]] is None
+            else values[leaf["id"]]["last_success"],
+            "first_failure": None if values[leaf["id"]] is None
+            else values[leaf["id"]]["first_failure"],
         },
         "sources": {name: {"path": path, "sha256": sha256(ROOT / path)}
                     for name, path in sorted(SOURCES.items())},

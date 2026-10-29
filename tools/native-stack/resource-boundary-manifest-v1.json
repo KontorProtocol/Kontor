@@ -109,10 +109,12 @@
   ],
   "leaf_case": {
     "case_id": "deepest_frame_host_call",
-    "depth_from_case": "pulley_plain_paid",
+    "first_failure": null,
+    "last_success": null,
+    "own_adjacent_boundary": true,
     "repeats": 2
   },
-  "parent_manifest_sha256": "0c5a0f17a3533ffd61f15f80f93f52abcb1b835aa1503668a8c3db01e64a39a2",
+  "parent_manifest_sha256": "4434676b208b9d9059dbc77a8a5976367ea1c647cc36c43bd0cbf1fba3a56fba",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -152,17 +154,17 @@
     "workload_plan": "awaiting_frozen_workload_plan"
   },
   "reviewed_discovery_sha256": null,
-  "schema_sha256": "bf02e554d8c9636495f68568e33dd4f05acf2cc224b1c2fe1225b268cb404953",
+  "schema_sha256": "b31fce3ce9c9455d7f404fef651aeaeb1bb0f17227c3b679f03a46b1970d3aeb",
   "schema_version": 1,
   "source_baseline_commit": "67a52fed58a893ce2c1c05483f86f4fffa02a675",
   "sources": {
     "capture": {
       "path": "tools/native-stack/capture_resource_boundary.py",
-      "sha256": "fe06fea712b53246fe6e2de9a65e878bb9d24222174559952689d2d2bbaaf417"
+      "sha256": "20d5fec463f10fd1a67ac800040eaccea8b7f13dd5f553585feb922d68909fbc"
     },
     "depths": {
       "path": "tools/native-stack/resource-boundary-depths-v1.json",
-      "sha256": "312a847b477922c776c4c2e37b9fad9fbf68ca7eac6e60a39bcf8a9556836121"
+      "sha256": "d1c4a02a03b751be2557e8273fe4e9bda64c98c9ae30a405c31b148bd551c5fd"
     },
     "fixture_binary": {
       "path": "test-contracts/binaries/stack_probe.wasm.br",
@@ -178,27 +180,27 @@
     },
     "manifest_builder": {
       "path": "tools/native-stack/resource_boundary_manifest.py",
-      "sha256": "801f48cdc6e837ce1397f138a21e1ca9ed11b145201afa85fe608cc97651edc5"
+      "sha256": "3155157771e61e14f8d04cfd75c6e7999f305fe7c6970f4f40b7e869964de0c9"
     },
     "plan": {
       "path": "tools/native-stack/resource-boundary-family.md",
-      "sha256": "56ad4b97d5c64d85149c7007e8c91a3ce5a7feb171707ba27295b14515c64241"
+      "sha256": "166829ffbc8a7982df20fba414ec9c694e1106ba039d68c26b7baff38ac8aff6"
     },
     "schema": {
       "path": "tools/native-stack/resource-boundary-evidence-schema-v1.json",
-      "sha256": "bf02e554d8c9636495f68568e33dd4f05acf2cc224b1c2fe1225b268cb404953"
+      "sha256": "b31fce3ce9c9455d7f404fef651aeaeb1bb0f17227c3b679f03a46b1970d3aeb"
     },
     "sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "30650b5ecf9a37122b9d5492a589cb5f97a626bb3fa2b09d6be07173956bf754"
+      "sha256": "d5ed3b2f786bdcc750eae0d98cdb2d0323bdb1db8012711fe43291bdfd5cee98"
     },
     "tests": {
       "path": "tools/native-stack/test_resource_boundary_evidence.py",
-      "sha256": "c64bcfc0f1b8008a3eabc2b39f2cf209ccb372086f65388fec4c01a45edf96e2"
+      "sha256": "7273300e0d8a72784590385ace41b6184693e8838ed1d0467bd02849d935a9ac"
     },
     "validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "940bdab5aa692d90e716395f97cfa033afd18417dbafeb0980e24364f8496492"
+      "sha256": "0d5b3a23ebaaf34f795a4fc229869e57d4f6b9a5e081da250afb4f4a6c12e5b7"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",

@@ -14,6 +14,7 @@ from jsonschema import Draft202012Validator
 from resource_manifest import CELLS, MANIFEST, OBSERVATION_FIELDS, ROOT, THREAD_CATEGORIES, build_manifest
 
 SCHEMA = Path(__file__).with_name("resource-evidence-schema-v1.json")
+BOUNDARY_DEPTHS = Path(__file__).with_name("resource-boundary-depths-v1.json")
 STATE_KEYS = {"before_sha256", "after_sha256", "marker", "balances_sha256"}
 BALANCE_TRANSITION_FIELDS = {
     "before", "after", "restored", "burned_before", "burned_after",
@@ -422,10 +423,24 @@ def check_cases(configuration, manifest, mode, directory, transcript):
         require(depths["first_failure"]["observed_depth"] ==
                 depths["last_success"]["observed_depth"] + 1,
                 f"{mode}: nonadjacent Pulley boundary: {case_id}")
-    parent = expected["deepest_frame_host_call"]["parameters"]["depth_from_case"]
+    leaf_parameters = expected["deepest_frame_host_call"]["parameters"]
+    require(leaf_parameters == {"adjacent_leaf_boundary": True,
+                                "host_call_at_leaf": True},
+            f"{mode}: leaf host-call contract changed")
+    frozen = load_json_strict(BOUNDARY_DEPTHS)
+    leaf_depths = frozen["cases"]["deepest_frame_host_call"]
+    require(isinstance(frozen["discovery_capture_sha256"], str)
+            and re.fullmatch(r"[0-9a-f]{64}",
+                             frozen["discovery_capture_sha256"]) is not None
+            and isinstance(leaf_depths, dict)
+            and type(leaf_depths.get("last_success")) is int
+            and type(leaf_depths.get("first_failure")) is int
+            and leaf_depths["first_failure"] == leaf_depths["last_success"] + 1
+            and leaf_depths["last_success"] > 0,
+            f"{mode}: leaf host-call depth lacks reviewed adjacent boundary")
     require(signatures["deepest_frame_host_call"]["target"]["observed_depth"] ==
-            signatures[parent]["last_success"]["observed_depth"],
-            f"{mode}: host operation did not run at the deepest successful Pulley frame")
+            leaf_depths["last_success"],
+            f"{mode}: host operation did not run at reviewed leaf boundary")
     return signatures
 
 

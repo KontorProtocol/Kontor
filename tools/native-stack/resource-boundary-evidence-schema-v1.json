@@ -7,7 +7,8 @@
     "schema_version", "phase", "qualification_status", "cell",
     "manifest_sha256", "source_sha", "binary_path", "binary_sha256",
     "timeout_seconds", "control_capture", "runs", "discovered_depths",
-    "remaining_case_bindings", "development_discovery"
+    "remaining_case_bindings", "development_discovery", "reviewed_discovery",
+    "discovery_binary"
   ],
   "properties": {
     "schema_version": {"const": 1},
@@ -21,6 +22,14 @@
     "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 1200},
     "control_capture": {"$ref": "#/$defs/raw_log"},
     "development_discovery": {"oneOf": [
+      {"type": "null"},
+      {"$ref": "#/$defs/raw_log"}
+    ]},
+    "reviewed_discovery": {"oneOf": [
+      {"type": "null"},
+      {"$ref": "#/$defs/raw_log"}
+    ]},
+    "discovery_binary": {"oneOf": [
       {"type": "null"},
       {"$ref": "#/$defs/raw_log"}
     ]},

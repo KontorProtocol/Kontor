@@ -17,7 +17,8 @@ from capture_resource_control import run_bounded_process
 from capture_resource_diagnostic import validate_control
 from resource_boundary_evidence import (TEST_NAME, expected_case_env,
                                         parse_worker_log, run_name,
-                                        validate_bundle)
+                                        validate_bundle, validate_cell_identity,
+                                        validate_reviewed_discovery)
 from resource_boundary_manifest import (CONFIGURATIONS, DISCOVERY_CELL,
                                         DISCOVERY_ROLE, FINAL_ROLES, MANIFEST,
                                         build_boundary_manifest)
@@ -27,6 +28,7 @@ from resource_manifest import build_manifest
 
 
 def capture(phase, cell, discovery_path, discovery_sha256,
+            reviewed_path, reviewed_sha256,
             control_path, control_sha256,
             evidence_dir, timeout_seconds):
     require(sys.platform == "linux", "boundary child capture requires Linux guard support")
@@ -50,8 +52,15 @@ def capture(phase, cell, discovery_path, discovery_sha256,
     require((discovery_path is not None and discovery_sha256 is not None)
             == (phase == "pilot_replay"),
             "pilot replay alone requires a pinned discovery capture")
+    require((reviewed_path is not None and reviewed_sha256 is not None)
+            == (phase == "final"),
+            "final capture requires a reviewed discovery archive")
     control, binary = validate_control(
         control_path, control_sha256, v1_manifest)
+    validate_cell_identity(cell, control["cargo_artifact"])
+    if reviewed_path is not None:
+        validate_reviewed_discovery(reviewed_path, reviewed_sha256,
+                                    manifest, control["source_sha"])
     pilot_depths = {}
     if discovery_path is not None:
         require(sha256(discovery_path) == discovery_sha256,
@@ -69,6 +78,15 @@ def capture(phase, cell, discovery_path, discovery_sha256,
     evidence_dir.mkdir(parents=True, exist_ok=True)
     control_dir, control_copy = copy_control(
         control_path, control_sha256, evidence_dir, control)
+    discovery_binary = None
+    if phase in ("discovery", "pilot_discovery"):
+        snapshot = evidence_dir / "discovery-indexer-test"
+        with binary.open("rb") as original, snapshot.open("xb") as target:
+            shutil.copyfileobj(original, target)
+        require(sha256(snapshot) == control["binary_sha256"],
+                "discovery binary snapshot differs from Cargo artifact")
+        discovery_binary = {"path": snapshot.name,
+                            "sha256": control["binary_sha256"]}
     discovery_reference = None
     if discovery_path is not None:
         nested = evidence_dir / "development_discovery"
@@ -83,12 +101,31 @@ def capture(phase, cell, discovery_path, discovery_sha256,
             "path": str(Path("development_discovery") / discovery_path.name),
             "sha256": discovery_sha256,
         }
+    reviewed_reference = None
+    if reviewed_path is not None:
+        nested = evidence_dir / "reviewed_discovery"
+        require(not evidence_dir.resolve().is_relative_to(
+            reviewed_path.parent.resolve()),
+            "final output cannot be inside reviewed discovery archive")
+        shutil.copytree(reviewed_path.parent, nested)
+        reviewed_copy = nested / reviewed_path.name
+        require(sha256(reviewed_copy) == reviewed_sha256,
+                "archived reviewed discovery changed")
+        reviewed_reference = {
+            "path": str(Path("reviewed_discovery") / reviewed_path.name),
+            "sha256": reviewed_sha256,
+        }
     frozen = {
         case["case_id"]: (case["last_success"], case["first_failure"])
         for case in manifest["boundary_cases"]
     }
+    frozen["deepest_frame_host_call"] = (
+        manifest["leaf_case"]["last_success"],
+        manifest["leaf_case"]["first_failure"],
+    )
     if phase in ("pilot_discovery", "discovery"):
-        selected = (["pulley_plain_paid", "pulley_wide_paid"]
+        selected = (["pulley_plain_paid", "pulley_wide_paid",
+                     "deepest_frame_host_call"]
                     if phase == "pilot_discovery" else sorted(frozen))
         matrix = [(case_id, DISCOVERY_ROLE, "production")
                   for case_id in selected]
@@ -98,7 +135,7 @@ def capture(phase, cell, discovery_path, discovery_sha256,
                   for configuration in CONFIGURATIONS for role in FINAL_ROLES]
     else:
         matrix = [(case_id, role, configuration)
-                  for case_id in (*sorted(frozen), "deepest_frame_host_call")
+                  for case_id in sorted(frozen)
                   for configuration in CONFIGURATIONS for role in FINAL_ROLES]
     runs = {}
     discovered = dict(pilot_depths)
@@ -116,8 +153,6 @@ def capture(phase, cell, discovery_path, discovery_sha256,
             elif phase == "pilot_replay":
                 values = pilot_depths[case_id]
                 depths = (values["last_success"], values["first_failure"])
-            elif case_id == "deepest_frame_host_call":
-                depths = frozen["pulley_plain_paid"]
             else:
                 depths = frozen[case_id]
             env_values = expected_case_env(case_id, role, configuration, depths)
@@ -175,7 +210,7 @@ def capture(phase, cell, discovery_path, discovery_sha256,
         remaining = {case["id"] for case in v1_manifest["cases"]
                      if case["family"] != "distinct_contract_chain"}
         if phase == "final":
-            remaining -= set(frozen) | {"deepest_frame_host_call"}
+            remaining -= set(frozen)
             discovered = {}
         bundle = {
             "schema_version": 1,
@@ -192,6 +227,8 @@ def capture(phase, cell, discovery_path, discovery_sha256,
                 "sha256": control_sha256,
             },
             "development_discovery": discovery_reference,
+            "reviewed_discovery": reviewed_reference,
+            "discovery_binary": discovery_binary,
             "runs": runs,
             "discovered_depths": discovered,
             "remaining_case_bindings": sorted(remaining),
@@ -221,6 +258,8 @@ def main():
     parser.add_argument("--cell", default=DISCOVERY_CELL)
     parser.add_argument("--pilot-discovery-capture", type=Path)
     parser.add_argument("--pilot-discovery-sha256")
+    parser.add_argument("--reviewed-discovery-capture", type=Path)
+    parser.add_argument("--reviewed-discovery-sha256")
     parser.add_argument("--control-capture", required=True, type=Path)
     parser.add_argument("--control-sha256", required=True)
     parser.add_argument("--evidence-dir", required=True, type=Path)
@@ -229,6 +268,8 @@ def main():
     path = capture(args.phase, args.cell,
                    args.pilot_discovery_capture,
                    args.pilot_discovery_sha256,
+                   args.reviewed_discovery_capture,
+                   args.reviewed_discovery_sha256,
                    args.control_capture,
                    args.control_sha256, args.evidence_dir,
                    args.timeout_seconds)
