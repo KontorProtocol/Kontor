@@ -254,6 +254,31 @@ result string, and adjacent 64- and 65-level record results. It compares full
 WAVE values and deterministic errors across the two stack settings and both
 probe roles, with a fresh Store per attempt.
 
+At source `3add2e56bbd0c28f6eef33883263f954dc4d67aa`, the Linux ARM64
+development canonical type/value capture completed four isolated child
+processes and 48 attempts. Each child ran the six declared samples twice
+through one published component. Full returned WAVE values, system fuel, and
+reset state matched across observed and probe-off roles and reduced and
+production worker stacks. The 64-level result succeeded and the adjacent
+65-level result was rejected deterministically at the result visitor. The two
+observed children recorded 24 closed Store lifecycles in total, with zero
+live invocations after each attempt. The standalone validator and three
+evidence reviews accepted the capture. The exact-source build attestation
+SHA-256 is
+`75d93bcd532eb1e0ab9818154cf0756697f6729d100afed58daeac8bb674d20d`;
+the test binary SHA-256 is
+`dccb75d75bd264ac8078eb4709c1a9650f802fb9734c7399a710e14e1b8b581d`.
+The guard control SHA-256 is
+`a5b73fd0f8744cd02583b00fcce9b431bafc67897aa76556f8341476b1a85bfe`,
+and the capture SHA-256 is
+`bf3c7276fdcc25356888322edb774e4b6c03389d5cc3fdb7d0499708cd56efa9`.
+This is one local diagnostic cell with `qualification_status: missing`. The
+capture does not establish the 100-level component type boundary or the
+maximum legal result size. It uses unsigned views and system fuel, and provides
+no paid-call, cancellation, guest-write rollback, or trap-unwind proof. The
+typed trap field is null. The other five cells and remaining case families
+are required for S2 qualification.
+
 The foreign WAVE adapter publishes a caller and a target through the same
 runtime path. The caller generates each expression inside guest memory and
 passes it through `foreign.call`, so the outer `run(index)` expression remains
