@@ -12,7 +12,7 @@ use bitcoin::{
     TxOut, Witness,
 };
 use indexer_types::{Block, Inst, InstKind, Insts, serialize};
-use libsql::{Connection, Value};
+use libsql::{Connection, Value, params};
 use malachitebft_engine::node::NodeRef;
 use tokio::time::timeout;
 
@@ -26,7 +26,8 @@ use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{
-    ContractAddress, Decimal, GenesisValidator, TransactionContext, native_provenance,
+    ContractAddress, Decimal, GenesisValidator, Runtime, TransactionContext, from_wave_expr,
+    native_provenance,
 };
 use crate::test_utils::{
     PublicKey, build_inscription, new_mock_block_hash, new_mock_transaction, sign_script_spend,
@@ -148,6 +149,34 @@ async fn effects(conn: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
     Ok(snapshot)
 }
 
+async fn assert_successful_write(
+    runtime: &mut Runtime,
+    txid: &str,
+    address: &ContractAddress,
+) -> Result<()> {
+    let conn = runtime.get_storage_conn();
+    let mut rows = conn
+        .query(
+            "SELECT r.status, r.value, r.func, r.gas FROM contract_results r
+         JOIN transactions t ON t.id = r.tx_id WHERE t.txid = ?",
+            params![txid],
+        )
+        .await?;
+    let row = rows.next().await?.context("successful write receipt")?;
+    assert_eq!(row.get::<String>(0)?, "Ok");
+    assert_eq!(row.get::<String>(1)?, "\"é\\n\"");
+    assert_eq!(row.get::<String>(2)?, "write-result-payload");
+    assert!(row.get::<u64>(3)? > 0);
+    assert!(rows.next().await?.is_none());
+    let state: Vec<u64> = from_wave_expr(
+        &runtime
+            .execute(None, None, address, "storage-state()")
+            .await?,
+    );
+    assert_eq!(state, [1, 0, 0, 1]);
+    Ok(())
+}
+
 async fn run_case(batched: bool) -> Result<()> {
     let secp = Secp256k1::new();
     let key = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[71; 32])?);
@@ -188,7 +217,7 @@ async fn run_case(batched: bool) -> Result<()> {
         height: 1,
         tx_index: 0,
     };
-    let raw = signed_call(&key, address)?;
+    let raw = signed_call(&key, address.clone())?;
     let txid = raw.compute_txid().to_string();
     let mut reactor = reactor(runtime, &dir).await?;
     let cleanup = StopEngine(reactor.consensus.engine_handle.actor.clone());
@@ -213,6 +242,7 @@ async fn run_case(batched: bool) -> Result<()> {
             assert_eq!(row.batch_height, Some(1));
             assert_eq!(row.confirmed_height, None);
             assert_eq!(get_confirmation_position(&conn, &txid).await?, None);
+            assert_successful_write(&mut reactor.runtime, &txid, &address).await?;
         }
         let before_confirmation = effects(&conn).await?;
         let block = confirmation_block(&raw, 2)?;
@@ -226,6 +256,7 @@ async fn run_case(batched: bool) -> Result<()> {
         assert_eq!(row.confirmed_height, Some(2));
         assert_eq!(row.tx_index, Some(0));
         assert_eq!(get_confirmation_position(&conn, &txid).await?, Some(2));
+        assert_successful_write(&mut reactor.runtime, &txid, &address).await?;
         let applied = effects(&conn).await?;
         assert_ne!(applied, original);
         if batched {
