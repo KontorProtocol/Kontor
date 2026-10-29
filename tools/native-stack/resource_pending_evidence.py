@@ -36,6 +36,7 @@ OBSERVATION_KEYS = {
 }
 MARKERS = {
     "attempts": "PENDING_HOST_IO_ATTEMPT:",
+    "controls": "PENDING_HOST_IO_CONTROL:",
     "summary": "PENDING_HOST_IO_SUMMARY:",
     "runtime": "FINITE_STACK_RUNTIME=",
     "trace": "FINITE_STACK_TRACE=",
@@ -74,25 +75,31 @@ def parse_worker_log(path):
                                       object_pairs_hook=no_duplicate_keys,
                                       parse_constant=no_nonfinite_constants))
                    for index, line in enumerate(lines) if marker in line]
-        require(len(matched) == (4 if key == "attempts" else 1),
+        expected_count = 4 if key == "attempts" else 2 if key == "controls" else 1
+        require(len(matched) == expected_count,
                 f"pending host transcript lacks {key}")
         positions[key] = [index for index, _ in matched]
-        records[key] = [value for _, value in matched] if key == "attempts" else matched[0][1]
-    require(positions["attempts"] == sorted(positions["attempts"])
-            and positions["attempts"][-1] < positions["summary"][0]
+        records[key] = ([value for _, value in matched]
+                        if key in {"attempts", "controls"} else matched[0][1])
+    a, c = positions["attempts"], positions["controls"]
+    timings = [index for index, line in enumerate(lines) if "KONTOR_STACK_TIMING:" in line]
+    require(len(timings) == 4
+            and a[0] < timings[0] < a[1] < timings[1] < c[0]
+            < a[2] < timings[2] < a[3] < timings[3] < c[1]
+            < positions["summary"][0]
             < positions["runtime"][0] < positions["trace"][0]
-            < positions["terminal"][0] < harness[0]
-            and sum("KONTOR_STACK_TIMING:" in line for line in lines) == 2,
+            < positions["terminal"][0] < harness[0],
             "pending host markers, timings, or harness result are out of order")
     return records
 
 
-def validate_observation(attempt, role, configuration, index, manifest, cell):
+def validate_observation(attempt, role, configuration, sample_index,
+                         repeat_index, sample_key, manifest, cell):
     observation = attempt["observation"]
     require(isinstance(observation, dict) and set(observation) == OBSERVATION_KEYS
             and observation["role"] == role
-            and observation["sample_index"] == index
-            and observation["sample_id"] == f"{role}:view_crypto:{index:04}"
+            and observation["sample_index"] == sample_index
+            and observation["sample_id"] == f"{role}:view_crypto:{sample_index:04}"
             and observation["kind"] == "view_crypto"
             and observation["depth"] == 0
             and observation["fixture_contracts"] == 1
@@ -173,7 +180,7 @@ def validate_observation(attempt, role, configuration, index, manifest, cell):
         require(observation["teardown_events"] is None,
                 "pending host probe-off role emitted teardown events")
     return {
-        "sample_key": "resumed", "repeat_index": index,
+        "sample_key": sample_key, "repeat_index": repeat_index,
         "outcome": observation["outcome"], "value": observation["value"],
         "fuel": fuel, "receipt": observation["receipt"],
         "state_before_sha256": digest,
@@ -203,14 +210,16 @@ def validate_run(run, bundle, manifest, directory):
     file_evidence(directory, run["raw_log"])
     parsed = parse_worker_log(directory / run["raw_log"]["path"])
     require(all(run[key] == parsed[key] for key in
-                ("attempts", "summary", "runtime", "trace", "terminal")),
+                ("attempts", "controls", "summary", "runtime", "trace", "terminal")),
             "pending host records differ from raw process transcript")
     attempts = parsed["attempts"]
+    controls = parsed["controls"]
     require([(item["sample_key"], item["repeat_index"]) for item in attempts] ==
             [("suspended", 0), ("resumed", 0), ("suspended", 1), ("resumed", 1)]
             and all(set(item) == {"case_id", "configuration", "process_role",
                                       "sample_key", "repeat_index", "pid", "host_import",
-                                      "host_entered", "guest_task_pending",
+                                      "host_entered", "host_poll_pending_count",
+                                      "guest_task_pending",
                                       "other_task_progressed", "observation"}
                     and item["case_id"] == CASE_ID
                     and item["configuration"] == configuration
@@ -219,15 +228,32 @@ def validate_run(run, bundle, manifest, directory):
                     and item["host_import"] == HOST_IMPORT
                     and item["host_entered"] is True
                     and item["other_task_progressed"] is True for item in attempts)
+            and all(type(item["host_poll_pending_count"]) is int for item in attempts)
+            and [item["host_poll_pending_count"] for item in attempts] ==
+                [1, 1, 2, 2]
             and all(attempts[index]["guest_task_pending"] is True
                     and attempts[index]["observation"] is None for index in (0, 2))
             and all(attempts[index]["guest_task_pending"] is False for index in (1, 3)),
             "pending host suspension and resumption phase markers differ")
+    require(all(set(item) == {"case_id", "configuration", "process_role",
+                                      "sample_key", "repeat_index", "pid", "host_import",
+                                      "linker", "observation"}
+                and item["case_id"] == CASE_ID
+                and item["configuration"] == configuration
+                and item["process_role"] == role
+                and item["sample_key"] == "unshadowed_control"
+                and item["repeat_index"] == index
+                and item["pid"] == process["pid"]
+                and item["host_import"] == HOST_IMPORT
+                and item["linker"] == "production"
+                for index, item in enumerate(controls)),
+            "pending host unshadowed control identity differs")
     summary, runtime, terminal = (parsed[key] for key in
                                   ("summary", "runtime", "terminal"))
     require(summary == {"case_id": CASE_ID, "configuration": configuration,
                         "process_role": role, "sample_count": 4,
-                        "host_calls": 2, "complete": True}
+                        "host_calls": 2, "host_poll_pending_count": 2,
+                        "control_count": 2, "complete": True}
             and terminal == {"case_id": CASE_ID, "configuration": configuration,
                              "process_role": role, "pid": process["pid"],
                              "sample_count": 4, "complete": True}
@@ -240,11 +266,24 @@ def validate_run(run, bundle, manifest, directory):
             "pending host summary, runtime, or terminal identity differs")
     os_name = "macos" if bundle["cell"].startswith("macOS-") else "linux"
     resumed = [attempts[1], attempts[3]]
-    validate_trace(parsed["trace"], runtime, resumed, os_name,
+    operation_order = [resumed[0], controls[0], resumed[1], controls[1]]
+    validate_trace(parsed["trace"], runtime, operation_order, os_name,
                    ("finite_stack_attempt_start", "finite_stack_attempt_end"))
-    return [validate_observation(item, role, configuration, index,
-                                 manifest, bundle["cell"])
-            for index, item in enumerate(resumed)]
+    signatures = []
+    for index, (resumed_item, control_item) in enumerate(zip(resumed, controls, strict=True)):
+        resumed_signature = validate_observation(
+            resumed_item, role, configuration, index * 2, index, "resumed",
+            manifest, bundle["cell"])
+        control_signature = validate_observation(
+            control_item, role, configuration, index * 2 + 1, index,
+            "unshadowed_control", manifest, bundle["cell"])
+        require({key: value for key, value in resumed_signature.items()
+                 if key != "sample_key"} ==
+                {key: value for key, value in control_signature.items()
+                 if key != "sample_key"},
+                "pending and unshadowed production host semantics differ")
+        signatures.append(resumed_signature)
+    return signatures
 
 
 def validate_bundle(bundle, directory):

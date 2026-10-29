@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::env;
+use std::future::{Future, poll_fn};
 use std::process;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -734,6 +736,8 @@ pub(super) async fn run_resource_pending_host_io(
         release: Arc::new(Notify::new()),
     };
     let calls = Arc::new(AtomicUsize::new(0));
+    let pending_polls = Arc::new(AtomicUsize::new(0));
+    let production_linkers = current.runtime.linkers.clone();
     let mut user = current.runtime.linkers.user.clone();
     user.allow_shadowing(true)
         .instance("kontor:built-in/crypto")?
@@ -741,17 +745,33 @@ pub(super) async fn run_resource_pending_host_io(
             let entered = gate.entered.clone();
             let release = gate.release.clone();
             let calls = calls.clone();
+            let pending_polls = pending_polls.clone();
             move |mut store, (input,): (Vec<u8>,)| {
                 let entered = entered.clone();
                 let release = release.clone();
                 let calls = calls.clone();
+                let pending_polls = pending_polls.clone();
                 Box::new(async move {
                     if input != b"native-stack-pending" {
                         return Err(WasmtimeError::msg("unexpected pending host input"));
                     }
                     calls.fetch_add(1, Ordering::SeqCst);
-                    entered.notify_one();
-                    release.notified().await;
+                    let wait = release.notified();
+                    tokio::pin!(wait);
+                    let mut signaled = false;
+                    poll_fn(|cx| match wait.as_mut().poll(cx) {
+                        Poll::Pending => {
+                            // Signal only after the host future really returns Pending.
+                            if !signaled {
+                                pending_polls.fetch_add(1, Ordering::SeqCst);
+                                entered.notify_one();
+                                signaled = true;
+                            }
+                            Poll::Pending
+                        }
+                        Poll::Ready(()) => Poll::Ready(()),
+                    })
+                    .await;
                     let mut access =
                         Access::<Runtime, Runtime>::new(store.as_context_mut(), |runtime| runtime);
                     let runtime = access.get().clone();
@@ -767,6 +787,7 @@ pub(super) async fn run_resource_pending_host_io(
         user,
         native: current.runtime.linkers.native.clone(),
     });
+    let suspended_linkers = current.runtime.linkers.clone();
     let mut fixture = Some(current);
     for repeat_index in 0..2 {
         resource_diagnostics::record("finite_stack_attempt_start");
@@ -787,7 +808,9 @@ pub(super) async fn run_resource_pending_host_io(
             () = tokio::time::sleep(Duration::from_secs(30)) => bail!("pending host import did not enter"),
         }
         ensure!(
-            !task.is_finished() && calls.load(Ordering::SeqCst) == repeat_index + 1,
+            !task.is_finished()
+                && calls.load(Ordering::SeqCst) == repeat_index + 1
+                && pending_polls.load(Ordering::SeqCst) == repeat_index + 1,
             "guest was not suspended at exactly one production host import"
         );
         ensure!(
@@ -805,6 +828,7 @@ pub(super) async fn run_resource_pending_host_io(
                 "pid": process::id(),
                 "host_import": "kontor:built-in/crypto.sha256",
                 "host_entered": true,
+                "host_poll_pending_count": pending_polls.load(Ordering::SeqCst),
                 "guest_task_pending": true,
                 "other_task_progressed": true,
                 "observation": JsonValue::Null,
@@ -835,12 +859,49 @@ pub(super) async fn run_resource_pending_host_io(
                 "pid": process::id(),
                 "host_import": "kontor:built-in/crypto.sha256",
                 "host_entered": true,
+                "host_poll_pending_count": pending_polls.load(Ordering::SeqCst),
                 "guest_task_pending": false,
                 "other_task_progressed": true,
-                "observation": observation,
+                "observation": observation.clone(),
             })
         );
         resource_diagnostics::record("finite_stack_attempt_end");
+        current.runtime.linkers = production_linkers.clone();
+        resource_diagnostics::record("finite_stack_attempt_start");
+        ensure!(
+            current.observe(0, process_role).await? == "ok",
+            "unshadowed production host control failed"
+        );
+        resource_diagnostics::record("finite_stack_attempt_end");
+        let control = current
+            .last_report
+            .take()
+            .context("unshadowed host control lacks semantic observation")?;
+        ensure!(
+            control["value"] == observation["value"]
+                && control["fuel"] == observation["fuel"]
+                && control["receipt"] == observation["receipt"]
+                && control["balance_transitions"] == observation["balance_transitions"]
+                && control["state_before_sha256"] == observation["state_before_sha256"]
+                && control["reset"]["post"]["persistent_digest_sha256"]
+                    == observation["reset"]["post"]["persistent_digest_sha256"],
+            "unshadowed production host semantics differ from suspended host call"
+        );
+        println!(
+            "PENDING_HOST_IO_CONTROL:{}",
+            json!({
+                "case_id": "pending_host_io",
+                "configuration": configuration,
+                "process_role": process_role,
+                "sample_key": "unshadowed_control",
+                "repeat_index": repeat_index,
+                "pid": process::id(),
+                "host_import": "kontor:built-in/crypto.sha256",
+                "linker": "production",
+                "observation": control,
+            })
+        );
+        current.runtime.linkers = suspended_linkers.clone();
         fixture = Some(current);
     }
     let summary = json!({
@@ -848,7 +909,9 @@ pub(super) async fn run_resource_pending_host_io(
         "configuration": configuration,
         "process_role": process_role,
         "sample_count": 4,
+        "control_count": 2,
         "host_calls": calls.load(Ordering::SeqCst),
+        "host_poll_pending_count": pending_polls.load(Ordering::SeqCst),
         "complete": true,
     });
     println!("PENDING_HOST_IO_SUMMARY:{summary}");

@@ -23,6 +23,7 @@ const COMPONENT: &[u8] =
 const CRYPTO_COMPONENT: &[u8] =
     include_bytes!("../../../../../../test-contracts/binaries/crypto.wasm.br");
 
+mod canonical;
 mod sweep;
 
 pub(super) use sweep::{assert_receipt_stream_initial_state, persistent_digest};

@@ -14,9 +14,13 @@ class PendingHostEvidenceTests(unittest.TestCase):
                 "PENDING_HOST_IO_ATTEMPT:{}",
                 "KONTOR_STACK_TIMING:{}",
                 "PENDING_HOST_IO_ATTEMPT:{}",
+                "KONTOR_STACK_TIMING:{}",
+                "PENDING_HOST_IO_CONTROL:{}",
                 "PENDING_HOST_IO_ATTEMPT:{}",
                 "KONTOR_STACK_TIMING:{}",
                 "PENDING_HOST_IO_ATTEMPT:{}",
+                "KONTOR_STACK_TIMING:{}",
+                "PENDING_HOST_IO_CONTROL:{}",
                 "PENDING_HOST_IO_SUMMARY:{}",
                 "FINITE_STACK_RUNTIME={}",
                 "FINITE_STACK_TRACE={}",
@@ -25,11 +29,11 @@ class PendingHostEvidenceTests(unittest.TestCase):
             ]
             path.write_text("\n".join(lines) + "\n")
             self.assertEqual(len(parse_worker_log(path)["attempts"]), 4)
-            lines[10], lines[11] = lines[11], lines[10]
+            lines[14], lines[15] = lines[15], lines[14]
             path.write_text("\n".join(lines) + "\n")
             with self.assertRaisesRegex(ValueError, "out of order"):
                 parse_worker_log(path)
-            lines[10], lines[11] = lines[11], lines[10]
+            lines[14], lines[15] = lines[15], lines[14]
             lines[1] = 'PENDING_HOST_IO_ATTEMPT:{"sample_key": "suspended", "sample_key": "resumed"}'
             path.write_text("\n".join(lines) + "\n")
             with self.assertRaisesRegex(ValueError, "duplicate"):

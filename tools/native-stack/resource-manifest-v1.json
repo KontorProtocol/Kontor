@@ -20,6 +20,22 @@
       "path": "core/indexer/src/runtime/sequential_tests.rs",
       "sha256": "61b0d6b327e64efaf5c2bfebf929e9be5fefc762f0b21a84909bec5802f6677e"
     },
+    "canonical_probe_builtin_wit": {
+      "path": "core/indexer/src/runtime/wit/deps/built-in/common.wit",
+      "sha256": "23e887c6ee281a6624e5ab9fa87565fbdde4a924a5c0759623fb1c654686aa96"
+    },
+    "canonical_probe_tests": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/canonical.rs",
+      "sha256": "bd1bf8b9c27605bd88e5232596a844bb6ce8a19caea0fdde9a8cca4bb35766be"
+    },
+    "canonical_probe_wat": {
+      "path": "test-contracts/canonical-probe/fixture.wat",
+      "sha256": "efc5975900104b593a83e9fbcfb1a0ab1a3ea555c435529990a03db9dece1529"
+    },
+    "canonical_probe_wit": {
+      "path": "test-contracts/canonical-probe/wit/contract.wit",
+      "sha256": "e7d68841aab16ec820193f9747e529d8d3ded37d903b649393b26277f5f3eb3d"
+    },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
       "sha256": "84bbd07d8b2a139410eabe0d00cc93f903a8858556be689d60f448b63b9a69fd"
@@ -118,11 +134,11 @@
     },
     "pending_host_tests": {
       "path": "tools/native-stack/test_resource_pending_evidence.py",
-      "sha256": "a105a0d00952e061ee3852456cca61148dd3f9d28cb6e1bbc6d21471c689fbdd"
+      "sha256": "916bfffc935a7b08173a13288d3e6671cee38aa03a5a07c207000371d393bfb0"
     },
     "pending_host_validator": {
       "path": "tools/native-stack/resource_pending_evidence.py",
-      "sha256": "35d4d3ebf0e909dcc49d6cb55e441563aeb913e05416e8d1b0d4068746f7824a"
+      "sha256": "5ff67743234682721ef0003cf30d341e25c27334253e4ea22d4a685be7d8c143"
     },
     "production_qualification": {
       "path": "tools/native-stack/compare.py",
@@ -158,7 +174,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "a0406d520aa716bc56873657617c48360318286dd02076e01f226e8e30ece68d"
+      "sha256": "16a227a512acee91c960158bde92ee0905169ccf0934f986f9d2bfcfdfe34f95"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -194,11 +210,11 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "da9259b640cd9e879b32126c156b9b5cef641b87accd71e20a7d71ba54666b9f"
+      "sha256": "37d16ccf297462372c33fcbd1718845bb40c6a3a75649e4156056bdd20be368c"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "a4ae50d2871cc90120df8e45c74aca0e026483fabf2ac5370606b283ae45c20f"
+      "sha256": "37e9bd5c60ba48574ea1942eb4b9f25a0f5f359f8b5a74957674c9b68ebe0ef5"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -292,7 +308,10 @@
       },
       "family": "canonical_abi",
       "fixtures": [
-        "callback_tests"
+        "callback_tests",
+        "canonical_probe_wat",
+        "canonical_probe_wit",
+        "canonical_probe_tests"
       ],
       "id": "canonical_lift_lower",
       "paired_worker_status": "missing",
@@ -317,7 +336,10 @@
       },
       "family": "canonical_abi",
       "fixtures": [
-        "callback_tests"
+        "callback_tests",
+        "canonical_probe_wat",
+        "canonical_probe_wit",
+        "canonical_probe_tests"
       ],
       "id": "canonical_post_return",
       "paired_worker_status": "missing",
@@ -344,7 +366,10 @@
       },
       "family": "canonical_abi",
       "fixtures": [
-        "callback_tests"
+        "callback_tests",
+        "canonical_probe_wat",
+        "canonical_probe_wit",
+        "canonical_probe_tests"
       ],
       "id": "canonical_realloc",
       "paired_worker_status": "missing",

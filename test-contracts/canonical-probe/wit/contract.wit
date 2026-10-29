@@ -1,0 +1,11 @@
+package root:component;
+
+world root {
+  import kontor:built-in/context;
+  use kontor:built-in/context.{proc-context, view-context, contract};
+
+  export init: func(ctx: borrow<proc-context>) -> contract;
+  export view-run: func(ctx: borrow<view-context>, text: string);
+  export paid-light: func(ctx: borrow<proc-context>);
+  export paid-heavy: func(ctx: borrow<proc-context>);
+}
