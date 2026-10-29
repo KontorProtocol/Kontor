@@ -16,13 +16,18 @@ receives the new position on reconfirmation.
 The migration is atomic and idempotent. It does not change legacy transaction
 query projections, execution context, receipt contents or checkpoint inputs.
 K2 extraction must retain explicit legacy transaction projections and exclude
-this column and its maintenance trigger from semantic comparison. Whole-database
+this column, its maintenance trigger and `idx_transactions_confirmation_height`
+from semantic comparison. Whole-database
 digests that include every physical column will change when rebased onto ID3;
 they must not be confused with retained protocol semantic projections.
 
 ## Historical backfill
 
-The candidate maintenance command handles one block at a time:
+The candidate maintenance command handles one block at a time. Stop the node
+before running this offline maintenance command, then start it normally afterwards.
+It is not part of the protocol activation procedure, which restarts only Malachite.
+The command's migration/index build and writer lock have no qualified five-second
+bound for a live node, so concurrent daemon operation is unsupported:
 
 ```sh
 kontor backfill-confirmations \
@@ -32,12 +37,16 @@ kontor backfill-confirmations \
 ```
 
 The file is a raw Bitcoin block in consensus binary encoding, not hex text. The
-command requires an existing database and reads at most 4,000,001 bytes to reject
+command requires an existing node database and reads at most 4,000,001 bytes to reject
 oversized input. It reports the height, block hash, number updated and number
-already known as JSON.
+already known as JSON. It opens without SQLite's create flag, checks the base
+node schema before DDL, and runs only the confirmation metadata migration. It
+does not run general node initialization, change journal mode, materialize other
+state indexes or write/load the crypto extension.
 
 Backfill verifies the transaction merkle root, witness commitment, coinbase shape,
-size and unique transaction IDs. Under an immediate database transaction it then
+size and unique transaction IDs. A block carrying a witness commitment must not
+be supplied with all witnesses stripped. Under an immediate database transaction it then
 checks the header hash against the stored canonical block at that height. Every
 stored confirmation at that height must occur in the supplied block, and every
 known position must agree. Only then are unknown positions filled. A mismatch or

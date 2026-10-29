@@ -92,11 +92,25 @@ pub async fn backfill_confirmation_positions(
     height: u64,
     block: &Block,
 ) -> Result<ConfirmationBackfill, QueryError> {
+    let witness_commitment_present = block.txdata.first().is_some_and(|tx| {
+        tx.output.iter().any(|output| {
+            let script = output.script_pubkey.as_bytes();
+            script.len() >= 38 && script.starts_with(&[0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed])
+        })
+    });
+    // rust-bitcoin accepts witness-free bodies before inspecting commitment
+    // outputs. A committed SegWit block must include its witness data here.
+    let stripped_witness = witness_commitment_present
+        && block
+            .txdata
+            .iter()
+            .all(|tx| tx.input.iter().all(|input| input.witness.is_empty()));
     if block.weight().to_wu() > 4_000_000
         || !block.txdata.first().is_some_and(|tx| tx.is_coinbase())
         || block.txdata.iter().skip(1).any(|tx| tx.is_coinbase())
         || !block.check_merkle_root()
         || !block.check_witness_commitment()
+        || stripped_witness
     {
         return Err(QueryError::InvalidData(
             "invalid confirmation block body".into(),

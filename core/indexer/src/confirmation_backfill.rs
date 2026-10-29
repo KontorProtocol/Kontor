@@ -4,11 +4,13 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::Block;
 use bitcoin::consensus::deserialize;
 use clap::Args;
+use libsql::{Builder, Connection, OpenFlags};
 use tokio::fs::{File, canonicalize};
 use tokio::io::AsyncReadExt;
 
-use crate::database::Writer;
-use crate::database::confirmation::{ConfirmationBackfill, backfill_confirmation_positions};
+use crate::database::confirmation::{
+    ConfirmationBackfill, backfill_confirmation_positions, initialize_confirmation_metadata,
+};
 
 #[derive(Args)]
 pub struct ConfirmationBackfillArgs {
@@ -37,19 +39,40 @@ pub async fn run(args: ConfirmationBackfillArgs) -> Result<ConfirmationBackfill>
         "raw Bitcoin block exceeds maximum size"
     );
     let block: Block = deserialize(&raw).context("decode raw Bitcoin block")?;
-    // Resolve an existing file before opening Writer, which otherwise creates
-    // a new database for a mistyped path.
     let database = canonicalize(&args.database)
         .await
         .context("resolve existing node database")?;
     ensure!(database.is_file(), "database path is not a file");
-    let directory = database
-        .parent()
-        .context("database has no parent directory")?;
-    let filename = database
-        .file_name()
-        .and_then(|name| name.to_str())
-        .context("database filename is not UTF-8")?;
-    let writer = Writer::new(directory, filename).await?;
-    Ok(backfill_confirmation_positions(&writer.connection(), args.height, &block).await?)
+    let db = Builder::new_local(database)
+        .flags(OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .build()
+        .await?;
+    let conn = db.connect()?;
+    validate_node_schema(&conn).await?;
+    conn.query("PRAGMA busy_timeout = 5000", ()).await?;
+    conn.query("PRAGMA foreign_keys = ON", ()).await?;
+    initialize_confirmation_metadata(&conn).await?;
+    Ok(backfill_confirmation_positions(&conn, args.height, &block).await?)
 }
+
+async fn validate_node_schema(conn: &Connection) -> Result<()> {
+    // Fail before any DDL. The maintenance path must not turn an unrelated
+    // SQLite file into a node database or run other startup migrations.
+    for projection in [
+        "SELECT height, hash, relevant FROM blocks LIMIT 0",
+        "SELECT id, txid, height, confirmed_height, tx_index, batch_height FROM transactions LIMIT 0",
+        "SELECT id, name, height, tx_index, bytes FROM contracts LIMIT 0",
+        "SELECT contract_id, path, height, value, deleted FROM contract_state LIMIT 0",
+        "SELECT id, contract_id, tx_id, status FROM contract_results LIMIT 0",
+        "SELECT height, hash FROM checkpoints LIMIT 0",
+        "SELECT key, value FROM node_meta LIMIT 0",
+    ] {
+        conn.query(projection, ())
+            .await
+            .context("not a supported node database")?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

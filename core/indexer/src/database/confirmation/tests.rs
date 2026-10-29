@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::constants::genesis_block;
-use bitcoin::{Amount, Block, Network, OutPoint};
+use bitcoin::hashes::Hash;
+use bitcoin::{Amount, Block, Network, OutPoint, ScriptBuf, TxOut, Witness};
 use indexer_types::{BlockRow, TransactionRow};
 use libsql::{Builder, Connection, params};
 use tempfile::TempDir;
@@ -300,5 +301,72 @@ async fn backfill_requires_canonical_body_and_rolls_back_partial_writes() -> Res
         get_confirmation_position(&conn, "absent-from-block").await?,
         None
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn backfill_requires_the_committed_witness_data() -> Result<()> {
+    let dir = TempDir::new()?;
+    let conn = new_connection(dir.path(), "witness-backfill.db").await?;
+    let mut block = backfill_block();
+    block.txdata[1].input[0].witness.push([42; 32]);
+    block.txdata[0].input[0].witness.push([0; 32]);
+    let commitment = Block::compute_witness_commitment(&block.witness_root().unwrap(), &[0; 32]);
+    let mut script = vec![0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed];
+    script.extend_from_slice(&commitment.to_byte_array());
+    block.txdata[0].output.push(TxOut {
+        value: Amount::ZERO,
+        script_pubkey: ScriptBuf::from_bytes(script),
+    });
+    block.header.merkle_root = block.compute_merkle_root().unwrap();
+    assert!(block.check_merkle_root());
+    assert!(block.check_witness_commitment());
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(7)
+            .hash(block.block_hash())
+            .relevant(true)
+            .build(),
+    )
+    .await?;
+    let txid = block.txdata[1].compute_txid().to_string();
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(7)
+            .confirmed_height(7)
+            .tx_index(0)
+            .txid(txid.clone())
+            .build(),
+    )
+    .await?;
+    let mut stripped = block.clone();
+    for transaction in &mut stripped.txdata {
+        for input in &mut transaction.input {
+            input.witness = Witness::new();
+        }
+    }
+    assert!(
+        stripped.check_witness_commitment(),
+        "pinned library skips witness-free bodies"
+    );
+    assert!(
+        backfill_confirmation_positions(&conn, 7, &stripped)
+            .await
+            .is_err()
+    );
+    assert_eq!(get_confirmation_position(&conn, &txid).await?, None);
+    let mut tampered = block.clone();
+    tampered.txdata[1].input[0].witness.push([43; 32]);
+    assert!(!tampered.check_witness_commitment());
+    assert!(
+        backfill_confirmation_positions(&conn, 7, &tampered)
+            .await
+            .is_err()
+    );
+    let result = backfill_confirmation_positions(&conn, 7, &block).await?;
+    assert_eq!((result.updated, result.already_known), (1, 0));
+    assert_eq!(get_confirmation_position(&conn, &txid).await?, Some(1));
     Ok(())
 }
