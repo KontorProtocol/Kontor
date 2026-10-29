@@ -4,6 +4,22 @@
     "sha256": "923f6ddf0e5646e140242d11fc48995f69e2929d34930609a82ac13a4fce337c"
   },
   "artifacts": {
+    "arith_guest": {
+      "path": "test-contracts/binaries/arith.wasm.br",
+      "sha256": "e9eb7678361f2f8bf838617f0e770b7091968bd36e59c6dfb8b455fbf27deb57"
+    },
+    "arith_guest_manifest": {
+      "path": "test-contracts/arith/Cargo.toml",
+      "sha256": "71f11d27564d51c9a10df8855b5d0bf0c42a78f666f408592ffef4c888756171"
+    },
+    "arith_guest_source": {
+      "path": "test-contracts/arith/src/lib.rs",
+      "sha256": "4efe0db49f70e0cb5d4ed8ac102c67638819f20b54b2980ad54350061667c337"
+    },
+    "arith_guest_wit": {
+      "path": "test-contracts/arith/wit/contract.wit",
+      "sha256": "43c285adf72c4ca0ac2a9ca29c6d9af45c2ad36f6f6fcdfae459cb86f4b96437"
+    },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
       "sha256": "9742dd2ac536de31cce92efb3573b65c687e56617c1c03d098b251710dcee228"
@@ -144,9 +160,17 @@
       "path": "tools/native-stack/test_resource_foreign_wave_evidence.py",
       "sha256": "c1cea8d8ff6e009b261c69b5c30addce331002c2f6b7097b20c9909d47eff32b"
     },
+    "guest_build_metadata": {
+      "path": "test-contracts/binaries/build.json",
+      "sha256": "9d927b68696a24aa94bf1d873bbbda7fa77158c6de277f555a58b08150bc0997"
+    },
     "guest_error_tests": {
       "path": "core/indexer/src/runtime/call/tests/canonical_guest_errors.rs",
       "sha256": "8973f4adc00a1062fe2c1c40e797f7cd94c885b1a55ddae9da142fff3b819f07"
+    },
+    "guest_lockfile": {
+      "path": "test-contracts/Cargo.lock",
+      "sha256": "22e0cfec8b95a0cfb170f8737ca585f3151507303d02cc151013ab641c16d392"
     },
     "indexer_build_script": {
       "path": "core/indexer/build.rs",
@@ -266,7 +290,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "7954a4fd36dbd9711f663f845a59eace72dbd04bbe34e7fc0060bd80e1f64e06"
+      "sha256": "b598e907caf8cdf24271b1fb0b3e8041aad8c81d38b0edbe420ba6d5cd10bfd0"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -294,7 +318,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "88eec2a81c91f2269ce0c9d14dcd8f2519b109b03167c1f769c066364fcba8f7"
+      "sha256": "db14331d64e4289440a3e41d5b5033e3be47bfb8125f21085cedc6335f58957a"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -316,6 +340,22 @@
       "path": "tools/native-stack/test_resource_sqlite_pagination_evidence.py",
       "sha256": "094b88a343013172a4706c1ecd6c9d44861f6281dd88f592ae5ea4807a970985"
     },
+    "sqlite_ranges_adapter": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_ranges.rs",
+      "sha256": "bf5f32f80df593c4126473a2a7afaaa2e8c785be857e1fd4e14a1141a7ffcf68"
+    },
+    "sqlite_ranges_capture": {
+      "path": "tools/native-stack/capture_resource_sqlite_ranges.py",
+      "sha256": "db3befc19395d08b74e925c6d3fe8dad35048e65748d937290987073a85f2441"
+    },
+    "sqlite_ranges_validator": {
+      "path": "tools/native-stack/resource_sqlite_ranges_evidence.py",
+      "sha256": "954052f47e7a44afc67709ca0aa1331e83ec01a6fc6db35c0e793512090ffee8"
+    },
+    "sqlite_ranges_validator_tests": {
+      "path": "tools/native-stack/test_resource_sqlite_ranges_evidence.py",
+      "sha256": "b81a0771a47a7d76e03d921a5aca2aaa75bbb7c7dcc496cbcf4368f37c625c47"
+    },
     "stack_probe": {
       "path": "test-contracts/binaries/stack_probe.wasm.br",
       "sha256": "32652cdffc656f2f9d13d1cd5e4083245ef148a5f6bfef85ec4166a10ada26b9"
@@ -326,7 +366,7 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "6b3d0f1d308e4fe42005b521ee76456973ebf96cb1459e75d3955e87f776f4d3"
+      "sha256": "158d7a8bf96cbd86c410c768b7b074bf055d11a2380f5f2d30947033d0d7c0e9"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
@@ -1775,7 +1815,19 @@
         "page_7_range_256": null
       },
       "family": "sqlite",
-      "fixtures": [],
+      "fixtures": [
+        "arith_guest",
+        "arith_guest_source",
+        "arith_guest_wit",
+        "arith_guest_manifest",
+        "guest_lockfile",
+        "guest_build_metadata",
+        "sqlite_ranges_adapter",
+        "resource_worker_diagnostic",
+        "sqlite_ranges_capture",
+        "sqlite_ranges_validator",
+        "sqlite_ranges_validator_tests"
+      ],
       "id": "sqlite_ranges",
       "paired_worker_status": "missing",
       "parameters": {
@@ -1846,7 +1898,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "88eec2a81c91f2269ce0c9d14dcd8f2519b109b03167c1f769c066364fcba8f7",
+    "source_sha256": "db14331d64e4289440a3e41d5b5033e3be47bfb8125f21085cedc6335f58957a",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1998,7 +2050,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "88eec2a81c91f2269ce0c9d14dcd8f2519b109b03167c1f769c066364fcba8f7",
+    "sha256": "db14331d64e4289440a3e41d5b5033e3be47bfb8125f21085cedc6335f58957a",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

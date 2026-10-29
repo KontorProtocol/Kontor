@@ -28,6 +28,7 @@ mod foreign_wave;
 mod initialization;
 mod lifecycle;
 mod sqlite_pagination;
+mod sqlite_ranges;
 mod sweep;
 mod type_value;
 
@@ -103,6 +104,13 @@ pub(super) async fn resource_sqlite_pagination(
     process_role: &str,
 ) -> Result<JsonValue> {
     sqlite_pagination::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_sqlite_ranges(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    sqlite_ranges::run(configuration, process_role).await
 }
 
 #[tokio::test]
