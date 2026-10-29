@@ -2,6 +2,12 @@ use thiserror::Error;
 
 use crate::protocol::storage_identity::{CoreCallbacks, IdentityCallbacks, NonceCallbacks};
 
+/// The reserved signer_id for the Core (system) signer. By construction the
+/// Core row is the first one inserted into `signers` at genesis, so SQLite
+/// auto-increment assigns it id = 1. This constant pins that contract and is
+/// asserted by `create_core_signer`.
+pub const CORE_SIGNER_ID: u64 = 1;
+
 #[derive(Debug, Error)]
 pub(crate) enum IdentityError {
     #[error("{0}")]
@@ -46,7 +52,6 @@ pub(crate) async fn x_only_pubkey(
 }
 
 pub(crate) async fn create_core_signer(callbacks: CoreCallbacks) -> Result<u64, IdentityError> {
-    const CORE_SIGNER_ID: u64 = 1;
     if let Some(id) = callbacks.0().await.map_err(IdentityError::Infrastructure)? {
         if id != CORE_SIGNER_ID {
             return Err(IdentityError::InvalidData(format!(

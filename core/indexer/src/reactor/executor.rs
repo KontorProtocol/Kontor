@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use bitcoin::Txid;
 use tracing::warn;
 
-use indexer_types::{InstKind, OpKind};
+use indexer_types::OpKind;
 
 use crate::bitcoin_client::error::Error as RpcError;
 use crate::bitcoin_client::types::Acceptance;
@@ -12,29 +12,13 @@ use crate::bls::{AggregateVerificationError, verify_aggregate};
 use crate::database;
 use crate::database::queries::insert_transaction_execution_usage;
 use crate::protocol::v1::storage_identity::IdentityError;
+pub use crate::protocol::v1::transactions::is_batchable;
 use crate::retry::{new_backoff_limited, retry};
 use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
 use crate::runtime::system;
 use crate::runtime::wit::Signer;
 use futures_util::future::BoxFuture;
-
-/// Check if a parsed transaction contains only batchable ops.
-/// Publish must only execute via Value::Block decisions (contract address
-/// depends on block height/tx_index). All other ops are batchable.
-/// Aggregate inputs are always batchable.
-pub fn is_batchable(inputs: &[indexer_types::Input]) -> bool {
-    inputs.iter().all(|input| {
-        if input.insts.is_aggregate() {
-            return true;
-        }
-        !input
-            .insts
-            .ops
-            .iter()
-            .any(|inst| matches!(inst.kind, InstKind::Publish { .. }))
-    })
-}
 
 /// The I/O phase's per-transaction verdict. The reason is for logs only —
 /// every rejection has the same effect (drop from the candidate set / reject

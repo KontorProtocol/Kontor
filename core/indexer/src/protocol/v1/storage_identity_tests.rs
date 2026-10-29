@@ -11,7 +11,10 @@ use libsql::{AuthAction, AuthContext, Authorization, Connection, Value, params};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
-use super::storage_identity::{IdentityError, advance_nonce, ensure_identity as ensure_versioned};
+use super::storage_identity::{
+    CORE_SIGNER_ID as VERSIONED_CORE_SIGNER_ID, IdentityError, advance_nonce,
+    ensure_identity as ensure_versioned,
+};
 use crate::database::queries::{
     Error as QueryError, create_core_signer, ensure_identity, get_checkpoint_latest,
     get_signer_entry_by_id, identity_callbacks, insert_block, insert_contract_state,
@@ -361,4 +364,10 @@ async fn identity_adapter_bls_reregistration_short_circuits_before_proof_parsing
     conn.authorizer(None)?;
     assert!(matches!(error, ExecutionError::NonDeterministic(_)));
     Ok(())
+}
+
+#[test]
+fn core_signer_id_is_reserved_one() {
+    assert_eq!(VERSIONED_CORE_SIGNER_ID, 1);
+    assert_eq!(CORE_SIGNER_ID, VERSIONED_CORE_SIGNER_ID);
 }
