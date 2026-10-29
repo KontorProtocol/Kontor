@@ -20,6 +20,7 @@ use super::PopulationConfig;
 use super::batch::BatchProof;
 use super::configuration::MixedConfig;
 use super::simulation_requests::SimulationRequests;
+use super::views;
 use crate::bitcoin_client::Client;
 use crate::database::Writer;
 use crate::reg_tester::workload_bitcoin;
@@ -362,20 +363,34 @@ async fn workload_saved_configured_replay() -> Result<()> {
             database_projection(&trial.db_conn()).await? == before,
             "startup changed saved prestate"
         );
-        if let Some(requests) = &simulations {
-            requests
-                .execute(&mut trial, manifest.mixed.warm_simulation_cache)
-                .await?;
-        }
-        let batches = if manifest.mixed.batch_operations > 0 {
-            BatchProof::execute_chunks(&mut trial, &reveals, manifest.mixed.batch_operations)
-                .await?
-        } else {
-            Vec::new()
-        };
-        let start = Instant::now();
-        apply(&mut trial, block.clone()).await?;
-        let service_ns = u64::try_from(start.elapsed().as_nanos())?;
+        let (batches, service_ns) = views::run(
+            directory.path(),
+            name,
+            Some(manifest.mixed),
+            &before,
+            async {
+                if let Some(requests) = &simulations {
+                    requests
+                        .execute(&mut trial, manifest.mixed.warm_simulation_cache)
+                        .await?;
+                }
+                let batches = if manifest.mixed.batch_operations > 0 {
+                    BatchProof::execute_chunks(
+                        &mut trial,
+                        &reveals,
+                        manifest.mixed.batch_operations,
+                    )
+                    .await?
+                } else {
+                    Vec::new()
+                };
+                let start = Instant::now();
+                apply(&mut trial, block.clone()).await?;
+                let service_ns = u64::try_from(start.elapsed().as_nanos())?;
+                Ok((batches, service_ns))
+            },
+        )
+        .await?;
         for batch in batches {
             batch.check(&trial).await?;
         }

@@ -40,6 +40,7 @@ mod saved;
 mod shapes;
 mod simulation;
 mod simulation_requests;
+mod views;
 
 use batch::BatchProof;
 use configuration::MixedConfig;
@@ -671,27 +672,44 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             database_projection(&trial.db_conn()).await? == projection_before,
             "reactor startup changed restored state"
         );
-        if let Some(requests) = &simulation_requests {
-            let Delivery::Configured(config) = delivery else {
-                unreachable!("simulation requests require configured delivery")
-            };
-            requests
-                .execute(&mut trial, config.warm_simulation_cache)
-                .await?;
-        }
-        let simulations = if delivery == Delivery::SimulationsThenBatch {
-            Some(SimulationProof::execute(&mut trial, &reveals[0]).await?)
-        } else {
-            None
+        let view_config = match delivery {
+            Delivery::Configured(config) => Some(config),
+            _ => None,
         };
-        let batches = match delivery {
-            Delivery::Configured(config) if config.batch_operations > 0 => {
-                BatchProof::execute_chunks(&mut trial, &reveals, config.batch_operations).await?
-            }
-            _ if delivery.batched() => vec![BatchProof::execute(&mut trial, &reveals[0]).await?],
-            _ => Vec::new(),
-        };
-        apply(&mut trial, block.clone()).await?;
+        let (simulations, batches) = views::run(
+            directory.path(),
+            name,
+            view_config,
+            &projection_before,
+            async {
+                if let Some(requests) = &simulation_requests {
+                    let Delivery::Configured(config) = delivery else {
+                        unreachable!("simulation requests require configured delivery")
+                    };
+                    requests
+                        .execute(&mut trial, config.warm_simulation_cache)
+                        .await?;
+                }
+                let simulations = if delivery == Delivery::SimulationsThenBatch {
+                    Some(SimulationProof::execute(&mut trial, &reveals[0]).await?)
+                } else {
+                    None
+                };
+                let batches = match delivery {
+                    Delivery::Configured(config) if config.batch_operations > 0 => {
+                        BatchProof::execute_chunks(&mut trial, &reveals, config.batch_operations)
+                            .await?
+                    }
+                    _ if delivery.batched() => {
+                        vec![BatchProof::execute(&mut trial, &reveals[0]).await?]
+                    }
+                    _ => Vec::new(),
+                };
+                apply(&mut trial, block.clone()).await?;
+                Ok((simulations, batches))
+            },
+        )
+        .await?;
         let projection = database_projection(&trial.db_conn()).await?;
         for (index, txid) in txids.iter().enumerate() {
             let transaction = get_transaction_by_txid(&trial.db_conn(), txid)

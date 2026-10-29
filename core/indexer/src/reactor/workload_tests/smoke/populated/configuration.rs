@@ -18,6 +18,8 @@ pub(super) struct MixedConfig {
     pub(super) simulation_operations: usize,
     #[serde(default)]
     pub(super) warm_simulation_cache: bool,
+    #[serde(default)]
+    pub(super) view_concurrency: usize,
 }
 
 impl MixedConfig {
@@ -51,6 +53,10 @@ impl MixedConfig {
         ensure!(
             !self.warm_simulation_cache || self.simulation_operations > 0,
             "simulation cache warming requires simulation requests"
+        );
+        ensure!(
+            matches!(self.view_concurrency, 0 | 8),
+            "configured views require zero or eight clients"
         );
         Ok(self)
     }
@@ -91,6 +97,8 @@ fn workload_mixed_configuration_rejects_invalid_shapes() -> Result<()> {
     let valid = r#"{"population":{"active_validators":4,"replacements":2,"agreements":2,"members_per_agreement":3},"mixed":{"transactions":50,"live_keys":257,"new_files":5}}"#;
     Configuration::parse(valid.as_bytes())?;
     for invalid in [
+        valid.replace("\"new_files\":5", "\"new_files\":5,\"view_concurrency\":1"),
+        valid.replace("\"new_files\":5", "\"new_files\":5,\"view_concurrency\":9"),
         valid.replace(
             "\"new_files\":5",
             "\"new_files\":5,\"warm_simulation_cache\":true",
@@ -126,6 +134,16 @@ fn workload_mixed_configuration_rejects_invalid_shapes() -> Result<()> {
             Configuration::parse(invalid.as_bytes()).is_err(),
             "accepted {invalid}"
         );
+    }
+    for count in [0, 8] {
+        Configuration::parse(
+            valid
+                .replace(
+                    "\"new_files\":5",
+                    &format!("\"new_files\":5,\"view_concurrency\":{count}"),
+                )
+                .as_bytes(),
+        )?;
     }
     for count in [0, 2, 4] {
         Configuration::parse(
