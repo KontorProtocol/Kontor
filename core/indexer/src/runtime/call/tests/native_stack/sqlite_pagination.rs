@@ -175,6 +175,8 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
     let mut outcomes = Vec::with_capacity(2 * 3 * 3 * 2);
     for source in ["token", "nft"] {
         if source == "nft" {
+            runtime.invocation_budget = None;
+            runtime.resource_probe_phase = None;
             resource_diagnostics::record("fixture_preparation_entry");
             expected_nft = populate_nfts(&mut runtime, &signer).await?;
             resource_diagnostics::record("fixture_preparation_exit");
@@ -292,6 +294,8 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                         })
                     );
                     resource_diagnostics::record("finite_stack_attempt_end");
+                    runtime.invocation_budget = None;
+                    runtime.resource_probe_phase = None;
                     outcomes.push("ok");
                 }
             }

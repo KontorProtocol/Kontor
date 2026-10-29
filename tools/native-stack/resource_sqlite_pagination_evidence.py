@@ -189,10 +189,11 @@ def validate_trace(trace, runtime, attempts, os_name):
             "pagination setup or attempt intervals changed")
     for attempt, start, end in zip(attempts, starts, ends, strict=True):
         segment = names[start:end + 1]
+        conversion = [name for name in segment if name.startswith("canonical_")]
         require(segment.count("fixture_preparation_entry") == 0
                 and segment.count("compiler_entry") == 0
-                and segment.count("canonical_input_entry") == 1
-                and segment.count("canonical_output_entry") == 1,
+                and conversion == ["canonical_input_entry", "canonical_input_exit",
+                                   "canonical_output_entry", "canonical_output_exit"],
                 f"pagination {attempt['sample_key']} did not reach its query boundary")
     for entry, exit_name in PHASES:
         if entry == "canonical_output_entry":

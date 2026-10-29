@@ -302,7 +302,7 @@
     },
     "sqlite_pagination_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_pagination.rs",
-      "sha256": "5ed48b7e178b71284042bef82063ac3765bfea28b27d61cba94c0a38281fe56d"
+      "sha256": "1482a600e16474a3d8019674b3de7c9e6121cbb6a181e083d46f277c8b8150cd"
     },
     "sqlite_pagination_capture": {
       "path": "tools/native-stack/capture_resource_sqlite_pagination.py",
@@ -310,11 +310,11 @@
     },
     "sqlite_pagination_validator": {
       "path": "tools/native-stack/resource_sqlite_pagination_evidence.py",
-      "sha256": "f3cdac38d01a43fcb1cccf8acc87fa17254fa393086100e287c291074b6fcd03"
+      "sha256": "1f1e3d6bb90a69887aa6a45fd6de9f9ec745a729204cd8283509eef98204ee14"
     },
     "sqlite_pagination_validator_tests": {
       "path": "tools/native-stack/test_resource_sqlite_pagination_evidence.py",
-      "sha256": "7cf1e3935370e2754cecbdc4a029c8d0330b21a4906a572f070814175abe043a"
+      "sha256": "34a21dba02727b9924b5383e905841f340f4891251cffabf26d3de805aa894b4"
     },
     "stack_probe": {
       "path": "test-contracts/binaries/stack_probe.wasm.br",

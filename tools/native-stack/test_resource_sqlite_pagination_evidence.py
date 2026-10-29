@@ -144,6 +144,36 @@ class SqlitePaginationEvidenceTests(unittest.TestCase):
             bad["events"].pop(-2)
             with self.assertRaises(ValueError):
                 validate_trace(bad, runtime, attempts, "linux")
+            crossing = copy.deepcopy(trace)
+            crossing_events = crossing["events"]
+            first_exit = next(index for index, item in enumerate(crossing_events)
+                              if item["name"] == "canonical_output_exit")
+            moved = crossing_events.pop(first_exit)
+            second_entry = [index for index, item in enumerate(crossing_events)
+                            if item["name"] == "canonical_output_entry"][1]
+            crossing_events.insert(second_entry + 1, moved)
+            with self.assertRaises(ValueError):
+                validate_trace(crossing, runtime, attempts, "linux")
+            overlap = copy.deepcopy(trace)
+            overlap_events = overlap["events"]
+            input_exit = next(index for index, item in enumerate(overlap_events)
+                              if item["name"] == "canonical_input_exit")
+            output_entry = next(index for index, item in enumerate(overlap_events)
+                                if item["name"] == "canonical_output_entry")
+            overlap_events[input_exit], overlap_events[output_entry] = (
+                overlap_events[output_entry], overlap_events[input_exit])
+            with self.assertRaises(ValueError):
+                validate_trace(overlap, runtime, attempts, "linux")
+            reversed_output = copy.deepcopy(trace)
+            reverse_events = reversed_output["events"]
+            output_entry = next(index for index, item in enumerate(reverse_events)
+                                if item["name"] == "canonical_output_entry")
+            output_exit = next(index for index, item in enumerate(reverse_events)
+                               if item["name"] == "canonical_output_exit")
+            reverse_events[output_entry], reverse_events[output_exit] = (
+                reverse_events[output_exit], reverse_events[output_entry])
+            with self.assertRaises(ValueError):
+                validate_trace(reversed_output, runtime, attempts, "linux")
 
 
 if __name__ == "__main__":
