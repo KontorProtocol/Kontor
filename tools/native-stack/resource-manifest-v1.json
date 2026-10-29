@@ -54,7 +54,7 @@
     },
     "invocation_budget": {
       "path": "core/indexer/src/runtime/invocation.rs",
-      "sha256": "0d847589d19246340ac60dabb4a170329096be13e82a9166857d85f265c51fd9"
+      "sha256": "4b3de82cc97997cf0b66aed41e00fbf959e380febab0bc7fe87c117dfbcb62db"
     },
     "native_filestorage": {
       "path": "native-contracts/filestorage/src/lib.rs",

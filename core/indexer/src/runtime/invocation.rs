@@ -428,6 +428,7 @@ mod tests {
     use super::{InvocationBudget, InvocationLease, ResourceProbePhase, ResourceTeardownRecorder};
     use crate::runtime::ContractAddress;
     use crate::runtime::token;
+    use crate::runtime::wit::kontor::built_in::context::HolderRef;
 
     #[test]
     fn lease_underflow_panics_without_wrapping_the_count() {
@@ -469,6 +470,24 @@ mod tests {
         assert_eq!(events.len(), 4);
         assert_eq!(events[2]["kind"], "table_destroyed");
         assert_eq!(events[2]["table_alive"], true);
+        assert_eq!(events[3]["kind"], "lease_released");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_query_drops_its_table_before_lease_release() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let recorder = Arc::new(ResourceTeardownRecorder::default());
+        let budget = Arc::new(InvocationBudget::with_teardown_recorder(recorder.clone()));
+        runtime.invocation_budget = Some(budget.clone());
+        runtime.resource_probe_phase = Some(ResourceProbePhase::PreObservation);
+        token::api::balance(&mut runtime, HolderRef::Burner).await?;
+        assert_eq!(budget.live(), 0);
+        let events = recorder.events();
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0]["role"], "pre_observation");
+        assert_eq!(events[2]["kind"], "table_destroyed");
+        assert_eq!(events[2]["table_alive"], false);
         assert_eq!(events[3]["kind"], "lease_released");
         Ok(())
     }
