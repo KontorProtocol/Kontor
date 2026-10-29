@@ -351,7 +351,7 @@ required for S2 qualification.
 
 The SQLite range adapter publishes the pinned `arith` guest through
 `Runtime::publish`, funds a signer, and writes 1,024 numeric map entries through
-signed guest operations. The measured `number-entries` views use a lower
+paid guest operations. The measured `number-entries` views use a lower
 inclusive and upper exclusive range. For each page size 1, 7, and 100 and range
 length 0, 1, 256, and 1,024, an attempt reads the first page as integers in
 ascending order and the last page as decimals in descending order. Both views
