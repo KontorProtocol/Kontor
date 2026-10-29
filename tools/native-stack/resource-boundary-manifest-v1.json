@@ -114,7 +114,7 @@
     "own_adjacent_boundary": true,
     "repeats": 2
   },
-  "parent_manifest_sha256": "7601267f7851c7cd42dc207b71c33549f591554b0ba206ffffc974d2b53a0dd6",
+  "parent_manifest_sha256": "3c47d1ba4610a907694ceb50abba6fb7641d57e41c224f1c68778565854fb0b0",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -154,7 +154,7 @@
     "workload_plan": "awaiting_frozen_workload_plan"
   },
   "reviewed_discovery_sha256": null,
-  "schema_sha256": "b31fce3ce9c9455d7f404fef651aeaeb1bb0f17227c3b679f03a46b1970d3aeb",
+  "schema_sha256": "36023c14bd0faa5e35df8525dda3a4293ccdaa46a4829781239a0f310c8cf96f",
   "schema_version": 1,
   "source_baseline_commit": "67a52fed58a893ce2c1c05483f86f4fffa02a675",
   "sources": {
@@ -164,7 +164,7 @@
     },
     "composition_tests": {
       "path": "tools/native-stack/test_resource_boundary_composition.py",
-      "sha256": "709af9756932699d6be071ee3a5a94458d76820709df7d94b06c58d07596a657"
+      "sha256": "88f8b56447c0edb8d48957b87eb5b4564c67462ab004033a60bfb962f4dfd4b2"
     },
     "depths": {
       "path": "tools/native-stack/resource-boundary-depths-v1.json",
@@ -192,11 +192,11 @@
     },
     "schema": {
       "path": "tools/native-stack/resource-boundary-evidence-schema-v1.json",
-      "sha256": "b31fce3ce9c9455d7f404fef651aeaeb1bb0f17227c3b679f03a46b1970d3aeb"
+      "sha256": "36023c14bd0faa5e35df8525dda3a4293ccdaa46a4829781239a0f310c8cf96f"
     },
     "sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "710c65932b610230f0bac963993818851391d11e769121016b4d048391f32077"
+      "sha256": "985e95718d973f834feffd6bda79019c1d6e7219e1641c3777ae0a41c744f241"
     },
     "synthetic_guard_tests": {
       "path": "tools/native-stack/test_resource_report.py",
@@ -204,11 +204,11 @@
     },
     "tests": {
       "path": "tools/native-stack/test_resource_boundary_evidence.py",
-      "sha256": "ebc29b616cfe057dec7d31a727da0efeb585a785f9cd3b398812616cc37f7328"
+      "sha256": "a4497f444ca8fec4e58bf2a533758b25946d75c1bbe71ee3788e38296941ba3e"
     },
     "validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "43f6ba391413ef3ca31a618e59ae2a41e9576f8d6d0eff6f1bd5b7d255c4dd48"
+      "sha256": "ce1e9977200844a87b3735c99e6de580b34a9ad7e7582ebd35a942de9f8a9223"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",

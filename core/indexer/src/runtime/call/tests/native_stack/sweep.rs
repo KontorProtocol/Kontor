@@ -9,7 +9,7 @@ use indexer_types::Payment;
 use libsql::{Connection, Value as SqlValue, params};
 use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
-use stdlib::to_wave_expr;
+use stdlib::{KeyPath, to_wave_expr};
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use tokio::time::timeout;
@@ -17,9 +17,11 @@ use wasmtime::Trap;
 
 use super::super::balance;
 use super::{COMPONENT, SYSTEM_FUEL_CEILING};
+use crate::database::queries::live_deposit_gas_sum;
 use crate::runtime::invocation::{
     InvocationBudget, InvocationLimitReached, ResourceProbePhase, ResourceTeardownRecorder,
 };
+use crate::runtime::pricing::Pricing;
 use crate::runtime::resource_diagnostics;
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
@@ -52,6 +54,7 @@ struct Fixture {
     baseline_balance: Decimal,
     baseline_burner: Decimal,
     baseline_floor: Decimal,
+    baseline_live_deposit_gas: u64,
     baseline_supply: Decimal,
     setup_ms: u128,
     funding_ms: u128,
@@ -71,6 +74,18 @@ impl Fixture {
             Runtime::new_engine()?
         };
         let (mut runtime, dir, _name) = test_runtime_with_engine(engine).await?;
+        ensure!(
+            runtime.pricing.storage_deposit_gas(1) == Some(1)
+                && Pricing::collateral_unit_price() == Decimal::from("1e-9")
+                && KeyPath::new().push_interned(0).len() == 2,
+            "boundary fixture storage pricing or path encoding changed"
+        );
+        for (value, bytes) in [(0_u64, 1), (127, 1), (128, 2), (16383, 2), (16384, 3)] {
+            ensure!(
+                postcard::to_allocvec(&value)?.len() == bytes,
+                "boundary fixture Postcard integer encoding changed"
+            );
+        }
         let setup_ms = setup_start.elapsed().as_millis();
         let funding_start = Instant::now();
         let signer = Signer::Id(runtime.get_or_create_identity(ACTOR_PUBKEY).await?);
@@ -132,9 +147,16 @@ impl Fixture {
         let baseline_balance = balance(&mut runtime, HolderRef::from(&signer)).await?;
         let baseline_burner = balance(&mut runtime, HolderRef::Burner).await?;
         let baseline_floor = token::floor(&mut runtime, HolderRef::from(&signer)).await?;
+        let conn = runtime.get_storage_conn();
+        let baseline_live_deposit_gas =
+            live_deposit_gas_sum(&conn, signer.signer_id().unwrap()).await?;
+        ensure!(
+            baseline_live_deposit_gas == 3 * u64::from(fixture_contracts)
+                && baseline_floor == Pricing::storage_collateral(baseline_live_deposit_gas)?,
+            "boundary fixture baseline storage deposit changed"
+        );
         let baseline_supply = token::total_supply(&mut runtime).await?;
         ensure!(budget.live() == 0, "fixture left live invocation Stores");
-        let conn = runtime.get_storage_conn();
         assert_receipt_stream_initial_state(&conn).await?;
         let baseline_digest = persistent_digest(&conn).await?;
         resource_diagnostics::record("fixture_preparation_exit");
@@ -152,6 +174,7 @@ impl Fixture {
             baseline_balance,
             baseline_burner,
             baseline_floor,
+            baseline_live_deposit_gas,
             baseline_supply,
             setup_ms,
             funding_ms,
@@ -213,6 +236,16 @@ impl Fixture {
             )
             .await?;
         let previous_result_id: u64 = rows.next().await?.unwrap().get(0)?;
+        let live_deposit_gas_before = if self.resource_probe.is_some() {
+            let gas = live_deposit_gas_sum(&conn, self.signer.signer_id().unwrap()).await?;
+            ensure!(
+                gas == self.baseline_live_deposit_gas,
+                "pretrial storage deposit drift in {sample_id}"
+            );
+            Some(gas)
+        } else {
+            None
+        };
         let expression = expression(&self.kind, depth, &self.address)?;
         let previous = self.runtime.start_usage();
         let execution_start = Instant::now();
@@ -327,6 +360,11 @@ impl Fixture {
             .execute(None, None, &self.address, "last-depth()")
             .await?
             .parse::<u32>()?;
+        let live_deposit_gas_after = if self.resource_probe.is_some() {
+            Some(live_deposit_gas_sum(&conn, self.signer.signer_id().unwrap()).await?)
+        } else {
+            None
+        };
         let after_amounts = if self.resource_probe.is_some() {
             Some((
                 balance(&mut self.runtime, HolderRef::from(&self.signer)).await?,
@@ -401,6 +439,11 @@ impl Fixture {
         let burned_restored = balance(&mut self.runtime, HolderRef::Burner).await?;
         let floor_restored_amount =
             token::floor(&mut self.runtime, HolderRef::from(&self.signer)).await?;
+        let live_deposit_gas_restored = if self.resource_probe.is_some() {
+            Some(live_deposit_gas_sum(&conn, self.signer.signer_id().unwrap()).await?)
+        } else {
+            None
+        };
         let supply_restored_amount = token::total_supply(&mut self.runtime).await?;
         let balances_restored =
             balance_restored == self.baseline_balance && burned_restored == self.baseline_burner;
@@ -505,10 +548,19 @@ impl Fixture {
                 "floor_after": floor_after.to_string(),
                 "floor_restored": floor_restored_amount.to_string(),
             });
+            let live_deposit_gas = json!({
+                "before": live_deposit_gas_before.context("missing pretrial live deposit")?,
+                "after": live_deposit_gas_after.context("missing postcall live deposit")?,
+                "restored": live_deposit_gas_restored.context("missing restored live deposit")?,
+            });
             report["balance_transitions_sha256"] = json!(hex::encode(Sha256::digest(
                 serde_json::to_vec(&transitions)?
             )));
             report["balance_transitions"] = transitions;
+            report["live_deposit_gas_sha256"] = json!(hex::encode(Sha256::digest(
+                serde_json::to_vec(&live_deposit_gas)?
+            )));
+            report["live_deposit_gas"] = live_deposit_gas;
             report["state_before_sha256"] = json!(state_before_sha256);
             report["teardown_events"] = json!(teardown_events);
             report["teardown_probe_on"] = json!(self.resource_probe == Some(true));

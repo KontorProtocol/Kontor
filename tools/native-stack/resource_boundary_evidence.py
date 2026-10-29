@@ -47,7 +47,8 @@ OBSERVATION_KEYS = {
     "target_arch", "reset", "state_before_sha256", "teardown_events",
     "teardown_probe_on", "error_class", "typed_trap", "host_io_suspended",
     "leaf_callback_seen", "balance_transitions", "balance_transitions_sha256",
-    "live_store_peak", "host_import_phase",
+    "live_store_peak", "host_import_phase", "live_deposit_gas",
+    "live_deposit_gas_sha256",
 }
 ATTEMPT_KEYS = {
     "case_id", "process_role", "configuration", "probe_on", "pid",
@@ -380,10 +381,46 @@ def validate_balance_transitions(balances, mode, outcome, depth, digest):
                 and (outcome != "ok" or depth == 0 or before_floor == 0
                      or after_floor < before_floor),
                 "Core storage collateral changed outside a successful owner transfer")
-    else:
+    elif mode in ("view", "system"):
         require(after_floor == before_floor,
-                "paid or view storage collateral changed unexpectedly")
+                "view storage collateral changed unexpectedly")
     return normalized
+
+
+def postcard_u64_length(value):
+    require(type(value) is int and 0 <= value <= 2**32 - 1,
+            "boundary depth is outside the fixture u32 domain")
+    return max(1, (value.bit_length() + 6) // 7)
+
+
+def validate_live_deposit_gas(live_gas, digest, balances, mode,
+                              outcome, depth):
+    require(isinstance(live_gas, dict)
+            and set(live_gas) == {"before", "after", "restored"},
+            "boundary live deposit fields are incomplete")
+    encoded = json.dumps(live_gas, sort_keys=True,
+                         separators=(",", ":")).encode()
+    require(digest == hashlib.sha256(encoded).hexdigest(),
+            "boundary live deposit digest differs")
+    require(all(type(gas) is int and 0 <= gas <= 2**64 - 1
+                for gas in live_gas.values()),
+            "boundary live deposit gas is outside the u64 domain")
+    require(live_gas["before"] == 3
+            and live_gas["restored"] == live_gas["before"],
+            "boundary fixture live deposit baseline or rollback differs")
+    for point, floor_key in (("before", "floor_before"),
+                             ("after", "floor_after"),
+                             ("restored", "floor_restored")):
+        floor = Fraction(Decimal(normalized_boundary_amount(
+            balances[floor_key])))
+        require(floor == Fraction(live_gas[point], 10**9),
+                f"boundary {point} floor differs from live deposit pricing")
+    if mode == "paid" and outcome == "ok":
+        require(live_gas["after"] == 2 + postcard_u64_length(depth),
+                "successful paid fixture write has wrong encoded deposit")
+    elif mode != "core" or outcome != "ok":
+        require(live_gas["after"] == live_gas["before"],
+                "failed or read-only call changed live storage deposit")
 
 
 def validate_observation(attempt, summary, manifest, index, cell):
@@ -505,6 +542,10 @@ def validate_observation(attempt, summary, manifest, index, cell):
     validate_balance_transitions(observation["balance_transitions"], mode,
                                  outcome, depth,
                                  observation["balance_transitions_sha256"])
+    validate_live_deposit_gas(observation["live_deposit_gas"],
+                              observation["live_deposit_gas_sha256"],
+                              observation["balance_transitions"], mode,
+                              outcome, depth)
     phase = observation["host_import_phase"]
     if case_id == "deepest_frame_host_call":
         require(phase in ("before_import", "after_host_release")
@@ -551,6 +592,8 @@ def semantic_signature(attempt):
         "live_store_peak": value["live_store_peak"],
         "balance_transitions": balances,
         "balance_transitions_sha256": balance_digest,
+        "live_deposit_gas": value["live_deposit_gas"],
+        "live_deposit_gas_sha256": value["live_deposit_gas_sha256"],
         "state_before_sha256": value["state_before_sha256"],
         "reset": value["reset"],
         "host_io_suspended": value["host_io_suspended"],

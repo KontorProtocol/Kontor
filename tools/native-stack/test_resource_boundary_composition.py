@@ -87,10 +87,15 @@ def observation(case_id, index, depth, component_sha, mutations=None,
         "restored": "100", "burned_before": "0",
         "burned_after": "1" if charged else "0",
         "supply_before": "100", "supply_after": "99" if charged else "100",
-        "floor_before": "1",
+        "floor_before": "3E-9",
         "floor_after": "0" if mode == "core" and outcome == "ok"
-        and depth > 0 else "1",
-        "floor_restored": "1",
+        else "3E-9",
+        "floor_restored": "3E-9",
+    }
+    live_deposit_gas = {
+        "before": 3,
+        "after": 0 if mode == "core" and outcome == "ok" else 3,
+        "restored": 3,
     }
     result = {
         "role": role, "sample_index": index,
@@ -128,6 +133,7 @@ def observation(case_id, index, depth, component_sha, mutations=None,
         "host_import_phase": phase,
         "live_store_peak": 1, "state_before_sha256": "b" * 64,
         "balance_transitions": balances,
+        "live_deposit_gas": live_deposit_gas,
         "reset": {
             "pre": {"live_invocations": 0, "stack_empty": True,
                     "savepoint_intact": True, "resource_count": 0,
@@ -145,6 +151,9 @@ def observation(case_id, index, depth, component_sha, mutations=None,
         mutations(case_id, index, result)
     result["balance_transitions_sha256"] = hashlib.sha256(
         json.dumps(result["balance_transitions"], sort_keys=True,
+                   separators=(",", ":")).encode()).hexdigest()
+    result["live_deposit_gas_sha256"] = hashlib.sha256(
+        json.dumps(result["live_deposit_gas"], sort_keys=True,
                    separators=(",", ":")).encode()).hexdigest()
     return result
 
@@ -766,6 +775,12 @@ class BoundaryCompositionTests(unittest.TestCase):
                      case == "pulley_plain_paid" and index == 0 else None),
                     ("floor", lambda case, index, value:
                      value["balance_transitions"].update(floor_after="2") if
+                     case == "pulley_plain_paid" and index == 0 else None),
+                    ("live gas", lambda case, index, value:
+                     value["live_deposit_gas"].update(after=4) if
+                     case == "pulley_plain_paid" and index == 0 else None),
+                    ("restored live gas", lambda case, index, value:
+                     value["live_deposit_gas"].update(restored=4) if
                      case == "pulley_plain_paid" and index == 0 else None),
                 ):
                     with self.subTest(name=name), self.assertRaises(ValueError):

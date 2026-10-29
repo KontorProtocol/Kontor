@@ -11,8 +11,10 @@ from jsonschema import Draft202012Validator
 
 from resource_boundary_evidence import (parse_worker_log,
                                         normalized_boundary_amount,
+                                        postcard_u64_length,
                                         semantic_signature,
                                         validate_balance_transitions,
+                                        validate_live_deposit_gas,
                                         validate_cell_identity,
                                         validate_discovery_sequence,
                                         validate_final_parity,
@@ -35,38 +37,108 @@ def attempt(depth, outcome, sample_key="calibration", repeat_index=0):
 
 
 class BoundaryEvidenceTests(unittest.TestCase):
-    def test_real_paid_decimal_spellings_preserve_raw_hash_and_exact_semantics(self):
+    def test_real_paid_balance_rows_with_constructed_live_gas(self):
         def digest(values):
             return hashlib.sha256(json.dumps(values, sort_keys=True,
                                              separators=(",", ":")).encode()).hexdigest()
 
         cases = (
-            ("plain", "99.999999918", "8.2E-8", "ok", 0,
+            ("plain", "99.999999918", "8.2E-8", "3E-9", "ok", 0,
              "556d5f5ec796f7fd45ec05cf0ea0fe6317f6ec301913f248ef101c96f5103438"),
-            ("plain boundary", "99.999999796", "2.04E-7",
+            ("plain positive", "99.99999989", "1.1E-7", "4E-9", "ok", 1024,
+             "704ab99e81eb4f568a8f579414767f9a6d18ad0ad8c582e1f783abc5b53f7b93"),
+            ("plain 2048", "99.999999862", "1.38E-7", "4E-9", "ok", 2048,
+             "47e89a7a2e4c51455edf697f1fba20fda199624b405870adc2308e20a35b10bb"),
+            ("plain 4096", "99.999999807", "1.93E-7", "4E-9", "ok", 4096,
+             "8a77c03b6921d0572e586581819e66fcad54a2ec3083373e8091f83dedd8aec0"),
+            ("plain 6144", "99.999999752", "2.48E-7", "4E-9", "ok", 6144,
+             "bae3bf5797f1f5ac499412466b3300b6ad36611bce9d316f19fc5f2d47be37f9"),
+            ("plain 7168", "99.999999724", "2.76E-7", "4E-9", "ok", 7168,
+             "e5237c627df0034d7b9ec00e6d9035e9a3c07aaa0f999a0ee5db40a363009795"),
+            ("plain 7680", "99.99999971", "2.9E-7", "4E-9", "ok", 7680,
+             "9b4f90e586e70ea83d9dc449948e70ac1f3a79ae9ce830614f8ab45853db78e3"),
+            ("plain 7936", "99.999999703", "2.97E-7", "4E-9", "ok", 7936,
+             "275b498646721f0a88d5c68dd3c5af79c5714fdefd46718d066109ddc38d87f8"),
+            ("plain 8064", "99.9999997", "3E-7", "4E-9", "ok", 8064,
+             "4e21d47fd04c6da686ef53e5dd08d1d8d96523b43f5859ee83c2c5e878bb3cd4"),
+            ("plain 8128", "99.999999698", "3.02E-7", "4E-9", "ok", 8128,
+             "5447b1ab0104ef8b6322044a0e8d309c611f7ebeb3140c33a62ea3bd67327948"),
+            ("plain 8160", "99.999999697", "3.03E-7", "4E-9", "ok", 8160,
+             "e3bc0358d25b7732ab52339770fc43d5cb29fe3307f64734b2edd6442c1f3379"),
+            ("plain 8176", "99.999999697", "3.03E-7", "4E-9", "ok", 8176,
+             "e3bc0358d25b7732ab52339770fc43d5cb29fe3307f64734b2edd6442c1f3379"),
+            ("plain 8184", "99.999999697", "3.03E-7", "4E-9", "ok", 8184,
+             "e3bc0358d25b7732ab52339770fc43d5cb29fe3307f64734b2edd6442c1f3379"),
+            ("plain 8186", "99.999999697", "3.03E-7", "4E-9", "ok", 8186,
+             "e3bc0358d25b7732ab52339770fc43d5cb29fe3307f64734b2edd6442c1f3379"),
+            ("plain boundary", "99.999999796", "2.04E-7", "3E-9",
              "stack_overflow", 8187,
              "c99b442c70084f675cde58aa001d60c23ea53b300fe63740dd3c3ec106e4b33d"),
-            ("wide", "99.999999913", "8.7E-8", "ok", 0,
+            ("wide", "99.999999913", "8.7E-8", "3E-9", "ok", 0,
              "1e543949caae9e9b5bbc20e614fc33a0cc6cfce82a540c081dc2a8d61928693d"),
-            ("wide boundary", "99.99999918", "8.2E-7",
+            ("wide positive", "99.999999468", "5.32E-7", "4E-9", "ok", 1024,
+             "cfba02a67ec7fa86f1c5ca2d4458c6dba14e4176b8ef145d0d3eeb2b8523fb06"),
+            ("wide 1536", "99.999999246", "7.54E-7", "4E-9", "ok", 1536,
+             "69dda129b1dfc5b27ab6741a8fce49edb870c1c6a74f466411b8f5bb13edae90"),
+            ("wide 1664", "99.999999191", "8.09E-7", "4E-9", "ok", 1664,
+             "8d41a5cc517156e8906ada9cd77c5e0552ececa1a0f4c4823bde8359dee32593"),
+            ("wide 1696", "99.999999177", "8.23E-7", "4E-9", "ok", 1696,
+             "0a3457bdd22ab32d07614435acea994d2f3d0ff2004497d5661b9ae12d94c2d3"),
+            ("wide 1712", "99.99999917", "8.3E-7", "4E-9", "ok", 1712,
+             "85d38447ca661251bee82b2be9e8a54b89213c755b57c5749edc211e2385e778"),
+            ("wide 1720", "99.999999166", "8.34E-7", "4E-9", "ok", 1720,
+             "53fd1fca69fa11727b63759a56f64f96221570dfd06ff2791c41a05a9d5dcc68"),
+            ("wide 1722", "99.999999165", "8.35E-7", "4E-9", "ok", 1722,
+             "85a03c940d27ff5992e08ad8e4f39a7b9119413a02d1ac9fb75cc5e0a861342d"),
+            ("wide boundary", "99.99999918", "8.2E-7", "3E-9",
              "stack_overflow", 1723,
              "8b839883fa317bdeda79aea320a437e782acb4913be25f58b44a97042290e71c"),
-            ("leaf", "99.999999796", "2.04E-7", "stack_overflow", 8184,
+            ("leaf positive", "99.999999889", "1.11E-7", "4E-9", "ok", 1024,
+             "5384c163e6485e998efa2a989ff0786c10090c7e09ece47ea8d947fddd7aa58b"),
+            ("leaf 2048", "99.999999862", "1.38E-7", "4E-9", "ok", 2048,
+             "47e89a7a2e4c51455edf697f1fba20fda199624b405870adc2308e20a35b10bb"),
+            ("leaf 4096", "99.999999806", "1.94E-7", "4E-9", "ok", 4096,
+             "19bb3913854139e41551207f28be5b4e85dd28b5b7c5567b434f7fb39ae09e11"),
+            ("leaf 6144", "99.999999751", "2.49E-7", "4E-9", "ok", 6144,
+             "23576a243a267986fbaef859343fd873c9f8d001107ce30cee7f42ebbaea1b43"),
+            ("leaf 7168", "99.999999723", "2.77E-7", "4E-9", "ok", 7168,
+             "a431c47fa577ed2dfc16f996791f5caee7df0d6bcfc149ae347771827f459ed6"),
+            ("leaf 7680", "99.99999971", "2.9E-7", "4E-9", "ok", 7680,
+             "9b4f90e586e70ea83d9dc449948e70ac1f3a79ae9ce830614f8ab45853db78e3"),
+            ("leaf 7936", "99.999999703", "2.97E-7", "4E-9", "ok", 7936,
+             "275b498646721f0a88d5c68dd3c5af79c5714fdefd46718d066109ddc38d87f8"),
+            ("leaf 8064", "99.999999699", "3.01E-7", "4E-9", "ok", 8064,
+             "01407f1ea77c3b3e64f5b18f3e5af5a4f381ca728a280ba2750b0d81399da648"),
+            ("leaf 8128", "99.999999698", "3.02E-7", "4E-9", "ok", 8128,
+             "5447b1ab0104ef8b6322044a0e8d309c611f7ebeb3140c33a62ea3bd67327948"),
+            ("leaf 8160", "99.999999697", "3.03E-7", "4E-9", "ok", 8160,
+             "e3bc0358d25b7732ab52339770fc43d5cb29fe3307f64734b2edd6442c1f3379"),
+            ("leaf 8176", "99.999999696", "3.04E-7", "4E-9", "ok", 8176,
+             "235a8e8fb4f066f1cbfc0961e66e57115f989f88fb47520b58125bc5c5b3925f"),
+            ("leaf", "99.999999796", "2.04E-7", "3E-9", "stack_overflow", 8184,
              "c99b442c70084f675cde58aa001d60c23ea53b300fe63740dd3c3ec106e4b33d"),
         )
-        for name, after, burned_after, outcome, depth, raw_digest in cases:
+        for name, after, burned_after, floor_after, outcome, depth, raw_digest in cases:
             with self.subTest(case=name):
                 balances = {
                     "before": "99.999999959", "after": after,
                     "restored": "99.999999959",
                     "burned_before": "4.1E-8", "burned_after": burned_after,
                     "supply_before": "99.999999959", "supply_after": after,
-                    "floor_before": "3E-9", "floor_after": "3E-9",
+                    "floor_before": "3E-9", "floor_after": floor_after,
                     "floor_restored": "3E-9",
                 }
                 self.assertEqual(digest(balances), raw_digest)
                 normalized = validate_balance_transitions(
                     balances, "paid", outcome, depth, raw_digest)
+                constructed_live_gas = {
+                    "before": 3,
+                    "after": 4 if outcome == "ok" and depth >= 128 else 3,
+                    "restored": 3,
+                }
+                validate_live_deposit_gas(
+                    constructed_live_gas, digest(constructed_live_gas),
+                    balances, "paid", outcome, depth)
                 self.assertEqual(normalized["floor_before"], "0.000000003")
                 self.assertEqual(normalized["burned_after"],
                                  normalized_boundary_amount(burned_after))
@@ -82,6 +154,8 @@ class BoundaryEvidenceTests(unittest.TestCase):
                               "live_store_peak": 1,
                               "balance_transitions": balances,
                               "balance_transitions_sha256": digest(balances),
+                              "live_deposit_gas": constructed_live_gas,
+                              "live_deposit_gas_sha256": digest(constructed_live_gas),
                               "state_before_sha256": "a" * 64, "reset": {},
                               "host_io_suspended": True,
                               "leaf_callback_seen": True,
@@ -95,6 +169,71 @@ class BoundaryEvidenceTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_balance_transitions(balances, "paid", outcome,
                                                  depth, digest(fixed))
+
+    def test_constructed_live_deposit_pricing_and_rollback_mutations(self):
+        def digest(value):
+            return hashlib.sha256(json.dumps(value, sort_keys=True,
+                                             separators=(",", ":")).encode()).hexdigest()
+
+        balances = {
+            "floor_before": "3E-9", "floor_after": "4E-9",
+            "floor_restored": "3E-9",
+        }
+        gas = {"before": 3, "after": 4, "restored": 3}
+        validate_live_deposit_gas(gas, digest(gas), balances,
+                                  "paid", "ok", 1024)
+        for altered_balances, altered_gas, outcome in (
+            ({**balances, "floor_after": "5E-9"}, gas, "ok"),
+            (balances, {**gas, "after": 5}, "ok"),
+            ({**balances, "floor_after": "3E-9"},
+             {**gas, "after": 3}, "ok"),
+            (balances, gas, "stack_overflow"),
+            ({**balances, "floor_restored": "4E-9"}, gas, "ok"),
+        ):
+            with self.subTest(outcome=outcome, balances=altered_balances,
+                              gas=altered_gas), self.assertRaises(ValueError):
+                validate_live_deposit_gas(
+                    altered_gas, digest(altered_gas), altered_balances,
+                    "paid", outcome, 1024)
+        with self.assertRaises(ValueError):
+            validate_live_deposit_gas(gas, "0" * 64, balances,
+                                      "paid", "ok", 1024)
+        with self.assertRaises(ValueError):
+            validate_live_deposit_gas({**gas, "after": True},
+                                      digest({**gas, "after": True}), balances,
+                                      "paid", "ok", 1024)
+
+        trapped_balances = {**balances, "floor_after": "3E-9"}
+        trapped_gas = {**gas, "after": 3}
+        validate_live_deposit_gas(trapped_gas, digest(trapped_gas),
+                                  trapped_balances, "paid",
+                                  "stack_overflow", 1024)
+        # The real trapped call recorded deposit fuel, but its live row rolled back.
+        with self.assertRaises(ValueError):
+            validate_live_deposit_gas(gas, digest(gas), balances,
+                                      "paid", "stack_overflow", 1024)
+
+    def test_constructed_postcard_threshold_gas(self):
+        def digest(value):
+            return hashlib.sha256(json.dumps(value, sort_keys=True,
+                                             separators=(",", ":")).encode()).hexdigest()
+
+        for depth, encoded_size in ((0, 1), (127, 1), (128, 2),
+                                    (16383, 2), (16384, 3)):
+            with self.subTest(depth=depth):
+                self.assertEqual(postcard_u64_length(depth), encoded_size)
+                after = 2 + encoded_size
+                balances = {
+                    "floor_before": "3E-9",
+                    "floor_after": f"{after}E-9",
+                    "floor_restored": "3E-9",
+                }
+                gas = {"before": 3, "after": after, "restored": 3}
+                validate_live_deposit_gas(gas, digest(gas), balances,
+                                          "paid", "ok", depth)
+        for depth in (-1, 2**32):
+            with self.assertRaises(ValueError):
+                postcard_u64_length(depth)
 
     def test_boundary_decimal_domain_rejects_malformed_and_subgrid_values(self):
         for value in ("0", "0.00", "0E-18", "0e+16", "1.0E-7", "1e+16"):
@@ -224,7 +363,7 @@ class BoundaryEvidenceTests(unittest.TestCase):
                          "floor_after": "1", "floor_restored": "2"}
         validate_balance_transitions(changed_floor, "core", "ok", 100,
                                      digest(changed_floor))
-        for mode in ("paid", "view", "system"):
+        for mode in ("view", "system"):
             with self.assertRaises(ValueError):
                 validate_balance_transitions(changed_floor, mode, "ok", 100,
                                              digest(changed_floor))

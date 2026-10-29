@@ -67,6 +67,16 @@
         "sha256": {"$ref": "#/$defs/sha256"}
       }
     },
+    "live_deposit_gas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before", "after", "restored"],
+      "properties": {
+        "before": {"type": "integer", "minimum": 0},
+        "after": {"type": "integer", "minimum": 0},
+        "restored": {"type": "integer", "minimum": 0}
+      }
+    },
     "process": {
       "type": "object",
       "additionalProperties": false,
@@ -103,7 +113,14 @@
         "repeat_index": {"type": "integer", "minimum": 0},
         "depth": {"type": "integer", "minimum": 0},
         "complete": {"const": true},
-        "observation": {"type": "object", "minProperties": 1}
+        "observation": {
+          "type": "object",
+          "required": ["live_deposit_gas", "live_deposit_gas_sha256"],
+          "properties": {
+            "live_deposit_gas": {"$ref": "#/$defs/live_deposit_gas"},
+            "live_deposit_gas_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
       }
     },
     "run": {
