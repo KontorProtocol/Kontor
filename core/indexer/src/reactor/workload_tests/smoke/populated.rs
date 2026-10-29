@@ -18,7 +18,7 @@ use super::{
 use crate::bitcoin_client::client::RegtestRpc;
 use crate::bls::taproot_derivation_path;
 use crate::database::Writer;
-use crate::database::queries::get_identity;
+use crate::database::queries::{get_confirmation_position, get_identity, get_transaction_by_txid};
 use crate::reactor::create_runtime_executor;
 use crate::reg_tester::{derive_taproot_keypair_from_seed, workload_bitcoin};
 use crate::runtime::token::api as token;
@@ -461,6 +461,29 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         };
         apply(&mut trial, block.clone()).await?;
         let projection = database_projection(&trial.db_conn()).await?;
+        for (index, txid) in txids.iter().enumerate() {
+            let transaction = get_transaction_by_txid(&trial.db_conn(), txid)
+                .await?
+                .context("missing workload transaction")?;
+            ensure!(
+                transaction.confirmed_height == Some(SMOKE_HEIGHT)
+                    && transaction.tx_index == Some(u32::try_from(index)?)
+                    && get_confirmation_position(&trial.db_conn(), txid).await?
+                        == Some(u32::try_from(index * 2 + 2)?),
+                "wrong persisted confirmation position for workload transaction {index}"
+            );
+            ensure!(
+                transaction.height
+                    == if delivery.batched() {
+                        ANCHOR_HEIGHT
+                    } else {
+                        SMOKE_HEIGHT
+                    }
+            );
+            if !delivery.batched() {
+                ensure!(transaction.batch_height.is_none());
+            }
+        }
         pruning.check(&trial.db_conn()).await?;
         let mut rows = receipts(&trial.db_conn(), SMOKE_HEIGHT).await?;
         if let Some(batch) = batch {
