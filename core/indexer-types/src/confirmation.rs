@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{ResultRow, TransactionRow};
+use crate::{Op, ResultRow, TransactionRow};
 
 /// Public transaction metadata, separate from retained execution row projections.
 /// `height` is the legacy alias of `execution_height`. `tx_index` is a deprecated
@@ -31,4 +31,23 @@ pub struct ResultInfo {
     pub confirmed_bitcoin_tx_index: Option<u32>,
     #[ts(type = "number | null")]
     pub batch_height: Option<u64>,
+}
+
+/// Inspection reads persisted receipts and their current confirmation metadata.
+/// Simulation uses `OpWithResult` instead because its receipts are provisional.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings.d.ts")]
+#[serde(tag = "kind")]
+#[allow(clippy::large_enum_variant)]
+pub enum InspectedOp {
+    Materialized {
+        op: Op,
+        result: Option<ResultInfo>,
+        error_message: Option<String>,
+    },
+    Rejected {
+        input_index: u32,
+        op_index: u32,
+        error_message: Option<String>,
+    },
 }

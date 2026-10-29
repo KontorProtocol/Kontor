@@ -1,17 +1,12 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::{deserialize, serialize as serialize_bitcoin};
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
-use bitcoin::taproot::TaprootBuilder;
-use bitcoin::transaction::Version;
-use bitcoin::{
-    Amount, Block as BitcoinBlock, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn,
-    TxOut, Witness,
-};
-use indexer_types::{Block, Inst, InstKind, Insts, serialize};
+use bitcoin::{Block as BitcoinBlock, Network, Transaction, Witness};
+use indexer_types::Block;
 use libsql::{Connection, Value, params};
 use malachitebft_engine::node::NodeRef;
 use testlib::sample_provenance;
@@ -29,10 +24,7 @@ use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{
     ContractAddress, Decimal, GenesisValidator, Runtime, TransactionContext, from_wave_expr,
 };
-use crate::test_utils::{
-    PublicKey, build_inscription, new_mock_block_hash, new_mock_transaction, sign_script_spend,
-    test_runtime_with_genesis,
-};
+use crate::test_utils::{new_mock_block_hash, signed_confirmation_call, test_runtime_with_genesis};
 
 struct StopEngine(NodeRef);
 
@@ -40,51 +32,6 @@ impl Drop for StopEngine {
     fn drop(&mut self) {
         self.0.stop(None);
     }
-}
-
-fn signed_call(key: &Keypair, contract: ContractAddress) -> Result<Transaction> {
-    let secp = Secp256k1::new();
-    let public_key = key.x_only_public_key().0;
-    let script = build_inscription(
-        serialize(&Insts {
-            ops: vec![Inst {
-                gas_limit: 100_000,
-                kind: InstKind::Call {
-                    contract,
-                    expr: "write-result-payload(1)".into(),
-                },
-            }],
-            aggregate: None,
-        })?,
-        PublicKey::Taproot(&public_key),
-    )?;
-    let spend = TaprootBuilder::new()
-        .add_leaf(0, script.clone())?
-        .finalize(&secp, public_key)
-        .map_err(|_| anyhow!("fixture taproot tree"))?;
-    let prevout = TxOut {
-        value: Amount::from_sat(1_000_000),
-        script_pubkey: ScriptBuf::new_p2tr_tweaked(spend.output_key()),
-    };
-    let mut tx = Transaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint {
-                txid: new_mock_transaction(600).txid,
-                vout: 0,
-            },
-            script_sig: ScriptBuf::new(),
-            sequence: Sequence::MAX,
-            witness: Witness::new(),
-        }],
-        output: vec![TxOut {
-            value: Amount::from_sat(900_000),
-            script_pubkey: ScriptBuf::new(),
-        }],
-    };
-    sign_script_spend(&secp, &spend, &script, &mut tx, &[prevout], key, 0)?;
-    Ok(tx)
 }
 
 // Synthetic raw blocks exercise parsing and coordinator behavior. Constructed
@@ -217,7 +164,7 @@ async fn run_case(batched: bool) -> Result<()> {
         height: 1,
         tx_index: 0,
     };
-    let raw = signed_call(&key, address.clone())?;
+    let raw = signed_confirmation_call(&key, address.clone())?;
     let txid = raw.compute_txid().to_string();
     let mut reactor = reactor(runtime, &dir).await?;
     let cleanup = StopEngine(reactor.consensus.engine_handle.actor.clone());

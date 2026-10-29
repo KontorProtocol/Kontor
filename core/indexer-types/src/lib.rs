@@ -1,7 +1,7 @@
 extern crate alloc;
 
 mod confirmation;
-pub use confirmation::{ResultInfo, TransactionInfo};
+pub use confirmation::{InspectedOp, ResultInfo, TransactionInfo};
 
 use anyhow::Result;
 use bitcoin::hex::DisplayHex;

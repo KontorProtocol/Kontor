@@ -1,13 +1,21 @@
 use anyhow::Result;
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use axum_test::TestServer;
-use indexer_types::{PaginatedResponse, ResultInfo, TransactionInfo, TransactionRow};
+use bitcoin::consensus::serialize;
+use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
+use indexer_types::{
+    InspectedOp, PaginatedResponse, ResultInfo, TransactionHex, TransactionInfo, TransactionRow,
+};
 use libsql::TransactionBehavior;
 
 use super::{ApiResult, insert_block_at, new_test_env};
 use crate::api::confirmation;
 use crate::api::handlers::{
     get_block_transactions, get_result, get_results, get_transaction, get_transactions,
+    post_transaction_hex_inspect,
 };
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
@@ -15,6 +23,8 @@ use crate::database::queries::{
     insert_contract_result, insert_transaction, rollback_to_height,
 };
 use crate::database::types::{ContractResultRow, ContractRow};
+use crate::runtime::ContractAddress;
+use crate::test_utils::signed_confirmation_call;
 
 #[tokio::test]
 async fn confirmation_endpoints_preserve_execution_and_cursor_across_reorg() -> Result<()> {
@@ -33,7 +43,16 @@ async fn confirmation_endpoints_preserve_execution_and_cursor_across_reorg() -> 
             .build(),
     )
     .await?;
-    let txid = "01".repeat(32);
+    let key = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[63; 32])?);
+    let raw = signed_confirmation_call(
+        &key,
+        ContractAddress {
+            name: "fixture".into(),
+            height: 1,
+            tx_index: 7,
+        },
+    )?;
+    let txid = raw.compute_txid().to_string();
     let id = insert_transaction(
         &conn,
         TransactionRow::builder()
@@ -80,6 +99,7 @@ async fn confirmation_endpoints_preserve_execution_and_cursor_across_reorg() -> 
     .await?;
     let router = Router::new()
         .route("/transactions", get(get_transactions))
+        .route("/transactions/inspect", post(post_transaction_hex_inspect))
         .route("/transactions/{txid}", get(get_transaction))
         .route(
             "/blocks/{identifier}/transactions",
@@ -122,6 +142,25 @@ async fn confirmation_endpoints_preserve_execution_and_cursor_across_reorg() -> 
         assert_eq!(result.batch_height, Some(9));
         assert_eq!(result.row.contract, "fixture_1_7");
         assert_eq!(result.row.gas, 3);
+        let inspected: ApiResult<Vec<InspectedOp>> = server
+            .post("/transactions/inspect")
+            .json(&TransactionHex {
+                hex: hex::encode(serialize(&raw)),
+            })
+            .await
+            .json();
+        let [
+            InspectedOp::Materialized {
+                result: Some(inspected),
+                error_message,
+                ..
+            },
+        ] = inspected.result.as_slice()
+        else {
+            panic!("expected one persisted inspected receipt");
+        };
+        assert_eq!(inspected, &result);
+        assert_eq!(error_message, &None);
         let page: ApiResult<PaginatedResponse<TransactionInfo>> = server
             .get(&format!("/transactions?order=asc&limit=1&cursor={cursor}"))
             .await

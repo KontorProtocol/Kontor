@@ -6,7 +6,7 @@ use axum::{
 };
 use bitcoin::consensus::encode;
 use indexer_types::{
-    BroadcastQuery, BroadcastResult, OpWithResult, PaginatedResponse, TransactionHex,
+    BroadcastQuery, BroadcastResult, InspectedOp, OpWithResult, PaginatedResponse, TransactionHex,
     TransactionInfo,
 };
 use libsql::TransactionBehavior;
@@ -58,26 +58,38 @@ pub async fn get_transaction(
 pub async fn post_transaction_hex_inspect(
     State(env): State<Env>,
     Json(TransactionHex { hex }): Json<TransactionHex>,
-) -> Result<Vec<OpWithResult>> {
+) -> Result<Vec<InspectedOp>> {
     let btx = encode::deserialize_hex::<bitcoin::Transaction>(&hex)
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
     let tx = filter_map((0, btx))
         .ok_or_else(|| HttpError::BadRequest("Not a valid Kontor transaction".to_string()))?;
     let conn = env.reader.connection().await?;
-    Ok(inspect(&conn, &tx).await?.into())
+    let snapshot = conn
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .await?;
+    let ops = inspect(&snapshot, &tx).await?;
+    let result = confirmation::inspection(&snapshot, ops).await?;
+    snapshot.commit().await?;
+    Ok(result.into())
 }
 
 pub async fn get_transaction_inspect(
     State(env): State<Env>,
     Path(txid): Path<String>,
-) -> Result<Vec<OpWithResult>> {
+) -> Result<Vec<InspectedOp>> {
     let txid = bitcoin::Txid::from_str(&txid)
         .map_err(|e| HttpError::BadRequest(format!("Invalid txid: {}", e)))?;
     let btx = env.bitcoin.get_raw_transaction(&txid).await?;
     let tx = filter_map((0, btx))
         .ok_or_else(|| HttpError::BadRequest("Not a valid Kontor transaction".to_string()))?;
     let conn = env.reader.connection().await?;
-    Ok(inspect(&conn, &tx).await?.into())
+    let snapshot = conn
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .await?;
+    let ops = inspect(&snapshot, &tx).await?;
+    let result = confirmation::inspection(&snapshot, ops).await?;
+    snapshot.commit().await?;
+    Ok(result.into())
 }
 
 /// Relay a package of raw Bitcoin transactions (dependency order — e.g.

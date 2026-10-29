@@ -1,6 +1,8 @@
 use std::collections::{BTreeSet, HashMap};
 
-use indexer_types::{ResultInfo, ResultRow, TransactionInfo, TransactionRow};
+use indexer_types::{
+    InspectedOp, OpWithResult, ResultInfo, ResultRow, TransactionInfo, TransactionRow,
+};
 use libsql::{Connection, Value};
 
 use crate::database::queries::Error;
@@ -95,6 +97,52 @@ pub(super) async fn results(
                 batch_height: confirmation.and_then(|value| value.batch_height),
                 row,
             })
+        })
+        .collect()
+}
+
+pub(super) async fn inspection(
+    conn: &Connection,
+    ops: Vec<OpWithResult>,
+) -> Result<Vec<InspectedOp>, Error> {
+    let rows = ops.iter().filter_map(|op| op.result().cloned()).collect();
+    let enriched: HashMap<_, _> = results(conn, rows)
+        .await?
+        .into_iter()
+        .map(|info| (info.row.id, info))
+        .collect();
+    ops.into_iter()
+        .map(|op| match op {
+            OpWithResult::Materialized {
+                op,
+                result,
+                error_message,
+            } => {
+                let result = result
+                    .map(|row| {
+                        enriched.get(&row.id).cloned().ok_or_else(|| {
+                            Error::InvalidData(format!(
+                                "missing inspected receipt metadata: {}",
+                                row.id
+                            ))
+                        })
+                    })
+                    .transpose()?;
+                Ok(InspectedOp::Materialized {
+                    op,
+                    result,
+                    error_message,
+                })
+            }
+            OpWithResult::Rejected {
+                input_index,
+                op_index,
+                error_message,
+            } => Ok(InspectedOp::Rejected {
+                input_index,
+                op_index,
+                error_message,
+            }),
         })
         .collect()
 }
