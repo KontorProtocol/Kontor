@@ -194,7 +194,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "26641b357cdc31f974834abcc867fca4f7cf56da54c98f5ef9df9d9b757e4e32"
+      "sha256": "7da1413980fabab271a67720fd8bb4ab98c1f3ed1b53457fff1c8df13e336283"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -210,7 +210,7 @@
     },
     "resource_test_builder_tests": {
       "path": "tools/native-stack/test_resource_build_attestation.py",
-      "sha256": "014c54863e04fd6e7f7c7656ec41e0e009411b9b639b6b91683db4f84a1ef61c"
+      "sha256": "5549b88de10f8900d8e8b2de5dc35f170a774e3684fbd37a2cf8ac98e26b1ec0"
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
@@ -275,15 +275,15 @@
   "build_policy": {
     "cargo_features": [],
     "compile_env": {
-      "CARGO_BUILD_RUSTC": "",
-      "CARGO_BUILD_RUSTFLAGS": "",
-      "CARGO_ENCODED_RUSTFLAGS": "",
+      "CARGO_BUILD_RUSTC": null,
+      "CARGO_BUILD_RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null,
       "CARGO_TARGET_DIR": null,
       "CCACHE_DISABLE": "1",
-      "RUSTC": "",
+      "RUSTC": null,
       "RUSTC_WORKSPACE_WRAPPER": null,
-      "RUSTC_WRAPPER": "",
-      "RUSTFLAGS": "",
+      "RUSTC_WRAPPER": null,
+      "RUSTFLAGS": null,
       "RUSTUP_TOOLCHAIN": "1.99.1",
       "RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD": null,
       "RUST_FASTNUM_FMT_EXPONENTIAL_UPPER_THRESHOLD": null,

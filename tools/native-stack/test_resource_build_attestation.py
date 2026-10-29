@@ -93,12 +93,15 @@ class ResourceBuildAttestationTests(unittest.TestCase):
             "RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD": "1",
             "RUST_FASTNUM_FMT_EXPONENTIAL_UPPER_THRESHOLD": "2",
             "RUST_FASTNUM_FMT_MAX_INTEGER_PADDING": "3",
+            "RUSTC": "false",
+            "RUSTFLAGS": "-C target-cpu=native",
         }):
             environment, actual = pinned_environment(self.manifest)
         for name in (
             "RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD",
             "RUST_FASTNUM_FMT_EXPONENTIAL_UPPER_THRESHOLD",
             "RUST_FASTNUM_FMT_MAX_INTEGER_PADDING",
+            "RUSTC", "RUSTFLAGS",
         ):
             self.assertNotIn(name, environment)
             self.assertIsNone(actual[name])
