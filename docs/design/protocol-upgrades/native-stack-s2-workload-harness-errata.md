@@ -1212,3 +1212,11 @@ replay, continuous views, timed arrivals or performance qualification. Failure
 injection for RPC/cleanup is not covered. The caller owns and discards isolated
 Bitcoin state on failure; the helper does not undo a submitted parent or mined
 anchor. No full sequence, W_op or S2 acceptance is claimed.
+
+### Signed consecutive workload inputs (a59d027f)
+
+The test-only input generator now builds distinct, signed commit/reveal transactions for consecutive blocks after the height-101 funding block. It checks every decoded operation and signer, raw transaction position, unique funding/reveal IDs, parent link, actual Bitcoin height/hash and empty mempool. Duplicate funding is rejected before chain mutation. Wrong operation gas and wrong parent hash are rejected by the structural decoder.
+
+At source `a59d027feef366f09a083eca3725cc720b3e1046`, the exact-head no-run build passed in 46.89s (session 18947). The ignored real-Bitcoin test passed in 25.14s (session 81501): two blocks of 50 transactions/100 operations and seven blocks of 500 transactions/1000 operations, heights 102-103 and 102-108 respectively. Bitcoin was v31.0. Clippy session 54974 reported exactly the six inherited S2 errors and no changed-file errors. Logs and checksums are recorded in `.build-cache/workload-reconcile/sequence-inputs-validation.json`.
+
+This is input preparation evidence, not execution qualification. The test does not publish or execute the named contract. The structural decoder alone does not authenticate signatures, supplied heights or funding values; generation gets consensus/admission checks from real Bitcoin. The future saved-sequence reader must import the chain and independently bind expected heights, hashes and funding outputs. Raw blocks are hashed but not yet archived. The six-block signed case was not run here. Lightweight logs rely on executor records and current source/binary hashes for local invocation identity. Evolving Kontor state, cumulative accounting, schema 2 checkpoints, full W_op and six-cell qualification remain pending.
