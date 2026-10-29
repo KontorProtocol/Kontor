@@ -30,6 +30,7 @@ def copy_control(control_path, control_sha256, evidence_dir, control):
     control_dir = evidence_dir / "control"
     control_dir.mkdir()
     entries = [control["cargo_artifacts"], control["cargo_metadata"],
+               control["build_attestation"], control["build_log"],
                control["guard_control"]["raw_log"],
                *control["wasmtime_source_files"].values()]
     for entry in entries:

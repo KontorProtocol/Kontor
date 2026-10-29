@@ -91,7 +91,8 @@ def bundle_fixture(directory):
     control_dir = directory / "control"
     control_dir.mkdir()
     control_entries = {}
-    for name in ("cargo-artifacts.json", "cargo-metadata.json", "guard.log"):
+    for name in ("cargo-artifacts.json", "cargo-metadata.json",
+                 "resource-build-attestation.json", "cargo-build.log", "guard.log"):
         path = control_dir / name
         path.write_text(name)
         control_entries[name] = {"path": name, "sha256": sha256(path)}
@@ -101,6 +102,8 @@ def bundle_fixture(directory):
         "manifest_sha256": sha256(ROOT / "tools/native-stack/resource-manifest-v1.json"),
         "cargo_artifacts": control_entries["cargo-artifacts.json"],
         "cargo_metadata": control_entries["cargo-metadata.json"],
+        "build_attestation": control_entries["resource-build-attestation.json"],
+        "build_log": control_entries["cargo-build.log"],
         "guard_control": {"process": {"pid": 1, "started_unix_ns": 1},
                           "raw_log": control_entries["guard.log"]},
         "wasmtime_source_files": {},

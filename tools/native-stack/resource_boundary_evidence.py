@@ -17,6 +17,7 @@ from jsonschema import Draft202012Validator
 sys.dont_write_bytecode = True
 
 from capture_resource_chain import harness_position
+from capture_resource_control import validate_build_attestation
 from capture_resource_diagnostic import validate_control
 from resource_evidence import (canonical_decimal_amount,
                                check_guard_control, file_evidence,
@@ -849,11 +850,15 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
     old_v1_sha = hashlib.sha256(old_v1_bytes).hexdigest()
     old_v1 = json.loads(old_v1_bytes, object_pairs_hook=no_duplicate_keys,
                         parse_constant=no_nonfinite_constants)
-    require(set(archived_control) == {
+    expected_control_keys = {
         "manifest_sha256", "source_sha", "binary_path", "binary_sha256",
         "cargo_artifact", "cargo_artifacts", "cargo_metadata",
         "guard_control", "wasmtime_source_files",
-    } and archived_control["source_sha"] == source_sha
+    }
+    if "resource_test_builder" in old_v1["artifacts"]:
+        expected_control_keys.update({"build_attestation", "build_log"})
+    require(set(archived_control) == expected_control_keys
+            and archived_control["source_sha"] == source_sha
             and archived_control["binary_sha256"] == archive["binary_sha256"]
             and archived_control["manifest_sha256"] == old_v1_sha,
             "reviewed discovery control differs from historical source")
@@ -866,8 +871,12 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
             "reviewed discovery binary bytes or path differ from control")
     control_dir = (path.parent /
                    archive["control_capture"]["path"]).parent
+    build_entries = ([archived_control["build_attestation"],
+                      archived_control["build_log"]]
+                     if "build_attestation" in archived_control else [])
     for entry in (archived_control["cargo_artifacts"],
                   archived_control["cargo_metadata"],
+                  *build_entries,
                   archived_control["guard_control"]["raw_log"],
                   *archived_control["wasmtime_source_files"].values()):
         file_evidence(control_dir, entry)
@@ -909,6 +918,16 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
             and records[-1].get("reason") == "build-finished"
             and records[-1].get("success") is True,
             "reviewed discovery binary lacks exact Cargo artifact identity")
+    if "build_attestation" in archived_control:
+        _, build_log = validate_build_attestation(
+            control_dir / archived_control["build_attestation"]["path"],
+            control_dir / archived_control["cargo_artifacts"]["path"],
+            control_dir / archived_control["cargo_metadata"]["path"],
+            source_sha, old_v1, Path(archive["binary_path"]), selected[0],
+            manifest_sha256=old_v1_sha, core_root=workspace,
+            binary_sha256=archive["binary_sha256"])
+        require(build_log == control_dir / archived_control["build_log"]["path"],
+                "reviewed discovery build log path differs")
     guard_lines = (control_dir /
                    archived_control["guard_control"]["raw_log"]["path"])
     guard_markers = [json.loads(line.split("KONTOR_RESOURCE_GUARD_CONTROL=", 1)[1],

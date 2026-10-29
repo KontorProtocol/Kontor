@@ -90,7 +90,7 @@
     },
     "finite_stack_boundary_validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "1a1f9ead282df2c8702e6d4061469170240f5bdbd6d0f6afc3dee608c002cee8"
+      "sha256": "57208f01d533f921684371567b0c536d3713b216edafadf83d6cd81c6fd8e3b4"
     },
     "finite_stack_capture": {
       "path": "tools/native-stack/capture_resource_finite.py",
@@ -98,11 +98,11 @@
     },
     "finite_stack_control_copy": {
       "path": "tools/native-stack/capture_resource_chain_v2.py",
-      "sha256": "8e21441f81ad1ac0e2eba8c6566cf23c9cf67cc82915c6a33d4cee70534cd858"
+      "sha256": "64642fada6f758045b317e7947df8114668812f45934475cc0df87725b4a5e38"
     },
     "finite_stack_teardown_validator": {
       "path": "tools/native-stack/resource_evidence_v2.py",
-      "sha256": "57d60151882def73fb2a1d8679a15fa7cca9177d1e2e4393341e9d9fbf24a071"
+      "sha256": "2c748d50c52ec9012ead6c640561ffadab3185fd524f698250f0a7d29f0b562e"
     },
     "finite_stack_tests": {
       "path": "tools/native-stack/test_resource_finite_evidence.py",
@@ -178,7 +178,7 @@
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
-      "sha256": "8f2ad3cbb0fa5afe88870464a96c79d34f7eceb2c860a7758a4dbb0f8bd32169"
+      "sha256": "df8fc385d1e52a2ba2a0eb05d4f626a8a4efd025686ee3463bf8dca92323d8b8"
     },
     "resource_comparator_source": {
       "path": "tools/native-stack/compare_resource.py",
@@ -186,15 +186,15 @@
     },
     "resource_control_capture": {
       "path": "tools/native-stack/capture_resource_control.py",
-      "sha256": "f0bbb6fc735dd8e10a5d28c99ff6dfb9c8dfb9348211a4593f991ff37219486f"
+      "sha256": "c2018947972dc19b90a3f5a57e6d78d16d6fb34ba2dac8a03efbcdebf795e778"
     },
     "resource_diagnostic_capture": {
       "path": "tools/native-stack/capture_resource_diagnostic.py",
-      "sha256": "9cde5f66ebe7215b88b69999e162d032e7acf70c95ec61e3e52a0b1bdd360768"
+      "sha256": "a05f59149edbc5e2613bcde5d201d948a58a8cca3549f671bbbb3d934a5520c7"
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "adf298a6f30b8255e00bc6ff772771b4a1f947ffd6814d686787d0c3c869b38d"
+      "sha256": "26641b357cdc31f974834abcc867fca4f7cf56da54c98f5ef9df9d9b757e4e32"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -203,6 +203,14 @@
     "resource_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v1.json",
       "sha256": "859a72c8eef969541801f2ed3ef043c51de3ca18e6e1caaaa7b62613c2cfd37a"
+    },
+    "resource_test_builder": {
+      "path": "tools/native-stack/build_resource_test.py",
+      "sha256": "ecde9cd6633cef0d4b411b42cac4137fcd0c9558e4fb17458bba545de5c5b8ad"
+    },
+    "resource_test_builder_tests": {
+      "path": "tools/native-stack/test_resource_build_attestation.py",
+      "sha256": "014c54863e04fd6e7f7c7656ec41e0e009411b9b639b6b91683db4f84a1ef61c"
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
@@ -270,11 +278,16 @@
       "CARGO_BUILD_RUSTC": "",
       "CARGO_BUILD_RUSTFLAGS": "",
       "CARGO_ENCODED_RUSTFLAGS": "",
+      "CARGO_TARGET_DIR": null,
       "CCACHE_DISABLE": "1",
       "RUSTC": "",
+      "RUSTC_WORKSPACE_WRAPPER": null,
       "RUSTC_WRAPPER": "",
       "RUSTFLAGS": "",
-      "RUSTUP_TOOLCHAIN": "1.99.1"
+      "RUSTUP_TOOLCHAIN": "1.99.1",
+      "RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD": null,
+      "RUST_FASTNUM_FMT_EXPONENTIAL_UPPER_THRESHOLD": null,
+      "RUST_FASTNUM_FMT_MAX_INTEGER_PADDING": null
     },
     "production_indexer_features": [],
     "resolved_indexer_test_features": [

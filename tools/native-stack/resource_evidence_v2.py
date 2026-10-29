@@ -348,6 +348,7 @@ def validate_bundle(bundle, directory, allow_pilot=False):
             and control["manifest_sha256"] == sha256(V1_MANIFEST),
             "guard/source control differs from v2 run")
     control_entries = [control["cargo_artifacts"], control["cargo_metadata"],
+                       control["build_attestation"], control["build_log"],
                        control["guard_control"]["raw_log"],
                        *control["wasmtime_source_files"].values()]
     control_directory = directory / "control"

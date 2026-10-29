@@ -12,7 +12,8 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-from capture_resource_control import run_bounded_process, selected_binary
+from capture_resource_control import (run_bounded_process, selected_binary,
+                                      validate_build_attestation)
 from resource_evidence import (check_guard_control, file_evidence, load_json_strict,
                                no_duplicate_keys, no_nonfinite_constants, require,
                                sha256, thread_capacities)
@@ -124,8 +125,8 @@ def validate_control(path, expected_sha256, manifest, page_size=None):
     control = load_json_strict(path)
     require(set(control) == {
         "manifest_sha256", "source_sha", "binary_path", "binary_sha256",
-        "cargo_artifact", "cargo_artifacts", "cargo_metadata", "guard_control",
-        "wasmtime_source_files",
+        "cargo_artifact", "cargo_artifacts", "cargo_metadata",
+        "build_attestation", "build_log", "guard_control", "wasmtime_source_files",
     } and control["manifest_sha256"] == sha256(MANIFEST),
             "control capture differs from resource manifest")
     head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"],
@@ -136,6 +137,7 @@ def validate_control(path, expected_sha256, manifest, page_size=None):
             "control source revision differs from checkout")
     directory = path.parent
     for entry in (control["cargo_artifacts"], control["cargo_metadata"],
+                  control["build_attestation"], control["build_log"],
                   control["guard_control"]["raw_log"]):
         file_evidence(directory, entry)
     require(set(control["wasmtime_source_files"]) == set(FIBER_SOURCE_FILES),
@@ -145,7 +147,8 @@ def validate_control(path, expected_sha256, manifest, page_size=None):
                 f"fiber source hash differs: {relative}")
         file_evidence(directory, entry)
     paths = [entry["path"] for entry in (control["cargo_artifacts"],
-             control["cargo_metadata"], control["guard_control"]["raw_log"],
+             control["cargo_metadata"], control["build_attestation"],
+             control["build_log"], control["guard_control"]["raw_log"],
              *control["wasmtime_source_files"].values())]
     require(len(paths) == len(set(paths)) and path.name not in paths,
             "control evidence file paths overlap")
@@ -156,6 +159,13 @@ def validate_control(path, expected_sha256, manifest, page_size=None):
     require(str(binary) == control["binary_path"] and artifact == control["cargo_artifact"]
             and sha256(binary) == control["binary_sha256"],
             "control Cargo artifact or binary differs")
+    _, build_log = validate_build_attestation(
+        directory / control["build_attestation"]["path"],
+        directory / control["cargo_artifacts"]["path"],
+        directory / control["cargo_metadata"]["path"],
+        control["source_sha"], manifest, binary, artifact)
+    require(build_log == directory / control["build_log"]["path"],
+            "control Cargo build log path differs from attestation")
     page = page_size if page_size is not None else os.sysconf("SC_PAGE_SIZE")
     report_view = {
         "host": {"os": os_name}, "binary_path": str(binary),
@@ -182,6 +192,7 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
     control_dir = evidence_dir / "control"
     control_dir.mkdir()
     control_entries = [control["cargo_artifacts"], control["cargo_metadata"],
+                       control["build_attestation"], control["build_log"],
                        control["guard_control"]["raw_log"],
                        *control["wasmtime_source_files"].values()]
     for entry in control_entries:

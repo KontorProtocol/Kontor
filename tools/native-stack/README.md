@@ -115,16 +115,22 @@ and these six file hashes from their resolved package roots, then archives
 the files under `wasmtime-source/`.
 `capture_resource_control.py` binds the selected indexer test executable to
 one successful Cargo JSON artifact stream, requires a clean checkout at the
-explicit source revision, runs the Linux guard control with a process deadline,
+explicit source revision, runs the host's guard control with a process deadline,
 validates its complete raw transcript, and archives the Cargo inputs and six
-pinned fiber source files. Run it with the artifact stream from the exact
-`cargo test --no-run --message-format=json` build and `cargo metadata` from
-the same checkout:
+pinned fiber source files. `build_resource_test.py` runs the pinned test build
+and records the compiler version, lockfile, Cargo command, resolved `testing`
+feature, and compiler environment. The three `RUST_FASTNUM_FMT_*` variables
+are removed from that environment and recorded as explicit null values. A
+build with a different formatter setting or missing attestation fails the
+control gate. Run both commands from the same clean checkout:
 
 ```sh
+python3 tools/native-stack/build_resource_test.py \
+  --profile dev --output-dir path/to/new-build-directory
 python3 tools/native-stack/capture_resource_control.py \
-  --cargo-artifacts path/to/cargo-artifacts.jsonl \
-  --metadata path/to/cargo-metadata.json \
+  --cargo-artifacts path/to/new-build-directory/cargo-artifacts.jsonl \
+  --metadata path/to/new-build-directory/cargo-metadata.json \
+  --build-attestation path/to/new-build-directory/resource-build-attestation.json \
   --source-sha COMMITTED_HEAD_SHA \
   --evidence-dir path/to/new-evidence-directory
 ```

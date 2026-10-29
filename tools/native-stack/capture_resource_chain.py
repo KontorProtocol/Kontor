@@ -410,6 +410,7 @@ def verify_final_closure(control, binary, control_dir, control_copy, control_sha
     require(sha256(control_copy) == control_sha256,
             "chain control capture changed in archive")
     for entry in (control["cargo_artifacts"], control["cargo_metadata"],
+                  control["build_attestation"], control["build_log"],
                   control["guard_control"]["raw_log"],
                   *control["wasmtime_source_files"].values()):
         file_evidence(control_dir, entry)
@@ -460,6 +461,7 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
     control_dir = evidence_dir / "control"
     control_dir.mkdir()
     control_entries = [control["cargo_artifacts"], control["cargo_metadata"],
+                       control["build_attestation"], control["build_log"],
                        control["guard_control"]["raw_log"],
                        *control["wasmtime_source_files"].values()]
     for entry in control_entries:

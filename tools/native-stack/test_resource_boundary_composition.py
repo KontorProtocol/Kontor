@@ -425,11 +425,12 @@ class BoundaryCompositionTests(unittest.TestCase):
                 return {"path": name, "sha256": sha256(path)}
 
             profile = {"test": True, "opt_level": "0",
-                       "debug_assertions": True}
+                       "debug_assertions": True, "overflow_checks": True}
             artifact = {
                 "reason": "compiler-artifact", "package_id": "indexer-package",
                 "target": {"name": "indexer", "kind": ["lib"]},
                 "profile": profile, "executable": original_binary,
+                "features": ["testing"],
             }
             artifacts = control_file("cargo-artifacts.jsonl",
                                      json.dumps(artifact) + "\n" +
@@ -442,6 +443,28 @@ class BoundaryCompositionTests(unittest.TestCase):
                               "manifest_path": str(archived_workspace /
                                                    "indexer/Cargo.toml")}],
             }) + "\n")
+            build_log = control_file("cargo-build.log", "compiler stderr\n")
+            v1_manifest = build_manifest()
+            build_attestation = control_file(
+                "resource-build-attestation.json", json.dumps({
+                    "schema_version": 1,
+                    "source_sha": discovery_sha,
+                    "manifest_sha256": sha256(old_v1_path),
+                    "lockfile_sha256": v1_manifest["artifacts"]["core_lockfile"]["sha256"],
+                    "profile": "dev",
+                    "rustc_verbose": "rustc 1.99.1 (test)\nhost: aarch64-unknown-linux-gnu\n",
+                    "compile_env": v1_manifest["build_policy"]["compile_env"],
+                    "cargo_command": ["cargo", "test", "-p", "indexer", "--lib",
+                                      "--locked", "-j2", "--no-run",
+                                      "--message-format=json"],
+                    "cargo_cwd": str(archived_workspace),
+                    "cargo_artifacts_sha256": artifacts["sha256"],
+                    "cargo_metadata_sha256": metadata["sha256"],
+                    "cargo_build_log_sha256": build_log["sha256"],
+                    "binary_path": original_binary,
+                    "binary_sha256": binary_sha,
+                    "indexer_artifact_features": ["testing"],
+                }) + "\n")
             guard = guard_control(control_dir, build_manifest(),
                                   original_binary, binary_sha, discovery_sha)
             fiber = control_file("fiber.txt", "pinned fiber source\n")
@@ -454,6 +477,8 @@ class BoundaryCompositionTests(unittest.TestCase):
                 "cargo_artifact": artifact,
                 "cargo_artifacts": artifacts,
                 "cargo_metadata": metadata,
+                "build_attestation": build_attestation,
+                "build_log": build_log,
                 "guard_control": guard,
                 "wasmtime_source_files": {
                     "crates/fiber/src/lib.rs": fiber,

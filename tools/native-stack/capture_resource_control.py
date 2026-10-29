@@ -52,6 +52,59 @@ def selected_binary(artifacts_path, metadata):
     return binary.resolve(), selected[0]
 
 
+def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
+                               manifest, binary, artifact,
+                               manifest_sha256=None, core_root=None,
+                               binary_sha256=None):
+    report = load_json_strict(path)
+    expected_keys = {
+        "schema_version", "source_sha", "manifest_sha256", "lockfile_sha256",
+        "profile", "rustc_verbose", "compile_env", "cargo_command",
+        "cargo_cwd", "cargo_artifacts_sha256", "cargo_metadata_sha256",
+        "cargo_build_log_sha256", "binary_path", "binary_sha256",
+        "indexer_artifact_features",
+    }
+    if not isinstance(report, dict) or set(report) != expected_keys:
+        raise ValueError("resource build attestation has an invalid schema")
+    profile = report["profile"]
+    command = ["cargo", "test", "-p", "indexer", "--lib", "--locked",
+               "-j2", "--no-run", "--message-format=json"]
+    if profile == "release":
+        command.append("--release")
+    if profile not in {"dev", "release"} or report["cargo_command"] != command:
+        raise ValueError("resource build command or profile differs from policy")
+    cargo_profile = artifact["profile"]
+    expected_profile = (("0", True, True) if profile == "dev"
+                        else ("3", False, False))
+    if (cargo_profile.get("opt_level"), cargo_profile.get("debug_assertions"),
+            cargo_profile.get("overflow_checks")) != expected_profile:
+        raise ValueError("resource Cargo artifact profile differs from build command")
+    expected_manifest_sha256 = manifest_sha256 or sha256(MANIFEST)
+    expected_core = core_root or ROOT / "core"
+    expected_binary_sha256 = binary_sha256 or sha256(binary)
+    if (report["schema_version"] != 1 or report["source_sha"] != source_sha
+            or report["manifest_sha256"] != expected_manifest_sha256
+            or report["lockfile_sha256"] != manifest["artifacts"]["core_lockfile"]["sha256"]
+            or report["compile_env"] != manifest["build_policy"]["compile_env"]
+            or report["cargo_cwd"] != str(expected_core)
+            or report["cargo_artifacts_sha256"] != sha256(artifacts_path)
+            or report["cargo_metadata_sha256"] != sha256(metadata_path)
+            or report["binary_path"] != str(binary)
+            or report["binary_sha256"] != expected_binary_sha256
+            or report["indexer_artifact_features"] != artifact["features"]
+            or artifact["features"] != manifest["build_policy"]["resolved_indexer_test_features"]):
+        raise ValueError("resource build attestation differs from source or Cargo artifact")
+    build_log = path.parent / "cargo-build.log"
+    if not build_log.is_file() or report["cargo_build_log_sha256"] != sha256(build_log):
+        raise ValueError("resource build stderr log differs from attestation")
+    rustc = report["rustc_verbose"]
+    if (not isinstance(rustc, str)
+            or not rustc.startswith(f"rustc {manifest['build_policy']['rustc_release']} ")
+            or not any(line.startswith("host: ") for line in rustc.splitlines())):
+        raise ValueError("resource Rust compiler identity differs from policy")
+    return report, build_log
+
+
 def run_bounded_process(command, timeout_seconds, env=None):
     started = time.time_ns()
     child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -77,7 +130,8 @@ def run_bounded_process(command, timeout_seconds, env=None):
     return child, started, time.time_ns(), output, timed_out
 
 
-def capture(artifacts_path, metadata_path, source_sha, evidence_dir, timeout_seconds):
+def capture(artifacts_path, metadata_path, build_attestation_path, source_sha,
+            evidence_dir, timeout_seconds):
     if sys.platform not in ("linux", "darwin"):
         raise ValueError("guard control capture is not implemented on this platform")
     os_name = "macos" if sys.platform == "darwin" else "linux"
@@ -103,19 +157,28 @@ def capture(artifacts_path, metadata_path, source_sha, evidence_dir, timeout_sec
     if metadata.get("workspace_root") != str(ROOT / "core"):
         raise ValueError("Cargo metadata workspace differs from source checkout")
     binary, artifact = selected_binary(artifacts_path, metadata)
+    _, build_log = validate_build_attestation(
+        build_attestation_path, artifacts_path, metadata_path, source_sha,
+        manifest, binary, artifact)
     binary_sha256 = sha256(binary)
     artifacts_sha256 = sha256(artifacts_path)
     metadata_sha256 = sha256(metadata_path)
+    attestation_sha256 = sha256(build_attestation_path)
+    build_log_sha256 = sha256(build_log)
     if evidence_dir.exists() and any(evidence_dir.iterdir()):
         raise ValueError("capture output directory is not empty")
     evidence_dir.mkdir(parents=True, exist_ok=True)
     for source, name in ((artifacts_path, "cargo-artifacts.jsonl"),
-                         (metadata_path, "cargo-metadata.json")):
+                         (metadata_path, "cargo-metadata.json"),
+                         (build_attestation_path, "resource-build-attestation.json"),
+                         (build_log, "cargo-build.log")):
         with (evidence_dir / name).open("xb") as destination, source.open("rb") as original:
             shutil.copyfileobj(original, destination)
     if (sha256(evidence_dir / "cargo-artifacts.jsonl") != artifacts_sha256
-            or sha256(evidence_dir / "cargo-metadata.json") != metadata_sha256):
-        raise ValueError("Cargo input changed during evidence archive")
+            or sha256(evidence_dir / "cargo-metadata.json") != metadata_sha256
+            or sha256(evidence_dir / "resource-build-attestation.json") != attestation_sha256
+            or sha256(evidence_dir / "cargo-build.log") != build_log_sha256):
+        raise ValueError("Cargo build input changed during evidence archive")
     raw_path = evidence_dir / "guard-control.log"
     fragment_path = evidence_dir / "resource-control-capture.json"
     failure_path = evidence_dir / "resource-control-failure.json"
@@ -182,6 +245,10 @@ def capture(artifacts_path, metadata_path, source_sha, evidence_dir, timeout_sec
                             "sha256": artifacts_sha256},
         "cargo_metadata": {"path": "cargo-metadata.json",
                            "sha256": metadata_sha256},
+        "build_attestation": {"path": "resource-build-attestation.json",
+                              "sha256": attestation_sha256},
+        "build_log": {"path": "cargo-build.log",
+                      "sha256": build_log_sha256},
         "guard_control": guard_control,
         "wasmtime_source_files": sources,
     }
@@ -195,13 +262,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cargo-artifacts", type=Path, required=True)
     parser.add_argument("--metadata", type=Path, required=True)
+    parser.add_argument("--build-attestation", type=Path, required=True)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=90)
     args = parser.parse_args()
     if args.timeout_seconds <= 0 or args.timeout_seconds > 600:
         parser.error("timeout must be between 1 and 600 seconds")
-    path = capture(args.cargo_artifacts, args.metadata,
+    path = capture(args.cargo_artifacts, args.metadata, args.build_attestation,
                    args.source_sha, args.evidence_dir, args.timeout_seconds)
     print(json.dumps({"capture_path": str(path), "sha256": sha256(path)}, sort_keys=True))
 
