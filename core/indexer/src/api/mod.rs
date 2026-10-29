@@ -1,5 +1,6 @@
 pub mod client;
 pub mod compose;
+mod confirmation;
 pub mod env;
 pub mod error;
 pub mod handlers;

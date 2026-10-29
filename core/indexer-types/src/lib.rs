@@ -1,5 +1,8 @@
 extern crate alloc;
 
+mod confirmation;
+pub use confirmation::{ResultInfo, TransactionInfo};
+
 use anyhow::Result;
 use bitcoin::hex::DisplayHex;
 use bitcoin::{BlockHash, ScriptBuf, Txid, XOnlyPublicKey, taproot::LeafVersion};
@@ -692,6 +695,7 @@ pub struct TransactionRow {
     pub height: u64,
     #[ts(type = "number | null")]
     pub confirmed_height: Option<u64>,
+    /// @deprecated Legacy filtered ordinal; use confirmed_bitcoin_tx_index for Bitcoin position.
     pub tx_index: Option<u32>,
     #[ts(type = "number | null")]
     pub batch_height: Option<u64>,
@@ -945,6 +949,7 @@ pub struct ResultRow {
     pub id: u64,
     #[ts(type = "number")]
     pub height: u64,
+    /// @deprecated Legacy filtered ordinal; use confirmed_bitcoin_tx_index for Bitcoin position.
     pub tx_index: Option<u32>,
     pub input_index: Option<u32>,
     pub op_index: Option<u32>,

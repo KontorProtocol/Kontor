@@ -1,15 +1,16 @@
 use axum::extract::{Path, Query, State};
-use indexer_types::{PaginatedResponse, ResultRow};
+use indexer_types::{PaginatedResponse, ResultInfo};
+use libsql::TransactionBehavior;
 
 use super::validate_query;
-use crate::api::{Env, error::HttpError, result::Result};
+use crate::api::{Env, confirmation, error::HttpError, result::Result};
 use crate::database::queries::{get_op_result, get_results_paginated};
 use crate::database::types::{OpResultId, ResultQuery};
 
 pub async fn get_results(
     Query(query): Query<ResultQuery>,
     State(env): State<Env>,
-) -> Result<PaginatedResponse<ResultRow>> {
+) -> Result<PaginatedResponse<ResultInfo>> {
     validate_query(query.cursor, query.offset)?;
     if query.start_height.is_some() && query.height.is_some() {
         return Err(HttpError::BadRequest(
@@ -22,10 +23,16 @@ pub async fn get_results(
         return Err(HttpError::BadRequest("func requires contract".to_string()).into());
     }
 
-    let (results, pagination) =
-        get_results_paginated(&*env.reader.connection().await?, query).await?;
+    let conn = env.reader.connection().await?;
+    let snapshot = conn
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .await?;
+    let (rows, pagination) = get_results_paginated(&snapshot, query).await?;
+    let results =
+        confirmation::results(&snapshot, rows.into_iter().map(Into::into).collect()).await?;
+    snapshot.commit().await?;
     Ok(PaginatedResponse {
-        results: results.into_iter().map(Into::into).collect(),
+        results,
         pagination,
     }
     .into())
@@ -34,12 +41,18 @@ pub async fn get_results(
 pub async fn get_result(
     Path(id): Path<String>,
     State(env): State<Env>,
-) -> Result<Option<ResultRow>> {
+) -> Result<Option<ResultInfo>> {
     let id = id
         .parse::<OpResultId>()
         .map_err(|_| HttpError::BadRequest("Invalid ID".to_string()))?;
-    Ok(get_op_result(&*env.reader.connection().await?, &id)
+    let conn = env.reader.connection().await?;
+    let snapshot = conn
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .await?;
+    let row = get_op_result(&snapshot, &id).await?;
+    let result = confirmation::results(&snapshot, row.into_iter().map(Into::into).collect())
         .await?
-        .map(Into::into)
-        .into())
+        .pop();
+    snapshot.commit().await?;
+    Ok(result.into())
 }
