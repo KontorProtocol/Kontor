@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from capture_resource_diagnostic import validate_control
@@ -78,6 +79,64 @@ def expected_case_env(case_id, role, configuration):
                 "on" if role == "target_observed" else "off"}
 
 
+def validate_paid_rejection(rejection):
+    require(isinstance(rejection, dict)
+            and set(rejection) == {
+                "outcome", "error", "key", "row_absent",
+                "state_before_sha256", "state_after_sha256",
+                "state_restored_sha256", "receipts_before", "receipts_after",
+                "receipts_restored", "receipt_status", "receipt_gas",
+                "user_fuel", "gas_to_fuel_multiplier", "fee",
+                "payer_before", "payer_after", "burner_before", "burner_after",
+                "supply_before", "supply_after", "core_before", "core_after"},
+            "paid large-value rejection fields changed")
+    require(rejection["outcome"] == "deterministic_error"
+            and rejection["error"] ==
+                "storage deposit exceeds the op's gas budget"
+            and rejection["key"] == "k999"
+            and rejection["row_absent"] is True
+            and rejection["receipt_status"] == "Other",
+            "paid large-value rejection outcome changed")
+    before = rejection["state_before_sha256"]
+    after = rejection["state_after_sha256"]
+    restored = rejection["state_restored_sha256"]
+    require(all(isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)
+                for digest in (before, after, restored))
+            and before != after and restored == before,
+            "paid large-value rejection leaked persistent state")
+    receipts_before = rejection["receipts_before"]
+    require(type(receipts_before) is int and receipts_before >= 0
+            and type(rejection["receipts_after"]) is int
+            and rejection["receipts_after"] == receipts_before + 1
+            and type(rejection["receipts_restored"]) is int
+            and rejection["receipts_restored"] == receipts_before,
+            "paid large-value rejection receipt count changed")
+    gas = rejection["receipt_gas"]
+    user_fuel = rejection["user_fuel"]
+    multiplier = rejection["gas_to_fuel_multiplier"]
+    require(all(type(value) is int for value in (gas, user_fuel, multiplier))
+            and user_fuel > 0 and multiplier > 0
+            and gas == max(1, (user_fuel + multiplier - 1) // multiplier)
+            and gas <= 100_000,
+            "paid large-value rejection gas accounting changed")
+    numeric_keys = ("fee", "payer_before", "payer_after", "burner_before",
+                    "burner_after", "supply_before", "supply_after",
+                    "core_before", "core_after")
+    try:
+        amounts = {key: Decimal(rejection[key]) for key in numeric_keys
+                   if isinstance(rejection[key], str)}
+    except InvalidOperation as error:
+        raise ValueError("paid large-value rejection has invalid amounts") from error
+    require(len(amounts) == len(numeric_keys)
+            and all(amount.is_finite() for amount in amounts.values())
+            and amounts["fee"] == Decimal(gas) * Decimal("1e-9")
+            and amounts["payer_before"] - amounts["payer_after"] == amounts["fee"]
+            and amounts["burner_after"] - amounts["burner_before"] == amounts["fee"]
+            and amounts["supply_before"] - amounts["supply_after"] == amounts["fee"]
+            and amounts["core_before"] == amounts["core_after"],
+            "paid large-value rejection fee or balance delta changed")
+
+
 def validate_observation(attempt, sample, repeat_index, role, configuration, pid):
     value = attempt["observation"]
     rows, cursor, continuation, size, value_bytes = expected_page(sample)
@@ -126,22 +185,7 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
         require(rejection is None,
                 "small value fixture unexpectedly used a paid rejection")
     else:
-        require(isinstance(rejection, dict)
-                and set(rejection) == {"outcome", "error", "key", "row_absent",
-                                       "state_before_sha256", "state_after_sha256",
-                                       "receipts_before", "receipts_after"}
-                and rejection["outcome"] == "deterministic_error"
-                and rejection["error"] ==
-                    "storage deposit exceeds the op's gas budget"
-                and rejection["key"] == "k999"
-                and rejection["row_absent"] is True
-                and all(isinstance(rejection[key], str)
-                        and re.fullmatch(r"[0-9a-f]{64}", rejection[key])
-                        for key in ("state_before_sha256", "state_after_sha256"))
-                and all(type(rejection[key]) is int and rejection[key] >= 0
-                        for key in ("receipts_before", "receipts_after"))
-                and rejection["receipts_after"] >= rejection["receipts_before"],
-                "paid large-value rejection or targeted rollback is incomplete")
+        validate_paid_rejection(rejection)
     before = value["state_before_sha256"]
     require(isinstance(before, str) and re.fullmatch(r"[0-9a-f]{64}", before)
             and value["state_after_sha256"] == before,

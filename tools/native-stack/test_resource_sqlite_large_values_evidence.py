@@ -21,7 +21,15 @@ def paid_rejection():
             "key": "k999", "row_absent": True,
             "state_before_sha256": "a" * 64,
             "state_after_sha256": "b" * 64,
-            "receipts_before": 10, "receipts_after": 11}
+            "state_restored_sha256": "a" * 64,
+            "receipts_before": 10, "receipts_after": 11,
+            "receipts_restored": 10, "receipt_status": "Other",
+            "receipt_gas": 1000, "user_fuel": 1000,
+            "gas_to_fuel_multiplier": 1, "fee": "0.000001",
+            "payer_before": "1000000", "payer_after": "999999.999999",
+            "burner_before": "0", "burner_after": "0.000001",
+            "supply_before": "1000000", "supply_after": "999999.999999",
+            "core_before": "0", "core_after": "0"}
 
 
 def attempt(sample, role="target_observed"):
@@ -110,7 +118,20 @@ class SqliteLargeValuesEvidenceTests(unittest.TestCase):
         for key, replacement in (("row_absent", False),
                                  ("outcome", "ok"),
                                  ("error", "out of fuel"),
-                                 ("receipts_after", 9)):
+                                 ("receipts_after", 9),
+                                 ("receipts_after", 10),
+                                 ("receipts_after", 12),
+                                 ("receipts_after", 109),
+                                 ("receipts_restored", 11),
+                                 ("state_restored_sha256", "c" * 64),
+                                 ("state_after_sha256", "a" * 64),
+                                 ("receipt_status", "Trap"),
+                                 ("receipt_gas", 1001),
+                                 ("fee", "0.000002"),
+                                 ("payer_after", "999999.999998"),
+                                 ("burner_after", "0.000002"),
+                                 ("supply_after", "999999.999998"),
+                                 ("core_after", "1")):
             with self.subTest(key=key):
                 item = copy.deepcopy(baseline)
                 item["observation"]["paid_rejection"][key] = replacement

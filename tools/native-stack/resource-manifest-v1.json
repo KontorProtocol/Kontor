@@ -74,7 +74,7 @@
     },
     "counter_guest": {
       "path": "test-contracts/binaries/counter.wasm.br",
-      "sha256": "e67f1278996f2f0a1650221b561b7047757281bf817cbe7491e872e9b9868414"
+      "sha256": "d80c38b9852d7be9e373d0ded5278c47ec2229d61bda673ac7389be925adc749"
     },
     "counter_guest_manifest": {
       "path": "test-contracts/counter/Cargo.toml",
@@ -82,7 +82,7 @@
     },
     "counter_guest_source": {
       "path": "test-contracts/counter/src/lib.rs",
-      "sha256": "213dc922baf8fb352a1734795552b941e39dc3d9e55d6a9f5b5846ab19f9a2da"
+      "sha256": "5704f1b10fea71f22f094172ae5f2c652eac3026178acda82d973b576a95b650"
     },
     "counter_guest_wit": {
       "path": "test-contracts/counter/wit/contract.wit",
@@ -342,7 +342,7 @@
     },
     "sqlite_large_values_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_large_values.rs",
-      "sha256": "047027a7174fb3028efc90828f25c88b32a3657fcd7454553729a1f11934631e"
+      "sha256": "5903aaacc835a7c096d4a75fbf9b0baec6d5f3ed9f30160ba3e593b45bdb9cd1"
     },
     "sqlite_large_values_capture": {
       "path": "tools/native-stack/capture_resource_sqlite_large_values.py",
@@ -350,11 +350,11 @@
     },
     "sqlite_large_values_validator": {
       "path": "tools/native-stack/resource_sqlite_large_values_evidence.py",
-      "sha256": "aef60c501df928cefff4f5e22e07175838075663a37482e0b2ba12d9ad62abd8"
+      "sha256": "31a06cbefde5956602f6adbb78fa9ebf9df9dbe31d4ba2999bb268f634652efb"
     },
     "sqlite_large_values_validator_tests": {
       "path": "tools/native-stack/test_resource_sqlite_large_values_evidence.py",
-      "sha256": "051cacbcc380fc6e9d48a96b2586a88790125b57f9d2b988da728e829ae7f3b2"
+      "sha256": "3ca2cabd87eecb219188b722b05bf143a022d899bca1d587b6de07407cb43850"
     },
     "sqlite_pagination_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_pagination.rs",

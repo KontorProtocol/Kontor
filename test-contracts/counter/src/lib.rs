@@ -1,7 +1,6 @@
 #![no_std]
 contract!(name = "counter");
 
-use alloc::vec::Vec;
 use core::ops::Bound;
 use stdlib::*;
 

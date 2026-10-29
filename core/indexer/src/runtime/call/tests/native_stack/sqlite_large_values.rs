@@ -10,8 +10,9 @@ use stdlib::{Wavey, to_wave_expr};
 
 use super::sweep::persistent_digest;
 use crate::runtime::invocation::{InvocationBudget, ResourceProbePhase, ResourceTeardownRecorder};
+use crate::runtime::numerics::sub_decimal;
 use crate::runtime::resource_diagnostics;
-use crate::runtime::token;
+use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{
@@ -78,7 +79,7 @@ async fn prepare_fixture(runtime: &mut Runtime) -> Result<(ContractAddress, Sign
         "large-value actor identity changed"
     );
     let core = Signer::Core(Box::new(Signer::Nobody));
-    token::api::issue_to(
+    token::issue_to(
         runtime,
         &core,
         HolderRef::from(&actor),
@@ -130,7 +131,22 @@ async fn paid_size_cap_control(
 ) -> Result<JsonValue> {
     let before_sha256 = persistent_digest(conn).await?;
     let receipts_before = receipt_count(conn).await?;
+    let payer = HolderRef::from(actor);
+    let payer_before = token::balance(runtime, payer.clone())
+        .await?
+        .unwrap_or_default();
+    let burner_before = token::balance(runtime, HolderRef::Burner)
+        .await?
+        .unwrap_or_default();
+    let core_before = token::balance(runtime, HolderRef::Core)
+        .await?
+        .unwrap_or_default();
+    let supply_before = token::total_supply(runtime).await?;
+    runtime.storage.savepoint().await?;
+    let outer_savepoint = runtime.storage.savepoint_stack.peek().await;
+    let previous = runtime.start_usage();
     let result = write_entry(runtime, actor, address, "k999", VALUE_BYTES[1]).await;
+    let usage = runtime.finish_usage(previous)?;
     let error = match result {
         Err(error) => error,
         Ok(()) => anyhow::bail!("paid 1 MiB storage write unexpectedly succeeded"),
@@ -141,6 +157,52 @@ async fn paid_size_cap_control(
             && format!("{error:#}").contains("storage deposit exceeds the op's gas budget"),
         "paid 1 MiB write failed for an unexpected reason: {error:#}"
     );
+    let gas = usage
+        .user_fuel
+        .div_ceil(runtime.gas_to_fuel_multiplier)
+        .max(1);
+    ensure!(
+        usage.user_fuel > 0 && usage.deposit_fuel == 0 && gas <= 100_000,
+        "paid large-value rejection used an unexpected fuel budget"
+    );
+    let fee = runtime.pricing.execution_fee(gas)?;
+    let payer_after = token::balance(runtime, payer).await?.unwrap_or_default();
+    let burner_after = token::balance(runtime, HolderRef::Burner)
+        .await?
+        .unwrap_or_default();
+    let core_after = token::balance(runtime, HolderRef::Core)
+        .await?
+        .unwrap_or_default();
+    let supply_after = token::total_supply(runtime).await?;
+    ensure!(
+        sub_decimal(payer_before, payer_after)? == fee
+            && sub_decimal(burner_after, burner_before)? == fee
+            && sub_decimal(supply_before, supply_after)? == fee
+            && core_after == core_before,
+        "paid large-value rejection has an unexpected token balance delta"
+    );
+    let receipts_after = receipt_count(conn).await?;
+    ensure!(
+        receipts_after == receipts_before + 1,
+        "paid large-value rejection did not add exactly one receipt"
+    );
+    let mut receipts = conn
+        .query(
+            "SELECT func, status, gas, signer_id, payer_signer_id \
+             FROM contract_results ORDER BY id DESC LIMIT 1",
+            (),
+        )
+        .await?;
+    let receipt = receipts.next().await?.unwrap();
+    ensure!(
+        receipt.get::<String>(0)? == "fill-entry"
+            && receipt.get::<String>(1)? == "Other"
+            && receipt.get::<u64>(2)? == gas
+            && receipt.get::<u64>(3)? == ACTOR_SIGNER_ID
+            && receipt.get::<u64>(4)? == ACTOR_SIGNER_ID,
+        "paid large-value rejection receipt changed"
+    );
+    drop(receipts);
     let raw = runtime
         .execute(None, None, address, "entry-page(some(\"k998\"), 1)")
         .await?;
@@ -149,11 +211,25 @@ async fn paid_size_cap_control(
     ensure!(
         absent
             && runtime.stack.is_empty().await
-            && runtime.storage.savepoint_stack.is_empty().await,
+            && runtime.storage.savepoint_stack.peek().await == outer_savepoint
+            && receipt_count(conn).await? == receipts_after,
         "failed paid write retained a row or live invocation state"
     );
     let after_sha256 = persistent_digest(conn).await?;
-    let receipts_after = receipt_count(conn).await?;
+    ensure!(
+        after_sha256 != before_sha256,
+        "paid large-value rejection did not leave its expected receipt and fee effects"
+    );
+    runtime.storage.rollback().await?;
+    let restored_sha256 = persistent_digest(conn).await?;
+    let receipts_restored = receipt_count(conn).await?;
+    ensure!(
+        restored_sha256 == before_sha256
+            && receipts_restored == receipts_before
+            && runtime.storage.savepoint_stack.is_empty().await
+            && runtime.deposit.take().await == 0,
+        "paid large-value control did not restore its complete persistent state"
+    );
     Ok(json!({
         "outcome": "deterministic_error",
         "error": "storage deposit exceeds the op's gas budget",
@@ -161,8 +237,23 @@ async fn paid_size_cap_control(
         "row_absent": absent,
         "state_before_sha256": before_sha256,
         "state_after_sha256": after_sha256,
+        "state_restored_sha256": restored_sha256,
         "receipts_before": receipts_before,
         "receipts_after": receipts_after,
+        "receipts_restored": receipts_restored,
+        "receipt_status": "Other",
+        "receipt_gas": gas,
+        "user_fuel": usage.user_fuel,
+        "gas_to_fuel_multiplier": runtime.gas_to_fuel_multiplier,
+        "fee": fee.to_string(),
+        "payer_before": payer_before.to_string(),
+        "payer_after": payer_after.to_string(),
+        "burner_before": burner_before.to_string(),
+        "burner_after": burner_after.to_string(),
+        "supply_before": supply_before.to_string(),
+        "supply_after": supply_after.to_string(),
+        "core_before": core_before.to_string(),
+        "core_after": core_after.to_string(),
     }))
 }
 
