@@ -176,7 +176,8 @@ It compares the entire moved source, exact quoted strings, and remaining node
 bodies. Parent and independent subagent source reviews found no material
 findings. Interlink independently approved the source in acknowledged receipt
 `08525ca791f7dabb085204dcb783dd9a`, checking its own normalized source diff and
-the publication test port. Post-move runtime validation is pending.
+the publication test port. Post-move debug validation is recorded below;
+release CI and final phase acceptance remain pending.
 
 The loop preserves input order, `tx.index` and `tx.txid`, OP_RETURN payloads,
 height selection before identity allocation, aggregate verification before
@@ -202,3 +203,45 @@ isolation. OWNERSHIP-1 must wrap these entry points with the agreed
 `CanonicalRootLease` and `RootKeeper` ownership before final baseline acceptance.
 The signatures are not frozen. This slice adds no activation or alternate executor
 selection and does not change existing cancellation behavior.
+
+## Execution validation and test readiness correction
+
+All 120 targeted tests passed at `09512a6a` with two concurrent test cases
+(600.33 seconds), and indexer Clippy with tests and warnings denied passed
+(7.04 seconds). This is debug diagnostic evidence for the preparatory extraction,
+not a replacement for CI. Actual CI runs `REGTEST=1 cargo test --release
+--workspace -- --nocapture` with default test concurrency. That configuration,
+the full K2a acceptance suite, and reconciliation with S2 and OWNERSHIP-1 remain
+required before a phase PR or P1 freeze.
+
+Two default-concurrency debug runs each passed 119 tests and failed one cluster
+test. Their original logs are preserved. The first exhausted the startup recovery
+deadline while follower initialization still waited at the existing round-zero
+barrier. The same binary passed that test alone in 28.58 seconds. Separate
+test-only commit `09512a6a` signals readiness from that barrier, bounds the readiness
+wait at 120 seconds, then starts the unchanged 40-second recovery check. Fault
+injection, recovery assertions and production timeouts are unchanged. Both error
+paths reach cluster shutdown. The setup wait starts after seed initialization in
+`start_with_faults`, and existing assertion panics retain their prior cleanup.
+All three source reviews approved this correction. Its focused test passed in
+28.75 seconds and it passed both subsequent broad runs. An initial sandboxed
+invocation could not open its localhost listener; that terminated attempt is
+recorded separately and is not test acceptance evidence.
+
+The second default-concurrency debug failure expected replayed batch 3 with two
+transactions. The trace contains that exact replay, but a preceding replayed
+block took 50,255 milliseconds versus 92 milliseconds on its first execution.
+Batch completion was logged immediately before the deadline assertion. The
+same binary passed the isolated test in 35.27 seconds. The waiter already polls
+the event channel until a fixed deadline; no assertion or timeout was changed.
+These observations support contention and a missed observation deadline, but
+the logs do not establish the exact scheduling cause or successful event enqueue.
+The unchanged LiteExecutor and this cluster test do not execute the relocated
+transaction entry. Independent source comparison confirms their preservation.
+
+Commands, terminal results, log hashes and both preserved failures are recorded
+in `.build-cache/k2a-reconcile/execution-validation.json`, SHA-256
+`d506747318783a21170cf6b2772b79b778e22de9b24fd656f13d4d170e0a8ec3`.
+Interlink receipt `85aa524648bba67792abd534c193f500` agrees to this bounded
+preparation evidence and retains the release/default-concurrency CI gate.
+No missing-transaction production fix or broader qualification is claimed.
