@@ -449,3 +449,46 @@ independent reviewers accepted the bounded evidence and documentation, including
 Interlink receipt `00d7fe03663bf43b86edb75da81f6ab9`. Commands, checkout history
 and terminal exit codes are recorded execution metadata consistent with the logs.
 This completes no performance or full S2 acceptance gate.
+
+
+## Mixed paid operations and nested receipt accounting
+
+Sources `0333a40d46229cdd83feb91bce453d98dbe6278c` and
+`3028085d1a90730bf61d9983fd20a21ed6c387b2`, based on `70e3ee50`, add one
+signed, single-input reveal with 100 operations. Five rounds contain 40 token
+transfers, 25 storage operations including 10 post-write failures, 15 proxy
+calls, 10 staking calls and 10 hash writes. Each restored execution must produce
+100 root receipts and 25 nested receipts with the expected positions, signers,
+payers, status, values and gas bounds. Highest result indices select root gas,
+so nested work is counted once. The accounting oracle reconciles 0.04 transferred
+and 0.01 staked separately from fees, including staking escrow and token supply.
+An explicit setup check rejects an existing payer bond. New bonds are inactive
+and cannot receive the ordering rewards checked by the existing oracle.
+
+The test verifies counter and blob state, failed-write rollback, independently
+calculated SHA-256 values, recipient funds and the payer bond. Existing validator
+transitions, storage rewards and challenges, useful pruning, read-only observation
+checks and exact logical database equality across two independent restores remain
+active. The four guest fixtures are published directly through Runtime with Core
+during setup. This does not cover signed publication transactions or cold publish.
+
+Parent and both independent source reviews accepted final `3028085d`, including
+Interlink receipt `d70d72c3772fb4fb0167db1c0bf4ff50`. The locked offline two-job
+build passed in 52.08 seconds. Binary SHA-256:
+`963e7b9d4cd7b61e3ddf20a7feae5f7eedece0cbb8b10fd693dcb4f3210573dd`.
+The new mixed test passed in 58.49 seconds. All three existing fresh-block,
+batch-confirmation and simulation regressions passed in 204.46 seconds on the
+same binary. These durations include fixture setup and are not performance
+qualification measurements. Clippy still reports exactly the six inherited S2
+findings, with no workload diagnostic; their separate native-branch fixes have
+not yet been integrated. No lint was suppressed.
+
+The local `.build-cache/workload-reconcile/mixed-validation.json` records commands,
+terminal outcomes, binary identity and hashes of four logs. Parent and both
+independent reviewers accepted this bounded evidence and documentation, including
+Interlink receipt `aaf392564ad9ed40ef1236989b0219a8`. Commands, historical checkout
+checks and terminal exit codes are recorded metadata consistent with the logs.
+This is one development recipe, not the full operational workload.
+Multiple transactions, multi-input and BLS shapes, pagination, file appends,
+near-cap operations, frozen populations, arrival streams, cold-cache and
+performance qualification remain required.
