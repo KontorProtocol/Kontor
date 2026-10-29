@@ -418,7 +418,10 @@ def validate_live_deposit_gas(live_gas, digest, balances, mode,
     if mode == "paid" and outcome == "ok":
         require(live_gas["after"] == 2 + postcard_u64_length(depth),
                 "successful paid fixture write has wrong encoded deposit")
-    elif mode != "core" or outcome != "ok":
+    elif mode == "core" and outcome == "ok":
+        require(live_gas["after"] == 0,
+                "successful Core fixture write retained depositor gas")
+    else:
         require(live_gas["after"] == live_gas["before"],
                 "failed or read-only call changed live storage deposit")
 

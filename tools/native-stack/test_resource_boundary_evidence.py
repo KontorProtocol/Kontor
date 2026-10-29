@@ -218,6 +218,51 @@ class BoundaryEvidenceTests(unittest.TestCase):
             validate_live_deposit_gas(gas, digest(gas), balances,
                                       "paid", "stack_overflow", 1024)
 
+    def test_measured_full9_core_rows_displace_only_actor_deposit(self):
+        # Raw rows from d4acc6e8: .build-cache/native-stack-d4acc6-full9-discovery/
+        # pulley_plain_core_discovery_production_observed_production.log and
+        # pulley_wide_core_discovery_production_observed_production.log.
+        def digest(value):
+            return hashlib.sha256(json.dumps(value, sort_keys=True,
+                                             separators=(",", ":")).encode()).hexdigest()
+
+        success_balance_hash = "21238ccf5fec246b7f3f0a9874300e13d02eda58964daf9cfae632f84f12d7b4"
+        failure_balance_hash = "98fe6f6c88b8ef9d41aef9e770fa9f0bcdd60db7f1a53cf6b87301ddafeba02b"
+        success_gas_hash = "66067cdc795b911d670d95241f3f232ebe0561ec04f7e5df9f79512ba72de135"
+        failure_gas_hash = "5a1dac30c6103998c7a967745c09cbc6ee45d905dd7ba83a3ac7840aee76a7ff"
+        rows = (
+            ("plain zero", 0, "ok"),
+            ("plain success", 8187, "ok"),
+            ("plain failure", 8188, "stack_overflow"),
+            ("wide zero", 0, "ok"),
+            ("wide success", 1722, "ok"),
+            ("wide failure", 1723, "stack_overflow"),
+        )
+        for name, depth, outcome in rows:
+            with self.subTest(row=name):
+                success = outcome == "ok"
+                balances = {
+                    "before": "99.999999959", "after": "99.999999959",
+                    "restored": "99.999999959", "burned_before": "4.1E-8",
+                    "burned_after": "4.1E-8", "supply_before": "99.999999959",
+                    "supply_after": "99.999999959", "floor_before": "3E-9",
+                    "floor_after": "0" if success else "3E-9",
+                    "floor_restored": "3E-9",
+                }
+                live_gas = {"before": 3, "after": 0 if success else 3,
+                            "restored": 3}
+                self.assertEqual(digest(balances),
+                                 success_balance_hash if success
+                                 else failure_balance_hash)
+                self.assertEqual(digest(live_gas),
+                                 success_gas_hash if success
+                                 else failure_gas_hash)
+                validate_balance_transitions(
+                    balances, "core", outcome, depth, digest(balances))
+                validate_live_deposit_gas(
+                    live_gas, digest(live_gas), balances,
+                    "core", outcome, depth)
+
     def test_constructed_postcard_threshold_gas(self):
         def digest(value):
             return hashlib.sha256(json.dumps(value, sort_keys=True,
