@@ -22,6 +22,18 @@ pub(super) async fn fund(
     count: usize,
 ) -> Result<Vec<(OutPoint, TxOut)>> {
     ensure!(matches!(count, 50 | 500));
+    fund_to(client, key, address, funding, &vec![address.clone(); count]).await
+}
+
+pub(super) async fn fund_to(
+    client: &Client,
+    key: &Keypair,
+    address: &Address,
+    funding: (OutPoint, TxOut),
+    recipients: &[Address],
+) -> Result<Vec<(OutPoint, TxOut)>> {
+    let count = recipients.len();
+    ensure!(matches!(count, 2 | 50 | 500));
     let count_u64 = u64::try_from(count)?;
     let available = funding
         .1
@@ -36,12 +48,14 @@ pub(super) async fn fund(
             previous_output: funding.0,
             ..Default::default()
         }],
-        output: (0..count)
-            .map(|index| TxOut {
+        output: recipients
+            .iter()
+            .enumerate()
+            .map(|(index, recipient)| TxOut {
                 value: Amount::from_sat(
                     available / count_u64 + if index == 0 { available % count_u64 } else { 0 },
                 ),
-                script_pubkey: address.script_pubkey(),
+                script_pubkey: recipient.script_pubkey(),
             })
             .collect(),
     };
@@ -111,7 +125,11 @@ pub(super) async fn block(
     Ok((block, reveals))
 }
 
-async fn mine(client: &Client, address: &Address, ordered: &[Transaction]) -> Result<Block> {
+pub(super) async fn mine(
+    client: &Client,
+    address: &Address,
+    ordered: &[Transaction],
+) -> Result<Block> {
     let txids: Vec<_> = ordered
         .iter()
         .map(|tx| tx.compute_txid().to_string())

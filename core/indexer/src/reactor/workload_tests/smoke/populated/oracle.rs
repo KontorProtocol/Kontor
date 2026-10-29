@@ -32,6 +32,7 @@ struct Host {
 pub(super) struct PaidEffects {
     pub(super) transferred: Decimal,
     pub(super) staked: Decimal,
+    pub(super) payer_staked: Decimal,
 }
 
 pub(super) fn root_receipts<'a>(rows: &'a [ResultRow], txid: &str) -> Result<Vec<&'a ResultRow>> {
@@ -270,7 +271,7 @@ impl Before {
             balance(runtime, HolderRef::XOnlyPubkey(self.payer.clone())).await?
                 == sub_decimal(
                     sub_decimal(sub_decimal(self.payer_balance, fee)?, effects.transferred)?,
-                    effects.staked
+                    effects.payer_staked
                 )?
         );
         ensure!(balance(runtime, HolderRef::Burner).await? == add_decimal(self.burner, fee)?);

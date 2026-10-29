@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result, ensure};
 use bitcoin::Network;
 use indexer_types::{ContractAddress, Inst, InstKind, OpStatus, ResultRow};
@@ -16,6 +18,60 @@ use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{Decimal, Runtime, TransactionContext, from_wave_expr, to_wave_expr};
 
 const BLOB_BYTES: usize = 128;
+
+#[derive(Clone, Copy)]
+pub(super) enum MixedLayout {
+    Single {
+        payer: u64,
+        operations_per_transaction: usize,
+    },
+    TwoInputs {
+        signers: [u64; 2],
+    },
+    Aggregate {
+        signers: [u64; 2],
+    },
+}
+
+impl MixedLayout {
+    pub(super) fn payer(self) -> u64 {
+        match self {
+            Self::Single { payer, .. } => payer,
+            Self::TwoInputs { signers } | Self::Aggregate { signers } => signers[0],
+        }
+    }
+
+    pub(super) fn signer(self, index: usize) -> u64 {
+        match self {
+            Self::Single { payer, .. } => payer,
+            Self::TwoInputs { signers } => signers[index / 50],
+            Self::Aggregate { signers } => signers[index % 2],
+        }
+    }
+
+    fn position(self, index: usize) -> Result<(u32, u32, u32)> {
+        let (tx, input, op) = match self {
+            Self::Single {
+                operations_per_transaction,
+                ..
+            } => {
+                ensure!(operations_per_transaction > 0);
+                (
+                    index / operations_per_transaction,
+                    0,
+                    index % operations_per_transaction,
+                )
+            }
+            Self::TwoInputs { .. } => (0, index / 50, index % 50),
+            Self::Aggregate { .. } => (0, 0, index),
+        };
+        Ok((
+            u32::try_from(tx)?,
+            u32::try_from(input)?,
+            u32::try_from(op)?,
+        ))
+    }
+}
 
 pub(super) struct MixedWorkload {
     counter: ContractAddress,
@@ -148,12 +204,33 @@ impl MixedWorkload {
         result
     }
 
-    pub(super) fn effects(&self) -> Result<PaidEffects> {
-        Ok(PaidEffects {
-            transferred: mul_decimal(
+    pub(super) fn signer_effects(
+        &self,
+        layout: MixedLayout,
+        signer: u64,
+    ) -> Result<(Decimal, Decimal)> {
+        let indices = (0..self.rounds * 20).filter(|index| layout.signer(*index) == signer);
+        let transfers = indices.clone().filter(|index| index % 20 <= 7).count();
+        let stakes = indices
+            .filter(|index| matches!(index % 20, 16..=17))
+            .count();
+        Ok((
+            mul_decimal(
                 Decimal::from("0.001"),
-                Decimal::try_from((self.rounds * 8) as u64)?,
+                Decimal::try_from(u64::try_from(transfers)?)?,
             )?,
+            mul_decimal(
+                Decimal::from("0.001"),
+                Decimal::try_from(u64::try_from(stakes)?)?,
+            )?,
+        ))
+    }
+
+    pub(super) fn effects(&self, layout: MixedLayout) -> Result<PaidEffects> {
+        let (transferred, payer_staked) = self.signer_effects(layout, layout.payer())?;
+        Ok(PaidEffects {
+            transferred,
+            payer_staked,
             staked: mul_decimal(
                 Decimal::from("0.001"),
                 Decimal::try_from((self.rounds * 2) as u64)?,
@@ -166,10 +243,9 @@ impl MixedWorkload {
         runtime: &mut Runtime,
         all: &[&ResultRow],
         roots: &[&ResultRow],
-        payer: u64,
-        operations_per_transaction: usize,
+        layout: MixedLayout,
     ) -> Result<()> {
-        ensure!(operations_per_transaction > 0);
+        let payer = layout.payer();
         ensure!(roots.len() == self.rounds * 20 && all.len() == self.rounds * 25);
         let conn = runtime.get_storage_conn();
         let staking_id = get_contract_id_from_address(&conn, &staking_address())
@@ -178,18 +254,20 @@ impl MixedWorkload {
         let staking_signer = get_contract_signer_id(&conn, staking_id)
             .await?
             .context("missing staking signer")?;
-        let mut expected_stake = Decimal::default();
+        let mut expected_stakes = BTreeMap::<u64, Decimal>::new();
         for (index, root) in roots.iter().enumerate() {
+            let signer = layout.signer(index);
+            let (tx_index, input_index, op_index) = layout.position(index)?;
             let slot = index % 20;
             let round = index / 20;
             let nested = matches!(slot, 13..=17);
             ensure!(
                 root.height == SMOKE_HEIGHT
-                    && root.tx_index == Some(u32::try_from(index / operations_per_transaction)?)
-                    && root.input_index == Some(0)
-                    && root.op_index == Some(u32::try_from(index % operations_per_transaction)?)
+                    && root.tx_index == Some(tx_index)
+                    && root.input_index == Some(input_index)
+                    && root.op_index == Some(op_index)
                     && root.result_index == u32::from(nested)
-                    && root.signer_id == payer
+                    && root.signer_id == signer
                     && root.payer_signer_id == Some(payer)
                     && root.gas > 0
                     && root.gas <= GAS_LIMIT
@@ -213,7 +291,7 @@ impl MixedWorkload {
                     );
                     let transfer = token::wave::transfer_parse_return_expr(value)?;
                     ensure!(
-                        transfer.src == HolderRef::SignerId(payer)
+                        transfer.src == HolderRef::SignerId(signer)
                             && transfer.dst == HolderRef::SignerId(self.recipient)
                             && transfer.amt == Decimal::from("0.001")
                     );
@@ -246,9 +324,10 @@ impl MixedWorkload {
                     ensure!(
                         root.contract == staking_address().to_string() && root.func == "add-stake"
                     );
-                    expected_stake = add_decimal(expected_stake, Decimal::from("0.001"))?;
+                    let expected_stake = expected_stakes.entry(signer).or_default();
+                    *expected_stake = add_decimal(*expected_stake, Decimal::from("0.001"))?;
                     let stake = staking::wave::add_stake_parse_return_expr(value)?;
-                    ensure!(stake.stake == expected_stake && stake.withdrawal_height.is_none());
+                    ensure!(stake.stake == *expected_stake && stake.withdrawal_height.is_none());
                 }
                 18..=19 => {
                     ensure!(root.contract == self.crypto.to_string() && root.func == "set-hash");
@@ -272,7 +351,7 @@ impl MixedWorkload {
                 let child = children[0];
                 ensure!(
                     child.status == OpStatus::Ok
-                        && child.signer_id == payer
+                        && child.signer_id == signer
                         && child.payer_signer_id.is_none()
                         && child.height == root.height
                         && child.tx_index == root.tx_index
@@ -298,7 +377,7 @@ impl MixedWorkload {
                 } else {
                     let transfer = token::wave::transfer_parse_return_expr(value)?;
                     ensure!(
-                        transfer.src == HolderRef::SignerId(payer)
+                        transfer.src == HolderRef::SignerId(signer)
                             && transfer.dst == HolderRef::SignerId(staking_signer)
                             && transfer.amt == Decimal::from("0.001")
                     );
@@ -324,7 +403,7 @@ impl MixedWorkload {
             )
             .is_empty()
         );
-        let effects = self.effects()?;
+
         ensure!(
             from_wave_expr::<Option<Vec<u8>>>(
                 &runtime
@@ -336,12 +415,17 @@ impl MixedWorkload {
         );
         ensure!(
             token::balance(runtime, HolderRef::SignerId(self.recipient)).await?
-                == Some(effects.transferred)
+                == Some(mul_decimal(
+                    Decimal::from("0.001"),
+                    Decimal::try_from((self.rounds * 8) as u64)?
+                )?)
         );
-        let stake = staking::get_stake(runtime, &HolderRef::SignerId(payer).to_string())
-            .await?
-            .context("missing mixed payer bond")?;
-        ensure!(stake.stake == effects.staked && stake.withdrawal_height.is_none());
+        for (signer, expected_stake) in expected_stakes {
+            let stake = staking::get_stake(runtime, &HolderRef::SignerId(signer).to_string())
+                .await?
+                .context("missing mixed signer bond")?;
+            ensure!(stake.stake == expected_stake && stake.withdrawal_height.is_none());
+        }
         Ok(())
     }
 }

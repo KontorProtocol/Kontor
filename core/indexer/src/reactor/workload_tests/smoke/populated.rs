@@ -32,12 +32,14 @@ mod many;
 mod mixed;
 mod oracle;
 mod pruning;
+mod shapes;
 mod simulation;
 
 use batch::BatchProof;
-use mixed::MixedWorkload;
+use mixed::{MixedLayout, MixedWorkload};
 use oracle::{PaidEffects, root_receipts};
 use pruning::PruningProof;
+use shapes::ShapeSigners;
 use simulation::SimulationProof;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,12 +49,14 @@ enum Delivery {
     SimulationsThenBatch,
     MixedBlock,
     MixedTransactions(usize),
+    MixedMultiInput,
+    MixedAggregate,
 }
 
 impl Delivery {
     fn mixed_rounds(self) -> Option<usize> {
         match self {
-            Self::MixedBlock => Some(5),
+            Self::MixedBlock | Self::MixedMultiInput | Self::MixedAggregate => Some(5),
             Self::MixedTransactions(count) => Some(count / 10),
             _ => None,
         }
@@ -244,6 +248,36 @@ async fn workload_five_hundred_transactions_preserve_mixed_accounting() -> Resul
     .await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; signed multi-input mixed workload, not performance acceptance"]
+async fn workload_multi_input_preserves_signers_and_sponsorship() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::MixedMultiInput,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; signed BLS mixed workload, not performance acceptance"]
+async fn workload_aggregate_preserves_signers_and_nonces() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::MixedAggregate,
+    )
+    .await
+}
+
 async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let config = config.validate()?;
     eprintln!("workload_population={}", serde_json::to_string(&config)?);
@@ -259,7 +293,11 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let address = Address::p2tr(&Secp256k1::new(), public_key, None, Network::Regtest);
     let mined = client
         .generate_to_address(
-            ANCHOR_HEIGHT - u64::from(matches!(delivery, Delivery::MixedTransactions(_))),
+            ANCHOR_HEIGHT
+                - u64::from(matches!(
+                    delivery,
+                    Delivery::MixedTransactions(_) | Delivery::MixedMultiInput
+                )),
             &address.to_string(),
         )
         .await?;
@@ -273,6 +311,15 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     );
     let fundings = if let Delivery::MixedTransactions(count) = delivery {
         many::fund(&client, &key, &address, funding.clone(), count).await?
+    } else if delivery == Delivery::MixedMultiInput {
+        many::fund_to(
+            &client,
+            &key,
+            &address,
+            funding.clone(),
+            &[address.clone(), shapes::address(&shapes::secondary_key()?)],
+        )
+        .await?
     } else {
         vec![funding.clone()]
     };
@@ -364,6 +411,33 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         .await?
         .context("missing payer identity")?
         .signer_id();
+    let shape_signers = if matches!(
+        delivery,
+        Delivery::MixedMultiInput | Delivery::MixedAggregate
+    ) {
+        Some(
+            ShapeSigners::prepare(
+                &mut history.runtime,
+                key,
+                delivery == Delivery::MixedAggregate,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let layout = shape_signers.as_ref().map_or(
+        MixedLayout::Single {
+            payer,
+            operations_per_transaction: if matches!(delivery, Delivery::MixedTransactions(_)) {
+                2
+            } else {
+                100
+            },
+        },
+        ShapeSigners::layout,
+    );
+    ensure!(layout.payer() == payer);
     let mixed = if let Some(rounds) = delivery.mixed_rounds() {
         Some(MixedWorkload::prepare(&mut history.runtime, payer, rounds).await?)
     } else {
@@ -385,7 +459,18 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let snapshot =
         Snapshot::export(&history.db_conn(), &directory.path().join("populated.db")).await?;
     stop_engine(&mut history).await?;
-    let (raw, reveals) = if matches!(delivery, Delivery::MixedTransactions(_)) {
+    let (raw, reveals) = if let Some(shape_signers) = &shape_signers {
+        shape_signers
+            .block(
+                &client,
+                fundings,
+                mixed
+                    .as_ref()
+                    .context("missing mixed fixture")?
+                    .instructions(),
+            )
+            .await?
+    } else if matches!(delivery, Delivery::MixedTransactions(_)) {
         many::block(
             &client,
             &key,
@@ -412,12 +497,26 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let hash = raw.block_hash();
     let block = decode_block(&serialize(&raw), SMOKE_HEIGHT, hash, anchor)?;
     ensure!(block.transactions.len() == reveals.len());
+    let raw_position = |index: usize| -> Result<u32> {
+        Ok(u32::try_from(if delivery == Delivery::MixedMultiInput {
+            3
+        } else {
+            index * 2 + 2
+        })?)
+    };
     for (index, (decoded, reveal)) in block.transactions.iter().zip(&reveals).enumerate() {
-        ensure!(
-            decoded.index == u32::try_from(index * 2 + 2)? && decoded.txid == reveal.compute_txid()
-        );
+        ensure!(decoded.index == raw_position(index)? && decoded.txid == reveal.compute_txid());
         if matches!(delivery, Delivery::MixedTransactions(_)) {
             ensure!(decoded.inputs.len() == 1 && decoded.inputs[0].insts.ops.len() == 2);
+        }
+        if let Some(shape_signers) = &shape_signers {
+            shape_signers.check_inputs(
+                &decoded.inputs,
+                mixed
+                    .as_ref()
+                    .context("missing mixed fixture")?
+                    .instructions(),
+            )?;
         }
     }
     let txids: Vec<_> = reveals
@@ -470,7 +569,7 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
                 transaction.confirmed_height == Some(SMOKE_HEIGHT)
                     && transaction.tx_index == Some(u32::try_from(index)?)
                     && get_confirmation_position(&trial.db_conn(), txid).await?
-                        == Some(u32::try_from(index * 2 + 2)?),
+                        == Some(raw_position(index)?),
                 "wrong persisted confirmation position for workload transaction {index}"
             );
             ensure!(
@@ -507,19 +606,12 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         }
         let effects = if let Some(mixed) = &mixed {
             mixed
-                .check(
-                    &mut trial.runtime,
-                    &all_paid,
-                    &paid,
-                    payer,
-                    if matches!(delivery, Delivery::MixedTransactions(_)) {
-                        2
-                    } else {
-                        100
-                    },
-                )
+                .check(&mut trial.runtime, &all_paid, &paid, layout)
                 .await?;
-            mixed.effects()?
+            if let Some(shape_signers) = &shape_signers {
+                shape_signers.check(&mut trial.runtime, mixed).await?;
+            }
+            mixed.effects(layout)?
         } else {
             ensure!(paid.len() == 3 && all_paid.len() == 3);
             if let Some(simulations) = simulations {
