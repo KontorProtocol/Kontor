@@ -1,7 +1,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use indexer_types::ResultRow;
 use libsql::params;
 use num::BigInt;
@@ -101,7 +101,8 @@ async fn reward_integer(runtime: &mut Runtime, field: u8) -> Result<BigInt> {
     let bytes: Vec<u8> = stored(runtime, contract, &KeyPath::new().push_interned(field))
         .await?
         .context("missing reward integer")?;
-    let (value, rest) = Integer::decode_from(&bytes).context("invalid reward integer")?;
+    let (value, rest) = Integer::decode_from(&bytes)
+        .map_err(|error| anyhow!("invalid reward integer: {error:?}"))?;
     ensure!(rest.is_empty());
     let value: BigInt = value.to_string().parse()?;
     ensure!(value >= BigInt::from(0));
