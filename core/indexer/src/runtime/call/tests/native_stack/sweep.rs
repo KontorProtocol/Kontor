@@ -31,8 +31,8 @@ use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{
-    ContractAddress, Decimal, ExecutionError, Linkers, MAX_UNTRUSTED_GAS_LIMIT, Runtime,
-    TransactionContext, native_provenance,
+    CheckedArithmetics, ContractAddress, Decimal, ExecutionError, Linkers, MAX_UNTRUSTED_GAS_LIMIT,
+    Runtime, TransactionContext, native_provenance,
 };
 use crate::test_utils::test_runtime_with_engine;
 
@@ -788,6 +788,7 @@ pub(super) async fn run_resource_canonical(
         _ => bail!("unknown canonical stack case {case_id}"),
     };
     let mut observations = Vec::with_capacity(samples.len() * 2);
+    let mut paid_fees = Vec::new();
     for (sample_key, kind, expected_outcome, expected_trap) in samples {
         let mut fixture = Fixture::new((*kind).to_owned(), configuration == "reduced").await?;
         fixture.resource_probe = Some(process_role == "target_observed");
@@ -809,6 +810,13 @@ pub(super) async fn run_resource_canonical(
                     observation["value"] == to_wave_expr("x".repeat(16_384)),
                     "canonical string lowering or lifting changed"
                 );
+            }
+            if kind.starts_with("paid_") {
+                paid_fees.push(canonical_paid_accounting(
+                    &observation,
+                    &fixture.runtime.pricing,
+                    fixture.runtime.gas_to_fuel_multiplier,
+                )?);
             }
             println!(
                 "CANONICAL_STACK_ATTEMPT:{}",
@@ -833,8 +841,11 @@ pub(super) async fn run_resource_canonical(
             .as_u64()
             .context("canonical heavy user fuel is missing")?;
         ensure!(
-            heavy >= light + 16_384,
-            "canonical post-return loop was not charged"
+            heavy >= light + 16_384
+                && paid_fees.len() == 4
+                && paid_fees[2].0 > paid_fees[0].0
+                && paid_fees[2].1 > paid_fees[0].1,
+            "canonical post-return loop or fee was not charged"
         );
     }
     let summary = json!({
@@ -848,6 +859,49 @@ pub(super) async fn run_resource_canonical(
     });
     println!("CANONICAL_STACK_SUMMARY:{summary}");
     Ok(summary)
+}
+
+fn canonical_paid_accounting(
+    observation: &JsonValue,
+    pricing: &Pricing,
+    multiplier: u64,
+) -> Result<(u64, Decimal)> {
+    let fuel = &observation["fuel"];
+    let user = fuel["user"]
+        .as_u64()
+        .context("canonical user fuel is missing")?;
+    ensure!(
+        user > 0 && fuel["deposit"].as_u64() == Some(0) && multiplier == 1_000,
+        "canonical fixture used deposit fuel or changed gas scale"
+    );
+    let expected_gas = user.div_ceil(multiplier).max(1);
+    let receipt_gas = observation["receipt"]["gas"]
+        .as_u64()
+        .context("canonical paid receipt gas is missing")?;
+    ensure!(
+        receipt_gas == expected_gas && receipt_gas <= MAX_UNTRUSTED_GAS_LIMIT,
+        "canonical paid receipt gas differs from user fuel"
+    );
+    ensure!(
+        pricing.execution_fee(1)? == Decimal::from("1e-9"),
+        "canonical fixture pricing changed"
+    );
+    let expected_fee = pricing.execution_fee(expected_gas)?;
+    let balances = &observation["balance_transitions"];
+    let amount = |name| -> Result<Decimal> {
+        Ok(Decimal::from(
+            balances[name]
+                .as_str()
+                .context("canonical balance amount is missing")?,
+        ))
+    };
+    ensure!(
+        amount("before")?.sub(amount("after")?)? == expected_fee
+            && amount("burned_after")?.sub(amount("burned_before")?)? == expected_fee
+            && amount("supply_before")?.sub(amount("supply_after")?)? == expected_fee,
+        "canonical paid debit, burn, or supply differs from priced gas"
+    );
+    Ok((expected_gas, expected_fee))
 }
 
 pub(super) async fn run_resource_pending_host_io(
