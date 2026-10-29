@@ -53,15 +53,22 @@ source review independently approved preparation in receipt
 `58f46e16205a15fc3bcc1147474104bb`, under `kontor-k2a-reconcile-524782c3`.
 This receipt was read and acknowledged. It is not a phase acceptance.
 
-`rustfmt` and `git diff --check` pass. Compilation and runtime tests have not yet
-run on this candidate. The native-stack agent retains the sole local Cargo slot
-for its live final qualification capture. The earlier K2a test run does not qualify
-this new candidate.
+`rustfmt` and `git diff --check` pass. On documentation head `47cf689a`, with
+source unchanged from `524782c3`, the following locked/offline checks passed:
 
-After the slot is released, run the ported storage differential tests, synchronous
-call regressions, canonical resource-error tests, and aggregate infrastructure
-regressions, then the applicable library and Clippy checks. Record actual commands,
-source identity, outcomes, and failures before claiming validation.
+- 28 versioned storage differential tests, 6.77 seconds after compilation.
+- 45 integration regressions covering synchronous guest calls, capability rejection,
+  canonical resource errors, aggregate infrastructure failures, BLS, and deep
+  separate-process chains, 135.11 seconds. The one ignored child helper is invoked
+  explicitly by the passing parent test.
+- Indexer Clippy with tests and warnings denied, 27.60 seconds.
+
+Exact commands, environment, terminal exit codes and log hashes are recorded in
+`.build-cache/k2a-reconcile/validation.json`. These checks validate this preparation
+slice; the complete final K2a library/CI and acceptance gates remain pending after
+S2 and OWNERSHIP-1 integration. The prior branch's tests are not used as evidence
+for this candidate. Parent released the Cargo slot back to the native agent after
+all three commands terminated.
 
 ## Remaining phase work
 
