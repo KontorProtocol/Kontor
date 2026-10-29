@@ -164,6 +164,12 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, 
     )
 }
 
+#[cfg(test)]
+pub(crate) async fn workload_bitcoin(data_dir: &Path) -> Result<(Child, BitcoinClient)> {
+    let (child, client, _, _) = run_bitcoin(data_dir).await?;
+    Ok((child, client))
+}
+
 /// Outcome of waiting on a freshly-spawned bitcoind.
 enum BitcoindStartup {
     /// RPC answered on regtest — bitcoind is up.

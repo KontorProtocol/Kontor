@@ -1,0 +1,356 @@
+use std::str::FromStr;
+
+use anyhow::{Context, Result, ensure};
+use bitcoin::consensus::serialize;
+use bitcoin::key::Secp256k1;
+use bitcoin::{Address, BlockHash, Network, OutPoint};
+use indexer_types::{ContractAddress, OpStatus};
+use serde::{Deserialize, Serialize};
+use tempfile::TempDir;
+
+use super::super::storage::Population as StoragePopulation;
+use super::super::validators::Population as ValidatorPopulation;
+use super::{
+    ANCHOR_HEIGHT, BitcoinProcess, EngineCleanup, FUNDING_SEED, GAS_LIMIT, SMOKE_HEIGHT, Snapshot,
+    apply, database_projection, decode_block, reactor, receipts, signed_smoke, state, stop_engine,
+    test_provenance,
+};
+use crate::bitcoin_client::client::RegtestRpc;
+use crate::bls::taproot_derivation_path;
+use crate::database::Writer;
+use crate::database::queries::get_identity;
+use crate::reactor::create_runtime_executor;
+use crate::reg_tester::{derive_taproot_keypair_from_seed, workload_bitcoin};
+use crate::runtime::token::api as token;
+use crate::runtime::wit::Signer;
+use crate::runtime::wit::kontor::built_in::context::HolderRef;
+use crate::runtime::{ComponentCache, Decimal, Runtime, Storage, TransactionContext};
+
+mod oracle;
+mod pruning;
+
+use pruning::PruningProof;
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PopulationConfig {
+    active_validators: usize,
+    replacements: usize,
+    agreements: usize,
+    members_per_agreement: usize,
+}
+
+impl PopulationConfig {
+    fn validate(self) -> Result<Self> {
+        ensure!(
+            self.active_validators > self.replacements && self.replacements > 0,
+            "fixture requires replacements and at least one unchanged reward recipient"
+        );
+        ensure!(self.agreements > 0 && self.members_per_agreement >= 3);
+        self.active_validators
+            .checked_add(self.replacements)
+            .context("validator population overflow")?;
+        self.replacements
+            .checked_mul(2)
+            .context("transition count overflow")?;
+        let storage_calls = self
+            .agreements
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(1))
+            .context("storage fixture call count overflow")?;
+        u64::try_from(storage_calls).context("storage fixture call count exceeds u64")?;
+        Ok(self)
+    }
+}
+
+#[test]
+fn workload_population_configuration_rejects_ambiguous_or_invalid_input() -> Result<()> {
+    let valid =
+        r#"{"active_validators":16,"replacements":1,"agreements":4,"members_per_agreement":5}"#;
+    let config: PopulationConfig = serde_json::from_str(valid)?;
+    config.validate()?;
+    for invalid in [
+        valid.replace("\"replacements\":1", "\"replacements\":0"),
+        valid.replace("\"replacements\":1", "\"replacements\":16"),
+        valid.replace("\"agreements\":4", "\"agreements\":0"),
+        valid.replace("\"members_per_agreement\":5", "\"members_per_agreement\":2"),
+    ] {
+        ensure!(
+            serde_json::from_str::<PopulationConfig>(&invalid)?
+                .validate()
+                .is_err()
+        );
+    }
+    for invalid in [
+        valid.replace("\"agreements\":4", "\"agreements\":4,\"agreements\":5"),
+        valid.replace("\"agreements\":4", "\"agreement\":4"),
+        valid.replace("\"agreements\":4", "\"agreements\":4,\"extra\":true"),
+        valid.replace("\"agreements\":4", "\"agreements\":-1"),
+    ] {
+        ensure!(serde_json::from_str::<PopulationConfig>(&invalid).is_err());
+    }
+    ensure!(
+        PopulationConfig {
+            active_validators: usize::MAX,
+            replacements: 1,
+            ..config
+        }
+        .validate()
+        .is_err()
+    );
+    ensure!(
+        PopulationConfig {
+            agreements: usize::MAX,
+            ..config
+        }
+        .validate()
+        .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; populated development replay, not performance acceptance"]
+async fn workload_populated_block_replays_transitions_and_rewards() -> Result<()> {
+    replay(PopulationConfig {
+        active_validators: 4,
+        replacements: 2,
+        agreements: 2,
+        members_per_agreement: 3,
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind and explicit KONTOR_WORKLOAD_POPULATION JSON; not performance acceptance"]
+async fn workload_configured_population_replays_transitions_and_rewards() -> Result<()> {
+    let config = serde_json::from_str(
+        &std::env::var("KONTOR_WORKLOAD_POPULATION")
+            .context("configured replay requires KONTOR_WORKLOAD_POPULATION")?,
+    )?;
+    replay(config).await
+}
+
+async fn replay(config: PopulationConfig) -> Result<()> {
+    let config = config.validate()?;
+    eprintln!("workload_population={}", serde_json::to_string(&config)?);
+    let bitcoin_dir = TempDir::new()?;
+    let (child, client) = workload_bitcoin(bitcoin_dir.path()).await?;
+    let mut bitcoin = BitcoinProcess(child);
+    let key = derive_taproot_keypair_from_seed(
+        &FUNDING_SEED,
+        &taproot_derivation_path(Network::Regtest),
+    )?;
+    let public_key = key.x_only_public_key().0;
+    let address = Address::p2tr(&Secp256k1::new(), public_key, None, Network::Regtest);
+    let mined = client
+        .generate_to_address(ANCHOR_HEIGHT, &address.to_string())
+        .await?;
+    let funding_block = client.get_block(&BlockHash::from_str(&mined[0])?).await?;
+    let funding = (
+        OutPoint {
+            txid: funding_block.txdata[0].compute_txid(),
+            vout: 0,
+        },
+        funding_block.txdata[0].output[0].clone(),
+    );
+    let anchor = BlockHash::from_str(mined.last().context("missing anchor")?)?;
+    let validators =
+        ValidatorPopulation::new(config.active_validators, config.replacements, [73; 32])?;
+    let directory = TempDir::new()?;
+    let writer = Writer::new(directory.path(), "source.db").await?;
+    let (_, mut runtime, last_height, last_hash) = create_runtime_executor(
+        89,
+        &writer,
+        client.clone(),
+        None,
+        &validators.genesis,
+        Network::Regtest,
+    )
+    .await?;
+    let core = Signer::Core(Box::new(Signer::Nobody));
+    token::issue_to(
+        &mut runtime,
+        &core,
+        HolderRef::XOnlyPubkey(public_key.to_string()),
+        Decimal::from("100"),
+    )
+    .await??;
+    let addresses = ["populateda", "populatedb"].map(|name| ContractAddress {
+        name: name.into(),
+        height: 0,
+        tx_index: 1,
+    });
+    runtime
+        .set_context(
+            0,
+            Some(TransactionContext::builder().tx_index(1).build()),
+            None,
+            None,
+        )
+        .await;
+    for address in &addresses {
+        runtime
+            .publish(
+                &core,
+                runtime.core_payment(),
+                &address.name,
+                include_bytes!("../../../../../../test-contracts/binaries/error_test.wasm.br"),
+                &test_provenance()?,
+            )
+            .await?;
+        ensure!(state(&mut runtime, address).await? == [0, 0, 0, 0]);
+    }
+    let mut cleanup = EngineCleanup::default();
+    let history_dir = TempDir::new_in(directory.path())?;
+    let mut history = reactor(
+        runtime,
+        client.clone(),
+        history_dir.path(),
+        last_height,
+        last_hash,
+        false,
+        &mut cleanup,
+    )
+    .await?;
+    for height in 89..=ANCHOR_HEIGHT {
+        let hash = client.get_block_hash(height).await?;
+        let block = client.get_block(&hash).await?;
+        apply(
+            &mut history,
+            decode_block(
+                &serialize(&block),
+                height,
+                hash,
+                block.header.prev_blockhash,
+            )?,
+        )
+        .await?;
+        if height == 90 {
+            let scheduled = validators.schedule(&mut history.runtime).await?;
+            ensure!(scheduled.due == SMOKE_HEIGHT);
+        }
+    }
+    StoragePopulation::prepare(
+        &mut history.runtime,
+        config.agreements,
+        config.members_per_agreement,
+        [81; 32],
+    )
+    .await?;
+    let projection_before = database_projection(&history.db_conn()).await?;
+    let pruning = PruningProof::capture(&history.db_conn(), 89, 96).await?;
+    let before = oracle::Before::capture(
+        &mut history.runtime,
+        &validators,
+        &public_key.to_string(),
+        config,
+    )
+    .await?;
+    ensure!(
+        database_projection(&history.db_conn()).await? == projection_before,
+        "prestate observations mutated state"
+    );
+    let payer = get_identity(&history.db_conn(), &public_key.to_string())
+        .await?
+        .context("missing payer identity")?
+        .signer_id();
+    let snapshot =
+        Snapshot::export(&history.db_conn(), &directory.path().join("populated.db")).await?;
+    stop_engine(&mut history).await?;
+    let (commit, reveal, _) = signed_smoke(&client, &key, funding, &addresses).await?;
+    let hash = BlockHash::from_str(&client.generate_to_address(1, &address.to_string()).await?[0])?;
+    let raw = client.get_block(&hash).await?;
+    ensure!(raw.txdata.len() == 3 && raw.txdata[1] == commit && raw.txdata[2] == reveal);
+    let block = decode_block(&serialize(&raw), SMOKE_HEIGHT, hash, anchor)?;
+    ensure!(block.transactions.len() == 1 && block.transactions[0].index == 2);
+    let txid = reveal.compute_txid().to_string();
+    let mut expected_projection = None;
+    for name in ["first.db", "second.db"] {
+        snapshot.copy_to(&directory.path().join(name))?;
+        let writer = Writer::new(directory.path(), name).await?;
+        ensure!(database_projection(&writer.connection()).await? == projection_before);
+        let storage = Storage::builder()
+            .height(ANCHOR_HEIGHT)
+            .conn(writer.connection())
+            .build();
+        let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+        runtime.network = Network::Regtest;
+        let engine_dir = TempDir::new_in(directory.path())?;
+        let mut trial = reactor(
+            runtime,
+            client.clone(),
+            engine_dir.path(),
+            ANCHOR_HEIGHT,
+            Some(anchor),
+            true,
+            &mut cleanup,
+        )
+        .await?;
+        ensure!(
+            database_projection(&trial.db_conn()).await? == projection_before,
+            "reactor startup changed restored state"
+        );
+        apply(&mut trial, block.clone()).await?;
+        let projection = database_projection(&trial.db_conn()).await?;
+        pruning.check(&trial.db_conn()).await?;
+        let rows = receipts(&trial.db_conn(), SMOKE_HEIGHT).await?;
+        let paid: Vec<_> = rows
+            .iter()
+            .filter(|row| row.txid.as_deref() == Some(&txid))
+            .collect();
+        ensure!(paid.len() == 3);
+        ensure!(
+            rows.iter()
+                .all(|row| row.txid.is_none() || row.txid.as_deref() == Some(&txid))
+        );
+        for (index, row) in paid.iter().enumerate() {
+            // Stored receipt positions currently use the filtered transaction index.
+            ensure!(
+                row.tx_index == Some(0)
+                    && row.input_index == Some(0)
+                    && row.op_index == Some(index as u32)
+                    && row.result_index == 0
+            );
+            ensure!(row.signer_id == payer && row.payer_signer_id == Some(payer));
+            ensure!(row.contract == addresses[usize::from(index == 1)].to_string());
+            ensure!(
+                row.func
+                    == if index == 1 {
+                        "scan-compound"
+                    } else {
+                        "write-result-payload"
+                    }
+            );
+            ensure!(row.gas > 0 && row.gas <= GAS_LIMIT);
+        }
+        ensure!(
+            paid.iter().map(|row| row.status).collect::<Vec<_>>()
+                == [OpStatus::Ok, OpStatus::Other, OpStatus::Ok]
+        );
+        ensure!(
+            paid[0].value.as_deref() == Some("\"é\\n\"")
+                && paid[1].value.is_none()
+                && paid[2].value.as_deref() == Some("\"é\\né\\n\"")
+        );
+        before.check(&mut trial, &rows, &txid).await?;
+        ensure!(state(&mut trial.runtime, &addresses[0]).await? == [1, 0, 0, 1]);
+        ensure!(state(&mut trial.runtime, &addresses[1]).await? == [0, 0, 0, 0]);
+        ensure!(
+            database_projection(&trial.db_conn()).await? == projection,
+            "observations mutated state"
+        );
+        if let Some(expected) = &expected_projection {
+            ensure!(&projection == expected, "populated replay differs");
+        }
+        expected_projection = Some(projection);
+        stop_engine(&mut trial).await?;
+    }
+    ensure!(database_projection(&history.db_conn()).await? == projection_before);
+    bitcoin.0.kill().await?;
+    eprintln!(
+        "workload_population_replays_passed={}",
+        serde_json::to_string(&config)?
+    );
+    Ok(())
+}

@@ -20,6 +20,8 @@ mod reactor_cluster_tests;
 mod startup_tests;
 #[cfg(test)]
 mod storage_penalty_tests;
+#[cfg(test)]
+mod workload_tests;
 pub mod types;
 
 use std::collections::VecDeque;
