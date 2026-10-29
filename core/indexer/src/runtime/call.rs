@@ -212,6 +212,8 @@ impl Runtime {
         nested: bool,
     ) -> Result<CallOutcome, ExecutionError> {
         if self.invocation_depth >= MAX_LIVE_INVOCATIONS {
+            #[cfg(test)]
+            self.record_resource_rejection(contract_address, "depth_gate_rejected");
             return Ok(invocation_limit_outcome(fuel_limit));
         }
         if self
@@ -219,11 +221,17 @@ impl Runtime {
             .as_ref()
             .is_some_and(|budget| budget.live() >= MAX_LIVE_INVOCATIONS)
         {
+            #[cfg(test)]
+            self.record_resource_rejection(contract_address, "physical_capacity_rejected");
             return Err(ExecutionError::NonDeterministic(
                 InvocationCapacityExhausted.into(),
             ));
         }
-        let mut store = match self.make_store(fuel_limit) {
+        #[cfg(test)]
+        let store_result = self.make_store_for_call(fuel_limit, contract_address);
+        #[cfg(not(test))]
+        let store_result = self.make_store(fuel_limit);
+        let mut store = match store_result {
             Ok(store) => store,
             Err(error) if error.is::<InvocationLimitReached>() => {
                 return Ok(invocation_limit_outcome(fuel_limit));

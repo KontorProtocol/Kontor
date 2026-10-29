@@ -1,0 +1,689 @@
+{
+  "auxiliary_callsite_citations": {
+    "post_observation": [
+      "core/indexer/src/runtime/call/tests/sequential_chains.rs::run_chain_probe: storage-state, balance, floor, supply after target"
+    ],
+    "pre_observation": [
+      "core/indexer/src/runtime/call/tests/sequential_chains.rs::run_chain_probe: balance, floor, supply before target"
+    ],
+    "rollback_observation": [
+      "core/indexer/src/runtime/call/tests/sequential_chains.rs::run_chain_probe: balance, floor, supply, storage-state after rollback"
+    ],
+    "target_native_auxiliary": [
+      "core/indexer/src/runtime/call.rs::invoke_unsettled: target-phase non-chain contract address"
+    ]
+  },
+  "auxiliary_count_status": "pilot_pending",
+  "auxiliary_expected_counts": {},
+  "case_roles": [
+    {
+      "case_id": "chain_33_core",
+      "nested_chain_created": 33,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_33_core",
+      "nested_chain_created": 33,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_33_paid",
+      "nested_chain_created": 33,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_33_paid",
+      "nested_chain_created": 33,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_33_view",
+      "nested_chain_created": 33,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_33_view",
+      "nested_chain_created": 33,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_63_core",
+      "nested_chain_created": 63,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_63_core",
+      "nested_chain_created": 63,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_63_paid",
+      "nested_chain_created": 63,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_63_paid",
+      "nested_chain_created": 63,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_63_view",
+      "nested_chain_created": 63,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_63_view",
+      "nested_chain_created": 63,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_core",
+      "nested_chain_created": 64,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_core",
+      "nested_chain_created": 64,
+      "process_role": "trap_control_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "trap_control"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_core",
+      "nested_chain_created": 64,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_core",
+      "nested_chain_created": 64,
+      "process_role": "trap_control_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "trap_control"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_paid",
+      "nested_chain_created": 64,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_paid",
+      "nested_chain_created": 64,
+      "process_role": "trap_control_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "trap_control"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_paid",
+      "nested_chain_created": 64,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_paid",
+      "nested_chain_created": 64,
+      "process_role": "trap_control_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "trap_control"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_view",
+      "nested_chain_created": 64,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_view",
+      "nested_chain_created": 64,
+      "process_role": "trap_control_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "trap_control"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_view",
+      "nested_chain_created": 64,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_view",
+      "nested_chain_created": 64,
+      "process_role": "trap_control_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "trap_control"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_65_core",
+      "nested_chain_created": 64,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_65_core",
+      "nested_chain_created": 64,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_65_paid",
+      "nested_chain_created": 64,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_65_paid",
+      "nested_chain_created": 64,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_65_view",
+      "nested_chain_created": 64,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_65_view",
+      "nested_chain_created": 64,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    }
+  ],
+  "claim_status": "candidate_only",
+  "parent_manifest_sha256": "2c9cfbb08c2ddc4050fc2c15e0012aa557d9062c66625d23baf14a3c2e1fe7d3",
+  "remaining_case_ids": [
+    "brotli_raw_ceiling",
+    "canonical_lift_lower",
+    "canonical_post_return",
+    "canonical_realloc",
+    "canonical_type_value_recursion",
+    "cold_publish_br_table",
+    "cold_publish_control_nesting",
+    "cold_publish_large_function",
+    "deepest_frame_host_call",
+    "explicit_resource_drop",
+    "failed_instantiation_cleanup",
+    "foreign_wave_parse_print",
+    "generated_initialization",
+    "large_frame_paid",
+    "max_gas_paid",
+    "native_filestorage_lifecycle",
+    "native_staking_rewards",
+    "pending_host_io",
+    "pulley_plain_core",
+    "pulley_plain_paid",
+    "pulley_plain_system",
+    "pulley_plain_view",
+    "pulley_wide_core",
+    "pulley_wide_paid",
+    "pulley_wide_system",
+    "pulley_wide_view",
+    "sqlite_large_values",
+    "sqlite_pagination",
+    "sqlite_ranges"
+  ],
+  "remaining_requirements": {
+    "attestation": {
+      "cargo_binary_capture": "unimplemented",
+      "macos_thread_guard_capacity": "unimplemented",
+      "per_cell_guard_fault_control": "missing",
+      "source_revision_capture": "unimplemented",
+      "wasmtime_fiber_effective_capacity": "missing"
+    },
+    "case_bindings": "missing_29",
+    "macos_guard": "missing",
+    "production_memory_profiles": "missing",
+    "workload_plan": "awaiting_frozen_workload_plan"
+  },
+  "schema_sha256": "0d4565e14ee0479b1ff20ee70c898cc838ae61f4ae43a2f974581ce5a0e77fcd",
+  "schema_version": 2,
+  "source_baseline_commit": "67a52fed58a893ce2c1c05483f86f4fffa02a675",
+  "sources": {
+    "call": {
+      "path": "core/indexer/src/runtime/call.rs",
+      "sha256": "e0b05416e90ce7c6f5ecdd1f68b293112b169333656f17c1dc477bbe28a66896"
+    },
+    "chain_fixture": {
+      "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
+      "sha256": "f5fa8755cfb7729209fc16e8be1baa8867c28ba0e29db90129ea0a5b80b9bc70"
+    },
+    "invocation": {
+      "path": "core/indexer/src/runtime/invocation.rs",
+      "sha256": "5ed59299e2d76fd57085197313f756a455fc01fa71d9af1570b121339cd487c9"
+    },
+    "runtime": {
+      "path": "core/indexer/src/runtime/mod.rs",
+      "sha256": "a733da4444ca07f1fa884c4249df6d624b0a3389bbfff3c324a0663f3fb65dde"
+    },
+    "v1_chain_capture": {
+      "path": "tools/native-stack/capture_resource_chain.py",
+      "sha256": "02d3fcaf37325918f860c3626526773c5694877142775e3b0382b35d08c2c9c4"
+    },
+    "v1_validator": {
+      "path": "tools/native-stack/resource_evidence.py",
+      "sha256": "6233e98c0de386d6e9b5d255820036168c2d9b971970b3c1ff3103a7acc1a9ec"
+    },
+    "v2_capture": {
+      "path": "tools/native-stack/capture_resource_chain_v2.py",
+      "sha256": "d26d70530cb1f8dedc32745c708e854b3b5429f2732dc54106b781c905ea3848"
+    },
+    "v2_manifest_builder": {
+      "path": "tools/native-stack/resource_manifest_v2.py",
+      "sha256": "c9863c9577a63bff022f36ae0534070c570d5a47ea01ac203833890ab17f0baa"
+    },
+    "v2_schema": {
+      "path": "tools/native-stack/resource-evidence-schema-v2.json",
+      "sha256": "0d4565e14ee0479b1ff20ee70c898cc838ae61f4ae43a2f974581ce5a0e77fcd"
+    },
+    "v2_tests": {
+      "path": "tools/native-stack/test_resource_evidence_v2.py",
+      "sha256": "aee317e357c98df0900b61611a1c28f23288d422dfa64e8f26d9827c5bdb7583"
+    },
+    "v2_validator": {
+      "path": "tools/native-stack/resource_evidence_v2.py",
+      "sha256": "3ab1ba1345c2949a44d1bc0ae0f68f99229286025b5e85c3c03f7dd47275f98c"
+    },
+    "worker": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
+      "sha256": "c7366d2c465c86c412093d3771bba29c02c96a0cd0d1801ea6e3578ffb0f69b0"
+    }
+  }
+}

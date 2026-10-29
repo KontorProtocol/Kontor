@@ -2,9 +2,11 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 #[cfg(test)]
+use std::sync::Mutex as StdMutex;
+#[cfg(test)]
 use std::sync::Weak;
 #[cfg(test)]
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(test)]
@@ -13,6 +15,11 @@ use tokio::sync::Mutex;
 use wasmtime::component::ResourceTable;
 use wasmtime::{AsContext, AsContextMut, Store, StoreContext, StoreContextMut};
 
+#[cfg(test)]
+use serde_json::{Value as JsonValue, json};
+
+#[cfg(test)]
+use super::ContractAddress;
 use super::Runtime;
 
 pub(super) const MAX_LIVE_INVOCATIONS: u32 = 64;
@@ -22,9 +29,173 @@ pub(super) struct InvocationBudget {
     live: AtomicU32,
     #[cfg(test)]
     peak: AtomicU32,
+    #[cfg(test)]
+    teardown_recorder: Option<Arc<ResourceTeardownRecorder>>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResourceProbeRole {
+    NestedChain,
+    TargetNativeAuxiliary,
+    PreObservation,
+    PostObservation,
+    RollbackObservation,
+    Unassigned,
+}
+
+#[cfg(test)]
+impl ResourceProbeRole {
+    fn name(self) -> &'static str {
+        match self {
+            Self::NestedChain => "nested_chain",
+            Self::TargetNativeAuxiliary => "target_native_auxiliary",
+            Self::PreObservation => "pre_observation",
+            Self::PostObservation => "post_observation",
+            Self::RollbackObservation => "rollback_observation",
+            Self::Unassigned => "unassigned",
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) enum ResourceProbePhase {
+    Target(Arc<Vec<ContractAddress>>),
+    PreObservation,
+    PostObservation,
+    RollbackObservation,
+}
+
+#[cfg(test)]
+impl ResourceProbePhase {
+    pub(crate) fn classify(&self, address: &ContractAddress) -> ResourceProbeRole {
+        match self {
+            Self::Target(chain) if chain.contains(address) => ResourceProbeRole::NestedChain,
+            Self::Target(_) => ResourceProbeRole::TargetNativeAuxiliary,
+            Self::PreObservation => ResourceProbeRole::PreObservation,
+            Self::PostObservation => ResourceProbeRole::PostObservation,
+            Self::RollbackObservation => ResourceProbeRole::RollbackObservation,
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct ResourceTeardownRecorder {
+    next_id: AtomicU64,
+    events: StdMutex<Vec<JsonValue>>,
+    retain_next_table: AtomicBool,
+    retained_table: StdMutex<Option<Arc<Mutex<ResourceTable>>>>,
+}
+
+#[cfg(test)]
+impl ResourceTeardownRecorder {
+    fn record(
+        &self,
+        id: Option<u64>,
+        role: ResourceProbeRole,
+        kind: &str,
+        table_alive: Option<bool>,
+    ) {
+        self.events
+            .lock()
+            .expect("teardown recorder poisoned")
+            .push(json!({
+                "id": id,
+                "role": role.name(),
+                "kind": kind,
+                "table_alive": table_alive,
+            }));
+    }
+
+    fn reserve(self: &Arc<Self>, role: ResourceProbeRole) -> LeaseTeardownToken {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        self.record(Some(id), role, "reserved", None);
+        LeaseTeardownToken {
+            id,
+            role,
+            recorder: self.clone(),
+            live: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    pub(crate) fn record_rejection(&self, role: ResourceProbeRole, kind: &str) {
+        assert_ne!(
+            role,
+            ResourceProbeRole::Unassigned,
+            "unassigned resource probe role"
+        );
+        self.record(None, role, kind, None);
+    }
+
+    pub(crate) fn events(&self) -> Vec<JsonValue> {
+        self.events
+            .lock()
+            .expect("teardown recorder poisoned")
+            .clone()
+    }
+
+    fn store_created(&self, token: &LeaseTeardownToken, table: &Arc<Mutex<ResourceTable>>) {
+        if self.retain_next_table.swap(false, Ordering::SeqCst) {
+            *self.retained_table.lock().expect("retained table poisoned") = Some(table.clone());
+        }
+        self.record(Some(token.id), token.role, "store_created", None);
+    }
+
+    #[cfg(test)]
+    fn retain_one_table_for_negative_control(&self) {
+        self.retain_next_table.store(true, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct LeaseTeardownToken {
+    id: u64,
+    role: ResourceProbeRole,
+    recorder: Arc<ResourceTeardownRecorder>,
+    live: Arc<AtomicBool>,
+}
+
+#[cfg(test)]
+struct LifecycleProbe {
+    token: LeaseTeardownToken,
+    table: Weak<Mutex<ResourceTable>>,
+}
+
+#[cfg(test)]
+impl Drop for LifecycleProbe {
+    fn drop(&mut self) {
+        self.token.recorder.record(
+            Some(self.token.id),
+            self.token.role,
+            "table_destroyed",
+            Some(self.table.upgrade().is_some()),
+        );
+        assert!(
+            self.token.live.load(Ordering::SeqCst),
+            "lease released before Store teardown"
+        );
+    }
 }
 
 impl InvocationBudget {
+    #[cfg(test)]
+    pub(crate) fn with_teardown_recorder(recorder: Arc<ResourceTeardownRecorder>) -> Self {
+        Self {
+            teardown_recorder: Some(recorder),
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_rejection(&self, role: ResourceProbeRole, kind: &str) {
+        if let Some(recorder) = &self.teardown_recorder {
+            recorder.record_rejection(role, kind);
+        }
+    }
+
     pub(super) fn live(&self) -> u32 {
         self.live.load(Ordering::SeqCst)
     }
@@ -53,16 +224,43 @@ impl InvocationBudget {
                     self.peak.fetch_max(live + 1, Ordering::SeqCst);
                     return Ok(InvocationLease {
                         budget: self.clone(),
+                        #[cfg(test)]
+                        teardown_token: None,
                     });
                 }
                 Err(actual) => live = actual,
             }
         }
     }
+
+    #[cfg(test)]
+    pub(super) fn reserve_for_role(
+        self: &Arc<Self>,
+        role: ResourceProbeRole,
+    ) -> Result<InvocationLease, InvocationCapacityExhausted> {
+        let mut lease = match self.reserve() {
+            Ok(lease) => lease,
+            Err(error) => {
+                self.record_rejection(role, "reserve_rejected");
+                return Err(error);
+            }
+        };
+        if let Some(recorder) = &self.teardown_recorder {
+            assert_ne!(
+                role,
+                ResourceProbeRole::Unassigned,
+                "unassigned resource probe role"
+            );
+            lease.teardown_token = Some(recorder.reserve(role));
+        }
+        Ok(lease)
+    }
 }
 
 pub(super) struct InvocationLease {
     budget: Arc<InvocationBudget>,
+    #[cfg(test)]
+    teardown_token: Option<LeaseTeardownToken>,
 }
 
 impl Drop for InvocationLease {
@@ -73,6 +271,16 @@ impl Drop for InvocationLease {
                 live.checked_sub(1)
             })
             .expect("invocation lease count underflow");
+        #[cfg(test)]
+        if let Some(token) = &self.teardown_token {
+            assert!(
+                token.live.swap(false, Ordering::SeqCst),
+                "duplicate lease release"
+            );
+            token
+                .recorder
+                .record(Some(token.id), token.role, "lease_released", None);
+        }
     }
 }
 
@@ -103,6 +311,8 @@ impl std::error::Error for InvocationCapacityExhausted {}
 
 pub(crate) struct InvocationStore {
     store: Store<Runtime>,
+    #[cfg(test)]
+    _lifecycle_probe: Option<LifecycleProbe>,
     // Store must finish deallocating before its lease releases capacity.
     #[cfg(test)]
     teardown_probe: Option<TeardownProbe>,
@@ -130,11 +340,33 @@ impl Drop for TeardownProbe {
 
 impl InvocationStore {
     pub(super) fn new(store: Store<Runtime>, lease: InvocationLease) -> Self {
+        #[cfg(test)]
+        let lifecycle_probe = lease.teardown_token.as_ref().map(|token| {
+            token.recorder.store_created(token, &store.data().table);
+            LifecycleProbe {
+                token: token.clone(),
+                table: Arc::downgrade(&store.data().table),
+            }
+        });
         Self {
             store,
             #[cfg(test)]
+            _lifecycle_probe: lifecycle_probe,
+            #[cfg(test)]
             teardown_probe: None,
             _lease: lease,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn record_initialization_failure(&self) {
+        if let Some(probe) = &self._lifecycle_probe {
+            probe.token.recorder.record(
+                Some(probe.token.id),
+                probe.token.role,
+                "store_initialization_failed",
+                None,
+            );
         }
     }
 
@@ -186,13 +418,15 @@ mod tests {
 
     use crate::test_utils::test_runtime;
 
-    use super::{InvocationBudget, InvocationLease};
+    use super::{InvocationBudget, InvocationLease, ResourceProbePhase, ResourceTeardownRecorder};
+    use crate::runtime::ContractAddress;
 
     #[test]
     fn lease_underflow_panics_without_wrapping_the_count() {
         let budget = Arc::new(InvocationBudget::default());
         let lease = InvocationLease {
             budget: budget.clone(),
+            teardown_token: None,
         };
         assert!(catch_unwind(AssertUnwindSafe(|| drop(lease))).is_err());
         assert_eq!(budget.live(), 0);
@@ -209,6 +443,30 @@ mod tests {
         drop(store);
         assert!(observed.load(Ordering::SeqCst));
         assert_eq!(budget.live(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retained_table_negative_control_reports_one_live_table() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let recorder = Arc::new(ResourceTeardownRecorder::default());
+        recorder.retain_one_table_for_negative_control();
+        let budget = Arc::new(InvocationBudget::with_teardown_recorder(recorder.clone()));
+        runtime.invocation_budget = Some(budget.clone());
+        runtime.resource_probe_phase = Some(ResourceProbePhase::PreObservation);
+        let address = ContractAddress {
+            name: "teardown-control".into(),
+            height: 1,
+            tx_index: 0,
+        };
+        let store = runtime.make_store_for_call(1_000_000, &address)?;
+        drop(store);
+        let events = recorder.events();
+        assert_eq!(budget.live(), 0);
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[2]["kind"], "table_destroyed");
+        assert_eq!(events[2]["table_alive"], true);
+        assert_eq!(events[3]["kind"], "lease_released");
         Ok(())
     }
 }

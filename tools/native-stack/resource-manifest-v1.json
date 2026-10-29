@@ -10,7 +10,7 @@
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "69f619b9085c221e5a2170ee0ff8312eaaa4cdbdb211a03f5a47f406e57ab248"
+      "sha256": "e0b05416e90ce7c6f5ecdd1f68b293112b169333656f17c1dc477bbe28a66896"
     },
     "call_output": {
       "path": "core/indexer/src/runtime/call/result.rs",
@@ -22,7 +22,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "f2031f4ee8a4b1505e8d2549debf87acd72c20fabe2033f1d715f766f3b92c62"
+      "sha256": "f5fa8755cfb7729209fc16e8be1baa8867c28ba0e29db90129ea0a5b80b9bc70"
     },
     "core_lockfile": {
       "path": "core/Cargo.lock",
@@ -54,7 +54,7 @@
     },
     "invocation_budget": {
       "path": "core/indexer/src/runtime/invocation.rs",
-      "sha256": "9db6e0d1a137fbf7d5df922d7aebbff9b4c1f368a08eb7bd528c9fb4d2495db1"
+      "sha256": "5ed59299e2d76fd57085197313f756a455fc01fa71d9af1570b121339cd487c9"
     },
     "native_filestorage": {
       "path": "native-contracts/filestorage/src/lib.rs",
@@ -78,7 +78,7 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "308f430f0a604bc72393a67f9cd5a3051f8a44332fc3a209ed310c1d30e7f97a"
+      "sha256": "a733da4444ca07f1fa884c4249df6d624b0a3389bbfff3c324a0663f3fb65dde"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",

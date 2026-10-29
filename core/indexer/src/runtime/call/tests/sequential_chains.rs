@@ -2,7 +2,7 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use indexer_types::Payment;
 use libsql::params;
 use serde_json::json;
@@ -17,6 +17,7 @@ use super::{balance, funded, funded_with_pubkey};
 use crate::database::queries::live_deposit_gas_sum;
 use crate::runtime::invocation::{
     InvocationBudget, InvocationCapacityExhausted, InvocationLimitReached, MAX_LIVE_INVOCATIONS,
+    ResourceProbePhase, ResourceTeardownRecorder,
 };
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::pricing::Pricing;
@@ -325,6 +326,14 @@ async fn run_chain_probe(
     });
     let conn = runtime.get_storage_conn();
     let root = chain.last().unwrap().clone();
+    let chain_addresses = Arc::new(chain.clone());
+    let teardown_probe_mode = match env::var("KONTOR_RESOURCE_TEARDOWN_PROBE").as_deref() {
+        Ok("on") => Some("on"),
+        Ok("off") => Some("off"),
+        Err(env::VarError::NotPresent) => None,
+        _ => bail!("invalid resource teardown probe mode"),
+    };
+    assert!(teardown_probe_mode.is_none() || diagnostic_reduced.is_some());
     let root_id = runtime.storage.contract_id(&root).await?.unwrap();
     let baseline_resources = runtime.table.lock().await.iter_mut().count();
     let mut over_cap_observation = None;
@@ -342,8 +351,15 @@ async fn run_chain_probe(
             resource_diagnostics::record("chain_attempt_start");
             resource_diagnostics::record("chain_preparation_entry");
         }
-        let budget = Arc::new(InvocationBudget::default());
+        let teardown_recorder = (teardown_probe_mode == Some("on"))
+            .then(|| Arc::new(ResourceTeardownRecorder::default()));
+        let budget = Arc::new(match &teardown_recorder {
+            Some(recorder) => InvocationBudget::with_teardown_recorder(recorder.clone()),
+            None => InvocationBudget::default(),
+        });
         runtime.invocation_budget = Some(budget.clone());
+        runtime.resource_probe_phase =
+            teardown_probe_mode.map(|_| ResourceProbePhase::PreObservation);
         assert_eq!(budget.live(), 0);
         let state_before_sha256 = persistent_digest(&conn).await?;
         assert!(runtime.conversion_probe.is_none());
@@ -375,6 +391,8 @@ async fn run_chain_probe(
             resource_diagnostics::record("chain_preparation_exit");
             resource_diagnostics::record("chain_operation_entry");
         }
+        runtime.resource_probe_phase =
+            teardown_probe_mode.map(|_| ResourceProbePhase::Target(chain_addresses.clone()));
         let target = root.clone();
         let task = tokio::spawn(async move {
             resource_diagnostics::record("chain_guest_task_entry");
@@ -403,6 +421,8 @@ async fn run_chain_probe(
         };
         let (returned, result) = timeout(Duration::from_secs(30), task).await??;
         runtime = returned;
+        runtime.resource_probe_phase =
+            teardown_probe_mode.map(|_| ResourceProbePhase::PostObservation);
         if diagnostic_reduced.is_some() {
             resource_diagnostics::record("chain_operation_exit");
             resource_diagnostics::record("chain_postcall_entry");
@@ -537,6 +557,8 @@ async fn run_chain_probe(
             resource_diagnostics::record("chain_postcall_exit");
             resource_diagnostics::record("chain_teardown_entry");
         }
+        runtime.resource_probe_phase =
+            teardown_probe_mode.map(|_| ResourceProbePhase::RollbackObservation);
         runtime.storage.rollback().await?;
         let state_after_sha256 = persistent_digest(&conn).await?;
         assert_eq!(state_before_sha256, state_after_sha256);
@@ -559,6 +581,9 @@ async fn run_chain_probe(
             "supply": supply_before.to_string(),
         });
         let balances_sha256 = hex::encode(Sha256::digest(serde_json::to_vec(&balances_snapshot)?));
+        assert_eq!(budget.live(), 0);
+        let teardown_events = teardown_recorder.as_ref().map(|recorder| recorder.events());
+        runtime.resource_probe_phase = None;
         trials.push(json!({
             "repeat_index": repeat_index,
             "sample_key": if fail { "trap_control" } else { "target" },
@@ -576,6 +601,7 @@ async fn run_chain_probe(
             "state_after_sha256": state_after_sha256,
             "balances_sha256": balances_sha256,
             "balances_snapshot": balances_snapshot,
+            "teardown_events": teardown_events,
             "live_store_peak": live_store_peak,
             "live_stores_before": 0,
             "live_stores_after": budget.live(),
@@ -613,6 +639,7 @@ async fn run_chain_probe(
             "case_id": format!("chain_{}_{}", depth + 1, mode),
             "mode": mode,
             "resource_mode": diagnostic_reduced.map(|reduced| if reduced { "reduced" } else { "production" }),
+            "teardown_probe_mode": teardown_probe_mode,
             "target_only": target_only,
             "call_hook_installed": runtime.conversion_probe.is_some(),
             "stores": depth + 1,

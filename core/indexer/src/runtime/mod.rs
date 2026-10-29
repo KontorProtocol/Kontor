@@ -42,6 +42,8 @@ use call::CallOutcome;
 pub use component_cache::ComponentCache;
 use guest_memory::{GuestMemoryLimiter, GuestMemoryLimits};
 use invocation::{InvocationBudget, InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS};
+#[cfg(test)]
+use invocation::{ResourceProbePhase, ResourceProbeRole};
 use libsql::Connection;
 use lowering::Linker;
 use sha2::{Digest, Sha256};
@@ -280,6 +282,8 @@ pub struct Runtime {
     invocation_budget: Option<Arc<InvocationBudget>>,
     invocation_depth: u32,
     #[cfg(test)]
+    resource_probe_phase: Option<ResourceProbePhase>,
+    #[cfg(test)]
     conversion_probe: Option<conversion_probe::Probe>,
     #[cfg(test)]
     pub(crate) test_host_error_message: Option<Arc<str>>,
@@ -447,6 +451,8 @@ impl Runtime {
             guest_memory_limiter: None,
             invocation_budget: None,
             invocation_depth: 0,
+            #[cfg(test)]
+            resource_probe_phase: None,
             #[cfg(test)]
             conversion_probe: None,
             #[cfg(test)]
@@ -1109,6 +1115,42 @@ impl Runtime {
     }
 
     pub(crate) fn make_store(&self, fuel: u64) -> Result<InvocationStore> {
+        self.make_store_inner(
+            fuel,
+            #[cfg(test)]
+            ResourceProbeRole::Unassigned,
+        )
+    }
+
+    #[cfg(test)]
+    fn make_store_for_call(&self, fuel: u64, address: &ContractAddress) -> Result<InvocationStore> {
+        let role = self
+            .resource_probe_phase
+            .as_ref()
+            .map_or(ResourceProbeRole::Unassigned, |phase| {
+                phase.classify(address)
+            });
+        self.make_store_inner(fuel, role)
+    }
+
+    #[cfg(test)]
+    fn record_resource_rejection(&self, address: &ContractAddress, kind: &str) {
+        if let Some(budget) = &self.invocation_budget {
+            let role = self
+                .resource_probe_phase
+                .as_ref()
+                .map_or(ResourceProbeRole::Unassigned, |phase| {
+                    phase.classify(address)
+                });
+            budget.record_rejection(role, kind);
+        }
+    }
+
+    fn make_store_inner(
+        &self,
+        fuel: u64,
+        #[cfg(test)] role: ResourceProbeRole,
+    ) -> Result<InvocationStore> {
         let depth = self
             .invocation_depth
             .checked_add(1)
@@ -1120,6 +1162,9 @@ impl Runtime {
             .invocation_budget
             .clone()
             .unwrap_or_else(|| Arc::new(InvocationBudget::default()));
+        #[cfg(test)]
+        let lease = budget.reserve_for_role(role)?;
+        #[cfg(not(test))]
         let lease = budget.reserve()?;
         // A child receives signer values and WAVE arguments, never parent handles.
         // Invocation ownership frees even resources abandoned by a guest trap.
@@ -1137,7 +1182,11 @@ impl Runtime {
         if s.data().guest_memory_limiter.is_some() {
             s.limiter(|runtime| runtime.guest_memory_limiter.as_mut().unwrap());
         }
-        s.set_fuel(fuel)?;
+        if let Err(error) = s.set_fuel(fuel) {
+            #[cfg(test)]
+            s.record_initialization_failure();
+            return Err(error.into());
+        }
         s.set_hostcall_fuel_enabled(false);
         s.data_mut().fuel_checkpoint = fuel;
         #[cfg(test)]
