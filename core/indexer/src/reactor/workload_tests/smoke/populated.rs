@@ -36,6 +36,7 @@ mod mixed;
 mod oracle;
 mod pagination;
 mod pruning;
+mod replay_identity;
 mod saved;
 mod shapes;
 mod simulation;

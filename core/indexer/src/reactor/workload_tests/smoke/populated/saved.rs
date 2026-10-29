@@ -19,6 +19,7 @@ use super::super::{
 use super::PopulationConfig;
 use super::batch::BatchProof;
 use super::configuration::MixedConfig;
+use super::replay_identity::ReplayIdentity;
 use super::simulation_requests::SimulationRequests;
 use super::views;
 use crate::bitcoin_client::Client;
@@ -158,6 +159,7 @@ impl Output {
 struct Saved {
     root: PathBuf,
     manifest: Manifest,
+    identity: ReplayIdentity,
 }
 
 impl Saved {
@@ -207,20 +209,19 @@ impl Saved {
             manifest.schema_version == 1,
             "unsupported saved workload schema"
         );
-        ensure!(
-            hash_file(&std::env::current_exe()?)? == manifest.binary_sha256,
-            "saved workload binary differs"
-        );
-        ensure!(
-            capture::source()? == manifest.source,
-            "saved workload source/build differs"
-        );
+        let identity = ReplayIdentity::load(
+            root,
+            expected_sha256,
+            &manifest.source,
+            &manifest.binary_sha256,
+        )?;
         Ok(Self {
             root: path
                 .parent()
                 .context("missing saved directory")?
                 .to_path_buf(),
             manifest,
+            identity,
         })
     }
 
@@ -412,10 +413,7 @@ async fn workload_saved_configured_replay() -> Result<()> {
         hash_file(&snapshot.path)? == snapshot.sha256,
         "saved baseline changed"
     );
-    ensure!(
-        capture::source()? == manifest.source,
-        "source changed during replay"
-    );
     bitcoin.0.kill().await?;
+    saved.identity.finish()?;
     Ok(())
 }
