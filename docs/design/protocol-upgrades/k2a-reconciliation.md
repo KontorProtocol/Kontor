@@ -127,8 +127,12 @@ receipt `4e41e085a2e41fb8a4ca22e67a404f6c`, independently comparing the moved
 source. Independent subagent review also found no material findings, checking
 the complete Git-object source sections, both batch-selection callers, aggregate
 shape rejection, parser indices, Sponsor transitions, and facade type identity.
-Runtime tests remain pending. The native-stack agent retains the shared Cargo
-slot until an explicit handoff. Neither review checked remote freshness; both
+On documentation head `3429514f`, all 91 targeted parser, Sponsor, BLS, identity,
+batch, aggregate-failure, and confirmation/reorg tests passed (30.72 seconds
+after a 67-second build). Indexer Clippy with tests and warnings denied passed
+(17.37 seconds). Both commands terminated successfully. Commands and log hashes
+are in `.build-cache/k2a-reconcile/transaction-validation.json`, SHA-256
+`dd0a6a0fe8da6cb2f614519a761ed3f0166b7da71ca4a243b1eaecab75c73349`. Neither review checked remote freshness; both
 reviewed the explicit local base and head above.
 
 This is preparation, not protocol selection. Ingestion still uses the current
@@ -137,3 +141,64 @@ selected protocol boundary without prematurely discarding inputs recognized by
 a newer protocol. Dispatch, a stable cross-graph codec, and a complete retained
 semantic dependency closure remain required. No activation or P1 freeze is
 claimed by this relocation.
+
+
+## Publication characterization baseline
+
+Test-only commit `88360cd9` ports both `runtime/call/tests/p1_publication.rs`
+and `p1_transaction_publication.rs` from
+`92e7b0b3adccdb2924206bb57d6d8fa466a39a8a`, byte-identical, plus their two module
+registrations. No assertions or imports changed. The local hash mapping is
+`.build-cache/k2a-reconcile/publication-source-mapping.json`.
+These tests characterize existing duplicate-publication effects, receipts,
+payments, stored bytes, and raw transaction positions through the actual parser
+and transaction executor. They are retained behavior tests, not a correction of
+that historical behavior. Both passed on `88360cd9` before the execution move
+(10.47 seconds after a 34.31-second build). Evidence is
+`.build-cache/k2a-reconcile/publication-before.json`. The same unchanged tests
+must pass after the move.
+
+
+## Operation execution entry preparation
+
+Source `484d3421` moves the real per-transaction operation loop from
+`RuntimeExecutor::execute_transaction_inner` into `v1::execution::execute_transaction`.
+The trait implementation performs one tail-await delegate. The same module now
+owns `process_input`, `process_direct_input`, `process_aggregate_input`, and
+`execute_op`. The old public `reactor::executor::process_input` path re-exports
+its versioned implementation.
+
+The semantic bodies are unchanged after imported type substitutions, method
+indentation, and rustfmt signature wrapping. Removing the unused `&self` receiver
+and adding the node delegate are the only new call wiring. The mechanical audit
+is `.build-cache/k2a-reconcile/execution-source-audit.py` and its JSON report.
+It compares the entire moved source, exact quoted strings, and remaining node
+bodies. Parent and independent subagent source reviews found no material
+findings. Interlink independently approved the source in acknowledged receipt
+`08525ca791f7dabb085204dcb783dd9a`, checking its own normalized source diff and
+the publication test port. Post-move runtime validation is pending.
+
+The loop preserves input order, `tx.index` and `tx.txid`, OP_RETURN payloads,
+height selection before identity allocation, aggregate verification before
+execution, per-op nonce advancement, error-vector positions and classifications,
+and Sponsor state transitions. The node retains the `Executor` trait's usage
+wrapper, including start/finish accounting and SQL recording, Bitcoin RPC,
+mempool policy, replay signaling, and `NoopExecutor`.
+
+Temporary dependencies, each a K2b boundary item:
+
+| Current dependency | Required final boundary work |
+| --- | --- |
+| `Runtime` and `TransactionContext` | Retain execution implementation and context inside the independently locked graph. |
+| `Signer` and `database::types::Identity` | Retain identity semantics; replace node-owned types at the shared interface. |
+| `bls::verify_aggregate` and `AggregateVerificationError` | Retain verification and classification with the protocol dependency graph. |
+| `ExecutionError` | Preserve classification internally and encode the common result envelope explicitly. |
+| `runtime::system` | Retain native identity and dispatch mappings with the protocol. |
+| `OpKind` and other `indexer_types` | Retain protocol schemas internally; define the explicit cross-graph codec. |
+| `bitcoin` and `anyhow` | Keep dependency types inside the graph, outside the standard-library-only linked interface. |
+
+These dependencies are deliberate intermediate links, not independent graph
+isolation. OWNERSHIP-1 must wrap these entry points with the agreed
+`CanonicalRootLease` and `RootKeeper` ownership before final baseline acceptance.
+The signatures are not frozen. This slice adds no activation or alternate executor
+selection and does not change existing cancellation behavior.
