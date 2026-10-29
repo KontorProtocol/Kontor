@@ -27,7 +27,13 @@ pub(super) struct MixedWorkload {
 }
 
 impl MixedWorkload {
-    pub(super) async fn prepare(runtime: &mut Runtime) -> Result<Self> {
+    pub(super) async fn prepare(runtime: &mut Runtime, payer: u64) -> Result<Self> {
+        ensure!(
+            staking::get_stake(runtime, &HolderRef::SignerId(payer).to_string())
+                .await?
+                .is_none(),
+            "mixed payer must start without a bond"
+        );
         let core = Signer::Core(Box::new(Signer::Nobody));
         runtime
             .set_context(

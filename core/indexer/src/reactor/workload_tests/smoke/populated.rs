@@ -311,8 +311,12 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         [81; 32],
     )
     .await?;
+    let payer = get_identity(&history.db_conn(), &public_key.to_string())
+        .await?
+        .context("missing payer identity")?
+        .signer_id();
     let mixed = if delivery == Delivery::MixedBlock {
-        Some(MixedWorkload::prepare(&mut history.runtime).await?)
+        Some(MixedWorkload::prepare(&mut history.runtime, payer).await?)
     } else {
         None
     };
@@ -329,10 +333,6 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         database_projection(&history.db_conn()).await? == projection_before,
         "prestate observations mutated state"
     );
-    let payer = get_identity(&history.db_conn(), &public_key.to_string())
-        .await?
-        .context("missing payer identity")?
-        .signer_id();
     let snapshot =
         Snapshot::export(&history.db_conn(), &directory.path().join("populated.db")).await?;
     stop_engine(&mut history).await?;
