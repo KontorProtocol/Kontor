@@ -235,12 +235,16 @@ The resource lifecycle adapter publishes a WIT-encoded guest resource through
 the normal `Runtime::publish` path. A successful view explicitly drops the
 resource and returns its destructor count. The trapping view checks that the
 destructor ran before its distinct `UnreachableCodeReached` trap, then a fresh
-successful call verifies reuse. Failed publication repeats an out-of-bounds
-active data segment, followed by valid control calls. The worker records each
+successful call verifies reuse. The trapping call drops its gadget before it
+traps, so this case proves explicit destructor dispatch and Store closure,
+not reclamation of a guest resource still live at the trap. Failed publication
+repeats an out-of-bounds active data segment, followed by valid control calls.
+The worker records each
 target Store teardown, receipts, resources, and the full persistent digest.
 The failed initialization case proves that its Store and table lease close
-after an initialization trap. It cannot prove guest resource cleanup because
-the active data trap occurs before guest code can create one. Contract policy
+after a component instantiation trap, before the `init` export is called. It
+cannot prove guest resource cleanup because the active data trap occurs before
+guest code can create one. Contract policy
 rejects all start sections before compilation, so no resource constructor
 can run during the admitted component's initialization.
 
