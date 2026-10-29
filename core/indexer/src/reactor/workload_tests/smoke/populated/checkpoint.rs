@@ -75,8 +75,8 @@ impl Checkpoint {
             actual
                 .check(expected)
                 .with_context(|| format!("replay checkpoint {index} differs"))?;
-            // Keep the first restore's bytes after checking, releasing the second
-            // copy immediately instead of doubling the complete fixture on disk.
+            // Reuse the first restore's handle in the retained sequence. BatchProof
+            // may still hold the second file until its confirmation checks finish.
             checkpoints.push(expected.clone());
         } else {
             checkpoints.push(actual);
