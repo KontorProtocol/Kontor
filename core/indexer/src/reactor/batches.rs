@@ -1,5 +1,4 @@
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
@@ -25,6 +24,8 @@ use crate::database::queries::{
     select_existing_txids,
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
+pub(super) use crate::protocol::coordinator::v1::batch_is_ordered;
+use crate::protocol::coordinator::v1::dependency_sort;
 
 use futures_util::future::BoxFuture;
 
@@ -120,96 +121,6 @@ enum ProposalSnapshot {
 fn compute_fee_threshold(fee_index: &MempoolFeeIndex) -> u64 {
     let raw = fee_index.fastest_fee().saturating_mul(FEE_THRESHOLD_NUM) / FEE_THRESHOLD_DEN;
     raw.max(fee_index.min_fee())
-}
-
-/// Topologically sort a batch's transactions so a tx that spends another
-/// batch tx's output comes after that producer. The proposer collects
-/// candidate txs from the mempool in arbitrary order; sorting here lets it
-/// propose a batch that already satisfies the dependency-order consensus
-/// rule (`batch_is_ordered`) rather than having peers vote it down.
-///
-/// Returns batch indices in proposal order. Kahn's algorithm, breaking
-/// ties by lowest original index. Falls back to identity order if a cycle
-/// is somehow present (impossible for valid Bitcoin transactions, but the
-/// sort must still total).
-fn dependency_sort(txs: &[bitcoin::Transaction]) -> Vec<usize> {
-    let index_of: HashMap<Txid, usize> = txs
-        .iter()
-        .enumerate()
-        .map(|(i, tx)| (tx.compute_txid(), i))
-        .collect();
-
-    let mut in_degree = vec![0usize; txs.len()];
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); txs.len()];
-    for (i, tx) in txs.iter().enumerate() {
-        let mut parents: HashSet<usize> = HashSet::new();
-        for input in &tx.input {
-            if let Some(&p) = index_of.get(&input.previous_output.txid)
-                && p != i
-            {
-                parents.insert(p);
-            }
-        }
-        in_degree[i] = parents.len();
-        for p in parents {
-            children[p].push(i);
-        }
-    }
-
-    let mut ready: BinaryHeap<Reverse<usize>> = (0..txs.len())
-        .filter(|&i| in_degree[i] == 0)
-        .map(Reverse)
-        .collect();
-    let mut ordered = Vec::with_capacity(txs.len());
-    while let Some(Reverse(i)) = ready.pop() {
-        ordered.push(i);
-        for &c in &children[i] {
-            in_degree[c] -= 1;
-            if in_degree[c] == 0 {
-                ready.push(Reverse(c));
-            }
-        }
-    }
-
-    if ordered.len() != txs.len() {
-        return (0..txs.len()).collect();
-    }
-    ordered
-}
-
-/// Check that a batch's transactions are in a valid dependency order:
-/// every tx that spends another batch tx's output appears *after* that
-/// producer.
-///
-/// The rule constrains only that parent-before-child relation — it does
-/// not canonicalize the batch. Independent transactions (sharing no UTXO)
-/// may appear in any order, chosen by the proposer. Note this is a
-/// Bitcoin-UTXO dependency, not a contract-state one: two UTXO-independent
-/// txs can still touch the same contract state, so their order — fixed in
-/// the decided value — can change results. That ordering is the
-/// proposer's prerogative, like tx order within a block; the rule enforces
-/// only the structural requirement that an escrow exists before it is
-/// spent (otherwise a detach simply finds nothing to detach).
-///
-/// The dependency-order rule of `ConsensusState::validate_batch`; lives
-/// here next to `dependency_sort`, the proposer-side helper that produces
-/// an order this accepts.
-pub(super) fn batch_is_ordered(txs: &[bitcoin::Transaction]) -> bool {
-    let index_of: HashMap<Txid, usize> = txs
-        .iter()
-        .enumerate()
-        .map(|(i, tx)| (tx.compute_txid(), i))
-        .collect();
-    for (i, tx) in txs.iter().enumerate() {
-        for input in &tx.input {
-            if let Some(&p) = index_of.get(&input.previous_output.txid)
-                && p > i
-            {
-                return false;
-            }
-        }
-    }
-    true
 }
 
 /// Put batches held during a drain pass back at the FRONT of the queue, in their

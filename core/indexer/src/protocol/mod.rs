@@ -1,3 +1,4 @@
+pub(crate) mod coordinator;
 pub(crate) mod storage_contracts;
 pub(crate) mod storage_footprint;
 pub(crate) mod storage_identity;

@@ -110,7 +110,8 @@ pub struct PruneConfig {
     /// `false` = archive node: full version history retained, no GC.
     pub enabled: bool,
     /// Blocks below the tip to retain before a version is prunable. Floored at
-    /// `FINALITY_WINDOW` at use so it can never reach into the reorg window.
+    /// the retained coordinator rules' minimum pruning floor at use so it
+    /// cannot reach into a required rollback window.
     pub retain_blocks: u64,
 }
 

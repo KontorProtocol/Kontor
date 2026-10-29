@@ -6,13 +6,14 @@ use metrics::{counter, gauge};
 use tracing::{debug, info, warn};
 
 use crate::block;
-use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
+use crate::consensus::finality_types::StateEvent;
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
     insert_block_execution_usage, insert_transaction, select_block_at_height, select_block_latest,
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
+use crate::protocol::coordinator::minimum_prune_retention_blocks;
 use crate::protocol::v1::lifecycle;
 use crate::test_utils::new_mock_block_hash;
 
@@ -44,7 +45,10 @@ impl<E: Executor> Reactor<E> {
         if !self.prune.enabled {
             return Ok(());
         }
-        let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
+        let retain = self
+            .prune
+            .retain_blocks
+            .max(minimum_prune_retention_blocks());
         if self.last_height.saturating_sub(to_height) > retain {
             bail!(
                 "rollback to height {to_height} is deeper than the prune retain window \
@@ -460,7 +464,7 @@ impl<E: Executor> Reactor<E> {
     }
 
     /// Prune finalized, superseded `contract_state` versions below the finality
-    /// watermark `tip − max(retain, FINALITY_WINDOW)`. No-op for archive nodes
+    /// watermark `tip − max(retain, minimum_prune_retention_blocks())`. No-op for archive nodes
     /// (`prune.enabled == false`) and until the chain is taller than the retain
     /// window. Runs once per block; the per-block churn is small. Returning freed
     /// pages to the OS (`incremental_vacuum`) is a separate, throttled step.
@@ -478,7 +482,10 @@ impl<E: Executor> Reactor<E> {
         if !self.prune.enabled {
             return;
         }
-        let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
+        let retain = self
+            .prune
+            .retain_blocks
+            .max(minimum_prune_retention_blocks());
         // W = how far we COULD prune; `prune_watermark` (W_prev) = how far we HAVE.
         let Some(w) = self.last_height.checked_sub(retain) else {
             return;
