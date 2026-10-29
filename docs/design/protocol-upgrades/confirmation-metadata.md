@@ -1,4 +1,4 @@
-# Bitcoin confirmation positions (ID3, implementation in progress)
+# Bitcoin confirmation positions (ID3-node candidate)
 
 The candidate adds nullable `transactions.confirmed_bitcoin_tx_index` as node
 metadata. Its value is the transaction's position in the confirming raw Bitcoin
@@ -119,9 +119,32 @@ test applies a real writer reorg between the request's two reads and verifies
 that the read snapshot remains consistent. Synthetic Bitcoin fixtures do not
 claim mining or mempool acceptance.
 
-Generated bindings use the full unfiltered indexer-types library suite. SDK,
-final-head integration and full reactor regressions, the actual CLI executable,
-Explorer consumers and their package-release paths still require completion.
-The checked-in SDK is `@kontor/sdk`; the separately located Explorer repositories
-consume older `@kontor/kontor-ts` packages. Updating this source alone does not
-update those deployments. This is not a completed-phase or release-readiness claim.
+Generated bindings passed the full unfiltered indexer-types library suite (67
+tests). Web and React Native package builds, 208 SDK tests and installed-tarball
+checks passed. The package checks cover all public subpaths with bundler and
+Node16 TypeScript resolution, strict null handling and the React Native export
+condition. They do not execute a React Native application. The package also fixes
+a pre-existing rc.6 release defect: its public exports referenced missing generated
+wire declarations. The rc.7 version is prepared in source and has not been published.
+
+At source revision `b2fecf1bc7f00c0d0a9de00347c5da120f0e077b`, the actual
+`kontor backfill-confirmations` executable passed its process-level smoke test:
+exact JSON output, repeat-run idempotence, raw position zero, preserved node
+metadata, missing database rejection and unchanged unrelated database bytes.
+Nonzero positions and canonical-body checks are covered by the module tests,
+not this genesis-block smoke test. All 110 reactor tests passed at that revision,
+including cluster, rollback, late-joiner and batch regressions. An earlier test
+wrapper used the wrong working directory and failed to find contract fixtures;
+that failed capture is retained separately and is not counted as passing evidence.
+
+The agreed IDENTITY-4 plan has hash
+`cb19e026c9a4f6b4a08ebc4c58a77e5d43c51bfd4c38ee62bbf63a81eb6112d3`.
+It separates this node/SDK PR from dependent ID3-indexer and ID3-explorer PRs in
+`UnspendableLabs/Kontor-Explorer-Indexer` and `UnspendableLabs/Kontor-Explorer`.
+Those consumers still use legacy packages and require transaction-ID joins,
+live-batch ingestion, separate execution/confirmation displays and a real SDK
+release. This PR does not update their deployments. ID3 remains incomplete until
+the dependent integrations are complete; K7 and final qualification must still
+prove confirmation across distinct protocol bundles. K2 must retain the explicit
+semantic projection described above. Native build provenance remains a separate
+unresolved K2 qualification concern, not a reason to normalize arbitrary state.
