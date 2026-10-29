@@ -5,6 +5,7 @@ pub mod block;
 pub mod bls;
 pub mod built_info;
 pub mod config;
+pub mod confirmation_backfill;
 pub mod consensus;
 pub mod database;
 pub mod event;

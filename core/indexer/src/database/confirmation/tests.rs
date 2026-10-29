@@ -1,17 +1,21 @@
 use anyhow::{Context, Result};
+use bitcoin::absolute::LockTime;
+use bitcoin::blockdata::constants::genesis_block;
+use bitcoin::{Amount, Block, Network, OutPoint};
 use indexer_types::{BlockRow, TransactionRow};
 use libsql::{Builder, Connection, params};
 use tempfile::TempDir;
 
 use super::{
-    get_confirmation_position, initialize_confirmation_metadata, set_confirmation_position,
+    backfill_confirmation_positions, get_confirmation_position, initialize_confirmation_metadata,
+    set_confirmation_position,
 };
 use crate::database::connection::new_connection;
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
     rollback_to_height,
 };
-use crate::test_utils::new_mock_block_hash;
+use crate::test_utils::{new_mock_block_hash, new_mock_transaction};
 
 async fn legacy_projection(conn: &Connection, txid: &str) -> Result<serde_json::Value> {
     Ok(serde_json::to_value(
@@ -159,5 +163,142 @@ async fn legacy_confirmation_changes_invalidate_position_and_rollback_atomically
     assert_eq!(reconfirmed.height, surviving.height);
     assert_eq!(reconfirmed.batch_height, surviving.batch_height);
     assert_eq!(reconfirmed.tx_index, Some(1));
+    Ok(())
+}
+
+fn backfill_block() -> Block {
+    let mut block = genesis_block(Network::Regtest);
+    for index in 1..=2 {
+        let mut tx = block.txdata[0].clone();
+        tx.input[0].previous_output = OutPoint {
+            txid: new_mock_transaction(index).txid,
+            vout: 0,
+        };
+        tx.lock_time = LockTime::from_consensus(index);
+        block.txdata.push(tx);
+    }
+    block.header.merkle_root = block.compute_merkle_root().unwrap();
+    block
+}
+
+#[tokio::test]
+async fn backfill_requires_canonical_body_and_rolls_back_partial_writes() -> Result<()> {
+    let dir = TempDir::new()?;
+    let conn = new_connection(dir.path(), "backfill.db").await?;
+    let block = backfill_block();
+    let ids: Vec<_> = block
+        .txdata
+        .iter()
+        .skip(1)
+        .map(|tx| tx.compute_txid().to_string())
+        .collect();
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(7)
+            .hash(block.block_hash())
+            .relevant(true)
+            .build(),
+    )
+    .await?;
+    for (ordinal, txid) in ids.iter().enumerate() {
+        insert_transaction(
+            &conn,
+            TransactionRow::builder()
+                .height(7)
+                .confirmed_height(7)
+                .tx_index(ordinal as u32)
+                .txid(txid.clone())
+                .build(),
+        )
+        .await?;
+    }
+    let before = [
+        legacy_projection(&conn, &ids[0]).await?,
+        legacy_projection(&conn, &ids[1]).await?,
+    ];
+    let mut wrong_header = block.clone();
+    wrong_header.header.nonce ^= 1;
+    assert!(
+        backfill_confirmation_positions(&conn, 7, &wrong_header)
+            .await
+            .is_err()
+    );
+    let mut wrong_body = block.clone();
+    wrong_body.txdata[1].output[0].value = Amount::ZERO;
+    assert!(
+        backfill_confirmation_positions(&conn, 7, &wrong_body)
+            .await
+            .is_err()
+    );
+    let mut wrong_witness = block.clone();
+    wrong_witness.txdata[1].input[0].witness.push([1; 32]);
+    assert!(
+        backfill_confirmation_positions(&conn, 7, &wrong_witness)
+            .await
+            .is_err()
+    );
+    assert!(
+        backfill_confirmation_positions(&conn, 8, &block)
+            .await
+            .is_err()
+    );
+    for txid in &ids {
+        assert_eq!(get_confirmation_position(&conn, txid).await?, None);
+    }
+
+    conn.execute_batch(
+        "CREATE TRIGGER reject_second_confirmation_position
+         BEFORE UPDATE OF confirmed_bitcoin_tx_index ON transactions WHEN NEW.id = 2
+         BEGIN SELECT RAISE(ABORT, 'injected metadata failure'); END;",
+    )
+    .await?;
+    assert!(
+        backfill_confirmation_positions(&conn, 7, &block)
+            .await
+            .is_err()
+    );
+    for txid in &ids {
+        assert_eq!(get_confirmation_position(&conn, txid).await?, None);
+    }
+    conn.execute_batch("DROP TRIGGER reject_second_confirmation_position")
+        .await?;
+
+    let report = backfill_confirmation_positions(&conn, 7, &block).await?;
+    assert_eq!((report.updated, report.already_known), (2, 0));
+    assert_eq!(get_confirmation_position(&conn, &ids[0]).await?, Some(1));
+    assert_eq!(get_confirmation_position(&conn, &ids[1]).await?, Some(2));
+    let report = backfill_confirmation_positions(&conn, 7, &block).await?;
+    assert_eq!((report.updated, report.already_known), (0, 2));
+    assert_eq!(legacy_projection(&conn, &ids[0]).await?, before[0]);
+    assert_eq!(legacy_projection(&conn, &ids[1]).await?, before[1]);
+
+    set_confirmation_position(&conn, &ids[0], 7, 0).await?;
+    assert!(
+        backfill_confirmation_positions(&conn, 7, &block)
+            .await
+            .is_err()
+    );
+    assert_eq!(get_confirmation_position(&conn, &ids[0]).await?, Some(0));
+    set_confirmation_position(&conn, &ids[0], 7, 1).await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(7)
+            .confirmed_height(7)
+            .tx_index(2)
+            .txid("absent-from-block".into())
+            .build(),
+    )
+    .await?;
+    assert!(
+        backfill_confirmation_positions(&conn, 7, &block)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        get_confirmation_position(&conn, "absent-from-block").await?,
+        None
+    );
     Ok(())
 }
