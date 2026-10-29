@@ -10,6 +10,8 @@ pub(super) struct MixedConfig {
     pub(super) transactions: usize,
     pub(super) live_keys: usize,
     pub(super) new_files: usize,
+    #[serde(default)]
+    pub(super) historical_rows: usize,
 }
 
 impl MixedConfig {
@@ -25,6 +27,10 @@ impl MixedConfig {
         ensure!(
             self.new_files <= self.transactions / 5,
             "file registrations exceed the native-operation allocation"
+        );
+        ensure!(
+            self.historical_rows <= self.live_keys * 12,
+            "history fixture supports at most twelve versions per live key"
         );
         Ok(self)
     }
@@ -73,6 +79,10 @@ fn workload_mixed_configuration_rejects_invalid_shapes() -> Result<()> {
         valid.replace("\"new_files\":5", "\"new_files\":5,\"new_files\":0"),
         valid.replace("\"new_files\":5", "\"new_files\":5,\"ignored\":true"),
         valid.replace("\"replacements\":2", "\"replacements\":4"),
+        valid.replace(
+            "\"new_files\":5",
+            "\"new_files\":5,\"historical_rows\":3085",
+        ),
     ] {
         ensure!(
             Configuration::parse(invalid.as_bytes()).is_err(),

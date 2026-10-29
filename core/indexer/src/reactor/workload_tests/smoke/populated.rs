@@ -30,6 +30,7 @@ use crate::runtime::{ComponentCache, Decimal, Runtime, Storage, TransactionConte
 mod batch;
 mod configuration;
 mod files;
+mod history;
 mod many;
 mod mixed;
 mod oracle;
@@ -41,6 +42,7 @@ mod simulation;
 
 use batch::BatchProof;
 use configuration::MixedConfig;
+use history::HistoryPopulation;
 use mixed::{MixedLayout, MixedWorkload};
 use oracle::{PaidEffects, root_receipts};
 use pruning::PruningProof;
@@ -425,6 +427,11 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             .await?;
         ensure!(state(&mut runtime, address).await? == [0, 0, 0, 0]);
     }
+    let retained_history = if let Delivery::Configured(mixed) = delivery {
+        HistoryPopulation::prepare(&mut runtime, mixed).await?
+    } else {
+        None
+    };
     let mut cleanup = EngineCleanup::default();
     let history_dir = TempDir::new_in(directory.path())?;
     let mut history = reactor(
@@ -450,10 +457,16 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             )?,
         )
         .await?;
+        if let Some(population) = &retained_history {
+            population.seed_height(&mut history.runtime, height).await?;
+        }
         if height == 90 {
             let scheduled = validators.schedule(&mut history.runtime).await?;
             ensure!(scheduled.due == SMOKE_HEIGHT);
         }
+    }
+    if let Some(population) = &retained_history {
+        population.check(&history.db_conn(), false).await?;
     }
     StoragePopulation::prepare(
         &mut history.runtime,
@@ -503,7 +516,13 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         };
         let workload = if let Some(entries) = entries {
             workload
-                .with_pagination(&mut history.runtime, entries)
+                .with_pagination(
+                    &mut history.runtime,
+                    entries,
+                    retained_history
+                        .as_ref()
+                        .map(|population| population.contract.clone()),
+                )
                 .await?
         } else {
             workload
@@ -520,7 +539,7 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         eprintln!("workload_operation_mix={}", mixed.operation_counts());
     }
     let projection_before = database_projection(&history.db_conn()).await?;
-    let pruning = PruningProof::capture(&history.db_conn(), 89, 96).await?;
+    let pruning = PruningProof::capture(&history.db_conn(), 89, history::prune_height()).await?;
     let before = oracle::Before::capture(
         &mut history.runtime,
         &validators,
@@ -661,6 +680,9 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             }
         }
         pruning.check(&trial.db_conn()).await?;
+        if let Some(population) = &retained_history {
+            population.check(&trial.db_conn(), true).await?;
+        }
         let mut rows = receipts(&trial.db_conn(), SMOKE_HEIGHT).await?;
         if let Some(batch) = batch {
             // Execution remains at the batch anchor. Only confirmation metadata

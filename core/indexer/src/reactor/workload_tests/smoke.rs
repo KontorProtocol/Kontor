@@ -66,6 +66,7 @@ use accounting::Balances;
 const START_HEIGHT: u64 = 93;
 const ANCHOR_HEIGHT: u64 = 101;
 const SMOKE_HEIGHT: u64 = 102;
+const PRUNE_RETAIN: u64 = 6;
 const GAS_LIMIT: u64 = 100_000;
 const FUNDING_SEED: [u8; 64] = [41; 64];
 
@@ -199,7 +200,7 @@ async fn reactor(
         consensus,
         PruneConfig {
             enabled: prune,
-            retain_blocks: 6,
+            retain_blocks: PRUNE_RETAIN,
         },
         height,
         hash,

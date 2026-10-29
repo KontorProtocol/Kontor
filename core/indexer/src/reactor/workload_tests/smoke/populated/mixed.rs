@@ -177,8 +177,13 @@ impl MixedWorkload {
         mut self,
         runtime: &mut Runtime,
         entries: usize,
+        prepared: Option<ContractAddress>,
     ) -> Result<Self> {
-        self.paginated = Some((pagination::prepare(runtime, entries).await?, entries));
+        let contract = match prepared {
+            Some(contract) => contract,
+            None => pagination::prepare(runtime, entries).await?,
+        };
+        self.paginated = Some((contract, entries));
         Ok(self)
     }
 

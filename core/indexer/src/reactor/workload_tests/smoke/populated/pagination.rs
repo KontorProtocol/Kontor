@@ -30,15 +30,21 @@ pub(super) async fn prepare(runtime: &mut Runtime, entries: usize) -> Result<Con
         (1..=100_000_000).contains(&entries),
         "fixture keys must retain eight-digit lexical order"
     );
+    let contract = publish(runtime, ANCHOR_HEIGHT).await?;
+    seed(runtime, &contract, entries).await?;
+    Ok(contract)
+}
+
+pub(super) async fn publish(runtime: &mut Runtime, height: u64) -> Result<ContractAddress> {
     let core = Signer::Core(Box::new(Signer::Nobody));
     let contract = ContractAddress {
         name: "mixedpages".into(),
-        height: ANCHOR_HEIGHT,
+        height,
         tx_index: 7,
     };
     runtime
         .set_context(
-            ANCHOR_HEIGHT,
+            height,
             Some(TransactionContext::builder().tx_index(7).build()),
             None,
             None,
@@ -53,18 +59,27 @@ pub(super) async fn prepare(runtime: &mut Runtime, entries: usize) -> Result<Con
             &test_provenance()?,
         )
         .await?;
+    Ok(contract)
+}
+
+pub(super) async fn seed(
+    runtime: &mut Runtime,
+    contract: &ContractAddress,
+    entries: usize,
+) -> Result<()> {
+    let core = Signer::Core(Box::new(Signer::Nobody));
     for start in (0..entries).step_by(PAGE_SIZE) {
         let count = PAGE_SIZE.min(entries - start);
         runtime
             .execute(
                 Some(&core),
                 Some(runtime.core_payment()),
-                &contract,
+                contract,
                 &format!("seed-entries({start}, {count})"),
             )
             .await?;
     }
-    Ok(contract)
+    Ok(())
 }
 
 fn page(round: usize, count: usize, rounds: usize) -> (usize, bool) {
