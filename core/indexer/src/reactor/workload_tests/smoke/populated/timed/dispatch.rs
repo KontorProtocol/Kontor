@@ -12,6 +12,7 @@ use super::{Action, Event, Schedule};
 mod tests;
 
 pub(super) trait Work {
+    async fn check_before(&mut self, event: &Event) -> Result<()>;
     async fn execute(&mut self, event: &Event) -> Result<()>;
     async fn check(&mut self, event: &Event) -> Result<()>;
 }
@@ -92,6 +93,7 @@ pub(super) struct Observation {
     pub(super) enqueued_ns: u64,
     pub(super) canonical_ready_ns: u64,
     pub(super) ordered_ready_ns: u64,
+    pub(super) precheck_ns: u64,
     pub(super) dispatch_ns: u64,
     pub(super) service_done_ns: u64,
     pub(super) checked_ns: u64,
@@ -118,12 +120,21 @@ pub(super) async fn drain(schedule: Schedule, work: &mut impl Work) -> Result<Re
     Ok(report)
 }
 
+fn drain_deadline(elapsed: Duration) -> Result<()> {
+    ensure!(
+        elapsed <= Duration::from_secs(600),
+        "backlog drain exceeded 600 seconds"
+    );
+    Ok(())
+}
+
 async fn drain_inner(arrivals: &mut Arrivals, work: &mut impl Work) -> Result<Report> {
     let mut observations: Vec<Observation> = Vec::new();
     let mut active_service_ns = 0u64;
     let mut pending = 0usize;
     loop {
         let observation_time = arrivals.start.elapsed();
+        drain_deadline(observation_time)?;
         let required = arrivals
             .schedule
             .required_before_validated(observation_time)?;
@@ -163,8 +174,13 @@ async fn drain_inner(arrivals: &mut Arrivals, work: &mut impl Work) -> Result<Re
         let ordered_ready_ns = observations
             .last()
             .map_or(0, |previous| previous.checked_ns);
+        let precheck = arrivals.start.elapsed();
+        ensure!(precheck >= arrival.enqueued);
+        work.check_before(event)
+            .await
+            .with_context(|| format!("precheck event {ordinal}"))?;
         let dispatch = arrivals.start.elapsed();
-        ensure!(dispatch >= arrival.enqueued);
+        drain_deadline(dispatch)?;
         work.execute(event)
             .await
             .with_context(|| format!("execute event {ordinal}"))?;
@@ -197,6 +213,7 @@ async fn drain_inner(arrivals: &mut Arrivals, work: &mut impl Work) -> Result<Re
             enqueued_ns: nanos(arrival.enqueued)?,
             canonical_ready_ns,
             ordered_ready_ns,
+            precheck_ns: nanos(precheck)?,
             dispatch_ns,
             service_done_ns,
             checked_ns: nanos(checked)?,

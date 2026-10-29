@@ -1,8 +1,8 @@
-use anyhow::{Result, bail, ensure};
+use anyhow::{Error, Result, bail, ensure};
 use tokio::task::yield_now;
 use tokio::time::{sleep, timeout};
 
-use super::{Arrivals, Duration, Event, Schedule, Work, drain};
+use super::{Arrivals, Duration, Event, Schedule, Work, drain, drain_deadline};
 use crate::reactor::workload_tests::smoke::populated::timed::{Profile, Spec};
 
 fn schedule(profile: Profile) -> Result<Schedule> {
@@ -15,13 +15,25 @@ fn schedule(profile: Profile) -> Result<Schedule> {
 
 #[derive(Default)]
 struct RecordingWork {
+    prepared: Vec<usize>,
     executed: Vec<usize>,
     checked: Vec<usize>,
+    fail_prepare: bool,
     fail_execute: bool,
     fail_check: bool,
 }
 
 impl Work for RecordingWork {
+    async fn check_before(&mut self, event: &Event) -> Result<()> {
+        ensure!(self.prepared.len() == self.executed.len());
+        if self.fail_prepare && event.ordinal == 6 {
+            bail!("precheck control");
+        }
+        sleep(Duration::from_millis(2)).await;
+        self.prepared.push(event.ordinal);
+        Ok(())
+    }
+
     async fn execute(&mut self, event: &Event) -> Result<()> {
         ensure!(self.executed.len() == self.checked.len());
         self.executed.push(event.ordinal);
@@ -49,7 +61,7 @@ async fn workload_timed_dispatch_preserves_order_and_measures_checks() -> Result
     let mut work = RecordingWork::default();
     let report = timeout(Duration::from_secs(5), drain(schedule, &mut work)).await??;
     ensure!(report.events.len() >= 8);
-    ensure!(work.executed == work.checked);
+    ensure!(work.prepared == work.executed && work.executed == work.checked);
     ensure!(work.checked == (0..report.events.len()).collect::<Vec<_>>());
     ensure!(
         expected.required_before(Duration::from_nanos(report.completion_ns))?
@@ -61,7 +73,8 @@ async fn workload_timed_dispatch_preserves_order_and_measures_checks() -> Result
         ensure!(observation.ordinal == ordinal);
         ensure!(observation.intended_ns == event.at_seconds * 1_000_000_000);
         ensure!(observation.enqueued_ns >= observation.intended_ns);
-        ensure!(observation.dispatch_ns >= observation.enqueued_ns);
+        ensure!(observation.precheck_ns >= observation.enqueued_ns);
+        ensure!(observation.dispatch_ns >= observation.precheck_ns + 2_000_000);
         ensure!(observation.dispatch_ns >= observation.ordered_ready_ns);
         ensure!(observation.service_done_ns >= observation.dispatch_ns);
         ensure!(observation.checked_ns >= observation.service_done_ns + 2_000_000);
@@ -99,7 +112,7 @@ async fn workload_timed_dispatch_arrivals_do_not_wait_for_execution() -> Result<
                 ensure!(arrivals.schedule.events[ordinal].at_seconds == 1);
             }
         }
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, Error>(())
     })
     .await??;
     arrivals.stop().await?;
@@ -109,10 +122,11 @@ async fn workload_timed_dispatch_arrivals_do_not_wait_for_execution() -> Result<
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workload_timed_dispatch_does_not_continue_after_failure() -> Result<()> {
-    for fail_execute in [true, false] {
+    for stage in ["precheck", "execute", "check"] {
         let mut work = RecordingWork {
-            fail_execute,
-            fail_check: !fail_execute,
+            fail_prepare: stage == "precheck",
+            fail_execute: stage == "execute",
+            fail_check: stage == "check",
             ..Default::default()
         };
         let error = timeout(
@@ -121,12 +135,9 @@ async fn workload_timed_dispatch_does_not_continue_after_failure() -> Result<()>
         )
         .await?
         .unwrap_err();
-        ensure!(format!("{error:#}").contains(if fail_execute {
-            "execute event 6"
-        } else {
-            "check event 6"
-        }));
-        ensure!(work.executed == (0..7).collect::<Vec<_>>());
+        ensure!(format!("{error:#}").contains(&format!("{stage} event 6")));
+        let executed = if stage == "precheck" { 6 } else { 7 };
+        ensure!(work.executed == (0..executed).collect::<Vec<_>>());
         ensure!(work.checked == (0..6).collect::<Vec<_>>());
     }
     let arrivals = Arrivals::new(schedule(Profile::Stress)?)?;
@@ -138,5 +149,13 @@ async fn workload_timed_dispatch_does_not_continue_after_failure() -> Result<()>
         }
     })
     .await?;
+    Ok(())
+}
+
+#[test]
+fn workload_timed_dispatch_rejects_completion_after_deadline() -> Result<()> {
+    drain_deadline(Duration::from_secs(600))?;
+    drain_deadline(Duration::from_secs(600) - Duration::from_nanos(1))?;
+    ensure!(drain_deadline(Duration::from_secs(600) + Duration::from_nanos(1)).is_err());
     Ok(())
 }
