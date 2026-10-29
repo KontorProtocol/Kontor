@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{slice, time::Duration};
 
 use anyhow::{Context, Result};
 use bitcoin::absolute::LockTime;
@@ -178,7 +178,7 @@ async fn run_case(batched: bool) -> Result<()> {
                     new_mock_block_hash(1),
                     Height::new(1),
                     &[],
-                    &[raw.clone()],
+                    slice::from_ref(&raw),
                     None,
                 )
                 .await?;
