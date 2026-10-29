@@ -42,6 +42,7 @@ OBSERVATION_KEYS = {
     "target_arch", "reset", "state_before_sha256", "teardown_events",
     "teardown_probe_on", "error_class", "typed_trap", "host_io_suspended",
     "leaf_callback_seen", "balance_transitions", "balance_transitions_sha256",
+    "live_store_peak",
 }
 ATTEMPT_KEYS = {
     "case_id", "process_role", "configuration", "probe_on", "pid",
@@ -327,6 +328,8 @@ def validate_observation(attempt, summary, manifest, index):
             and observation["target_os"] == "linux"
             and observation["child_markers"] == [],
             "boundary observation differs from selected real fixture")
+    require(observation["live_store_peak"] == 1,
+            "boundary guest Store did not reach one live reservation")
     require(observation["engine_target"] == "pulley64-unknown-unknown-elf"
             and observation["max_wasm_stack"] == 524288
             and observation["async_stack_size"] ==
@@ -448,6 +451,7 @@ def semantic_signature(attempt):
         "last_depth": value["last_depth"],
         "rolled_back": value["rolled_back"],
         "fuel": value["fuel"],
+        "live_store_peak": value["live_store_peak"],
         "balance_transitions": value["balance_transitions"],
         "balance_transitions_sha256": value["balance_transitions_sha256"],
         "state_before_sha256": value["state_before_sha256"],
@@ -637,6 +641,9 @@ def validate_bundle(bundle, directory):
             "boundary process registry has missing or extra children")
     process_ids = [(run["process"]["pid"],
                     run["process"]["started_unix_ns"]) for run in runs.values()]
+    guard_process = control["guard_control"]["process"]
+    process_ids.append((guard_process["pid"],
+                        guard_process["started_unix_ns"]))
     require(len(process_ids) == len(set(process_ids)),
             "boundary process PID/start identity is duplicated")
     logs = [run["raw_log"]["path"] for run in runs.values()]

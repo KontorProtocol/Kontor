@@ -512,6 +512,7 @@ impl Fixture {
             report["state_before_sha256"] = json!(state_before_sha256);
             report["teardown_events"] = json!(teardown_events);
             report["teardown_probe_on"] = json!(self.resource_probe == Some(true));
+            report["live_store_peak"] = json!(self.budget.peak());
             report["error_class"] = json!((outcome != "ok").then_some("deterministic"));
             report["typed_trap"] = json!(typed_trap);
         }

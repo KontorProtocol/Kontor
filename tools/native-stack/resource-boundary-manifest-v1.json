@@ -112,7 +112,7 @@
     "depth_from_case": "pulley_plain_paid",
     "repeats": 2
   },
-  "parent_manifest_sha256": "44ac5c5bc7b783643987ebf78531089bad3d9d3206b71fe33cad4aa541867990",
+  "parent_manifest_sha256": "0c5a0f17a3533ffd61f15f80f93f52abcb1b835aa1503668a8c3db01e64a39a2",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -190,7 +190,7 @@
     },
     "sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "477b4d94d5963dc8d15ced124494335ec2673cdbf5b519eeef66008c028371c0"
+      "sha256": "30650b5ecf9a37122b9d5492a589cb5f97a626bb3fa2b09d6be07173956bf754"
     },
     "tests": {
       "path": "tools/native-stack/test_resource_boundary_evidence.py",
@@ -198,7 +198,7 @@
     },
     "validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "eef4024e98ba063ea53954aeea9e0747468dfae0ac4ee3c83841cf20a3f88d5d"
+      "sha256": "720342bdba644948e2a3679a31a2ed905d500159b9c85aa7aebbcdbc8df18c50"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
