@@ -82,3 +82,58 @@ and coordinator-rules-v1 boundaries, then perform K2a acceptance and K2b extract
 
 External Explorer/Indexer work is excluded from the goal and is not a dependency.
 SDK publication remains deferred until completion and review of all in-scope work.
+
+## Transaction semantics preparation
+
+Source `6e0e4f175f5acf50d44635970fc10cd6f17ca291` follows storage checkpoint
+`5d9e634d22f3365a1e5db557d782e2546544e8c7`. It moves actual recognition,
+materialization, Sponsor state, and batch eligibility into
+`protocol/v1/transactions.rs`. The existing `block` and `reactor::executor`
+paths re-export these items. SQL-backed inspection and result lookup stay in
+`block.rs`, with no second parser or materializer.
+
+| Old location | Versioned location |
+| --- | --- |
+| `block::TransactionFilterMap`, `block::OpMetadataBase` | `transactions::TransactionFilterMap`, `transactions::OpMetadataBase` |
+| `block::materialize_op`, `block::core_payment` | `transactions::materialize_op`, `transactions::core_payment` |
+| `block::TxWalker::{new,payment_override,capture,next_input,materialize}` | `transactions::TxWalker`, same methods |
+| `block::filter_map` | `transactions::filter_map` |
+| `reactor::executor::is_batchable` | `transactions::is_batchable` |
+
+The complete relocated source sections are byte-identical after replacing three
+qualified types with imports (`bitcoin::Transaction`, `bitcoin::OutPoint`, and
+`indexer_types::Input`) and removing the final blank line after `is_batchable`.
+Function bodies, error strings, and parser acceptance rules are unchanged. This
+includes raw transaction and input indices, OP_RETURN bytes, aggregate batch
+eligibility, direct Publish exclusion, and Sponsor precedence and expiry.
+Existing block tests, node inspection, and the rest of the reactor executor are
+byte-identical. Existing identity test bodies are unchanged.
+
+The separate dependency cleanup moves the documented `CORE_SIGNER_ID = 1`
+constant from `database::types` to `v1::storage_identity`. Its original path
+re-exports the same item. The identical function-local constant in
+`create_core_signer` is removed. A new test checks the reserved value and alias.
+The transaction module has no dependency on database, reactor, or API modules.
+It still uses the shared Bitcoin, indexer-types, and anyhow dependencies; this
+preparation does not establish independent dependency graphs.
+
+The local reproducible comparison is
+`.build-cache/k2a-reconcile/transaction-source-audit.py`; its report is
+`transaction-source-audit.json`, SHA-256
+`56a2d5dbef83f6a70666374f2756c92a8cff71cadafeef659d51b33cfacff791`.
+Formatting and whitespace checks passed. Parent source review found no material
+regression. Interlink source review approved the exact revision in acknowledged
+receipt `4e41e085a2e41fb8a4ca22e67a404f6c`, independently comparing the moved
+source. Independent subagent review also found no material findings, checking
+the complete Git-object source sections, both batch-selection callers, aggregate
+shape rejection, parser indices, Sponsor transitions, and facade type identity.
+Runtime tests remain pending. The native-stack agent retains the shared Cargo
+slot until an explicit handoff. Neither review checked remote freshness; both
+reviewed the explicit local base and head above.
+
+This is preparation, not protocol selection. Ingestion still uses the current
+parser through its existing facade. K2a/K2b must pass raw inputs through the
+selected protocol boundary without prematurely discarding inputs recognized by
+a newer protocol. Dispatch, a stable cross-graph codec, and a complete retained
+semantic dependency closure remain required. No activation or P1 freeze is
+claimed by this relocation.
