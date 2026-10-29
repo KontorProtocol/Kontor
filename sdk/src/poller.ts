@@ -363,6 +363,7 @@ export class ResultsPoller {
       for (const row of page.results) {
         if (pending.length > 0 && pending[0]!.txid !== row.txid) {
           this.emitTx(pending);
+          this.cursor = pending[pending.length - 1]!.id;
           pending = [];
         }
         pending.push(row);
@@ -380,6 +381,21 @@ export class ResultsPoller {
     // Results with no txid (shouldn't occur for contract calls) carry
     // no transaction to surface — skip the group.
     if (last.txid == null) return;
+    const executionHeight = last.execution_height ?? last.height;
+    if (
+      rows.some(
+        (row) => (row.execution_height ?? row.height) !== executionHeight,
+      )
+    ) {
+      // Retry from the last completed transaction. Collapsing duplicate op keys
+      // first would hide receipts from different executions across page reads.
+      throw new TransportError(
+        "Transaction execution changed while reading receipts",
+      );
+    }
+    // One transaction can span pages read on either side of a confirmation or
+    // reorg. Use the final page's metadata consistently for the emitted group.
+    const coordinates = executionCoordinates(last);
     // Collapse each (input_index, op_index) to its highest-`result_index`
     // row — the op's canonical result, mirroring the indexer's
     // `get_op_result`. Drops intermediate sub-results and the implicit
@@ -407,14 +423,14 @@ export class ResultsPoller {
         contract: r.contract,
         inputIndex: r.input_index,
         opIndex: r.op_index,
-        coordinates: executionCoordinates(r),
+        coordinates: { ...coordinates },
       }));
     this.emit({
       kind: "tx",
       id: last.id,
       height: BigInt(last.height),
       txIndex: last.tx_index ?? null,
-      ...executionCoordinates(last),
+      ...coordinates,
       txid: last.txid,
       outcomes,
     });

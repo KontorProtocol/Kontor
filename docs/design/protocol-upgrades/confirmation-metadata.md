@@ -89,6 +89,15 @@ index is never changed to zero. Event outcomes and decoded persisted receipts
 retain their read-time coordinates. Older nodes without the new fields yield
 unknown confirmation metadata, not a fabricated position.
 
+When one transaction spans result pages, the latest observed page supplies its
+confirmation coordinates for the whole event and all outcomes. Confirmation,
+unconfirmation and reconfirmation can therefore change between page reads without
+producing contradictory coordinates within one event. Conflicting execution
+heights cause the pending transaction to be discarded and retried from the last
+completed transaction cursor, before duplicate operation keys are collapsed.
+This is a consistency check, not an atomic snapshot across HTTP requests; it does
+not detect every possible execution reorg at the same height.
+
 Execution events are snapshots. Confirmation does not execute a batch again and
 does not produce another execution event. Consumers tracking confirmation must
 refresh with `await session.transaction(txid)`, including after a reorg signal.

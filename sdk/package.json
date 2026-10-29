@@ -1,6 +1,6 @@
 {
   "name": "@kontor/sdk",
-  "version": "0.3.0-rc.6",
+  "version": "0.3.0-rc.7",
   "author": "Unspendable Labs <dev@unspendablelabs.com>",
   "repository": {
     "type": "git",
@@ -13,26 +13,26 @@
   "type": "module",
   "main": "./dist/index.js",
   "react-native": "./dist/index.native.js",
-  "types": "./dist/src/index.d.ts",
+  "types": "./dist/index.d.ts",
   "files": [
     "dist"
   ],
   "exports": {
     ".": {
-      "types": "./dist/src/index.d.ts",
+      "types": "./dist/index.d.ts",
       "react-native": "./dist/index.native.js",
       "import": "./dist/index.js"
     },
     "./vite": {
-      "types": "./dist/src/vite.d.ts",
+      "types": "./dist/vite.d.ts",
       "import": "./dist/vite.js"
     },
     "./regtest": {
-      "types": "./dist/src/regtest.d.ts",
+      "types": "./dist/regtest.d.ts",
       "import": "./dist/regtest.js"
     },
     "./wallets/sats-connect": {
-      "types": "./dist/src/wallets/sats-connect.d.ts",
+      "types": "./dist/wallets/sats-connect.d.ts",
       "import": "./dist/wallets/sats-connect.js"
     }
   },
@@ -62,7 +62,8 @@
     "test:regtest": "npm run build && vitest --config vitest.regtest.config.ts",
     "test:regtest:browser": "npm run build && vitest --config vitest.regtest.config.ts --browser",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test:package": "node scripts/check-package.mjs"
   },
   "devDependencies": {
     "@bytecodealliance/jco": "1.39.0",

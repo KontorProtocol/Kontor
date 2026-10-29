@@ -252,6 +252,138 @@ test("transaction lookup preserves unknown historical positions and distinguishe
   await expect(poller.transaction("failed")).rejects.toThrow(/500/);
 });
 
+test.each([
+  [null, 2],
+  [2, null],
+  [2, 4],
+])(
+  "one event uses one confirmation snapshot across pages (%s to %s)",
+  async (before, after) => {
+    const txid = "bb".repeat(32);
+    const infos = mockFetch({
+      infos: [
+        {
+          height: 2,
+          last_result_id: 0,
+          recent_blocks: [{ height: 2, hash: "a" }],
+          signature: "s0",
+        },
+        {
+          height: 2,
+          last_result_id: 2,
+          recent_blocks: [{ height: 2, hash: "a" }],
+          signature: "s1",
+        },
+      ],
+    });
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/results")) {
+        const second = Number(url.searchParams.get("cursor")) === 1;
+        const position = second ? after : before;
+        const receipt = {
+          ...row(second ? 2 : 1, txid, 1, second ? 1 : 0),
+          execution_height: 1,
+          confirmed_height: position === null ? null : 2,
+          confirmed_bitcoin_tx_index: position,
+          batch_height: 9,
+        };
+        return new Response(
+          JSON.stringify({
+            result: {
+              results: [receipt],
+              pagination: { has_more: !second, next_cursor: second ? null : 1 },
+            },
+          }),
+        );
+      }
+      return infos(input, init);
+    }) as typeof globalThis.fetch;
+    const poller = new ResultsPoller({ baseUrl: "http://test/api", fetch });
+    const iter = poller.events();
+    poller.start();
+    const event = (await iter.next()).value!;
+    poller.stop();
+    if (event.kind !== "tx") throw new Error("expected transaction");
+    expect(event.id).toBe(2);
+    expect(event.outcomes).toHaveLength(2);
+    expect(event.confirmedBitcoinTxIndex).toBe(after);
+    for (const outcome of event.outcomes) {
+      expect(outcome.coordinates).toEqual({
+        executionHeight: 1n,
+        confirmedHeight: after === null ? null : 2n,
+        confirmedBitcoinTxIndex: after,
+        batchHeight: 9n,
+      });
+    }
+  },
+);
+
+test("mixed execution pages retry without emitting mixed outcomes or duplicating completed transactions", async () => {
+  const txid = "cc".repeat(32);
+  const infos = mockFetch({
+    infos: [
+      {
+        height: 2,
+        last_result_id: 0,
+        recent_blocks: [{ height: 2, hash: "a" }],
+        signature: "s0",
+      },
+      {
+        height: 2,
+        last_result_id: 3,
+        recent_blocks: [{ height: 2, hash: "a" }],
+        signature: "s1",
+      },
+    ],
+  });
+  const cursors: number[] = [];
+  const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (!url.pathname.endsWith("/results")) return infos(input, init);
+    const cursor = Number(url.searchParams.get("cursor"));
+    cursors.push(cursor);
+    const results =
+      cursor === 0
+        ? [row(1, "completed", 1), row(2, txid, 1)]
+        : cursor === 2
+          ? [row(3, txid, 2, 0, 1)]
+          : [row(2, txid, 2), row(3, txid, 2, 0, 1)];
+    return new Response(
+      JSON.stringify({
+        result: {
+          results,
+          pagination: {
+            has_more: cursor === 0,
+            next_cursor: cursor === 0 ? 2 : null,
+          },
+        },
+      }),
+    );
+  }) as typeof globalThis.fetch;
+  const poller = new ResultsPoller({
+    baseUrl: "http://test/api",
+    fetch,
+    retryBackoffMs: 1,
+  });
+  const iter = poller.events();
+  poller.start();
+  try {
+    const first = (await iter.next()).value!;
+    expect(first.kind === "tx" && first.txid).toBe("completed");
+    const second = (await iter.next()).value!;
+    if (second.kind !== "tx") throw new Error("expected transaction");
+    expect(cursors).toEqual([0, 2, 1]);
+    expect(second.txid).toBe(txid);
+    expect(second.executionHeight).toBe(2n);
+    expect(second.outcomes).toHaveLength(1);
+    expect(second.outcomes[0]!.coordinates?.executionHeight).toBe(2n);
+  } finally {
+    poller.stop();
+    await iter.return!();
+  }
+});
+
 test("ResultsPoller: collapses one op's rows to its max-result_index result", async () => {
   // The user op and the implicit gas op share (input 0, op 0); the gas
   // op sits at a lower result_index. The poller keeps only the highest

@@ -18,17 +18,17 @@ export type {
   ValidationResultValidationErrors,
 } from "./component/kontor-sdk.js";
 
-export type * from "./bindings";
-export { generate } from "./codegen";
-export type { KontorTransport } from "./json-codec";
+export type * from "./bindings.js";
+export { generate } from "./codegen.js";
+export type { KontorTransport } from "./json-codec.js";
 // Client layer. Codegen output references KontorSession / Inst; callers
 // (and the e2e test) also need the chain config + the Account type.
 // The full client-layer export pass — Account impls, transport, errors,
 // aggregate — lands with the runtime implementation (work item #13).
-export { KontorSession } from "./session";
-export { PaginatedView } from "./pagination";
-export type { CursorPage } from "./pagination";
-export { Result, ResultUnwrapError } from "./result";
+export { KontorSession } from "./session.js";
+export { PaginatedView } from "./pagination.js";
+export type { CursorPage } from "./pagination.js";
+export { Result, ResultUnwrapError } from "./result.js";
 export {
   BaseError,
   ChainError,
@@ -36,48 +36,49 @@ export {
   DeepReorgError,
   SignerError,
   TransportError,
-} from "./errors";
-export type { BaseErrorOptions, ContractErrorOptions } from "./errors";
-export type { Inst } from "./inst";
-export { ContractBase } from "./contract-base";
+} from "./errors.js";
+export type { BaseErrorOptions, ContractErrorOptions } from "./errors.js";
+export type { Inst } from "./inst.js";
+export { ContractBase } from "./contract-base.js";
 export type {
   BuildProvenance,
   Forge,
   Platform,
   ProvenanceEntry,
   Source,
-} from "./provenance";
-export { Attachment } from "./attach";
-export { Offer, IncomingOffer } from "./offer";
-export type { OfferData, OfferInspection } from "./offer";
-export type { ExtraOutput } from "./outputs";
-export { HttpTransport, http } from "./transport/http";
-export type { HttpTransportOptions } from "./transport/http";
-export type { TransactionInfo, ResultInfo, InspectedOp } from "./bindings";
-export type { ExecutionCoordinates } from "./confirmation";
-export type { Utxo } from "./json-codec";
-export { signet } from "./chains";
-export type { Chain } from "./chains";
-export { Identity } from "./identity";
+} from "./provenance.js";
+export { Attachment } from "./attach.js";
+export { Offer, IncomingOffer } from "./offer.js";
+export type { OfferData, OfferInspection } from "./offer.js";
+export type { ExtraOutput } from "./outputs.js";
+export { HttpTransport, http } from "./transport/http.js";
+export type { HttpTransportOptions } from "./transport/http.js";
+export type { TransactionInfo, ResultInfo, InspectedOp } from "./bindings.js";
+export type { ExecutionCoordinates } from "./confirmation.js";
+export type { ChainEvent, EventsFilter, EventsOptions } from "./events.js";
+export type { Utxo } from "./json-codec.js";
+export { signet } from "./chains.js";
+export type { Chain } from "./chains.js";
+export { Identity } from "./identity.js";
 export type {
   Signing,
   SighashKind,
   SignInput,
   SignPsbtOptions,
-} from "./signing";
-export { canSignSchnorr } from "./signing";
-export type { FundingSource } from "./funding";
-export { inMemoryFunding, queryFunding } from "./funding";
-export { LocalKey } from "./local-key";
-export { BlsKey, blsDerivationPath } from "./bls";
+} from "./signing.js";
+export { canSignSchnorr } from "./signing.js";
+export type { FundingSource } from "./funding.js";
+export { inMemoryFunding, queryFunding } from "./funding.js";
+export { LocalKey } from "./local-key.js";
+export { BlsKey, blsDerivationPath } from "./bls.js";
 export type {
   Bip86Indices,
   FromHdKeyOptions,
   FromMnemonicOptions,
   FromPrivateKeyOptions,
-} from "./local-key";
-export { Decimal } from "./canonical/Decimal";
-export { Integer } from "./canonical/Integer";
-export { HolderRef } from "./canonical/HolderRef";
-export type { OutPoint } from "./canonical/HolderRef";
-export { ContractAddress } from "./canonical/ContractAddress";
+} from "./local-key.js";
+export { Decimal } from "./canonical/Decimal.js";
+export { Integer } from "./canonical/Integer.js";
+export { HolderRef } from "./canonical/HolderRef.js";
+export type { OutPoint } from "./canonical/HolderRef.js";
+export { ContractAddress } from "./canonical/ContractAddress.js";
