@@ -154,16 +154,19 @@ impl SimulationRequests {
                                 },
                         "configured simulation outcome or position differs at request {request_index}, op {index}"
                     );
+                    // ContractErr is a returned WIT result. Only execution failures
+                    // populate simulate's separate error_message field.
                     ensure!(
-                        if failed {
-                            result
-                                .error_message()
-                                .is_some_and(|message| !message.is_empty())
-                        } else {
-                            result.error_message().is_none()
-                        },
-                        "configured simulation error detail differs"
+                        result.error_message().is_none(),
+                        "configured simulation unexpectedly failed execution at request {request_index}, op {index}: {result:?}"
                     );
+                    if failed {
+                        ensure!(
+                            row.value.as_deref()
+                                == Some("err(message(\"deliberate failure after write\"))"),
+                            "configured simulation returned a different contract error"
+                        );
+                    }
                 }
                 if let Some(previous) = &previous {
                     ensure!(
