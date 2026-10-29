@@ -11,8 +11,8 @@ use crate::api::handlers::{
 };
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
-    confirm_transaction, get_transaction_by_txid, insert_contract, insert_contract_result,
-    insert_transaction, rollback_to_height,
+    confirm_transaction, get_transaction_by_txid, insert_batch, insert_contract,
+    insert_contract_result, insert_transaction, rollback_to_height,
 };
 use crate::database::types::{ContractResultRow, ContractRow};
 
@@ -20,6 +20,7 @@ use crate::database::types::{ContractResultRow, ContractRow};
 async fn confirmation_endpoints_preserve_execution_and_cursor_across_reorg() -> Result<()> {
     let (env, conn, _dir) = new_test_env().await?;
     insert_block_at(&conn, 1, &format!("{:064x}", 1)).await?;
+    insert_batch(&conn, 9, 1, &format!("{:064x}", 1), b"fixture", false).await?;
     conn.execute("INSERT INTO signers (id, height) VALUES (0, 1)", ())
         .await?;
     let contract = insert_contract(
@@ -162,6 +163,7 @@ async fn confirmation_enrichment_uses_the_same_snapshot_during_reorg() -> Result
     for height in [1, 2] {
         insert_block_at(&writer, height, &format!("{height:064x}")).await?;
     }
+    insert_batch(&writer, 9, 1, &format!("{:064x}", 1), b"fixture", false).await?;
     let txid = "03".repeat(32);
     insert_transaction(
         &writer,
