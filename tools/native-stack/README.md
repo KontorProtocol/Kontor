@@ -349,6 +349,36 @@ and provides no paid-call, cancellation, guest-write rollback, or
 trap-unwind proof. The other five cells and remaining case families are
 required for S2 qualification.
 
+The SQLite range adapter publishes the pinned `arith` guest through
+`Runtime::publish`, funds a signer, and writes 1,024 numeric map entries through
+signed guest operations. The measured `number-entries` views use a lower
+inclusive and upper exclusive range. For each page size 1, 7, and 100 and range
+length 0, 1, 256, and 1,024, an attempt reads the first page as integers in
+ascending order and the last page as decimals in descending order. Both views
+reach the SQLite range iterator and have independently frozen exact row order,
+values, bounds, fuel, persistent state, and Store teardown. The bounded samples
+cover the empty and singleton ranges and both ends of longer ranges. They do not
+exhaust every interior row of the 256 or 1,024 entry ranges.
+
+At source `4a57b3a193b4a2126a000158ed0dba16408a1833`, the Linux ARM64
+development range capture completed four isolated children, 24 attempts each,
+and 96 attempts overall. The standalone validator accepted all four runs. The
+two observed children recorded 96 created and 96 destroyed target Stores, with
+zero live invocations after each attempt. Exact results, system fuel, and full
+persistent-state digests matched across both probe roles and reduced and
+production worker stacks. The exact-source build attestation SHA-256 is
+`8ccfe03694e2890e34772b3eb9f2a158be70adfd4bafb0dae59f36815a2fe0b1`;
+the test binary SHA-256 is
+`da35dc7541faead4c1c89e9fa3f1a1a43cac9a00fe414cf7211a3304ed66d8a1`.
+The guard control SHA-256 is
+`3b8779a6ac34b00a9ac9331e5d94616d7abd73c527bdc98cf52b730ded8c2554`,
+and the capture SHA-256 is
+`458742df7d8460a53ae9eb7c7da60fa1e568154aaed117b63e8e7518cd7f7e23`.
+This is one local diagnostic cell with `qualification_status: missing`. It does
+not establish SQL query counts, comparative timing, or cross-node and six-cell
+semantic equality. The measured calls are unsigned views; paid-call, guest
+write rollback, cancellation, and trap unwind remain separate cases.
+
 At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
 development canonical capture completed 12 child processes, 56 attempts, and
 268 closed Store lifecycles. The standalone validator accepted all 12 runs.
