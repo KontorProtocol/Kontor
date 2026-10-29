@@ -1,5 +1,5 @@
 use anyhow::Result;
-use libsql::{Connection, params};
+use libsql::{Connection, Value, params};
 use tempfile::TempDir;
 
 use super::{
@@ -25,7 +25,7 @@ async fn receipt(conn: &Connection, id: Option<u64>, height: u64) -> Result<u64>
         "INSERT INTO contract_results
          (id, contract_id, func, height, result_index, gas, size, signer_id)
          VALUES (?1, 1, 'test', ?2, 0, 1, 1, 1)",
-        params![id, height],
+        params![id.map(Value::try_from).transpose()?, height],
     )
     .await?;
     Ok(conn.last_insert_rowid() as u64)
