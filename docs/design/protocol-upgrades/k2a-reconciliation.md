@@ -476,3 +476,181 @@ documentation; Interlink evidence-review receipt
 the existing tests and do not replace final phase CI.
 No claim of phase completion, selected rule dispatch or historical isolation is
 made by these relocations.
+
+
+## Remaining executor API and context design
+
+Design agreed following source `3e13c5ee`; not implemented yet.
+This completes the existing K2a boundary design and feeds K2b, K3 and K7. It does
+not introduce another prerequisite phase or change the agreed activation rule.
+
+### Selection and state identity
+
+The node's coordinator selects an executor once for an admitted root operation.
+The selected executor and its live storage session must describe the same canonical
+state. Selection binds the protocol definition and artifact identity, canonical
+application position and lineage, legacy checkpoint, completed migration identity,
+and network/genesis identity. These are the identities already required by K3/K7,
+not a new full-state root or a replacement for the legacy ordered checkpoint.
+K2a initially supplies P1 through the same API; it must not fabricate completed
+migration metadata or claim that K3/K7 persistence already exists.
+
+Bitcoin height alone is insufficient. Block H completes with the old rules; the
+post-migration state and subsequent Batch(H) still have height H but use new rules.
+Read the selected protocol and canonical identity in the same database snapshot
+that serves the operation. Never select from a separate latest-tip connection,
+`info_rx`, a wall clock, the live Malachite era, or a schedule lookup alone. During
+reorg recovery the canonical executor can be historical even while the live engine
+and signing era remain newer. An unsupported selected executor is an explicit
+unavailable condition, never a fallback to the newest installed executor.
+
+For a canonical block or batch, the coordinator supplies its ordered application
+position and explicit phase. For a view, it supplies the committed snapshot's
+position. For simulation, it supplies the pinned base position plus the existing
+fabricated next-block position. The simulated block height remains tip+1, but
+selection follows the base state's completed boundary. A scheduled activation at
+H does not authorize P2 execution on a P1 pre-migration snapshot.
+
+### Requests spanning activation
+
+Public views use snapshot pinning. Begin a read transaction, read the canonical
+identity and protocol from that connection, then acquire the matching executor
+and run every contract read through that transaction. A view whose first snapshot
+read precedes the migration commit completes with the old state and executor;
+a view whose first read follows it gets the new state and executor. The commit's
+linearization point determines which complete snapshot it sees. Do not re-read
+latest protocol halfway through a view, and do not retry a partially executed view
+against a different snapshot. Old bundles remain resident under the retention plan.
+
+Simulation uses coordinator admission. Queue raw requests through the existing
+bounded channel; issue the root context only when dequeued at an open canonical
+execution boundary. Do not dequeue/start simulation between closing the activation
+boundary and completing migration/handoff readiness. An already admitted simulation
+finishes and rolls back before the coordinator advances the canonical boundary.
+If recovery or unsupported-protocol state leaves admission unavailable, return the
+node's explicit unavailable result rather than execute on mismatched state. A
+queued request has no promised old version; admission selects its actual base.
+Caller response loss does not cancel admitted work, per OWNERSHIP-1.
+
+Preserve the current production queue capacity, `available_parallelism()` in
+`main.rs`, and `send().await` backpressure (the test Env uses ten). A full queue
+waits for space; it does not produce a new queue-full error. The API router
+currently applies `API_REQUEST_TIMEOUT_MS = 30_000` and returns HTTP 408 with an
+empty body when its timeout wins. A timed-out pending send has not enqueued work;
+an already enqueued request remains eligible for admission even if its response
+receiver closes. Do not add a queue-age expiry or silently discard it on reopening.
+It executes against the base selected at eventual admission and then rolls back.
+These are node request-lifetime semantics, not a consensus execution deadline.
+
+Views may serve an already committed canonical snapshot while Malachite is stopped,
+provided the matching executor and storage snapshot are available. This does not
+reopen canonical simulation/application admission or confer signing authority.
+The existing 30-second HTTP timeout requests view cancellation, but does not prove
+that its read transaction is already released. OWNERSHIP-1 retains resources during
+drain, with its five-second cleanup deadline and quarantine on expiry. Gas limits
+and fuel yields do not bound cold compilation or synchronous/blocking host work.
+An old SQLite snapshot can therefore delay WAL checkpointing and grow the WAL;
+no finite WAL-size or root-lifetime guarantee is claimed from these timeouts.
+Retain the bounded global pool capacity through quarantine as already specified.
+
+Partition compiled caches by executor artifact and engine identity, plus immutable
+code identity resolved from the root's own snapshot. A bare `contract_id` is not a
+safe cache key: reorg/republication can reuse it for different code within the same
+protocol and engine while an old view still holds its original snapshot. Do not
+look up the old ID in a shared cache before resolving that snapshot's code identity.
+Share one explicit node-wide view capacity across retained executors, including
+active and quarantined roots. Keep one aggregate bounded compile-cache budget
+across namespaces rather than multiplying the cache allowance for each protocol.
+Resident historical bundles remain governed by the separate retention policy.
+
+### Context and ownership
+
+Use a coordinator-created root context with private construction outside the
+coordinator/selected-executor adapter. It carries the selected definition/artifact,
+base identity, intended position/phase, root purpose (canonical, simulation, public
+view or trusted lifecycle), immutable resolved runtime policy, network identity,
+and the node-owned live storage session capability. The policy comes from the
+selected protocol, not request fields or mutable latest-runtime configuration.
+Public view gas caps remain a local limit on that root only; they cannot alter
+canonical or trusted system budgets. Pricing, conversion factors, resource limits,
+native artifact/provenance identities and semantic error policy must come from the
+retained implementation/definition with the context binding which one is active.
+
+Do not put a single payer on a whole block, batch or transaction root. Existing
+Sponsor materialization, per-operation payment, Core signer distinction and nested
+fuel inheritance can produce different effective payment modes inside one root.
+The selected executor derives each operation context under that root after its
+own recognition/authentication rules. Operation and child contexts inherit the
+same protocol and storage authority, with the existing payer and budget rules;
+none may reselect from ambient node state. A Runtime field may cache this immutable
+resolved policy internally, but it cannot independently override the selected root.
+
+OWNERSHIP-1 owns root admission, retained tasks, cancellation/drain, commit authority,
+pooled object quarantine and table-before-lease release. Reuse its accepted design
+and qualified API/view yield policy, rather than implementing a second cleanup
+mechanism here. The node owns physical SQL connections, transactions, cursors and
+ordered metadata writes. The executor owns versioned recognition, materialization,
+execution, lifecycle, view evaluation, committee derivation and simulation semantics.
+Do not move the Reactor into the semantic graph. Cross-graph K2b envelopes must use
+std-only owned data and logical callbacks; temporary in-tree Runtime/anyhow/Bitcoin
+interfaces are not evidence of that isolation.
+
+### Concrete call-site conversion
+
+| Current path | Required conversion |
+| --- | --- |
+| `api::handlers::transactions::post_simulate` and `reactor::Simulation` | Carry raw transaction bytes to coordinator admission; selected executor performs Bitcoin decoding and Kontor recognition. Transport hex validation and size limits stay node-side. Preserve P1's parser acceptance and input filtering. |
+| `Reactor::{simulate,simulate_inner}` | Own admission, temporary transaction and unconditional cleanup; pass a selected root and raw request into the semantic simulation path. Preserve fabricated block construction and current omission of lifecycle in simulation. |
+| `Reactor::execute_block` | Keep node confirmation/usage bookkeeping and already-executed transaction deduplication. Dispatch fresh operations through the selected executor; confirmation never reruns an earlier batch merely because the confirming block selects another protocol. Per-block lifecycle and file-root batching use the confirming block's selected rules; prior effects keep their execution identity. Local pruning retains the maximum required history across retained rules. |
+| `api::handlers::contracts::post_contract`, `runtime::pool` | Bind one read transaction, canonical identity and matching executor before evaluation. Pool reuse cannot retain a previous root context or an incompatible engine/cache. |
+| `Runtime::{execute,execute_api,execute_system_view}` | Route public, paid and trusted calls through the selected root/derived operation context. Retain portable charges and existing distinctions between view, user and system budgets. |
+| `v1::{execution,lifecycle,committee,transactions}` and coordinator policies | Enter through selected implementations. Internal calls inherit root identity; coordinator policies come from the same network definition while remaining distinct from local queues and I/O. |
+
+The simulation transport currently decodes Bitcoin and calls `filter_map` before
+queueing a materialized transaction. Its error mapping and failure projection must
+remain compatible for P1 when moved behind selection. Malformed input must stay an
+ordinary request/recognition result, not become an infrastructure error that stops
+the reactor. Real database, executor infrastructure and cleanup failures retain
+their fatal/unavailable handling. Preserve error text where required by P1; do not
+silently fix old acceptance or classification during the extraction.
+
+### Acceptance and implementation sequence
+
+1. Reconcile the reviewed S2 and OWNERSHIP-1 source before changing runtime ownership
+   or constructing the final P1 runtime. Complete K2a's in-tree API and call-site
+   wiring with one P1 implementation and explicit context, preserving actual behavior.
+2. Before changing call sites, capture P1 simulation, view and execution outcomes,
+   receipts, fees and full logical state from the reconciled pre-change source.
+   Use identical explicit native artifact/provenance fixture inputs or cloned
+   starting databases on both sides. Publication cases must also compare newly
+   stored provenance. Do not exclude provenance rows to claim full-state parity;
+   unequal build-dependent inputs must be identified and fixed through the existing
+   retained-provenance boundary before using that case as an equivalence oracle.
+   Preserve source, fixture and output hashes for the baseline. Cover raw simulation
+   ingress with malformed and partly recognized transactions,
+   deterministic per-op errors, infrastructure failures, existing deduplication,
+   rollback and cache suppression. Verify results/receipts/fees and persistent state
+   against the current path, not only the same new helper called twice.
+3. Cover pool reuse with held cursors, cancellation, discarded objects and incompatible
+   engines. Hold an old view across reorg/republication that reuses the same row ID
+   for different code; verify both old and fresh views with a shared P1 engine.
+   Check that every logical read and every nested call uses its root's
+   selected state and implementation. Keep system budgets independent of local view caps.
+4. K2b must prevent unselected entry points and dependency-owned types crossing the
+   graph boundary. Complete native artifact/provenance and formatting-build retention,
+   existing logical storage callbacks and actual production bundle qualification.
+5. Once K3/K7 provide durable identities and real activation, test views on both sides
+   of the same H migration commit, a pre-commit view held across it, queued simulation
+   spanning handoff, unsupported target, and reorg replay with a newer live engine.
+   Use deliberately different P2 behavior to prove dispatch. Height-only mocks cannot
+   establish these invariants. These remain required goal acceptance, not optional
+   post-completion follow-ups.
+
+All three design reviews accepted revision SHA-256
+`a54865ec9d08b572f4d9e2e4a3d00c5836565b796d87a45e8cffc119ebabe410`
+(the text before this acceptance record and status update). Interlink agreement
+`f643c9e9031dc8b8c3b8f50c97be4704` was read and acknowledged. Independent subagent
+review required the same-protocol reorg/cache identity correction above. Parent
+review corrected production queue capacity, rejected a finite WAL bound inferred
+from cancellation deadlines, and retained full-state/provenance comparison rather
+than excluding rows. No runtime code or qualification acceptance changed.
