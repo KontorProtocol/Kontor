@@ -10,7 +10,7 @@
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "e0b05416e90ce7c6f5ecdd1f68b293112b169333656f17c1dc477bbe28a66896"
+      "sha256": "0992e2c6dd3f9d9f8adb9e04fce7a63ffe747bde216c34a49fc3580ce713b04b"
     },
     "call_output": {
       "path": "core/indexer/src/runtime/call/result.rs",

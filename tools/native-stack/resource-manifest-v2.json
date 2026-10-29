@@ -589,7 +589,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "addc9bbc91c69829d82f58b0ea4249709739a782778930a31de8cbe819e2ce05",
+  "parent_manifest_sha256": "542eaf5dcb93b704dfaca87dda5f4c77cbf3480bed60510bbf6335724763bf15",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -640,7 +640,7 @@
   "sources": {
     "call": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "e0b05416e90ce7c6f5ecdd1f68b293112b169333656f17c1dc477bbe28a66896"
+      "sha256": "0992e2c6dd3f9d9f8adb9e04fce7a63ffe747bde216c34a49fc3580ce713b04b"
     },
     "chain_fixture": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",

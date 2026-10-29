@@ -245,9 +245,14 @@ impl Runtime {
             };
         }
         let mut runtime = store.data().clone();
+        // The invocation driver never accesses this table; guest callbacks use
+        // Store.data(). Keeping its table here would outlive Store on Err paths
+        // and release the lease while the resource table is still alive.
+        runtime.table = self.table.clone();
         let (result, mut store) = runtime
             .invoke_in_store(store, contract_address, signer, payment, expr, nested)
             .await?;
+        drop(runtime);
         record_fuel(&mut store)?;
         Ok(CallOutcome {
             result,
