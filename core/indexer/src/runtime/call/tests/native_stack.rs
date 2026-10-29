@@ -28,6 +28,7 @@ mod foreign_wave;
 mod initialization;
 mod lifecycle;
 mod sweep;
+mod type_value;
 
 pub(super) use sweep::{assert_receipt_stream_initial_state, persistent_digest};
 
@@ -87,6 +88,13 @@ pub(super) async fn resource_foreign_wave(
     process_role: &str,
 ) -> Result<JsonValue> {
     foreign_wave::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_type_value(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    type_value::run(configuration, process_role).await
 }
 
 #[tokio::test]

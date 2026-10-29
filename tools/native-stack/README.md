@@ -248,6 +248,12 @@ guest code can create one. Contract policy
 rejects all start sections before compilation, so no resource constructor
 can run during the admitted component's initialization.
 
+The canonical type/value adapter publishes one component and directly calls
+exports for nested record and variant values, a list of 64 records, a 16,384-byte
+result string, and adjacent 64- and 65-level record results. It compares full
+WAVE values and deterministic errors across the two stack settings and both
+probe roles, with a fresh Store per attempt.
+
 The foreign WAVE adapter publishes a caller and a target through the same
 runtime path. The caller generates each expression inside guest memory and
 passes it through `foreign.call`, so the outer `run(index)` expression remains
