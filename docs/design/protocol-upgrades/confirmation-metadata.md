@@ -86,17 +86,19 @@ SDK execution events now carry `executionHeight`, nullable `confirmedHeight`,
 `confirmedBitcoinTxIndex`, and `batchHeight`. The deprecated `height` alias is
 execution height; deprecated `txIndex` is a nullable legacy ordinal. A missing
 index is never changed to zero. Event outcomes and decoded persisted receipts
-retain their read-time coordinates. Older nodes without the new fields yield
-unknown confirmation metadata, not a fabricated position.
+retain their read-time coordinates. Direct transaction lookups on older nodes
+without the new fields yield unknown confirmation metadata. Event streams require
+the new receipt-stream endpoint and fail explicitly on unsupported servers.
 
 When one transaction spans result pages, the latest observed page supplies its
 confirmation coordinates for the whole event and all outcomes. Confirmation,
 unconfirmation and reconfirmation can therefore change between page reads without
 producing contradictory coordinates within one event. Conflicting execution
 heights cause the pending transaction to be discarded and retried from the last
-completed transaction cursor, before duplicate operation keys are collapsed.
-This is a consistency check, not an atomic snapshot across HTTP requests; it does
-not detect every possible execution reorg at the same height.
+completed transaction token, before duplicate operation keys are collapsed.
+Generation checks discard unfinished groups when a rollback intervenes. There is
+still no atomic snapshot across HTTP requests: an observation can be invalidated
+by a subsequent rollback.
 
 Execution events are snapshots. Confirmation does not execute a batch again and
 does not produce another execution event. Consumers tracking confirmation must
@@ -108,7 +110,63 @@ failures still throw. It does not start background polling. A known confirmation
 height with a null raw index means historical position is unavailable, not that
 the transaction is unconfirmed.
 
+## Durable receipt resume
+
+`GET /api/receipt-stream` follows node-local receipt history. Its opaque tokens
+contain the node's epoch, rollback generation, receipt cursor and filter identity.
+They are positions, not credentials, and cannot be moved to another independent
+node or a different filter. Existing `/results` pagination remains available for
+browsing, but its numeric row IDs can be reused after rollback and are not safe
+resume tokens.
+
+Acquire an initial token with `start=origin` or `start=tip`, then pass it as
+`from`. A page supplies a token for each receipt and a `next_token` for continuing
+the scan. While a transaction group is unfinished, retain its preceding completed
+token as `from` and pass scan progress as `page`. Do not acknowledge a high-water
+token until all matching transaction groups before it have completed.
+
+Each canonical rollback records its surviving height and maximum receipt ID
+atomically with deletion. A stale token receives a recovery response without
+receipt rows. Its cursor is the minimum of the completed cursor and the recorded
+surviving maxima; its invalidation boundary is the minimum surviving height.
+Recovery processes at most 256 successive records per response and continues
+through recovery-only responses before reading replacements. The current log is
+retained in full. A missing record, foreign epoch, future generation or unsupported
+lineage returns an explicit reset requirement. This covers finality replay with
+unchanged Bitcoin hashes and receipt maximum, and rollback without replacement.
+
+The SDK exposes `resumeToken` on both `tx` and `reorg` events. Configure
+`events: { from: savedToken }` to resume, or `events: { start: "origin" }` to ingest
+current canonical history. The default follows the current tip. Numeric-only
+resume requires an explicit resynchronization. `ReceiptStreamError.reason` names
+terminal failures; the SDK never silently switches nodes or skips to the tip.
+
+Consumers must commit each transaction's derived effects and its token in one
+database transaction. For a reorg, retract effects strictly above `forkHeight`
+and save its recovery token atomically. This supplies resumable observations, not
+exactly-once external effects without application-side atomicity. Confirmation
+metadata changes do not cause another application of transaction effects.
+
+After restoring a database backup, stop the node and rotate its receipt epoch
+before serving clients:
+
+```sh
+kontor rotate-receipt-stream --database /path/to/node.db
+```
+
+The command changes only receipt-stream metadata, invalidating old tokens. It
+does not initialize a node, replay contracts or delete execution state. Existing
+clients must explicitly resynchronize. A normal restart preserves the epoch.
+The stream refuses receipt IDs above JavaScript's exact integer limit. Its
+unsupported-lineage marker survives canonical rollback; rotation clears it only
+when current IDs are supported. Retained executor allocation remains unchanged.
+
 ## Acceptance status
+
+The following evidence predates the durable recovery extension. That extension
+has source reviews for its journal and API, SQL smoke checks and 25 SDK poller
+tests, but still requires generated bindings, Rust execution, CLI integration,
+full SDK/package checks and final reviews before merge.
 
 The migration, coordinator, backfill and initial API slices have passed their
 focused Rust tests and independent source reviews. Database, batch, consensus
@@ -137,8 +195,8 @@ including cluster, rollback, late-joiner and batch regressions. An earlier test
 wrapper used the wrong working directory and failed to find contract fixtures;
 that failed capture is retained separately and is not counted as passing evidence.
 
-The agreed IDENTITY-4 plan has hash
-`cb19e026c9a4f6b4a08ebc4c58a77e5d43c51bfd4c38ee62bbf63a81eb6112d3`.
+The agreed IDENTITY-5 plan has hash
+`d90ad7ee3d8dc9d9ac5bd2e347cdf28dda8cf0a2c22f0fbf5f8c0c09c5da1857`.
 It separates this node/SDK PR from dependent ID3-indexer and ID3-explorer PRs in
 `UnspendableLabs/Kontor-Explorer-Indexer` and `UnspendableLabs/Kontor-Explorer`.
 Those consumers still use legacy packages and require transaction-ID joins,

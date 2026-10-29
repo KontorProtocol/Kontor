@@ -110,8 +110,8 @@ export interface KontorSessionOptions {
   /**
    * Results-poller configuration. The poller starts in the constructor
    * — it follows the chain for `events()` / `wait()` and doubles as a
-   * connectivity check (see `ready()`). `from` resumes a persisted
-   * cursor; `filter` narrows the stream. Omit for "follow from the tip".
+   * connectivity check (see `ready()`). `from` resumes an opaque token;
+   * `start: "origin"` reads history. Omit both to follow from the tip.
    */
   events?: EventsOptions;
   /**
@@ -196,6 +196,7 @@ export class KontorSession {
       baseUrl: opts.chain.urls.http,
       fetch: opts.fetch ?? globalThis.fetch.bind(globalThis),
       from: opts.events?.from,
+      start: opts.events?.start,
       filter: opts.events?.filter,
     });
   }

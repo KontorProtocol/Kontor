@@ -19,6 +19,7 @@ use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Genesis, Height, Validator, ValidatorSet};
+use crate::database::receipt_stream::{recovery_boundary, stream_state};
 use crate::keygen;
 use crate::logging;
 use crate::reactor::consensus_state::{ConsensusState, ObservationChannels};
@@ -1499,6 +1500,8 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
             .await;
     }
 
+    let conn = cluster.node_conn(0).await.clone();
+    let before_stream = stream_state(&conn).await?;
     cluster.mock_bitcoin().reset_to(1);
     cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
     cluster.wait_for_rollback(1, Duration::from_secs(60)).await;
@@ -1514,6 +1517,18 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
     cluster.wait_for_block(3, Duration::from_secs(60)).await;
 
     cluster.shutdown().await;
+    let after_stream = stream_state(&conn).await?;
+    assert_eq!(after_stream.epoch, before_stream.epoch);
+    assert!(after_stream.generation > before_stream.generation);
+    let recovery = recovery_boundary(
+        &conn,
+        &after_stream,
+        before_stream.generation,
+        before_stream.max_result_id,
+    )
+    .await?
+    .expect("Bitcoin rollback must be recoverable by a disconnected client");
+    assert_eq!(recovery.surviving_height, 1);
     Ok(())
 }
 
@@ -1598,6 +1613,7 @@ async fn prod_reactor_restart_inside_finality_window_still_rolls_back() -> Resul
     }
     let batch = cluster.wait_for_batch(1, Duration::from_secs(60)).await;
     assert_eq!(batch.txids.len(), 1, "setup batch must carry the tx");
+    let before_stream = stream_state(cluster.node_conn(3).await).await?;
 
     // The node under test executed it, so the rows are there before the restart.
     {
@@ -1649,6 +1665,19 @@ async fn prod_reactor_restart_inside_finality_window_still_rolls_back() -> Resul
     );
 
     cluster.shutdown().await;
+    let after_stream = stream_state(&conn).await?;
+    assert_eq!(after_stream.epoch, before_stream.epoch);
+    assert!(after_stream.generation > before_stream.generation);
+    let recovery = recovery_boundary(
+        &conn,
+        &after_stream,
+        before_stream.generation,
+        before_stream.max_result_id,
+    )
+    .await?
+    .expect("same-chain finality replay must retain a durable recovery boundary");
+    assert_eq!(recovery.surviving_height, 0);
+    assert!(recovery.cursor <= before_stream.max_result_id);
     Ok(())
 }
 

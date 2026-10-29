@@ -18,6 +18,7 @@ use crate::consensus::Height;
 use crate::consensus::signing::PrivateKey;
 use crate::database::confirmation::get_confirmation_position;
 use crate::database::queries::get_transaction_by_txid;
+use crate::database::receipt_stream::{recovery_boundary, stream_state};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -211,7 +212,19 @@ async fn run_case(batched: bool) -> Result<()> {
                 applied, before_confirmation,
                 "confirmation must not execute or charge again"
             );
+            let before_stream = stream_state(&conn).await?;
             reactor.rollback(1).await?;
+            let after_stream = stream_state(&conn).await?;
+            let recovery = recovery_boundary(
+                &conn,
+                &after_stream,
+                before_stream.generation,
+                before_stream.max_result_id,
+            )
+            .await?
+            .expect("confirmation rollback must notify receipt consumers");
+            assert_eq!(recovery.cursor, before_stream.max_result_id);
+            assert_eq!(recovery.surviving_height, 1);
             let rolled_back = get_transaction_by_txid(&conn, &txid)
                 .await?
                 .context("batch survives reorg")?;

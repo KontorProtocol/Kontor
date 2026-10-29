@@ -140,3 +140,28 @@ Native and decimal tokens exclude core and burner accounts; the integer test
 token excludes the burner. Reward pools and stored zero balances remain visible.
 Each page reads current state independently. A multi-page walk is not a snapshot
 across concurrent transfers, insertions, removals, or chain rollbacks.
+
+## Resuming execution events
+
+`session.events()` returns transaction observations and rollback signals. Both
+carry an opaque `resumeToken`. Persist that token atomically with the transaction's
+derived effects, or with the retraction of effects above a reorg's `forkHeight`.
+Resume using session options `events: { from: savedToken }` with the same node and
+filter. Receipt `id` values can be reused after rollback and must not be used as
+resume tokens.
+
+Without a token, the default follows the current tip. Set
+`events: { start: "origin" }` explicitly to ingest canonical history. The node's
+durable rollback journal covers offline clients and finality replay even when
+Bitcoin hashes remain unchanged. Recovery may emit several reorg events before
+replacement transactions when many rollbacks occurred while a client was offline.
+
+A token from another node, a restored database epoch, or unavailable history
+requires explicit resynchronization. These failures surface as `ReceiptStreamError`
+with a typed `reason`; no automatic jump to the tip occurs. Older servers without
+the receipt-stream endpoint are rejected. `DeepReorgError` is retained as a
+deprecated export and is no longer emitted by the poller.
+
+Events remain observations, not finality promises. Confirmation changes do not
+emit the transaction again. Refresh confirmation metadata with
+`await session.transaction(txid)`, including after rollback signals.

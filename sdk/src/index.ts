@@ -34,6 +34,7 @@ export {
   ChainError,
   ContractError,
   DeepReorgError,
+  ReceiptStreamError,
   SignerError,
   TransportError,
 } from "./errors.js";

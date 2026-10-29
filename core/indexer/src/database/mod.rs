@@ -1,6 +1,7 @@
 pub mod confirmation;
 pub mod connection;
 pub mod init;
+pub(crate) mod maintenance;
 pub mod native_contracts;
 mod pool;
 pub mod queries;

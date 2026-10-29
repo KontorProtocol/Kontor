@@ -1,50 +1,28 @@
-/**
- * Unit tests for the indexer-following loop: the `BlockHashCache` and
- * the `ResultsPoller`'s drain + reorg-detection behaviour, driven by a
- * mock `fetch`.
- */
-import { test, expect } from "vitest";
-import { BlockHashCache, ResultsPoller } from "../src/poller.js";
+import { test, expect, afterEach } from "vitest";
+import { ResultsPoller } from "../src/poller.js";
+import { ReceiptStreamError } from "../src/errors.js";
 
-// ─── BlockHashCache ───────────────────────────────────────────────
-
-test("BlockHashCache: insert + get", () => {
-  const c = new BlockHashCache(10);
-  c.insert(1, "a");
-  c.insert(2, "b");
-  expect(c.get(1)).toBe("a");
-  expect(c.get(2)).toBe("b");
-  expect(c.get(3)).toBeUndefined();
+const openPollers: ResultsPoller[] = [];
+afterEach(() => {
+  for (const poller of openPollers.splice(0)) poller.stop();
 });
-
-test("BlockHashCache: re-insert of a known height is a no-op", () => {
-  const c = new BlockHashCache(10);
-  c.insert(1, "a");
-  c.insert(1, "different");
-  expect(c.get(1)).toBe("a");
+const token = (cursor: number, generation = 0) => `g${generation}c${cursor}`;
+const tokenCursor = (value: string | null) => Number(value?.split("c")[1] ?? 0);
+const page = (
+  rows: ReturnType<typeof row>[],
+  hasMore = false,
+  generation = 0,
+  highWater?: number,
+) => ({
+  kind: "page",
+  receipts: rows.map((receipt) => ({
+    receipt,
+    resume_token: token(receipt.id, generation),
+  })),
+  next_token: token(highWater ?? rows.at(-1)?.id ?? 0, generation),
+  has_more: hasMore,
 });
-
-test("BlockHashCache: capacity evicts the oldest-inserted entry", () => {
-  const c = new BlockHashCache(2);
-  c.insert(1, "a");
-  c.insert(2, "b");
-  c.insert(3, "c"); // evicts height 1
-  expect(c.get(1)).toBeUndefined();
-  expect(c.get(2)).toBe("b");
-  expect(c.get(3)).toBe("c");
-});
-
-test("BlockHashCache: truncateAbove drops entries above the fork", () => {
-  const c = new BlockHashCache(10);
-  for (let h = 1; h <= 5; h++) c.insert(h, `h${h}`);
-  c.truncateAbove(3);
-  expect(c.get(3)).toBe("h3");
-  expect(c.get(4)).toBeUndefined();
-  expect(c.get(5)).toBeUndefined();
-  expect(c.minHeight()).toBe(1);
-});
-
-// ─── ResultsPoller ────────────────────────────────────────────────
+const response = (result: unknown) => new Response(JSON.stringify({ result }));
 
 interface MockInfo {
   height: number;
@@ -63,30 +41,41 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 function mockFetch(opts: {
   infos: MockInfo[];
-  results?: unknown[];
+  results?: ReturnType<typeof row>[];
 }): typeof fetch {
   let pollCount = 0;
-  return (async (url: string) => {
-    const path = url.replace(/^.*\/api/, "");
-    let result: unknown;
-    if (path === "") {
-      result = opts.infos[0]; // bootstrap
-    } else if (path.startsWith("?wait=")) {
-      await sleep(5); // mimic a long-poll, avoid a busy loop
+  return (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.searchParams.has("wait")) {
+      await sleep(5);
       pollCount += 1;
-      result = opts.infos[Math.min(pollCount, opts.infos.length - 1)];
-    } else if (path.startsWith("/results")) {
-      result = {
-        results: opts.results ?? [],
-        pagination: { has_more: false, next_offset: null },
-      };
-    } else {
-      throw new Error(`unexpected mock path: ${path}`);
     }
-    return new Response(JSON.stringify({ result }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    const info = opts.infos[Math.min(pollCount, opts.infos.length - 1)]!;
+    if (url.pathname.endsWith("/receipt-stream")) {
+      if (url.searchParams.has("start"))
+        return response({
+          kind: "start",
+          resume_token: token(
+            url.searchParams.get("start") === "origin"
+              ? 0
+              : info.last_result_id,
+          ),
+        });
+      const cursor = tokenCursor(
+        url.searchParams.get("page") ?? url.searchParams.get("from"),
+      );
+      return response(
+        page(
+          (opts.results ?? []).filter(
+            (row) => row.id > cursor && row.id <= info.last_result_id,
+          ),
+          false,
+          0,
+          info.last_result_id,
+        ),
+      );
+    }
+    return response(info);
   }) as typeof fetch;
 }
 
@@ -278,8 +267,14 @@ test.each([
     });
     const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
-      if (url.pathname.endsWith("/results")) {
-        const second = Number(url.searchParams.get("cursor")) === 1;
+      if (
+        url.pathname.endsWith("/receipt-stream") &&
+        !url.searchParams.has("start")
+      ) {
+        const second =
+          tokenCursor(
+            url.searchParams.get("page") ?? url.searchParams.get("from"),
+          ) === 1;
         const position = second ? after : before;
         const receipt = {
           ...row(second ? 2 : 1, txid, 1, second ? 1 : 0),
@@ -290,10 +285,7 @@ test.each([
         };
         return new Response(
           JSON.stringify({
-            result: {
-              results: [receipt],
-              pagination: { has_more: !second, next_cursor: second ? null : 1 },
-            },
+            result: page([receipt], !second),
           }),
         );
       }
@@ -340,8 +332,14 @@ test("mixed execution pages retry without emitting mixed outcomes or duplicating
   const cursors: number[] = [];
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
-    if (!url.pathname.endsWith("/results")) return infos(input, init);
-    const cursor = Number(url.searchParams.get("cursor"));
+    if (
+      !url.pathname.endsWith("/receipt-stream") ||
+      url.searchParams.has("start")
+    )
+      return infos(input, init);
+    const cursor = tokenCursor(
+      url.searchParams.get("page") ?? url.searchParams.get("from"),
+    );
     cursors.push(cursor);
     const results =
       cursor === 0
@@ -351,13 +349,7 @@ test("mixed execution pages retry without emitting mixed outcomes or duplicating
           : [row(2, txid, 2), row(3, txid, 2, 0, 1)];
     return new Response(
       JSON.stringify({
-        result: {
-          results,
-          pagination: {
-            has_more: cursor === 0,
-            next_cursor: cursor === 0 ? 2 : null,
-          },
-        },
+        result: page(results, cursor === 0),
       }),
     );
   }) as typeof globalThis.fetch;
@@ -421,43 +413,55 @@ test("ResultsPoller: collapses one op's rows to its max-result_index result", as
   expect(ev.outcomes[0]!.gas).toBe(10n);
 });
 
-test("ResultsPoller: a changed recent-block hash yields a reorg event", async () => {
-  const fetch = mockFetch({
-    infos: [
-      {
-        height: 3,
-        last_result_id: 0,
-        recent_blocks: [
-          { height: 3, hash: "c" },
-          { height: 2, hash: "b" },
-          { height: 1, hash: "a" },
-        ],
-        signature: "s0",
-      },
-      {
-        // height 3 re-mined: c → c2; the fork point is height 2
-        height: 3,
-        last_result_id: 0,
-        recent_blocks: [
-          { height: 3, hash: "c2" },
-          { height: 2, hash: "b" },
-          { height: 1, hash: "a" },
-        ],
-        signature: "s1",
-      },
-    ],
+test("same-hash finality replay signals retraction and drains reused IDs", async () => {
+  const requests: URL[] = [];
+  const stream = [
+    {
+      kind: "recovery",
+      resume_token: token(80, 1),
+      fork_height: 1,
+      more: false,
+    },
+    page([row(81, "replacement", 1)], false, 1),
+  ];
+  const fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    requests.push(url);
+    if (url.pathname.endsWith("/receipt-stream"))
+      return response(stream.shift() ?? page([], false, 1, 81));
+    if (url.searchParams.has("wait")) await sleep(5);
+    return response({
+      height: 2,
+      last_result_id: 100,
+      recent_blocks: [{ height: 2, hash: "unchanged" }],
+      signature: "new-generation",
+    });
+  }) as typeof globalThis.fetch;
+  const poller = new ResultsPoller({
+    baseUrl: "http://test/api",
+    fetch,
+    from: token(100),
   });
-  const poller = new ResultsPoller({ baseUrl: "http://test/api", fetch });
+  openPollers.push(poller);
   const iter = poller.events();
   poller.start();
-
-  const first = await iter.next();
+  expect((await iter.next()).value).toEqual({
+    kind: "reorg",
+    forkHeight: 1n,
+    resumeToken: token(80, 1),
+  });
+  expect((await iter.next()).value).toMatchObject({
+    kind: "tx",
+    txid: "replacement",
+    id: 81,
+    resumeToken: token(81, 1),
+  });
   poller.stop();
-
-  const ev = first.value!;
-  expect(ev.kind).toBe("reorg");
-  if (ev.kind !== "reorg") throw new Error("expected reorg");
-  expect(ev.forkHeight).toBe(2n);
+  const pages = requests.filter((url) =>
+    url.pathname.endsWith("/receipt-stream"),
+  );
+  expect(pages[0]!.searchParams.get("from")).toBe(token(100));
+  expect(pages[1]!.searchParams.get("from")).toBe(token(80, 1));
 });
 
 test("ResultsPoller: ready() resolves once the node is reachable", async () => {
@@ -488,4 +492,270 @@ test("ResultsPoller: ready() rejects when the node is unreachable", async () => 
   poller.start();
   await expect(poller.ready()).rejects.toThrow(/poll request failed/);
   poller.stop();
+});
+
+function scriptedStream(steps: Array<unknown | (() => Response)>) {
+  const requests: URLSearchParams[] = [];
+  const fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/receipt-stream")) {
+      requests.push(new URLSearchParams(url.search));
+      const step = steps.shift();
+      if (typeof step === "function") return step();
+      return response(step ?? page([], false, 0, 100));
+    }
+    if (url.searchParams.has("wait")) await sleep(5);
+    return response({
+      height: 2,
+      last_result_id: 100,
+      recent_blocks: [],
+      signature: "same",
+    });
+  }) as typeof globalThis.fetch;
+  return { fetch, requests };
+}
+
+function startScript(
+  steps: Array<unknown | (() => Response)>,
+  from = token(0),
+) {
+  const mock = scriptedStream(steps);
+  const poller = new ResultsPoller({
+    baseUrl: "http://test/api",
+    fetch: mock.fetch,
+    from,
+    retryBackoffMs: 1,
+  });
+  openPollers.push(poller);
+  const events = poller.events();
+  poller.start();
+  return { ...mock, poller, events };
+}
+
+test("rollback between pages discards the pending group and preserves completed observations", async () => {
+  const { events, requests, poller } = startScript([
+    page([row(1, "survivor", 1), row(2, "pending", 2)], true),
+    {
+      kind: "recovery",
+      resume_token: token(1, 1),
+      fork_height: 1,
+      more: false,
+    },
+    page([row(2, "replacement", 2, 0), row(3, "replacement", 2, 1)], false, 1),
+  ]);
+  expect((await events.next()).value).toMatchObject({
+    kind: "tx",
+    txid: "survivor",
+    resumeToken: token(1),
+  });
+  expect((await events.next()).value).toMatchObject({
+    kind: "reorg",
+    resumeToken: token(1, 1),
+  });
+  expect((await events.next()).value).toMatchObject({
+    kind: "tx",
+    txid: "replacement",
+    resumeToken: token(3, 1),
+    outcomes: [
+      { inputIndex: 0, opIndex: 0 },
+      { inputIndex: 0, opIndex: 1 },
+    ],
+  });
+  poller.stop();
+  expect(
+    requests.map((query) => [query.get("from"), query.get("page")]),
+  ).toEqual([
+    [token(0), null],
+    [token(1), token(2)],
+    [token(1, 1), null],
+  ]);
+});
+
+test("failed continuation retries from the last completed group without duplicate delivery", async () => {
+  const { events, requests, poller } = startScript([
+    page([row(1, "survivor", 1), row(2, "pending", 2)], true),
+    () => new Response("temporary", { status: 503 }),
+    page([row(2, "pending", 2, 0), row(3, "pending", 2, 1)]),
+  ]);
+  expect((await events.next()).value).toMatchObject({ txid: "survivor" });
+  expect((await events.next()).value).toMatchObject({
+    txid: "pending",
+    resumeToken: token(3),
+  });
+  await poller.ready();
+  poller.stop();
+  expect(
+    requests.map((query) => [query.get("from"), query.get("page")]),
+  ).toEqual([
+    [token(0), null],
+    [token(1), token(2)],
+    [token(1), null],
+  ]);
+});
+
+test("an empty continuation completes pending receipts before advancing the high-water token", async () => {
+  const { events, requests, poller } = startScript([
+    page([row(1, "pending", 1)], true),
+    page([], false, 0, 50),
+    page([], false, 0, 50),
+  ]);
+  expect((await events.next()).value).toMatchObject({
+    txid: "pending",
+    resumeToken: token(1),
+  });
+  await poller.ready();
+  await expect.poll(() => requests.length).toBeGreaterThanOrEqual(3);
+  poller.stop();
+  expect(requests[2]!.get("from")).toBe(token(50));
+  expect(requests[2]!.has("page")).toBe(false);
+});
+
+test("offline resume walks bounded recovery batches before reading replacements", async () => {
+  const { events, requests, poller } = startScript(
+    [
+      {
+        kind: "recovery",
+        resume_token: token(90, 256),
+        fork_height: 3,
+        more: true,
+      },
+      {
+        kind: "recovery",
+        resume_token: token(80, 300),
+        fork_height: 1,
+        more: false,
+      },
+      page([row(81, "new", 2)], false, 300),
+    ],
+    token(100),
+  );
+  expect((await events.next()).value).toEqual({
+    kind: "reorg",
+    forkHeight: 3n,
+    resumeToken: token(90, 256),
+  });
+  expect((await events.next()).value).toEqual({
+    kind: "reorg",
+    forkHeight: 1n,
+    resumeToken: token(80, 300),
+  });
+  expect((await events.next()).value).toMatchObject({
+    txid: "new",
+    resumeToken: token(81, 300),
+  });
+  poller.stop();
+  expect(requests.map((query) => query.get("from"))).toEqual([
+    token(100),
+    token(90, 256),
+    token(80, 300),
+  ]);
+  expect(requests.some((query) => query.has("start"))).toBe(false);
+});
+
+test("failed request after recovery resumes its committed token without a second invalidation", async () => {
+  const { events, requests, poller } = startScript(
+    [
+      {
+        kind: "recovery",
+        resume_token: token(0, 1),
+        fork_height: 0,
+        more: false,
+      },
+      () => new Response("temporary", { status: 503 }),
+      page([row(1, "new", 1)], false, 1),
+    ],
+    token(100),
+  );
+  expect((await events.next()).value).toMatchObject({
+    kind: "reorg",
+    resumeToken: token(0, 1),
+  });
+  expect((await events.next()).value).toMatchObject({
+    kind: "tx",
+    txid: "new",
+  });
+  poller.stop();
+  expect(requests.map((query) => query.get("from"))).toEqual([
+    token(100),
+    token(0, 1),
+    token(0, 1),
+  ]);
+});
+
+test.each([
+  "epoch_mismatch",
+  "future_generation",
+  "unsupported_lineage",
+  "missing_history",
+])("%s requires explicit resynchronization", async (reason) => {
+  const { poller, events, requests } = startScript([
+    { kind: "reset_required", reason },
+  ]);
+  await expect(poller.ready()).rejects.toMatchObject({
+    name: "ReceiptStreamError",
+    reason,
+  });
+  await expect(events.next()).rejects.toMatchObject({ reason });
+  expect(requests).toHaveLength(1);
+});
+
+test.each(["origin", "tip"] as const)(
+  "bootstrap explicitly requests %s and keeps its filter",
+  async (start) => {
+    const mock = scriptedStream([
+      { kind: "start", resume_token: token(start === "tip" ? 100 : 0) },
+      page([], false, 0, 100),
+    ]);
+    const poller = new ResultsPoller({
+      baseUrl: "http://test/api",
+      fetch: mock.fetch,
+      start,
+      filter: { contract: "token_0_0", func: "transfer", signerId: 7 },
+    });
+    openPollers.push(poller);
+    poller.start();
+    await poller.ready();
+    poller.stop();
+    expect(mock.requests[0]!.get("start")).toBe(start);
+    expect(mock.requests[1]!.get("from")).toBe(
+      token(start === "tip" ? 100 : 0),
+    );
+    for (const query of mock.requests) {
+      expect(query.get("contract")).toBe("token_0_0");
+      expect(query.get("func")).toBe("transfer");
+      expect(query.get("signer_id")).toBe("7");
+    }
+  },
+);
+
+test("numeric-only resume is rejected rather than assigned a guessed generation", () => {
+  expect(
+    () =>
+      new ResultsPoller({
+        baseUrl: "http://test/api",
+        fetch,
+        from: 100 as unknown as string,
+      }),
+  ).toThrow(ReceiptStreamError);
+});
+
+test("unsafe receipt IDs and non-progressing continuation pages fail closed", async () => {
+  for (const malformed of [
+    page([row(Number.MAX_SAFE_INTEGER + 1, "bad", 1)]),
+    page([], true),
+  ]) {
+    const { poller } = startScript([malformed]);
+    await expect(poller.ready()).rejects.toMatchObject({
+      reason: "invalid_response",
+    });
+  }
+});
+
+test("old servers do not silently fall back to unsafe numeric pagination", async () => {
+  const { poller } = startScript([
+    () => new Response("not found", { status: 404 }),
+  ]);
+  await expect(poller.ready()).rejects.toMatchObject({
+    reason: "unsupported_server",
+  });
 });

@@ -788,8 +788,8 @@ pub struct Info {
     /// draining `/api/results`. 0 when no results exist yet.
     #[ts(type = "number")]
     pub last_result_id: u64,
-    /// The last 10 indexed blocks, height-descending. The SDK compares
-    /// these against its local block-hash cache for reorg detection.
+    /// The last 10 indexed blocks, height-descending. Durable receipt recovery
+    /// uses the rollback journal rather than inferring it from this window.
     pub recent_blocks: Vec<RecentBlock>,
     /// Opaque token including the receipt lineage and rollback generation. Pass back as
     /// `?since=` to the long-poll endpoint; the request blocks until

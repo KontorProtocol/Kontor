@@ -16,6 +16,7 @@ pub mod logging;
 pub mod metrics;
 pub mod multi_psbt_test_utils;
 pub mod reactor;
+pub mod receipt_stream_rotation;
 pub mod reg_tester;
 pub mod retry;
 pub mod runtime;

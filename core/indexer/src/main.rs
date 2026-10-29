@@ -14,6 +14,7 @@ use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
 use indexer::info::{compute_info_core, run_info_publisher};
 use indexer::keygen::{self, KeygenArgs};
+use indexer::receipt_stream_rotation::{self, ReceiptStreamRotationArgs};
 use indexer::stopper::{self, Shutdown};
 use indexer::{api, block, built_info, reactor, reg_tester, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging};
@@ -47,6 +48,8 @@ enum Command {
     Keygen(KeygenArgs),
     /// Recover confirmation positions from one verified canonical raw block.
     BackfillConfirmations(ConfirmationBackfillArgs),
+    /// Invalidate receipt resume tokens after restoring a node database backup.
+    RotateReceiptStream(ReceiptStreamRotationArgs),
     /// Stand up a single-node regtest devnet (bitcoind + one validator,
     /// auto-miner, pre-funded dev account). Intended for local SDK
     /// development and CI; prints `KONTOR_REGTEST_*` markers on stdout.
@@ -62,6 +65,11 @@ async fn main() -> Result<()> {
         Command::Keygen(args) => keygen::run(args),
         Command::BackfillConfirmations(args) => {
             let result = confirmation_backfill::run(args).await?;
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
+        Command::RotateReceiptStream(args) => {
+            let result = receipt_stream_rotation::run(args).await?;
             println!("{}", serde_json::to_string(&result)?);
             Ok(())
         }

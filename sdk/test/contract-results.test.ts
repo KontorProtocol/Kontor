@@ -59,6 +59,7 @@ function setup(
       try {
         yield {
           kind: "tx",
+          resumeToken: "fixture-token",
           txid: "tx-results",
           id: 1,
           height: 1n,
