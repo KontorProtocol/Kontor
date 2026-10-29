@@ -12,6 +12,8 @@ pub(super) struct MixedConfig {
     pub(super) new_files: usize,
     #[serde(default)]
     pub(super) historical_rows: usize,
+    #[serde(default)]
+    pub(super) batch_operations: usize,
 }
 
 impl MixedConfig {
@@ -31,6 +33,12 @@ impl MixedConfig {
         ensure!(
             self.historical_rows <= self.live_keys * 12,
             "history fixture supports at most twelve versions per live key"
+        );
+        ensure!(
+            self.batch_operations == 0
+                || (matches!(self.batch_operations, 20 | 40)
+                    && (self.transactions * 2).is_multiple_of(self.batch_operations)),
+            "configured batches require complete groups of 20 or 40 operations"
         );
         Ok(self)
     }
@@ -71,6 +79,8 @@ fn workload_mixed_configuration_rejects_invalid_shapes() -> Result<()> {
     let valid = r#"{"population":{"active_validators":4,"replacements":2,"agreements":2,"members_per_agreement":3},"mixed":{"transactions":50,"live_keys":257,"new_files":5}}"#;
     Configuration::parse(valid.as_bytes())?;
     for invalid in [
+        valid.replace("\"new_files\":5", "\"new_files\":5,\"batch_operations\":1"),
+        valid.replace("\"new_files\":5", "\"new_files\":5,\"batch_operations\":40"),
         valid.replace("\"transactions\":50", "\"transactions\":0"),
         valid.replace("\"transactions\":50", "\"transactions\":51"),
         valid.replace("\"live_keys\":257", "\"live_keys\":0"),
@@ -89,6 +99,17 @@ fn workload_mixed_configuration_rejects_invalid_shapes() -> Result<()> {
             "accepted {invalid}"
         );
     }
+    Configuration::parse(
+        valid
+            .replace("\"new_files\":5", "\"new_files\":5,\"batch_operations\":20")
+            .as_bytes(),
+    )?;
+    Configuration::parse(
+        valid
+            .replace("\"transactions\":50", "\"transactions\":500")
+            .replace("\"new_files\":5", "\"new_files\":5,\"batch_operations\":40")
+            .as_bytes(),
+    )?;
     for count in [0, 5, 10] {
         Configuration::parse(
             valid

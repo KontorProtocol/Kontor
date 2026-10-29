@@ -89,7 +89,7 @@ impl Delivery {
         matches!(
             self,
             Self::BatchThenConfirmation | Self::SimulationsThenBatch
-        )
+        ) || matches!(self, Self::Configured(config) if config.batch_operations > 0)
     }
 }
 
@@ -649,10 +649,12 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         } else {
             None
         };
-        let batch = if delivery.batched() {
-            Some(BatchProof::execute(&mut trial, &reveals[0]).await?)
-        } else {
-            None
+        let batches = match delivery {
+            Delivery::Configured(config) if config.batch_operations > 0 => {
+                BatchProof::execute_chunks(&mut trial, &reveals, config.batch_operations).await?
+            }
+            _ if delivery.batched() => vec![BatchProof::execute(&mut trial, &reveals[0]).await?],
+            _ => Vec::new(),
         };
         apply(&mut trial, block.clone()).await?;
         let projection = database_projection(&trial.db_conn()).await?;
@@ -684,12 +686,12 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             population.check(&trial.db_conn(), true).await?;
         }
         let mut rows = receipts(&trial.db_conn(), SMOKE_HEIGHT).await?;
-        if let Some(batch) = batch {
+        for batch in batches {
             // Execution remains at the batch anchor. Only confirmation metadata
             // moves to the new block, whose lifecycle still runs exactly once.
             rows.extend(batch.check(&trial).await?);
-            rows.sort_by_key(|row| row.id);
         }
+        rows.sort_by_key(|row| row.id);
         let all_paid: Vec<_> = rows
             .iter()
             .filter(|row| row.txid.as_ref().is_some_and(|txid| txids.contains(txid)))
@@ -704,7 +706,17 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         }
         let effects = if let Some(mixed) = &mixed {
             mixed
-                .check(&mut trial.runtime, &all_paid, &paid, layout)
+                .check(
+                    &mut trial.runtime,
+                    &all_paid,
+                    &paid,
+                    layout,
+                    if delivery.batched() {
+                        ANCHOR_HEIGHT
+                    } else {
+                        SMOKE_HEIGHT
+                    },
+                )
                 .await?;
             mixed
                 .check_file_lifecycle(&mut trial.runtime, &rows)

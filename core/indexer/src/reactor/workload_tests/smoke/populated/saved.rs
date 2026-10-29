@@ -17,6 +17,7 @@ use super::super::{
     database_projection, decode_block, hash_file, reactor, stop_engine,
 };
 use super::PopulationConfig;
+use super::batch::BatchProof;
 use super::configuration::MixedConfig;
 use crate::bitcoin_client::Client;
 use crate::database::Writer;
@@ -272,6 +273,22 @@ async fn workload_saved_configured_replay() -> Result<()> {
             .all(|transaction| transaction.inputs.len() == 1
                 && transaction.inputs[0].insts.ops.len() == 2)
     );
+    let bitcoin_block: BitcoinBlock = deserialize(&raw)?;
+    let reveals = block
+        .transactions
+        .iter()
+        .map(|tx| {
+            let raw_tx = bitcoin_block
+                .txdata
+                .get(usize::try_from(tx.index)?)
+                .context("saved transaction index outside raw block")?;
+            ensure!(
+                raw_tx.compute_txid() == tx.txid,
+                "saved reveal identity differs"
+            );
+            Ok(raw_tx.clone())
+        })
+        .collect::<Result<Vec<_>>>()?;
     let bitcoin_dir = TempDir::new()?;
     let (child, client) = workload_bitcoin(bitcoin_dir.path()).await?;
     let mut bitcoin = BitcoinProcess(child);
@@ -319,9 +336,18 @@ async fn workload_saved_configured_replay() -> Result<()> {
             database_projection(&trial.db_conn()).await? == before,
             "startup changed saved prestate"
         );
+        let batches = if manifest.mixed.batch_operations > 0 {
+            BatchProof::execute_chunks(&mut trial, &reveals, manifest.mixed.batch_operations)
+                .await?
+        } else {
+            Vec::new()
+        };
         let start = Instant::now();
         apply(&mut trial, block.clone()).await?;
         let service_ns = u64::try_from(start.elapsed().as_nanos())?;
+        for batch in batches {
+            batch.check(&trial).await?;
+        }
         ensure!(
             database_projection(&trial.db_conn()).await? == after,
             "saved execution result differs"
@@ -330,7 +356,9 @@ async fn workload_saved_configured_replay() -> Result<()> {
         eprintln!(
             "workload_saved_trial={}",
             json!({"trial": name, "manifest_sha256": expected,
-            "service_ns": service_ns, "timing_claim": "diagnostic_only"})
+            "service_ns": service_ns, "batch_operations": manifest.mixed.batch_operations,
+            "service_scope": "block application through pruning, excludes prior batches",
+            "timing_claim": "diagnostic_only"})
         );
     }
     ensure!(

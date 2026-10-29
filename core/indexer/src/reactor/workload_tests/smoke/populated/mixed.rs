@@ -6,7 +6,7 @@ use indexer_types::{ContractAddress, Inst, InstKind, OpStatus, ResultRow};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::super::{ANCHOR_HEIGHT, GAS_LIMIT, SMOKE_HEIGHT, test_provenance};
+use super::super::{ANCHOR_HEIGHT, GAS_LIMIT, test_provenance};
 use super::files::FileWorkload;
 use super::oracle::PaidEffects;
 use super::pagination;
@@ -323,6 +323,7 @@ impl MixedWorkload {
         all: &[&ResultRow],
         roots: &[&ResultRow],
         layout: MixedLayout,
+        execution_height: u64,
     ) -> Result<()> {
         let payer = layout.payer();
         ensure!(
@@ -346,7 +347,7 @@ impl MixedWorkload {
             let nested =
                 matches!(slot, 13..=15) || (matches!(slot, 16..=17) && file_index.is_none());
             ensure!(
-                root.height == SMOKE_HEIGHT
+                root.height == execution_height
                     && root.tx_index == Some(tx_index)
                     && root.input_index == Some(input_index)
                     && root.op_index == Some(op_index)
