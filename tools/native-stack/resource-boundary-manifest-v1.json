@@ -200,7 +200,7 @@
     },
     "validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "8cfcc4eabfbf514c4d47e5d3999f5cbd1c443abaf2cb2a900ae679ad80a1b698"
+      "sha256": "9974f36fc63b93206b81fbde3fb5a1af677459fc4a948cc67da66731dedb09ce"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",

@@ -17,14 +17,15 @@ sys.dont_write_bytecode = True
 
 from capture_resource_chain import harness_position
 from capture_resource_diagnostic import validate_control
-from resource_evidence import (file_evidence, load_json_strict, no_duplicate_keys,
+from resource_evidence import (check_guard_control, file_evidence,
+                               load_json_strict, no_duplicate_keys,
                                no_nonfinite_constants, require, sha256,
                                thread_capacities)
 from resource_evidence_v2 import validate_teardown
 from resource_boundary_manifest import (CONFIGURATIONS, DISCOVERY_CELL,
                                         DISCOVERY_ROLE, FINAL_ROLES, MANIFEST,
                                         SCHEMA, build_boundary_manifest)
-from resource_manifest import ROOT, build_manifest
+from resource_manifest import FIBER_SOURCE_FILES, ROOT, build_manifest
 
 
 TEST_NAME = "runtime::call::tests::native_stack_resource::pulley_boundary_worker_case"
@@ -718,9 +719,16 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
     file_evidence(path.parent, archive["control_capture"])
     archived_control = load_json_strict(path.parent /
                                         archive["control_capture"]["path"])
-    old_v1_sha = hashlib.sha256(historical_file(source_sha,
-        "tools/native-stack/resource-manifest-v1.json")).hexdigest()
-    require(archived_control["source_sha"] == source_sha
+    old_v1_bytes = historical_file(
+        source_sha, "tools/native-stack/resource-manifest-v1.json")
+    old_v1_sha = hashlib.sha256(old_v1_bytes).hexdigest()
+    old_v1 = json.loads(old_v1_bytes, object_pairs_hook=no_duplicate_keys,
+                        parse_constant=no_nonfinite_constants)
+    require(set(archived_control) == {
+        "manifest_sha256", "source_sha", "binary_path", "binary_sha256",
+        "cargo_artifact", "cargo_artifacts", "cargo_metadata",
+        "guard_control", "wasmtime_source_files",
+    } and archived_control["source_sha"] == source_sha
             and archived_control["binary_sha256"] == archive["binary_sha256"]
             and archived_control["manifest_sha256"] == old_v1_sha,
             "reviewed discovery control differs from historical source")
@@ -738,8 +746,16 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
                   archived_control["guard_control"]["raw_log"],
                   *archived_control["wasmtime_source_files"].values()):
         file_evidence(control_dir, entry)
+    require(set(archived_control["wasmtime_source_files"]) ==
+            set(FIBER_SOURCE_FILES),
+            "reviewed discovery control lacks pinned fiber sources")
+    for relative, entry in archived_control["wasmtime_source_files"].items():
+        require(entry["sha256"] == FIBER_SOURCE_FILES[relative],
+                f"reviewed discovery fiber source differs: {relative}")
     metadata = load_json_strict(control_dir /
                                 archived_control["cargo_metadata"]["path"])
+    require(metadata["workspace_root"] == str(ROOT / "core"),
+            "reviewed discovery Cargo workspace differs from source")
     indexers = [package for package in metadata["packages"]
                 if package.get("name") == "indexer"]
     require(len(indexers) == 1,
@@ -761,6 +777,32 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
             and records[-1].get("reason") == "build-finished"
             and records[-1].get("success") is True,
             "reviewed discovery binary lacks exact Cargo artifact identity")
+    guard_lines = (control_dir /
+                   archived_control["guard_control"]["raw_log"]["path"])
+    guard_markers = [json.loads(line.split("KONTOR_RESOURCE_GUARD_CONTROL=", 1)[1],
+                                object_pairs_hook=no_duplicate_keys,
+                                parse_constant=no_nonfinite_constants)
+                     for line in guard_lines.read_text().splitlines()
+                     if "KONTOR_RESOURCE_GUARD_CONTROL=" in line]
+    require(len(guard_markers) == 2
+            and {marker["mode"] for marker in guard_markers} ==
+            {"reduced", "production"},
+            "reviewed discovery guard modes are incomplete")
+    pages = {marker["mode"]: marker["target"]["page_size_bytes"]
+             for marker in guard_markers}
+    report_view = {
+        "host": {"os": "linux"},
+        "binary_path": archive["binary_path"],
+        "binary_sha256": archive["binary_sha256"],
+        "source_sha": source_sha,
+        "configurations": {
+            mode: {"engine": {"page_size_bytes": pages[mode]},
+                   "process_log": {"path": f"{mode}-worker.log"}}
+            for mode in ("reduced", "production")
+        },
+        "guard_control": archived_control["guard_control"],
+    }
+    check_guard_control(report_view, old_v1, control_dir)
     for case_id in sorted(cases):
         name = run_name(case_id, DISCOVERY_ROLE, "production")
         run = archive["runs"][name]
