@@ -12,6 +12,7 @@ from resource_evidence import (file_evidence, load_json_strict, require, sha256,
                                thread_capacities)
 from resource_finite_evidence import (CONFIGURATIONS, ROLES, WORKER_TEST,
                                       parse_worker_log)
+from resource_evidence_v2 import validate_teardown
 from resource_manifest import MANIFEST, build_manifest
 
 
@@ -24,10 +25,14 @@ EXPECTED = {"active_data_success": ("ok", None),
             "active_element_oob": ("deterministic_error", "TableOutOfBounds"),
             "fuel_failure": ("out_of_fuel", "OutOfFuel")}
 OBSERVATION_KEYS = {
-    "sample_key", "outcome", "typed_trap", "module_sha256", "fuel_limit",
-    "fuel_used", "host_callback_count", "state_before_sha256",
-    "state_after_sha256", "store_closed", "teardown_probe_on",
-    "store_close_count", "engine_target", "max_wasm_stack", "async_stack_size",
+    "sample_key", "outcome", "typed_trap", "result_value", "component_sha256",
+    "execution_path", "admission_path", "published", "fuel_failure_stage",
+    "view_fuel_limit",
+    "user_fuel", "system_fuel", "deposit_fuel", "host_callback_count",
+    "state_before_sha256", "state_after_sha256", "receipts_before",
+    "receipts_after", "resources_before", "resources_after", "stack_empty",
+    "savepoint_empty", "live_invocations", "teardown_probe_on",
+    "teardown_events", "engine_target", "max_wasm_stack", "async_stack_size",
 }
 
 
@@ -58,20 +63,36 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
             and attempt["pid"] == pid,
             "generated initialization attempt identity changed")
     expected_outcome, expected_trap = EXPECTED[sample]
-    fuel_limit = 0 if sample == "fuel_failure" else 1_000_000
     require(isinstance(value, dict) and set(value) == OBSERVATION_KEYS
             and value["sample_key"] == sample
             and value["outcome"] == expected_outcome
             and value["typed_trap"] == expected_trap
-            and isinstance(value["module_sha256"], str)
-            and re.fullmatch(r"[0-9a-f]{64}", value["module_sha256"])
-            and value["fuel_limit"] == fuel_limit
-            and type(value["fuel_used"]) is int
-            and 0 <= value["fuel_used"] <= fuel_limit
+            and ((isinstance(value["result_value"], str)
+                  and sample.endswith("success"))
+                 or (value["result_value"] is None
+                     and not sample.endswith("success")))
+            and isinstance(value["component_sha256"], str)
+            and re.fullmatch(r"[0-9a-f]{64}", value["component_sha256"])
+            and value["execution_path"] == "Runtime::execute"
+            and value["admission_path"] == "admitted_component_cache"
+            and value["published"] is False
+            and value["fuel_failure_stage"] ==
+                ("input_precharge" if sample == "fuel_failure" else None)
+            and type(value["view_fuel_limit"]) is int
+            and (value["view_fuel_limit"] == 0 if sample == "fuel_failure"
+                 else value["view_fuel_limit"] > 0)
+            and all(type(value[key]) is int and value[key] >= 0 for key in
+                    ("user_fuel", "system_fuel", "deposit_fuel"))
+            and (sample != "fuel_failure" or value["system_fuel"] == 0)
             and value["host_callback_count"] == 0
-            and value["store_closed"] is True
+            and type(value["receipts_before"]) is int
+            and value["receipts_after"] == value["receipts_before"]
+            and type(value["resources_before"]) is int
+            and value["resources_after"] == value["resources_before"]
+            and value["stack_empty"] is True
+            and value["savepoint_empty"] is True
+            and value["live_invocations"] == 0
             and value["teardown_probe_on"] is (role == "target_observed")
-            and value["store_close_count"] == (1 if role == "target_observed" else 0)
             and value["engine_target"] == "pulley64-unknown-unknown-elf"
             and value["max_wasm_stack"] == 524_288
             and value["async_stack_size"] ==
@@ -81,10 +102,24 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
     require(isinstance(before, str) and re.fullmatch(r"[0-9a-f]{64}", before)
             and value["state_after_sha256"] == before,
             "generated initialization changed full persistent state")
+    if role == "target_observed":
+        teardown = validate_teardown(value["teardown_events"], 1, 0)
+        require(teardown["created"]["nested_chain"] == 1,
+                "generated initialization did not close one call Store")
+    else:
+        require(value["teardown_events"] is None,
+                "generated initialization probe-off role recorded Store events")
     return {"sample_key": sample, "repeat_index": repeat_index,
             "outcome": value["outcome"], "typed_trap": value["typed_trap"],
-            "module_sha256": value["module_sha256"],
-            "fuel_used": value["fuel_used"], "state_sha256": before}
+            "result_value": value["result_value"],
+            "component_sha256": value["component_sha256"],
+            "view_fuel_limit": value["view_fuel_limit"],
+            "user_fuel": value["user_fuel"],
+            "system_fuel": value["system_fuel"],
+            "deposit_fuel": value["deposit_fuel"],
+            "receipts": value["receipts_before"],
+            "resources": value["resources_before"],
+            "state_sha256": before}
 
 
 def validate_trace(trace, runtime, attempts, os_name):
@@ -102,15 +137,27 @@ def validate_trace(trace, runtime, attempts, os_name):
         os_name, runtime["pid"])
     workers = {item["thread_id"]: item["os_thread_id"]
                for item in threads["tokio_worker"]}
+    blocking = {item["thread_id"]: item["os_thread_id"]
+                for item in threads["blocking_pool"]}
     names = []
     for event in trace["events"]:
         require(set(event) == {"name", "thread_id", "os_thread_id", "category"}
                 and event["name"] in {"compiler_entry", "compiler_exit",
                                       "finite_stack_attempt_start",
-                                      "finite_stack_attempt_end"}
-                and event["category"] == "tokio_worker"
-                and workers.get(event["thread_id"]) == event["os_thread_id"],
-                "generated initialization escaped a measured worker")
+                                      "finite_stack_attempt_end",
+                                      "canonical_input_entry", "canonical_input_exit",
+                                      "canonical_output_entry", "canonical_output_exit",
+                                      "blocking_decode_entry", "blocking_decode_exit"},
+                "generated initialization has an unknown thread event")
+        if event["category"] == "tokio_worker":
+            require(workers.get(event["thread_id"]) == event["os_thread_id"]
+                    and not event["name"].startswith("blocking_decode_"),
+                    "generated initialization escaped a measured worker")
+        else:
+            require(event["category"] == "blocking_pool"
+                    and blocking.get(event["thread_id"]) == event["os_thread_id"]
+                    and event["name"].startswith("blocking_decode_"),
+                    "generated initialization blocking decode lacks measured stack")
         names.append(event["name"])
     starts = [index for index, name in enumerate(names)
               if name == "finite_stack_attempt_start"]
@@ -119,8 +166,33 @@ def validate_trace(trace, runtime, attempts, os_name):
     require(len(starts) == len(ends) == len(attempts)
             and all(start < end and (index == 0 or ends[index - 1] < start)
                     for index, (start, end) in enumerate(zip(starts, ends, strict=True)))
-            and names.count("compiler_entry") == names.count("compiler_exit"),
+            and names.count("compiler_entry") > 0
+            and names.count("blocking_decode_entry") > 0,
             "generated initialization worker attempt intervals are incomplete")
+    for attempt, start, end in zip(attempts, starts, ends, strict=True):
+        operation = names[start:end + 1]
+        if attempt["observation"]["outcome"] == "ok":
+            require(operation.count("canonical_input_entry") >= 1
+                    and operation.count("canonical_output_entry") >= 1,
+                    "generated initialization success omitted canonical call conversion")
+    for entry, exit_name in (
+        ("compiler_entry", "compiler_exit"),
+        ("blocking_decode_entry", "blocking_decode_exit"),
+        ("canonical_input_entry", "canonical_input_exit"),
+        ("canonical_output_entry", "canonical_output_exit"),
+    ):
+        in_flight = {}
+        for event in trace["events"]:
+            thread = event["thread_id"]
+            if event["name"] == entry:
+                require(thread not in in_flight,
+                        f"overlapping generated initialization {entry}")
+                in_flight[thread] = event["os_thread_id"]
+            elif event["name"] == exit_name:
+                require(in_flight.pop(thread, None) == event["os_thread_id"],
+                        f"unpaired generated initialization {exit_name}")
+        require(not in_flight,
+                f"unclosed generated initialization {entry}")
 
 
 def validate_run(run, bundle, manifest, directory):

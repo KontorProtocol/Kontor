@@ -126,7 +126,7 @@
     },
     "initialization_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/initialization.rs",
-      "sha256": "7286b8fb11e525a6f654ca1ad1fc4ef5f977414ba62f9a216f14ea48a03495ba"
+      "sha256": "ae8924bb216918ce01ad9129d4c4a3944f7cb024ac9f333594acb5f781a5dc08"
     },
     "initialization_capture": {
       "path": "tools/native-stack/capture_resource_initialization.py",
@@ -134,11 +134,11 @@
     },
     "initialization_validator": {
       "path": "tools/native-stack/resource_initialization_evidence.py",
-      "sha256": "1f3d21306b8b469a8362c62d3dc11cdc942e65050745ef39a56f3e2c8ccf2183"
+      "sha256": "f6966fd784e62f4fdf7c8858a9a5840f1f70b90285eb4e87c5045f9cd6fbf348"
     },
     "initialization_validator_tests": {
       "path": "tools/native-stack/test_resource_initialization_evidence.py",
-      "sha256": "be1efd646819226bf1a6cdd6f45a400ee1c7781545412e1fc13cc26d155db18c"
+      "sha256": "81a9d079f81852e4fbf1a7687440c706ad057bd5a90487b7f6175500998a47a3"
     },
     "invocation_budget": {
       "path": "core/indexer/src/runtime/invocation.rs",
