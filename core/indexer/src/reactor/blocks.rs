@@ -202,7 +202,8 @@ impl<E: Executor> Reactor<E> {
                     block.height,
                     t.index,
                 )
-                .await?;
+                .await
+                .context("set_confirmation_position failed")?;
                 failures.push(Vec::new());
                 continue;
             }
@@ -232,7 +233,8 @@ impl<E: Executor> Reactor<E> {
                 .context("execute_transaction failed")?;
             failures.push(tx_failures);
             set_confirmation_position(&self.db_conn(), &t.txid.to_string(), block.height, t.index)
-                .await?;
+                .await
+                .context("set_confirmation_position failed")?;
         }
 
         Ok((unbatched_count, executed_ops, failures))
