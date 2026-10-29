@@ -65,6 +65,10 @@ class SqlitePaginationEvidenceTests(unittest.TestCase):
         self.assertEqual(page["items"][0]["nft_id"], "nft-0974")
         self.assertEqual(page["items"][-1]["nft_id"], "nft-1023")
         self.assertIsNone(page["next"])
+        token_final, _, _ = expected_page("token_100_final")
+        self.assertEqual(token_final["items"][-1],
+                         {"acc": "7", "amt": "1000000000"})
+        self.assertEqual(page["items"][-1]["owner"], "7")
 
     def test_rejects_equal_length_missing_duplicate_and_shifted_rows(self):
         for sample in ("token_7_middle", "nft_100_final"):

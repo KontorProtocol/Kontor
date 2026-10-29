@@ -24,13 +24,13 @@ SAMPLES = tuple(f"{source}_{size}_{position}"
                 for source in ("token", "nft") for size in PAGE_SIZES
                 for position in POSITIONS)
 TOKEN_ROWS = sorted(
-    [{"acc": "2", "amt": "1000000000"}] +
+    [{"acc": "7", "amt": "1000000000"}] +
     [{"acc": str(identity), "amt": "1"}
      for identity in range(10_000, 10_000 + ROWS - 1)],
     key=lambda row: row["acc"])
 NFT_ROWS = [
     {"nft_id": f"nft-{index:04}", "agreement_id": f"file-{index:04}",
-     "owner": "2", "creator": "2"}
+     "owner": "7", "creator": "7"}
     for index in range(ROWS)
 ]
 OBSERVATION_KEYS = {

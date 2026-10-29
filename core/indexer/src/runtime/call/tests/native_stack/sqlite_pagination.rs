@@ -19,6 +19,8 @@ use crate::test_utils::{make_descriptor, test_runtime_with_engine};
 
 const CASE_ID: &str = "sqlite_pagination";
 const ACTOR_PUBKEY: &str = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+// Genesis inserts the Core signer, then one signer for each of five native contracts.
+const ACTOR_SIGNER_ID: u64 = 7;
 const ROWS: usize = 1_024;
 const PAGE_SIZES: [usize; 3] = [1, 7, 100];
 const POSITIONS: [&str; 3] = ["first", "middle", "final"];
@@ -42,7 +44,7 @@ fn start_index(page_size: usize, position: &str) -> usize {
 async fn populate_token(runtime: &mut Runtime) -> Result<(Signer, Vec<(String, Decimal)>)> {
     let signer = Signer::Id(runtime.get_or_create_identity(ACTOR_PUBKEY).await?);
     ensure!(
-        signer.signer_id() == Some(2),
+        signer.signer_id() == Some(ACTOR_SIGNER_ID),
         "pagination actor identity changed"
     );
     let holder = HolderRef::from(&signer);
@@ -149,8 +151,8 @@ async fn query_page(
             ensure!(
                 item.nft_id == *nft_id
                     && item.agreement_id == agreement_id
-                    && item.owner == HolderRef::SignerId(2)
-                    && item.creator == HolderRef::SignerId(2),
+                    && item.owner == HolderRef::SignerId(ACTOR_SIGNER_ID)
+                    && item.creator == HolderRef::SignerId(ACTOR_SIGNER_ID),
                 "NFT page has a missing, duplicated, or changed row"
             );
             rows.push(json!({
