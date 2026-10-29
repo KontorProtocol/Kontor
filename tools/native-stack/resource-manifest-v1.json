@@ -238,7 +238,7 @@
     },
     "native_staking_rewards_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/native_staking_rewards.rs",
-      "sha256": "db30ef746919feb26e4447dbea81ec1e2dc389f89c6fd9b70f229e22e9d99b91"
+      "sha256": "7ccdb80008e877d87d872bdf7b8c138169e90d6fa82453932ec34ad433064c79"
     },
     "native_staking_rewards_capture": {
       "path": "tools/native-stack/capture_resource_native_staking_rewards.py",

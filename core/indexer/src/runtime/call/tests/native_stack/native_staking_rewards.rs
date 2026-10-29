@@ -388,7 +388,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                     && runtime.storage.savepoint_stack.is_empty().await,
                 "staking reward repeat did not restore full baseline state"
             );
-            let observation = json!({
+            let mut observation = json!({
                 "sample_key": sample,
                 "outcome": "ok",
                 "population": population,
@@ -410,6 +410,8 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 "pool_after": pool_after.to_string(),
                 "total_stake_before": total_stake_before.to_string(),
                 "total_stake_after": total_stake_after.to_string(),
+            });
+            let diagnostics = json!({
                 "last_reward_height": last_reward_height,
                 "system_fuel": usage.system_fuel,
                 "user_fuel": usage.user_fuel,
@@ -433,6 +435,10 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 "max_wasm_stack": runtime.engine.get_max_wasm_stack(),
                 "async_stack_size": runtime.engine.get_async_stack_size(),
             });
+            observation
+                .as_object_mut()
+                .unwrap()
+                .extend(diagnostics.as_object().unwrap().clone());
             println!(
                 "FINITE_STACK_ATTEMPT:{}",
                 json!({
