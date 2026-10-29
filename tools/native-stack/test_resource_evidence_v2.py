@@ -2,7 +2,6 @@
 
 import copy
 import json
-import os
 import subprocess
 import tempfile
 import unittest
@@ -107,7 +106,7 @@ def bundle_fixture(directory):
     control_path.write_text(json.dumps(control))
     runs = {}
     historical_runs = {}
-    page = os.sysconf("SC_PAGE_SIZE")
+    page = 16_384
     pid = 100
     for binding in manifest["case_roles"]:
         case_id, role = binding["case_id"], binding["process_role"]
@@ -175,7 +174,8 @@ def bundle_fixture(directory):
                      "trap_control": trap_control, "events": trace_events}
             attempts = measured_trace(trace, runtime, configuration, stores, pid,
                                       mode, trap_control,
-                                      tuple(key["sample_key"] for key in binding["trials"]))
+                                      tuple(key["sample_key"] for key in binding["trials"]),
+                                      page_size=page)
             report = {
                 "case_id": case_id, "mode": mode, "stores": stores,
                 "resource_mode": configuration,
@@ -292,6 +292,11 @@ class EvidenceV2Tests(unittest.TestCase):
             bundle, control = bundle_fixture(directory)
             measured = bundle["runs"]["chain_33_paid_target_observed_reduced"]
             resource_evidence_v2.validate_engine_measurement(measured)
+            archived_page = copy.deepcopy(measured)
+            archived_page["engine"]["page_size_bytes"] = 65_536
+            for thread in archived_page["runtime"]["thread_observations"]:
+                thread["page_size_bytes"] = 65_536
+            resource_evidence_v2.validate_engine_measurement(archived_page)
             wrong_page = copy.deepcopy(measured)
             wrong_page["engine"]["page_size_bytes"] *= 2
             with self.assertRaisesRegex(ValueError, "fiber capacity"):
@@ -304,6 +309,7 @@ class EvidenceV2Tests(unittest.TestCase):
                     bundle, directory, allow_pilot=True)
                 self.assertEqual(len(signatures), 60)
                 guard.assert_called_once()
+                self.assertEqual(guard.call_args.kwargs["page_size"], 16_384)
                 with self.assertRaisesRegex(ValueError, "auxiliary Store counts"):
                     resource_evidence_v2.validate_bundle(bundle, directory)
                 changed = copy.deepcopy(bundle)

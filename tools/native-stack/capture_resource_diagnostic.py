@@ -117,7 +117,7 @@ def parse_worker_log(raw_path, mode, pid):
     return runtime, trace, uncovered
 
 
-def validate_control(path, expected_sha256, manifest):
+def validate_control(path, expected_sha256, manifest, page_size=None):
     require(sha256(path) == expected_sha256, "control capture hash changed")
     control = load_json_strict(path)
     require(set(control) == {
@@ -154,7 +154,7 @@ def validate_control(path, expected_sha256, manifest):
     require(str(binary) == control["binary_path"] and artifact == control["cargo_artifact"]
             and sha256(binary) == control["binary_sha256"],
             "control Cargo artifact or binary differs")
-    page = os.sysconf("SC_PAGE_SIZE")
+    page = page_size if page_size is not None else os.sysconf("SC_PAGE_SIZE")
     report_view = {
         "host": {"os": "linux"}, "binary_path": str(binary),
         "binary_sha256": control["binary_sha256"], "source_sha": control["source_sha"],

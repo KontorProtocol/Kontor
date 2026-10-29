@@ -3,7 +3,6 @@
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -223,7 +222,6 @@ def validate_engine_measurement(run):
             "child engine identity differs")
     page = run["engine"]["page_size_bytes"]
     require(type(page) is int and page > 0 and page & (page - 1) == 0
-            and page == os.sysconf("SC_PAGE_SIZE")
             and all(thread["page_size_bytes"] == page for thread in
                     run["runtime"]["thread_observations"])
             and run["engine"]["fiber_effective_writable_bytes"] ==
@@ -245,7 +243,8 @@ def run_semantics(run, v1_manifest, v2_manifest, directory):
     raw_path = directory / run["raw_log"]["path"]
     schema_v1 = load_json_strict(V1_MANIFEST.with_name("resource-evidence-schema-v1.json"))
     parsed = parse_worker(raw_path, configuration, stores, process["pid"],
-                          v1_manifest, schema_v1, chain_mode, trap_control)
+                          v1_manifest, schema_v1, chain_mode, trap_control,
+                          run["engine"]["page_size_bytes"])
     require(run["report"] == parsed["report"]
             and run["runtime"] == parsed["runtime"]
             and run["thread_trace"] == parsed["thread_trace"]
@@ -334,10 +333,13 @@ def validate_bundle(bundle, directory, allow_pilot=False):
     if not allow_pilot:
         require(bundle["auxiliary_count_status"] == "frozen",
                 "auxiliary Store counts are not frozen")
+    archive_pages = {run["engine"]["page_size_bytes"] for run in bundle["runs"].values()}
+    require(len(archive_pages) == 1, "child engine page sizes differ within one cell")
     file_evidence(directory, bundle["control_capture"])
     control, binary = validate_control(
         directory / bundle["control_capture"]["path"],
-        bundle["control_capture"]["sha256"], v1_manifest)
+        bundle["control_capture"]["sha256"], v1_manifest,
+        page_size=next(iter(archive_pages)))
     require(control["source_sha"] == bundle["source_sha"]
             and control["binary_path"] == bundle["binary_path"]
             and control["binary_sha256"] == bundle["binary_sha256"]

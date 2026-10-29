@@ -589,7 +589,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "b548ae136c747e01e54cc595ecf3447038001a2b3a5e099ea0606aefd4f787c8",
+  "parent_manifest_sha256": "addc9bbc91c69829d82f58b0ea4249709739a782778930a31de8cbe819e2ce05",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -652,7 +652,7 @@
     },
     "invocation": {
       "path": "core/indexer/src/runtime/invocation.rs",
-      "sha256": "dbd847eb87b6678ad9b134739ba6dcc48771fef3e94a615d5df1eb615a165669"
+      "sha256": "0d847589d19246340ac60dabb4a170329096be13e82a9166857d85f265c51fd9"
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
@@ -664,7 +664,7 @@
     },
     "v1_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
-      "sha256": "02d3fcaf37325918f860c3626526773c5694877142775e3b0382b35d08c2c9c4"
+      "sha256": "8f2ad3cbb0fa5afe88870464a96c79d34f7eceb2c860a7758a4dbb0f8bd32169"
     },
     "v1_validator": {
       "path": "tools/native-stack/resource_evidence.py",
@@ -684,11 +684,11 @@
     },
     "v2_tests": {
       "path": "tools/native-stack/test_resource_evidence_v2.py",
-      "sha256": "360ae3c91eda4eadc2bc74021e7b5f4244b549a1dfb8015ad760bd251bf656bd"
+      "sha256": "e45018d1babb48e4c2c8ce089d11d9f278b5f6beb95343cfa3aa37722c5e2a43"
     },
     "v2_validator": {
       "path": "tools/native-stack/resource_evidence_v2.py",
-      "sha256": "72be472ec38c64bd125bf43a40107d48dba2eda5b7cab198fc53b19bd4f3d32b"
+      "sha256": "18d00e06be0e4eba4c569e91aab701b90b0cd43ac6d34de9e17796f3578327d4"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",

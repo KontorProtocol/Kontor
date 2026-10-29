@@ -54,7 +54,7 @@
     },
     "invocation_budget": {
       "path": "core/indexer/src/runtime/invocation.rs",
-      "sha256": "dbd847eb87b6678ad9b134739ba6dcc48771fef3e94a615d5df1eb615a165669"
+      "sha256": "0d847589d19246340ac60dabb4a170329096be13e82a9166857d85f265c51fd9"
     },
     "native_filestorage": {
       "path": "native-contracts/filestorage/src/lib.rs",
@@ -86,7 +86,7 @@
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
-      "sha256": "02d3fcaf37325918f860c3626526773c5694877142775e3b0382b35d08c2c9c4"
+      "sha256": "8f2ad3cbb0fa5afe88870464a96c79d34f7eceb2c860a7758a4dbb0f8bd32169"
     },
     "resource_comparator_source": {
       "path": "tools/native-stack/compare_resource.py",
@@ -98,7 +98,7 @@
     },
     "resource_diagnostic_capture": {
       "path": "tools/native-stack/capture_resource_diagnostic.py",
-      "sha256": "e44c7945a42ad50efcde646c488a31009989e51f0c24aa670c88097e9612bd5c"
+      "sha256": "b4671a46e7e3e7a13ce7a328dcafa3323b27a301f86c819092459f5c7adf4748"
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",

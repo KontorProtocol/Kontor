@@ -462,12 +462,7 @@ mod tests {
         let budget = Arc::new(InvocationBudget::with_teardown_recorder(recorder.clone()));
         runtime.invocation_budget = Some(budget.clone());
         runtime.resource_probe_phase = Some(ResourceProbePhase::PreObservation);
-        let address = ContractAddress {
-            name: "teardown-control".into(),
-            height: 1,
-            tx_index: 0,
-        };
-        let store = runtime.make_store_for_call(1_000_000, &address)?;
+        let store = runtime.make_store_for_call(1_000_000, &token::address())?;
         drop(store);
         let events = recorder.events();
         assert_eq!(budget.live(), 0);
