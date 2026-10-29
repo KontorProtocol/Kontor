@@ -40,7 +40,6 @@ use tokio::{
 use bitcoin::{BlockHash, Txid};
 use malachitebft_app_channel::NetworkMsg;
 use malachitebft_app_channel::app::types::LocallyProposedValue;
-use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_core_types::{LinearTimeouts, Round};
 use metrics::gauge;
 use tracing::{debug, info, warn};
@@ -48,24 +47,20 @@ use tracing::{debug, info, warn};
 use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
+use crate::protocol::v1::committee::build_validator_set;
+#[cfg(test)]
+use crate::protocol::v1::committee::stake_to_voting_power;
 use crate::stopper::ShutdownSignal;
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
-    consensus::{Genesis, Validator, ValidatorSet, signing::PublicKey},
+    consensus::Genesis,
     database::{
         self,
         queries::{
             insert_block, select_block_at_height, select_block_latest, select_unconfirmed_batch_tx,
         },
     },
-    runtime::{
-        ComponentCache, Decimal, GenesisParameters, Runtime, Storage,
-        numerics::decimal_to_string,
-        staking::{
-            address as staking_address,
-            api::wave::{get_active_set_call_expr, get_active_set_parse_return_expr},
-        },
-    },
+    runtime::{ComponentCache, GenesisParameters, Runtime, Storage},
     test_utils::new_mock_block_hash,
 };
 
@@ -728,50 +723,6 @@ impl<E: Executor> Reactor<E> {
 
         result
     }
-}
-
-/// Query the staking contract and build a ValidatorSet from the active validators.
-async fn build_validator_set(runtime: &mut Runtime) -> Result<ValidatorSet> {
-    let result = runtime
-        .execute_system_view(&staking_address(), &get_active_set_call_expr())
-        .await
-        .context("Failed to query active validator set from staking contract")?;
-    let active_set = get_active_set_parse_return_expr(&result);
-
-    let validators: Vec<Validator> = active_set
-        .into_iter()
-        .map(|v| {
-            anyhow::ensure!(
-                v.ed25519_pubkey.len() == 32,
-                "Validator {} has invalid ed25519 pubkey length {}",
-                v.x_only_pubkey,
-                v.ed25519_pubkey.len()
-            );
-            let mut key_bytes = [0u8; 32];
-            key_bytes.copy_from_slice(&v.ed25519_pubkey);
-            let public_key = PublicKey::from_bytes(key_bytes).with_context(|| {
-                format!("Invalid ed25519 pubkey for validator {}", v.x_only_pubkey)
-            })?;
-            let voting_power = stake_to_voting_power(v.stake)
-                .with_context(|| format!("Invalid stake for validator {}", v.x_only_pubkey))?;
-            Ok(Validator::new(public_key, voting_power))
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    ValidatorSet::try_new(validators)
-}
-
-fn stake_to_voting_power(stake: Decimal) -> Result<VotingPower> {
-    let s = decimal_to_string(stake);
-    let integer_part = s
-        .split('.')
-        .next()
-        .context("decimal string missing integer part")?;
-    let power = integer_part
-        .parse::<u64>()
-        .context("stake integer part is not a valid u64")?;
-    anyhow::ensure!(power > 0, "stake is below one voting power unit");
-    Ok(power)
 }
 
 /// Build a Genesis from the staking contract's active validator set.

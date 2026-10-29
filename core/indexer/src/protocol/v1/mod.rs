@@ -1,3 +1,4 @@
+pub(crate) mod committee;
 pub(crate) mod execution;
 pub(crate) mod lifecycle;
 mod storage_bounds;
