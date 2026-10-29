@@ -314,6 +314,41 @@ cancellation, guest-write, or trap-unwind proof; the typed trap field is null.
 The other five cells and remaining case families are required for S2
 qualification.
 
+The SQLite pagination adapter prepares 1,024 token accounts, tests token
+pages, then mints 1,024 NFTs and tests NFT pages. It uses the generated WAVE
+request and result helpers around `Runtime::execute_api`, which reaches the
+native contract invocation Store on a measured Tokio worker. The generated
+`AsyncCursorQuery` builder has a non-`Send` future and is not used inside the
+worker task. The adapter freezes the first, middle, and final page at sizes
+1, 7, and 100 for both contracts, then checks every returned account, amount,
+NFT ID, agreement ID, owner, creator, and continuation. The first external
+signer is ID 7 after Core and five native contract signers at genesis. The
+validator rejects the earlier ID 2 assumption and missing, duplicated,
+shifted, or altered rows.
+
+At source `743cb3e711afcb3bea7b428a736fa3ad9f9fb370`, the Linux ARM64
+development pagination capture completed four isolated children and 144
+attempts. All 18 declared samples ran twice per child. Exact full pages,
+continuations, system fuel, and full persistent-state digests matched across
+both probe roles and reduced and production worker stacks. The two observed
+children recorded 72 closed target Stores in total, with zero live
+invocations after every attempt. The standalone validator accepted all four
+runs. The exact-source build attestation SHA-256 is
+`3a007a63ff272d537a16ff17fee70cb61b3da3151ea5d66248567ac3cfc05ac9`;
+the test binary SHA-256 is
+`a33eef41d86954f11519dd11fd4f6b7c4bcdf48d65a7f12db3a6703bd3d515ae`.
+The guard control SHA-256 is
+`df2cdea2b57ecadfd4b192d1c140f766e5137195ae9358cc7e522d5f5eeee154`,
+and the capture SHA-256 is
+`5aeeb3073c1d1cee32a58155946afdc05b977c0cfe6de1a1d1cfbbdd1f97aa60`.
+This is one local diagnostic cell with `qualification_status: missing`. The
+adapter measures page semantics, fuel, state, and Store cleanup. It records
+per-attempt elapsed time for diagnostics but does not establish SQL query
+counts or comparative timing as performance evidence. It uses unsigned views
+and provides no paid-call, cancellation, guest-write rollback, or
+trap-unwind proof. The other five cells and remaining case families are
+required for S2 qualification.
+
 At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
 development canonical capture completed 12 child processes, 56 attempts, and
 268 closed Store lifecycles. The standalone validator accepted all 12 runs.
