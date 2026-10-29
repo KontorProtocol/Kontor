@@ -1,11 +1,14 @@
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Write};
+
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use tempfile::{NamedTempFile, TempDir, TempPath};
+
+use super::super::hash_file;
 
 #[derive(Clone)]
 pub(super) struct Checkpoint {
@@ -42,8 +45,12 @@ impl Checkpoint {
     }
 
     pub(super) fn check(&self, expected: &Self) -> Result<()> {
+        self.check_file(expected.path.as_ref())
+    }
+
+    pub(super) fn check_file(&self, expected: &Path) -> Result<()> {
         let mut actual = File::open(self.path.as_ref())?;
-        let mut expected = File::open(expected.path.as_ref())?;
+        let mut expected = File::open(expected)?;
         let mut remaining = actual.metadata()?.len();
         ensure!(
             remaining == expected.metadata()?.len(),
@@ -82,6 +89,16 @@ impl Checkpoint {
             checkpoints.push(actual);
         }
         Ok(())
+    }
+
+    pub(super) fn export(&self, directory: &Path, name: &str) -> Result<String> {
+        let mut source = File::open(self.path.as_ref())?;
+        let mut output = NamedTempFile::new_in(directory)?;
+        io::copy(&mut source, output.as_file_mut())?;
+        output.as_file().sync_all()?;
+        let digest = hash_file(output.path())?;
+        output.persist_noclobber(directory.join(name))?;
+        Ok(digest)
     }
 
     pub(super) fn load(&self) -> Result<Value> {

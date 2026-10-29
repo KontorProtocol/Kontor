@@ -13,7 +13,7 @@ use super::super::{capture, hash_file};
 // silently accepting the last value as serde_json::Value would.
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct SourceIdentity {
+pub(super) struct SourceIdentity {
     git_head_log: String,
     git_status_log: String,
     embedded_source_commit: String,

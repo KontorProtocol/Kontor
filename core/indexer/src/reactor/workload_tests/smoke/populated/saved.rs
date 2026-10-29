@@ -62,7 +62,7 @@ pub(super) struct Output {
     mixed: MixedConfig,
 }
 
-fn write_new(root: &Path, name: &str, bytes: &[u8]) -> Result<String> {
+pub(super) fn write_new(root: &Path, name: &str, bytes: &[u8]) -> Result<String> {
     let mut file = NamedTempFile::new_in(root)?;
     file.write_all(bytes)?;
     file.as_file().sync_all()?;

@@ -75,7 +75,7 @@ impl BatchProof {
         Ok(proofs)
     }
 
-    async fn execute_many(
+    pub(super) async fn execute_many(
         trial: &mut Reactor<RuntimeExecutor>,
         reveals: &[Transaction],
         first_confirmation_index: usize,

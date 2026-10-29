@@ -40,6 +40,7 @@ mod pagination;
 mod pruning;
 mod replay_identity;
 mod saved;
+mod saved_sequence;
 mod sequence_funding;
 mod sequence_inputs;
 mod shapes;
@@ -348,13 +349,18 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
 async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize) -> Result<()> {
     ensure!(matches!(steps, 1 | 2 | 6 | 7));
     ensure!(steps == 1 || matches!(delivery, Delivery::Configured(_)));
-    ensure!(
-        steps == 1 || std::env::var_os("KONTOR_WORKLOAD_SAVED_DIR").is_none(),
-        "multi-block saved fixtures require the sequence schema"
-    );
     let config = config.validate()?;
-    let saved = if let Delivery::Configured(mixed) = delivery {
+    let saved = if let Delivery::Configured(mixed) = delivery
+        && steps == 1
+    {
         saved::Output::from_env(config, mixed)?
+    } else {
+        None
+    };
+    let saved_sequence = if let Delivery::Configured(mixed) = delivery
+        && steps > 1
+    {
+        saved_sequence::Output::from_env(config, mixed)?
     } else {
         None
     };
@@ -967,6 +973,20 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                     .context("missing final projection")?
                     .load()?,
                 simulation_requests[0].as_ref(),
+            )
+            .await?;
+    }
+    if let Some(saved) = saved_sequence {
+        saved
+            .write(
+                &snapshot,
+                &client,
+                &inputs,
+                &projection_before,
+                expected_projection
+                    .as_deref()
+                    .context("missing sequence checkpoints")?,
+                &simulation_requests,
             )
             .await?;
     }
