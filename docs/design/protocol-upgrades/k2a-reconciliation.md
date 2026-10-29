@@ -245,3 +245,100 @@ in `.build-cache/k2a-reconcile/execution-validation.json`, SHA-256
 Interlink receipt `85aa524648bba67792abd534c193f500` agrees to this bounded
 preparation evidence and retains the release/default-concurrency CI gate.
 No missing-transaction production fix or broader qualification is claimed.
+
+## Block lifecycle preparation
+
+Source `f5714b4f3e50a5643c52f3ade788299ba9c9832e` moves the complete
+`Reactor::run_block_lifecycle_inner` body into
+`protocol::v1::lifecycle::run_block_lifecycle`. The node's existing usage wrapper
+calls it once and retains usage restoration, error precedence and SQL recording.
+Block transactions, rollback, commit, finality and lifecycle scheduling are unchanged.
+
+The ordered body is identical after replacing the receiver with a mutable Runtime
+argument, normalizing reborrows and formatting. Exact error and log strings match.
+The comparison also checks the entire remaining node source, not only the moved
+lines. Its reproducible audit is `.build-cache/k2a-reconcile/lifecycle-source-audit.py`;
+the JSON report has SHA-256
+`5acab71a82681b9ca455bb8d1505a421d776ddf9b43165034e9396371eed2c68`.
+Parent, independent subagent and Interlink source reviews found no material
+regression. Interlink approval `978753794597febc13945702633aa34f` was acknowledged.
+Combined post-move diagnostics and Clippy passed as recorded below. These checks
+do not replace final release CI.
+
+The versioned body preserves context reset, reward eligibility, emission, ordering
+reward distribution, storage reward accrual, root recording, challenge expiry,
+settlement, challenge generation and pending-validator processing, in that order.
+It retains the distinction between nested results handled by `await??` and errors
+wrapped with context or debug formatting. The lifecycle still runs with no transaction
+context. ID0's missing-context generated-ID audit must cover this new path; relocation
+does not resolve that separate obligation.
+
+Temporary K2b dependencies are Runtime, `Signer::Core(Nobody)`, the shared Block
+type, Bitcoin hash conversion, and staking, token and filestorage native bindings.
+Their execution semantics and dependencies still need retention in the independent
+graph. Native validator processing remains in the staking binding. The unchanged
+filestorage contract selects eight challenges on regtest and one hundred on other
+networks during initialization; this extraction does not assume regtest values.
+No final cross-graph API, protocol selection or baseline freeze is claimed.
+
+
+## Committee derivation preparation
+
+Source `35dc5736f4062f5773ca68ad27e2db02db7c380e` moves `build_validator_set`
+and `stake_to_voting_power` from the reactor into `protocol::v1::committee`.
+The complete bodies are byte-identical; only their visibility changes to
+`pub(crate)`. Genesis assembly and live committee refresh remain node-owned
+and call the same imported implementation. Existing tests retain their import
+path through a test-only reactor import. Each function has one definition.
+
+The staking system view and native binding decode preserve active-set order.
+Stake is formatted using the existing decimal conversion, truncated to its
+integer part, parsed as `u64` and rejected if zero. The Ed25519 key length is
+checked before copying, then validated by `PublicKey::from_bytes`. Every error
+string and propagation operator remains unchanged. The staking contract supplies
+the sorted set; `ValidatorSet::try_new` preserves that order and checks emptiness,
+positive powers, aggregate overflow and quorum-arithmetic limits. This extraction
+does not add sorting or duplicate-key validation. The staking contract enforces
+Ed25519 key uniqueness during registration and genesis. Additional rejection in a
+future committee implementation is a possible hardening change, not a P1 edit or
+a blocker for this preserved extraction.
+
+Parent, independent subagent and Interlink source reviews found no material
+regression. Interlink receipt `8e52f12a32ad52f25dda443d2c6ffd6c` was acknowledged.
+The reproducible comparison is `.build-cache/k2a-reconcile/committee-source-audit.py`;
+its JSON report has SHA-256
+`89eb8e155d641c8e4c4f7da35e19a9e281cbf7837629aededf18414aa8af158e`.
+The audit checks exact complete bodies, the entire remaining reactor source,
+module registration and single definitions. Runtime validation is recorded below.
+
+Temporary K2b dependencies include Malachite `VotingPower`, node consensus
+`Validator`, `ValidatorSet` and `PublicKey`, Runtime, Decimal and its conversion,
+and staking view bindings. Their behavior and dependencies still need retention
+inside the independent graph. This source move is not a final cross-graph API,
+validator-authorization mechanism or activation policy.
+
+
+## Combined lifecycle and committee validation
+
+Exact source `35dc5736f4062f5773ca68ad27e2db02db7c380e` passed:
+
+- 124 debug tests with two test threads, 531.46 seconds after a 55.28-second build.
+  This includes the prior 120-test baseline and four storage-penalty regressions.
+  Both ordering-reward tests, fractional voting power, exhausted committee behavior,
+  reorgs, startup recovery, simulation and publication passed without changing tests.
+- Four existing validator-set arithmetic tests, including zero power, aggregate
+  overflow, quorum bounds and the expected panic for a deserialized invalid total.
+- Indexer Clippy with tests and warnings denied, 7.42 seconds.
+
+All commands terminated with exit code zero. Exact commands, log hashes and
+summaries are in `.build-cache/k2a-reconcile/lifecycle-committee-validation.json`,
+SHA-256 `f55ea31f1d2ecfb1bd9c8e4fc46f5e389daabcee4dd774235010ac1a705a3062`.
+The lifecycle body and block coordinator remain byte-identical to their reviewed
+f5714b4f source at this committee head. No additional source changes were made
+while these checks ran. Final release/default-thread CI and the complete K2a
+acceptance gates remain required after S2 and OWNERSHIP-1 reconciliation.
+
+Parent and both independent reviewers verified this evidence. The subagent
+rehashed the logs and counted unique passes, including all prior baseline cases;
+Interlink accepted both moves in acknowledged receipt
+`a398e302ebef8224b22140f3e20ae5c5`. This closes preparation review only.
