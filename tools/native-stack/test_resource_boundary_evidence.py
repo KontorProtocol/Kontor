@@ -38,6 +38,11 @@ def attempt(depth, outcome, sample_key="calibration", repeat_index=0):
 
 class BoundaryEvidenceTests(unittest.TestCase):
     def test_real_paid_balance_rows_with_constructed_live_gas(self):
+        # Raw balances and digests: .build-cache/native-stack-5bdf-pilot/discovery/
+        # pulley_plain_paid_discovery_production_observed_production.log and
+        # pulley_wide_paid_discovery_production_observed_production.log, plus
+        # .build-cache/native-stack-ad48-leaf-diagnostic/leaf-discovery.log.
+        # Live gas is constructed because those captures did not measure it.
         def digest(values):
             return hashlib.sha256(json.dumps(values, sort_keys=True,
                                              separators=(",", ":")).encode()).hexdigest()
