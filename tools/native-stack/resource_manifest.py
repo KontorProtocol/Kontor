@@ -15,6 +15,17 @@ MANIFEST = Path(__file__).with_name("resource-manifest-v1.json")
 AMENDMENT = "docs/design/protocol-upgrades/native-stack-s2-resource-amendment-v1.md"
 AMENDMENT_SHA256 = "923f6ddf0e5646e140242d11fc48995f69e2929d34930609a82ac13a4fce337c"
 WASMTIME_REVISION = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+FASTNUM_BUILD_SCRIPT_SHA256 = "12dc45339dbf31bebb484721803e4ffd264f6e8cd66b97df851f4754d6297b97"
+FASTNUM_GENERATED = {
+    "default_rounding_mode.rs":
+        "const DEFAULT_ROUNDING_MODE: RoundingMode = RoundingMode::HalfUp;",
+    "exponential_format_threshold.rs":
+        "const EXPONENTIAL_FORMAT_LEADING_ZERO_THRESHOLD: usize = 5;\n"
+        "const EXPONENTIAL_FORMAT_TRAILING_ZERO_THRESHOLD: usize = 15;\n"
+        "const FMT_MAX_INTEGER_PADDING: usize = 1000;",
+    "serde_deserialize_mode.rs":
+        "const SERDE_DESERIALIZE_MODE: DeserializeMode = DeserializeMode::Strict;",
+}
 FIBER_SOURCE_FILES = {
     "crates/wasmtime/src/config.rs": "681d6d278c7c0da051672c2c0acf0e658cab8338a5d461dba5f1596978336b8a",
     "crates/wasmtime/src/runtime/fiber.rs": "6cb7d27f82be901b663a8ef54d9cf9ee2c797f937c59544403e82cae27b2cf4e",
@@ -312,6 +323,8 @@ def build_manifest():
         "wasmtime_features": {"production": sorted(PRODUCTION_FEATURES),
                               "qualification": sorted(QUALIFICATION_FEATURES)},
         "build_policy": {"rustc_release": "1.99.1", "cargo_features": [],
+                         "fastnum_build_script_sha256": FASTNUM_BUILD_SCRIPT_SHA256,
+                         "fastnum_generated": FASTNUM_GENERATED,
                          "resolved_indexer_test_features": ["testing"],
                          "production_indexer_features": [],
                          "testing_host_imports": ["host-error", "host-panic"],

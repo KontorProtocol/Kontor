@@ -857,6 +857,8 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
     }
     if "resource_test_builder" in old_v1["artifacts"]:
         expected_control_keys.update({"build_attestation", "build_log"})
+    if "fastnum_generated" in old_v1["build_policy"]:
+        expected_control_keys.add("fastnum_files")
     require(set(archived_control) == expected_control_keys
             and archived_control["source_sha"] == source_sha
             and archived_control["binary_sha256"] == archive["binary_sha256"]
@@ -874,10 +876,13 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
     build_entries = ([archived_control["build_attestation"],
                       archived_control["build_log"]]
                      if "build_attestation" in archived_control else [])
+    fastnum_entries = (list(archived_control["fastnum_files"].values())
+                       if "fastnum_files" in archived_control else [])
     for entry in (archived_control["cargo_artifacts"],
                   archived_control["cargo_metadata"],
                   *build_entries,
                   archived_control["guard_control"]["raw_log"],
+                  *fastnum_entries,
                   *archived_control["wasmtime_source_files"].values()):
         file_evidence(control_dir, entry)
     require(set(archived_control["wasmtime_source_files"]) ==
@@ -919,7 +924,7 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
             and records[-1].get("success") is True,
             "reviewed discovery binary lacks exact Cargo artifact identity")
     if "build_attestation" in archived_control:
-        _, build_log = validate_build_attestation(
+        attestation, build_log = validate_build_attestation(
             control_dir / archived_control["build_attestation"]["path"],
             control_dir / archived_control["cargo_artifacts"]["path"],
             control_dir / archived_control["cargo_metadata"]["path"],
@@ -928,6 +933,11 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
             binary_sha256=archive["binary_sha256"])
         require(build_log == control_dir / archived_control["build_log"]["path"],
                 "reviewed discovery build log path differs")
+        if "fastnum_files" in archived_control:
+            require(archived_control["fastnum_files"] == {
+                "build_script": attestation["fastnum_build_script"],
+                **attestation["fastnum_generated"],
+            }, "reviewed discovery fastnum settings differ from build")
     guard_lines = (control_dir /
                    archived_control["guard_control"]["raw_log"]["path"])
     guard_markers = [json.loads(line.split("KONTOR_RESOURCE_GUARD_CONTROL=", 1)[1],

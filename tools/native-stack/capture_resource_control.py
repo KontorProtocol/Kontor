@@ -71,6 +71,32 @@ def selected_binary(artifacts_path, metadata):
     return binary.resolve(), selected[0]
 
 
+def fastnum_build_record(artifacts_path, metadata):
+    packages = [package for package in metadata["packages"]
+                if package.get("name") == "fastnum" and package.get("version") == "0.7.5"]
+    if len(packages) != 1:
+        raise ValueError("Cargo metadata lacks one pinned fastnum package")
+    package = packages[0]
+    records = [json.loads(line, object_pairs_hook=no_duplicate_keys,
+                          parse_constant=no_nonfinite_constants)
+               for line in artifacts_path.read_text().splitlines()]
+    builds = [record for record in records
+              if record.get("reason") == "build-script-executed"
+              and record.get("package_id") == package["id"]]
+    libraries = [record for record in records
+                 if record.get("reason") == "compiler-artifact"
+                 and record.get("package_id") == package["id"]
+                 and record.get("target", {}).get("kind") == ["lib"]]
+    if len(builds) != 1 or len(libraries) != 1:
+        raise ValueError("Cargo lacks one fastnum build script and library artifact")
+    source = Path(package["manifest_path"]).parent / "build.rs"
+    out_dir = Path(builds[0]["out_dir"])
+    if (not source.is_absolute() or not out_dir.is_absolute()
+            or not out_dir.is_relative_to(Path(metadata["target_directory"]))):
+        raise ValueError("fastnum build source or output path is outside Cargo closure")
+    return source, out_dir
+
+
 def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
                                manifest, binary, artifact,
                                manifest_sha256=None, core_root=None,
@@ -83,6 +109,10 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
         "cargo_build_log_sha256", "binary_path", "binary_sha256",
         "indexer_artifact_features", "cargo_home", "cargo_config_candidates",
     }
+    generated_policy = manifest["build_policy"].get("fastnum_generated")
+    if generated_policy is not None:
+        expected_keys.update({"fastnum_source_path", "fastnum_out_dir",
+                              "fastnum_build_script", "fastnum_generated"})
     if not isinstance(report, dict) or set(report) != expected_keys:
         raise ValueError("resource build attestation has an invalid schema")
     profile = report["profile"]
@@ -113,7 +143,9 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
           or any(not Path(candidate).is_absolute()
                  for candidate in report["cargo_config_candidates"])):
         raise ValueError("historical Cargo config search paths are incomplete")
-    if (report["schema_version"] != 1 or report["source_sha"] != source_sha
+    expected_schema = 2 if generated_policy is not None else 1
+    if (report["schema_version"] != expected_schema
+            or report["source_sha"] != source_sha
             or report["manifest_sha256"] != expected_manifest_sha256
             or report["lockfile_sha256"] != manifest["artifacts"]["core_lockfile"]["sha256"]
             or report["compile_env"] != manifest["build_policy"]["compile_env"]
@@ -133,6 +165,30 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
             or not rustc.startswith(f"rustc {manifest['build_policy']['rustc_release']} ")
             or not any(line.startswith("host: ") for line in rustc.splitlines())):
         raise ValueError("resource Rust compiler identity differs from policy")
+    if generated_policy is not None:
+        source, out_dir = fastnum_build_record(
+            artifacts_path, load_json_strict(metadata_path))
+        if (report["fastnum_source_path"] != str(source)
+                or report["fastnum_out_dir"] != str(out_dir)
+                or set(report["fastnum_generated"]) != set(generated_policy)):
+            raise ValueError("fastnum Cargo output paths differ from attestation")
+        source_entry = report["fastnum_build_script"]
+        entries = [source_entry, *report["fastnum_generated"].values()]
+        if (source_entry != {"path": "fastnum-build.rs",
+                             "sha256": manifest["build_policy"]["fastnum_build_script_sha256"]}
+                or len({entry["path"] for entry in entries}) != len(entries)):
+            raise ValueError("fastnum source archive entry differs from policy")
+        for name, expected in generated_policy.items():
+            entry = report["fastnum_generated"][name]
+            if entry["path"] != f"fastnum-{name}":
+                raise ValueError("fastnum generated archive path differs")
+            archived = path.parent / entry["path"]
+            if (not archived.is_file() or sha256(archived) != entry["sha256"]
+                    or archived.read_text() != expected):
+                raise ValueError("fastnum generated compiler setting differs")
+        source_archive = path.parent / source_entry["path"]
+        if not source_archive.is_file() or sha256(source_archive) != source_entry["sha256"]:
+            raise ValueError("fastnum build script archive differs")
     return report, build_log
 
 
@@ -188,9 +244,15 @@ def capture(artifacts_path, metadata_path, build_attestation_path, source_sha,
     if metadata.get("workspace_root") != str(ROOT / "core"):
         raise ValueError("Cargo metadata workspace differs from source checkout")
     binary, artifact = selected_binary(artifacts_path, metadata)
-    _, build_log = validate_build_attestation(
+    attestation, build_log = validate_build_attestation(
         build_attestation_path, artifacts_path, metadata_path, source_sha,
         manifest, binary, artifact)
+    fastnum_source, fastnum_out_dir = fastnum_build_record(artifacts_path, metadata)
+    if sha256(fastnum_source) != attestation["fastnum_build_script"]["sha256"]:
+        raise ValueError("fastnum build script changed after attested build")
+    for name, entry in attestation["fastnum_generated"].items():
+        if sha256(fastnum_out_dir / name) != entry["sha256"]:
+            raise ValueError("fastnum generated setting changed after attested build")
     binary_sha256 = sha256(binary)
     artifacts_sha256 = sha256(artifacts_path)
     metadata_sha256 = sha256(metadata_path)
@@ -199,10 +261,15 @@ def capture(artifacts_path, metadata_path, build_attestation_path, source_sha,
     if evidence_dir.exists() and any(evidence_dir.iterdir()):
         raise ValueError("capture output directory is not empty")
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    for source, name in ((artifacts_path, "cargo-artifacts.jsonl"),
-                         (metadata_path, "cargo-metadata.json"),
-                         (build_attestation_path, "resource-build-attestation.json"),
-                         (build_log, "cargo-build.log")):
+    fastnum_files = {"build_script": attestation["fastnum_build_script"],
+                     **attestation["fastnum_generated"]}
+    inputs = [(artifacts_path, "cargo-artifacts.jsonl"),
+              (metadata_path, "cargo-metadata.json"),
+              (build_attestation_path, "resource-build-attestation.json"),
+              (build_log, "cargo-build.log")]
+    inputs.extend((build_attestation_path.parent / entry["path"], entry["path"])
+                  for entry in fastnum_files.values())
+    for source, name in inputs:
         with (evidence_dir / name).open("xb") as destination, source.open("rb") as original:
             shutil.copyfileobj(original, destination)
     if (sha256(evidence_dir / "cargo-artifacts.jsonl") != artifacts_sha256
@@ -210,6 +277,9 @@ def capture(artifacts_path, metadata_path, build_attestation_path, source_sha,
             or sha256(evidence_dir / "resource-build-attestation.json") != attestation_sha256
             or sha256(evidence_dir / "cargo-build.log") != build_log_sha256):
         raise ValueError("Cargo build input changed during evidence archive")
+    for entry in fastnum_files.values():
+        if sha256(evidence_dir / entry["path"]) != entry["sha256"]:
+            raise ValueError("fastnum compiler setting changed during evidence archive")
     raw_path = evidence_dir / "guard-control.log"
     fragment_path = evidence_dir / "resource-control-capture.json"
     failure_path = evidence_dir / "resource-control-failure.json"
@@ -280,6 +350,7 @@ def capture(artifacts_path, metadata_path, build_attestation_path, source_sha,
                               "sha256": attestation_sha256},
         "build_log": {"path": "cargo-build.log",
                       "sha256": build_log_sha256},
+        "fastnum_files": fastnum_files,
         "guard_control": guard_control,
         "wasmtime_source_files": sources,
     }

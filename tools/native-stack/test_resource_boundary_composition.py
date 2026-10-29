@@ -384,7 +384,10 @@ class BoundaryCompositionTests(unittest.TestCase):
                                                 sort_keys=True) + "\n")
             old_manifest_sha = sha256(manifest_path)
             old_v1_path = source_dir / "resource-manifest-v1.json"
-            old_v1_path.write_text(json.dumps(build_manifest(), indent=2,
+            old_v1 = build_manifest()
+            old_v1["build_policy"].pop("fastnum_generated")
+            old_v1["build_policy"].pop("fastnum_build_script_sha256")
+            old_v1_path.write_text(json.dumps(old_v1, indent=2,
                                               sort_keys=True) + "\n")
             depths_path = source_dir / "resource-boundary-depths-v1.json"
             depths_path.write_text('{"cases":"pending"}\n')
@@ -444,7 +447,7 @@ class BoundaryCompositionTests(unittest.TestCase):
                                                    "indexer/Cargo.toml")}],
             }) + "\n")
             build_log = control_file("cargo-build.log", "compiler stderr\n")
-            v1_manifest = build_manifest()
+            v1_manifest = old_v1
             build_attestation = control_file(
                 "resource-build-attestation.json", json.dumps({
                     "schema_version": 1,

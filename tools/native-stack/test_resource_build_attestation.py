@@ -23,20 +23,44 @@ class ResourceBuildAttestationTests(unittest.TestCase):
         self.metadata = self.root / "cargo-metadata.json"
         self.build_log = self.root / "cargo-build.log"
         self.binary = self.root / "indexer-test"
-        for path, data in ((self.artifacts, b"artifact\n"),
-                           (self.metadata, b"metadata\n"),
+        fastnum_source = self.root / "registry/fastnum-0.7.5/build.rs"
+        fastnum_source.parent.mkdir(parents=True)
+        fastnum_out = self.root / "target/debug/build/fastnum-test/out"
+        fastnum_out.mkdir(parents=True)
+        records = [
+            {"reason": "build-script-executed", "package_id": "fastnum-package",
+             "out_dir": str(fastnum_out)},
+            {"reason": "compiler-artifact", "package_id": "fastnum-package",
+             "target": {"kind": ["lib"]}},
+        ]
+        metadata = {"target_directory": str(self.root / "target"),
+                    "packages": [{"name": "fastnum", "version": "0.7.5",
+                                  "id": "fastnum-package",
+                                  "manifest_path": str(fastnum_source.parent / "Cargo.toml")}]}
+        for path, data in ((self.artifacts, ("\n".join(json.dumps(row) for row in records)
+                                             + "\n").encode()),
+                           (self.metadata, (json.dumps(metadata) + "\n").encode()),
                            (self.build_log, b"compiler stderr\n"),
                            (self.binary, b"test executable\n")):
             path.write_bytes(data)
         self.attestation = self.root / "resource-build-attestation.json"
         self.cargo_home = self.root / "cargo-home"
         self.cargo_home.mkdir()
-        self.manifest = build_manifest()
+        self.manifest = json.loads(json.dumps(build_manifest()))
+        fastnum_source.write_text("fn main() {}\n")
+        self.manifest["build_policy"]["fastnum_build_script_sha256"] = sha256(fastnum_source)
+        source_archive = self.root / "fastnum-build.rs"
+        source_archive.write_bytes(fastnum_source.read_bytes())
+        generated = {}
+        for name, expected in self.manifest["build_policy"]["fastnum_generated"].items():
+            archive = self.root / f"fastnum-{name}"
+            archive.write_text(expected)
+            generated[name] = {"path": archive.name, "sha256": sha256(archive)}
         self.source_sha = "a" * 40
         self.artifact = {"features": ["testing"], "profile": {
             "opt_level": "0", "debug_assertions": True, "overflow_checks": True}}
         self.report = {
-            "schema_version": 1,
+            "schema_version": 2,
             "source_sha": self.source_sha,
             "manifest_sha256": sha256(MANIFEST),
             "lockfile_sha256": self.manifest["artifacts"]["core_lockfile"]["sha256"],
@@ -55,6 +79,11 @@ class ResourceBuildAttestationTests(unittest.TestCase):
             "cargo_home": str(self.cargo_home),
             "cargo_config_candidates": ensure_no_cargo_config(ROOT / "core",
                                                                 self.cargo_home),
+            "fastnum_source_path": str(fastnum_source),
+            "fastnum_out_dir": str(fastnum_out),
+            "fastnum_build_script": {"path": source_archive.name,
+                                     "sha256": sha256(source_archive)},
+            "fastnum_generated": generated,
         }
 
     def validate(self):
@@ -91,6 +120,13 @@ class ResourceBuildAttestationTests(unittest.TestCase):
     def test_rejects_changed_build_log(self):
         self.validate()
         self.build_log.write_bytes(b"changed compiler stderr\n")
+        with self.assertRaises(ValueError):
+            self.validate()
+
+    def test_rejects_changed_generated_formatter_constant(self):
+        self.validate()
+        (self.root / "fastnum-exponential_format_threshold.rs").write_text(
+            "const FMT_MAX_INTEGER_PADDING: usize = 1;")
         with self.assertRaises(ValueError):
             self.validate()
 

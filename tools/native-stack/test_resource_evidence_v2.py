@@ -92,7 +92,8 @@ def bundle_fixture(directory):
     control_dir.mkdir()
     control_entries = {}
     for name in ("cargo-artifacts.json", "cargo-metadata.json",
-                 "resource-build-attestation.json", "cargo-build.log", "guard.log"):
+                 "resource-build-attestation.json", "cargo-build.log",
+                 "fastnum-build.rs", "guard.log"):
         path = control_dir / name
         path.write_text(name)
         control_entries[name] = {"path": name, "sha256": sha256(path)}
@@ -104,6 +105,7 @@ def bundle_fixture(directory):
         "cargo_metadata": control_entries["cargo-metadata.json"],
         "build_attestation": control_entries["resource-build-attestation.json"],
         "build_log": control_entries["cargo-build.log"],
+        "fastnum_files": {"build_script": control_entries["fastnum-build.rs"]},
         "guard_control": {"process": {"pid": 1, "started_unix_ns": 1},
                           "raw_log": control_entries["guard.log"]},
         "wasmtime_source_files": {},

@@ -4,13 +4,15 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-from capture_resource_control import ensure_no_cargo_config, selected_binary
+from capture_resource_control import (ensure_no_cargo_config,
+                                      fastnum_build_record, selected_binary)
 from resource_evidence import load_json_strict, sha256
 from resource_manifest import MANIFEST, ROOT, build_manifest
 
@@ -91,12 +93,26 @@ def build(profile, output_dir):
         subprocess.run(command, cwd=core, env=environment, check=True,
                        stdout=stdout, stderr=stderr)
     binary, artifact = selected_binary(artifacts_path, metadata)
+    fastnum_source, fastnum_out_dir = fastnum_build_record(artifacts_path, metadata)
+    fastnum_policy = manifest["build_policy"]["fastnum_generated"]
+    source_archive = output_dir / "fastnum-build.rs"
+    if sha256(fastnum_source) != manifest["build_policy"]["fastnum_build_script_sha256"]:
+        raise ValueError("fastnum build script differs from pinned source")
+    shutil.copyfile(fastnum_source, source_archive)
+    fastnum_generated = {}
+    for name, expected in fastnum_policy.items():
+        source = fastnum_out_dir / name
+        if source.read_text() != expected:
+            raise ValueError(f"effective fastnum setting differs: {name}")
+        archive = output_dir / f"fastnum-{name}"
+        shutil.copyfile(source, archive)
+        fastnum_generated[name] = {"path": archive.name, "sha256": sha256(archive)}
     if ensure_no_cargo_config(core, cargo_home) != config_candidates:
         raise ValueError("resource Cargo config search path changed during build")
     if source_revision() != head or load_json_strict(MANIFEST) != build_manifest():
         raise ValueError("resource source changed during build")
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source_sha": head,
         "manifest_sha256": sha256(MANIFEST),
         "lockfile_sha256": sha256(core / "Cargo.lock"),
@@ -113,6 +129,11 @@ def build(profile, output_dir):
         "indexer_artifact_features": artifact["features"],
         "cargo_home": str(cargo_home),
         "cargo_config_candidates": config_candidates,
+        "fastnum_source_path": str(fastnum_source),
+        "fastnum_out_dir": str(fastnum_out_dir),
+        "fastnum_build_script": {"path": source_archive.name,
+                                 "sha256": sha256(source_archive)},
+        "fastnum_generated": fastnum_generated,
     }
     report_path = output_dir / "resource-build-attestation.json"
     with report_path.open("x") as output:

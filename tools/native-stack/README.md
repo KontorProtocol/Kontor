@@ -125,6 +125,10 @@ Empty Rust flag and wrapper variables override inherited Cargo settings.
 The builder clears other inherited `CARGO_*` and `RUST*` build options and
 rejects either Cargo config filename in every parent `.cargo` directory or
 the active Cargo home. It records the searched paths for the aggregate gate.
+The Cargo build-script record identifies fastnum's generated output directory.
+The builder archives its pinned build script and the generated formatter,
+rounding, and serde constants, then checks their exact contents. The control
+archive copies and revalidates those files against the same Cargo artifact.
 A build with a different formatter setting or missing attestation fails the
 control gate. Run both commands from the same clean checkout:
 
