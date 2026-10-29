@@ -983,6 +983,10 @@ async fn resource_attempt(
                         "process_role": process_role,
                         "configuration": configuration,
                         "phase": "after_host_release",
+                        "host_import_entered": true,
+                        "host_import_released": true,
+                        "second_tokio_task_progressed": true,
+                        "guest_task_completed": true,
                         "outcome": outcome.as_str(),
                         "observation": current.last_report.as_ref(),
                     })
