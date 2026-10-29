@@ -14,16 +14,16 @@ use crate::stopper::ShutdownSignal;
 use anyhow::Result;
 use bitcoin::hashes::{Hash, sha256};
 use indexer_types::{Event, RecentBlock};
-use libsql::Connection;
+use libsql::{Connection, TransactionBehavior};
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use tracing::warn;
 
 use crate::database;
 use crate::database::queries::{
-    get_checkpoint_latest, select_latest_consensus_height, select_latest_result_id,
-    select_recent_blocks,
+    get_checkpoint_latest, select_latest_consensus_height, select_recent_blocks,
 };
+use crate::database::receipt_stream::stream_state;
 
 /// Recent-block window surfaced in `Info::recent_blocks` — the SDK's
 /// fast-path reorg-detection window.
@@ -47,17 +47,19 @@ pub struct InfoCore {
     pub consensus_height: Option<u64>,
     pub last_result_id: u64,
     pub recent_blocks: Vec<RecentBlock>,
-    /// Hash of `last_result_id` + `recent_blocks` — the long-poll
-    /// `?since=` token. Changes exactly when a new snapshot is published.
+    /// Opaque long-poll token including the receipt lineage and rollback generation.
     pub signature: String,
 }
 
 /// Recompute `InfoCore` from the database. `height` is `None` until the
 /// first block is indexed; see [`InfoCore`] for the rationale.
 pub async fn compute_info_core(conn: &Connection) -> Result<InfoCore> {
-    let checkpoint = get_checkpoint_latest(conn).await?.map(|c| c.hash);
-    let consensus_height = select_latest_consensus_height(conn).await?;
-    let recent_blocks: Vec<RecentBlock> = select_recent_blocks(conn, RECENT_BLOCKS_WINDOW)
+    let snapshot = conn
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .await?;
+    let checkpoint = get_checkpoint_latest(&snapshot).await?.map(|c| c.hash);
+    let consensus_height = select_latest_consensus_height(&snapshot).await?;
+    let recent_blocks: Vec<RecentBlock> = select_recent_blocks(&snapshot, RECENT_BLOCKS_WINDOW)
         .await?
         .into_iter()
         .map(|b| RecentBlock {
@@ -67,8 +69,15 @@ pub async fn compute_info_core(conn: &Connection) -> Result<InfoCore> {
         .collect();
     // `recent_blocks` is height-descending, so its head is the tip.
     let height = recent_blocks.first().map(|b| b.height);
-    let last_result_id = select_latest_result_id(conn).await?.unwrap_or(0);
-    let signature = info_signature(last_result_id, &recent_blocks);
+    let stream = stream_state(&snapshot).await?;
+    let last_result_id = stream.max_result_id;
+    let signature = info_signature(
+        &stream.epoch,
+        stream.generation,
+        last_result_id,
+        &recent_blocks,
+    );
+    snapshot.commit().await?;
     Ok(InfoCore {
         height,
         checkpoint,
@@ -82,8 +91,13 @@ pub async fn compute_info_core(conn: &Connection) -> Result<InfoCore> {
 /// Opaque token over the long-poll-relevant state. Deliberately excludes
 /// fields (`available` / `consensus_mode` / statics) that don't move with
 /// the chain.
-fn info_signature(last_result_id: u64, recent_blocks: &[RecentBlock]) -> String {
-    let mut buf = format!("r{last_result_id}");
+fn info_signature(
+    epoch: &str,
+    generation: u64,
+    last_result_id: u64,
+    recent_blocks: &[RecentBlock],
+) -> String {
+    let mut buf = format!("e{epoch};g{generation};r{last_result_id}");
     for b in recent_blocks {
         buf.push_str(&format!(";{}:{}", b.height, b.hash));
     }
@@ -126,4 +140,38 @@ pub fn run_info_publisher(
         }
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use tempfile::TempDir;
+
+    use super::compute_info_core;
+    use crate::database::connection::new_connection;
+    use crate::database::queries::rollback_to_height;
+
+    #[tokio::test]
+    async fn same_hash_replay_changes_signature_without_new_receipts() -> Result<()> {
+        let dir = TempDir::new()?;
+        let conn = new_connection(dir.path(), "info-replay.db").await?;
+        conn.execute_batch(
+            "INSERT INTO blocks VALUES (1, printf('%064x', 1), 1);
+             INSERT INTO blocks VALUES (2, printf('%064x', 2), 1);",
+        )
+        .await?;
+        let before = compute_info_core(&conn).await?;
+        rollback_to_height(&conn, 1).await?;
+        conn.execute("INSERT INTO blocks VALUES (2, printf('%064x', 2), 1)", ())
+            .await?;
+        let after = compute_info_core(&conn).await?;
+        assert_eq!(after.height, before.height);
+        assert_eq!(after.last_result_id, before.last_result_id);
+        assert_eq!(
+            serde_json::to_value(after.recent_blocks)?,
+            serde_json::to_value(before.recent_blocks)?
+        );
+        assert_ne!(after.signature, before.signature);
+        Ok(())
+    }
 }

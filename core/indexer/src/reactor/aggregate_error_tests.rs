@@ -41,7 +41,10 @@ enum Fault {
     RegisterSignerRead,
 }
 
-async fn reactor(mut runtime: Runtime, dir: &TempDir) -> Result<Reactor<RuntimeExecutor>> {
+pub(super) async fn reactor(
+    mut runtime: Runtime,
+    dir: &TempDir,
+) -> Result<Reactor<RuntimeExecutor>> {
     let consensus = start_consensus(
         EngineConfig {
             private_key: PrivateKey::from([17; 32]),

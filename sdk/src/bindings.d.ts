@@ -245,12 +245,12 @@ export type Info = {
    */
   last_result_id: number;
   /**
-   * The last 10 indexed blocks, height-descending. The SDK compares
-   * these against its local block-hash cache for reorg detection.
+   * The last 10 indexed blocks, height-descending. Durable receipt recovery
+   * uses the rollback journal rather than inferring it from this window.
    */
   recent_blocks: Array<RecentBlock>;
   /**
-   * Hash of `last_result_id` + `recent_blocks`. Pass back as
+   * Opaque token including the receipt lineage and rollback generation. Pass back as
    * `?since=` to the long-poll endpoint; the request blocks until
    * this value changes.
    */
@@ -262,6 +262,22 @@ export type Input = {
   input_index: number;
   x_only_pubkey: string;
   insts: Insts;
+};
+
+/**
+ * Inspection reads persisted receipts and their current confirmation metadata.
+ * Simulation uses `OpWithResult` instead because its receipts are provisional.
+ */
+export type InspectedOp = {
+  "kind": "Materialized";
+  op: Op;
+  result: ResultInfo | null;
+  error_message: string | null;
+} | {
+  "kind": "Rejected";
+  input_index: number;
+  op_index: number;
+  error_message: string | null;
 };
 
 export type Inst = {
@@ -438,17 +454,74 @@ export type ProvenanceEntry = {
   provenance: BuildProvenance;
 };
 
+export type ReceiptStreamResponse =
+  | { "kind": "start"; resume_token: string }
+  | {
+    "kind": "recovery";
+    resume_token: string;
+    fork_height: number;
+    more: boolean;
+  }
+  | {
+    "kind": "page";
+    receipts: Array<StreamReceipt>;
+    next_token: string;
+    has_more: boolean;
+  }
+  | { "kind": "reset_required"; reason: StreamResetReason };
+
 /**
  * One entry in `Info::recent_blocks` — a `BlockRow` trimmed to the
  * fields the SDK needs for reorg detection (no `relevant` flag).
  */
 export type RecentBlock = { height: number; hash: string };
 
+/**
+ * A receipt with current confirmation metadata. System receipts without a
+ * transaction have null confirmation and batch coordinates.
+ */
+export type ResultInfo = {
+  execution_height: number;
+  confirmed_height: number | null;
+  confirmed_bitcoin_tx_index: number | null;
+  batch_height: number | null;
+  id: number;
+  height: number;
+  /**
+   * @deprecated Legacy filtered ordinal; use confirmed_bitcoin_tx_index for Bitcoin position.
+   */
+  tx_index: number | null;
+  input_index: number | null;
+  op_index: number | null;
+  result_index: number;
+  func: string;
+  gas: number;
+  /**
+   * Outcome category for this op. `Ok` for successful calls (regardless
+   * of whether the contract returned `ok(...)` or just a value); the
+   * failure variants distinguish what went wrong.
+   */
+  status: OpStatus;
+  value: string | null;
+  contract: string;
+  txid: string | null;
+  signer_id: number;
+  /**
+   * Who funded gas for this op. Equals `signer_id` for self-pay ops;
+   * for BLS-aggregate sponsored ops it's the publisher's signer_id.
+   * `null` for ops that don't go through user-side gas accounting.
+   */
+  payer_signer_id: number | null;
+};
+
 export type ResultResponse<T> = { result: T };
 
 export type ResultRow = {
   id: number;
   height: number;
+  /**
+   * @deprecated Legacy filtered ordinal; use confirmed_bitcoin_tx_index for Bitcoin position.
+   */
   tx_index: number | null;
   input_index: number | null;
   op_index: number | null;
@@ -589,6 +662,14 @@ export type Source = {
   commit: CommitId;
 };
 
+export type StreamReceipt = { receipt: ResultInfo; resume_token: string };
+
+export type StreamResetReason =
+  | "epoch_mismatch"
+  | "future_generation"
+  | "unsupported_lineage"
+  | "missing_history";
+
 export type TapLeafScript = {
   leafVersion: number;
   script: string;
@@ -610,11 +691,36 @@ export type Transaction = {
 
 export type TransactionHex = { hex: string };
 
+/**
+ * Public transaction metadata, separate from retained execution row projections.
+ * `height` is the legacy alias of `execution_height`. `tx_index` is a deprecated
+ * filtered ordinal, never a raw Bitcoin position.
+ */
+export type TransactionInfo = {
+  execution_height: number;
+  /**
+   * Unknown historical positions and unconfirmed transactions are null.
+   */
+  confirmed_bitcoin_tx_index: number | null;
+  id: number;
+  txid: string;
+  height: number;
+  confirmed_height: number | null;
+  /**
+   * @deprecated Legacy filtered ordinal; use confirmed_bitcoin_tx_index for Bitcoin position.
+   */
+  tx_index: number | null;
+  batch_height: number | null;
+};
+
 export type TransactionRow = {
   id: number;
   txid: string;
   height: number;
   confirmed_height: number | null;
+  /**
+   * @deprecated Legacy filtered ordinal; use confirmed_bitcoin_tx_index for Bitcoin position.
+   */
   tx_index: number | null;
   batch_height: number | null;
 };

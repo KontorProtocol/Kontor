@@ -273,6 +273,9 @@ jobs:
       - name: Unit tests
         run: npm test
         working-directory: ./sdk
+      - name: Validate installed SDK package
+        run: npm run test:package
+        working-directory: ./sdk
       - name: Live regtest test
         id: live-regtest
         shell: bash

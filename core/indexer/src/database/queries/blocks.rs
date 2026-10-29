@@ -5,6 +5,7 @@ use libsql::{Connection, Value, de::from_row, params};
 use super::Error;
 use super::current_state::{prepare_affected_keys, restore_affected_keys, with_state_savepoint};
 use super::pagination::{PageOptions, PageSource, get_paginated};
+use crate::database::receipt_stream::record_rollback;
 use crate::database::types::BlockQuery;
 
 pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Error> {
@@ -29,6 +30,7 @@ pub async fn rollback_to_height(conn: &Connection, height: u64) -> Result<u64, E
         .await?;
         let removed = rollback_blocks(conn, height).await?;
         restore_affected_keys(conn).await?;
+        record_rollback(conn, height).await?;
         Ok(removed)
     })
     .await

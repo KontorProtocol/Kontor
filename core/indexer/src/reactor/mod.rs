@@ -2,6 +2,8 @@
 mod aggregate_error_tests;
 mod batches;
 mod blocks;
+#[cfg(test)]
+mod confirmation_position_tests;
 pub mod consensus_state;
 pub mod engine;
 pub mod executor;

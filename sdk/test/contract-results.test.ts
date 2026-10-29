@@ -59,10 +59,15 @@ function setup(
       try {
         yield {
           kind: "tx",
+          resumeToken: "fixture-token",
           txid: "tx-results",
           id: 1,
           height: 1n,
           txIndex: 0,
+          executionHeight: 1n,
+          confirmedHeight: null,
+          confirmedBitcoinTxIndex: null,
+          batchHeight: null,
           outcomes,
         };
       } finally {

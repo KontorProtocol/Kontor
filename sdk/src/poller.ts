@@ -1,152 +1,72 @@
-/**
- * `ResultsPoller` — the SDK's indexer-following loop, and the
- * `BlockHashCache` it leans on for reorg detection.
- *
- * The indexer is followed entirely over its REST surface — no
- * websocket, no server-side event log:
- *
- *   - `GET /api?wait=&since=` — long-poll heartbeat. The request hangs
- *     until `Info.signature` moves (a block / batch / rollback) or the
- *     timeout elapses.
- *   - `GET /api/results?cursor=` — forward, id-cursored drain of
- *     `contract_results`. `cursor` is the last row id consumed.
- *   - `GET /api/blocks/{height}` — single block, for the deep-reorg
- *     walk-down.
- *
- * Each long-poll wake runs reorg detection by comparing the indexer's
- * `recent_blocks` against the local `BlockHashCache`; a divergence is
- * synthesized into a `reorg` ChainEvent (there is no server-side reorg
- * record). Then, if `last_result_id` advanced, results are drained and
- * grouped per transaction into `tx` ChainEvents.
- *
- * The poller is a per-session singleton: multiple `events()` iterators
- * share one polling loop, each getting its own fan-out queue.
- */
-
+/** Ordered receipt observations with durable rollback recovery and opaque resume tokens. */
 import type {
-  BlockRow,
   Info,
-  PaginatedResponse,
-  ResultRow,
+  ReceiptStreamResponse,
+  ResultInfo,
+  StreamReceipt,
+  TransactionInfo,
 } from "./bindings.js";
-import type { ChainEvent, EventsFilter } from "./events.js";
-import { DeepReorgError, TransportError } from "./errors.js";
+import {
+  executionCoordinates,
+  transactionInfoFromWire,
+} from "./confirmation.js";
+import type { ChainEvent, EventsOptions } from "./events.js";
+import { ReceiptStreamError, TransportError } from "./errors.js";
 import type { OpResultRaw } from "./json-codec.js";
 
-/** Local block-hash cache depth — mirrors the indexer's `HASH_CACHE_SIZE`. */
-const HASH_CACHE_SIZE = 50;
-/** Long-poll budget — at or below the indexer's `MAX_WAIT_MS` cap. */
 const LONG_POLL_MS = 25_000;
-/** Page size when draining `/api/results`. */
 const DRAIN_PAGE_LIMIT = 200;
-/** Bootstrap (`getInfo`) attempts before the poller calls the node unreachable. */
 const BOOTSTRAP_ATTEMPTS = 5;
-/** Base retry backoff (ms) — bootstrap and post-bootstrap transient errors. */
 const DEFAULT_RETRY_BACKOFF_MS = 500;
-/** Ceiling on the (linearly-growing) transient-error backoff. */
 const MAX_RETRY_BACKOFF_MS = 10_000;
 
-/**
- * Bounded `height → hash` map. Mirrors
- * `core/indexer/src/bitcoin_follower/poller/mod.rs::BlockHashCache`:
- * the SDK following Kontor, as Kontor follows Bitcoin.
- */
-export class BlockHashCache {
-  private readonly hashes = new Map<number, string>();
-  /** Insertion order, for capacity eviction (oldest-inserted first). */
-  private readonly order: number[] = [];
-
-  constructor(private readonly capacity: number) {}
-
-  /** Record `height → hash`. A height already present is left as-is. */
-  insert(height: number, hash: string): void {
-    if (this.hashes.has(height)) return;
-    if (this.order.length >= this.capacity) {
-      const oldest = this.order.shift();
-      if (oldest !== undefined) this.hashes.delete(oldest);
-    }
-    this.hashes.set(height, hash);
-    this.order.push(height);
-  }
-
-  get(height: number): string | undefined {
-    return this.hashes.get(height);
-  }
-
-  /** Drop every entry strictly above `height` — post-reorg cleanup. */
-  truncateAbove(height: number): void {
-    for (let i = this.order.length - 1; i >= 0; i--) {
-      const h = this.order[i]!;
-      if (h > height) {
-        this.order.splice(i, 1);
-        this.hashes.delete(h);
-      }
-    }
-  }
-
-  /** Lowest cached height, or `undefined` when empty. */
-  minHeight(): number | undefined {
-    let min: number | undefined;
-    for (const h of this.order) {
-      if (min === undefined || h < min) min = h;
-    }
-    return min;
-  }
-}
-
-export interface PollerOptions {
-  /** Indexer HTTP API base, e.g. `https://signet.kontor.network:35001/api`. */
+export interface PollerOptions extends EventsOptions {
   baseUrl: string;
-  /** `fetch` implementation (injectable for tests). */
   fetch: typeof fetch;
-  /**
-   * Resume cursor — a prior `tx` event's `id`. Omitted: start at the
-   * current chain tip (no history replay).
-   */
-  from?: number;
-  /** Server-side filter narrowing the `/api/results` drain. */
-  filter?: EventsFilter;
-  /** Base retry backoff in ms (bootstrap + transient errors). Default 500. */
   retryBackoffMs?: number;
 }
 
-/** One `events()` iterator's fan-out queue. */
 interface Consumer {
   queue: ChainEvent[];
-  /** Resolver for a `next()` currently parked on an empty queue. */
   wake: (() => void) | null;
   done: boolean;
 }
 
 export class ResultsPoller {
-  private readonly cache = new BlockHashCache(HASH_CACHE_SIZE);
   private readonly consumers = new Set<Consumer>();
-  /** Last `contract_results` row id consumed. */
-  private cursor: number;
-  /** Whether `from` was omitted — if so, jump `cursor` to the tip on bootstrap. */
-  private readonly seekToTip: boolean;
-  /** Latest `Info.signature`, fed back as the long-poll `?since=`. */
+  private completedToken: string | undefined;
   private signature = "";
   private running = false;
-  /** Set when the loop dies (e.g. `DeepReorgError`); re-thrown to consumers. */
+  private subscriberWake: (() => void) | undefined;
   private fatal: Error | null = null;
-  /** Base retry backoff (ms). */
   private readonly backoff: number;
-  /** Resolves on the first successful poll; rejects if bootstrap fails. */
   private readonly readyPromise: Promise<void>;
   private readyResolve!: () => void;
   private readyReject!: (e: Error) => void;
 
   constructor(private readonly opts: PollerOptions) {
-    this.cursor = opts.from ?? 0;
-    this.seekToTip = opts.from === undefined;
+    if (
+      opts.from !== undefined &&
+      (typeof opts.from !== "string" || !opts.from)
+    ) {
+      throw new ReceiptStreamError(
+        "invalid_request",
+        "Resume requires an opaque receipt token; numeric cursors require explicit resynchronization",
+      );
+    }
+    if (opts.from !== undefined && opts.start !== undefined) {
+      throw new ReceiptStreamError(
+        "invalid_request",
+        "Specify a resume token or a start mode, not both",
+      );
+    }
+    this.opts = { ...opts, filter: opts.filter && { ...opts.filter } };
+    this.completedToken = opts.from;
     this.backoff = opts.retryBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS;
-    this.readyPromise = new Promise<void>((res, rej) => {
+    this.readyPromise = new Promise((res, rej) => {
       this.readyResolve = res;
       this.readyReject = rej;
     });
-    // Pre-attach a no-op catch so an unobserved bootstrap failure isn't
-    // reported as an unhandled rejection — `ready()` callers still see it.
     this.readyPromise.catch(() => {});
   }
 
@@ -173,6 +93,7 @@ export class ResultsPoller {
   /** Stop the loop and close every `events()` iterator. */
   stop(): void {
     this.running = false;
+    this.subscriberWake?.();
     for (const c of this.consumers) c.done = true;
     this.wakeAll();
   }
@@ -184,6 +105,7 @@ export class ResultsPoller {
   events(): AsyncIterableIterator<ChainEvent> {
     const consumer: Consumer = { queue: [], wake: null, done: false };
     this.consumers.add(consumer);
+    this.subscriberWake?.();
     const poller = this;
     return {
       [Symbol.asyncIterator]() {
@@ -208,38 +130,39 @@ export class ResultsPoller {
     };
   }
 
-  // ── loop ─────────────────────────────────────────────────────────
-
   private async loop(): Promise<void> {
     try {
       await this.bootstrap();
     } catch (e) {
-      // Bootstrap exhausted its retries — the node is unreachable or
-      // misconfigured. Terminal: fail `ready()` and every consumer.
-      const err = e instanceof Error ? e : new Error(String(e));
-      this.fatal = err;
-      this.readyReject(err);
+      const error = e instanceof Error ? e : new Error(String(e));
+      this.fatal = error;
+      this.readyReject(error);
       this.wakeAll();
       return;
     }
     this.readyResolve();
-
     let failures = 0;
     while (this.running) {
       try {
-        const info = await this.longPoll();
-        if (!this.running) break;
-        await this.detectReorg(info.recent_blocks);
-        this.seed(info);
-        if (info.last_result_id > this.cursor) {
-          await this.drainResults(info.last_result_id);
+        const resuming = this.consumers.size === 0;
+        if (resuming) {
+          await new Promise<void>((resolve) => {
+            this.subscriberWake = resolve;
+          });
+          this.subscriberWake = undefined;
         }
+        if (!this.running) break;
+        const info =
+          failures > 0 || resuming
+            ? await this.getInfo()
+            : await this.longPoll();
+        if (!this.running) break;
+        // Rollback may keep both the height and maximum result ID unchanged.
+        await this.drainResults();
+        this.signature = info.signature;
         failures = 0;
       } catch (e) {
-        // A reorg past the cache is unrecoverable; everything else
-        // (network blip, node restart) is transient — back off and
-        // retry, since an always-on poller must survive these.
-        if (e instanceof DeepReorgError) throw e;
+        if (e instanceof ReceiptStreamError) throw e;
         failures += 1;
         await this.sleep(
           Math.min(this.backoff * failures, MAX_RETRY_BACKOFF_MS),
@@ -248,139 +171,154 @@ export class ResultsPoller {
     }
   }
 
-  /**
-   * First poll, with retry — seeds the cache, anchors the cursor,
-   * drains any backlog. Doubles as the connectivity check: if every
-   * attempt fails, the caller treats the node as unreachable.
-   */
   private async bootstrap(): Promise<void> {
-    let lastErr: Error = new Error("indexer unreachable");
+    let lastError: Error = new Error("indexer unreachable");
     for (let attempt = 1; attempt <= BOOTSTRAP_ATTEMPTS; attempt++) {
       try {
         const info = await this.getInfo();
-        this.seed(info);
-        if (this.seekToTip) this.cursor = info.last_result_id;
-        if (info.last_result_id > this.cursor) {
-          await this.drainResults(info.last_result_id);
+        if (this.completedToken === undefined) {
+          const response = await this.getStream(
+            new URLSearchParams({ start: this.opts.start ?? "tip" }),
+          );
+          if (response.kind !== "start") throw this.invalidResponse();
+          this.completedToken = this.requireToken(response.resume_token);
         }
+        await this.drainResults();
+        this.signature = info.signature;
         return;
       } catch (e) {
-        lastErr = e instanceof Error ? e : new Error(String(e));
-        if (attempt < BOOTSTRAP_ATTEMPTS) {
+        if (e instanceof ReceiptStreamError) throw e;
+        lastError = e instanceof Error ? e : new Error(String(e));
+        if (attempt < BOOTSTRAP_ATTEMPTS)
           await this.sleep(this.backoff * attempt);
-        }
       }
     }
-    throw lastErr;
+    throw lastError;
   }
 
   private sleep(ms: number): Promise<void> {
-    return new Promise((r) => setTimeout(r, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  /** Fold `Info` into local state: cache + signature. */
-  private seed(info: Info): void {
-    for (const b of info.recent_blocks) this.cache.insert(b.height, b.hash);
-    this.signature = info.signature;
+  private invalidResponse(): ReceiptStreamError {
+    return new ReceiptStreamError(
+      "invalid_response",
+      "Invalid receipt stream response",
+    );
   }
 
-  // ── reorg detection ──────────────────────────────────────────────
+  private requireToken(token: unknown): string {
+    if (typeof token !== "string" || token.length === 0 || token.length > 192)
+      throw this.invalidResponse();
+    return token;
+  }
 
-  /**
-   * Compare the indexer's `recent_blocks` against the cache. On a
-   * divergence, emit one `reorg` event and truncate the cache to the
-   * fork point. Fast path scans the (descending) `recent_blocks`
-   * window; if every cached height there disagrees, the slow path
-   * walks `/api/blocks/{h}` down to the fork.
-   */
-  private async detectReorg(
-    recent: ReadonlyArray<Info["recent_blocks"][number]>,
-  ): Promise<void> {
-    const diverged = recent.some((b) => {
-      const cached = this.cache.get(b.height);
-      return cached !== undefined && cached !== b.hash;
-    });
-    if (!diverged) return;
+  private completeGroup(group: StreamReceipt[]): void {
+    const last = group[group.length - 1]!;
+    this.emitTx(
+      group.map((entry) => entry.receipt),
+      last.resume_token,
+    );
+    this.completedToken = last.resume_token;
+  }
 
-    // `recent` is height-descending, so the first agreement is the
-    // highest height that still matches — the fork point.
-    let forkHeight: number | undefined;
-    for (const b of recent) {
-      if (this.cache.get(b.height) === b.hash) {
-        forkHeight = b.height;
-        break;
+  private async drainResults(): Promise<void> {
+    let pending: StreamReceipt[] = [];
+    let pageToken: string | undefined;
+    let previousId: number | undefined;
+    while (this.running && this.consumers.size > 0) {
+      const params = new URLSearchParams({
+        from: this.completedToken!,
+        limit: String(DRAIN_PAGE_LIMIT),
+      });
+      if (pageToken !== undefined) params.set("page", pageToken);
+      const response = await this.getStream(params);
+      if (!this.running || this.consumers.size === 0) return;
+      if (response.kind === "recovery") {
+        const resumeToken = this.requireToken(response.resume_token);
+        if (
+          !Number.isSafeInteger(response.fork_height) ||
+          response.fork_height < 0 ||
+          resumeToken === this.completedToken
+        )
+          throw this.invalidResponse();
+        pending = [];
+        pageToken = undefined;
+        previousId = undefined;
+        this.emit({
+          kind: "reorg",
+          forkHeight: BigInt(response.fork_height),
+          resumeToken,
+        });
+        this.completedToken = resumeToken;
+        continue;
       }
-    }
-    if (forkHeight === undefined) {
-      forkHeight = await this.slowPathFork(recent);
-    }
-    this.cache.truncateAbove(forkHeight);
-    this.emit({ kind: "reorg", forkHeight: BigInt(forkHeight) });
-  }
-
-  /**
-   * Every height in the `recent_blocks` window disagreed — walk down
-   * one block at a time until a cached hash matches. Throws
-   * `DeepReorgError` if the walk falls below the cache.
-   */
-  private async slowPathFork(
-    recent: ReadonlyArray<Info["recent_blocks"][number]>,
-  ): Promise<number> {
-    const windowMin = Math.min(...recent.map((b) => b.height));
-    for (let h = windowMin - 1; h >= 0; h--) {
-      const cached = this.cache.get(h);
-      if (cached === undefined) {
-        throw new DeepReorgError(
-          `reorg deeper than the ${HASH_CACHE_SIZE}-block cache`,
-          { details: `walked down to height ${h} with no cached hash` },
-        );
-      }
-      const block = await this.getBlock(h);
-      if (block.hash === cached) return h;
-    }
-    throw new DeepReorgError("reorg past the base of the local cache");
-  }
-
-  // ── results drain ────────────────────────────────────────────────
-
-  /**
-   * Drain `/api/results` forward from `cursor` up to `upTo`, grouping
-   * consecutive same-`txid` rows into one `tx` event each. A tx's op
-   * results are inserted with consecutive ids, so a group never
-   * interleaves — though it may span a page boundary.
-   */
-  private async drainResults(upTo: number): Promise<void> {
-    let cursor = this.cursor;
-    let pending: ResultRow[] = [];
-    while (cursor < upTo) {
-      const page = await this.getResults(cursor);
-      if (page.results.length === 0) break;
-      for (const row of page.results) {
-        if (pending.length > 0 && pending[0]!.txid !== row.txid) {
-          this.emitTx(pending);
+      if (
+        response.kind !== "page" ||
+        !Array.isArray(response.receipts) ||
+        typeof response.has_more !== "boolean"
+      )
+        throw this.invalidResponse();
+      const nextToken = this.requireToken(response.next_token);
+      if (
+        response.has_more &&
+        (response.receipts.length === 0 || nextToken === pageToken)
+      )
+        throw this.invalidResponse();
+      for (const entry of response.receipts) {
+        const row = entry.receipt;
+        this.requireToken(entry.resume_token);
+        if (
+          !row ||
+          !Number.isSafeInteger(row.id) ||
+          row.id <= 0 ||
+          (previousId !== undefined && row.id <= previousId)
+        )
+          throw this.invalidResponse();
+        if (pending.length > 0 && pending[0]!.receipt.txid !== row.txid) {
+          this.completeGroup(pending);
           pending = [];
         }
-        pending.push(row);
-        cursor = row.id;
+        pending.push(entry);
+        previousId = row.id;
       }
-      if (!page.pagination.has_more) break;
+      if (!response.has_more) {
+        // An empty continuation still completes a group buffered from its prior page.
+        if (pending.length > 0) this.completeGroup(pending);
+        this.completedToken = nextToken;
+        return;
+      }
+      pageToken = nextToken;
     }
-    if (pending.length > 0) this.emitTx(pending);
-    this.cursor = cursor;
   }
 
   /** Group of same-`txid` result rows → one `tx` ChainEvent. */
-  private emitTx(rows: ResultRow[]): void {
+  private emitTx(rows: ResultInfo[], resumeToken: string): void {
     const last = rows[rows.length - 1]!;
     // Results with no txid (shouldn't occur for contract calls) carry
     // no transaction to surface — skip the group.
     if (last.txid == null) return;
+    const executionHeight = last.execution_height ?? last.height;
+    if (
+      rows.some(
+        (row) => (row.execution_height ?? row.height) !== executionHeight,
+      )
+    ) {
+      // Retry from the last completed transaction. Collapsing duplicate op keys
+      // first would hide receipts from different executions across page reads.
+      throw new TransportError(
+        "Transaction execution changed while reading receipts",
+      );
+    }
+    // One transaction can span pages read on either side of a confirmation or
+    // reorg. Use the final page's metadata consistently for the emitted group.
+    const coordinates = executionCoordinates(last);
     // Collapse each (input_index, op_index) to its highest-`result_index`
     // row — the op's canonical result, mirroring the indexer's
     // `get_op_result`. Drops intermediate sub-results and the implicit
     // gas op (which shares the user op's indices at a lower
     // `result_index`).
-    const canonical = new Map<string, ResultRow>();
+    const canonical = new Map<string, ResultInfo>();
     for (const r of rows) {
       const key = `${r.input_index}:${r.op_index}`;
       const prev = canonical.get(key);
@@ -402,18 +340,19 @@ export class ResultsPoller {
         contract: r.contract,
         inputIndex: r.input_index,
         opIndex: r.op_index,
+        coordinates: { ...coordinates },
       }));
     this.emit({
       kind: "tx",
+      resumeToken,
       id: last.id,
       height: BigInt(last.height),
-      txIndex: last.tx_index ?? 0,
+      txIndex: last.tx_index ?? null,
+      ...coordinates,
       txid: last.txid,
       outcomes,
     });
   }
-
-  // ── fan-out ──────────────────────────────────────────────────────
 
   private emit(event: ChainEvent): void {
     for (const c of this.consumers) {
@@ -434,9 +373,7 @@ export class ResultsPoller {
     }
   }
 
-  // ── HTTP ─────────────────────────────────────────────────────────
-
-  private async fetchResult<T>(path: string): Promise<T> {
+  private async fetchResponse(path: string): Promise<Response> {
     let res: Response;
     try {
       res = await this.opts.fetch(`${this.opts.baseUrl}${path}`);
@@ -446,6 +383,10 @@ export class ResultsPoller {
         details: path,
       });
     }
+    return res;
+  }
+
+  private async readResult<T>(res: Response, path: string): Promise<T> {
     if (!res.ok) {
       throw new TransportError(`indexer poll returned ${res.status}`, {
         details: path,
@@ -455,31 +396,58 @@ export class ResultsPoller {
     return body.result;
   }
 
+  private async fetchResult<T>(path: string): Promise<T> {
+    return this.readResult<T>(await this.fetchResponse(path), path);
+  }
+
+  /** Fresh metadata without starting the event loop. A missing transaction is null. */
+  async transaction(txid: string): Promise<TransactionInfo | null> {
+    const path = `/transactions/${encodeURIComponent(txid)}`;
+    const response = await this.fetchResponse(path);
+    if (response.status === 404) return null;
+    return transactionInfoFromWire(
+      await this.readResult<TransactionInfo>(response, path),
+    );
+  }
+
   private getInfo(): Promise<Info> {
-    // The indexer serves the info endpoint at the API base exactly
-    // (`/api`); `/api/` 404s. So this path is empty, not "/".
     return this.fetchResult<Info>("");
   }
 
   private longPoll(): Promise<Info> {
-    const sig = encodeURIComponent(this.signature);
-    return this.fetchResult<Info>(`?wait=${LONG_POLL_MS}&since=${sig}`);
+    return this.fetchResult<Info>(
+      `?wait=${LONG_POLL_MS}&since=${encodeURIComponent(this.signature)}`,
+    );
   }
 
-  private getBlock(height: number): Promise<BlockRow> {
-    return this.fetchResult<BlockRow>(`/blocks/${height}`);
-  }
-
-  private getResults(cursor: number): Promise<PaginatedResponse<ResultRow>> {
-    const params = new URLSearchParams({
-      cursor: String(cursor),
-      order: "asc",
-      limit: String(DRAIN_PAGE_LIMIT),
-    });
-    const f = this.opts.filter;
-    if (f?.contract) params.set("contract", f.contract);
-    if (f?.func) params.set("func", f.func);
-    if (f?.signerId !== undefined) params.set("signer_id", String(f.signerId));
-    return this.fetchResult<PaginatedResponse<ResultRow>>(`/results?${params}`);
+  private async getStream(
+    params: URLSearchParams,
+  ): Promise<ReceiptStreamResponse> {
+    const filter = this.opts.filter;
+    if (filter?.contract !== undefined) params.set("contract", filter.contract);
+    if (filter?.func !== undefined) params.set("func", filter.func);
+    if (filter?.signerId !== undefined)
+      params.set("signer_id", String(filter.signerId));
+    const path = `/receipt-stream?${params}`;
+    const response = await this.fetchResponse(path);
+    if (response.status === 404)
+      throw new ReceiptStreamError(
+        "unsupported_server",
+        "This node does not support durable receipt streams",
+      );
+    if (response.status === 400 || response.status === 422)
+      throw new ReceiptStreamError(
+        "invalid_request",
+        "The node rejected the receipt resume token or stream options",
+      );
+    const result = await this.readResult<ReceiptStreamResponse>(response, path);
+    if (!result || typeof result !== "object") throw this.invalidResponse();
+    if (result.kind === "reset_required") {
+      throw new ReceiptStreamError(
+        result.reason,
+        "Receipt history requires explicit resynchronization",
+      );
+    }
+    return result;
   }
 }

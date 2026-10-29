@@ -23,6 +23,7 @@
  */
 
 import type { ContractAddress } from "./canonical/ContractAddress.js";
+import type { StreamResetReason } from "./bindings.js";
 
 const SDK_VERSION = "0.3.0";
 const DEFAULT_DOCS_BASE = "https://docs.kontor.network";
@@ -135,12 +136,23 @@ export class ChainError extends BaseError {
   override name = "ChainError";
 }
 
-/**
- * The chain reorged deeper than the SDK's local block-hash cache, so
- * the results poller can't locate the fork point. Surfaced out of
- * `session.events()` — the consumer decides recovery policy (full
- * re-index, or alert); there's nothing the SDK can safely do for them.
- */
+/** @deprecated Durable receipt streams emit ReceiptStreamError for unavailable history. */
 export class DeepReorgError extends BaseError {
   override name = "DeepReorgError";
+}
+
+/** Terminal receipt-stream failure. The consumer chooses an explicit resync policy. */
+export class ReceiptStreamError extends BaseError {
+  override name = "ReceiptStreamError";
+
+  constructor(
+    readonly reason:
+      | StreamResetReason
+      | "invalid_request"
+      | "unsupported_server"
+      | "invalid_response",
+    message: string,
+  ) {
+    super(message);
+  }
 }

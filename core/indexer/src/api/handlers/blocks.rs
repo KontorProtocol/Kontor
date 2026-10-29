@@ -1,8 +1,9 @@
 use axum::extract::{Path, Query, State};
-use indexer_types::{BlockRow, PaginatedResponse, TransactionRow};
+use indexer_types::{BlockRow, PaginatedResponse, TransactionInfo};
+use libsql::TransactionBehavior;
 
 use super::validate_query;
-use crate::api::{Env, error::HttpError, result::Result};
+use crate::api::{Env, confirmation, error::HttpError, result::Result};
 use crate::database::queries::{
     get_blocks_paginated, get_transactions_paginated, select_block_by_height_or_hash,
     select_block_latest,
@@ -41,14 +42,19 @@ pub async fn get_block_transactions(
     Path(identifier): Path<String>,
     Query(mut query): Query<TransactionQuery>,
     State(env): State<Env>,
-) -> Result<PaginatedResponse<TransactionRow>> {
+) -> Result<PaginatedResponse<TransactionInfo>> {
     validate_query(query.cursor, query.offset)?;
     let conn = env.reader.connection().await?;
-    let block = select_block_by_height_or_hash(&conn, &identifier)
+    let snapshot = conn
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .await?;
+    let block = select_block_by_height_or_hash(&snapshot, &identifier)
         .await?
         .ok_or_else(|| HttpError::NotFound(format!("block at height or hash: {}", identifier)))?;
     query.height = Some(block.height);
-    let (results, pagination) = get_transactions_paginated(&conn, query).await?;
+    let (rows, pagination) = get_transactions_paginated(&snapshot, query).await?;
+    let results = confirmation::transactions(&snapshot, rows).await?;
+    snapshot.commit().await?;
     Ok(PaginatedResponse {
         results,
         pagination,
