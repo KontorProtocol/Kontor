@@ -109,15 +109,14 @@ export default defineConfig({
             "src/backend/component-stub.native.ts",
           ],
           rollupTypes: false,
-          // vite-plugin-dts emits per-file declarations under `dist/src/`
-          // (mirroring the source tree); the runtime JS is bundled at the
-          // `dist/` root. So package.json's `types` paths point into
-          // `dist/src/**`, while `import` paths point at `dist/*.js`.
           entryRoot: "src",
         }),
         {
           name: "copy-component",
           closeBundle() {
+            // The declaration plugin does not emit existing .d.ts inputs.
+            // Public declarations import these generated API wire types.
+            copyFileSync("src/bindings.d.ts", "dist/bindings.d.ts");
             // Copy the entire jco-emitted component bundle:
             // - .core.wasm: the Rust→WASM binary, loaded at runtime via
             //   `new URL('./kontor-sdk.core.wasm', import.meta.url)`

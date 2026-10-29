@@ -1,5 +1,10 @@
 extern crate alloc;
 
+mod confirmation;
+pub use confirmation::{InspectedOp, ResultInfo, TransactionInfo};
+mod receipt_stream;
+pub use receipt_stream::{ReceiptStreamResponse, StreamReceipt, StreamResetReason};
+
 use anyhow::Result;
 use bitcoin::hex::DisplayHex;
 use bitcoin::{BlockHash, ScriptBuf, Txid, XOnlyPublicKey, taproot::LeafVersion};
@@ -692,6 +697,7 @@ pub struct TransactionRow {
     pub height: u64,
     #[ts(type = "number | null")]
     pub confirmed_height: Option<u64>,
+    /// @deprecated Legacy filtered ordinal; use confirmed_bitcoin_tx_index for Bitcoin position.
     pub tx_index: Option<u32>,
     #[ts(type = "number | null")]
     pub batch_height: Option<u64>,
@@ -782,10 +788,10 @@ pub struct Info {
     /// draining `/api/results`. 0 when no results exist yet.
     #[ts(type = "number")]
     pub last_result_id: u64,
-    /// The last 10 indexed blocks, height-descending. The SDK compares
-    /// these against its local block-hash cache for reorg detection.
+    /// The last 10 indexed blocks, height-descending. Durable receipt recovery
+    /// uses the rollback journal rather than inferring it from this window.
     pub recent_blocks: Vec<RecentBlock>,
-    /// Hash of `last_result_id` + `recent_blocks`. Pass back as
+    /// Opaque token including the receipt lineage and rollback generation. Pass back as
     /// `?since=` to the long-poll endpoint; the request blocks until
     /// this value changes.
     pub signature: String,
@@ -945,6 +951,7 @@ pub struct ResultRow {
     pub id: u64,
     #[ts(type = "number")]
     pub height: u64,
+    /// @deprecated Legacy filtered ordinal; use confirmed_bitcoin_tx_index for Bitcoin position.
     pub tx_index: Option<u32>,
     pub input_index: Option<u32>,
     pub op_index: Option<u32>,

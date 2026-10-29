@@ -44,6 +44,7 @@ import type {
   AggregateInfo,
   AggregateSigner,
   FootprintResponse,
+  TransactionInfo,
   Inst as WireInst,
 } from "./bindings.js";
 import { blsAggregateSignatures } from "./backend/index.js";
@@ -107,10 +108,10 @@ export interface KontorSessionOptions {
    */
   defaultGasLimit?: bigint;
   /**
-   * Results-poller configuration. The poller starts in the constructor
-   * — it follows the chain for `events()` / `wait()` and doubles as a
-   * connectivity check (see `ready()`). `from` resumes a persisted
-   * cursor; `filter` narrows the stream. Omit for "follow from the tip".
+   * Results-poller configuration. The poller starts lazily and follows
+   * the chain for `events()` / `wait()`. It also provides a
+   * connectivity check (see `ready()`). `from` resumes an opaque token;
+   * `start: "origin"` reads history. Omit both to follow from the tip.
    */
   events?: EventsOptions;
   /**
@@ -195,6 +196,7 @@ export class KontorSession {
       baseUrl: opts.chain.urls.http,
       fetch: opts.fetch ?? globalThis.fetch.bind(globalThis),
       from: opts.events?.from,
+      start: opts.events?.start,
       filter: opts.events?.filter,
     });
   }
@@ -471,15 +473,19 @@ export class KontorSession {
    * Follow chain events — the indexer-following API. Returns a fresh
    * async iterator over `ChainEvent`s (tx outcomes + reorg signals),
    * attached to the session's already-running poller. Multiple
-   * iterators share that one loop.
+   * iterators share that one loop. A later iterator joins at its current
+   * completed progress and receives subsequent emitted events, without replay
+   * of earlier events. Use a separate session for an independent resume token.
    *
    *     for await (const event of session.events()) {
-   *       if (event.kind === "reorg") {
-   *         await store.revertAbove(event.forkHeight);
-   *       } else {
-   *         await store.apply(event);
-   *         await store.checkpoint(event.id);
-   *       }
+   *       await store.transaction(async (tx) => {
+   *         if (event.kind === "reorg") {
+   *           await tx.revertAbove(event.forkHeight);
+   *         } else {
+   *           await tx.apply(event);
+   *         }
+   *         await tx.checkpoint(event.resumeToken);
+   *       });
    *     }
    *
    * The poller's resume cursor + filter are set once, at construction,
@@ -491,9 +497,21 @@ export class KontorSession {
   }
 
   /**
+   * Current execution and confirmation metadata. Execution events are snapshots:
+   * later confirmation does not emit another execution event. Re-fetch this data
+   * to track confirmation, and after reorg signals invalidate cached coordinates.
+   * Returns null if the transaction is not indexed or its execution was reverted.
+   * This lookup does not start the event loop. Wire heights are numbers.
+   */
+  transaction(txid: string): Promise<TransactionInfo | null> {
+    return this.poller.transaction(txid);
+  }
+
+  /**
    * Resolves once the session's poller has reached the indexer — a
    * connectivity / config check. Rejects if the node is unreachable
-   * after the poller's bootstrap retries.
+   * after the poller's bootstrap retries. Receipt draining waits for an
+   * event iterator, so calling ready() first preserves recovery and history.
    */
   ready(): Promise<void> {
     this.poller.start(); // idempotent — lazy-starts the loop on first use

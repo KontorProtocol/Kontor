@@ -1,3 +1,6 @@
+mod confirmation;
+pub use confirmation::signed_confirmation_call;
+
 use anyhow::{Result, anyhow};
 
 use bitcoin::hashes::Hash;

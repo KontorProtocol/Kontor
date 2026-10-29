@@ -1,8 +1,9 @@
 use anyhow::{Result, anyhow};
 use indexer_types::{
     CheckpointRow, CommitOutputs, ComposeOutputs, ContractProvenanceResponse, ContractResponse,
-    ErrorResponse, FootprintResponse, Info, OpWithResult, ResultResponse, ResultRow, Reveal,
-    RevealOutputs, SignerResponse, TransactionHex, TransactionRow, ViewExpr, ViewResult,
+    ErrorResponse, FootprintResponse, Info, OpWithResult, ResultInfo, ResultResponse, ResultRow,
+    Reveal, RevealOutputs, SignerResponse, TransactionHex, TransactionInfo, TransactionRow,
+    ViewExpr, ViewResult,
 };
 use reqwest::{Client as HttpClient, ClientBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -202,9 +203,32 @@ impl Client {
         .await
     }
 
+    pub async fn result_info(&self, id: &OpResultId) -> Result<Option<ResultInfo>> {
+        Self::handle_response(
+            self.client
+                .get(format!("{}/results/{}", self.url, id))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
     /// Fetch an indexed transaction by txid. `None` when the indexer has
     /// not processed it yet (the endpoint 404s).
     pub async fn transaction(&self, txid: &str) -> Result<Option<TransactionRow>> {
+        let res = self
+            .client
+            .get(format!("{}/transactions/{}", self.url, txid))
+            .send()
+            .await?;
+        if res.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Self::handle_response(res).await.map(Some)
+    }
+
+    /// Current metadata, including nullable Bitcoin confirmation coordinates.
+    pub async fn transaction_info(&self, txid: &str) -> Result<Option<TransactionInfo>> {
         let res = self
             .client
             .get(format!("{}/transactions/{}", self.url, txid))

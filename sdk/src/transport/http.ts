@@ -47,6 +47,7 @@ import type {
   ContractProvenanceResponse,
   ErrorResponse,
   FootprintResponse,
+  InspectedOp,
   OpWithResult,
   ResultResponse,
   Reveal,
@@ -54,6 +55,7 @@ import type {
   ViewExpr,
   ViewResult,
 } from "../bindings.js";
+import { executionCoordinates } from "../confirmation.js";
 import {
   type ProvenanceEntry,
   provenanceEntryFromWire,
@@ -542,7 +544,7 @@ export class HttpTransport implements KontorTransport {
     try {
       const reveal = await this.buildSimpleReveal(insts, taken);
       const { revealTx } = await this.composeAndSign(reveal);
-      const ops = await this.postJson<OpWithResult[]>("/transactions/inspect", {
+      const ops = await this.postJson<InspectedOp[]>("/transactions/inspect", {
         hex: hex.encode(revealTx.extract()),
       });
       return ops.map(opWithResultToRaw);
@@ -580,7 +582,7 @@ export class HttpTransport implements KontorTransport {
  * materialize), a materialized + executed op (simulate — carries a
  * result row), and a materialized-only op (inspect — parsed, not run).
  */
-function opWithResultToRaw(o: OpWithResult): OpResultRaw {
+function opWithResultToRaw(o: OpWithResult | InspectedOp): OpResultRaw {
   if (o.kind === "Rejected") {
     return {
       status: "Other",
@@ -595,6 +597,9 @@ function opWithResultToRaw(o: OpWithResult): OpResultRaw {
   const r = o.result;
   if (r != null) {
     return {
+      ...("execution_height" in r
+        ? { coordinates: executionCoordinates(r) }
+        : {}),
       status: r.status,
       gas: BigInt(r.gas),
       value: r.value ?? undefined,

@@ -7,41 +7,44 @@
  * Two event kinds:
  *
  *   - `tx`     — a transaction was processed; carries its per-Inst
- *                outcomes. The `id` is the cursor — persist it and
- *                pass it back as `EventsOptions.from` to resume.
+ *                outcomes. Persist its opaque `resumeToken` atomically with
+ *                derived effects and pass it as `EventsOptions.from`.
  *   - `reorg`  — a chain reorg was detected. Everything strictly above
  *                `forkHeight` is invalidated; the consumer must revert
  *                derived state for those heights, then continues from
  *                the post-reorg events that follow.
  *
- * `reorg` events are synthesized client-side by the poller (it detects
- * the fork by comparing the indexer's recent block hashes against its
- * local cache). There is no server-side reorg record — the signal is
- * canonical-chain state differing from what the SDK last saw.
+ * `reorg` events come from the node's durable rollback journal, including
+ * finality replay with unchanged Bitcoin hashes. Persist the recovery token
+ * atomically with the corresponding retraction of derived effects.
  */
 
 import type { OpResultRaw } from "./json-codec.js";
+import type { ExecutionCoordinates } from "./confirmation.js";
 
 export type ChainEvent =
-  | {
+  | (ExecutionCoordinates & {
       kind: "tx";
       /**
        * Cursor id for this event — the underlying `contract_results`
-       * row id. Monotonic. Persist it; pass as `EventsOptions.from`
-       * to resume the stream after this event.
+       * row id. It can be reused after rollback and is not a resume token.
        */
       id: number;
+      resumeToken: string;
+      /** @deprecated Alias of executionHeight, not Bitcoin confirmation height. */
       height: bigint;
-      txIndex: number;
+      /** @deprecated Legacy filtered ordinal; use confirmedBitcoinTxIndex. */
+      txIndex: number | null;
       txid: string;
       /** Per-Inst outcomes, raw (WAVE-encoded values + telemetry). */
       outcomes: OpResultRaw[];
-    }
+    })
   | {
       kind: "reorg";
+      resumeToken: string;
       /**
-       * Common-ancestor height. Heights strictly greater than this
-       * have been rolled back — the consumer reverts derived state
+       * Surviving execution height. Heights strictly greater than this
+       * have been rolled back; the consumer reverts derived state
        * for those heights before processing subsequent events.
        */
       forkHeight: bigint;
@@ -58,10 +61,12 @@ export interface EventsFilter {
 
 export interface EventsOptions {
   /**
-   * Resume the stream after this cursor id (a prior `tx` event's
-   * `id`). Omit to start from the current chain tip.
+   * Resume after an observed tx or reorg event's opaque token, on the same
+   * node and with the same filter. Numeric-only cursors require resynchronization.
    */
-  from?: number;
+  from?: string;
+  /** Start a new stream at origin or the current tip (default); excludes from. */
+  start?: "origin" | "tip";
   /** Server-side filter — narrows what the poller fetches. */
   filter?: EventsFilter;
 }

@@ -8,6 +8,7 @@ use tracing::{debug, info, warn};
 
 use crate::block;
 use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
+use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
     insert_block_execution_usage, insert_transaction, select_block_at_height, select_block_latest,
@@ -195,6 +196,14 @@ impl<E: Executor> Reactor<E> {
                 confirm_transaction(&self.db_conn(), &t.txid.to_string(), block.height, i as u32)
                     .await
                     .context("confirm_transaction failed")?;
+                set_confirmation_position(
+                    &self.db_conn(),
+                    &t.txid.to_string(),
+                    block.height,
+                    t.index,
+                )
+                .await
+                .context("set_confirmation_position failed")?;
                 failures.push(Vec::new());
                 continue;
             }
@@ -223,6 +232,9 @@ impl<E: Executor> Reactor<E> {
                 .await
                 .context("execute_transaction failed")?;
             failures.push(tx_failures);
+            set_confirmation_position(&self.db_conn(), &t.txid.to_string(), block.height, t.index)
+                .await
+                .context("set_confirmation_position failed")?;
         }
 
         Ok((unbatched_count, executed_ops, failures))

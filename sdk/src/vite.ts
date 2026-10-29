@@ -28,7 +28,7 @@
 import type { Plugin } from "vite";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import { generate } from "./codegen";
+import { generate } from "./codegen.js";
 
 export interface KontorPluginOptions {
   /** Path(s) to WIT files. Resolved relative to Vite's root. */

@@ -10,6 +10,34 @@ import { KontorSession, Identity, signet } from "@kontor/sdk";
 const XONLY =
   "8c7fc6552af4384a13791e63bac79ff2bcfeedf143a88d6dc4b6080a8829cdc1";
 
+test("transaction metadata lookup does not start background polling", async () => {
+  const requests: string[] = [];
+  const session = new KontorSession({
+    chain: signet,
+    identity: Identity.fromXOnly(XONLY, signet),
+    fetch: (async (url: RequestInfo | URL) => {
+      requests.push(String(url));
+      return new Response(
+        JSON.stringify({
+          result: {
+            id: 1,
+            txid: "aa",
+            height: 1,
+            execution_height: 1,
+            tx_index: 0,
+            confirmed_height: 2,
+            confirmed_bitcoin_tx_index: 4,
+            batch_height: 9,
+          },
+        }),
+      );
+    }) as typeof fetch,
+  });
+  expect((await session.transaction("aa"))?.confirmed_bitcoin_tx_index).toBe(4);
+  expect(requests).toEqual([`${signet.urls.http}/transactions/aa`]);
+  session.close();
+});
+
 test("read-only session: identity-only, no signer, no side effects", () => {
   const identity = Identity.fromXOnly(XONLY, signet);
   const session = new KontorSession({ chain: signet, identity });
