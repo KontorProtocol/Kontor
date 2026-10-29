@@ -164,7 +164,7 @@
     },
     "composition_tests": {
       "path": "tools/native-stack/test_resource_boundary_composition.py",
-      "sha256": "ea2ce762a1c14fff6c2cd7e7fb983c2186c9e4b3e61aca4cc98473bcc487bc10"
+      "sha256": "a2f9bbccfe5d9f95a34230694987ed6f79f718939c41d8be3317790fb3ddd531"
     },
     "depths": {
       "path": "tools/native-stack/resource-boundary-depths-v1.json",

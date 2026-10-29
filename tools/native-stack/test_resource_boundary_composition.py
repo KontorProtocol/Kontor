@@ -695,20 +695,21 @@ class BoundaryCompositionTests(unittest.TestCase):
                 self.assertEqual(len(signatures), len(calibration_depths()))
                 self.assertEqual(counts["compiler_entry"], 1)
 
-    def test_core_residue_rejected_after_repairing_all_evidence_hashes(self):
+    def test_core_deposit_mutants_rejected_after_repairing_all_evidence_hashes(self):
         manifest = build_boundary_manifest()
         manifest_sha = sha256(MANIFEST)
         component_sha = sha256(ROOT / "test-contracts/binaries/stack_probe.wasm.br")
         case_id = "pulley_plain_core"
-        for depth, retained_gas in ((0, 3), (1, 1)):
-            with self.subTest(depth=depth), tempfile.TemporaryDirectory() as temporary:
+        mutations = ((0, 3), (1, 1), (1, 2), (2, 0))
+        for depth, altered_gas in mutations:
+            with self.subTest(depth=depth, gas=altered_gas), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
 
-                def retain_core_deposit(case, index, value):
+                def alter_core_deposit(case, index, value):
                     if case == case_id and value["depth"] == depth:
-                        value["live_deposit_gas"]["after"] = retained_gas
+                        value["live_deposit_gas"]["after"] = altered_gas
                         value["balance_transitions"]["floor_after"] = (
-                            f"{retained_gas}E-9")
+                            f"{altered_gas}E-9")
 
                 bundle = {"phase": "discovery", "cell": "Linux-ARM64/dev",
                           "source_sha": SOURCE_SHA,
@@ -719,9 +720,12 @@ class BoundaryCompositionTests(unittest.TestCase):
                 # make_run rebuilds both observation digests and the raw log hash.
                 run = make_run(directory, case_id, 100,
                                bundle["binary_path"], bundle["binary_sha256"],
-                               manifest_sha, component_sha, retain_core_deposit)
+                               manifest_sha, component_sha, alter_core_deposit)
+                message = ("Core storage collateral changed outside a successful owner transfer"
+                           if depth == 2 else
+                           "successful Core fixture write retained depositor gas")
                 with self.assertRaisesRegex(
-                        ValueError, "successful Core fixture write retained depositor gas"):
+                        ValueError, message):
                     validate_run(run, bundle, manifest, directory)
 
     def test_full_pilot_discovery_composition_and_semantic_mutants(self):
