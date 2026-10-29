@@ -959,3 +959,90 @@ All five input hashes were verified; the six-file bundle totals 3,135,547 bytes.
 Clippy reported the same six inherited S2 findings, with no configured-workload
 finding. No suppression was added. The fixes remain assigned to native-branch
 integration. All parent build and runtime processes are terminal.
+
+## Mixed simulation inputs and explicit cache setup
+
+Final source `42a5a39ca6f628898695364d5b8a160c1049c5a8` adds optional
+`mixed.simulation_operations` (zero, two or four, default zero). It partitions
+the entire mixed operation sequence into signed simulation requests, checks the
+commit/reveal pair with Bitcoin's mempool admission before any canonical spend,
+and leaves those alternatives unbroadcast. Each request spends the same confirmed
+funding alternative. Decoded public keys and instructions, including gas limits,
+must match the flattened canonical two-operation reveals exactly.
+
+Each request runs twice from the same baseline before canonical execution. After
+every call, the complete logical database must remain unchanged, including usage,
+fees and receipts; storage height, simulation flag and reactor tip must be restored.
+The checks cover receipt positions, gas bounds, expected statuses, returned
+contract-error values and repeatability of the complete result. These checks do
+not assert equivalence with cumulative canonical return values, since each
+simulation rolls back before the next request. They also do not cover cancellation
+or infrastructure errors, or every mutable runtime context field.
+
+Saved fixtures optionally include a hash-bound `simulations.json`. Its presence
+must agree with the configuration, and loading validates the exact inventory,
+payload checksum and flattened signer/operation sequence before starting Bitcoin.
+Fresh-process replay executes the same requests before the canonical batches or
+block and compares the complete expected state on two independent restores.
+
+`mixed.warm_simulation_cache` is separately explicit, defaults to false, and is
+invalid without simulation requests. When enabled, the harness compiles every
+existing baseline contract through production `load_component` outside simulation,
+checks every entry is admitted, and verifies the database is unchanged. The run
+records all warmed IDs. This also warms the subsequent canonical batches and block.
+It does not change production cache guards or cache speculative publication IDs.
+
+An initial source75eb run failed its new error-detail assertion after 121.84s.
+The assertion incorrectly treated a returned WIT error (`ContractErr`) as an
+execution error. Sourceccfc corrected it to require no separate `error_message`
+and the known returned `err(message("deliberate failure after write"))` value.
+The initial failed log and result record are retained.
+
+The unprewarmed ccfc diagnostic was intentionally stopped after 539.56s, not
+reported as passing. A debugger sample showed Pulley compilation in regalloc2;
+source inspection confirmed that simulation deliberately prevents component-cache
+writes, so uncached contracts compile repeatedly. Perf was unavailable, and a
+full-debug-info debugger attempt crashed before a minimal-symbol attempt succeeded;
+target detachment was verified. Observer intervention and incomplete execution
+exclude this run from performance qualification. The operational compilation and
+reactor-occupancy finding is tracked separately in the execution ledger. A future
+cache change must preserve immutable code/protocol/engine identity because contract
+row IDs can be reused after simulated publication rollback.
+
+The final warm-cache correctness cases retain four validators, two replacements,
+two agreements, three members, 50 canonical reveals, 64 live keys, 150 historical
+rows and five paid files. The two-operation simulation case precedes 20-operation
+batches and confirmation; the four-operation case precedes fresh block execution.
+These remain development correctness diagnostics. Cold-component qualification,
+full populations, timed arrivals, eight competing views, enforced memory profiles
+and S1/S2 comparisons remain open. Saved `service_ns` covers only block application
+through pruning, excluding earlier simulations and batches.
+
+Final-source build passed in 40.46s and the configuration unit passed. All six
+runtime cases passed: two-operation generation (122.21s), its saved replay
+(81.28s), four-operation generation (117.62s), its saved replay (76.82s), disabled
+simulation generation (88.74s), and legacy-format saved replay (47.84s). Each
+saved replay used two independent restores. Two-operation fixtures contain 50
+simulation requests; four-operation fixtures contain 25. Each restore executes
+each request twice. Both enabled cases explicitly warmed all 12 baseline IDs.
+
+The legacy-format check deliberately removed both new optional configuration
+fields from the disabled fixture before fresh-process replay. Its original
+manifest SHA256 was `243af2cbb76ce37702dbba0f01474e8a7db980e22abfb743c3779dc35d8b47cf`;
+the replayed manifest SHA256 is
+`c30d033c369ca52cd40a5ca3bc3ac2994c9ac4cc99b0772654aec61318a4ff40`.
+The remaining input bytes and six-file inventory were retained. This is a
+same-source legacy-shape compatibility test, not a cross-version replay test.
+
+Ten actual-binary negative controls passed: missing and extra files, disabled
+configuration with payload, enabled configuration without its digest, payload
+checksum mismatch, symlink escape, unsupported width, empty requests, reordered
+operation mix, and missing request. All original fixture files were unchanged.
+The record `configured-simulations-validation.json` preserves the commands,
+source/binary identities, per-run logs and checksums, and both earlier failed or
+stopped attempts. These durations are whole-test diagnostics, not API latency.
+
+Clippy exited 101 with exactly the six inherited S2 findings in sequential_tests,
+native_stack/sweep, native_stack_resource and invocation. No new finding concerns
+the simulation changes. They remain assigned to the native Stage1 integration;
+no warning suppression was introduced and this is not a green-merge claim.
