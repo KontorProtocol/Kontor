@@ -1046,3 +1046,79 @@ Clippy exited 101 with exactly the six inherited S2 findings in sequential_tests
 native_stack/sweep, native_stack_resource and invocation. No new finding concerns
 the simulation changes. They remain assigned to the native Stage1 integration;
 no warning suppression was introduced and this is not a green-merge claim.
+
+## Eight competing pooled views
+
+Source `1edd1dc94f38a5d9a7b8265d22c34ed2e85bbd8d` adds optional
+`mixed.view_concurrency`, accepting zero (default) or eight. Generation and saved
+replay use the same wrapper around simulation checks, batches, block application
+and pruning. Production runtime code is unchanged.
+
+Eight separately spawned closed-loop clients use production `pool::Manager` and
+unsigned `Runtime.execute(None, None, ...)` with the production view gas cap.
+The fixture overrides pool size to eight instead of available parallelism. Its
+Tokio runtime still has two worker threads; no CPU or memory quota is enforced.
+The current source does not configure a fuel-async-yield interval. Those settings
+are reported explicitly rather than treated as production performance equivalence.
+
+All fallible pool setup, connection checks and cache warming precede the startup
+barrier. Warmup performs checked pagination and counter reads through the separate
+view-pool cache; database projections must match the baseline before and afterward.
+Each worker reads bounded immutable pages and a counter changed by canonical work,
+releasing and reacquiring the pooled runtime between calls. Historical pagination
+contracts use height zero; fixtures without history use the anchor height.
+
+Every client must complete a page call within the combined writer interval and
+more than one page execution must overlap. This measures in-flight calls, not
+simultaneous CPU execution or overlap with every subphase. Counter observations
+must not decrease, and a final reacquired view after successful writer completion
+must equal the committed expected value. These checks establish eventual
+freshness, not visibility of every intervening commit. The field
+`last_counter_during_work` is the last loop observation and may finish during drain.
+
+Writer errors and unwinding panics set the stop flag; every worker handle is
+joined before returning an error. Calls already in progress finish without abort.
+Final-value checks apply only after successful writer completion. This cleanup
+was inspected statically; no fault-injection evidence is claimed here. Existing
+canonical full-projection, accounting and snapshot checks remain in place.
+
+This is a bounded warm correctness diagnostic, not
+HTTP scheduling, open-loop load, cold compilation, enforced-resource performance
+or full S2 qualification.
+
+The committed build passed in 28.18s and the selected configuration test passed.
+An earlier uncommitted compile failed generic pool inference; explicitly typing
+`Pool<Manager>` corrected it, and that preliminary build passed in 39.48s.
+The initial short `--exact` unit selector ran zero tests and is not counted.
+
+All six actual-binary runtime cases passed: history plus two-operation simulations
+and 20-operation batches (173.24s), saved history replay (121.98s), no-history fresh
+block (105.28s), saved fresh replay (65.42s), disabled views (88.81s), and legacy
+format replay (48.31s). Every case ran two independent restores. Both enabled
+fixtures use 50 canonical reveals, 257 live keys and 5 paid files; the history fixture
+adds 150 historical rows. Across the eight enabled restore intervals, all eight
+clients completed page calls during the writer interval and peak in-flight page
+calls was 8. Per-client completions ranged 54–247. Writer intervals were 18.29–52.70s,
+including their checks and projection overhead. These are diagnostic durations,
+not production throughput or API latency.
+
+The legacy replay deliberately removed only `view_concurrency:0` from the disabled
+manifest. Its original SHA256 was
+`889eea0656af97c8b3e4a148cba7bfc5ea14235e830550953a684d7937a77341`,
+and replay used
+`028cd47bbe3a6142447567694c8c0fbf958c34ed1c7549c33fe5465f396050df`.
+All five inputs retained their hashes. Disabled and legacy runs emitted no
+competing-view trace. This verifies the defaulted field on the same build.
+
+The source review also traced scheduling through pinned deadpool 0.13.1 and
+Tokio 1.53.3. Repeated pool semaphore acquisition and spawned guest-task joins
+consume Tokio cooperative budget, so this loop does not indefinitely bypass
+cooperative yielding merely because local SQLite awaits complete immediately.
+No explicit per-iteration yield policy was added. External cancellation of the
+whole adapter remains outside its writer-error draining guarantee.
+
+Clippy 69568 exited 101 with the same six inherited S2 findings in sequential_tests,
+native_stack/sweep, native_stack_resource and invocation. It reported no new
+finding in this adapter. No suppression was introduced; native Stage1 integration
+still owns those fixes. Record `competing-views-validation.json` retains exact
+commands, source/binary identities, logs and hashes, and the initial compile failure.
