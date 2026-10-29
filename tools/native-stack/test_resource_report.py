@@ -372,6 +372,20 @@ def synthetic_report(directory):
 
 
 class ResourceReportControls(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        depths = Path(temporary.name) / "leaf-depths.json"
+        depths.write_text(json.dumps({
+            "discovery_capture_sha256": "1" * 64,
+            "cases": {"deepest_frame_host_call": {
+                "last_success": 10, "first_failure": 11,
+            }},
+        }))
+        patcher = patch.object(resource_evidence, "BOUNDARY_DEPTHS", depths)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_guard_control_transcript_mutations(self):
         for mutation, expected in (
                 ("missing_child", "lacks exact two children and terminal"),
