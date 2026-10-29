@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -21,9 +22,10 @@ from test_resource_report import guard_control
 SOURCE_SHA = "1" * 40
 
 
-def capacity(category, number, base, pid):
+def capacity(category, number, base, pid, configuration):
     guard = 4096 if category == "tokio_worker" else 0
-    mapped = 2097152
+    mapped = (1048576 if configuration == "reduced"
+              and category == "tokio_worker" else 2097152)
     start = base + guard
     return {
         "thread_category": category,
@@ -32,7 +34,8 @@ def capacity(category, number, base, pid):
         "os_thread_id": number,
         "identity_api": "linux_gettid",
         "page_size_bytes": 4096,
-        "requested_bytes": None,
+        "requested_bytes": (1048576 if configuration == "reduced"
+                            and category == "tokio_worker" else None),
         "mapped_bytes": mapped,
         "guard_bytes": guard,
         "guard_start": base if guard else 0,
@@ -67,7 +70,8 @@ def teardown_events(mode):
     return events
 
 
-def observation(case_id, index, depth, component_sha, mutations=None):
+def observation(case_id, index, depth, component_sha, mutations=None,
+                role=DISCOVERY_ROLE, configuration="production"):
     leaf = case_id == "deepest_frame_host_call"
     wide = "_wide_" in case_id
     mode = "paid" if leaf else case_id.rsplit("_", 1)[1]
@@ -84,8 +88,8 @@ def observation(case_id, index, depth, component_sha, mutations=None):
         "floor_restored": "1",
     }
     result = {
-        "role": DISCOVERY_ROLE, "sample_index": index,
-        "sample_id": f"{DISCOVERY_ROLE}:{case_id}:{index:04}",
+        "role": role, "sample_index": index,
+        "sample_id": f"{role}:{case_id}:{index:04}",
         "cache_mode": "warm_compiled_cache", "call_hook_installed": False,
         "fixture_contracts": 1,
         "kind": "paid_leaf_host" if leaf else (
@@ -105,11 +109,13 @@ def observation(case_id, index, depth, component_sha, mutations=None):
         "view_gas_limit": 100000, "view_fuel_limit": 100000000,
         "system_fuel_ceiling": 9223372036854775807,
         "gas_to_fuel_multiplier": 1000, "max_wasm_stack": 524288,
-        "async_stack_size": 2097152,
+        "async_stack_size": 1048576 if configuration == "reduced" else 2097152,
         "engine_target": "pulley64-unknown-unknown-elf",
         "component_sha256": component_sha,
         "target_os": "linux", "target_arch": "aarch64",
-        "teardown_events": teardown_events(mode), "teardown_probe_on": True,
+        "teardown_events": (teardown_events(mode)
+                            if role != "probe_off_control" else None),
+        "teardown_probe_on": role != "probe_off_control",
         "error_class": None if outcome == "ok" else "deterministic",
         "typed_trap": None if outcome == "ok" else "StackOverflow",
         "host_io_suspended": leaf and outcome == "ok",
@@ -154,9 +160,21 @@ def trace_event(name, number=1, category="tokio_worker"):
 
 def make_run(directory, case_id, pid, binary_path, binary_sha,
              manifest_sha, component_sha, mutations=None,
-             source_sha=SOURCE_SHA, trace_mutation=None):
-    name = run_name(case_id, DISCOVERY_ROLE, "production")
-    depths = calibration_depths()
+             source_sha=SOURCE_SHA, trace_mutation=None,
+             role=DISCOVERY_ROLE, configuration="production"):
+    name = run_name(case_id, role, configuration)
+    if role == DISCOVERY_ROLE:
+        samples = [("calibration", depth, index)
+                   for index, depth in enumerate(calibration_depths())]
+    elif case_id == "deepest_frame_host_call":
+        samples = [("target", 1, index) for index in range(2)]
+    else:
+        samples = [("last_success", 1, 0),
+                   ("first_failure", 2, 0),
+                   ("first_failure", 2, 1),
+                   ("last_success", 1, 1),
+                   ("last_success", 1, 2),
+                   ("first_failure", 2, 2)]
     attempts = []
     timings = []
     events = [trace_event("fixture_preparation_entry"),
@@ -166,16 +184,18 @@ def make_run(directory, case_id, pid, binary_path, binary_sha,
               trace_event("blocking_decode_exit", 3, "blocking_pool"),
               trace_event("publication_exit"),
               trace_event("fixture_preparation_exit")]
-    for index, depth in enumerate(depths):
-        observed = observation(case_id, index, depth, component_sha, mutations)
+    for index, (sample_key, depth, repeat_index) in enumerate(samples):
+        observed = observation(case_id, index, depth, component_sha,
+                               mutations, role, configuration)
         attempts.append({
-            "case_id": case_id, "process_role": DISCOVERY_ROLE,
-            "configuration": "production", "probe_on": True, "pid": pid,
-            "sample_key": "calibration", "repeat_index": index,
+            "case_id": case_id, "process_role": role,
+            "configuration": configuration,
+            "probe_on": role != "probe_off_control", "pid": pid,
+            "sample_key": sample_key, "repeat_index": repeat_index,
             "depth": depth, "complete": True, "observation": observed,
         })
         timings.append({
-            "role": DISCOVERY_ROLE, "kind": observed["kind"],
+            "role": role, "kind": observed["kind"],
             "sample_index": index, "setup_ms": 1, "funding_ms": 1,
             "publication_ms": 1, "execution_ms": 1, "postcall_ms": 1,
             "total_sample_ms": 1,
@@ -194,35 +214,39 @@ def make_run(directory, case_id, pid, binary_path, binary_sha,
             "boundary_attempt_end",
         ))
     runtime = {
-        "scope": "paired_pulley_boundary_worker", "configuration": "production",
-        "case_id": case_id, "process_role": DISCOVERY_ROLE, "pid": pid,
+        "scope": "paired_pulley_boundary_worker",
+        "configuration": configuration,
+        "case_id": case_id, "process_role": role, "pid": pid,
         "flavor": "multi_thread", "worker_count": 2,
-        "worker_requested_bytes": None,
+        "worker_requested_bytes": 1048576 if configuration == "reduced" else None,
         "thread_observations": [
-            capacity("tokio_worker", 1, 0x1000000, pid),
-            capacity("tokio_worker", 2, 0x2000000, pid),
-            capacity("blocking_pool", 3, 0x3000000, pid),
-            capacity("block_on_caller", 4, 0x4000000, pid),
+            capacity("tokio_worker", 1, 0x1000000, pid, configuration),
+            capacity("tokio_worker", 2, 0x2000000, pid, configuration),
+            capacity("blocking_pool", 3, 0x3000000, pid, configuration),
+            capacity("block_on_caller", 4, 0x4000000, pid, configuration),
         ],
         "blocking_pool_observed": True, "block_on_caller_observed": True,
         "embedded_source_sha": source_sha, "binary_sha256": binary_sha,
     }
-    trace = {"scope": runtime["scope"], "configuration": "production",
-             "case_id": case_id, "process_role": DISCOVERY_ROLE,
+    trace = {"scope": runtime["scope"], "configuration": configuration,
+             "case_id": case_id, "process_role": role,
              "events": events}
     if trace_mutation is not None:
         trace_mutation(case_id, trace["events"])
     summary = {
-        "case_id": case_id, "process_role": DISCOVERY_ROLE,
-        "configuration": "production", "probe_on": True, "pid": pid,
-        "discovery": True, "last_success": 1, "first_failure": 2,
+        "case_id": case_id, "process_role": role,
+        "configuration": configuration,
+        "probe_on": role != "probe_off_control", "pid": pid,
+        "discovery": role == DISCOVERY_ROLE,
+        "last_success": 1, "first_failure": 2,
         "attempt_count": len(attempts), "component_sha256": component_sha,
         "engine_target": "pulley64-unknown-unknown-elf",
-        "max_wasm_stack": 524288, "async_stack_size": 2097152,
+        "max_wasm_stack": 524288,
+        "async_stack_size": 1048576 if configuration == "reduced" else 2097152,
         "cache_mode": "warm_compiled_cache", "complete": True,
     }
-    terminal = {"case_id": case_id, "process_role": DISCOVERY_ROLE,
-                "configuration": "production", "pid": pid,
+    terminal = {"case_id": case_id, "process_role": role,
+                "configuration": configuration, "pid": pid,
                 "attempt_count": len(attempts), "complete": True}
     lines = ["running 1 test"]
     for timing, attempt in zip(timings, attempts, strict=True):
@@ -238,10 +262,11 @@ def make_run(directory, case_id, pid, binary_path, binary_sha,
     log.write_text("\n".join(lines) + "\n")
     command = [binary_path, "--ignored", "--exact", TEST_NAME, "--nocapture"]
     return {
-        "run_id": name, "case_id": case_id, "process_role": DISCOVERY_ROLE,
-        "configuration": "production", "cell": "Linux-ARM64/dev",
+        "run_id": name, "case_id": case_id, "process_role": role,
+        "configuration": configuration, "cell": "Linux-ARM64/dev",
         "argv": command, "case_env": expected_case_env(
-            case_id, DISCOVERY_ROLE, "production"),
+            case_id, role, configuration,
+            None if role == DISCOVERY_ROLE else (1, 2)),
         "process": {"pid": pid, "command": command,
                     "started_unix_ns": pid * 1000,
                     "ended_unix_ns": pid * 1000 + 1,
@@ -400,6 +425,130 @@ class BoundaryCompositionTests(unittest.TestCase):
                     fiber_sources):
                 validate_reviewed_discovery(archive_path, sha256(archive_path),
                                             final_manifest, final_sha)
+                final_dir = base / "final"
+                final_dir.mkdir()
+                shutil.copytree(evidence, final_dir / "reviewed_discovery")
+                final_binary = final_dir / "final-indexer-test"
+                final_binary.write_bytes(b"final selected test artifact")
+                final_binary_sha = sha256(final_binary)
+                final_control_path = final_dir / "control.json"
+                final_control_path.write_text("{}\n")
+                final_manifest_sha = sha256(manifest_path)
+                final_runs = {}
+                for index, (case_id, configuration, role) in enumerate(
+                    (case_id, configuration, role)
+                    for case_id in cases
+                    for configuration in ("reduced", "production")
+                    for role in ("target_observed", "probe_off_control")
+                ):
+                    name = run_name(case_id, role, configuration)
+                    final_runs[name] = make_run(
+                        final_dir, case_id, 300 + index, str(final_binary),
+                        final_binary_sha, final_manifest_sha, component_sha,
+                        source_sha=final_sha, role=role,
+                        configuration=configuration)
+                final_bundle = {
+                    "schema_version": 1, "phase": "final",
+                    "qualification_status": "missing", "cell": "Linux-ARM64/dev",
+                    "manifest_sha256": final_manifest_sha,
+                    "source_sha": final_sha,
+                    "binary_path": str(final_binary),
+                    "binary_sha256": final_binary_sha,
+                    "timeout_seconds": 600,
+                    "control_capture": {"path": final_control_path.name,
+                                        "sha256": sha256(final_control_path)},
+                    "development_discovery": None,
+                    "reviewed_discovery": {
+                        "path": "reviewed_discovery/" + archive_path.name,
+                        "sha256": sha256(archive_path),
+                    },
+                    "discovery_binary": None,
+                    "runs": final_runs,
+                    "discovered_depths": {},
+                    "remaining_case_bindings": sorted(
+                        case["id"] for case in build_manifest()["cases"]
+                        if case["family"] != "distinct_contract_chain"
+                        and case["id"] not in cases),
+                }
+                final_control = {
+                    "source_sha": final_sha,
+                    "binary_sha256": final_binary_sha,
+                    "cargo_artifact": {"profile": {
+                        "test": True, "opt_level": "0",
+                        "debug_assertions": True,
+                    }},
+                    "guard_control": {"process": {
+                        "pid": 999, "started_unix_ns": 999000,
+                    }},
+                }
+                with patch("resource_boundary_evidence.MANIFEST",
+                           manifest_path), patch(
+                               "resource_boundary_evidence.build_boundary_manifest",
+                               return_value=final_manifest), patch(
+                               "resource_boundary_evidence.validate_control",
+                               return_value=(final_control, final_binary)), patch(
+                               "resource_boundary_evidence.platform.machine",
+                               return_value="aarch64"):
+                    self.assertEqual(len(validate_bundle(final_bundle, final_dir)
+                                         ["signatures"]), 36)
+                    wrong_hash_bundle = copy.deepcopy(final_bundle)
+                    wrong_hash_bundle["reviewed_discovery"]["sha256"] = "0" * 64
+                    with self.assertRaises(ValueError):
+                        validate_bundle(wrong_hash_bundle, final_dir)
+                    wrong_path_bundle = copy.deepcopy(final_bundle)
+                    wrong_path_bundle["reviewed_discovery"]["path"] = \
+                        "reviewed_discovery/absent.json"
+                    with self.assertRaises(ValueError):
+                        validate_bundle(wrong_path_bundle, final_dir)
+                    wrong_pair_manifest = copy.deepcopy(final_manifest)
+                    wrong_pair_manifest["leaf_case"].update(
+                        last_success=2, first_failure=3)
+                    wrong_pair_path = base / "wrong-final-manifest.json"
+                    wrong_pair_path.write_text(json.dumps(wrong_pair_manifest) + "\n")
+                    wrong_pair_bundle = copy.deepcopy(final_bundle)
+                    wrong_pair_bundle["manifest_sha256"] = sha256(wrong_pair_path)
+                    with patch("resource_boundary_evidence.MANIFEST",
+                               wrong_pair_path), patch(
+                                   "resource_boundary_evidence.build_boundary_manifest",
+                                   return_value=wrong_pair_manifest):
+                        with self.assertRaisesRegex(ValueError,
+                                                    "frozen depths differ"):
+                            validate_bundle(wrong_pair_bundle, final_dir)
+                    copied_archive = (final_dir / "reviewed_discovery" /
+                                      archive_path.name)
+                    copied_control = (final_dir / "reviewed_discovery/control" /
+                                      control_path.name)
+                    copied_metadata = (final_dir / "reviewed_discovery/control" /
+                                       metadata["path"])
+                    relocated_metadata = json.loads(copied_metadata.read_text())
+                    relocated_metadata["workspace_root"] = "/remote/other/core"
+                    copied_metadata.write_text(json.dumps(relocated_metadata) + "\n")
+                    relocated_control = json.loads(copied_control.read_text())
+                    relocated_control["cargo_metadata"]["sha256"] = \
+                        sha256(copied_metadata)
+                    copied_control.write_text(json.dumps(relocated_control) + "\n")
+                    relocated_archive = json.loads(copied_archive.read_text())
+                    relocated_archive["control_capture"]["sha256"] = \
+                        sha256(copied_control)
+                    copied_archive.write_text(json.dumps(relocated_archive) + "\n")
+                    relocated_manifest = copy.deepcopy(final_manifest)
+                    relocated_manifest["reviewed_discovery_sha256"] = \
+                        sha256(copied_archive)
+                    relocated_manifest_path = base / "relocated-final-manifest.json"
+                    relocated_manifest_path.write_text(
+                        json.dumps(relocated_manifest) + "\n")
+                    relocated_bundle = copy.deepcopy(final_bundle)
+                    relocated_bundle["manifest_sha256"] = \
+                        sha256(relocated_manifest_path)
+                    relocated_bundle["reviewed_discovery"]["sha256"] = \
+                        sha256(copied_archive)
+                    with patch("resource_boundary_evidence.MANIFEST",
+                               relocated_manifest_path), patch(
+                                   "resource_boundary_evidence.build_boundary_manifest",
+                                   return_value=relocated_manifest):
+                        with self.assertRaisesRegex(ValueError,
+                                                    "Cargo workspace or artifact paths disagree"):
+                            validate_bundle(relocated_bundle, final_dir)
                 wrong_pair = copy.deepcopy(final_manifest)
                 wrong_pair["leaf_case"]["last_success"] = 2
                 with self.assertRaises(ValueError):
