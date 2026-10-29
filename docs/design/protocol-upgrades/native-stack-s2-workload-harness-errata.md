@@ -492,3 +492,60 @@ This is one development recipe, not the full operational workload.
 Multiple transactions, multi-input and BLS shapes, pagination, file appends,
 near-cap operations, frozen populations, arrival streams, cold-cache and
 performance qualification remain required.
+
+
+## Fifty and five hundred signed transactions
+
+The many-transaction workload distributes the mixed recipe across 50 or 500
+real signed reveals, with two executable operations in each single input. It
+uses 5 or 50 rounds of the existing mix, giving 100 or 1,000 operations. Setup
+spends the mature height-1 coinbase into a funding fanout confirmed at block 101.
+Each commit/reveal pair must pass Bitcoin mempool acceptance. The generated
+block fixes their order and must contain exactly those pairs after its coinbase.
+The confirmed fanout avoids shared unconfirmed-ancestor limits.
+
+Checks cover decoded transaction identities and raw positions, one input and
+two operations per reveal, persisted confirmation height and both the filtered
+and raw Bitcoin ordinals. Every transaction must have exactly one persisted
+usage record, whose user and deposit fuel reconcile with its own root receipts.
+The aggregate fee, transferred funds, new bonds, supply, rewards, validator
+transitions, storage lifecycle and pruning remain independently checked. Nested
+receipt selection now includes transaction identity, since operation indices
+repeat. Both independent snapshot restores must produce identical complete
+logical projections. Earlier fresh, batch-confirmation, simulation and single-
+transaction mixed delivery modes retain their assertions.
+
+The logged shape records actual block bytes, weight and SHA-256. The 50-reveal
+fixture contains 101 Bitcoin transactions and the 500-reveal fixture contains
+1,001, counting commits and coinbase. These workloads retain four active
+validators, two replacements and two agreements with three members each. They
+do not qualify the proposed full state populations, maximum Bitcoin capacity,
+multi-input/BLS signers, pagination, file appends, near-cap cases, cold
+compilation, arrival streams or performance gates.
+
+Final source `1d51c4c662ac89cbb430c9272f674d41ff909c65`, based on
+`dfd14159fe5066821ef771b6b6b7386e727efc87`, passed all three source reviews,
+including Interlink receipt `fd2722ed8347ccb9e681a34114517d38`. The locked offline
+two-job build passed in 40.93 seconds. Binary SHA-256:
+`21f43be3f8df446adccafde89d6cff741aa1170dcf8ed8d23db7706683318e40`.
+All six delivery tests passed on that binary in 429.57 seconds. Each test runs
+two independent restores. The 50-reveal block had 29,401 bytes and weight 64,726;
+the 500-reveal block had 291,743 bytes and weight 638,924. These test durations
+include setup and are not workload performance measurements.
+
+The earlier two-case run passed in 166.78 seconds before the one-line chunking
+lint correction. The initial compilation failure, SQL borrow fix, and the new
+chunking lint failure remain recorded. Final Clippy reports exactly the six
+inherited S2 errors, with no workload errors. Their native-branch fixes remain
+separate pending integration. No lint was suppressed and this is not a green
+merge candidate.
+
+The local `.build-cache/workload-reconcile/many-validation.json` records commands,
+terminal results, source and binary identities, actual block shapes, and hashes
+of all seven logs, including failures. The raw block hashes are specific to each
+regtest run, not a frozen qualification input. Full operational populations,
+remaining transaction shapes and the final cross-platform qualification remain
+required. Parent and both independent reviewers accepted this evidence and documentation,
+including Interlink receipt `800ee73f8cafc2cdcf55f0224ca97624`. Historical binary
+identity, commands and terminal exit codes are recorded parent observations
+consistent with the logs; reviewers did not rerun the shared binary after release.
