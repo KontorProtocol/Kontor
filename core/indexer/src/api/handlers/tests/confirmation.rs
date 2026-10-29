@@ -120,7 +120,7 @@ async fn confirmation_endpoints_preserve_execution_and_cursor_across_reorg() -> 
         assert_eq!(result.confirmed_height, position.map(|_| 2));
         assert_eq!(result.confirmed_bitcoin_tx_index, position);
         assert_eq!(result.batch_height, Some(9));
-        assert_eq!(result.row.contract, "fixture@1.7");
+        assert_eq!(result.row.contract, "fixture_1_7");
         assert_eq!(result.row.gas, 3);
         let page: ApiResult<PaginatedResponse<TransactionInfo>> = server
             .get(&format!("/transactions?order=asc&limit=1&cursor={cursor}"))
