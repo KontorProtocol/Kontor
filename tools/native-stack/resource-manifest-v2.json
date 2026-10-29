@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "90bc1f32f45763a17bded00739da6a5952b92b5576137bce14d4ed1004d50bc1",
+  "parent_manifest_sha256": "665de34a96b41f966f6f39d3e533ab88029a57ce3e7c97f850bac5957455c5f2",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1187,7 +1187,7 @@
   "remaining_requirements": {
     "attestation": {
       "cargo_binary_capture": "unimplemented",
-      "macos_thread_guard_capacity": "unimplemented",
+      "macos_thread_guard_capacity": "capture_pending",
       "per_cell_guard_fault_control": "missing",
       "source_revision_capture": "unimplemented",
       "wasmtime_fiber_effective_capacity": "missing"
@@ -1231,7 +1231,7 @@
     },
     "v1_validator": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "b6054fae1647eb09335046cef8a3fd96db0e6eb2a22ecf7e569139b58ebd191e"
+      "sha256": "459ab0c0ba34fcdab45c0b2c99a382fbea92af63d39dba42d7acf1aa9806c453"
     },
     "v2_capture": {
       "path": "tools/native-stack/capture_resource_chain_v2.py",
@@ -1255,7 +1255,7 @@
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "88d9c6dc29bd0e2855432fce492c869dd681c12bbc05e73d7d4e135c3395f198"
+      "sha256": "5adacbf56a7385346cf2c96f722e6b3805b5e1f8bebc54dd4adddbf37906354a"
     }
   }
 }

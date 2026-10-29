@@ -55,7 +55,7 @@ class ResourceDiagnosticTraceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch(
                 "capture_resource_diagnostic.thread_capacities", return_value=capacities):
             path = log_file(directory, trace)
-            observed_runtime, observed_trace, uncovered = parse_worker_log(path, mode, pid)
+            observed_runtime, observed_trace, uncovered = parse_worker_log(path, mode, pid, "linux")
             self.assertEqual(observed_runtime, runtime)
             self.assertEqual(observed_trace, trace)
             self.assertEqual(uncovered, [])

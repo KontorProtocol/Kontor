@@ -373,6 +373,37 @@ def synthetic_report(directory):
 
 
 class ResourceReportControls(unittest.TestCase):
+    def test_macos_guard_control_accepts_faulted_children_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            manifest, _, report = synthetic_report(directory)
+            report["host"]["os"] = "macos"
+            control = report["guard_control"]
+            control["process"]["command"][2] = manifest["guard_control_runner"]["macos_test_name"]
+            path = directory / control["raw_log"]["path"]
+            lines = path.read_text().splitlines()
+            for index in (1, 2):
+                child = json.loads(lines[index].split("=", 1)[1])
+                child["signal"] = 11
+                child["target"]["guard_verification"] = "macos_mach_vm_region_prot_none"
+                child["child_stdout"] = (
+                    "running 1 test\nKONTOR_RESOURCE_GUARD_TARGET=" +
+                    json.dumps(child["target"]) + "\n")
+                child["child_stderr"] = ""
+                lines[index] = "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child)
+            lines[4] = lines[4].replace("linux_worker_guard_fault_control",
+                                        "macos_worker_guard_fault_control")
+            path.write_text("\n".join(lines) + "\n")
+            control["raw_log"]["sha256"] = resource_evidence.sha256(path)
+            resource_evidence.check_guard_control(report, manifest, directory)
+            child = json.loads(lines[1].split("=", 1)[1])
+            child["signal"] = 6
+            lines[1] = "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child)
+            path.write_text("\n".join(lines) + "\n")
+            control["raw_log"]["sha256"] = resource_evidence.sha256(path)
+            with self.assertRaisesRegex(ValueError, "guard child signal"):
+                resource_evidence.check_guard_control(report, manifest, directory)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

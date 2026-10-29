@@ -26,7 +26,7 @@
     },
     "core_lockfile": {
       "path": "core/Cargo.lock",
-      "sha256": "37e2f362d03fabb42688347ebf7fcbaeb273447c1dcdd3d37708facdb77e72e4"
+      "sha256": "6e7ea3f1f76c383f267f9b00125a86dc01de45f7f3a2e5082da89598265b525f"
     },
     "error_test": {
       "path": "test-contracts/binaries/error_test.wasm.br",
@@ -54,11 +54,15 @@
     },
     "indexer_manifest": {
       "path": "core/indexer/Cargo.toml",
-      "sha256": "8eaa49dfff7d02d4fc67255e2efc9d119710c865451611844fa951daea4df757"
+      "sha256": "b8f3848a7408da12f46b25bb91a4c8b6a290f4c8aae94ce561857e4f5a74b9b0"
     },
     "invocation_budget": {
       "path": "core/indexer/src/runtime/invocation.rs",
       "sha256": "4e767d07aa26053467cf8ae24fe38d6da7e66206b2c1180e5a5c7a5918a4ad08"
+    },
+    "macos_worker_capacity_guard": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
+      "sha256": "67b7faad150b1f2180159e8f605e6016767882cdab6c4314e0991ed16d5c9483"
     },
     "native_filestorage": {
       "path": "native-contracts/filestorage/src/lib.rs",
@@ -98,15 +102,15 @@
     },
     "resource_control_capture": {
       "path": "tools/native-stack/capture_resource_control.py",
-      "sha256": "631315ad1c400d6f8c060637e1d937158a7ea85c0de2ab94ade424e43c5cf7c8"
+      "sha256": "f0bbb6fc735dd8e10a5d28c99ff6dfb9c8dfb9348211a4593f991ff37219486f"
     },
     "resource_diagnostic_capture": {
       "path": "tools/native-stack/capture_resource_diagnostic.py",
-      "sha256": "b4671a46e7e3e7a13ce7a328dcafa3323b27a301f86c819092459f5c7adf4748"
+      "sha256": "9cde5f66ebe7215b88b69999e162d032e7acf70c95ec61e3e52a0b1bdd360768"
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "7d9e8e9f657e8823802410a7a90cd28796089ab8a289412e5e8d9c6334166c47"
+      "sha256": "fd57ff3494c8ce7ad7c01ad6967bda0e5d2056228ab7fae59f3cee3f55fedc8e"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -118,15 +122,15 @@
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
-      "sha256": "9651453c7ec342745556ed00939c61536dd5934e85ace17a6b7198af17c88e58"
+      "sha256": "5d94c3654f79c407ed2de2f82cbec5405f2516369996879c775f94e6b826cb46"
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "b6054fae1647eb09335046cef8a3fd96db0e6eb2a22ecf7e569139b58ebd191e"
+      "sha256": "459ab0c0ba34fcdab45c0b2c99a382fbea92af63d39dba42d7acf1aa9806c453"
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "88d9c6dc29bd0e2855432fce492c869dd681c12bbc05e73d7d4e135c3395f198"
+      "sha256": "5adacbf56a7385346cf2c96f722e6b3805b5e1f8bebc54dd4adddbf37906354a"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -171,7 +175,7 @@
   },
   "attestation_status": {
     "cargo_binary_capture": "unimplemented",
-    "macos_thread_guard_capacity": "unimplemented",
+    "macos_thread_guard_capacity": "capture_pending",
     "per_cell_guard_fault_control": "missing",
     "source_revision_capture": "unimplemented",
     "wasmtime_fiber_effective_capacity": "missing"
@@ -1524,7 +1528,8 @@
     "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
   },
   "guard_control_runner": {
-    "source_sha256": "88d9c6dc29bd0e2855432fce492c869dd681c12bbc05e73d7d4e135c3395f198",
+    "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
+    "source_sha256": "5adacbf56a7385346cf2c96f722e6b3805b5e1f8bebc54dd4adddbf37906354a",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1676,7 +1681,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "88d9c6dc29bd0e2855432fce492c869dd681c12bbc05e73d7d4e135c3395f198",
+    "sha256": "5adacbf56a7385346cf2c96f722e6b3805b5e1f8bebc54dd4adddbf37906354a",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

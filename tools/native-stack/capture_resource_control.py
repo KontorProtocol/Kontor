@@ -78,8 +78,9 @@ def run_bounded_process(command, timeout_seconds, env=None):
 
 
 def capture(artifacts_path, metadata_path, source_sha, evidence_dir, timeout_seconds):
-    if sys.platform != "linux":
+    if sys.platform not in ("linux", "darwin"):
         raise ValueError("guard control capture is not implemented on this platform")
+    os_name = "macos" if sys.platform == "darwin" else "linux"
     if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
         raise ValueError("source revision is not a Git SHA-1")
     manifest = build_manifest()
@@ -118,7 +119,9 @@ def capture(artifacts_path, metadata_path, source_sha, evidence_dir, timeout_sec
     raw_path = evidence_dir / "guard-control.log"
     fragment_path = evidence_dir / "resource-control-capture.json"
     failure_path = evidence_dir / "resource-control-failure.json"
-    command = [str(binary), "--exact", manifest["guard_control_runner"]["test_name"],
+    test_name = (manifest["guard_control_runner"]["macos_test_name"]
+                 if os_name == "macos" else manifest["guard_control_runner"]["test_name"])
+    command = [str(binary), "--exact", test_name,
                "--ignored", "--nocapture"]
     child, started, ended, output, timed_out = run_bounded_process(command, timeout_seconds)
     with raw_path.open("xb") as raw:
@@ -137,7 +140,7 @@ def capture(artifacts_path, metadata_path, source_sha, evidence_dir, timeout_sec
         "raw_log": {"path": raw_path.name, "sha256": sha256(raw_path)},
     }
     report_view = {
-        "host": {"os": "linux"}, "binary_path": str(binary),
+        "host": {"os": os_name}, "binary_path": str(binary),
         "binary_sha256": binary_sha256, "source_sha": source_sha,
         "configurations": {
             mode: {"engine": {"page_size_bytes": page_size},

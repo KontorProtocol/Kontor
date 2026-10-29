@@ -37,6 +37,7 @@ INPUTS = {
     "stack_probe_tests": "core/indexer/src/runtime/call/tests/native_stack.rs",
     "stack_sweep": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
     "resource_worker_diagnostic": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
+    "macos_worker_capacity_guard": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
     "chain_tests": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
     "invocation_budget": "core/indexer/src/runtime/invocation.rs",
     "callback_tests": "core/indexer/src/runtime/sequential_tests.rs",
@@ -320,12 +321,13 @@ def build_manifest():
             "cargo_binary_capture": "unimplemented",
             "source_revision_capture": "unimplemented",
             "per_cell_guard_fault_control": "missing",
-            "macos_thread_guard_capacity": "unimplemented",
+            "macos_thread_guard_capacity": "capture_pending",
             "wasmtime_fiber_effective_capacity": "missing",
         },
         "guard_control_runner": {
             "status": "diagnostic_only",
             "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control",
+            "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
             "source_sha256": sha256(ROOT / "core/indexer/src/runtime/call/tests/native_stack_resource.rs"),
         },
         "fiber_source_proof": {

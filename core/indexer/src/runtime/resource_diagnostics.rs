@@ -3,6 +3,8 @@ use std::thread::ThreadId;
 
 #[cfg(target_os = "linux")]
 use libc::gettid;
+#[cfg(target_os = "macos")]
+use libc::{pthread_self, pthread_threadid_np};
 
 #[derive(Clone, Debug)]
 pub(crate) struct ThreadEvent {
@@ -10,6 +12,8 @@ pub(crate) struct ThreadEvent {
     pub thread_id: ThreadId,
     #[cfg(target_os = "linux")]
     pub os_thread_id: i32,
+    #[cfg(target_os = "macos")]
+    pub os_thread_id: i64,
 }
 
 struct TraceState {
@@ -84,6 +88,13 @@ fn push(name: &'static str, conversion_only: bool) {
             thread_id: std::thread::current().id(),
             #[cfg(target_os = "linux")]
             os_thread_id: unsafe { gettid() },
+            #[cfg(target_os = "macos")]
+            os_thread_id: {
+                let mut id = 0;
+                let status = unsafe { pthread_threadid_np(pthread_self(), &mut id) };
+                assert_eq!(status, 0, "resource diagnostic thread ID unavailable");
+                i64::try_from(id).expect("resource diagnostic thread ID overflow")
+            },
         });
     }
 }

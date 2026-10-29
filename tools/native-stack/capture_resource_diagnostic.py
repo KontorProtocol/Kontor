@@ -38,7 +38,7 @@ def one_marker(lines, marker):
                                       parse_constant=no_nonfinite_constants)
 
 
-def parse_worker_log(raw_path, mode, pid):
+def parse_worker_log(raw_path, mode, pid, os_name="linux"):
     lines = raw_path.read_text().splitlines()
     require(sum(line.strip() == "running 1 test" for line in lines) == 1,
             f"{mode}: worker transcript lacks one selected test")
@@ -59,7 +59,7 @@ def parse_worker_log(raw_path, mode, pid):
     capacities = {key: value for key, value in runtime.items()
                   if key not in {"scope", "mode", "pid"}}
     by_category = thread_capacities(capacities, mode, os.sysconf("SC_PAGE_SIZE"),
-                                    "linux", pid)
+                                    os_name, pid)
     workers = {thread["thread_id"]: thread["os_thread_id"]
                for thread in by_category["tokio_worker"]}
     blocking = {thread["thread_id"]: thread["os_thread_id"]
@@ -118,6 +118,8 @@ def parse_worker_log(raw_path, mode, pid):
 
 
 def validate_control(path, expected_sha256, manifest, page_size=None):
+    require(sys.platform in ("linux", "darwin"), "unsupported resource diagnostic host")
+    os_name = "macos" if sys.platform == "darwin" else "linux"
     require(sha256(path) == expected_sha256, "control capture hash changed")
     control = load_json_strict(path)
     require(set(control) == {
@@ -156,7 +158,7 @@ def validate_control(path, expected_sha256, manifest, page_size=None):
             "control Cargo artifact or binary differs")
     page = page_size if page_size is not None else os.sysconf("SC_PAGE_SIZE")
     report_view = {
-        "host": {"os": "linux"}, "binary_path": str(binary),
+        "host": {"os": os_name}, "binary_path": str(binary),
         "binary_sha256": control["binary_sha256"], "source_sha": control["source_sha"],
         "configurations": {mode: {"engine": {"page_size_bytes": page},
                                  "process_log": {"path": f"{mode}-worker.log"}}
@@ -168,8 +170,9 @@ def validate_control(path, expected_sha256, manifest, page_size=None):
 
 
 def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
-    if sys.platform != "linux":
-        raise ValueError("paired resource diagnostic is Linux-only")
+    if sys.platform not in ("linux", "darwin"):
+        raise ValueError("paired resource diagnostic is unsupported on this host")
+    os_name = "macos" if sys.platform == "darwin" else "linux"
     manifest = build_manifest()
     require(load_json_strict(MANIFEST) == manifest, "resource manifest changed")
     control, binary = validate_control(control_path, control_sha256, manifest)
@@ -215,7 +218,7 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
         try:
             require(not timed_out and child.returncode == 0,
                     f"{mode}: worker process failed or timed out")
-            runtime, trace, uncovered = parse_worker_log(raw_path, mode, child.pid)
+            runtime, trace, uncovered = parse_worker_log(raw_path, mode, child.pid, os_name)
             require(sha256(binary) == control["binary_sha256"],
                     f"{mode}: selected binary changed during diagnostic")
             modes[mode] = {
@@ -267,7 +270,7 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
                                         for case in manifest["cases"]),
             "workload_plan": manifest["workload_plan"]["status"],
             "attestation": manifest["attestation_status"],
-            "macos_guard": "missing",
+            "macos_guard": "diagnostic_only" if os_name == "macos" else "missing",
             "production_memory_profiles": "missing",
         },
     }

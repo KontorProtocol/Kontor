@@ -5,10 +5,10 @@ use std::thread::ThreadId;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use hex::encode;
 use serde_json::{Value as JsonValue, from_str, json};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use sha2::{Digest, Sha256};
 use tokio::runtime::Builder;
 
@@ -20,17 +20,21 @@ use libc::{
 };
 #[cfg(target_os = "linux")]
 use std::arch::asm;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::fs::File;
 #[cfg(target_os = "linux")]
-use std::fs::{File, read_to_string};
+use std::fs::read_to_string;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::io::Read;
 #[cfg(target_os = "linux")]
-use std::io::{Read, Write};
+use std::io::Write;
 #[cfg(target_os = "linux")]
 use std::mem::MaybeUninit;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::FileExt;
 #[cfg(target_os = "linux")]
 use std::os::unix::process::ExitStatusExt;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
 #[cfg(target_os = "linux")]
 use std::process::{self, Command, Stdio};
@@ -43,10 +47,13 @@ use std::time::Instant;
 #[cfg(target_os = "linux")]
 use tokio::runtime::Runtime as TokioRuntime;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::built_info;
 use crate::runtime::Runtime;
 use crate::runtime::resource_diagnostics::{self, ThreadEvent};
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 #[test]
 #[ignore = "run explicitly to isolate a real paid call in a multithread worker"]
@@ -59,7 +66,9 @@ fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
     let reduced = mode == "reduced";
     #[cfg(target_os = "linux")]
     let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
-    #[cfg(target_os = "linux")]
+    #[cfg(target_os = "macos")]
+    let (runtime, workers) = macos::measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let worker_ids = workers
         .iter()
         .map(|worker| worker.thread_id)
@@ -68,9 +77,15 @@ fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
     let blocking = runtime
         .block_on(async { tokio::task::spawn_blocking(current_linux_stack_range).await })?
         .context("blocking pool stack capacity")?;
+    #[cfg(target_os = "macos")]
+    let blocking = runtime
+        .block_on(async { tokio::task::spawn_blocking(macos::current_stack_range).await })?
+        .context("blocking pool stack capacity")?;
     #[cfg(target_os = "linux")]
     let caller = current_linux_stack_range().context("block_on caller stack capacity")?;
-    #[cfg(target_os = "linux")]
+    #[cfg(target_os = "macos")]
+    let caller = macos::current_stack_range().context("block_on caller stack capacity")?;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     ensure!(
         workers.iter().all(|worker| {
             worker.thread_id != blocking.thread_id
@@ -81,7 +96,7 @@ fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
             && blocking.os_thread_id != caller.os_thread_id,
         "measured worker, blocking, and caller thread categories overlap"
     );
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let (runtime, worker_ids) = {
         let (sender, receiver) = channel();
         let mut builder = Builder::new_multi_thread();
@@ -118,7 +133,7 @@ fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
         worker_ids.contains(&start) && worker_ids.contains(&end),
         "real paid call began or ended outside measured Tokio workers"
     );
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     for event in &events {
         if let Some(worker) = workers
             .iter()
@@ -153,6 +168,26 @@ fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
                 linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
                 linux_thread_observation(&blocking, "blocking_pool", None),
                 linux_thread_observation(&caller, "block_on_caller", None),
+            ],
+            "blocking_pool_observed": true,
+            "block_on_caller_observed": true,
+        })
+    );
+    #[cfg(target_os = "macos")]
+    println!(
+        "KONTOR_RESOURCE_RUNTIME={}",
+        json!({
+            "scope": "diagnostic_only",
+            "mode": mode,
+            "pid": std::process::id(),
+            "flavor": "multi_thread",
+            "worker_count": workers.len(),
+            "worker_requested_bytes": reduced.then_some(1024 * 1024),
+            "thread_observations": [
+                macos::thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
+                macos::thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+                macos::thread_observation(&blocking, "blocking_pool", None),
+                macos::thread_observation(&caller, "block_on_caller", None),
             ],
             "blocking_pool_observed": true,
             "block_on_caller_observed": true,
@@ -239,7 +274,7 @@ fn attest_resource_threads(events: &[ThreadEvent], workers: &[ThreadId], mode: &
                     start.is_some(),
                     "{exit} has no matching entry on this thread: {event:?}"
                 );
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 ensure!(
                     start.unwrap().os_thread_id == event.os_thread_id,
                     "{entry}/{exit} changed kernel thread identity: {event:?}"
@@ -262,9 +297,9 @@ fn attest_resource_threads(events: &[ThreadEvent], workers: &[ThreadId], mode: &
             "mode": mode,
             "compiler_internal_threads": "unobserved",
             "events": events.iter().map(|event| {
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 let os_thread_id = Some(event.os_thread_id);
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                 let os_thread_id = None::<i32>;
                 json!({
                     "name": event.name,
@@ -434,7 +469,7 @@ fn chain_worker_case() -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 #[ignore = "run through the bounded Pulley resource child driver"]
 fn pulley_boundary_worker_case() -> Result<()> {
@@ -460,11 +495,22 @@ fn pulley_boundary_worker_case() -> Result<()> {
         _ => bail!("boundary depth environment is incomplete"),
     };
     let reduced = configuration == "reduced";
+    #[cfg(target_os = "linux")]
     let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    #[cfg(target_os = "macos")]
+    let (runtime, workers) = macos::measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    #[cfg(target_os = "linux")]
     let blocking = runtime
         .block_on(async { tokio::task::spawn_blocking(current_linux_stack_range).await })?
         .context("blocking pool stack capacity")?;
+    #[cfg(target_os = "macos")]
+    let blocking = runtime
+        .block_on(async { tokio::task::spawn_blocking(macos::current_stack_range).await })?
+        .context("blocking pool stack capacity")?;
+    #[cfg(target_os = "linux")]
     let caller = current_linux_stack_range().context("block_on caller stack capacity")?;
+    #[cfg(target_os = "macos")]
+    let caller = macos::current_stack_range().context("block_on caller stack capacity")?;
     let worker_ids = workers
         .iter()
         .map(|worker| worker.thread_id)
@@ -522,6 +568,20 @@ fn pulley_boundary_worker_case() -> Result<()> {
             );
         }
     }
+    #[cfg(target_os = "linux")]
+    let thread_observations = [
+        linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
+        linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+        linux_thread_observation(&blocking, "blocking_pool", None),
+        linux_thread_observation(&caller, "block_on_caller", None),
+    ];
+    #[cfg(target_os = "macos")]
+    let thread_observations = [
+        macos::thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
+        macos::thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+        macos::thread_observation(&blocking, "blocking_pool", None),
+        macos::thread_observation(&caller, "block_on_caller", None),
+    ];
     println!(
         "BOUNDARY_WORKER_RUNTIME={}",
         json!({
@@ -533,12 +593,7 @@ fn pulley_boundary_worker_case() -> Result<()> {
             "flavor": "multi_thread",
             "worker_count": workers.len(),
             "worker_requested_bytes": reduced.then_some(1024 * 1024),
-            "thread_observations": [
-                linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
-                linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
-                linux_thread_observation(&blocking, "blocking_pool", None),
-                linux_thread_observation(&caller, "block_on_caller", None),
-            ],
+            "thread_observations": thread_observations,
             "blocking_pool_observed": true,
             "block_on_caller_observed": true,
             "embedded_source_sha": built_info::GIT_COMMIT_HASH,
@@ -577,6 +632,20 @@ fn pulley_boundary_worker_case() -> Result<()> {
         })
     );
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "run explicitly to verify macOS worker guards in isolated child processes"]
+fn macos_worker_guard_fault_control() -> Result<()> {
+    macos::guard_fault_control()
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "run only as a faulting child of macos_worker_guard_fault_control"]
+fn macos_worker_guard_fault_child() -> Result<()> {
+    macos::guard_fault_child()
 }
 
 #[cfg(target_os = "linux")]
@@ -703,7 +772,7 @@ fn linux_worker_guard_fault_control() -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn sha256_file(path: &Path) -> Result<String> {
     let mut file = File::open(path)?;
     let mut digest = Sha256::new();
