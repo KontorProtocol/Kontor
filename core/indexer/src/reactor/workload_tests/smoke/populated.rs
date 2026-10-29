@@ -38,6 +38,7 @@ mod pagination;
 mod pruning;
 mod replay_identity;
 mod saved;
+mod sequence_funding;
 mod shapes;
 mod simulation;
 mod simulation_requests;
