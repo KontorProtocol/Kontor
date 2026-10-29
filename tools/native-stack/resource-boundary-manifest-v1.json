@@ -114,7 +114,7 @@
     "own_adjacent_boundary": true,
     "repeats": 2
   },
-  "parent_manifest_sha256": "65459860925d9514bc5764998082c8a3abeb90a231ff363cffa69a54ff433aaf",
+  "parent_manifest_sha256": "2fdfc169c243c679375846d9b250d8708e92b5bf5a995ad13aa534dc95eb014b",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -164,7 +164,7 @@
     },
     "composition_tests": {
       "path": "tools/native-stack/test_resource_boundary_composition.py",
-      "sha256": "feae03fb37f19cadc9c429c9b4763add52d38452537b48149465bcaec3777018"
+      "sha256": "810f4faaff021d849098ba9a0640e4688d5d5098d5c74cfd4e9a1627be90c6ab"
     },
     "depths": {
       "path": "tools/native-stack/resource-boundary-depths-v1.json",

@@ -186,7 +186,7 @@
     },
     "resource_control_capture": {
       "path": "tools/native-stack/capture_resource_control.py",
-      "sha256": "b9687d17b378d52b4b4468f86cca66e3b12565a8cd11427fb79f794952bb2c45"
+      "sha256": "afeea7fad0e0c88d14e196d2390b15e09aa237c781053879b566f02e75d3da2a"
     },
     "resource_diagnostic_capture": {
       "path": "tools/native-stack/capture_resource_diagnostic.py",
@@ -194,7 +194,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "d5dadab780091c97c6ac9eb6769df67ed9cd25dea7488877faaf134c2532797d"
+      "sha256": "39ad008e19f6828810bea15b8313fe340a9de27d0e8a019d9de2af447bbeb0fd"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -206,11 +206,11 @@
     },
     "resource_test_builder": {
       "path": "tools/native-stack/build_resource_test.py",
-      "sha256": "bd4bc78598668ada7e9dbe92b78328b739607c128fde69fd0360cc33cf6f8f50"
+      "sha256": "a19e4824cee41bed8dccd9ca0983e2cfbc04184dc589ffad8c32466c621d5da2"
     },
     "resource_test_builder_tests": {
       "path": "tools/native-stack/test_resource_build_attestation.py",
-      "sha256": "1295a8392783b88ccb17d81ea593c62b5c3fad6f95086f2e5c156058ae799681"
+      "sha256": "9c1fefcf32b299eb0a763de2c5f0038067065ed8b0a049d59fc0016df6f9dfaf"
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
@@ -295,6 +295,36 @@
       "exponential_format_threshold.rs": "const EXPONENTIAL_FORMAT_LEADING_ZERO_THRESHOLD: usize = 5;\nconst EXPONENTIAL_FORMAT_TRAILING_ZERO_THRESHOLD: usize = 15;\nconst FMT_MAX_INTEGER_PADDING: usize = 1000;",
       "serde_deserialize_mode.rs": "const SERDE_DESERIALIZE_MODE: DeserializeMode = DeserializeMode::Strict;"
     },
+    "native_environment_keys": [
+      "AR",
+      "ARFLAGS",
+      "CARGO_BUILD_RUSTFLAGS",
+      "CARGO_ENCODED_RUSTFLAGS",
+      "CARGO_HOME",
+      "CARGO_INCREMENTAL",
+      "CARGO_TARGET_DIR",
+      "CC",
+      "CCACHE_DISABLE",
+      "CFLAGS",
+      "CMAKE_CXX_COMPILER",
+      "CMAKE_C_COMPILER",
+      "CPPFLAGS",
+      "CXX",
+      "CXXFLAGS",
+      "HOME",
+      "LANG",
+      "LC_ALL",
+      "LDFLAGS",
+      "PATH",
+      "RUSTC_WORKSPACE_WRAPPER",
+      "RUSTC_WRAPPER",
+      "RUSTFLAGS",
+      "RUSTUP_HOME",
+      "RUSTUP_TOOLCHAIN",
+      "SOURCE_DATE_EPOCH",
+      "TMPDIR",
+      "TZ"
+    ],
     "production_indexer_features": [],
     "resolved_indexer_test_features": [
       "testing"

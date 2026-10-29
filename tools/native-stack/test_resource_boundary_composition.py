@@ -387,6 +387,7 @@ class BoundaryCompositionTests(unittest.TestCase):
             old_v1 = build_manifest()
             old_v1["build_policy"].pop("fastnum_generated")
             old_v1["build_policy"].pop("fastnum_build_script_sha256")
+            old_v1["build_policy"].pop("native_environment_keys")
             old_v1_path.write_text(json.dumps(old_v1, indent=2,
                                               sort_keys=True) + "\n")
             depths_path = source_dir / "resource-boundary-depths-v1.json"

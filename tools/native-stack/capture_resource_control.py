@@ -39,6 +39,22 @@ def ensure_no_cargo_config(core, cargo_home):
     return [str(path) for path in unique]
 
 
+def native_tool_records(environment):
+    records = {}
+    for name in ("cargo", "rustc", "cc", "c++", "ar", "cmake", "make", "perl",
+                 "pkg-config", "python3"):
+        selected = shutil.which(name, path=environment["PATH"])
+        if selected is None:
+            if name in ("cargo", "rustc", "cc", "c++", "ar"):
+                raise ValueError(f"required native build tool is missing: {name}")
+            continue
+        path = Path(selected)
+        resolved = path.resolve(strict=True)
+        records[name] = {"selected_path": str(path), "resolved_path": str(resolved),
+                         "sha256": sha256(resolved)}
+    return records
+
+
 def selected_binary(artifacts_path, metadata):
     lines = artifacts_path.read_text().splitlines()
     if not lines or any(not line.strip() for line in lines):
@@ -97,6 +113,48 @@ def fastnum_build_record(artifacts_path, metadata):
     return source, out_dir
 
 
+def validate_native_environment(report, manifest, metadata):
+    environment = report["build_environment"]
+    output_dir = Path(report["build_output_dir"])
+    if (not output_dir.is_absolute() or output_dir.is_relative_to(ROOT)
+            or not isinstance(environment, dict)
+            or set(environment) != set(manifest["build_policy"]["native_environment_keys"])
+            or any(not isinstance(value, str) for value in environment.values())):
+        raise ValueError("native build environment has an invalid allowlist")
+    cargo_home = Path(report["cargo_home"])
+    rustup_home = Path(environment["RUSTUP_HOME"])
+    if not rustup_home.is_absolute():
+        raise ValueError("native Rustup home is not absolute")
+    expected_path = os.pathsep.join(dict.fromkeys((str(cargo_home / "bin"),
+                                                   str(Path.home() / ".cargo/bin"),
+                                                   "/usr/bin", "/bin",
+                                                   "/usr/local/bin",
+                                                   "/opt/homebrew/bin")))
+    expected = {"PATH": expected_path, "HOME": str(output_dir / "home"),
+                "TMPDIR": str(output_dir / "tmp"),
+                "CARGO_HOME": str(cargo_home),
+                "CARGO_TARGET_DIR": str(output_dir / "target"),
+                "CARGO_INCREMENTAL": "0", "LC_ALL": "C", "LANG": "C",
+                "TZ": "UTC", "SOURCE_DATE_EPOCH": "0",
+                "CFLAGS": "", "CXXFLAGS": "", "CPPFLAGS": "",
+                "LDFLAGS": "", "ARFLAGS": ""}
+    expected.update({name: value for name, value in
+                     manifest["build_policy"]["compile_env"].items()
+                     if value is not None})
+    if any(environment.get(name) != value for name, value in expected.items()):
+        raise ValueError("native build environment differs from pinned settings")
+    native_tools = native_tool_records(environment)
+    if report["native_tools"] != native_tools:
+        raise ValueError("native build tool identity differs from attestation")
+    if (environment["CC"] != native_tools["cc"]["selected_path"]
+            or environment["CXX"] != native_tools["c++"]["selected_path"]
+            or environment["AR"] != native_tools["ar"]["selected_path"]
+            or environment["CMAKE_C_COMPILER"] != environment["CC"]
+            or environment["CMAKE_CXX_COMPILER"] != environment["CXX"]
+            or metadata.get("target_directory") != environment["CARGO_TARGET_DIR"]):
+        raise ValueError("native compiler or fresh Cargo target differs from policy")
+
+
 def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
                                manifest, binary, artifact,
                                manifest_sha256=None, core_root=None,
@@ -110,9 +168,12 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
         "indexer_artifact_features", "cargo_home", "cargo_config_candidates",
     }
     generated_policy = manifest["build_policy"].get("fastnum_generated")
+    native_policy = manifest["build_policy"].get("native_environment_keys")
     if generated_policy is not None:
         expected_keys.update({"fastnum_source_path", "fastnum_out_dir",
                               "fastnum_build_script", "fastnum_generated"})
+    if native_policy is not None:
+        expected_keys.update({"build_output_dir", "build_environment", "native_tools"})
     if not isinstance(report, dict) or set(report) != expected_keys:
         raise ValueError("resource build attestation has an invalid schema")
     profile = report["profile"]
@@ -143,7 +204,8 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
           or any(not Path(candidate).is_absolute()
                  for candidate in report["cargo_config_candidates"])):
         raise ValueError("historical Cargo config search paths are incomplete")
-    expected_schema = 2 if generated_policy is not None else 1
+    expected_schema = (3 if native_policy is not None else
+                       2 if generated_policy is not None else 1)
     if (report["schema_version"] != expected_schema
             or report["source_sha"] != source_sha
             or report["manifest_sha256"] != expected_manifest_sha256
@@ -165,9 +227,12 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
             or not rustc.startswith(f"rustc {manifest['build_policy']['rustc_release']} ")
             or not any(line.startswith("host: ") for line in rustc.splitlines())):
         raise ValueError("resource Rust compiler identity differs from policy")
+    metadata = load_json_strict(metadata_path)
+    if native_policy is not None:
+        validate_native_environment(report, manifest, metadata)
     if generated_policy is not None:
         source, out_dir = fastnum_build_record(
-            artifacts_path, load_json_strict(metadata_path))
+            artifacts_path, metadata)
         if (report["fastnum_source_path"] != str(source)
                 or report["fastnum_out_dir"] != str(out_dir)
                 or set(report["fastnum_generated"]) != set(generated_policy)):

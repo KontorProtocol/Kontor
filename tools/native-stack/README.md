@@ -122,9 +122,16 @@ and records the compiler version, lockfile, Cargo command, resolved `testing`
 feature, and compiler environment. The three `RUST_FASTNUM_FMT_*` variables
 are removed from that environment and recorded as explicit null values.
 Empty Rust flag and wrapper variables override inherited Cargo settings.
-The builder clears other inherited `CARGO_*` and `RUST*` build options and
-rejects either Cargo config filename in every parent `.cargo` directory or
-the active Cargo home. It records the searched paths for the aggregate gate.
+The builder starts Cargo with a small allowlisted environment, so inherited
+native compiler flags, include paths, package discovery settings, and
+crate-specific build variables cannot alter the artifact. It selects `cc`,
+`c++`, and `ar` from a fixed search path, records the selected native tool
+paths and file hashes, and rejects a tool change during the build. It uses
+an empty, build-specific Cargo target directory under the output directory
+with incremental compilation disabled. This avoids reusing artifacts built
+under other settings. The builder also rejects either Cargo config filename
+in every parent `.cargo` directory or the active Cargo home, and records the
+searched paths for the aggregate gate.
 The Cargo build-script record identifies fastnum's generated output directory.
 The builder archives its pinned build script and the generated formatter,
 rounding, and serde constants, then checks their exact contents. The control

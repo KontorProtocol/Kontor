@@ -47,6 +47,9 @@ class ResourceBuildAttestationTests(unittest.TestCase):
         self.cargo_home = self.root / "cargo-home"
         self.cargo_home.mkdir()
         self.manifest = json.loads(json.dumps(build_manifest()))
+        with patch.dict(os.environ, {"CARGO_HOME": str(self.cargo_home)}):
+            build_environment, _, _, native_tools = pinned_environment(
+                self.manifest, self.root)
         fastnum_source.write_text("fn main() {}\n")
         self.manifest["build_policy"]["fastnum_build_script_sha256"] = sha256(fastnum_source)
         source_archive = self.root / "fastnum-build.rs"
@@ -60,7 +63,7 @@ class ResourceBuildAttestationTests(unittest.TestCase):
         self.artifact = {"features": ["testing"], "profile": {
             "opt_level": "0", "debug_assertions": True, "overflow_checks": True}}
         self.report = {
-            "schema_version": 2,
+            "schema_version": 3,
             "source_sha": self.source_sha,
             "manifest_sha256": sha256(MANIFEST),
             "lockfile_sha256": self.manifest["artifacts"]["core_lockfile"]["sha256"],
@@ -79,6 +82,9 @@ class ResourceBuildAttestationTests(unittest.TestCase):
             "cargo_home": str(self.cargo_home),
             "cargo_config_candidates": ensure_no_cargo_config(ROOT / "core",
                                                                 self.cargo_home),
+            "build_output_dir": str(self.root),
+            "build_environment": build_environment,
+            "native_tools": native_tools,
             "fastnum_source_path": str(fastnum_source),
             "fastnum_out_dir": str(fastnum_out),
             "fastnum_build_script": {"path": source_archive.name,
@@ -130,6 +136,22 @@ class ResourceBuildAttestationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.validate()
 
+    def test_rejects_native_compiler_or_flag_drift(self):
+        baseline = json.loads(json.dumps(self.report))
+        for mutation in ("compiler", "flags", "tool_hash", "target"):
+            with self.subTest(mutation=mutation):
+                self.report = json.loads(json.dumps(baseline))
+                if mutation == "compiler":
+                    self.report["build_environment"]["CC"] = "/tmp/other-cc"
+                elif mutation == "flags":
+                    self.report["build_environment"]["CFLAGS"] = "-DSQLITE_MAX_COLUMN=1"
+                elif mutation == "tool_hash":
+                    self.report["native_tools"]["cc"]["sha256"] = "0" * 64
+                else:
+                    self.report["build_environment"]["CARGO_TARGET_DIR"] = "/tmp/old-target"
+                with self.assertRaises(ValueError):
+                    self.validate()
+
     def test_rejects_cargo_config_injected_formatter_or_flags(self):
         core = self.root / "project/core"
         core.mkdir(parents=True)
@@ -167,8 +189,13 @@ class ResourceBuildAttestationTests(unittest.TestCase):
             "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS": "-C target-cpu=native",
             "CARGO_PROFILE_TEST_OPT_LEVEL": "3",
             "RUSTC_BOOTSTRAP": "1",
+            "CC": "/tmp/other-cc", "CFLAGS": "-DSQLITE_MAX_COLUMN=1",
+            "LIBSQL_DEV": "1", "SQLITE_MAX_VARIABLE_NUMBER": "1",
+            "PKG_CONFIG_PATH": "/tmp/untrusted", "CPATH": "/tmp/untrusted",
+            "AWS_LC_SYS_CFLAGS": "-DOTHER", "ZSTD_SYS_USE_PKG_CONFIG": "1",
         }):
-            environment, actual, cargo_home = pinned_environment(self.manifest)
+            environment, actual, cargo_home, _ = pinned_environment(
+                self.manifest, self.root)
         for name in (
             "RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD",
             "RUST_FASTNUM_FMT_EXPONENTIAL_UPPER_THRESHOLD",
@@ -183,6 +210,11 @@ class ResourceBuildAttestationTests(unittest.TestCase):
         self.assertEqual(actual["RUSTFLAGS"], "")
         self.assertEqual(environment["RUSTC_WRAPPER"], "")
         self.assertTrue(cargo_home.is_absolute())
+        self.assertEqual(environment["CFLAGS"], "")
+        self.assertNotEqual(environment["CC"], "/tmp/other-cc")
+        for name in ("LIBSQL_DEV", "SQLITE_MAX_VARIABLE_NUMBER", "PKG_CONFIG_PATH",
+                     "CPATH", "AWS_LC_SYS_CFLAGS", "ZSTD_SYS_USE_PKG_CONFIG"):
+            self.assertNotIn(name, environment)
 
 
 if __name__ == "__main__":

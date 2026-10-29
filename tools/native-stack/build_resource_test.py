@@ -12,7 +12,8 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 
 from capture_resource_control import (ensure_no_cargo_config,
-                                      fastnum_build_record, selected_binary)
+                                      fastnum_build_record, native_tool_records,
+                                      selected_binary)
 from resource_evidence import load_json_strict, sha256
 from resource_manifest import MANIFEST, ROOT, build_manifest
 
@@ -31,17 +32,27 @@ def source_revision():
     return head
 
 
-def pinned_environment(manifest):
+def pinned_environment(manifest, output_dir):
     policy = manifest["build_policy"]["compile_env"]
-    environment = os.environ.copy()
-    for name in tuple(environment):
-        if ((name.startswith("CARGO_") and name != "CARGO_HOME")
-                or (name.startswith("RUST") and name != "RUSTUP_HOME")):
-            environment.pop(name)
-    cargo_home = Path(environment.get("CARGO_HOME") or Path.home() / ".cargo")
-    if not cargo_home.is_absolute():
-        raise ValueError("resource Cargo home must be absolute")
-    environment["CARGO_HOME"] = str(cargo_home.resolve())
+    cargo_home = Path(os.environ.get("CARGO_HOME") or Path.home() / ".cargo")
+    rustup_home = Path(os.environ.get("RUSTUP_HOME") or Path.home() / ".rustup")
+    if not cargo_home.is_absolute() or not rustup_home.is_absolute():
+        raise ValueError("resource Cargo and Rustup homes must be absolute")
+    cargo_home = cargo_home.resolve()
+    rustup_home = rustup_home.resolve()
+    target_dir = output_dir / "target"
+    home_dir = output_dir / "home"
+    tmp_dir = output_dir / "tmp"
+    home_dir.mkdir(exist_ok=True)
+    tmp_dir.mkdir(exist_ok=True)
+    path = os.pathsep.join(dict.fromkeys((str(cargo_home / "bin"),
+                                         str(Path.home() / ".cargo/bin"),
+                                         "/usr/bin", "/bin", "/usr/local/bin",
+                                         "/opt/homebrew/bin")))
+    environment = {"PATH": path, "HOME": str(home_dir), "TMPDIR": str(tmp_dir),
+                   "CARGO_HOME": str(cargo_home), "RUSTUP_HOME": str(rustup_home),
+                   "CARGO_INCREMENTAL": "0", "LC_ALL": "C", "LANG": "C",
+                   "TZ": "UTC", "SOURCE_DATE_EPOCH": "0"}
     for name, value in policy.items():
         if value is None:
             environment.pop(name, None)
@@ -50,7 +61,18 @@ def pinned_environment(manifest):
     actual = {name: environment.get(name) for name in policy}
     if actual != policy:
         raise ValueError("resource compiler environment differs from manifest")
-    return environment, actual, cargo_home.resolve()
+    environment["CARGO_TARGET_DIR"] = str(target_dir)
+    tools = native_tool_records(environment)
+    environment.update({"CC": tools["cc"]["selected_path"],
+                        "CXX": tools["c++"]["selected_path"],
+                        "AR": tools["ar"]["selected_path"],
+                        "CMAKE_C_COMPILER": tools["cc"]["selected_path"],
+                        "CMAKE_CXX_COMPILER": tools["c++"]["selected_path"],
+                        "CFLAGS": "", "CXXFLAGS": "", "CPPFLAGS": "",
+                        "LDFLAGS": "", "ARFLAGS": ""})
+    if set(environment) != set(manifest["build_policy"]["native_environment_keys"]):
+        raise ValueError("native build environment differs from pinned allowlist")
+    return environment, actual, cargo_home, tools
 
 
 def build(profile, output_dir):
@@ -65,7 +87,8 @@ def build(profile, output_dir):
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ValueError("resource build output directory is not empty")
     output_dir.mkdir(parents=True, exist_ok=True)
-    environment, compile_env, cargo_home = pinned_environment(manifest)
+    environment, compile_env, cargo_home, native_tools = pinned_environment(
+        manifest, output_dir)
     core = ROOT / "core"
     config_candidates = ensure_no_cargo_config(core, cargo_home)
     rustc = subprocess.run(
@@ -83,6 +106,8 @@ def build(profile, output_dir):
     metadata = load_json_strict(metadata_path)
     if metadata.get("workspace_root") != str(core):
         raise ValueError("resource build Cargo workspace differs from source checkout")
+    if metadata.get("target_directory") != environment["CARGO_TARGET_DIR"]:
+        raise ValueError("resource build Cargo target directory differs from fresh target")
     command = ["cargo", "test", "-p", "indexer", "--lib", "--locked",
                "-j2", "--no-run", "--message-format=json"]
     if profile == "release":
@@ -109,10 +134,12 @@ def build(profile, output_dir):
         fastnum_generated[name] = {"path": archive.name, "sha256": sha256(archive)}
     if ensure_no_cargo_config(core, cargo_home) != config_candidates:
         raise ValueError("resource Cargo config search path changed during build")
+    if native_tool_records(environment) != native_tools:
+        raise ValueError("native build tool changed during build")
     if source_revision() != head or load_json_strict(MANIFEST) != build_manifest():
         raise ValueError("resource source changed during build")
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "source_sha": head,
         "manifest_sha256": sha256(MANIFEST),
         "lockfile_sha256": sha256(core / "Cargo.lock"),
@@ -129,6 +156,9 @@ def build(profile, output_dir):
         "indexer_artifact_features": artifact["features"],
         "cargo_home": str(cargo_home),
         "cargo_config_candidates": config_candidates,
+        "build_output_dir": str(output_dir),
+        "build_environment": environment,
+        "native_tools": native_tools,
         "fastnum_source_path": str(fastnum_source),
         "fastnum_out_dir": str(fastnum_out_dir),
         "fastnum_build_script": {"path": source_archive.name,

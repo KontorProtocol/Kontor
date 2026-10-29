@@ -310,6 +310,23 @@ def build_manifest():
             or indexer.get("features", {}).get("default", []) != []
             or testlib.get("dependencies", {}).get("indexer", {}).get("features") != ["testing"]):
         raise ValueError("test-only indexer feature path differs from frozen policy")
+    compile_env = {"RUSTUP_TOOLCHAIN": "1.99.1",
+                   "RUSTC_WRAPPER": "", "RUSTC_WORKSPACE_WRAPPER": "",
+                   "RUSTC": None, "CARGO_TARGET_DIR": None,
+                   "CARGO_BUILD_RUSTC": None, "CCACHE_DISABLE": "1",
+                   "RUSTFLAGS": "", "CARGO_ENCODED_RUSTFLAGS": "",
+                   "CARGO_BUILD_RUSTFLAGS": "",
+                   "RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD": None,
+                   "RUST_FASTNUM_FMT_EXPONENTIAL_UPPER_THRESHOLD": None,
+                   "RUST_FASTNUM_FMT_MAX_INTEGER_PADDING": None}
+    native_environment_keys = sorted({name for name, value in compile_env.items()
+                                      if value is not None} | {
+        "PATH", "HOME", "TMPDIR", "CARGO_HOME", "RUSTUP_HOME",
+        "CARGO_TARGET_DIR", "CARGO_INCREMENTAL", "LC_ALL", "LANG", "TZ",
+        "SOURCE_DATE_EPOCH",
+        "CC", "CXX", "AR", "CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER",
+        "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "ARFLAGS",
+    })
     artifacts = {
         name: {"path": path, "sha256": sha256(ROOT / path)}
         for name, path in sorted(INPUTS.items())
@@ -331,15 +348,8 @@ def build_manifest():
                          "rustflags": [], "rustc_wrapper": "",
                          "stack_probing_configuration":
                          "target default; native probe coverage not verified by disassembly",
-                         "compile_env": {"RUSTUP_TOOLCHAIN": "1.99.1",
-                                         "RUSTC_WRAPPER": "", "RUSTC_WORKSPACE_WRAPPER": "",
-                                         "RUSTC": None, "CARGO_TARGET_DIR": None,
-                                         "CARGO_BUILD_RUSTC": None, "CCACHE_DISABLE": "1",
-                                         "RUSTFLAGS": "", "CARGO_ENCODED_RUSTFLAGS": "",
-                                         "CARGO_BUILD_RUSTFLAGS": "",
-                                         "RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD": None,
-                                         "RUST_FASTNUM_FMT_EXPONENTIAL_UPPER_THRESHOLD": None,
-                                         "RUST_FASTNUM_FMT_MAX_INTEGER_PADDING": None}},
+                         "compile_env": compile_env,
+                         "native_environment_keys": native_environment_keys},
         "cells": list(CELLS),
         "configurations": {
             "production": {"pulley_stack_bytes": 524_288, "fiber_requested_bytes": 2_097_152,
