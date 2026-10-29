@@ -710,3 +710,76 @@ Parent and both independent reviewers accepted this evidence and documentation,
 including Interlink receipt `3777a2c91aaef3463d9a30cdcde426aa`. Historical binary
 identity, commands and terminal exits are parent-recorded metadata consistent
 with the logs; reviewers did not rerun the shared binary after slot release.
+
+## Configurable mixed workloads
+
+The configured replay combines population preparation with 50 or 500 signed
+Bitcoin transactions, each containing two executable operations. Set
+`KONTOR_WORKLOAD_CONFIG` to a JSON object with `population` and `mixed`:
+
+```json
+{"population":{"active_validators":4,"replacements":2,"agreements":2,"members_per_agreement":3},"mixed":{"transactions":500,"live_keys":100000,"new_files":100}}
+```
+
+Select the ignored test
+`workload_configured_mixed_replays_populations_and_accounting`. It rejects
+unknown or duplicate fields and invalid population, transaction, key and file
+counts before starting bitcoind. The transaction choices describe the existing
+fixture shapes, not protocol admission limits. The key bound preserves lexical
+ordering of the fixture's eight-digit keys. Input bytes are hashed and the
+parsed configuration is printed alongside the actual serialized transaction
+shape and operation counts.
+
+Each 20-operation round retains eight transfers, five storage operations
+(including two deliberate failures after writes), three proxy calls, two
+staking/file calls, and two hashes. File registrations replace the second
+staking slot first, then the first slot of enough rounds to reach the requested
+count. Descriptor indices follow actual execution order, which matters because
+registry rank affects collateral. The initial b539362c implementation duplicated
+descriptors in doubled rounds. Independent review caught this; a4f5aaea fixes it
+and checks all 112 permitted round/allocation combinations. Runs print paid
+staking and file counts separately. A 100-file, 1,000-operation run has zero paid
+staking operations, although the block's staking lifecycle still executes.
+`proxy_calls` counts root proxy operations; `nested_receipts` also includes
+staking children. Pagination is a subset of the storage category.
+
+Pagination seeds the configured number of real contract keys through the
+existing bounded seed operation. Large keyspaces use paid page requests in
+both directions, spread from the first through the last page. The 257-key,
+five-round diagnostic retains its original page order. Boundary views check
+empty and zero-limit results separately. Every result page, receipt, transfer,
+stake, hash, file descriptor and registry root is checked. Two independent
+snapshot restores still exercise real block application, native lifecycle,
+accounting, confirmation positions, useful pruning and logical-state equality.
+
+Source through b5e42cc9 has all three reviews. This is a configurable correctness
+harness, not the frozen operational manifest or a performance acceptance run.
+Full validator/agreement populations, historical-row counts, challenge/cleanup
+backlogs, near-cap compute, cold compilation, mixed signer shapes in this new
+configured delivery, arrival streams and enforced memory profiles remain to be
+integrated and qualified. Existing multi-input/BLS tests are separate modes.
+
+Validation at b5e42cc9 uses the development test binary with SHA-256
+`167e7d8cedaad4d1d44fab320d63c28fde00ca044aae4fa273f0c4dc59359752`.
+The no-run build passed in 1m00s; all three focused configuration/allocation/page
+schedule tests passed in 0.01s. A 50-transaction run with 10,000 keys and six new
+files passed in 77.21s. A 500-transaction run with 100,000 keys and 100 new files
+passed in 287.46s. Each uses four validators, two replacements, two baseline
+agreements and three members per agreement. These durations include fixture
+preparation and two replays, so they are not block-service performance samples.
+The 50-transaction case recorded 32,532 block bytes and weight 67,857; the
+500-transaction case recorded 343,212 bytes and weight 690,393. These include
+coinbase and commit transactions. Both were accepted by the local Bitcoin
+regtest node.
+
+The first sandboxed 50-transaction attempt failed before workload execution:
+bitcoind could not start its HTTP server on eight port attempts. A separate
+loopback socket check returned `PermissionError: [Errno 1] Operation not
+permitted`. The same binary and input then passed outside that sandbox with
+explicit tool approval. Both attempt logs are retained.
+
+Both original pagination and signed-file regression tests also passed at this
+head (123.34s combined). Clippy reported exactly the six inherited S2 findings
+already assigned to the native branch, with no workload finding. Other delivery
+modes were not rerun at this head. The seven logs, including the failed sandbox
+attempt, are hashed in `.build-cache/workload-reconcile/configured-validation.json`.
