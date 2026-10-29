@@ -1369,3 +1369,11 @@ recorded hashes, weights and complete schedules. Wrapper records, raw logs and
 the consolidated `timed-input-validation.json` remain in the workload evidence
 cache. The dispatcher must preserve complete event order, including simulations,
 and use full-resolution elapsed time for strict-before completion observations.
+
+### Timed dispatcher controls (source 8b46ebc6)
+
+Source `8b46ebc63ae69fd82822d1040915425847c8e19a`, reviewed against `1852664c8ff23afc413cad02759b695d8c2b3bc7`, adds an independently clocked finite arrival producer and sequential consumer. Intended arrivals do not wait for execution. Canonical dependencies and global event order are checked; prechecks and postchecks count toward end-to-end completion while active service measures execution alone. Drain completion uses intended events strictly before the observation instant, including nanosecond boundary precision. The 600-second gate prevents late dispatch and rejects late completion without cancelling an executing callback. Ordinary failures stop and await the queue producer; Drop only aborts that producer and is not proof of awaited guest cleanup.
+
+Exact-source build and six tests passed (45.37 seconds including build, 1.01 seconds for tests); the separate Bitcoin input test was ignored. Tests cover callback ordering, timing separation, arrivals progressing without execution, failures at all three callback stages, and the deadline helper at 600 seconds plus/minus one nanosecond. Clippy exited 101 with the same six inherited findings and none in changed files; no suppression was added. Evidence records, raw logs and runner hashes are in `.build-cache/workload-reconcile/timed-dispatch-8b46ebc6-*`; consolidated record: `timed-dispatch-validation.json`. Test binary SHA-256: `09e432ce3ebc79bffb554e3a81b33741a227ddfe26f9e159faa87336d3e34765`.
+
+These are RecordingWork dispatcher controls, not actual Kontor execution, reactor/finality integration, a persistent confirmation ledger, an event archive, a real 600-second run or S2 performance qualification. Concurrent test log lines are interleaved and cannot be treated as one global ordinal sequence. Real runtime integration and the agreed full workload qualification remain required.
