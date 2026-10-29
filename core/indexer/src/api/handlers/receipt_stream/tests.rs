@@ -180,3 +180,117 @@ async fn empty_filter_page_advances_only_its_own_stream() -> Result<()> {
         .assert_status(StatusCode::BAD_REQUEST);
     Ok(())
 }
+
+#[tokio::test]
+async fn invalid_page_tokens_and_divergent_history_fail_explicitly() -> Result<()> {
+    let (server, _conn, _dir) = fixture().await?;
+    let tip = start(&server, "start=tip").await;
+    let parsed = ResumeToken::parse(&tip)?;
+    for page in [
+        ResumeToken {
+            cursor: 99,
+            ..parsed.clone()
+        },
+        ResumeToken {
+            generation: 1,
+            ..parsed.clone()
+        },
+        ResumeToken {
+            epoch: "ff".repeat(32),
+            ..parsed.clone()
+        },
+        ResumeToken {
+            filter: "ff".repeat(32),
+            ..parsed.clone()
+        },
+    ] {
+        server
+            .get(&format!(
+                "/receipt-stream?from={tip}&page={}",
+                page.encode()
+            ))
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+    for invalid in [
+        format!("v1:{}:00:100:{}", parsed.epoch, parsed.filter),
+        format!(
+            "v1:{}:9223372036854775808:100:{}",
+            parsed.epoch, parsed.filter
+        ),
+        format!(
+            "v1:{}:0:{}:{}",
+            parsed.epoch,
+            MAX_SAFE_RECEIPT_ID + 1,
+            parsed.filter
+        ),
+        "x".repeat(193),
+    ] {
+        server
+            .get(&format!("/receipt-stream?from={invalid}"))
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+    let ahead = ResumeToken {
+        cursor: 101,
+        ..parsed
+    }
+    .encode();
+    for query in [format!("from={ahead}"), format!("from={tip}&page={ahead}")] {
+        assert!(matches!(
+            request(&server, &query).await,
+            ReceiptStreamResponse::ResetRequired {
+                reason: StreamResetReason::MissingHistory
+            }
+        ));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn multiple_recovery_batches_precede_rows_and_missing_history_resets() -> Result<()> {
+    let (server, conn, _dir) = fixture().await?;
+    let tip = start(&server, "start=tip").await;
+    for _ in 0..257 {
+        rollback_to_height(&conn, 1).await?;
+    }
+    let ReceiptStreamResponse::Recovery {
+        resume_token,
+        fork_height,
+        more,
+    } = request(&server, &format!("from={tip}")).await
+    else {
+        panic!("expected first recovery");
+    };
+    assert!(more);
+    assert_eq!(fork_height, 1);
+    let parsed = ResumeToken::parse(&resume_token)?;
+    assert_eq!((parsed.generation, parsed.cursor), (256, 80));
+    let ReceiptStreamResponse::Recovery {
+        resume_token, more, ..
+    } = request(&server, &format!("from={resume_token}")).await
+    else {
+        panic!("expected remaining recovery");
+    };
+    assert!(!more);
+    assert_eq!(ResumeToken::parse(&resume_token)?.generation, 257);
+    assert!(matches!(
+        request(&server, &format!("from={resume_token}")).await,
+        ReceiptStreamResponse::Page {
+            has_more: false,
+            ..
+        }
+    ));
+    conn.execute(
+        "DELETE FROM receipt_stream_rollbacks WHERE generation = 1",
+        (),
+    )
+    .await?;
+    assert!(matches!(
+        request(&server, &format!("from={tip}")).await,
+        ReceiptStreamResponse::ResetRequired {
+            reason: StreamResetReason::MissingHistory
+        }
+    ));
+    Ok(())
+}

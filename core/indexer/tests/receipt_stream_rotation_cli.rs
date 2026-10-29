@@ -93,3 +93,20 @@ async fn executable_rotates_only_stream_metadata_in_existing_node_database() -> 
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn legacy_backup_reports_startup_migration_without_changing_database() -> Result<()> {
+    let directory = TempDir::new()?;
+    let database = directory.path().join("legacy.db");
+    {
+        let db = Builder::new_local(&database).build().await?;
+        db.connect()?.execute_batch(CREATE_SCHEMA).await?;
+    }
+    let before = fs::read(&database).await?;
+    let output = rotate(directory.path(), &database).await?;
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8(output.stderr)?;
+    assert!(diagnostic.contains("normal node startup migration assigns a fresh epoch"));
+    assert_eq!(fs::read(&database).await?, before);
+    Ok(())
+}

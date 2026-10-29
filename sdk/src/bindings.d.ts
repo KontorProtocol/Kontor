@@ -245,12 +245,12 @@ export type Info = {
    */
   last_result_id: number;
   /**
-   * The last 10 indexed blocks, height-descending. The SDK compares
-   * these against its local block-hash cache for reorg detection.
+   * The last 10 indexed blocks, height-descending. Durable receipt recovery
+   * uses the rollback journal rather than inferring it from this window.
    */
   recent_blocks: Array<RecentBlock>;
   /**
-   * Hash of `last_result_id` + `recent_blocks`. Pass back as
+   * Opaque token including the receipt lineage and rollback generation. Pass back as
    * `?since=` to the long-poll endpoint; the request blocks until
    * this value changes.
    */
@@ -454,6 +454,22 @@ export type ProvenanceEntry = {
   provenance: BuildProvenance;
 };
 
+export type ReceiptStreamResponse =
+  | { "kind": "start"; resume_token: string }
+  | {
+    "kind": "recovery";
+    resume_token: string;
+    fork_height: number;
+    more: boolean;
+  }
+  | {
+    "kind": "page";
+    receipts: Array<StreamReceipt>;
+    next_token: string;
+    has_more: boolean;
+  }
+  | { "kind": "reset_required"; reason: StreamResetReason };
+
 /**
  * One entry in `Info::recent_blocks` — a `BlockRow` trimmed to the
  * fields the SDK needs for reorg detection (no `relevant` flag).
@@ -645,6 +661,14 @@ export type Source = {
   repo: string;
   commit: CommitId;
 };
+
+export type StreamReceipt = { receipt: ResultInfo; resume_token: string };
+
+export type StreamResetReason =
+  | "epoch_mismatch"
+  | "future_generation"
+  | "unsupported_lineage"
+  | "missing_history";
 
 export type TapLeafScript = {
   leafVersion: number;

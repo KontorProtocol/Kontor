@@ -37,6 +37,7 @@ export class ResultsPoller {
   private completedToken: string | undefined;
   private signature = "";
   private running = false;
+  private subscriberWake: (() => void) | undefined;
   private fatal: Error | null = null;
   private readonly backoff: number;
   private readonly readyPromise: Promise<void>;
@@ -92,6 +93,7 @@ export class ResultsPoller {
   /** Stop the loop and close every `events()` iterator. */
   stop(): void {
     this.running = false;
+    this.subscriberWake?.();
     for (const c of this.consumers) c.done = true;
     this.wakeAll();
   }
@@ -103,6 +105,7 @@ export class ResultsPoller {
   events(): AsyncIterableIterator<ChainEvent> {
     const consumer: Consumer = { queue: [], wake: null, done: false };
     this.consumers.add(consumer);
+    this.subscriberWake?.();
     const poller = this;
     return {
       [Symbol.asyncIterator]() {
@@ -141,8 +144,18 @@ export class ResultsPoller {
     let failures = 0;
     while (this.running) {
       try {
+        const resuming = this.consumers.size === 0;
+        if (resuming) {
+          await new Promise<void>((resolve) => {
+            this.subscriberWake = resolve;
+          });
+          this.subscriberWake = undefined;
+        }
+        if (!this.running) break;
         const info =
-          failures > 0 ? await this.getInfo() : await this.longPoll();
+          failures > 0 || resuming
+            ? await this.getInfo()
+            : await this.longPoll();
         if (!this.running) break;
         // Rollback may keep both the height and maximum result ID unchanged.
         await this.drainResults();
@@ -213,14 +226,14 @@ export class ResultsPoller {
     let pending: StreamReceipt[] = [];
     let pageToken: string | undefined;
     let previousId: number | undefined;
-    while (this.running) {
+    while (this.running && this.consumers.size > 0) {
       const params = new URLSearchParams({
         from: this.completedToken!,
         limit: String(DRAIN_PAGE_LIMIT),
       });
       if (pageToken !== undefined) params.set("page", pageToken);
       const response = await this.getStream(params);
-      if (!this.running) return;
+      if (!this.running || this.consumers.size === 0) return;
       if (response.kind === "recovery") {
         const resumeToken = this.requireToken(response.resume_token);
         if (

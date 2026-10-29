@@ -108,8 +108,8 @@ export interface KontorSessionOptions {
    */
   defaultGasLimit?: bigint;
   /**
-   * Results-poller configuration. The poller starts in the constructor
-   * — it follows the chain for `events()` / `wait()` and doubles as a
+   * Results-poller configuration. The poller starts lazily and follows
+   * the chain for `events()` / `wait()`. It also provides a
    * connectivity check (see `ready()`). `from` resumes an opaque token;
    * `start: "origin"` reads history. Omit both to follow from the tip.
    */
@@ -476,12 +476,14 @@ export class KontorSession {
    * iterators share that one loop.
    *
    *     for await (const event of session.events()) {
-   *       if (event.kind === "reorg") {
-   *         await store.revertAbove(event.forkHeight);
-   *       } else {
-   *         await store.apply(event);
-   *         await store.checkpoint(event.id);
-   *       }
+   *       await store.transaction(async (tx) => {
+   *         if (event.kind === "reorg") {
+   *           await tx.revertAbove(event.forkHeight);
+   *         } else {
+   *           await tx.apply(event);
+   *         }
+   *         await tx.checkpoint(event.resumeToken);
+   *       });
    *     }
    *
    * The poller's resume cursor + filter are set once, at construction,
@@ -506,7 +508,8 @@ export class KontorSession {
   /**
    * Resolves once the session's poller has reached the indexer — a
    * connectivity / config check. Rejects if the node is unreachable
-   * after the poller's bootstrap retries.
+   * after the poller's bootstrap retries. Receipt draining waits for an
+   * event iterator, so calling ready() first preserves recovery and history.
    */
   ready(): Promise<void> {
     this.poller.start(); // idempotent — lazy-starts the loop on first use

@@ -192,7 +192,7 @@ pub async fn get_receipt_stream(
     }
     let cursor = page.as_ref().unwrap_or(&completed).cursor;
     if cursor > state.max_result_id {
-        return Err(bad_request("Receipt cursor exceeds its generation's current history").into());
+        return Ok(reset(StreamResetReason::MissingHistory).into());
     }
     let page_result = get_results_paginated(
         &snapshot,

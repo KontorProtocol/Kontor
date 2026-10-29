@@ -713,6 +713,7 @@ test.each(["origin", "tip"] as const)(
       filter: { contract: "token_0_0", func: "transfer", signerId: 7 },
     });
     openPollers.push(poller);
+    poller.events();
     poller.start();
     await poller.ready();
     poller.stop();
@@ -759,3 +760,68 @@ test("old servers do not silently fall back to unsafe numeric pagination", async
     reason: "unsupported_server",
   });
 });
+
+test.each(["origin", "resume"] as const)(
+  "ready before events preserves %s history and recovery",
+  async (mode) => {
+    let reads = 0;
+    const info = {
+      height: 2,
+      last_result_id: 1,
+      recent_blocks: [{ height: 2, hash: "same" }],
+      signature: "s1",
+    };
+    const fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (!url.pathname.endsWith("/receipt-stream")) {
+        if (url.searchParams.has("wait")) await sleep(5);
+        return response(info);
+      }
+      if (url.searchParams.has("start"))
+        return response({ kind: "start", resume_token: token(0, 1) });
+      reads += 1;
+      const from = url.searchParams.get("from");
+      if (from === token(100, 0))
+        return response({
+          kind: "recovery",
+          resume_token: token(0, 1),
+          fork_height: 1,
+          more: false,
+        });
+      return response(
+        page(
+          from === token(0, 1) ? [row(1, "replacement", 2)] : [],
+          false,
+          1,
+          1,
+        ),
+      );
+    }) as typeof globalThis.fetch;
+    const poller = new ResultsPoller({
+      baseUrl: "http://test/api",
+      fetch,
+      ...(mode === "origin"
+        ? { start: "origin" as const }
+        : { from: token(100, 0) }),
+    });
+    openPollers.push(poller);
+    poller.start();
+    await poller.ready();
+    await sleep(10);
+    expect(reads).toBe(0);
+    const iterator = poller.events();
+    if (mode === "resume") {
+      const recovery = (await iterator.next()).value!;
+      expect(recovery).toMatchObject({
+        kind: "reorg",
+        forkHeight: 1n,
+        resumeToken: token(0, 1),
+      });
+    }
+    expect((await iterator.next()).value).toMatchObject({
+      kind: "tx",
+      txid: "replacement",
+      resumeToken: token(1, 1),
+    });
+  },
+);

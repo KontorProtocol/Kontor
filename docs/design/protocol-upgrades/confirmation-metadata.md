@@ -157,6 +157,9 @@ kontor rotate-receipt-stream --database /path/to/node.db
 The command changes only receipt-stream metadata, invalidating old tokens. It
 does not initialize a node, replay contracts or delete execution state. Existing
 clients must explicitly resynchronize. A normal restart preserves the epoch.
+A backup predating receipt-stream metadata needs no rotation: normal startup
+migration creates a fresh epoch. The offline command reports this case without
+changing the backup.
 The stream refuses receipt IDs above JavaScript's exact integer limit. Its
 unsupported-lineage marker survives canonical rollback; rotation clears it only
 when current IDs are supported. Retained executor allocation remains unchanged.
