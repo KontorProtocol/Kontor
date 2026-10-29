@@ -29,6 +29,8 @@ mod guest_memory;
 #[cfg(target_os = "linux")]
 mod guest_memory_failure;
 mod holder_errors;
+mod p1_publication;
+mod p1_transaction_publication;
 mod preparation_fees;
 mod results;
 mod sequential_chains;
