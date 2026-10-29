@@ -111,6 +111,17 @@ def build_manifest_v2():
         "auxiliary_count_status": "frozen",
         "auxiliary_expected_counts": AUXILIARY_EXPECTED_COUNTS,
         "auxiliary_callsite_citations": AUXILIARY_CALLSITES,
+        "persistent_digest_rules": {
+            "format": "row_multiset_and_logical_schema_v2",
+            "row_value_projection": {
+                "receipt_stream_state.epoch": "fixed_local_epoch_placeholder",
+            },
+            "schema_fields": ["type", "name", "tbl_name", "sql"],
+            "schema_order": ["type", "name"],
+            "schema_exclusions": ["sqlite_sequence", "sqlite_stat*"],
+            "physical_rootpage": "omitted",
+            "historical_full_digest_comparison": "excluded_source_provenance_and_format",
+        },
         "remaining_case_ids": remaining,
         "remaining_requirements": {
             "case_bindings": "missing_29",

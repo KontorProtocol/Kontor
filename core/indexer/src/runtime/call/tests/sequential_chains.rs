@@ -13,7 +13,7 @@ use tokio::sync::Notify;
 use tokio::time::timeout;
 use wasmtime::Trap;
 
-use super::native_stack::persistent_digest;
+use super::native_stack::{assert_receipt_stream_initial_state, persistent_digest};
 use super::{balance, funded, funded_with_pubkey};
 use crate::database::queries::live_deposit_gas_sum;
 use crate::runtime::invocation::{
@@ -369,6 +369,7 @@ async fn run_chain_probe(
         runtime.resource_probe_phase =
             teardown_probe_mode.map(|_| ResourceProbePhase::PreObservation);
         assert_eq!(budget.live(), 0);
+        assert_receipt_stream_initial_state(&conn).await?;
         let state_before_sha256 = persistent_digest(&conn).await?;
         assert!(runtime.conversion_probe.is_none());
         runtime.storage.savepoint().await?;
@@ -568,6 +569,7 @@ async fn run_chain_probe(
         runtime.resource_probe_phase =
             teardown_probe_mode.map(|_| ResourceProbePhase::RollbackObservation(chain[0].clone()));
         runtime.storage.rollback().await?;
+        assert_receipt_stream_initial_state(&conn).await?;
         let state_after_sha256 = persistent_digest(&conn).await?;
         assert_eq!(state_before_sha256, state_after_sha256);
         let restored = balance(&mut runtime, HolderRef::from(&actor)).await?;

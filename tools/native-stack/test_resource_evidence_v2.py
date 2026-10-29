@@ -359,6 +359,11 @@ class EvidenceV2Tests(unittest.TestCase):
         self.assertEqual(len(manifest["remaining_case_ids"]), 29)
         self.assertEqual(manifest["auxiliary_count_status"], "frozen")
         self.assertEqual(len(manifest["auxiliary_expected_counts"]), 90)
+        self.assertEqual(manifest["persistent_digest_rules"]["row_value_projection"], {
+            "receipt_stream_state.epoch": "fixed_local_epoch_placeholder",
+        })
+        self.assertEqual(manifest["persistent_digest_rules"]["schema_fields"],
+                         ["type", "name", "tbl_name", "sql"])
         with patch("resource_manifest_v2.AUXILIARY_EXPECTED_COUNTS", {}):
             with self.assertRaisesRegex(ValueError, "cover each observed trial"):
                 build_manifest_v2()

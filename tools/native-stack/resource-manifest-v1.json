@@ -22,7 +22,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "74726bb9da6424b52f1fd3fe480431cfb9684c28c3fd2cbd0730a5f6bf68bc79"
+      "sha256": "84bbd07d8b2a139410eabe0d00cc93f903a8858556be689d60f448b63b9a69fd"
     },
     "core_lockfile": {
       "path": "core/Cargo.lock",
@@ -138,11 +138,11 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "bfcfd2334370ef95aeb75d9ab51fe8980d7cf3b86672b313ca26e71a66b4ed75"
+      "sha256": "3d0b4e9f7c4e933bc96b2e61e146106a6654967daf8ea9a556e262c5a8a6b4d8"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "fdb6f4e731f73102fd61000a8e95289ff863d4aeecfc94a169c2545d325e8526"
+      "sha256": "395c6805b9d8cbba39975679e3f8ada0a37fbfb786b44bd09710a42940b6379c"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",

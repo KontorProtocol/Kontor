@@ -127,7 +127,9 @@ impl Fixture {
         let baseline_floor = token::floor(&mut runtime, HolderRef::from(&signer)).await?;
         let baseline_supply = token::total_supply(&mut runtime).await?;
         ensure!(budget.live() == 0, "fixture left live invocation Stores");
-        let baseline_digest = persistent_digest(&runtime.get_storage_conn()).await?;
+        let conn = runtime.get_storage_conn();
+        assert_receipt_stream_initial_state(&conn).await?;
+        let baseline_digest = persistent_digest(&conn).await?;
         resource_diagnostics::record("fixture_preparation_exit");
         Ok(Self {
             runtime,
@@ -337,6 +339,7 @@ impl Fixture {
         let floor_restored = token::floor(&mut self.runtime, HolderRef::from(&self.signer)).await?
             == self.baseline_floor;
         let supply_restored = token::total_supply(&mut self.runtime).await? == self.baseline_supply;
+        assert_receipt_stream_initial_state(&conn).await?;
         let post_digest = persistent_digest(&conn).await?;
         let digest_matches = post_digest == self.baseline_digest;
         let post_live = self.budget.live();
@@ -498,6 +501,7 @@ pub(crate) async fn persistent_digest(conn: &Connection) -> Result<String> {
     }
     drop(rows);
     let mut digest = Sha256::new();
+    digest.update(b"kontor-persistent-rows-v2\0");
     for table in tables {
         let quoted = table.replace('"', "\"\"");
         let mut rows = conn
@@ -508,26 +512,19 @@ pub(crate) async fn persistent_digest(conn: &Connection) -> Result<String> {
             let mut row_digest = Sha256::new();
             row_digest.update(row.column_count().to_le_bytes());
             for column in 0..row.column_count() {
-                match row.get_value(column)? {
-                    SqlValue::Null => row_digest.update([0]),
-                    SqlValue::Integer(value) => {
-                        row_digest.update([1]);
-                        row_digest.update(value.to_le_bytes());
-                    }
-                    SqlValue::Real(value) => {
-                        row_digest.update([2]);
-                        row_digest.update(value.to_bits().to_le_bytes());
-                    }
-                    SqlValue::Text(value) => {
-                        row_digest.update([3]);
-                        row_digest.update((value.len() as u64).to_le_bytes());
-                        row_digest.update(value.as_bytes());
-                    }
-                    SqlValue::Blob(value) => {
-                        row_digest.update([4]);
-                        row_digest.update((value.len() as u64).to_le_bytes());
-                        row_digest.update(value);
-                    }
+                let value = row.get_value(column)?;
+                if table == "receipt_stream_state" && row.column_name(column) == Some("epoch") {
+                    let SqlValue::Text(epoch) = &value else {
+                        bail!("receipt stream epoch is not text");
+                    };
+                    ensure!(
+                        epoch.len() == 64 && epoch.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                        "receipt stream epoch is malformed"
+                    );
+                    // The epoch identifies this local database, not replicated protocol state.
+                    hash_sql_value(&mut row_digest, &SqlValue::Text("<local-epoch>".into()));
+                } else {
+                    hash_sql_value(&mut row_digest, &value);
                 }
             }
             row_hashes.push(row_digest.finalize().into());
@@ -541,7 +538,218 @@ pub(crate) async fn persistent_digest(conn: &Connection) -> Result<String> {
             digest.update(hash);
         }
     }
+    digest.update(b"\0logical-sqlite-schema-v1\0");
+    // SQLite generates these bookkeeping definitions; their table rows remain hashed above.
+    let mut rows = conn
+        .query(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master \
+             WHERE name != 'sqlite_sequence' AND name NOT GLOB 'sqlite_stat*' \
+             ORDER BY type, name",
+            (),
+        )
+        .await?;
+    let mut schema = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let sql = row.get_value(3)?;
+        ensure!(
+            matches!(&sql, SqlValue::Null | SqlValue::Text(_)),
+            "logical schema SQL has an unexpected type"
+        );
+        schema.push((
+            row.get::<String>(0)?,
+            row.get::<String>(1)?,
+            row.get::<String>(2)?,
+            sql,
+        ));
+    }
+    digest.update((schema.len() as u64).to_le_bytes());
+    for (kind, name, table, sql) in schema {
+        for value in [
+            SqlValue::Text(kind),
+            SqlValue::Text(name),
+            SqlValue::Text(table),
+            sql,
+        ] {
+            hash_sql_value(&mut digest, &value);
+        }
+    }
     Ok(hex::encode(digest.finalize()))
+}
+
+pub(crate) async fn assert_receipt_stream_initial_state(conn: &Connection) -> Result<()> {
+    let mut tables = conn
+        .query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'receipt_stream_state'",
+            (),
+        )
+        .await?;
+    if tables.next().await?.is_none() {
+        // This branch predates the receipt stream migration; the merged fixture has the table.
+        return Ok(());
+    }
+    drop(tables);
+    let mut rows = conn
+        .query(
+            "SELECT singleton, generation, unsupported FROM receipt_stream_state",
+            (),
+        )
+        .await?;
+    let state = rows
+        .next()
+        .await?
+        .context("missing receipt stream singleton")?;
+    ensure!(
+        state.get::<i64>(0)? == 1 && state.get::<i64>(1)? == 0 && state.get::<i64>(2)? == 0,
+        "receipt stream fixture is not at generation zero with supported IDs"
+    );
+    ensure!(
+        rows.next().await?.is_none(),
+        "duplicate receipt stream singleton"
+    );
+    drop(rows);
+    let mut rollback_rows = conn
+        .query("SELECT 1 FROM receipt_stream_rollbacks", ())
+        .await?;
+    ensure!(
+        rollback_rows.next().await?.is_none(),
+        "receipt stream fixture has rollback history"
+    );
+    Ok(())
+}
+
+fn hash_sql_value(digest: &mut Sha256, value: &SqlValue) {
+    match value {
+        SqlValue::Null => digest.update([0]),
+        SqlValue::Integer(value) => {
+            digest.update([1]);
+            digest.update(value.to_le_bytes());
+        }
+        SqlValue::Real(value) => {
+            digest.update([2]);
+            digest.update(value.to_bits().to_le_bytes());
+        }
+        SqlValue::Text(value) => {
+            digest.update([3]);
+            digest.update((value.len() as u64).to_le_bytes());
+            digest.update(value.as_bytes());
+        }
+        SqlValue::Blob(value) => {
+            digest.update([4]);
+            digest.update((value.len() as u64).to_le_bytes());
+            digest.update(value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod persistent_digest_tests {
+    use anyhow::Result;
+    use libsql::Builder;
+    use tempfile::TempDir;
+
+    use super::{assert_receipt_stream_initial_state, persistent_digest};
+
+    #[tokio::test]
+    async fn digest_projects_only_local_epoch_and_captures_logical_schema() -> Result<()> {
+        let dir = TempDir::new()?;
+        let db = Builder::new_local(dir.path().join("digest.db"))
+            .build()
+            .await?;
+        let conn = db.connect()?;
+        conn.execute_batch(
+            "CREATE TABLE receipt_stream_state \
+               (singleton INTEGER PRIMARY KEY, epoch TEXT NOT NULL, \
+                generation INTEGER NOT NULL, unsupported INTEGER NOT NULL); \
+             CREATE TABLE receipt_stream_rollbacks \
+               (generation INTEGER PRIMARY KEY, surviving_height INTEGER NOT NULL); \
+             CREATE TABLE contract_results \
+               (id INTEGER PRIMARY KEY, confirmed_bitcoin_tx_index INTEGER NOT NULL); \
+             CREATE TABLE unique_control (code TEXT UNIQUE); \
+             CREATE TABLE auto_counter (id INTEGER PRIMARY KEY AUTOINCREMENT); \
+             INSERT INTO receipt_stream_state VALUES \
+               (1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 0, 0); \
+             INSERT INTO contract_results VALUES (1, 0); \
+             INSERT INTO auto_counter VALUES (1);",
+        )
+        .await?;
+        assert_receipt_stream_initial_state(&conn).await?;
+        let baseline = persistent_digest(&conn).await?;
+
+        conn.execute(
+            "UPDATE receipt_stream_state SET epoch = \
+             'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'",
+            (),
+        )
+        .await?;
+        assert_eq!(persistent_digest(&conn).await?, baseline);
+
+        conn.execute("UPDATE receipt_stream_state SET generation = 1", ())
+            .await?;
+        assert!(assert_receipt_stream_initial_state(&conn).await.is_err());
+        conn.execute("UPDATE receipt_stream_state SET generation = 0", ())
+            .await?;
+        conn.execute("INSERT INTO receipt_stream_rollbacks VALUES (1, 0)", ())
+            .await?;
+        assert!(assert_receipt_stream_initial_state(&conn).await.is_err());
+        conn.execute("DELETE FROM receipt_stream_rollbacks", ())
+            .await?;
+        conn.execute("UPDATE receipt_stream_state SET unsupported = 1", ())
+            .await?;
+        assert!(assert_receipt_stream_initial_state(&conn).await.is_err());
+        conn.execute("UPDATE receipt_stream_state SET unsupported = 0", ())
+            .await?;
+        assert_receipt_stream_initial_state(&conn).await?;
+        conn.execute(
+            "INSERT INTO receipt_stream_state VALUES \
+             (2, 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 0, 0)",
+            (),
+        )
+        .await?;
+        assert!(assert_receipt_stream_initial_state(&conn).await.is_err());
+        conn.execute("DELETE FROM receipt_stream_state WHERE singleton = 2", ())
+            .await?;
+
+        for (change, restore) in [
+            (
+                "UPDATE receipt_stream_state SET generation = 1",
+                "UPDATE receipt_stream_state SET generation = 0",
+            ),
+            (
+                "UPDATE receipt_stream_state SET unsupported = 1",
+                "UPDATE receipt_stream_state SET unsupported = 0",
+            ),
+            (
+                "INSERT INTO receipt_stream_rollbacks VALUES (1, 0)",
+                "DELETE FROM receipt_stream_rollbacks",
+            ),
+            (
+                "UPDATE contract_results SET confirmed_bitcoin_tx_index = 1",
+                "UPDATE contract_results SET confirmed_bitcoin_tx_index = 0",
+            ),
+            (
+                "UPDATE sqlite_sequence SET seq = 2 WHERE name = 'auto_counter'",
+                "UPDATE sqlite_sequence SET seq = 1 WHERE name = 'auto_counter'",
+            ),
+            (
+                "CREATE INDEX receipt_confirmation_idx ON contract_results(confirmed_bitcoin_tx_index)",
+                "DROP INDEX receipt_confirmation_idx",
+            ),
+            (
+                "CREATE TRIGGER receipt_confirmation_trigger AFTER INSERT ON contract_results \
+              BEGIN SELECT 1; END",
+                "DROP TRIGGER receipt_confirmation_trigger",
+            ),
+        ] {
+            conn.execute_batch(change).await?;
+            assert_ne!(persistent_digest(&conn).await?, baseline, "{change}");
+            conn.execute_batch(restore).await?;
+            assert_eq!(persistent_digest(&conn).await?, baseline, "{restore}");
+        }
+        conn.execute("UPDATE receipt_stream_state SET epoch = 'bad'", ())
+            .await?;
+        assert!(persistent_digest(&conn).await.is_err());
+        Ok(())
+    }
 }
 
 async fn worker_boundary(

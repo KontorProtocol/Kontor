@@ -294,6 +294,7 @@ def normalized_for_probe_parity(observations):
 def historical_semantics(observations):
     normalized = normalized_for_probe_parity(observations)
     for observation in normalized:
+        # Historical row-only hashes also differ by source provenance and digest format.
         observation["state"].pop("before_sha256")
         observation["state"].pop("after_sha256")
     return normalized
