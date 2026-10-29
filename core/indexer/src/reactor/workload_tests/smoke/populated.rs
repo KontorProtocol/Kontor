@@ -31,6 +31,7 @@ mod batch;
 mod many;
 mod mixed;
 mod oracle;
+mod pagination;
 mod pruning;
 mod shapes;
 mod simulation;
@@ -51,12 +52,16 @@ enum Delivery {
     MixedTransactions(usize),
     MixedMultiInput,
     MixedAggregate,
+    MixedPagination,
 }
 
 impl Delivery {
     fn mixed_rounds(self) -> Option<usize> {
         match self {
-            Self::MixedBlock | Self::MixedMultiInput | Self::MixedAggregate => Some(5),
+            Self::MixedBlock
+            | Self::MixedMultiInput
+            | Self::MixedAggregate
+            | Self::MixedPagination => Some(5),
             Self::MixedTransactions(count) => Some(count / 10),
             _ => None,
         }
@@ -278,6 +283,21 @@ async fn workload_aggregate_preserves_signers_and_nonces() -> Result<()> {
     .await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; bounded storage cursor replay, not full W_op qualification"]
+async fn workload_pagination_preserves_order_and_boundaries() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::MixedPagination,
+    )
+    .await
+}
+
 async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let config = config.validate()?;
     eprintln!("workload_population={}", serde_json::to_string(&config)?);
@@ -439,7 +459,12 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     );
     ensure!(layout.payer() == payer);
     let mixed = if let Some(rounds) = delivery.mixed_rounds() {
-        Some(MixedWorkload::prepare(&mut history.runtime, payer, rounds).await?)
+        let workload = MixedWorkload::prepare(&mut history.runtime, payer, rounds).await?;
+        Some(if delivery == Delivery::MixedPagination {
+            workload.with_pagination(&mut history.runtime).await?
+        } else {
+            workload
+        })
     } else {
         None
     };

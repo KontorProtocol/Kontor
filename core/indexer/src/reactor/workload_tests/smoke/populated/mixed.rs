@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 
 use super::super::{ANCHOR_HEIGHT, GAS_LIMIT, SMOKE_HEIGHT, test_provenance};
 use super::oracle::PaidEffects;
+use super::pagination;
 use crate::bls::taproot_derivation_path;
 use crate::database::queries::{get_contract_id_from_address, get_contract_signer_id};
 use crate::reg_tester::derive_taproot_keypair_from_seed;
@@ -80,6 +81,7 @@ pub(super) struct MixedWorkload {
     crypto: ContractAddress,
     recipient: u64,
     rounds: usize,
+    paginated: bool,
 }
 
 impl MixedWorkload {
@@ -162,7 +164,15 @@ impl MixedWorkload {
             crypto,
             recipient,
             rounds,
+            paginated: false,
         })
+    }
+
+    pub(super) async fn with_pagination(mut self, runtime: &mut Runtime) -> Result<Self> {
+        ensure!(self.rounds == 5);
+        pagination::seed(runtime, &self.counter).await?;
+        self.paginated = true;
+        Ok(self)
     }
 
     pub(super) fn instructions(&self) -> Vec<Inst> {
@@ -179,7 +189,14 @@ impl MixedWorkload {
                     ),
                     8 => (self.counter.clone(), "increment()".into()),
                     9 => (self.counter.clone(), format!("fill-blob({BLOB_BYTES})")),
-                    10 => (self.counter.clone(), "get-blob()".into()),
+                    10 => (
+                        self.counter.clone(),
+                        if self.paginated {
+                            pagination::call(round)
+                        } else {
+                            "get-blob()".into()
+                        },
+                    ),
                     11..=12 => (
                         self.failed.clone(),
                         "set-blob-then-fail(\"must roll back\")".into(),
@@ -295,6 +312,12 @@ impl MixedWorkload {
                             && transfer.dst == HolderRef::SignerId(self.recipient)
                             && transfer.amt == Decimal::from("0.001")
                     );
+                }
+                10 if self.paginated => {
+                    ensure!(
+                        root.contract == self.counter.to_string() && root.func == "entries-page"
+                    );
+                    pagination::check(round, value)?;
                 }
                 8..=10 => {
                     ensure!(root.contract == self.counter.to_string());
@@ -425,6 +448,9 @@ impl MixedWorkload {
                 .await?
                 .context("missing mixed signer bond")?;
             ensure!(stake.stake == expected_stake && stake.withdrawal_height.is_none());
+        }
+        if self.paginated {
+            pagination::check_boundaries(runtime, &self.counter).await?;
         }
         Ok(())
     }

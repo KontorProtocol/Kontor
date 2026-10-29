@@ -33,4 +33,8 @@ world root {
 	// block confirmation), each owning its own keys — a whole-map clear would free
 	// other tests' rows mid-flight.
 	export remove-entry: func(ctx: borrow<proc-context>, key: string);
+
+	export seed-entries: func(ctx: borrow<proc-context>, start: u32, count: u32);
+
+	export entries-page: func(ctx: borrow<view-context>, cursor: option<string>, limit: u32, descending: bool) -> list<tuple<string, string>>;
 }
