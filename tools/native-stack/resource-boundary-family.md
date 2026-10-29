@@ -64,8 +64,10 @@ capture rules remain mandatory. A fixture or runtime frame-path edit after
 discovery requires new reviewed discovery and a fresh final binary.
 The v1 case contract now records `adjacent_leaf_boundary: true` instead of
 borrowing `pulley_plain_paid` depth. This amends the generated v1 manifest
-hash while retaining all 41 case IDs and the approved resource amendment
-bytes. The historical a355 chain archive remains unchanged. The v1 validator
+hash to
+`4434676b208b9d9059dbc77a8a5976367ea1c647cc36c43bd0cbf1fba3a56fba`
+while retaining all 41 case IDs and the approved resource amendment bytes.
+The historical a355 chain archive remains unchanged. The v1 validator
 requires the leaf observation to equal the reviewed frozen leaf depth.
 
 Final capture takes the complete archived nine-case discovery and its pinned
