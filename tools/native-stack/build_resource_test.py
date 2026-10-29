@@ -40,13 +40,14 @@ def pinned_environment(manifest, output_dir):
         raise ValueError("resource Cargo and Rustup homes must be absolute")
     cargo_home = cargo_home.resolve()
     rustup_home = rustup_home.resolve()
+    builder_home = Path.home().resolve()
     target_dir = output_dir / "target"
     home_dir = output_dir / "home"
     tmp_dir = output_dir / "tmp"
     home_dir.mkdir(exist_ok=True)
     tmp_dir.mkdir(exist_ok=True)
     path = os.pathsep.join(dict.fromkeys((str(cargo_home / "bin"),
-                                         str(Path.home() / ".cargo/bin"),
+                                         str(builder_home / ".cargo/bin"),
                                          "/usr/bin", "/bin", "/usr/local/bin",
                                          "/opt/homebrew/bin")))
     environment = {"PATH": path, "HOME": str(home_dir), "TMPDIR": str(tmp_dir),
@@ -72,7 +73,7 @@ def pinned_environment(manifest, output_dir):
                         "LDFLAGS": "", "ARFLAGS": ""})
     if set(environment) != set(manifest["build_policy"]["native_environment_keys"]):
         raise ValueError("native build environment differs from pinned allowlist")
-    return environment, actual, cargo_home, tools
+    return environment, actual, cargo_home, tools, builder_home
 
 
 def build(profile, output_dir):
@@ -87,7 +88,7 @@ def build(profile, output_dir):
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ValueError("resource build output directory is not empty")
     output_dir.mkdir(parents=True, exist_ok=True)
-    environment, compile_env, cargo_home, native_tools = pinned_environment(
+    environment, compile_env, cargo_home, native_tools, builder_home = pinned_environment(
         manifest, output_dir)
     core = ROOT / "core"
     config_candidates = ensure_no_cargo_config(core, cargo_home)
@@ -156,6 +157,7 @@ def build(profile, output_dir):
         "indexer_artifact_features": artifact["features"],
         "cargo_home": str(cargo_home),
         "cargo_config_candidates": config_candidates,
+        "builder_home": str(builder_home),
         "build_output_dir": str(output_dir),
         "build_environment": environment,
         "native_tools": native_tools,

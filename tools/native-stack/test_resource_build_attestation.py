@@ -22,7 +22,8 @@ class ResourceBuildAttestationTests(unittest.TestCase):
         self.artifacts = self.root / "cargo-artifacts.jsonl"
         self.metadata = self.root / "cargo-metadata.json"
         self.build_log = self.root / "cargo-build.log"
-        self.binary = self.root / "indexer-test"
+        self.binary = self.root / "target/debug/deps/indexer-test"
+        self.binary.parent.mkdir(parents=True)
         fastnum_source = self.root / "registry/fastnum-0.7.5/build.rs"
         fastnum_source.parent.mkdir(parents=True)
         fastnum_out = self.root / "target/debug/build/fastnum-test/out"
@@ -33,7 +34,8 @@ class ResourceBuildAttestationTests(unittest.TestCase):
             {"reason": "compiler-artifact", "package_id": "fastnum-package",
              "target": {"kind": ["lib"]}},
         ]
-        metadata = {"target_directory": str(self.root / "target"),
+        metadata = {"workspace_root": str(ROOT / "core"),
+                    "target_directory": str(self.root / "target"),
                     "packages": [{"name": "fastnum", "version": "0.7.5",
                                   "id": "fastnum-package",
                                   "manifest_path": str(fastnum_source.parent / "Cargo.toml")}]}
@@ -48,7 +50,7 @@ class ResourceBuildAttestationTests(unittest.TestCase):
         self.cargo_home.mkdir()
         self.manifest = json.loads(json.dumps(build_manifest()))
         with patch.dict(os.environ, {"CARGO_HOME": str(self.cargo_home)}):
-            build_environment, _, _, native_tools = pinned_environment(
+            build_environment, _, _, native_tools, builder_home = pinned_environment(
                 self.manifest, self.root)
         fastnum_source.write_text("fn main() {}\n")
         self.manifest["build_policy"]["fastnum_build_script_sha256"] = sha256(fastnum_source)
@@ -82,6 +84,7 @@ class ResourceBuildAttestationTests(unittest.TestCase):
             "cargo_home": str(self.cargo_home),
             "cargo_config_candidates": ensure_no_cargo_config(ROOT / "core",
                                                                 self.cargo_home),
+            "builder_home": str(builder_home),
             "build_output_dir": str(self.root),
             "build_environment": build_environment,
             "native_tools": native_tools,
@@ -152,6 +155,30 @@ class ResourceBuildAttestationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.validate()
 
+    def test_rejects_consistent_binary_outside_fresh_target(self):
+        other = self.root / "old-target/indexer-test"
+        other.parent.mkdir()
+        other.write_bytes(self.binary.read_bytes())
+        self.report["binary_path"] = str(other)
+        self.report["binary_sha256"] = sha256(other)
+        self.attestation.write_text(json.dumps(self.report, sort_keys=True) + "\n")
+        with self.assertRaisesRegex(ValueError, "outside fresh target"):
+            validate_build_attestation(
+                self.attestation, self.artifacts, self.metadata, self.source_sha,
+                self.manifest, other, self.artifact)
+
+    def test_historical_validation_uses_recorded_builder_home_and_tools(self):
+        self.attestation.write_text(json.dumps(self.report, sort_keys=True) + "\n")
+        with patch("pathlib.Path.home", return_value=Path("/other/verifier")), \
+                patch("capture_resource_control.native_tool_records",
+                      side_effect=AssertionError("historical validation touched live tools")):
+            report, _ = validate_build_attestation(
+                self.attestation, self.artifacts, self.metadata, self.source_sha,
+                self.manifest, self.binary, self.artifact,
+                manifest_sha256=sha256(MANIFEST), core_root=ROOT / "core",
+                binary_sha256=sha256(self.binary))
+        self.assertEqual(report, self.report)
+
     def test_rejects_cargo_config_injected_formatter_or_flags(self):
         core = self.root / "project/core"
         core.mkdir(parents=True)
@@ -194,7 +221,7 @@ class ResourceBuildAttestationTests(unittest.TestCase):
             "PKG_CONFIG_PATH": "/tmp/untrusted", "CPATH": "/tmp/untrusted",
             "AWS_LC_SYS_CFLAGS": "-DOTHER", "ZSTD_SYS_USE_PKG_CONFIG": "1",
         }):
-            environment, actual, cargo_home, _ = pinned_environment(
+            environment, actual, cargo_home, _, _ = pinned_environment(
                 self.manifest, self.root)
         for name in (
             "RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD",

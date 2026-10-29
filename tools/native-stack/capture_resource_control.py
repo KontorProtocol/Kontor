@@ -55,6 +55,28 @@ def native_tool_records(environment):
     return records
 
 
+def validate_native_tool_records(records, search_path):
+    permitted = {"cargo", "rustc", "cc", "c++", "ar", "cmake", "make",
+                 "perl", "pkg-config", "python3"}
+    required = {"cargo", "rustc", "cc", "c++", "ar"}
+    if (not isinstance(records, dict) or not required <= set(records)
+            or not set(records) <= permitted):
+        raise ValueError("native tool record set differs from policy")
+    search_dirs = set(search_path.split(os.pathsep))
+    for name, record in records.items():
+        if (not isinstance(record, dict)
+                or set(record) != {"selected_path", "resolved_path", "sha256"}
+                or any(not isinstance(value, str) for value in record.values())):
+            raise ValueError("native tool record has an invalid schema")
+        selected = Path(record["selected_path"])
+        resolved = Path(record["resolved_path"])
+        if (not selected.is_absolute() or selected.name != name
+                or str(selected.parent) not in search_dirs
+                or not resolved.is_absolute()
+                or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"])):
+            raise ValueError("native tool record differs from search path")
+
+
 def selected_binary(artifacts_path, metadata):
     lines = artifacts_path.read_text().splitlines()
     if not lines or any(not line.strip() for line in lines):
@@ -113,10 +135,13 @@ def fastnum_build_record(artifacts_path, metadata):
     return source, out_dir
 
 
-def validate_native_environment(report, manifest, metadata):
+def validate_native_environment(report, manifest, metadata, historical=False):
     environment = report["build_environment"]
     output_dir = Path(report["build_output_dir"])
-    if (not output_dir.is_absolute() or output_dir.is_relative_to(ROOT)
+    builder_home = Path(report["builder_home"])
+    workspace = Path(metadata["workspace_root"])
+    if (not output_dir.is_absolute() or output_dir.is_relative_to(workspace)
+            or not builder_home.is_absolute() or not workspace.is_absolute()
             or not isinstance(environment, dict)
             or set(environment) != set(manifest["build_policy"]["native_environment_keys"])
             or any(not isinstance(value, str) for value in environment.values())):
@@ -126,7 +151,7 @@ def validate_native_environment(report, manifest, metadata):
     if not rustup_home.is_absolute():
         raise ValueError("native Rustup home is not absolute")
     expected_path = os.pathsep.join(dict.fromkeys((str(cargo_home / "bin"),
-                                                   str(Path.home() / ".cargo/bin"),
+                                                   str(builder_home / ".cargo/bin"),
                                                    "/usr/bin", "/bin",
                                                    "/usr/local/bin",
                                                    "/opt/homebrew/bin")))
@@ -143,9 +168,11 @@ def validate_native_environment(report, manifest, metadata):
                      if value is not None})
     if any(environment.get(name) != value for name, value in expected.items()):
         raise ValueError("native build environment differs from pinned settings")
-    native_tools = native_tool_records(environment)
-    if report["native_tools"] != native_tools:
-        raise ValueError("native build tool identity differs from attestation")
+    native_tools = report["native_tools"]
+    validate_native_tool_records(native_tools, environment["PATH"])
+    if not historical and (builder_home != Path.home().resolve()
+                           or native_tools != native_tool_records(environment)):
+        raise ValueError("live native build tool identity differs from attestation")
     if (environment["CC"] != native_tools["cc"]["selected_path"]
             or environment["CXX"] != native_tools["c++"]["selected_path"]
             or environment["AR"] != native_tools["ar"]["selected_path"]
@@ -173,7 +200,8 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
         expected_keys.update({"fastnum_source_path", "fastnum_out_dir",
                               "fastnum_build_script", "fastnum_generated"})
     if native_policy is not None:
-        expected_keys.update({"build_output_dir", "build_environment", "native_tools"})
+        expected_keys.update({"builder_home", "build_output_dir",
+                              "build_environment", "native_tools"})
     if not isinstance(report, dict) or set(report) != expected_keys:
         raise ValueError("resource build attestation has an invalid schema")
     profile = report["profile"]
@@ -192,6 +220,12 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
     expected_manifest_sha256 = manifest_sha256 or sha256(MANIFEST)
     expected_core = core_root or ROOT / "core"
     expected_binary_sha256 = binary_sha256 or sha256(binary)
+    if native_policy is not None:
+        target_dir = Path(report["build_output_dir"]) / "target"
+        profile_dir = "release" if profile == "release" else "debug"
+        if not Path(report["binary_path"]).is_relative_to(
+                target_dir / profile_dir / "deps"):
+            raise ValueError("resource test executable is outside fresh target")
     cargo_home = Path(report["cargo_home"])
     if not cargo_home.is_absolute():
         raise ValueError("resource Cargo home is not absolute")
@@ -229,7 +263,8 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
         raise ValueError("resource Rust compiler identity differs from policy")
     metadata = load_json_strict(metadata_path)
     if native_policy is not None:
-        validate_native_environment(report, manifest, metadata)
+        validate_native_environment(report, manifest, metadata,
+                                    historical=core_root is not None)
     if generated_policy is not None:
         source, out_dir = fastnum_build_record(
             artifacts_path, metadata)

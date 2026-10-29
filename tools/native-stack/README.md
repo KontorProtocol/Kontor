@@ -132,6 +132,11 @@ with incremental compilation disabled. This avoids reusing artifacts built
 under other settings. The builder also rejects either Cargo config filename
 in every parent `.cargo` directory or the active Cargo home, and records the
 searched paths for the aggregate gate.
+Live validation checks the native tool files again. Archived validation checks
+their recorded paths and hashes without requiring the original tool files on
+the verifier's host. These hashes identify the tool drivers, not their
+subprograms, system headers, or dynamic libraries. The qualification still
+needs workload and state parity across nodes.
 The Cargo build-script record identifies fastnum's generated output directory.
 The builder archives its pinned build script and the generated formatter,
 rounding, and serde constants, then checks their exact contents. The control

@@ -186,7 +186,7 @@
     },
     "resource_control_capture": {
       "path": "tools/native-stack/capture_resource_control.py",
-      "sha256": "afeea7fad0e0c88d14e196d2390b15e09aa237c781053879b566f02e75d3da2a"
+      "sha256": "465d8e6cbd2cf8f4ac0d15367e3c395e393f4d9483fc8bab63ff2c500d9d19fb"
     },
     "resource_diagnostic_capture": {
       "path": "tools/native-stack/capture_resource_diagnostic.py",
@@ -206,11 +206,11 @@
     },
     "resource_test_builder": {
       "path": "tools/native-stack/build_resource_test.py",
-      "sha256": "a19e4824cee41bed8dccd9ca0983e2cfbc04184dc589ffad8c32466c621d5da2"
+      "sha256": "220e65bebbfd2d8f97bebcbd67e407b7de90366a52ee4f6adb4918f1a4f317bc"
     },
     "resource_test_builder_tests": {
       "path": "tools/native-stack/test_resource_build_attestation.py",
-      "sha256": "9c1fefcf32b299eb0a763de2c5f0038067065ed8b0a049d59fc0016df6f9dfaf"
+      "sha256": "b9755f340ba201d15f6a7ac99b5ac313439576fbf33735d36ed2bf2d3ea51429"
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
