@@ -653,6 +653,7 @@ fn finite_stack_worker_case() -> Result<()> {
                 | "canonical_lift_lower"
                 | "canonical_realloc"
                 | "canonical_post_return"
+                | "generated_initialization"
         ),
         "unknown finite stack case"
     );
@@ -705,6 +706,12 @@ fn finite_stack_worker_case() -> Result<()> {
             let summary = if task_case_id == "pending_host_io" {
                 super::native_stack::resource_pending_host_io(&task_configuration, &task_role)
                     .await?
+            } else if task_case_id == "generated_initialization" {
+                super::native_stack::resource_generated_initialization(
+                    &task_configuration,
+                    &task_role,
+                )
+                .await?
             } else if task_case_id.starts_with("canonical_") {
                 super::native_stack::resource_canonical(
                     &task_case_id,

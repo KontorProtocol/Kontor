@@ -24,6 +24,7 @@ const CRYPTO_COMPONENT: &[u8] =
     include_bytes!("../../../../../../test-contracts/binaries/crypto.wasm.br");
 
 mod canonical;
+mod initialization;
 mod sweep;
 
 pub(super) use sweep::{assert_receipt_stream_initial_state, persistent_digest};
@@ -62,6 +63,13 @@ pub(super) async fn resource_pending_host_io(
     process_role: &str,
 ) -> Result<JsonValue> {
     sweep::run_resource_pending_host_io(configuration, process_role).await
+}
+
+pub(super) async fn resource_generated_initialization(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    initialization::run(configuration, process_role).await
 }
 
 #[tokio::test]

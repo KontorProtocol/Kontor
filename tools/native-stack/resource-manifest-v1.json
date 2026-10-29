@@ -124,6 +124,22 @@
       "path": "core/indexer/Cargo.toml",
       "sha256": "b8f3848a7408da12f46b25bb91a4c8b6a290f4c8aae94ce561857e4f5a74b9b0"
     },
+    "initialization_adapter": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/initialization.rs",
+      "sha256": "7286b8fb11e525a6f654ca1ad1fc4ef5f977414ba62f9a216f14ea48a03495ba"
+    },
+    "initialization_capture": {
+      "path": "tools/native-stack/capture_resource_initialization.py",
+      "sha256": "0b897134f8a975ca3a1b6e6570c59b75e2c33a462c314cea7354419803e2c15b"
+    },
+    "initialization_validator": {
+      "path": "tools/native-stack/resource_initialization_evidence.py",
+      "sha256": "1f3d21306b8b469a8362c62d3dc11cdc942e65050745ef39a56f3e2c8ccf2183"
+    },
+    "initialization_validator_tests": {
+      "path": "tools/native-stack/test_resource_initialization_evidence.py",
+      "sha256": "be1efd646819226bf1a6cdd6f45a400ee1c7781545412e1fc13cc26d155db18c"
+    },
     "invocation_budget": {
       "path": "core/indexer/src/runtime/invocation.rs",
       "sha256": "4b92bc61d40beba9e537381f3eba4cf514e2807b1930cfcc3a1569daa6c5f524"
@@ -194,7 +210,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "39ad008e19f6828810bea15b8313fe340a9de27d0e8a019d9de2af447bbeb0fd"
+      "sha256": "baa1e828f0ac0b92a53a3a8e89e97d5954ee35e9bd5cafaf3e439254e1d56c3e"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -222,7 +238,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "b28f6a56c68cb4c532eaec4fd5be05a022d6b4608247d79537aaab3ba1e2efda"
+      "sha256": "3d7b8f4602eecf1219eb56713aacc9cbc804019477d3d605a3794cf53d8a25f7"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -238,7 +254,7 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "a3f4b2c31e2df6c5f5f778fc1d00a91bd752df091eccc1144f4da7cb5bf8796a"
+      "sha256": "bcb86e0f524064536036124ae0b78c54c715ea7f09b1a22ad0c990ca887c362b"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
@@ -1049,7 +1065,12 @@
       },
       "family": "initialization",
       "fixtures": [
-        "callback_tests"
+        "callback_tests",
+        "initialization_adapter",
+        "resource_worker_diagnostic",
+        "initialization_capture",
+        "initialization_validator",
+        "initialization_validator_tests"
       ],
       "id": "generated_initialization",
       "paired_worker_status": "missing",
@@ -1694,7 +1715,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "b28f6a56c68cb4c532eaec4fd5be05a022d6b4608247d79537aaab3ba1e2efda",
+    "source_sha256": "3d7b8f4602eecf1219eb56713aacc9cbc804019477d3d605a3794cf53d8a25f7",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1846,7 +1867,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "b28f6a56c68cb4c532eaec4fd5be05a022d6b4608247d79537aaab3ba1e2efda",
+    "sha256": "3d7b8f4602eecf1219eb56713aacc9cbc804019477d3d605a3794cf53d8a25f7",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },
