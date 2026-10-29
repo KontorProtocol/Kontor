@@ -18,7 +18,7 @@
     },
     "callback_tests": {
       "path": "core/indexer/src/runtime/sequential_tests.rs",
-      "sha256": "b94b1c620d2593820a85ba63a9cb90cf4396adbc60c9eeea3fa2d93c807e5260"
+      "sha256": "61b0d6b327e64efaf5c2bfebf929e9be5fefc762f0b21a84909bec5802f6677e"
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
@@ -58,11 +58,11 @@
     },
     "invocation_budget": {
       "path": "core/indexer/src/runtime/invocation.rs",
-      "sha256": "4e767d07aa26053467cf8ae24fe38d6da7e66206b2c1180e5a5c7a5918a4ad08"
+      "sha256": "4b92bc61d40beba9e537381f3eba4cf514e2807b1930cfcc3a1569daa6c5f524"
     },
     "macos_worker_capacity_guard": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
-      "sha256": "67b7faad150b1f2180159e8f605e6016767882cdab6c4314e0991ed16d5c9483"
+      "sha256": "d3573e8b63aa3491d7462fbc8bf86ea0553085ae0407ecac601557c8bae4489d"
     },
     "native_filestorage": {
       "path": "native-contracts/filestorage/src/lib.rs",
@@ -130,7 +130,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "5adacbf56a7385346cf2c96f722e6b3805b5e1f8bebc54dd4adddbf37906354a"
+      "sha256": "2b5666fb89cb248ad814e402d3762f4eef206144a39be40d77918fb33771d7f8"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -150,7 +150,7 @@
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "985e95718d973f834feffd6bda79019c1d6e7219e1641c3777ae0a41c744f241"
+      "sha256": "a8faa6b4d84f13d34796d6f3a1c3273135164ce342a8259ea64f8c980b929672"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -1529,7 +1529,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "5adacbf56a7385346cf2c96f722e6b3805b5e1f8bebc54dd4adddbf37906354a",
+    "source_sha256": "2b5666fb89cb248ad814e402d3762f4eef206144a39be40d77918fb33771d7f8",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1681,7 +1681,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "5adacbf56a7385346cf2c96f722e6b3805b5e1f8bebc54dd4adddbf37906354a",
+    "sha256": "2b5666fb89cb248ad814e402d3762f4eef206144a39be40d77918fb33771d7f8",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

@@ -781,117 +781,6 @@ fn hash_sql_value(digest: &mut Sha256, value: &SqlValue) {
     }
 }
 
-#[cfg(test)]
-mod persistent_digest_tests {
-    use anyhow::Result;
-    use libsql::Builder;
-    use tempfile::TempDir;
-
-    use super::{assert_receipt_stream_initial_state, persistent_digest};
-
-    #[tokio::test]
-    async fn digest_projects_only_local_epoch_and_captures_logical_schema() -> Result<()> {
-        let dir = TempDir::new()?;
-        let db = Builder::new_local(dir.path().join("digest.db"))
-            .build()
-            .await?;
-        let conn = db.connect()?;
-        conn.execute_batch(
-            "CREATE TABLE receipt_stream_state \
-               (singleton INTEGER PRIMARY KEY, epoch TEXT NOT NULL, \
-                generation INTEGER NOT NULL, unsupported INTEGER NOT NULL); \
-             CREATE TABLE receipt_stream_rollbacks \
-               (generation INTEGER PRIMARY KEY, surviving_height INTEGER NOT NULL); \
-             CREATE TABLE contract_results \
-               (id INTEGER PRIMARY KEY, confirmed_bitcoin_tx_index INTEGER NOT NULL); \
-             CREATE TABLE unique_control (code TEXT UNIQUE); \
-             CREATE TABLE auto_counter (id INTEGER PRIMARY KEY AUTOINCREMENT); \
-             INSERT INTO receipt_stream_state VALUES \
-               (1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 0, 0); \
-             INSERT INTO contract_results VALUES (1, 0); \
-             INSERT INTO auto_counter VALUES (1);",
-        )
-        .await?;
-        assert_receipt_stream_initial_state(&conn).await?;
-        let baseline = persistent_digest(&conn).await?;
-
-        conn.execute(
-            "UPDATE receipt_stream_state SET epoch = \
-             'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'",
-            (),
-        )
-        .await?;
-        assert_eq!(persistent_digest(&conn).await?, baseline);
-
-        conn.execute("UPDATE receipt_stream_state SET generation = 1", ())
-            .await?;
-        assert!(assert_receipt_stream_initial_state(&conn).await.is_err());
-        conn.execute("UPDATE receipt_stream_state SET generation = 0", ())
-            .await?;
-        conn.execute("INSERT INTO receipt_stream_rollbacks VALUES (1, 0)", ())
-            .await?;
-        assert!(assert_receipt_stream_initial_state(&conn).await.is_err());
-        conn.execute("DELETE FROM receipt_stream_rollbacks", ())
-            .await?;
-        conn.execute("UPDATE receipt_stream_state SET unsupported = 1", ())
-            .await?;
-        assert!(assert_receipt_stream_initial_state(&conn).await.is_err());
-        conn.execute("UPDATE receipt_stream_state SET unsupported = 0", ())
-            .await?;
-        assert_receipt_stream_initial_state(&conn).await?;
-        conn.execute(
-            "INSERT INTO receipt_stream_state VALUES \
-             (2, 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 0, 0)",
-            (),
-        )
-        .await?;
-        assert!(assert_receipt_stream_initial_state(&conn).await.is_err());
-        conn.execute("DELETE FROM receipt_stream_state WHERE singleton = 2", ())
-            .await?;
-
-        for (change, restore) in [
-            (
-                "UPDATE receipt_stream_state SET generation = 1",
-                "UPDATE receipt_stream_state SET generation = 0",
-            ),
-            (
-                "UPDATE receipt_stream_state SET unsupported = 1",
-                "UPDATE receipt_stream_state SET unsupported = 0",
-            ),
-            (
-                "INSERT INTO receipt_stream_rollbacks VALUES (1, 0)",
-                "DELETE FROM receipt_stream_rollbacks",
-            ),
-            (
-                "UPDATE contract_results SET confirmed_bitcoin_tx_index = 1",
-                "UPDATE contract_results SET confirmed_bitcoin_tx_index = 0",
-            ),
-            (
-                "UPDATE sqlite_sequence SET seq = 2 WHERE name = 'auto_counter'",
-                "UPDATE sqlite_sequence SET seq = 1 WHERE name = 'auto_counter'",
-            ),
-            (
-                "CREATE INDEX receipt_confirmation_idx ON contract_results(confirmed_bitcoin_tx_index)",
-                "DROP INDEX receipt_confirmation_idx",
-            ),
-            (
-                "CREATE TRIGGER receipt_confirmation_trigger AFTER INSERT ON contract_results \
-              BEGIN SELECT 1; END",
-                "DROP TRIGGER receipt_confirmation_trigger",
-            ),
-        ] {
-            conn.execute_batch(change).await?;
-            assert_ne!(persistent_digest(&conn).await?, baseline, "{change}");
-            conn.execute_batch(restore).await?;
-            assert_eq!(persistent_digest(&conn).await?, baseline, "{restore}");
-        }
-        conn.execute("UPDATE receipt_stream_state SET epoch = 'bad'", ())
-            .await?;
-        assert!(persistent_digest(&conn).await.is_err());
-        Ok(())
-    }
-}
-
 async fn worker_boundary(
     fixture: &mut Fixture,
     max_depth: u32,
@@ -1396,4 +1285,115 @@ pub(super) async fn run(role: &str) -> Result<()> {
     });
     println!("KONTOR_STACK_SWEEP_SUMMARY:{summary}");
     Ok(())
+}
+
+#[cfg(test)]
+mod persistent_digest_tests {
+    use anyhow::Result;
+    use libsql::Builder;
+    use tempfile::TempDir;
+
+    use super::{assert_receipt_stream_initial_state, persistent_digest};
+
+    #[tokio::test]
+    async fn digest_projects_only_local_epoch_and_captures_logical_schema() -> Result<()> {
+        let dir = TempDir::new()?;
+        let db = Builder::new_local(dir.path().join("digest.db"))
+            .build()
+            .await?;
+        let conn = db.connect()?;
+        conn.execute_batch(
+            "CREATE TABLE receipt_stream_state \
+               (singleton INTEGER PRIMARY KEY, epoch TEXT NOT NULL, \
+                generation INTEGER NOT NULL, unsupported INTEGER NOT NULL); \
+             CREATE TABLE receipt_stream_rollbacks \
+               (generation INTEGER PRIMARY KEY, surviving_height INTEGER NOT NULL); \
+             CREATE TABLE contract_results \
+               (id INTEGER PRIMARY KEY, confirmed_bitcoin_tx_index INTEGER NOT NULL); \
+             CREATE TABLE unique_control (code TEXT UNIQUE); \
+             CREATE TABLE auto_counter (id INTEGER PRIMARY KEY AUTOINCREMENT); \
+             INSERT INTO receipt_stream_state VALUES \
+               (1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 0, 0); \
+             INSERT INTO contract_results VALUES (1, 0); \
+             INSERT INTO auto_counter VALUES (1);",
+        )
+        .await?;
+        assert_receipt_stream_initial_state(&conn).await?;
+        let baseline = persistent_digest(&conn).await?;
+
+        conn.execute(
+            "UPDATE receipt_stream_state SET epoch = \
+             'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'",
+            (),
+        )
+        .await?;
+        assert_eq!(persistent_digest(&conn).await?, baseline);
+
+        conn.execute("UPDATE receipt_stream_state SET generation = 1", ())
+            .await?;
+        assert!(assert_receipt_stream_initial_state(&conn).await.is_err());
+        conn.execute("UPDATE receipt_stream_state SET generation = 0", ())
+            .await?;
+        conn.execute("INSERT INTO receipt_stream_rollbacks VALUES (1, 0)", ())
+            .await?;
+        assert!(assert_receipt_stream_initial_state(&conn).await.is_err());
+        conn.execute("DELETE FROM receipt_stream_rollbacks", ())
+            .await?;
+        conn.execute("UPDATE receipt_stream_state SET unsupported = 1", ())
+            .await?;
+        assert!(assert_receipt_stream_initial_state(&conn).await.is_err());
+        conn.execute("UPDATE receipt_stream_state SET unsupported = 0", ())
+            .await?;
+        assert_receipt_stream_initial_state(&conn).await?;
+        conn.execute(
+            "INSERT INTO receipt_stream_state VALUES \
+             (2, 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 0, 0)",
+            (),
+        )
+        .await?;
+        assert!(assert_receipt_stream_initial_state(&conn).await.is_err());
+        conn.execute("DELETE FROM receipt_stream_state WHERE singleton = 2", ())
+            .await?;
+
+        for (change, restore) in [
+            (
+                "UPDATE receipt_stream_state SET generation = 1",
+                "UPDATE receipt_stream_state SET generation = 0",
+            ),
+            (
+                "UPDATE receipt_stream_state SET unsupported = 1",
+                "UPDATE receipt_stream_state SET unsupported = 0",
+            ),
+            (
+                "INSERT INTO receipt_stream_rollbacks VALUES (1, 0)",
+                "DELETE FROM receipt_stream_rollbacks",
+            ),
+            (
+                "UPDATE contract_results SET confirmed_bitcoin_tx_index = 1",
+                "UPDATE contract_results SET confirmed_bitcoin_tx_index = 0",
+            ),
+            (
+                "UPDATE sqlite_sequence SET seq = 2 WHERE name = 'auto_counter'",
+                "UPDATE sqlite_sequence SET seq = 1 WHERE name = 'auto_counter'",
+            ),
+            (
+                "CREATE INDEX receipt_confirmation_idx ON contract_results(confirmed_bitcoin_tx_index)",
+                "DROP INDEX receipt_confirmation_idx",
+            ),
+            (
+                "CREATE TRIGGER receipt_confirmation_trigger AFTER INSERT ON contract_results \
+              BEGIN SELECT 1; END",
+                "DROP TRIGGER receipt_confirmation_trigger",
+            ),
+        ] {
+            conn.execute_batch(change).await?;
+            assert_ne!(persistent_digest(&conn).await?, baseline, "{change}");
+            conn.execute_batch(restore).await?;
+            assert_eq!(persistent_digest(&conn).await?, baseline, "{restore}");
+        }
+        conn.execute("UPDATE receipt_stream_state SET epoch = 'bad'", ())
+            .await?;
+        assert!(persistent_digest(&conn).await.is_err());
+        Ok(())
+    }
 }

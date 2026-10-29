@@ -489,7 +489,9 @@ mod tests {
         assert_eq!(budget.live(), 0);
         let events = recorder.events();
         assert_eq!(events.len(), 8);
-        for event_group in events.chunks_exact(4) {
+        let (event_groups, remainder) = events.as_chunks::<4>();
+        assert!(remainder.is_empty());
+        for event_group in event_groups {
             assert_eq!(event_group[0]["role"], "pre_observation");
             assert_eq!(event_group[0]["kind"], "reserved");
             assert_eq!(event_group[1]["kind"], "store_created");
