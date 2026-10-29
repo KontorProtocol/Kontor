@@ -1180,3 +1180,35 @@ native_stack/sweep, native_stack_resource and invocation. No new finding concern
 this change, and no suppression was introduced. The validation record preserves
 commands, source/binary identities, all runtime and control logs and their hashes.
 The paired engine, workload and platform acceptance requirements remain open.
+
+### Consecutive sequence funding setup
+
+Plan `14e3ffce` was reviewed by the lead and both independent reviewers and
+committed as `b48a7cae`. Source `1d4724c265baca1296ea246b3678cac5967399be` implements the initial funding helper
+only. Existing single-block paths are unchanged. The mature coin funds a small
+parent and per-block splits; each child is admission-checked with only the parent
+in the mempool, then ordered raw transactions are confirmed together at height
+101. This avoids the connected-cluster size limit without policy changes.
+
+The exact-source build passed in 30.85 seconds. One real Bitcoin test passed in
+0.94 seconds, covering two blocks of 50 outputs, six of 500, and seven of 500:
+100, 3,000 and 3,500 distinct confirmed outputs respectively. Each 500-output
+child weighed 86,280 weight units. Checks include signatures via Bitcoin
+admission, exact accepted block contents, predecessor/height, empty final
+mempool and sampled confirmed UTXOs. The full accepted transaction list binds
+all returned output values, scripts and identities.
+
+The executable SHA-256 was `a16f60e69bc661b02cdb8cd77c79a0c067903146adcdc0f8cf64a932a1baf8b4`.
+Bitcoin Core v31.0 was `4841faf4cd67d99d8d33dca95ab7f78e1580a4f63513a5473a7e26f6f748082b`.
+The five raw logs and complete observations are recorded in
+`.build-cache/workload-reconcile/sequence-funding-validation.json`. The earlier
+uncommitted-source compile (46.78 seconds) and test (0.98 seconds) are retained
+separately. Clippy reported exactly the six inherited S2 findings, with none in
+the new helper.
+
+This is funding setup evidence. It does not yet spend those outputs in
+consecutive workload blocks, establish evolving state/accounting, saved sequence
+replay, continuous views, timed arrivals or performance qualification. Failure
+injection for RPC/cleanup is not covered. The caller owns and discards isolated
+Bitcoin state on failure; the helper does not undo a submitted parent or mined
+anchor. No full sequence, W_op or S2 acceptance is claimed.
