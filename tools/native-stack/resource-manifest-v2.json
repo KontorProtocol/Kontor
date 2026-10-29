@@ -1,13 +1,13 @@
 {
   "auxiliary_callsite_citations": {
     "post_observation": [
-      "core/indexer/src/runtime/call/tests/sequential_chains.rs:478-480,540-548: storage-state, actor balance, burner balance, supply, and floor each create one Store after the target"
+      "core/indexer/src/runtime/call/tests/sequential_chains.rs:479-481,541-549: storage-state, actor balance, burner balance, supply, and floor each create one Store after the target"
     ],
     "pre_observation": [
-      "core/indexer/src/runtime/call/tests/sequential_chains.rs:377-380: actor balance, burner balance, floor, and supply each create one native Store before the target"
+      "core/indexer/src/runtime/call/tests/sequential_chains.rs:378-381: actor balance, burner balance, floor, and supply each create one native Store before the target"
     ],
     "rollback_observation": [
-      "core/indexer/src/runtime/call/tests/sequential_chains.rs:573-584: actor balance, floor, burner balance, supply, and storage-state each execute after rollback; asserted rollback_clean proves no short-circuit skipped a call"
+      "core/indexer/src/runtime/call/tests/sequential_chains.rs:575-586: actor balance, floor, burner balance, supply, and storage-state each execute after rollback; asserted rollback_clean proves no short-circuit skipped a call"
     ],
     "target_native_auxiliary": [
       "core/indexer/src/runtime/fees.rs:25,50: with_payment calls token::api::hold and token::api::release around paid deterministic outcomes, including traps and depth rejection",
@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "7271a340b702f4be399408cd50ac093b321509c555c6cce1ad47bf4fe03810d0",
+  "parent_manifest_sha256": "cbeabd6fde9a2479afad462e030dc89aaa98cb8414234c52d42818364ba5121b",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1239,7 +1239,7 @@
     },
     "v2_manifest_builder": {
       "path": "tools/native-stack/resource_manifest_v2.py",
-      "sha256": "720518733d268e7fb5b215443be80855c6e632c901dea14e33dd16a7ca1d2a89"
+      "sha256": "4c4e75a90a91b5ae1cd3ccc0a2838c7df723b3bd958ca5b22c3e55c0e485910d"
     },
     "v2_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v2.json",

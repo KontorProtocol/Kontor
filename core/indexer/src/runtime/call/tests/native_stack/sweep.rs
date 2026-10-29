@@ -577,17 +577,6 @@ pub(crate) async fn persistent_digest(conn: &Connection) -> Result<String> {
 }
 
 pub(crate) async fn assert_receipt_stream_initial_state(conn: &Connection) -> Result<()> {
-    let mut tables = conn
-        .query(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'receipt_stream_state'",
-            (),
-        )
-        .await?;
-    if tables.next().await?.is_none() {
-        // This branch predates the receipt stream migration; the merged fixture has the table.
-        return Ok(());
-    }
-    drop(tables);
     let mut rows = conn
         .query(
             "SELECT singleton, generation, unsupported FROM receipt_stream_state",

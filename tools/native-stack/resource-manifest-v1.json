@@ -142,7 +142,7 @@
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "395c6805b9d8cbba39975679e3f8ada0a37fbfb786b44bd09710a42940b6379c"
+      "sha256": "fff7660ca0ef29b8a6cba28cc682daa75814c862068216a7902ba0b1fa1ed815"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -150,7 +150,7 @@
     },
     "test_runtime_setup": {
       "path": "core/indexer/src/test_utils.rs",
-      "sha256": "f196f24ab8ae02c29a80fc424db92053b00dc4a254d72577c5249723dc2a3304"
+      "sha256": "eaf0bda8e242ed339ad5b70181aadf728a5fb80306d16c1908116d815a958a0a"
     },
     "token_pages": {
       "path": "core/indexer/src/runtime/token/query_tests.rs",

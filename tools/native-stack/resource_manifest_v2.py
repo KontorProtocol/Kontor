@@ -52,13 +52,13 @@ AUXILIARY_CALLSITES = {
         "core/indexer/src/runtime/invocation.rs:73-77: target-phase token calls are classified separately from chain Stores",
     ],
     "pre_observation": [
-        "core/indexer/src/runtime/call/tests/sequential_chains.rs:377-380: actor balance, burner balance, floor, and supply each create one native Store before the target",
+        "core/indexer/src/runtime/call/tests/sequential_chains.rs:378-381: actor balance, burner balance, floor, and supply each create one native Store before the target",
     ],
     "post_observation": [
-        "core/indexer/src/runtime/call/tests/sequential_chains.rs:478-480,540-548: storage-state, actor balance, burner balance, supply, and floor each create one Store after the target",
+        "core/indexer/src/runtime/call/tests/sequential_chains.rs:479-481,541-549: storage-state, actor balance, burner balance, supply, and floor each create one Store after the target",
     ],
     "rollback_observation": [
-        "core/indexer/src/runtime/call/tests/sequential_chains.rs:573-584: actor balance, floor, burner balance, supply, and storage-state each execute after rollback; asserted rollback_clean proves no short-circuit skipped a call",
+        "core/indexer/src/runtime/call/tests/sequential_chains.rs:575-586: actor balance, floor, burner balance, supply, and storage-state each execute after rollback; asserted rollback_clean proves no short-circuit skipped a call",
     ],
 }
 
