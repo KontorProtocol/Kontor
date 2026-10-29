@@ -313,3 +313,65 @@ validator, storage and initial populated replay evidence in messages
 `f7800724a93f12701339911fc2ea7c6d`. These approvals preserve the limitations
 recorded above, including regtest proof dimensions and the consensus-disabled
 execution helper.
+
+
+## Reconciliation with the current S2 candidate
+
+Preparation source `b8bbdfd0c2876ac55b48929a92cad314a9a2b331` ports this harness
+onto S2 source `35ee59d0a0cd31dd2626723c9562f1d815eb7766` in the isolated
+`native-stack-workload-reconcile` worktree. Donor source is
+`7bc47388951865fb86ead66e802a526e7efcdf81`, based on `67a52fed`.
+Twenty added files are byte-identical to the donor. The three integration deltas
+(test module registration, Bitcoin submission and regtest startup helpers) are
+identical; current surrounding source is preserved. The donor's build-script
+change was already present and is not duplicated. No production runtime code
+changed in this port. Parent, independent subagent and Interlink source reviews
+accepted the bounded reconciliation; Interlink receipt
+`3202b4225a85e3d2e8fc40427286d999` was acknowledged.
+
+The existing 21 Python tests pass in 0.026 seconds. A locked, offline, two-job Rust
+no-run build passes in 1 minute 46 seconds. Its development test binary hashes to
+`c6f4df89aac19a03d466d956f302e2ebb9b6ccf6bd40f888d883ddd5f343c57c`.
+Seven ordinary workload tests pass in 108.62 seconds, covering snapshot export,
+independent restoration, native-state reopening, validator/storage population
+setup, invalid configurations and the negative-amount oracle control.
+The real-block smoke and populated replay were then explicitly enabled against
+local regtest Bitcoin processes; both pass in 125.16 seconds. Their original
+accounting expectations are unchanged. These times include fixture setup and
+are not operational block-service measurements.
+
+The ignored configured-population and frozen-manifest replay tests are not claimed
+as covered by this run. Donor captures are not upgraded to current-source evidence.
+Further S2 source reconciliation, an exact frozen operational manifest, reference
+profiles and the performance acceptance campaign remain required. The completed
+35ee59 boundary capture was preserved in its separate frozen worktree and binary.
+
+Required Clippy initially failed with four imported helper findings and six
+findings in unchanged S2 source. Follow-up `8f793dc782c4fed3cb540388775ba784e80c80c7`
+replaces three unsigned divisibility expressions with `is_multiple_of(1000)` and
+uses a vacant map entry for one host initialization. Both independent reviewers
+and the parent verified preserved call/error order and unchanged expectations.
+Its no-run build passed in 39.01 seconds; binary SHA-256 is
+`6dd38d95d61536fd6be0fa6f229eb501e2805e30dfaa5b6cd89e175bc6bcfd52`.
+
+The populated replay and two oracle/configuration controls passed. The smoke test
+then refused the parent's uncommitted documentation draft at its clean-checkout
+guard, before execution. That failed run (three passed, one failed, 53.49 seconds)
+is preserved. Moving the draft to the ignored evidence directory and restoring
+the tracked document resolved the precondition. Only the failed smoke test was
+rerun on the same binary and passed in 71.85 seconds. No runtime, fixture or
+expected values were changed to address the guard failure.
+
+Clippy was rerun and still exits 101 with exactly six existing S2 findings, all
+outside the workload port: a redundant copy clone, items after a test module, a
+collapsible conditional, two divisibility expressions and a constant chunking
+idiom. The native-stack implementer owns their correction in Stage 1. No lint
+was suppressed, and this is not a green-Clippy or merge-ready claim. Commands,
+log hashes and terminal results are in the local
+`.build-cache/workload-reconcile/validation.json`. Parent and both independent
+reviewers accepted this bounded evidence and documentation, including the failed
+run and unresolved S2 lints. Interlink receipt
+`102b3903e7d6e04a103b331b6dd19e72` was read and acknowledged. Exact dirty-file
+history and binary continuity across the retry are recorded execution metadata;
+raw logs independently establish the guard failure and subsequent test result.
+All parent checks are terminal and the single build slot is released.
