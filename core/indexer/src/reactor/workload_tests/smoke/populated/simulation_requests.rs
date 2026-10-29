@@ -108,11 +108,46 @@ impl SimulationRequests {
         Ok(())
     }
 
-    pub(super) async fn execute(&self, trial: &mut Reactor<RuntimeExecutor>) -> Result<()> {
+    pub(super) async fn execute(
+        &self,
+        trial: &mut Reactor<RuntimeExecutor>,
+        warm_cache: bool,
+    ) -> Result<()> {
         let before = database_projection(&trial.db_conn()).await?;
         let height = trial.runtime.storage.height;
         let tip = (trial.last_height, trial.last_hash);
         ensure!(!trial.runtime.simulating);
+        let mut warmed = Vec::new();
+        if warm_cache {
+            let conn = trial.db_conn();
+            let mut rows = conn
+                .query("SELECT id FROM contracts ORDER BY id", ())
+                .await?;
+            while let Some(row) = rows.next().await? {
+                warmed.push(row.get::<u64>(0)?);
+            }
+            drop(rows);
+            ensure!(!warmed.is_empty());
+            // Populate only existing canonical IDs outside simulation. Simulation
+            // must still never cache a speculative publication's reusable row ID.
+            for id in &warmed {
+                trial.runtime.load_component(*id).await?;
+            }
+            for id in &warmed {
+                ensure!(
+                    trial
+                        .runtime
+                        .component_cache
+                        .get_admitted(id)
+                        .await
+                        .is_some()
+                );
+            }
+            ensure!(
+                database_projection(&conn).await? == before,
+                "cache warming mutated state"
+            );
+        }
         for (request_index, transaction) in self.transactions.iter().enumerate() {
             let tx = filter_map((0, transaction.clone())).context("simulation reveal missing")?;
             let mut previous = None;
@@ -183,6 +218,8 @@ impl SimulationRequests {
                 "requests": self.transactions.len(),
                 "operations_per_request": self.operations_per_request,
                 "repetitions": 2,
+                "cache_setup": if warm_cache { "all baseline contracts preloaded outside simulation" } else { "no explicit prewarming" },
+                "prewarmed_contract_ids": warmed,
                 "input_sha256": hex::encode(Sha256::digest(self.bytes()?)),
                 "scope": "sequential rollback correctness before canonical execution, no arrival timing",
             })

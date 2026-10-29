@@ -363,7 +363,9 @@ async fn workload_saved_configured_replay() -> Result<()> {
             "startup changed saved prestate"
         );
         if let Some(requests) = &simulations {
-            requests.execute(&mut trial).await?;
+            requests
+                .execute(&mut trial, manifest.mixed.warm_simulation_cache)
+                .await?;
         }
         let batches = if manifest.mixed.batch_operations > 0 {
             BatchProof::execute_chunks(&mut trial, &reveals, manifest.mixed.batch_operations)

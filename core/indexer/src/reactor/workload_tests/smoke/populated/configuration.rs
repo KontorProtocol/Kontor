@@ -16,6 +16,8 @@ pub(super) struct MixedConfig {
     pub(super) batch_operations: usize,
     #[serde(default)]
     pub(super) simulation_operations: usize,
+    #[serde(default)]
+    pub(super) warm_simulation_cache: bool,
 }
 
 impl MixedConfig {
@@ -45,6 +47,10 @@ impl MixedConfig {
         ensure!(
             matches!(self.simulation_operations, 0 | 2 | 4),
             "configured simulations require two or four operations"
+        );
+        ensure!(
+            !self.warm_simulation_cache || self.simulation_operations > 0,
+            "simulation cache warming requires simulation requests"
         );
         Ok(self)
     }
@@ -87,6 +93,10 @@ fn workload_mixed_configuration_rejects_invalid_shapes() -> Result<()> {
     for invalid in [
         valid.replace(
             "\"new_files\":5",
+            "\"new_files\":5,\"warm_simulation_cache\":true",
+        ),
+        valid.replace(
+            "\"new_files\":5",
             "\"new_files\":5,\"simulation_operations\":1",
         ),
         valid.replace(
@@ -127,6 +137,14 @@ fn workload_mixed_configuration_rejects_invalid_shapes() -> Result<()> {
                 .as_bytes(),
         )?;
     }
+    Configuration::parse(
+        valid
+            .replace(
+                "\"new_files\":5",
+                "\"new_files\":5,\"simulation_operations\":2,\"warm_simulation_cache\":true",
+            )
+            .as_bytes(),
+    )?;
     Configuration::parse(
         valid
             .replace("\"new_files\":5", "\"new_files\":5,\"batch_operations\":20")

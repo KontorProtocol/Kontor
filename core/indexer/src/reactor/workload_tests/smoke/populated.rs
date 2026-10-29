@@ -672,7 +672,12 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             "reactor startup changed restored state"
         );
         if let Some(requests) = &simulation_requests {
-            requests.execute(&mut trial).await?;
+            let Delivery::Configured(config) = delivery else {
+                unreachable!("simulation requests require configured delivery")
+            };
+            requests
+                .execute(&mut trial, config.warm_simulation_cache)
+                .await?;
         }
         let simulations = if delivery == Delivery::SimulationsThenBatch {
             Some(SimulationProof::execute(&mut trial, &reveals[0]).await?)
