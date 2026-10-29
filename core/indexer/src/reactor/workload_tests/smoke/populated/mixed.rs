@@ -189,16 +189,7 @@ impl MixedWorkload {
     }
 
     fn file_index(&self, round: usize, slot: usize) -> Option<usize> {
-        let count = self.files.as_ref()?.len();
-        let doubled_rounds = count.saturating_sub(self.rounds);
-        // Descriptors must follow execution order, since creation assigns the
-        // next ledger index and that index affects the collateral calculation.
-        let index = match slot {
-            16 if round < doubled_rounds => round * 2,
-            17 => round + round.min(doubled_rounds),
-            _ => return None,
-        };
-        (index < count).then_some(index)
+        file_index(self.rounds, self.files.as_ref()?.len(), round, slot)
     }
 
     pub(super) async fn check_file_lifecycle(
@@ -550,5 +541,40 @@ impl MixedWorkload {
             pagination::check_boundaries(runtime, contract, *count).await?;
         }
         Ok(())
+    }
+}
+
+fn file_index(rounds: usize, count: usize, round: usize, slot: usize) -> Option<usize> {
+    let doubled_rounds = count.saturating_sub(rounds);
+    // Descriptors must follow execution order, since creation assigns the
+    // next ledger index and that index affects the collateral calculation.
+    let index = match slot {
+        16 if round < doubled_rounds => round * 2,
+        17 => round + (round + 1).min(doubled_rounds),
+        _ => return None,
+    };
+    (index < count).then_some(index)
+}
+
+#[test]
+fn workload_file_allocation_preserves_ledger_order() {
+    for rounds in [5, 50] {
+        for count in 0..=rounds * 2 {
+            let actual: Vec<_> = (0..rounds)
+                .flat_map(|round| {
+                    (0..20).filter_map(move |slot| file_index(rounds, count, round, slot))
+                })
+                .collect();
+            assert_eq!(
+                actual,
+                (0..count).collect::<Vec<_>>(),
+                "{rounds} rounds, {count} files"
+            );
+            let stakes = (0..rounds)
+                .flat_map(|round| (16..=17).map(move |slot| (round, slot)))
+                .filter(|(round, slot)| file_index(rounds, count, *round, *slot).is_none())
+                .count();
+            assert_eq!(stakes + actual.len(), rounds * 2);
+        }
     }
 }
