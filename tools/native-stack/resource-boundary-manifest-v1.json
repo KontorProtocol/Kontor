@@ -160,7 +160,7 @@
   "sources": {
     "capture": {
       "path": "tools/native-stack/capture_resource_boundary.py",
-      "sha256": "20d5fec463f10fd1a67ac800040eaccea8b7f13dd5f553585feb922d68909fbc"
+      "sha256": "e5b963813fbb946e654208ad5367b786210c18aeb527fd68d78642d996104187"
     },
     "composition_tests": {
       "path": "tools/native-stack/test_resource_boundary_composition.py",
@@ -200,15 +200,15 @@
     },
     "synthetic_guard_tests": {
       "path": "tools/native-stack/test_resource_report.py",
-      "sha256": "7606edeb7d9eef22ab30ddb81b51a3e057153065e13ec4954a298200d7d3e967"
+      "sha256": "1a605ce345ad8ecaeec2845f03bb52030fbaff52ebf268eba22a8da949a46c5d"
     },
     "tests": {
       "path": "tools/native-stack/test_resource_boundary_evidence.py",
-      "sha256": "a7c83d16e8e86f2426f11cdc6317a37c3608ca6c526a40849f440e5374450ce3"
+      "sha256": "15b07118f584f90389084db75a182d27f1ced5936ff9dc1d73b1f00f92552a2a"
     },
     "validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "d210ef4f305405a0feaa3495bf82cd0fdaedf2335bab9b9006098c95957a5c9d"
+      "sha256": "57da40ee485bd5b48a1509945eb343751e7267d071f8a5f184538f99e3cdcf47"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",

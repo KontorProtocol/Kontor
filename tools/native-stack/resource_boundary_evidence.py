@@ -107,12 +107,19 @@ def expected_case_env(case_id, role, configuration, depths=None):
 
 
 def validate_cell_identity(cell, cargo_artifact, check_host=True):
-    match = re.fullmatch(r"Linux-(ARM64|X64)/(dev|release)", cell)
-    require(match is not None and sys.platform == "linux",
+    match = re.fullmatch(r"(Linux-ARM64|Linux-X64|macOS-ARM64)/(dev|release)", cell)
+    require(match is not None,
             "boundary cell OS, architecture, or profile is unsupported")
-    arch, build_profile = match.groups()
-    expected_arch = {"ARM64": "aarch64", "X64": "x86_64"}[arch]
-    require(not check_host or platform.machine() == expected_arch,
+    cell_host, build_profile = match.groups()
+    expected_os, expected_arch = {
+        "Linux-ARM64": ("linux", "aarch64"),
+        "Linux-X64": ("linux", "x86_64"),
+        "macOS-ARM64": ("darwin", "aarch64"),
+    }[cell_host]
+    host_arches = ({"arm64", "aarch64"} if cell_host == "macOS-ARM64"
+                   else {expected_arch})
+    require(not check_host or (sys.platform == expected_os and
+                               platform.machine() in host_arches),
             "boundary cell architecture differs from validation host")
     profile = cargo_artifact["profile"]
     require(profile["test"] is True
@@ -227,7 +234,7 @@ def validate_replay_order(attempts, depths, leaf=False):
             "boundary replay omitted or reordered frozen depth samples")
 
 
-def validate_trace(trace, runtime, attempts):
+def validate_trace(trace, runtime, attempts, os_name="linux"):
     require(set(trace) == TRACE_KEYS
             and trace["scope"] == runtime["scope"]
             and all(trace[key] == runtime[key] for key in
@@ -240,7 +247,7 @@ def validate_trace(trace, runtime, attempts):
          if key not in {"scope", "configuration", "case_id",
                         "process_role", "pid", "embedded_source_sha",
                         "binary_sha256"}},
-        runtime["configuration"], page, "linux", runtime["pid"])
+        runtime["configuration"], page, os_name, runtime["pid"])
     workers = {item["thread_id"]: item["os_thread_id"]
                for item in threads["tokio_worker"]}
     blocking = {item["thread_id"]: item["os_thread_id"]
@@ -453,7 +460,7 @@ def validate_observation(attempt, summary, manifest, index, cell):
             and observation["engine_target"] == summary["engine_target"]
             and observation["max_wasm_stack"] == summary["max_wasm_stack"]
             and observation["async_stack_size"] == summary["async_stack_size"]
-            and observation["target_os"] == "linux"
+            and observation["target_os"] == ("macos" if cell.startswith("macOS-") else "linux")
             and observation["target_arch"] ==
             {"ARM64": "aarch64", "X64": "x86_64"}[
                 cell.split("/", 1)[0].split("-", 1)[1]]
@@ -705,7 +712,8 @@ def validate_run(run, bundle, manifest, directory):
                 "boundary attempt escaped its child process")
         validate_observation(attempt, summary, manifest, index,
                              bundle["cell"])
-    counts = validate_trace(parsed["thread_trace"], runtime, parsed["attempts"])
+    counts = validate_trace(parsed["thread_trace"], runtime, parsed["attempts"],
+                            "macos" if bundle["cell"].startswith("macOS-") else "linux")
     require(len(parsed["timings"]) == len(parsed["attempts"])
             and all(set(timing) == {
                 "role", "kind", "sample_index", "setup_ms", "funding_ms",

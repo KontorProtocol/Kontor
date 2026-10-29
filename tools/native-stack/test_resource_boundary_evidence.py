@@ -447,6 +447,13 @@ class BoundaryEvidenceTests(unittest.TestCase):
                    return_value="aarch64"):
             self.assertEqual(validate_cell_identity(
                 "Linux-ARM64/release", release), "aarch64")
+        with patch("resource_boundary_evidence.sys.platform", "darwin"), patch(
+            "resource_boundary_evidence.platform.machine", return_value="arm64"
+        ):
+            self.assertEqual(validate_cell_identity(
+                "macOS-ARM64/dev", artifact), "aarch64")
+            with self.assertRaises(ValueError):
+                validate_cell_identity("Linux-ARM64/dev", artifact)
 
     def test_leaf_requires_cross_configuration_semantics_and_capacity(self):
         case_id = "deepest_frame_host_call"

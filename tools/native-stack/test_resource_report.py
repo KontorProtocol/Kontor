@@ -373,6 +373,31 @@ def synthetic_report(directory):
 
 
 class ResourceReportControls(unittest.TestCase):
+    def test_macos_worker_capacity_requires_guard_below_mapped_stack(self):
+        pid = 401
+        records = [
+            thread("tokio_worker", "worker-1", 1_048_576, 1_048_576, pid),
+            thread("tokio_worker", "worker-2", 1_048_576, 1_048_576, pid),
+            thread("blocking_pool", "blocking", 8_388_608, None, pid),
+            thread("block_on_caller", "caller", 8_388_608, None, pid),
+        ]
+        for record in records:
+            record["identity_api"] = "macos_pthread_threadid_np"
+            record["guard_verification"] = "macos_mach_vm_region_prot_none"
+            record["mapped_start"] = record["usable_start"]
+            record["mapped_bytes"] = record["usable_bytes"]
+            record["guard_treatment"] = "guard protected below pthread stack range"
+        runtime = {
+            "flavor": "multi_thread", "worker_count": 2,
+            "worker_requested_bytes": 1_048_576,
+            "thread_observations": records,
+            "blocking_pool_observed": True, "block_on_caller_observed": True,
+        }
+        resource_evidence.thread_capacities(runtime, "reduced", 4096, "macos", pid)
+        records[0]["guard_end"] += 4096
+        with self.assertRaisesRegex(ValueError, "thread guard interval"):
+            resource_evidence.thread_capacities(runtime, "reduced", 4096, "macos", pid)
+
     def test_macos_guard_control_accepts_faulted_children_only(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
