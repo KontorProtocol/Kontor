@@ -461,6 +461,30 @@ def semantic_signature(attempt):
     }
 
 
+def validate_final_parity(signatures, runs, case_ids):
+    for case_id in case_ids:
+        for configuration in CONFIGURATIONS:
+            on = signatures[case_id, "target_observed", configuration]
+            off = signatures[case_id, "probe_off_control", configuration]
+            require(on == off,
+                    f"{case_id}: probe-on/off semantic parity differs")
+        require(signatures[case_id, "target_observed", "reduced"] ==
+                signatures[case_id, "target_observed", "production"],
+                f"{case_id}: reduced/production semantics differ")
+        for role in FINAL_ROLES:
+            reduced = [thread["usable_bytes"] for thread in
+                       runs[run_name(case_id, role, "reduced")]
+                       ["runtime"]["thread_observations"]
+                       if thread["thread_category"] == "tokio_worker"]
+            production = [thread["usable_bytes"] for thread in
+                          runs[run_name(case_id, role, "production")]
+                          ["runtime"]["thread_observations"]
+                          if thread["thread_category"] == "tokio_worker"]
+            require(reduced and production
+                    and min(production) >= 2 * max(reduced),
+                    f"{case_id}: usable worker-capacity ratio is below two")
+
+
 def validate_run(run, bundle, manifest, directory):
     case_id, role, configuration = (run[key] for key in
                                     ("case_id", "process_role", "configuration"))
@@ -665,35 +689,10 @@ def validate_bundle(bundle, directory):
         } for case_id in bundle["discovered_depths"]),
                 "discovered depths differ from raw production children")
     else:
-        for case_id in (sorted(cases) if bundle["phase"] == "final"
-                        else sorted(bundle["discovered_depths"])):
-            for configuration in CONFIGURATIONS:
-                on = signatures[case_id, "target_observed", configuration]
-                off = signatures[case_id, "probe_off_control", configuration]
-                require(on == off,
-                        "boundary probe-on/off semantic parity differs")
-            require(signatures[case_id, "target_observed", "reduced"] ==
-                    signatures[case_id, "target_observed", "production"],
-                    "boundary reduced/production semantics differ")
-            for role in FINAL_ROLES:
-                reduced = [thread["usable_bytes"] for thread in
-                           runs[run_name(case_id, role, "reduced")]
-                           ["runtime"]["thread_observations"]
-                           if thread["thread_category"] == "tokio_worker"]
-                production = [thread["usable_bytes"] for thread in
-                              runs[run_name(case_id, role, "production")]
-                              ["runtime"]["thread_observations"]
-                              if thread["thread_category"] == "tokio_worker"]
-                require(reduced and production
-                        and min(production) >= 2 * max(reduced),
-                        "boundary usable worker-capacity ratio is below two")
-        if bundle["phase"] == "final":
-            for configuration in CONFIGURATIONS:
-                require(signatures[
-                    "deepest_frame_host_call", "target_observed", configuration]
-                    == signatures[
-                    "deepest_frame_host_call", "probe_off_control", configuration],
-                    "leaf host probe-on/off semantics differ")
+        checked_cases = (sorted(cases) + ["deepest_frame_host_call"]
+                         if bundle["phase"] == "final"
+                         else sorted(bundle["discovered_depths"]))
+        validate_final_parity(signatures, runs, checked_cases)
     all_cases = {case["id"] for case in build_manifest()["cases"]
                  if case["family"] != "distinct_contract_chain"}
     bound = cases | {"deepest_frame_host_call"} if bundle["phase"] == "final" else set()

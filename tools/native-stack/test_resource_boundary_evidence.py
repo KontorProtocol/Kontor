@@ -8,7 +8,9 @@ from jsonschema import Draft202012Validator
 
 from resource_boundary_evidence import (parse_worker_log,
                                         validate_discovery_sequence,
-                                        validate_replay_order, validate_trace)
+                                        validate_final_parity,
+                                        validate_replay_order, validate_trace,
+                                        run_name)
 from resource_boundary_manifest import SCHEMA
 from resource_evidence import load_json_strict
 from resource_evidence_v2 import validate_teardown
@@ -24,6 +26,41 @@ def attempt(depth, outcome, sample_key="calibration", repeat_index=0):
 
 
 class BoundaryEvidenceTests(unittest.TestCase):
+    def test_leaf_requires_cross_configuration_semantics_and_capacity(self):
+        case_id = "deepest_frame_host_call"
+        signatures = {}
+        runs = {}
+        for configuration, usable in (("reduced", 1_000_000),
+                                      ("production", 2_000_000)):
+            for role in ("target_observed", "probe_off_control"):
+                signatures[case_id, role, configuration] = [{
+                    "sample_key": "target",
+                    "depth": 100,
+                    "fuel": {"user": 100, "system": 0, "deposit": 0},
+                    "receipt": {"status": "Ok", "gas": 10},
+                }]
+                runs[run_name(case_id, role, configuration)] = {
+                    "runtime": {"thread_observations": [
+                        {"thread_category": "tokio_worker",
+                         "usable_bytes": usable},
+                        {"thread_category": "tokio_worker",
+                         "usable_bytes": usable},
+                    ]}
+                }
+        validate_final_parity(signatures, runs, [case_id])
+        different_semantics = copy.deepcopy(signatures)
+        for role in ("target_observed", "probe_off_control"):
+            different_semantics[case_id, role, "reduced"][0]["fuel"]["user"] += 1
+        with self.assertRaises(ValueError):
+            validate_final_parity(different_semantics, runs, [case_id])
+        insufficient_capacity = copy.deepcopy(runs)
+        for role in ("target_observed", "probe_off_control"):
+            key = run_name(case_id, role, "production")
+            for thread in insufficient_capacity[key]["runtime"]["thread_observations"]:
+                thread["usable_bytes"] = 1_999_999
+        with self.assertRaises(ValueError):
+            validate_final_parity(signatures, insufficient_capacity, [case_id])
+
     def test_trace_binds_phase_and_compiler_to_measured_threads(self):
         def thread(category, number, base, requested):
             guard = 4096 if category == "tokio_worker" else 0
