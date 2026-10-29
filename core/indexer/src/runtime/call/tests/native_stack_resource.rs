@@ -661,6 +661,7 @@ fn finite_stack_worker_case() -> Result<()> {
                 | "sqlite_pagination"
                 | "sqlite_ranges"
                 | "sqlite_large_values"
+                | "native_staking_rewards"
         ),
         "unknown finite stack case"
     );
@@ -741,6 +742,12 @@ fn finite_stack_worker_case() -> Result<()> {
             } else if task_case_id == "sqlite_large_values" {
                 super::native_stack::resource_sqlite_large_values(&task_configuration, &task_role)
                     .await?
+            } else if task_case_id == "native_staking_rewards" {
+                super::native_stack::resource_native_staking_rewards(
+                    &task_configuration,
+                    &task_role,
+                )
+                .await?
             } else if task_case_id.starts_with("canonical_") {
                 super::native_stack::resource_canonical(
                     &task_case_id,

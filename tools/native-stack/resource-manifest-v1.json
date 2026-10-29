@@ -220,6 +220,10 @@
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
       "sha256": "d3573e8b63aa3491d7462fbc8bf86ea0553085ae0407ecac601557c8bae4489d"
     },
+    "native_build_metadata": {
+      "path": "native-contracts/binaries/build.json",
+      "sha256": "9d927b68696a24aa94bf1d873bbbda7fa77158c6de277f555a58b08150bc0997"
+    },
     "native_filestorage": {
       "path": "native-contracts/filestorage/src/lib.rs",
       "sha256": "b13919f9d9abe52ceb801ddc697887f60cfc5e1e99be3dced2c311cc882fb698"
@@ -227,6 +231,42 @@
     "native_staking": {
       "path": "native-contracts/staking/src/lib.rs",
       "sha256": "d7cf3419b2c84dc3389a9bf19ade05a42aa69799f6dfb84b00c47f39313f2dce"
+    },
+    "native_staking_binary": {
+      "path": "native-contracts/binaries/staking.wasm.br",
+      "sha256": "11bba975a24cdfe022610c6ff219c1cc699864608180081d7634766cef55e278"
+    },
+    "native_staking_rewards_adapter": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/native_staking_rewards.rs",
+      "sha256": "5af0311bd64d71dc381d5079cc7bc5a22f00c2ece5a416bfb5915f31bdda76b4"
+    },
+    "native_staking_rewards_capture": {
+      "path": "tools/native-stack/capture_resource_native_staking_rewards.py",
+      "sha256": "d3cde759c009ac8ab7c2b17da8d772882057bd0aa9d7e670a94bb0fe6c344c24"
+    },
+    "native_staking_rewards_validator": {
+      "path": "tools/native-stack/resource_native_staking_rewards_evidence.py",
+      "sha256": "3c3d8559214686dec4924a5e62bad49e4b7d245e5d4317439a1556bd41437611"
+    },
+    "native_staking_rewards_validator_tests": {
+      "path": "tools/native-stack/test_resource_native_staking_rewards_evidence.py",
+      "sha256": "3aea96b930959ff414345be7bd57e616200755a2b20fea7bf5155c77d1091dd9"
+    },
+    "native_staking_wit": {
+      "path": "native-contracts/staking/wit/contract.wit",
+      "sha256": "6f072f1d01b06b2fc0f5556bc4cf0ad15ddf87b5ee6dad95e28f7ca125fd6044"
+    },
+    "native_token": {
+      "path": "native-contracts/token/src/lib.rs",
+      "sha256": "b30a2a6a0f38e3426e4f6939f616bf30d1c73f4a1b1eaa6974b0a400e5c7d438"
+    },
+    "native_token_binary": {
+      "path": "native-contracts/binaries/token.wasm.br",
+      "sha256": "4b5a443f5b26740e61c0ac8fe6bab0b1132b7d6a0f4ae21036166beacb01e500"
+    },
+    "native_token_wit": {
+      "path": "native-contracts/token/wit/contract.wit",
+      "sha256": "975e51548fe46a5a1801e12ab558d6cd367aa1114b38405ee67e02a1ffb89239"
     },
     "nft_pages": {
       "path": "core/indexer/src/runtime/nft/query_tests.rs",
@@ -306,7 +346,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "fc98f227fa32dc14a859e6ee220efd1bc53e2a75f7d8bc56d6cccacf7e44ffcb"
+      "sha256": "416ac9a0d9c3bf2477de29399632a9d96f4058b5539465694ddef5d8ee67af6b"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -334,7 +374,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "2bb58bd44a81078d6a9c4d847bd7ea5b1296d02aded7680ff2c5d105dd15aa6f"
+      "sha256": "fab32ada83cba13d16e786cda82f3eeaba302112ce8b4fc49d9ce537de103d09"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -398,7 +438,7 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "eec7b543fa08c59cdb4049559e38cc4a5276fb312459207c5e33428aa3c9361a"
+      "sha256": "080a8bb2d71beb5de325340a272f9a660e0ccc38c5e0fab43dba22b65b99ad65"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
@@ -1394,7 +1434,18 @@
       "family": "native_core",
       "fixtures": [
         "staking_costs",
-        "native_staking"
+        "native_staking",
+        "native_staking_wit",
+        "native_staking_binary",
+        "native_token",
+        "native_token_wit",
+        "native_token_binary",
+        "native_build_metadata",
+        "native_staking_rewards_adapter",
+        "resource_worker_diagnostic",
+        "native_staking_rewards_capture",
+        "native_staking_rewards_validator",
+        "native_staking_rewards_validator_tests"
       ],
       "id": "native_staking_rewards",
       "paired_worker_status": "missing",
@@ -1942,7 +1993,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "2bb58bd44a81078d6a9c4d847bd7ea5b1296d02aded7680ff2c5d105dd15aa6f",
+    "source_sha256": "fab32ada83cba13d16e786cda82f3eeaba302112ce8b4fc49d9ce537de103d09",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -2094,7 +2145,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "2bb58bd44a81078d6a9c4d847bd7ea5b1296d02aded7680ff2c5d105dd15aa6f",
+    "sha256": "fab32ada83cba13d16e786cda82f3eeaba302112ce8b4fc49d9ce537de103d09",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },
