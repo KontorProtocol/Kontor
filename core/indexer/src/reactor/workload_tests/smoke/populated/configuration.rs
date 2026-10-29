@@ -14,6 +14,8 @@ pub(super) struct MixedConfig {
     pub(super) historical_rows: usize,
     #[serde(default)]
     pub(super) batch_operations: usize,
+    #[serde(default)]
+    pub(super) simulation_operations: usize,
 }
 
 impl MixedConfig {
@@ -39,6 +41,10 @@ impl MixedConfig {
                 || (matches!(self.batch_operations, 20 | 40)
                     && (self.transactions * 2).is_multiple_of(self.batch_operations)),
             "configured batches require complete groups of 20 or 40 operations"
+        );
+        ensure!(
+            matches!(self.simulation_operations, 0 | 2 | 4),
+            "configured simulations require two or four operations"
         );
         Ok(self)
     }
@@ -79,6 +85,18 @@ fn workload_mixed_configuration_rejects_invalid_shapes() -> Result<()> {
     let valid = r#"{"population":{"active_validators":4,"replacements":2,"agreements":2,"members_per_agreement":3},"mixed":{"transactions":50,"live_keys":257,"new_files":5}}"#;
     Configuration::parse(valid.as_bytes())?;
     for invalid in [
+        valid.replace(
+            "\"new_files\":5",
+            "\"new_files\":5,\"simulation_operations\":1",
+        ),
+        valid.replace(
+            "\"new_files\":5",
+            "\"new_files\":5,\"simulation_operations\":3",
+        ),
+        valid.replace(
+            "\"new_files\":5",
+            "\"new_files\":5,\"simulation_operations\":5",
+        ),
         valid.replace("\"new_files\":5", "\"new_files\":5,\"batch_operations\":1"),
         valid.replace("\"new_files\":5", "\"new_files\":5,\"batch_operations\":40"),
         valid.replace("\"transactions\":50", "\"transactions\":0"),
@@ -98,6 +116,16 @@ fn workload_mixed_configuration_rejects_invalid_shapes() -> Result<()> {
             Configuration::parse(invalid.as_bytes()).is_err(),
             "accepted {invalid}"
         );
+    }
+    for count in [0, 2, 4] {
+        Configuration::parse(
+            valid
+                .replace(
+                    "\"new_files\":5",
+                    &format!("\"new_files\":5,\"simulation_operations\":{count}"),
+                )
+                .as_bytes(),
+        )?;
     }
     Configuration::parse(
         valid

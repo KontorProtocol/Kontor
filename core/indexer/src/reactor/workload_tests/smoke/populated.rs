@@ -39,6 +39,7 @@ mod pruning;
 mod saved;
 mod shapes;
 mod simulation;
+mod simulation_requests;
 
 use batch::BatchProof;
 use configuration::MixedConfig;
@@ -48,6 +49,7 @@ use oracle::{PaidEffects, root_receipts};
 use pruning::PruningProof;
 use shapes::ShapeSigners;
 use simulation::SimulationProof;
+use simulation_requests::SimulationRequests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Delivery {
@@ -554,6 +556,28 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let snapshot =
         Snapshot::export(&history.db_conn(), &directory.path().join("populated.db")).await?;
     stop_engine(&mut history).await?;
+    let simulation_requests = if let Delivery::Configured(config) = delivery
+        && config.simulation_operations > 0
+    {
+        Some(
+            SimulationRequests::prepare(
+                &client,
+                &key,
+                fundings
+                    .first()
+                    .context("missing simulation funding")?
+                    .clone(),
+                mixed
+                    .as_ref()
+                    .context("missing mixed fixture")?
+                    .instructions(),
+                config.simulation_operations,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let (raw, reveals) = if let Some(shape_signers) = &shape_signers {
         shape_signers
             .block(
@@ -618,6 +642,9 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         .iter()
         .map(|tx| tx.compute_txid().to_string())
         .collect();
+    if let Some(requests) = &simulation_requests {
+        requests.validate(&reveals)?;
+    }
     let mut expected_projection = None;
     for name in ["first.db", "second.db"] {
         snapshot.copy_to(&directory.path().join(name))?;
@@ -644,6 +671,9 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             database_projection(&trial.db_conn()).await? == projection_before,
             "reactor startup changed restored state"
         );
+        if let Some(requests) = &simulation_requests {
+            requests.execute(&mut trial).await?;
+        }
         let simulations = if delivery == Delivery::SimulationsThenBatch {
             Some(SimulationProof::execute(&mut trial, &reveals[0]).await?)
         } else {
@@ -793,6 +823,7 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
                 expected_projection
                     .as_ref()
                     .context("missing final projection")?,
+                simulation_requests.as_ref(),
             )
             .await?;
     }

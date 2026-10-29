@@ -19,6 +19,7 @@ use super::super::{
 use super::PopulationConfig;
 use super::batch::BatchProof;
 use super::configuration::MixedConfig;
+use super::simulation_requests::SimulationRequests;
 use crate::bitcoin_client::Client;
 use crate::database::Writer;
 use crate::reg_tester::workload_bitcoin;
@@ -32,6 +33,8 @@ struct Files {
     chain: String,
     before: String,
     after: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    simulations: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -91,6 +94,7 @@ impl Output {
         block: &BitcoinBlock,
         before: &Value,
         after: &Value,
+        simulations: Option<&SimulationRequests>,
     ) -> Result<()> {
         ensure!(
             capture::source()? == self.source,
@@ -100,6 +104,7 @@ impl Output {
             hash_file(&std::env::current_exe()?)? == self.binary_sha256,
             "binary changed during generation"
         );
+        ensure!(simulations.is_some() == (self.mixed.simulation_operations > 0));
         snapshot.copy_to(&self.root.join("snapshot.db"))?;
         let info: Value = client.call("getnetworkinfo", vec![]).await?;
         let anchor_hash = client.get_block_hash(ANCHOR_HEIGHT).await?;
@@ -116,6 +121,9 @@ impl Output {
             chain: write_new(&self.root, "chain.json", &serde_json::to_vec(&chain)?)?,
             before: write_new(&self.root, "before.json", &serde_json::to_vec(before)?)?,
             after: write_new(&self.root, "after.json", &serde_json::to_vec(after)?)?,
+            simulations: simulations
+                .map(|requests| write_new(&self.root, "simulations.json", &requests.bytes()?))
+                .transpose()?,
         };
         let manifest = Manifest {
             schema_version: 1,
@@ -159,6 +167,18 @@ impl Saved {
             "saved manifest name differs"
         );
         let root = path.parent().context("missing saved directory")?;
+        let bytes = fs::read(&path)?;
+        ensure!(
+            hex::encode(Sha256::digest(&bytes)) == expected_sha256,
+            "saved manifest hash differs"
+        );
+        let manifest: Manifest = serde_json::from_slice(&bytes)?;
+        manifest.population.validate()?;
+        manifest.mixed.validate()?;
+        ensure!(
+            manifest.files.simulations.is_some() == (manifest.mixed.simulation_operations > 0),
+            "saved simulation inventory differs from configuration"
+        );
         let names = fs::read_dir(root)?
             .map(|entry| {
                 entry?
@@ -167,27 +187,21 @@ impl Saved {
                     .map_err(|_| anyhow!("non-UTF-8 saved file"))
             })
             .collect::<Result<BTreeSet<_>>>()?;
-        ensure!(
-            names
-                == [
-                    "manifest.json",
-                    "snapshot.db",
-                    "block.bin",
-                    "chain.json",
-                    "before.json",
-                    "after.json"
-                ]
-                .into_iter()
-                .map(String::from)
-                .collect(),
-            "saved file inventory differs"
-        );
-        let bytes = fs::read(&path)?;
-        ensure!(
-            hex::encode(Sha256::digest(&bytes)) == expected_sha256,
-            "saved manifest hash differs"
-        );
-        let manifest: Manifest = serde_json::from_slice(&bytes)?;
+        let mut expected_names: BTreeSet<_> = [
+            "manifest.json",
+            "snapshot.db",
+            "block.bin",
+            "chain.json",
+            "before.json",
+            "after.json",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        if manifest.files.simulations.is_some() {
+            expected_names.insert("simulations.json".into());
+        }
+        ensure!(names == expected_names, "saved file inventory differs");
         ensure!(
             manifest.schema_version == 1,
             "unsupported saved workload schema"
@@ -196,8 +210,6 @@ impl Saved {
             hash_file(&std::env::current_exe()?)? == manifest.binary_sha256,
             "saved workload binary differs"
         );
-        manifest.population.validate()?;
-        manifest.mixed.validate()?;
         ensure!(
             capture::source()? == manifest.source,
             "saved workload source/build differs"
@@ -289,6 +301,20 @@ async fn workload_saved_configured_replay() -> Result<()> {
             Ok(raw_tx.clone())
         })
         .collect::<Result<Vec<_>>>()?;
+    let simulations = manifest
+        .files
+        .simulations
+        .as_ref()
+        .map(|digest| {
+            SimulationRequests::load(
+                &saved.bytes("simulations.json", digest)?,
+                manifest.mixed.simulation_operations,
+            )
+        })
+        .transpose()?;
+    if let Some(requests) = &simulations {
+        requests.validate(&reveals)?;
+    }
     let bitcoin_dir = TempDir::new()?;
     let (child, client) = workload_bitcoin(bitcoin_dir.path()).await?;
     let mut bitcoin = BitcoinProcess(child);
@@ -336,6 +362,9 @@ async fn workload_saved_configured_replay() -> Result<()> {
             database_projection(&trial.db_conn()).await? == before,
             "startup changed saved prestate"
         );
+        if let Some(requests) = &simulations {
+            requests.execute(&mut trial).await?;
+        }
         let batches = if manifest.mixed.batch_operations > 0 {
             BatchProof::execute_chunks(&mut trial, &reveals, manifest.mixed.batch_operations)
                 .await?
@@ -357,7 +386,8 @@ async fn workload_saved_configured_replay() -> Result<()> {
             "workload_saved_trial={}",
             json!({"trial": name, "manifest_sha256": expected,
             "service_ns": service_ns, "batch_operations": manifest.mixed.batch_operations,
-            "service_scope": "block application through pruning, excludes prior batches",
+            "simulation_operations": manifest.mixed.simulation_operations,
+            "service_scope": "block application through pruning, excludes prior batches and simulations",
             "timing_claim": "diagnostic_only"})
         );
     }

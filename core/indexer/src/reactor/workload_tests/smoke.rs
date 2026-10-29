@@ -254,6 +254,21 @@ async fn signed_instructions(
     funding: (OutPoint, TxOut),
     ops: Vec<Inst>,
 ) -> Result<(Transaction, Transaction, JsonValue)> {
+    let (commit, reveal, record) = checked_signed_instructions(client, key, funding, ops).await?;
+    for transaction in [&commit, &reveal] {
+        client
+            .send_raw_transaction(&hex::encode(serialize(transaction)))
+            .await?;
+    }
+    Ok((commit, reveal, record))
+}
+
+async fn checked_signed_instructions(
+    client: &Client,
+    key: &Keypair,
+    funding: (OutPoint, TxOut),
+    ops: Vec<Inst>,
+) -> Result<(Transaction, Transaction, JsonValue)> {
     ensure!(!ops.is_empty(), "workload reveal must contain operations");
     let secp = Secp256k1::new();
     let public_key = key.x_only_public_key().0;
@@ -303,9 +318,6 @@ async fn signed_instructions(
         verdicts.len() == 2 && verdicts.iter().all(|v| v.allowed),
         "bitcoind rejected smoke: {verdicts:?}"
     );
-    for transaction in raw {
-        client.send_raw_transaction(&transaction).await?;
-    }
     let record = json!(
         verdicts
             .iter()
