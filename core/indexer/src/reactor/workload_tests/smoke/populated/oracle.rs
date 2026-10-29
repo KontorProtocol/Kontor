@@ -191,26 +191,44 @@ impl Before {
         &self,
         reactor: &mut Reactor<RuntimeExecutor>,
         rows: &[ResultRow],
-        txid: &str,
+        txids: &[String],
         effects: &PaidEffects,
     ) -> Result<()> {
         let runtime = &mut reactor.runtime;
-        let roots = root_receipts(rows, txid)?;
+        let mut roots = Vec::new();
+        let mut transaction_ids = BTreeSet::new();
+        for txid in txids {
+            ensure!(
+                transaction_ids.insert(txid),
+                "duplicate workload transaction"
+            );
+            let transaction_roots = root_receipts(rows, txid)?;
+            ensure!(
+                !transaction_roots.is_empty(),
+                "missing transaction receipts"
+            );
+            roots.extend(transaction_roots);
+        }
         ensure!(!roots.is_empty());
         let gas = roots.iter().try_fold(0u64, |sum, row| {
             sum.checked_add(row.gas).context("gas overflow")
         })?;
-        let mut usage = runtime.get_storage_conn().query(
+        let mut deposit = 0u64;
+        let mut user = 0u64;
+        for txid in txids {
+            let mut usage = runtime.get_storage_conn().query(
             "SELECT u.deposit_fuel, u.user_fuel FROM transaction_execution_usage u JOIN transactions t ON t.id = u.tx_id WHERE t.txid = ?", params![txid],
         ).await?;
-        let usage_row = usage.next().await?.context("missing paid usage")?;
-        let deposit: u64 = usage_row.get(0)?;
-        let user: u64 = usage_row.get(1)?;
-        ensure!(
-            usage.next().await?.is_none()
-                && runtime.gas_to_fuel_multiplier == 1000
-                && deposit.is_multiple_of(1000)
-        );
+            let usage_row = usage.next().await?.context("missing paid usage")?;
+            deposit = deposit
+                .checked_add(usage_row.get::<u64>(0)?)
+                .context("deposit overflow")?;
+            user = user
+                .checked_add(usage_row.get::<u64>(1)?)
+                .context("user fuel overflow")?;
+            ensure!(usage.next().await?.is_none(), "duplicate transaction usage");
+        }
+        ensure!(runtime.gas_to_fuel_multiplier == 1000 && deposit.is_multiple_of(1000));
         let rounded = user
             .checked_add(deposit)
             .context("fuel overflow")?

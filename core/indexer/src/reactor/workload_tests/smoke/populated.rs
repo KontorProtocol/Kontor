@@ -27,6 +27,7 @@ use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{ComponentCache, Decimal, Runtime, Storage, TransactionContext};
 
 mod batch;
+mod many;
 mod mixed;
 mod oracle;
 mod pruning;
@@ -44,9 +45,18 @@ enum Delivery {
     BatchThenConfirmation,
     SimulationsThenBatch,
     MixedBlock,
+    MixedTransactions(usize),
 }
 
 impl Delivery {
+    fn mixed_rounds(self) -> Option<usize> {
+        match self {
+            Self::MixedBlock => Some(5),
+            Self::MixedTransactions(count) => Some(count / 10),
+            _ => None,
+        }
+    }
+
     fn batched(self) -> bool {
         matches!(
             self,
@@ -203,6 +213,36 @@ async fn workload_mixed_operations_preserve_accounting_and_rollback() -> Result<
     .await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; 50 real signed reveals, not performance acceptance"]
+async fn workload_fifty_transactions_preserve_mixed_accounting() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::MixedTransactions(50),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; 500 real signed reveals, not performance acceptance"]
+async fn workload_five_hundred_transactions_preserve_mixed_accounting() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::MixedTransactions(500),
+    )
+    .await
+}
+
 async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let config = config.validate()?;
     eprintln!("workload_population={}", serde_json::to_string(&config)?);
@@ -217,7 +257,10 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let public_key = key.x_only_public_key().0;
     let address = Address::p2tr(&Secp256k1::new(), public_key, None, Network::Regtest);
     let mined = client
-        .generate_to_address(ANCHOR_HEIGHT, &address.to_string())
+        .generate_to_address(
+            ANCHOR_HEIGHT - u64::from(matches!(delivery, Delivery::MixedTransactions(_))),
+            &address.to_string(),
+        )
         .await?;
     let funding_block = client.get_block(&BlockHash::from_str(&mined[0])?).await?;
     let funding = (
@@ -227,7 +270,12 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         },
         funding_block.txdata[0].output[0].clone(),
     );
-    let anchor = BlockHash::from_str(mined.last().context("missing anchor")?)?;
+    let fundings = if let Delivery::MixedTransactions(count) = delivery {
+        many::fund(&client, &key, &address, funding.clone(), count).await?
+    } else {
+        vec![funding.clone()]
+    };
+    let anchor = client.get_block_hash(ANCHOR_HEIGHT).await?;
     let validators =
         ValidatorPopulation::new(config.active_validators, config.replacements, [73; 32])?;
     let directory = TempDir::new()?;
@@ -315,8 +363,8 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         .await?
         .context("missing payer identity")?
         .signer_id();
-    let mixed = if delivery == Delivery::MixedBlock {
-        Some(MixedWorkload::prepare(&mut history.runtime, payer).await?)
+    let mixed = if let Some(rounds) = delivery.mixed_rounds() {
+        Some(MixedWorkload::prepare(&mut history.runtime, payer, rounds).await?)
     } else {
         None
     };
@@ -336,17 +384,45 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let snapshot =
         Snapshot::export(&history.db_conn(), &directory.path().join("populated.db")).await?;
     stop_engine(&mut history).await?;
-    let (commit, reveal, _) = if let Some(mixed) = &mixed {
-        signed_instructions(&client, &key, funding, mixed.instructions()).await?
+    let (raw, reveals) = if matches!(delivery, Delivery::MixedTransactions(_)) {
+        many::block(
+            &client,
+            &key,
+            &address,
+            fundings,
+            mixed
+                .as_ref()
+                .context("missing mixed fixture")?
+                .instructions(),
+        )
+        .await?
     } else {
-        signed_smoke(&client, &key, funding, &addresses).await?
+        let (commit, reveal, _) = if let Some(mixed) = &mixed {
+            signed_instructions(&client, &key, funding, mixed.instructions()).await?
+        } else {
+            signed_smoke(&client, &key, funding, &addresses).await?
+        };
+        let hash =
+            BlockHash::from_str(&client.generate_to_address(1, &address.to_string()).await?[0])?;
+        let raw = client.get_block(&hash).await?;
+        ensure!(raw.txdata.len() == 3 && raw.txdata[1] == commit && raw.txdata[2] == reveal);
+        (raw, vec![reveal])
     };
-    let hash = BlockHash::from_str(&client.generate_to_address(1, &address.to_string()).await?[0])?;
-    let raw = client.get_block(&hash).await?;
-    ensure!(raw.txdata.len() == 3 && raw.txdata[1] == commit && raw.txdata[2] == reveal);
+    let hash = raw.block_hash();
     let block = decode_block(&serialize(&raw), SMOKE_HEIGHT, hash, anchor)?;
-    ensure!(block.transactions.len() == 1 && block.transactions[0].index == 2);
-    let txid = reveal.compute_txid().to_string();
+    ensure!(block.transactions.len() == reveals.len());
+    for (index, (decoded, reveal)) in block.transactions.iter().zip(&reveals).enumerate() {
+        ensure!(
+            decoded.index == u32::try_from(index * 2 + 2)? && decoded.txid == reveal.compute_txid()
+        );
+        if matches!(delivery, Delivery::MixedTransactions(_)) {
+            ensure!(decoded.inputs.len() == 1 && decoded.inputs[0].insts.ops.len() == 2);
+        }
+    }
+    let txids: Vec<_> = reveals
+        .iter()
+        .map(|tx| tx.compute_txid().to_string())
+        .collect();
     let mut expected_projection = None;
     for name in ["first.db", "second.db"] {
         snapshot.copy_to(&directory.path().join(name))?;
@@ -374,12 +450,12 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             "reactor startup changed restored state"
         );
         let simulations = if delivery == Delivery::SimulationsThenBatch {
-            Some(SimulationProof::execute(&mut trial, &reveal).await?)
+            Some(SimulationProof::execute(&mut trial, &reveals[0]).await?)
         } else {
             None
         };
         let batch = if delivery.batched() {
-            Some(BatchProof::execute(&mut trial, &reveal).await?)
+            Some(BatchProof::execute(&mut trial, &reveals[0]).await?)
         } else {
             None
         };
@@ -395,16 +471,29 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         }
         let all_paid: Vec<_> = rows
             .iter()
-            .filter(|row| row.txid.as_deref() == Some(&txid))
+            .filter(|row| row.txid.as_ref().is_some_and(|txid| txids.contains(txid)))
             .collect();
         ensure!(
             rows.iter()
-                .all(|row| row.txid.is_none() || row.txid.as_deref() == Some(&txid))
+                .all(|row| row.txid.as_ref().is_none_or(|txid| txids.contains(txid)))
         );
-        let paid = root_receipts(&rows, &txid)?;
+        let mut paid = Vec::new();
+        for txid in &txids {
+            paid.extend(root_receipts(&rows, txid)?);
+        }
         let effects = if let Some(mixed) = &mixed {
             mixed
-                .check(&mut trial.runtime, &all_paid, &paid, payer)
+                .check(
+                    &mut trial.runtime,
+                    &all_paid,
+                    &paid,
+                    payer,
+                    if matches!(delivery, Delivery::MixedTransactions(_)) {
+                        2
+                    } else {
+                        100
+                    },
+                )
                 .await?;
             mixed.effects()?
         } else {
@@ -453,7 +542,7 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             ensure!(state(&mut trial.runtime, &addresses[1]).await? == [0, 0, 0, 0]);
             PaidEffects::default()
         };
-        before.check(&mut trial, &rows, &txid, &effects).await?;
+        before.check(&mut trial, &rows, &txids, &effects).await?;
         ensure!(
             database_projection(&trial.db_conn()).await? == projection,
             "observations mutated state"

@@ -15,7 +15,6 @@ use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{Decimal, Runtime, TransactionContext, from_wave_expr, to_wave_expr};
 
-const ROUNDS: usize = 5;
 const BLOB_BYTES: usize = 128;
 
 pub(super) struct MixedWorkload {
@@ -24,10 +23,12 @@ pub(super) struct MixedWorkload {
     proxy: ContractAddress,
     crypto: ContractAddress,
     recipient: u64,
+    rounds: usize,
 }
 
 impl MixedWorkload {
-    pub(super) async fn prepare(runtime: &mut Runtime, payer: u64) -> Result<Self> {
+    pub(super) async fn prepare(runtime: &mut Runtime, payer: u64, rounds: usize) -> Result<Self> {
+        ensure!(matches!(rounds, 5 | 50));
         ensure!(
             staking::get_stake(runtime, &HolderRef::SignerId(payer).to_string())
                 .await?
@@ -104,12 +105,13 @@ impl MixedWorkload {
             proxy,
             crypto,
             recipient,
+            rounds,
         })
     }
 
     pub(super) fn instructions(&self) -> Vec<Inst> {
         let mut result = Vec::new();
-        for round in 0..ROUNDS {
+        for round in 0..self.rounds {
             for slot in 0..20 {
                 let (contract, expr) = match slot {
                     0..=7 => (
@@ -150,11 +152,11 @@ impl MixedWorkload {
         Ok(PaidEffects {
             transferred: mul_decimal(
                 Decimal::from("0.001"),
-                Decimal::try_from((ROUNDS * 8) as u64)?,
+                Decimal::try_from((self.rounds * 8) as u64)?,
             )?,
             staked: mul_decimal(
                 Decimal::from("0.001"),
-                Decimal::try_from((ROUNDS * 2) as u64)?,
+                Decimal::try_from((self.rounds * 2) as u64)?,
             )?,
         })
     }
@@ -165,8 +167,10 @@ impl MixedWorkload {
         all: &[&ResultRow],
         roots: &[&ResultRow],
         payer: u64,
+        operations_per_transaction: usize,
     ) -> Result<()> {
-        ensure!(roots.len() == ROUNDS * 20 && all.len() == ROUNDS * 25);
+        ensure!(operations_per_transaction > 0);
+        ensure!(roots.len() == self.rounds * 20 && all.len() == self.rounds * 25);
         let conn = runtime.get_storage_conn();
         let staking_id = get_contract_id_from_address(&conn, &staking_address())
             .await?
@@ -181,9 +185,9 @@ impl MixedWorkload {
             let nested = matches!(slot, 13..=17);
             ensure!(
                 root.height == SMOKE_HEIGHT
-                    && root.tx_index == Some(0)
+                    && root.tx_index == Some(u32::try_from(index / operations_per_transaction)?)
                     && root.input_index == Some(0)
-                    && root.op_index == Some(index as u32)
+                    && root.op_index == Some(u32::try_from(index % operations_per_transaction)?)
                     && root.result_index == u32::from(nested)
                     && root.signer_id == payer
                     && root.payer_signer_id == Some(payer)
@@ -257,7 +261,12 @@ impl MixedWorkload {
             if nested {
                 let children: Vec<_> = all
                     .iter()
-                    .filter(|row| row.op_index == root.op_index && row.result_index == 0)
+                    .filter(|row| {
+                        row.txid == root.txid
+                            && row.input_index == root.input_index
+                            && row.op_index == root.op_index
+                            && row.result_index == 0
+                    })
                     .collect();
                 ensure!(children.len() == 1);
                 let child = children[0];
@@ -298,7 +307,7 @@ impl MixedWorkload {
         }
         ensure!(
             from_wave_expr::<u64>(&runtime.execute_system_view(&self.counter, "get()").await?)
-                == (ROUNDS * 4) as u64
+                == (self.rounds * 4) as u64
         );
         ensure!(
             from_wave_expr::<String>(
@@ -321,7 +330,9 @@ impl MixedWorkload {
                 &runtime
                     .execute_system_view(&self.crypto, "get-hash()")
                     .await?
-            ) == Some(Sha256::digest(format!("round-{}-slot-19", ROUNDS - 1).as_bytes()).to_vec())
+            ) == Some(
+                Sha256::digest(format!("round-{}-slot-19", self.rounds - 1).as_bytes()).to_vec()
+            )
         );
         ensure!(
             token::balance(runtime, HolderRef::SignerId(self.recipient)).await?
