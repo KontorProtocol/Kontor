@@ -27,6 +27,7 @@ mod canonical;
 mod foreign_wave;
 mod initialization;
 mod lifecycle;
+mod sqlite_large_values;
 mod sqlite_pagination;
 mod sqlite_ranges;
 mod sweep;
@@ -111,6 +112,13 @@ pub(super) async fn resource_sqlite_ranges(
     process_role: &str,
 ) -> Result<JsonValue> {
     sqlite_ranges::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_sqlite_large_values(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    sqlite_large_values::run(configuration, process_role).await
 }
 
 #[tokio::test]

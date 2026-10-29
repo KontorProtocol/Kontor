@@ -72,6 +72,22 @@
       "path": "core/Cargo.lock",
       "sha256": "6e7ea3f1f76c383f267f9b00125a86dc01de45f7f3a2e5082da89598265b525f"
     },
+    "counter_guest": {
+      "path": "test-contracts/binaries/counter.wasm.br",
+      "sha256": "e67f1278996f2f0a1650221b561b7047757281bf817cbe7491e872e9b9868414"
+    },
+    "counter_guest_manifest": {
+      "path": "test-contracts/counter/Cargo.toml",
+      "sha256": "37014e54d4f8943ebcf434876a4ed6ed2eee0891237e80b3043bf6eac6a556a0"
+    },
+    "counter_guest_source": {
+      "path": "test-contracts/counter/src/lib.rs",
+      "sha256": "213dc922baf8fb352a1734795552b941e39dc3d9e55d6a9f5b5846ab19f9a2da"
+    },
+    "counter_guest_wit": {
+      "path": "test-contracts/counter/wit/contract.wit",
+      "sha256": "c6aaa6ca53cf70b4f619b6b8d44805cd2e656d2ff3dc893c5f2bb61d160b215d"
+    },
     "crypto_component": {
       "path": "test-contracts/binaries/crypto.wasm.br",
       "sha256": "cb191cf025e572978574e7069bc425ccd5d26db528eec5eabcc01345a1ea0c8d"
@@ -290,7 +306,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "b598e907caf8cdf24271b1fb0b3e8041aad8c81d38b0edbe420ba6d5cd10bfd0"
+      "sha256": "fc98f227fa32dc14a859e6ee220efd1bc53e2a75f7d8bc56d6cccacf7e44ffcb"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -318,11 +334,27 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "db14331d64e4289440a3e41d5b5033e3be47bfb8125f21085cedc6335f58957a"
+      "sha256": "2bb58bd44a81078d6a9c4d847bd7ea5b1296d02aded7680ff2c5d105dd15aa6f"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
       "sha256": "48ed4901e83e95cec2fd0d928bbe3c06993f916ab0be5398fe84107d8802a69e"
+    },
+    "sqlite_large_values_adapter": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_large_values.rs",
+      "sha256": "047027a7174fb3028efc90828f25c88b32a3657fcd7454553729a1f11934631e"
+    },
+    "sqlite_large_values_capture": {
+      "path": "tools/native-stack/capture_resource_sqlite_large_values.py",
+      "sha256": "67cdd8066a22dc1274d4e5355be20b9912ab5eb7a9407788a93e4f5264ee5ad7"
+    },
+    "sqlite_large_values_validator": {
+      "path": "tools/native-stack/resource_sqlite_large_values_evidence.py",
+      "sha256": "aef60c501df928cefff4f5e22e07175838075663a37482e0b2ba12d9ad62abd8"
+    },
+    "sqlite_large_values_validator_tests": {
+      "path": "tools/native-stack/test_resource_sqlite_large_values_evidence.py",
+      "sha256": "051cacbcc380fc6e9d48a96b2586a88790125b57f9d2b988da728e829ae7f3b2"
     },
     "sqlite_pagination_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_pagination.rs",
@@ -366,7 +398,7 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "158d7a8bf96cbd86c410c768b7b074bf055d11a2380f5f2d30947033d0d7c0e9"
+      "sha256": "eec7b543fa08c59cdb4049559e38cc4a5276fb312459207c5e33428aa3c9361a"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
@@ -1678,7 +1710,19 @@
         "value_16384_page_7": null
       },
       "family": "sqlite",
-      "fixtures": [],
+      "fixtures": [
+        "counter_guest",
+        "counter_guest_source",
+        "counter_guest_wit",
+        "counter_guest_manifest",
+        "guest_lockfile",
+        "guest_build_metadata",
+        "sqlite_large_values_adapter",
+        "resource_worker_diagnostic",
+        "sqlite_large_values_capture",
+        "sqlite_large_values_validator",
+        "sqlite_large_values_validator_tests"
+      ],
       "id": "sqlite_large_values",
       "paired_worker_status": "missing",
       "parameters": {
@@ -1898,7 +1942,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "db14331d64e4289440a3e41d5b5033e3be47bfb8125f21085cedc6335f58957a",
+    "source_sha256": "2bb58bd44a81078d6a9c4d847bd7ea5b1296d02aded7680ff2c5d105dd15aa6f",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -2050,7 +2094,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "db14331d64e4289440a3e41d5b5033e3be47bfb8125f21085cedc6335f58957a",
+    "sha256": "2bb58bd44a81078d6a9c4d847bd7ea5b1296d02aded7680ff2c5d105dd15aa6f",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },
