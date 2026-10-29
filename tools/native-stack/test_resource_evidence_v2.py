@@ -22,21 +22,24 @@ from resource_evidence_v2 import (expected_case_env, historical_semantics,
 from resource_manifest_v2 import MANIFEST, SCHEMA, build_manifest_v2
 
 
-def store_events(count, role="nested_chain", depth_gate=False):
+def store_events(count, role="nested_chain", depth_gate=False, auxiliary=None):
     events = []
-    for identifier in range(count):
+    roles = [role] * count
+    for auxiliary_role, extra in sorted((auxiliary or {}).items()):
+        roles.extend([auxiliary_role] * extra)
+    for identifier, store_role in enumerate(roles):
         events.extend([
-            {"id": identifier, "role": role, "kind": "reserved", "table_alive": None},
-            {"id": identifier, "role": role, "kind": "store_created", "table_alive": None},
+            {"id": identifier, "role": store_role, "kind": "reserved", "table_alive": None},
+            {"id": identifier, "role": store_role, "kind": "store_created", "table_alive": None},
         ])
     if depth_gate:
         events.append({"id": None, "role": "nested_chain",
                        "kind": "depth_gate_rejected", "table_alive": None})
-    for identifier in reversed(range(count)):
+    for identifier, store_role in reversed(list(enumerate(roles))):
         events.extend([
-            {"id": identifier, "role": role, "kind": "table_destroyed",
+            {"id": identifier, "role": store_role, "kind": "table_destroyed",
              "table_alive": False},
-            {"id": identifier, "role": role, "kind": "lease_released",
+            {"id": identifier, "role": store_role, "kind": "lease_released",
              "table_alive": None},
         ])
     return events
@@ -123,9 +126,12 @@ def bundle_fixture(directory):
                 outcome = ("trap" if key["sample_key"] == "trap_control" else
                            "invocation_limit" if stores == 65 else "ok")
                 trial = trial_fixture(mode, stores, outcome, key["sample_key"])
+                auxiliary = manifest["auxiliary_expected_counts"].get(
+                    f"{case_id}/{role}/{configuration}/{index}")
                 trial.update(repeat_index=index,
                              teardown_events=(store_events(min(stores, 64),
-                                             depth_gate=stores == 65)
+                                             depth_gate=stores == 65,
+                                             auxiliary=auxiliary)
                                               if observed else None))
                 trials.append(trial)
                 observation = observation_from_trial(
@@ -278,7 +284,8 @@ def bundle_fixture(directory):
         "historical_reference": {"path": historical_path.name,
                                  "sha256": sha256(historical_path)},
         "runs": runs, "remaining_case_bindings": manifest["remaining_case_ids"],
-        "auxiliary_count_status": "pilot_pending", "auxiliary_expected_counts": {},
+        "auxiliary_count_status": manifest["auxiliary_count_status"],
+        "auxiliary_expected_counts": manifest["auxiliary_expected_counts"],
         "cross_mode_initial_states": cross_mode_initial_states(captured, {}),
     }
     (directory / "resource-chain-v2-capture.json").write_text(json.dumps(bundle))
@@ -310,8 +317,8 @@ class EvidenceV2Tests(unittest.TestCase):
                 self.assertEqual(len(signatures), 60)
                 guard.assert_called_once()
                 self.assertEqual(guard.call_args.kwargs["page_size"], 16_384)
-                with self.assertRaisesRegex(ValueError, "auxiliary Store counts"):
-                    resource_evidence_v2.validate_bundle(bundle, directory)
+                self.assertEqual(len(resource_evidence_v2.validate_bundle(
+                    bundle, directory)), 60)
                 changed = copy.deepcopy(bundle)
                 changed_run = changed["runs"]["chain_64_paid_target_probe_off_control_reduced"]
                 duplicate = changed["runs"][
@@ -350,7 +357,19 @@ class EvidenceV2Tests(unittest.TestCase):
         self.assertEqual(json.loads(MANIFEST.read_text()), manifest)
         self.assertEqual(len(manifest["case_roles"]), 30)
         self.assertEqual(len(manifest["remaining_case_ids"]), 29)
-        self.assertEqual(manifest["auxiliary_count_status"], "pilot_pending")
+        self.assertEqual(manifest["auxiliary_count_status"], "frozen")
+        self.assertEqual(len(manifest["auxiliary_expected_counts"]), 90)
+        with patch("resource_manifest_v2.AUXILIARY_EXPECTED_COUNTS", {}):
+            with self.assertRaisesRegex(ValueError, "cover each observed trial"):
+                build_manifest_v2()
+        for key, counts in manifest["auxiliary_expected_counts"].items():
+            case_id = key.split("/", 1)[0]
+            mode = case_id.split("_")[2]
+            self.assertEqual(counts, {
+                "pre_observation": 4, "post_observation": 5,
+                "rollback_observation": 5,
+                "target_native_auxiliary": 2 if mode == "paid" else 0,
+            })
         self.assertEqual(sum(len(item["trials"]) for item in manifest["case_roles"]), 90)
         self.assertTrue(all(item["nested_chain_created"] in (33, 63, 64)
                             for item in manifest["case_roles"]))

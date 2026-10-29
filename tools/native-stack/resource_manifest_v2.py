@@ -31,21 +31,34 @@ ROLES = (
     "target_observed", "trap_control_observed",
     "target_probe_off_control", "trap_control_probe_off_control",
 )
-# Populate only after an archived pilot trace and independent count review.
-AUXILIARY_EXPECTED_COUNTS = {}
+AUXILIARY_EXPECTED_COUNTS = {
+    f"chain_{stores}_{mode}/{role}/{configuration}/{index}": {
+        "pre_observation": 4,
+        "post_observation": 5,
+        "rollback_observation": 5,
+        "target_native_auxiliary": 2 if mode == "paid" else 0,
+    }
+    for stores in (33, 63, 64, 65)
+    for mode in ("core", "paid", "view")
+    for role in ROLES
+    if stores == 64 or not role.startswith("trap_control")
+    if role.endswith("observed")
+    for configuration in ("reduced", "production")
+    for index in range(3)
+}
 AUXILIARY_CALLSITES = {
     "target_native_auxiliary": [
-        "core/indexer/src/runtime/fees.rs::with_payment: token::api::hold and token::api::release around paid calls",
-        "core/indexer/src/runtime/token.rs::address: token_0_0 is the only target-phase native address",
+        "core/indexer/src/runtime/fees.rs:25,50: with_payment calls token::api::hold and token::api::release around paid deterministic outcomes, including traps and depth rejection",
+        "core/indexer/src/runtime/invocation.rs:73-77: target-phase token calls are classified separately from chain Stores",
     ],
     "pre_observation": [
-        "core/indexer/src/runtime/call/tests/sequential_chains.rs::run_chain_probe: balance, floor, supply before target",
+        "core/indexer/src/runtime/call/tests/sequential_chains.rs:377-380: actor balance, burner balance, floor, and supply each create one native Store before the target",
     ],
     "post_observation": [
-        "core/indexer/src/runtime/call/tests/sequential_chains.rs::run_chain_probe: storage-state, balance, floor, supply after target",
+        "core/indexer/src/runtime/call/tests/sequential_chains.rs:478-480,540-548: storage-state, actor balance, burner balance, supply, and floor each create one Store after the target",
     ],
     "rollback_observation": [
-        "core/indexer/src/runtime/call/tests/sequential_chains.rs::run_chain_probe: balance, floor, supply, storage-state after rollback",
+        "core/indexer/src/runtime/call/tests/sequential_chains.rs:573-584: actor balance, floor, burner balance, supply, and storage-state each execute after rollback; asserted rollback_clean proves no short-circuit skipped a call",
     ],
 }
 
@@ -79,12 +92,13 @@ def build_manifest_v2():
         for configuration in ("reduced", "production")
         for index, _ in enumerate(item["trials"])
     }
-    if AUXILIARY_EXPECTED_COUNTS:
-        assert set(AUXILIARY_EXPECTED_COUNTS) == expected_auxiliary_keys
-        assert all(set(counts) == set(AUXILIARY_CALLSITES)
-                   and all(type(count) is int and count >= 0
-                           for count in counts.values())
-                   for counts in AUXILIARY_EXPECTED_COUNTS.values())
+    if set(AUXILIARY_EXPECTED_COUNTS) != expected_auxiliary_keys:
+        raise ValueError("frozen auxiliary counts do not cover each observed trial")
+    if not all(set(counts) == set(AUXILIARY_CALLSITES)
+               and all(type(count) is int and count >= 0
+                       for count in counts.values())
+               for counts in AUXILIARY_EXPECTED_COUNTS.values()):
+        raise ValueError("frozen auxiliary counts contain an invalid role or value")
     return {
         "schema_version": 2,
         "claim_status": "candidate_only",
@@ -94,8 +108,7 @@ def build_manifest_v2():
         "sources": {name: {"path": path, "sha256": sha256(ROOT / path)}
                     for name, path in sorted(SOURCES.items())},
         "case_roles": expected,
-        "auxiliary_count_status": (
-            "frozen" if AUXILIARY_EXPECTED_COUNTS else "pilot_pending"),
+        "auxiliary_count_status": "frozen",
         "auxiliary_expected_counts": AUXILIARY_EXPECTED_COUNTS,
         "auxiliary_callsite_citations": AUXILIARY_CALLSITES,
         "remaining_case_ids": remaining,
