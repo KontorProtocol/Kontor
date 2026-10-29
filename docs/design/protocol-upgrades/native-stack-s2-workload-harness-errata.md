@@ -412,3 +412,40 @@ Interlink receipt `49afd2f9f8e484760f5dddd9327896b2`. Commands and terminal exit
 codes are parent-recorded metadata consistent with the independently read logs.
 Full operational mixes, arrival traces, simulations,
 population selection, frozen manifests and performance qualification remain open.
+
+## Simulation rollback before canonical execution
+
+Source `10cbc8cbfbde280a1f7787b9913aef332b549957`, based on `6e54b3de`, adds
+two real `Reactor::simulate` calls before the batch-confirmation workload. In each
+of two independent snapshot restores, both simulations must restore the complete
+logical projection of non-`sqlite_*` tables, storage height, simulation flag and
+reactor tip. Each returns three materialized operations, two successful and one
+deterministic failure with an error message. The complete returned results must
+match between simulations. Their receipt outcomes must then match canonical batch
+execution, excluding only discarded receipt IDs, execution height and the joined
+confirmation ordinal. Existing fee, supply, reward, transition, pruning and
+independent-reset assertions remain active.
+
+The fixture calls do not read height, and both simulation and canonical paid
+execution precede block maintenance. This is not general equivalence between
+simulating at the next height and executing at an earlier batch anchor. It also
+does not establish a cold/warm cache gate: startup can preload components, and
+simulation deliberately avoids persisting speculative cache entries. The test
+covers completed simulations with an embedded deterministic operation failure,
+not infrastructure-error or cancellation cleanup, API admission queues or load.
+
+Parent and both independent source reviews accepted the source, with the final
+change limited to an explanatory comment. The no-run build passed in 37.41 seconds;
+binary SHA-256 is
+`b0cac2d8621404598da3b2076abf9c87003da10fca1209380d9b0ee38b4a559f`.
+The explicitly enabled simulation regression passed in 97.85 seconds, including
+fixture setup. Clippy reports the same six inherited S2 findings and no new
+workload diagnostics. Their fixes exist on the separate native Stage 1 branch;
+this workload branch has not yet integrated that source.
+
+Commands, terminal results and three log hashes are recorded in
+`.build-cache/workload-reconcile/simulation-validation.json`. Parent and both
+independent reviewers accepted the bounded evidence and documentation, including
+Interlink receipt `00d7fe03663bf43b86edb75da81f6ab9`. Commands, checkout history
+and terminal exit codes are recorded execution metadata consistent with the logs.
+This completes no performance or full S2 acceptance gate.
