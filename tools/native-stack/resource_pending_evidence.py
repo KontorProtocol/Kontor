@@ -189,6 +189,37 @@ def validate_observation(attempt, role, configuration, sample_index,
     }
 
 
+def validate_phase_attempts(attempts, role, configuration, pid):
+    require([(item["sample_key"], item["repeat_index"]) for item in attempts] ==
+            [("suspended", 0), ("resumed", 0), ("suspended", 1), ("resumed", 1)]
+            and all(set(item) == {"case_id", "configuration", "process_role",
+                                      "sample_key", "repeat_index", "pid", "host_import",
+                                      "host_entered", "host_poll_pending_count",
+                                      "guest_task_pending", "other_task_progressed",
+                                      "observation"}
+                    and item["case_id"] == CASE_ID
+                    and item["configuration"] == configuration
+                    and item["process_role"] == role
+                    and item["pid"] == pid
+                    and item["host_import"] == HOST_IMPORT
+                    and item["host_entered"] is True
+                    and item["other_task_progressed"] is True for item in attempts)
+            and all(type(item["host_poll_pending_count"]) is int for item in attempts)
+            and [item["host_poll_pending_count"] for item in attempts] == [1, 1, 2, 2]
+            and all(attempts[index]["guest_task_pending"] is True
+                    and attempts[index]["observation"] is None for index in (0, 2))
+            and all(attempts[index]["guest_task_pending"] is False for index in (1, 3)),
+            "pending host suspension and resumption phase markers differ")
+
+
+def validate_control_parity(resumed_signature, control_signature):
+    require({key: value for key, value in resumed_signature.items()
+             if key != "sample_key"} ==
+            {key: value for key, value in control_signature.items()
+             if key != "sample_key"},
+            "pending and unshadowed production host semantics differ")
+
+
 def validate_run(run, bundle, manifest, directory):
     role, configuration = run["process_role"], run["configuration"]
     name = run_name(role, configuration)
@@ -214,27 +245,7 @@ def validate_run(run, bundle, manifest, directory):
             "pending host records differ from raw process transcript")
     attempts = parsed["attempts"]
     controls = parsed["controls"]
-    require([(item["sample_key"], item["repeat_index"]) for item in attempts] ==
-            [("suspended", 0), ("resumed", 0), ("suspended", 1), ("resumed", 1)]
-            and all(set(item) == {"case_id", "configuration", "process_role",
-                                      "sample_key", "repeat_index", "pid", "host_import",
-                                      "host_entered", "host_poll_pending_count",
-                                      "guest_task_pending",
-                                      "other_task_progressed", "observation"}
-                    and item["case_id"] == CASE_ID
-                    and item["configuration"] == configuration
-                    and item["process_role"] == role
-                    and item["pid"] == process["pid"]
-                    and item["host_import"] == HOST_IMPORT
-                    and item["host_entered"] is True
-                    and item["other_task_progressed"] is True for item in attempts)
-            and all(type(item["host_poll_pending_count"]) is int for item in attempts)
-            and [item["host_poll_pending_count"] for item in attempts] ==
-                [1, 1, 2, 2]
-            and all(attempts[index]["guest_task_pending"] is True
-                    and attempts[index]["observation"] is None for index in (0, 2))
-            and all(attempts[index]["guest_task_pending"] is False for index in (1, 3)),
-            "pending host suspension and resumption phase markers differ")
+    validate_phase_attempts(attempts, role, configuration, process["pid"])
     require(all(set(item) == {"case_id", "configuration", "process_role",
                                       "sample_key", "repeat_index", "pid", "host_import",
                                       "linker", "observation"}
@@ -277,11 +288,7 @@ def validate_run(run, bundle, manifest, directory):
         control_signature = validate_observation(
             control_item, role, configuration, index * 2 + 1, index,
             "unshadowed_control", manifest, bundle["cell"])
-        require({key: value for key, value in resumed_signature.items()
-                 if key != "sample_key"} ==
-                {key: value for key, value in control_signature.items()
-                 if key != "sample_key"},
-                "pending and unshadowed production host semantics differ")
+        validate_control_parity(resumed_signature, control_signature)
         signatures.append(resumed_signature)
     return signatures
 

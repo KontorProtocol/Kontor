@@ -6,6 +6,7 @@ world root {
 
   export init: func(ctx: borrow<proc-context>) -> contract;
   export view-run: func(ctx: borrow<view-context>, text: string);
+  export view-echo: func(ctx: borrow<view-context>, text: string) -> string;
   export paid-light: func(ctx: borrow<proc-context>);
   export paid-heavy: func(ctx: borrow<proc-context>);
 }

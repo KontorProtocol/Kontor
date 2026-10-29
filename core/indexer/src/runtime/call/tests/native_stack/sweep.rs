@@ -20,7 +20,7 @@ use wasmtime::component::Access;
 use wasmtime::{AsContextMut, Error as WasmtimeError, Trap};
 
 use super::super::balance;
-use super::{COMPONENT, CRYPTO_COMPONENT, SYSTEM_FUEL_CEILING};
+use super::{COMPONENT, CRYPTO_COMPONENT, SYSTEM_FUEL_CEILING, canonical};
 use crate::database::queries::live_deposit_gas_sum;
 use crate::runtime::invocation::{
     InvocationBudget, InvocationLimitReached, ResourceProbePhase, ResourceTeardownRecorder,
@@ -48,6 +48,7 @@ struct Fixture {
     runtime: Runtime,
     _dir: TempDir,
     kind: String,
+    component_sha256: String,
     signer: Signer,
     payment: Payment,
     address: ContractAddress,
@@ -107,10 +108,13 @@ impl Fixture {
         };
         let fixture_contracts = if kind == "paid_reenter" { 65 } else { 1 };
         let (name, component) = if kind == "view_crypto" {
-            ("crypto", CRYPTO_COMPONENT)
+            ("crypto", CRYPTO_COMPONENT.to_vec())
+        } else if kind.contains("_canonical_") {
+            ("canonical-probe", canonical::fixture_bytes_for_kind(&kind)?)
         } else {
-            ("stack-probe", COMPONENT)
+            ("stack-probe", COMPONENT.to_vec())
         };
+        let component_sha256 = hex::encode(Sha256::digest(&component));
         let publication_start = Instant::now();
         resource_diagnostics::record("publication_entry");
         for tx_index in 0..fixture_contracts {
@@ -127,7 +131,7 @@ impl Fixture {
                     &signer,
                     payment.clone(),
                     name,
-                    component,
+                    &component,
                     &native_provenance()?,
                 )
                 .await
@@ -162,10 +166,13 @@ impl Fixture {
         ensure!(
             (if kind == "view_crypto" {
                 baseline_live_deposit_gas > 0
+            } else if kind.contains("_canonical_") {
+                baseline_live_deposit_gas == 0
             } else {
                 baseline_live_deposit_gas == 3 * u64::from(fixture_contracts)
             }) && baseline_floor == Pricing::storage_collateral(baseline_live_deposit_gas)?,
-            "boundary fixture baseline storage deposit changed"
+            "boundary fixture baseline storage deposit changed: kind={kind} live={baseline_live_deposit_gas} floor={baseline_floor} expected={}",
+            Pricing::storage_collateral(baseline_live_deposit_gas)?
         );
         let baseline_supply = token::total_supply(&mut runtime).await?;
         ensure!(budget.live() == 0, "fixture left live invocation Stores");
@@ -176,6 +183,7 @@ impl Fixture {
             runtime,
             _dir: dir,
             kind,
+            component_sha256,
             signer,
             payment,
             address,
@@ -367,7 +375,7 @@ impl Fixture {
         } else {
             None
         };
-        let last_depth = if self.kind == "view_crypto" {
+        let last_depth = if self.kind == "view_crypto" || self.kind.contains("_canonical_") {
             0
         } else {
             self.runtime
@@ -522,7 +530,7 @@ impl Fixture {
             "max_wasm_stack": self.runtime.engine.get_max_wasm_stack(),
             "async_stack_size": self.runtime.engine.get_async_stack_size(),
             "engine_target": self.runtime.engine.get_target(),
-            "component_sha256": hex::encode(Sha256::digest(if self.kind == "view_crypto" { CRYPTO_COMPONENT } else { COMPONENT })),
+            "component_sha256": self.component_sha256,
             "target_os": env::consts::OS,
             "target_arch": env::consts::ARCH,
             "reset": {
@@ -642,6 +650,14 @@ fn expression(kind: &str, depth: u32, address: &ContractAddress) -> Result<Strin
             })
         ),
         "view_crypto" => format!("sha256({})", to_wave_expr(b"native-stack-pending".to_vec())),
+        "view_canonical_echo" => {
+            format!("view-echo({})", to_wave_expr("x".repeat(16_384)))
+        }
+        "view_canonical_realloc_trap" | "view_canonical_realloc_import" => {
+            format!("view-run({})", to_wave_expr("x".repeat(16_384)))
+        }
+        "paid_canonical_post_light" => "paid-light()".to_owned(),
+        "paid_canonical_post_heavy" => "paid-heavy()".to_owned(),
         _ => bail!("unknown probe kind {kind}"),
     })
 }
@@ -714,6 +730,123 @@ pub(super) async fn run_resource_finite_paid(
         "complete": true,
     });
     println!("FINITE_STACK_SUMMARY:{summary}");
+    Ok(summary)
+}
+
+pub(super) async fn run_resource_canonical(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    ensure!(
+        matches!(configuration, "reduced" | "production"),
+        "unknown canonical stack configuration"
+    );
+    ensure!(
+        matches!(process_role, "target_observed" | "probe_off_control"),
+        "unknown canonical stack role"
+    );
+    let samples: &[(&str, &str, &str, Option<&str>)] = match case_id {
+        "canonical_lift_lower" => &[
+            ("success", "view_canonical_echo", "ok", None),
+            (
+                "failure",
+                "view_canonical_realloc_import",
+                "other_trap",
+                Some("CannotLeaveComponent"),
+            ),
+        ],
+        "canonical_realloc" => &[
+            ("success_lowering", "view_canonical_echo", "ok", None),
+            (
+                "realloc_trap",
+                "view_canonical_realloc_trap",
+                "other_trap",
+                Some("UnreachableCodeReached"),
+            ),
+            (
+                "forbidden_import",
+                "view_canonical_realloc_import",
+                "other_trap",
+                Some("CannotLeaveComponent"),
+            ),
+        ],
+        "canonical_post_return" => &[
+            (
+                "light",
+                "paid_canonical_post_light",
+                "other_trap",
+                Some("CannotLeaveComponent"),
+            ),
+            (
+                "heavy",
+                "paid_canonical_post_heavy",
+                "other_trap",
+                Some("CannotLeaveComponent"),
+            ),
+        ],
+        _ => bail!("unknown canonical stack case {case_id}"),
+    };
+    let mut observations = Vec::with_capacity(samples.len() * 2);
+    for (sample_key, kind, expected_outcome, expected_trap) in samples {
+        let mut fixture = Fixture::new((*kind).to_owned(), configuration == "reduced").await?;
+        fixture.resource_probe = Some(process_role == "target_observed");
+        for repeat_index in 0..2 {
+            resource_diagnostics::record("finite_stack_attempt_start");
+            let outcome = fixture.observe(0, process_role).await?;
+            resource_diagnostics::record("finite_stack_attempt_end");
+            let observation = fixture
+                .last_report
+                .take()
+                .context("canonical sample lacks semantic observation")?;
+            ensure!(
+                outcome == *expected_outcome
+                    && observation["typed_trap"].as_str() == *expected_trap,
+                "canonical {sample_key} returned {outcome}: {observation}"
+            );
+            if *expected_outcome == "ok" {
+                ensure!(
+                    observation["value"] == to_wave_expr("x".repeat(16_384)),
+                    "canonical string lowering or lifting changed"
+                );
+            }
+            println!(
+                "CANONICAL_STACK_ATTEMPT:{}",
+                json!({
+                    "case_id": case_id,
+                    "configuration": configuration,
+                    "process_role": process_role,
+                    "sample_key": sample_key,
+                    "repeat_index": repeat_index,
+                    "pid": process::id(),
+                    "observation": observation,
+                })
+            );
+            observations.push(((*sample_key).to_owned(), observation));
+        }
+    }
+    if case_id == "canonical_post_return" {
+        let light = observations[0].1["fuel"]["user"]
+            .as_u64()
+            .context("canonical light user fuel is missing")?;
+        let heavy = observations[2].1["fuel"]["user"]
+            .as_u64()
+            .context("canonical heavy user fuel is missing")?;
+        ensure!(
+            heavy >= light + 16_384,
+            "canonical post-return loop was not charged"
+        );
+    }
+    let summary = json!({
+        "case_id": case_id,
+        "configuration": configuration,
+        "process_role": process_role,
+        "sample_count": observations.len(),
+        "sample_keys": samples.iter().map(|(key, ..)| *key).collect::<Vec<_>>(),
+        "outcomes": observations.iter().map(|(_, value)| value["outcome"].clone()).collect::<Vec<_>>(),
+        "complete": true,
+    });
+    println!("CANONICAL_STACK_SUMMARY:{summary}");
     Ok(summary)
 }
 

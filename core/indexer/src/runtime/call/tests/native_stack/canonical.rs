@@ -3,6 +3,7 @@ use std::io::Read;
 use anyhow::{Context, Result, bail, ensure};
 use brotli::CompressorReader;
 use indexer_types::Payment;
+use stdlib::to_wave_expr;
 use wasmtime::Trap;
 use wit_component::{StringEncoding, embed_component_metadata};
 use wit_validator::Validator;
@@ -44,6 +45,22 @@ fn fixture_bytes(realloc_body: &str, post_light: &str, post_heavy: &str) -> Resu
     Ok(compressed)
 }
 
+pub(super) fn fixture_bytes_for_kind(kind: &str) -> Result<Vec<u8>> {
+    match kind {
+        "view_canonical_echo" => fixture_bytes("i32.const 64", "", ""),
+        "view_canonical_realloc_trap" => fixture_bytes("unreachable", "", ""),
+        "view_canonical_realloc_import" => {
+            fixture_bytes("i32.const 0 call $contract drop i32.const 64", "", "")
+        }
+        "paid_canonical_post_light" | "paid_canonical_post_heavy" => fixture_bytes(
+            "i32.const 64",
+            "i32.const 0 call $contract drop",
+            "(local $i i32) (loop $work local.get $i i32.const 1 i32.add local.tee $i i32.const 16384 i32.lt_u br_if $work) i32.const 0 call $contract drop",
+        ),
+        _ => bail!("unknown canonical fixture kind {kind}"),
+    }
+}
+
 #[tokio::test]
 #[ignore = "run explicitly while validating publishable canonical ABI fixtures"]
 async fn publishable_canonical_fixture_smoke() -> Result<()> {
@@ -61,22 +78,12 @@ async fn publishable_canonical_fixture_smoke() -> Result<()> {
         gas_limit: MAX_UNTRUSTED_GAS_LIMIT,
     };
     let variants = [
-        ("canonical-success", "i32.const 64", "", ""),
-        ("canonical-realloc-trap", "unreachable", "", ""),
-        (
-            "canonical-realloc-import",
-            "i32.const 0 call $contract drop i32.const 64",
-            "",
-            "",
-        ),
-        (
-            "canonical-post-return",
-            "i32.const 64",
-            "i32.const 0 call $contract drop",
-            "(local $i i32) (loop $work local.get $i i32.const 1 i32.add local.tee $i i32.const 16384 i32.lt_u br_if $work) i32.const 0 call $contract drop",
-        ),
+        ("canonical-success", "view_canonical_echo"),
+        ("canonical-realloc-trap", "view_canonical_realloc_trap"),
+        ("canonical-realloc-import", "view_canonical_realloc_import"),
+        ("canonical-post-return", "paid_canonical_post_light"),
     ];
-    for (tx_index, (name, realloc, post_light, post_heavy)) in variants.iter().enumerate() {
+    for (tx_index, (name, kind)) in variants.iter().enumerate() {
         runtime
             .set_context(
                 1,
@@ -94,7 +101,7 @@ async fn publishable_canonical_fixture_smoke() -> Result<()> {
                 &signer,
                 payment.clone(),
                 name,
-                &fixture_bytes(realloc, post_light, post_heavy)?,
+                &fixture_bytes_for_kind(kind)?,
                 &native_provenance()?,
             )
             .await?;
@@ -117,12 +124,39 @@ async fn publishable_canonical_fixture_smoke() -> Result<()> {
     runtime
         .execute(None, None, &address(0), "view-run(\"ok\")")
         .await?;
+    let echo = "native stack: こんにちは";
+    let result = runtime
+        .execute(
+            None,
+            None,
+            &address(0),
+            &format!("view-echo({})", to_wave_expr(echo)),
+        )
+        .await?;
+    ensure!(
+        result == to_wave_expr(echo),
+        "canonical string roundtrip changed"
+    );
+    let large_echo = "x".repeat(16_384);
+    let result = runtime
+        .execute(
+            None,
+            None,
+            &address(0),
+            &format!("view-echo({})", to_wave_expr(large_echo.as_str())),
+        )
+        .await?;
+    ensure!(
+        result == to_wave_expr(large_echo.as_str()),
+        "canonical maximum string roundtrip changed"
+    );
+    let large_input = format!("view-run({})", to_wave_expr(large_echo.as_str()));
     for (index, trap) in [
         (1, Trap::UnreachableCodeReached),
         (2, Trap::CannotLeaveComponent),
     ] {
         let result = runtime
-            .execute(None, None, &address(index), "view-run(\"ok\")")
+            .execute(None, None, &address(index), &large_input)
             .await;
         match result {
             Err(ExecutionError::Deterministic(error)) => ensure!(

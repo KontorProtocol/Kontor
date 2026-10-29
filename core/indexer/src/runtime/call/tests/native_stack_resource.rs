@@ -647,7 +647,12 @@ fn finite_stack_worker_case() -> Result<()> {
     ensure!(
         matches!(
             case_id.as_str(),
-            "large_frame_paid" | "max_gas_paid" | "pending_host_io"
+            "large_frame_paid"
+                | "max_gas_paid"
+                | "pending_host_io"
+                | "canonical_lift_lower"
+                | "canonical_realloc"
+                | "canonical_post_return"
         ),
         "unknown finite stack case"
     );
@@ -700,6 +705,13 @@ fn finite_stack_worker_case() -> Result<()> {
             let summary = if task_case_id == "pending_host_io" {
                 super::native_stack::resource_pending_host_io(&task_configuration, &task_role)
                     .await?
+            } else if task_case_id.starts_with("canonical_") {
+                super::native_stack::resource_canonical(
+                    &task_case_id,
+                    &task_configuration,
+                    &task_role,
+                )
+                .await?
             } else {
                 super::native_stack::resource_finite_paid(
                     &task_case_id,

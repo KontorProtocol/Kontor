@@ -49,6 +49,14 @@ pub(super) async fn resource_finite_paid(
     sweep::run_resource_finite_paid(case_id, configuration, process_role).await
 }
 
+pub(super) async fn resource_canonical(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    sweep::run_resource_canonical(case_id, configuration, process_role).await
+}
+
 pub(super) async fn resource_pending_host_io(
     configuration: &str,
     process_role: &str,
