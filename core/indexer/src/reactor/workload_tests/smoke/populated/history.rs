@@ -11,7 +11,11 @@ use crate::runtime::Runtime;
 
 const FIRST_HEIGHT: u64 = 89;
 pub(super) fn prune_height() -> u64 {
-    SMOKE_HEIGHT.saturating_sub(PRUNE_RETAIN.max(FINALITY_WINDOW))
+    prune_height_at(SMOKE_HEIGHT)
+}
+
+pub(super) fn prune_height_at(height: u64) -> u64 {
+    height.saturating_sub(PRUNE_RETAIN.max(FINALITY_WINDOW))
 }
 
 pub(super) struct HistoryPopulation {
@@ -56,14 +60,14 @@ impl HistoryPopulation {
             .min(self.live_keys)
     }
 
-    fn retained(&self, height: u64) -> usize {
+    fn retained(&self, height: u64, cutoff: u64) -> usize {
         let count = self.count(height);
-        if height > prune_height() {
+        if height > cutoff {
             return count;
         }
         // Every version writes a prefix of the same keys. The last partial
         // version can leave a suffix whose newest pre-cutoff row is older.
-        let superseded = ((height + 1)..=prune_height())
+        let superseded = ((height + 1)..=cutoff)
             .map(|later| self.count(later))
             .max()
             .unwrap_or(0);
@@ -76,6 +80,10 @@ impl HistoryPopulation {
     }
 
     pub(super) async fn check(&self, conn: &Connection, pruned: bool) -> Result<()> {
+        self.check_at(conn, pruned.then_some(prune_height())).await
+    }
+
+    pub(super) async fn check_at(&self, conn: &Connection, cutoff: Option<u64>) -> Result<()> {
         let mut counts = Vec::new();
         for height in FIRST_HEIGHT..=ANCHOR_HEIGHT {
             let mut rows = conn
@@ -89,14 +97,13 @@ impl HistoryPopulation {
                 .await?
                 .context("missing history count")?
                 .get(0)?;
-            let expected = if pruned {
-                self.retained(height)
-            } else {
-                self.count(height)
-            };
+            let expected = cutoff.map_or_else(
+                || self.count(height),
+                |cutoff| self.retained(height, cutoff),
+            );
             ensure!(
                 actual == u64::try_from(expected)?,
-                "history rows at {height}: expected {expected}, got {actual}, pruned={pruned}"
+                "history rows at {height}: expected {expected}, got {actual}, cutoff={cutoff:?}"
             );
             counts.push((height, actual));
         }
@@ -122,7 +129,7 @@ impl HistoryPopulation {
             .context("missing history consistency result")?
             .get(0)?;
         ensure!(inconsistent == 0, "history values or live pointers differ");
-        for height in (if pruned { prune_height() } else { FIRST_HEIGHT })..=ANCHOR_HEIGHT {
+        for height in cutoff.unwrap_or(FIRST_HEIGHT)..=ANCHOR_HEIGHT {
             let mut rows = conn
                 .query(
                     "SELECT count(*) FROM contract_state s
@@ -168,7 +175,7 @@ impl HistoryPopulation {
                 "contract": self.contract.to_string(),
                 "historical_rows_before_pruning": self.historical_rows,
                 "live_keys": self.live_keys,
-                "pruned": pruned,
+                "cutoff": cutoff,
                 "rows_by_height": counts,
                 "setup": "Core guest calls, unchanged values, no signed historical transactions"
             })
@@ -190,22 +197,24 @@ fn workload_history_retains_partial_prefix_and_unfinalized_versions() {
         historical_rows,
     };
     let partial = population(25);
-    assert_eq!(partial.retained(89), 0);
-    assert_eq!(partial.retained(90), 5);
-    assert_eq!(partial.retained(91), 5);
-    assert_eq!(partial.retained(ANCHOR_HEIGHT), 10);
+    assert_eq!(partial.retained(89, prune_height()), 0);
+    assert_eq!(partial.retained(90, prune_height()), 5);
+    assert_eq!(partial.retained(91, prune_height()), 5);
+    assert_eq!(partial.retained(ANCHOR_HEIGHT, prune_height()), 10);
     let across_cutoff = population(85);
-    assert_eq!(across_cutoff.retained(95), 0);
-    assert_eq!(across_cutoff.retained(96), 10);
-    assert_eq!(across_cutoff.retained(97), 5);
-    assert_eq!(across_cutoff.retained(ANCHOR_HEIGHT), 10);
+    assert_eq!(across_cutoff.retained(95, prune_height()), 0);
+    assert_eq!(across_cutoff.retained(96, prune_height()), 10);
+    assert_eq!(across_cutoff.retained(97, prune_height()), 5);
+    assert_eq!(across_cutoff.retained(ANCHOR_HEIGHT, prune_height()), 10);
     let full = population(120);
     assert_eq!(
         (89..101).map(|height| full.count(height)).sum::<usize>(),
         120
     );
     assert_eq!(
-        (89..101).map(|height| full.retained(height)).sum::<usize>(),
+        (89..101)
+            .map(|height| full.retained(height, prune_height()))
+            .sum::<usize>(),
         50
     );
 }

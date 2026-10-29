@@ -2,8 +2,9 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::Transaction;
 use indexer_types::{ResultRow, TransactionRow};
 use libsql::params;
+use serde_json::Value;
 
-use super::super::{ANCHOR_HEIGHT, SMOKE_HEIGHT, receipts};
+use super::super::{database_projection, receipts};
 use super::oracle::root_receipts;
 use crate::block::filter_map;
 use crate::consensus::Height;
@@ -25,6 +26,8 @@ struct TransactionProof {
 
 pub(super) struct BatchProof {
     transactions: Vec<TransactionProof>,
+    anchor_height: u64,
+    checkpoint: Value,
 }
 
 impl BatchProof {
@@ -70,12 +73,12 @@ impl BatchProof {
             .checked_add(1)
             .context("batch height overflow")?;
         let anchor = trial.last_hash.context("missing batch anchor")?;
-        ensure!(trial.last_height == ANCHOR_HEIGHT);
+        let anchor_height = trial.last_height;
         // Already-decided batches exercise execution and confirmation, not
         // consensus authorization. Keep the original transaction order intact.
         let outcome = trial
             .process_decided_batch(
-                ANCHOR_HEIGHT,
+                anchor_height,
                 anchor,
                 Height::new(height),
                 &[],
@@ -85,7 +88,7 @@ impl BatchProof {
             .await?;
         ensure!(outcome == BatchOutcome::Executed, "batch was not executed");
         let conn = trial.db_conn();
-        let all_paid = receipts(&conn, ANCHOR_HEIGHT).await?;
+        let all_paid = receipts(&conn, anchor_height).await?;
         let mut transactions = Vec::new();
         for (index, reveal) in reveals.iter().enumerate() {
             let txid = reveal.compute_txid().to_string();
@@ -100,7 +103,7 @@ impl BatchProof {
                 .await?
                 .context("batch did not persist its transaction")?;
             ensure!(
-                transaction.height == ANCHOR_HEIGHT
+                transaction.height == anchor_height
                     && transaction.batch_height == Some(height)
                     && transaction.confirmed_height.is_none()
                     && transaction.tx_index.is_none()
@@ -129,12 +132,25 @@ impl BatchProof {
                 )?,
             });
         }
-        Ok(Self { transactions })
+        Ok(Self {
+            transactions,
+            anchor_height,
+            checkpoint: database_projection(&conn).await?,
+        })
+    }
+
+    pub(super) fn checkpoint(&self) -> &Value {
+        &self.checkpoint
     }
 
     pub(super) async fn check(self, trial: &Reactor<RuntimeExecutor>) -> Result<Vec<ResultRow>> {
         let conn = trial.db_conn();
-        let all_paid = receipts(&conn, ANCHOR_HEIGHT).await?;
+        let anchor_height = self.anchor_height;
+        let confirmed_height = anchor_height
+            .checked_add(1)
+            .context("confirmation height overflow")?;
+        ensure!(trial.last_height == confirmed_height);
+        let all_paid = receipts(&conn, anchor_height).await?;
         let mut checked = Vec::new();
         for proof in self.transactions {
             let txid = &proof.transaction.txid;
@@ -150,7 +166,7 @@ impl BatchProof {
                 confirmed.id == proof.transaction.id
                     && confirmed.height == proof.transaction.height
                     && confirmed.batch_height == proof.transaction.batch_height
-                    && confirmed.confirmed_height == Some(SMOKE_HEIGHT)
+                    && confirmed.confirmed_height == Some(confirmed_height)
                     && confirmed.tx_index == Some(proof.confirmation_index)
                     && get_confirmation_position(&conn, txid).await? == Some(raw_position),
                 "confirmation changed execution identity or recorded the wrong Bitcoin position"

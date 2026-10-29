@@ -17,7 +17,7 @@ impl PruningProof {
         history_start: u64,
         cutoff: u64,
     ) -> Result<Self> {
-        ensure!(get_meta_u64(conn, PRUNE_WATERMARK_KEY, 0).await? == 0);
+        ensure!(get_meta_u64(conn, PRUNE_WATERMARK_KEY, 0).await? < cutoff);
         let mut rows = conn
             .query(
                 "SELECT s.contract_id, s.path, s.height FROM contract_state s

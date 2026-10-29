@@ -5,9 +5,12 @@ use anyhow::{Context, Result, ensure};
 use indexer_types::ResultRow;
 use libsql::params;
 use num::BigInt;
+use stdlib::{KeyElement, KeyPath};
 
+use super::super::super::storage::stored;
 use super::super::accounting::{balance, escrow, lifecycle_value};
 use super::PopulationConfig;
+use super::challenges::Challenges;
 use crate::database::queries::get_identity;
 use crate::reactor::Reactor;
 use crate::reactor::executor::RuntimeExecutor;
@@ -19,13 +22,15 @@ use crate::runtime::staking::{address as staking_address, api as staking};
 use crate::runtime::token::{address as token_address, api as token};
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{Decimal, Runtime};
+use crate::runtime::{Decimal, Integer, Runtime};
 
+#[derive(Clone)]
 struct Host {
     weight: BigInt,
     liquid: Decimal,
     bond: Decimal,
     reservation: Decimal,
+    earned: BigInt,
 }
 
 #[derive(Default)]
@@ -57,6 +62,7 @@ pub(super) fn root_receipts<'a>(rows: &'a [ResultRow], txid: &str) -> Result<Vec
     Ok(roots.into_values().collect())
 }
 
+#[derive(Clone)]
 pub(super) struct Before {
     config: PopulationConfig,
     payer: String,
@@ -67,7 +73,10 @@ pub(super) struct Before {
     storage_escrow: Decimal,
     validators: Vec<(Signer, ValidatorInfo, Decimal)>,
     hosts: BTreeMap<u64, Host>,
-    files: BTreeSet<String>,
+    challenges: Challenges,
+    height: u64,
+    reward_index: BigInt,
+    reward_remainder: BigInt,
     omega: BigInt,
 }
 
@@ -81,6 +90,22 @@ fn atoms(value: Decimal) -> BigInt {
         result = (result << 64) + limb;
     }
     result
+}
+
+async fn reward_integer(runtime: &mut Runtime, field: u8) -> Result<BigInt> {
+    let contract = runtime
+        .storage
+        .contract_id(&storage_address())
+        .await?
+        .context("missing reward contract")?;
+    let bytes: Vec<u8> = stored(runtime, contract, &KeyPath::new().push_interned(field))
+        .await?
+        .context("missing reward integer")?;
+    let (value, rest) = Integer::decode_from(&bytes).context("invalid reward integer")?;
+    ensure!(rest.is_empty());
+    let value: BigInt = value.to_string().parse()?;
+    ensure!(value >= BigInt::from(0));
+    Ok(value)
 }
 
 impl Before {
@@ -152,6 +177,7 @@ impl Before {
                     );
                     entry.insert(Host {
                         weight: BigInt::from(0),
+                        earned: BigInt::from(0),
                         liquid: balance(runtime, holder).await?,
                         bond: stake.stake,
                         reservation: files::get_node_reservation(runtime, node.node_id).await?,
@@ -173,6 +199,14 @@ impl Before {
         }
         let storage_escrow = escrow(runtime, &storage_address()).await?;
         ensure!(storage_escrow == Decimal::default());
+        let reward_index = reward_integer(runtime, 14).await?;
+        let reward_remainder = reward_integer(runtime, 16).await?;
+        ensure!(reward_remainder == BigInt::from(0));
+        ensure!(
+            reward_integer(runtime, 15).await?
+                == hosts.values().map(|host| &host.weight).sum::<BigInt>()
+        );
+        let challenges = Challenges::capture(runtime).await?;
         Ok(Self {
             config,
             payer: payer.into(),
@@ -183,7 +217,10 @@ impl Before {
             storage_escrow,
             validators,
             hosts,
-            files: ids,
+            challenges,
+            height: 101,
+            reward_index,
+            reward_remainder,
             omega,
         })
     }
@@ -194,7 +231,18 @@ impl Before {
         rows: &[ResultRow],
         txids: &[String],
         effects: &PaidEffects,
-    ) -> Result<()> {
+    ) -> Result<Self> {
+        let height = reactor.last_height;
+        ensure!(
+            height
+                == self
+                    .height
+                    .checked_add(1)
+                    .context("oracle height overflow")?
+        );
+        let hash = reactor.last_hash.context("missing applied block hash")?;
+        let mut next = self.clone();
+        next.height = height;
         let runtime = &mut reactor.runtime;
         let mut roots = Vec::new();
         let mut transaction_ids = BTreeSet::new();
@@ -274,7 +322,12 @@ impl Before {
                     effects.payer_staked
                 )?
         );
-        ensure!(balance(runtime, HolderRef::Burner).await? == add_decimal(self.burner, fee)?);
+        next.payer_balance = sub_decimal(
+            sub_decimal(sub_decimal(self.payer_balance, fee)?, effects.transferred)?,
+            effects.payer_staked,
+        )?;
+        next.burner = add_decimal(self.burner, fee)?;
+        ensure!(balance(runtime, HolderRef::Burner).await? == next.burner);
         let supply = sub_decimal(self.supply, fee)?;
         let scheduled = div_decimal(
             div_decimal(
@@ -327,6 +380,9 @@ impl Before {
         ensure!(credited == ordering);
         let mut active = Vec::new();
         let mut total_active = Decimal::default();
+        let mut activated = 0;
+        let mut deactivated = 0;
+        next.validators.clear();
         for (signer, old, liquid) in &self.validators {
             let actual = staking::get_validator(runtime, signer)
                 .await?
@@ -335,19 +391,35 @@ impl Before {
                 old.stake,
                 credits.get(&old.x_only_pubkey).copied().unwrap_or_default(),
             )?;
-            let status = if old.status == ValidatorStatus::PendingExit {
+            let status = if old.status == ValidatorStatus::PendingExit
+                && old.deactivation_height <= height
+            {
+                deactivated += 1;
                 ValidatorStatus::Inactive
-            } else {
+            } else if old.status == ValidatorStatus::PendingJoin && old.activation_height <= height
+            {
+                activated += 1;
                 ValidatorStatus::Active
+            } else {
+                old.status
             };
             ensure!(
                 actual.x_only_pubkey == old.x_only_pubkey
                     && actual.ed25519_pubkey == old.ed25519_pubkey
                     && actual.stake == stake
                     && actual.status == status
+                    && actual.activation_height == old.activation_height
+                    && actual.deactivation_height == old.deactivation_height
             );
+            let mut expected = old.clone();
+            expected.stake = stake;
+            expected.status = status;
+            next.validators.push((signer.clone(), expected, *liquid));
             ensure!(balance(runtime, HolderRef::from(signer)).await? == *liquid);
-            if status == ValidatorStatus::Active {
+            if matches!(
+                status,
+                ValidatorStatus::Active | ValidatorStatus::PendingExit
+            ) {
                 active.push((old.x_only_pubkey.clone(), stake, old.ed25519_pubkey.clone()));
                 total_active = add_decimal(total_active, stake)?;
             }
@@ -389,22 +461,26 @@ impl Before {
         let changed = staking::wave::process_pending_validators_parse_return_expr(
             lifecycle_value(rows, &staking_address(), "process-pending-validators")?,
         )?;
-        ensure!(
-            changed.activated == u64::try_from(self.config.replacements)?
-                && changed.deactivated == u64::try_from(self.config.replacements)?
-        );
+        ensure!(changed.activated == activated && changed.deactivated == deactivated);
         ensure!(
             escrow(runtime, &staking_address()).await?
                 == add_decimal(add_decimal(self.staking_escrow, ordering)?, effects.staked)?
         );
 
+        next.staking_escrow =
+            add_decimal(add_decimal(self.staking_escrow, ordering)?, effects.staked)?;
         let index_scale = BigInt::from(10u64).pow(36);
         let weight_scale = BigInt::from(10u64).pow(18);
         let step = atoms(budget) * &index_scale / (&self.omega * &weight_scale);
         let mut liability = BigInt::from(0);
         for (node, host) in &self.hosts {
-            let earned = &step * &host.weight;
-            liability += &earned;
+            let increment = &step * &host.weight;
+            liability += &increment;
+            let earned = &host.earned + increment;
+            next.hosts
+                .get_mut(node)
+                .context("missing expected host")?
+                .earned = earned.clone();
             ensure!(atoms(files::reward_balance(runtime, *node).await??) == &earned / &index_scale);
             let holder = HolderRef::SignerId(*node);
             ensure!(balance(runtime, holder.clone()).await? == host.liquid);
@@ -417,8 +493,32 @@ impl Before {
             );
             ensure!(files::get_node_reservation(runtime, *node).await? == host.reservation);
         }
-        let funded = (liability + &index_scale - 1) / &index_scale;
-        ensure!(funded > BigInt::from(0));
+        let exact = liability + &self.reward_remainder;
+        next.reward_remainder = &exact % &index_scale;
+        next.reward_index = &self.reward_index + step;
+        let funded = &exact / &index_scale + u8::from(next.reward_remainder > BigInt::from(0))
+            - u8::from(self.reward_remainder > BigInt::from(0));
+        ensure!(funded >= BigInt::from(0));
+        ensure!(reward_integer(runtime, 14).await? == next.reward_index);
+        ensure!(reward_integer(runtime, 16).await? == next.reward_remainder);
+        ensure!(
+            reward_integer(runtime, 15).await?
+                == self.hosts.values().map(|host| &host.weight).sum::<BigInt>()
+        );
+        let contract = runtime
+            .storage
+            .contract_id(&storage_address())
+            .await?
+            .context("missing rewards")?;
+        ensure!(
+            stored::<u64>(
+                runtime,
+                contract,
+                &KeyPath::new().push_interned(17).push("some")
+            )
+            .await?
+                == Some(height)
+        );
         let actual_funded = files::wave::accrue_storage_rewards_parse_return_expr(
             lifecycle_value(rows, &storage_address(), "accrue-storage-rewards")?,
         )?;
@@ -437,33 +537,13 @@ impl Before {
         ] {
             ensure!(balance(runtime, holder).await? == Decimal::default());
         }
-        let challenges = files::get_active_challenges(runtime).await?;
-        let mut challenged = BTreeMap::new();
-        for challenge in challenges {
-            ensure!(
-                self.files.contains(&challenge.agreement_id)
-                    && self.hosts.contains_key(&challenge.prover_id)
-            );
-            ensure!(
-                challenge.block_height == 102
-                    && challenge.deadline_height == 2118
-                    && challenge.num_challenges == 8
-                    && challenge.seed.len() == 64
-                    && challenge.status == files::ChallengeStatus::Active
-            );
-            ensure!(
-                challenged
-                    .insert(challenge.agreement_id, challenge.challenge_id)
-                    .is_none()
-            );
-        }
-        for id in &self.files {
-            let file = files::get_agreement(runtime, id)
-                .await?
-                .context("lost storage agreement")?;
-            ensure!(file.active && file.active_challenge.as_ref() == challenged.get(id));
-        }
-        Ok(())
+        next.storage_escrow = add_decimal(self.storage_escrow, actual_funded)?;
+        next.supply = add_decimal(add_decimal(supply, ordering)?, actual_funded)?;
+        next.challenges = self
+            .challenges
+            .check_next(runtime, rows, height, hash)
+            .await?;
+        Ok(next)
     }
 }
 

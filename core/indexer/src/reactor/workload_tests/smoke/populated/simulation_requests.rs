@@ -6,7 +6,7 @@ use indexer_types::{Inst, OpStatus};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use super::super::{GAS_LIMIT, SMOKE_HEIGHT, checked_signed_instructions, database_projection};
+use super::super::{GAS_LIMIT, checked_signed_instructions, database_projection};
 use crate::bitcoin_client::Client;
 use crate::block::filter_map;
 use crate::reactor::Reactor;
@@ -116,6 +116,7 @@ impl SimulationRequests {
         let before = database_projection(&trial.db_conn()).await?;
         let height = trial.runtime.storage.height;
         let tip = (trial.last_height, trial.last_hash);
+        let expected_height = tip.0.checked_add(1).context("simulation height overflow")?;
         ensure!(!trial.runtime.simulating);
         let mut warmed = Vec::new();
         if warm_cache {
@@ -175,7 +176,7 @@ impl SimulationRequests {
                     let slot = (request_index * self.operations_per_request + index) % 20;
                     let failed = matches!(slot, 11 | 12);
                     ensure!(
-                        row.height == SMOKE_HEIGHT
+                        row.height == expected_height
                             && row.input_index == Some(0)
                             && row.op_index == Some(u32::try_from(index)?)
                             && row.txid.as_deref() == Some(tx.txid.to_string().as_str())

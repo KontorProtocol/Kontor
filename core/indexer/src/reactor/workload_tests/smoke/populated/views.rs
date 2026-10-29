@@ -50,6 +50,18 @@ pub(super) async fn run<T>(
     before: &Value,
     work: impl Future<Output = Result<T>>,
 ) -> Result<T> {
+    run_steps(directory, filename, config, before, 1, work).await
+}
+
+pub(super) async fn run_steps<T>(
+    directory: &Path,
+    filename: &str,
+    config: Option<MixedConfig>,
+    before: &Value,
+    steps: usize,
+    work: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    ensure!(matches!(steps, 1 | 2 | 6 | 7));
     let Some(config) = config.filter(|config| config.view_concurrency > 0) else {
         return work.await;
     };
@@ -76,7 +88,7 @@ pub(super) async fn run<T>(
         height: ANCHOR_HEIGHT,
         tx_index: 7,
     };
-    let expected_counter = u64::try_from(config.transactions / 10 * 4)?;
+    let expected_counter = u64::try_from(config.transactions / 10 * 4 * steps)?;
     let mut connections = Vec::with_capacity(CLIENTS);
     // All fallible setup precedes the barrier, so a failed checkout cannot strand workers.
     for _ in 0..CLIENTS {
@@ -195,7 +207,7 @@ pub(super) async fn run<T>(
             "view_gas_limit": DEFAULT_VIEW_GAS_LIMIT, "fuel_async_yield_interval": null,
             "cache_setup": "unsigned pagination and counter warmup outside writer interval; separate view pool cache",
             "peak_inflight_page_calls": peak.load(Ordering::SeqCst), "writer_interval_ns": writer_ns,
-            "writer_interval_scope": "simulation checks, batches, block application and pruning; excludes setup and final view drain",
+            "writer_interval_scope": "canonical work and caller-provided checks; excludes setup and final view drain",
             "timing_claim": "diagnostic_only", "workers": observations,
         })
     );

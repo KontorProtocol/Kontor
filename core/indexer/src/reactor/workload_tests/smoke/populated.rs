@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use anyhow::{Context, Result, ensure};
-use bitcoin::consensus::serialize;
+use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::key::Secp256k1;
 use bitcoin::{Address, BlockHash, Network, OutPoint};
 use indexer_types::{ContractAddress, OpStatus};
@@ -28,6 +28,7 @@ use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{ComponentCache, Decimal, Runtime, Storage, TransactionContext};
 
 mod batch;
+mod challenges;
 mod configuration;
 mod files;
 mod history;
@@ -51,6 +52,7 @@ use history::HistoryPopulation;
 use mixed::{MixedLayout, MixedWorkload};
 use oracle::{PaidEffects, root_receipts};
 use pruning::PruningProof;
+use sequence_inputs::BlockInput;
 use shapes::ShapeSigners;
 use simulation::SimulationProof;
 use simulation_requests::SimulationRequests;
@@ -338,6 +340,16 @@ async fn workload_signed_files_preserve_registry_and_accounting() -> Result<()> 
 }
 
 async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
+    replay_steps(config, delivery, 1).await
+}
+
+async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize) -> Result<()> {
+    ensure!(matches!(steps, 1 | 2 | 6 | 7));
+    ensure!(steps == 1 || matches!(delivery, Delivery::Configured(_)));
+    ensure!(
+        steps == 1 || std::env::var_os("KONTOR_WORKLOAD_SAVED_DIR").is_none(),
+        "multi-block saved fixtures require the sequence schema"
+    );
     let config = config.validate()?;
     let saved = if let Delivery::Configured(mixed) = delivery {
         saved::Output::from_env(config, mixed)?
@@ -372,7 +384,26 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         },
         funding_block.txdata[0].output[0].clone(),
     );
-    let fundings = if let Some(count) = delivery.transaction_count() {
+    let sequence_fundings = if steps > 1 {
+        Some(
+            sequence_funding::prepare(
+                &client,
+                &key,
+                &address,
+                funding.clone(),
+                steps,
+                delivery
+                    .transaction_count()
+                    .context("sequence requires configured transactions")?,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let fundings = if let Some(fundings) = &sequence_fundings {
+        fundings[0].clone()
+    } else if let Some(count) = delivery.transaction_count() {
         many::fund(&client, &key, &address, funding.clone(), count).await?
     } else if delivery == Delivery::MixedMultiInput {
         many::fund_to(
@@ -545,7 +576,6 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         eprintln!("workload_operation_mix={}", mixed.operation_counts());
     }
     let projection_before = database_projection(&history.db_conn()).await?;
-    let pruning = PruningProof::capture(&history.db_conn(), 89, history::prune_height()).await?;
     let before = oracle::Before::capture(
         &mut history.runtime,
         &validators,
@@ -560,32 +590,76 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let snapshot =
         Snapshot::export(&history.db_conn(), &directory.path().join("populated.db")).await?;
     stop_engine(&mut history).await?;
-    let simulation_requests = if let Delivery::Configured(config) = delivery
-        && config.simulation_operations > 0
-    {
-        Some(
-            SimulationRequests::prepare(
+    let mut workloads = vec![mixed];
+    for _ in 1..steps {
+        let next = workloads
+            .last()
+            .and_then(Option::as_ref)
+            .context("sequence requires mixed workload")?
+            .next_step(layout)?;
+        workloads.push(Some(next));
+    }
+    // Sign simulation alternatives before mining any canonical sequence input.
+    // Each step uses its own still-unspent funding output from the initial snapshot.
+    let mut simulation_requests = Vec::new();
+    for (ordinal, mixed) in workloads.iter().enumerate() {
+        simulation_requests.push(
+            if let Delivery::Configured(config) = delivery
+                && config.simulation_operations > 0
+            {
+                let funding = sequence_fundings
+                    .as_ref()
+                    .map_or(&fundings, |all| &all[ordinal]);
+                Some(
+                    SimulationRequests::prepare(
+                        &client,
+                        &key,
+                        funding
+                            .first()
+                            .context("missing simulation funding")?
+                            .clone(),
+                        mixed
+                            .as_ref()
+                            .context("missing mixed fixture")?
+                            .instructions(),
+                        config.simulation_operations,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            },
+        );
+    }
+    let inputs = if let Some(fundings) = &sequence_fundings {
+        let instructions = workloads
+            .iter()
+            .map(|mixed| {
+                Ok(mixed
+                    .as_ref()
+                    .context("missing sequence workload")?
+                    .instructions())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        sequence_inputs::generate(&client, &key, &address, fundings, &instructions).await?
+    } else {
+        let mixed = &workloads[0];
+        let (raw, reveals) = if let Some(shape_signers) = &shape_signers {
+            shape_signers
+                .block(
+                    &client,
+                    fundings,
+                    mixed
+                        .as_ref()
+                        .context("missing mixed fixture")?
+                        .instructions(),
+                )
+                .await?
+        } else if delivery.transaction_count().is_some() {
+            many::block(
                 &client,
                 &key,
-                fundings
-                    .first()
-                    .context("missing simulation funding")?
-                    .clone(),
-                mixed
-                    .as_ref()
-                    .context("missing mixed fixture")?
-                    .instructions(),
-                config.simulation_operations,
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-    let (raw, reveals) = if let Some(shape_signers) = &shape_signers {
-        shape_signers
-            .block(
-                &client,
+                &address,
                 fundings,
                 mixed
                     .as_ref()
@@ -593,33 +667,56 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
                     .instructions(),
             )
             .await?
-    } else if delivery.transaction_count().is_some() {
-        many::block(
-            &client,
-            &key,
-            &address,
-            fundings,
-            mixed
-                .as_ref()
-                .context("missing mixed fixture")?
-                .instructions(),
-        )
-        .await?
-    } else {
-        let (commit, reveal, _) = if let Some(mixed) = &mixed {
-            signed_instructions(&client, &key, funding, mixed.instructions()).await?
         } else {
-            signed_smoke(&client, &key, funding, &addresses).await?
+            let (commit, reveal, _) = if let Some(mixed) = &mixed {
+                signed_instructions(&client, &key, funding, mixed.instructions()).await?
+            } else {
+                signed_smoke(&client, &key, funding, &addresses).await?
+            };
+            let hash = BlockHash::from_str(
+                &client.generate_to_address(1, &address.to_string()).await?[0],
+            )?;
+            let raw = client.get_block(&hash).await?;
+            ensure!(raw.txdata.len() == 3 && raw.txdata[1] == commit && raw.txdata[2] == reveal);
+            (raw, vec![reveal])
         };
-        let hash =
-            BlockHash::from_str(&client.generate_to_address(1, &address.to_string()).await?[0])?;
-        let raw = client.get_block(&hash).await?;
-        ensure!(raw.txdata.len() == 3 && raw.txdata[1] == commit && raw.txdata[2] == reveal);
-        (raw, vec![reveal])
+        let hash = raw.block_hash();
+        let block = decode_block(&serialize(&raw), SMOKE_HEIGHT, hash, anchor)?;
+        ensure!(block.transactions.len() == reveals.len());
+        let raw_position = |index: usize| -> Result<u32> {
+            Ok(u32::try_from(if delivery == Delivery::MixedMultiInput {
+                3
+            } else {
+                index * 2 + 2
+            })?)
+        };
+        for (index, (decoded, reveal)) in block.transactions.iter().zip(&reveals).enumerate() {
+            ensure!(decoded.index == raw_position(index)? && decoded.txid == reveal.compute_txid());
+            if delivery.transaction_count().is_some() {
+                ensure!(decoded.inputs.len() == 1 && decoded.inputs[0].insts.ops.len() == 2);
+            }
+            if let Some(shape_signers) = &shape_signers {
+                shape_signers.check_inputs(
+                    &decoded.inputs,
+                    mixed
+                        .as_ref()
+                        .context("missing mixed fixture")?
+                        .instructions(),
+                )?;
+            }
+        }
+        vec![BlockInput {
+            raw: serialize(&raw),
+            block,
+            reveals,
+        }]
     };
-    let hash = raw.block_hash();
-    let block = decode_block(&serialize(&raw), SMOKE_HEIGHT, hash, anchor)?;
-    ensure!(block.transactions.len() == reveals.len());
+    ensure!(inputs.len() == steps && simulation_requests.len() == steps);
+    for (input, requests) in inputs.iter().zip(&simulation_requests) {
+        if let Some(requests) = requests {
+            requests.validate(&input.reveals)?;
+        }
+    }
     let raw_position = |index: usize| -> Result<u32> {
         Ok(u32::try_from(if delivery == Delivery::MixedMultiInput {
             3
@@ -627,28 +724,6 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             index * 2 + 2
         })?)
     };
-    for (index, (decoded, reveal)) in block.transactions.iter().zip(&reveals).enumerate() {
-        ensure!(decoded.index == raw_position(index)? && decoded.txid == reveal.compute_txid());
-        if delivery.transaction_count().is_some() {
-            ensure!(decoded.inputs.len() == 1 && decoded.inputs[0].insts.ops.len() == 2);
-        }
-        if let Some(shape_signers) = &shape_signers {
-            shape_signers.check_inputs(
-                &decoded.inputs,
-                mixed
-                    .as_ref()
-                    .context("missing mixed fixture")?
-                    .instructions(),
-            )?;
-        }
-    }
-    let txids: Vec<_> = reveals
-        .iter()
-        .map(|tx| tx.compute_txid().to_string())
-        .collect();
-    if let Some(requests) = &simulation_requests {
-        requests.validate(&reveals)?;
-    }
     let mut expected_projection = None;
     for name in ["first.db", "second.db"] {
         snapshot.copy_to(&directory.path().join(name))?;
@@ -679,13 +754,27 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             Delivery::Configured(config) => Some(config),
             _ => None,
         };
-        let (simulations, batches) = views::run(
-            directory.path(),
-            name,
-            view_config,
-            &projection_before,
-            async {
-                if let Some(requests) = &simulation_requests {
+        let mut model = before.clone();
+        let work = async {
+            let mut projections = Vec::new();
+            for (ordinal, input) in inputs.iter().enumerate() {
+                let mixed = &workloads[ordinal];
+                let reveals = &input.reveals;
+                let block = &input.block;
+                let height = block.height;
+                let execution_height = if delivery.batched() {
+                    height - 1
+                } else {
+                    height
+                };
+                let txids: Vec<_> = reveals
+                    .iter()
+                    .map(|tx| tx.compute_txid().to_string())
+                    .collect();
+                let pruning =
+                    PruningProof::capture(&trial.db_conn(), 89, history::prune_height_at(height))
+                        .await?;
+                if let Some(requests) = &simulation_requests[ordinal] {
                     let Delivery::Configured(config) = delivery else {
                         unreachable!("simulation requests require configured delivery")
                     };
@@ -700,7 +789,7 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
                 };
                 let batches = match delivery {
                     Delivery::Configured(config) if config.batch_operations > 0 => {
-                        BatchProof::execute_chunks(&mut trial, &reveals, config.batch_operations)
+                        BatchProof::execute_chunks(&mut trial, reveals, config.batch_operations)
                             .await?
                     }
                     _ if delivery.batched() => {
@@ -708,134 +797,137 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
                     }
                     _ => Vec::new(),
                 };
+                for batch in &batches {
+                    projections.push(batch.checkpoint().clone());
+                }
                 apply(&mut trial, block.clone()).await?;
-                Ok((simulations, batches))
-            },
+                let projection = database_projection(&trial.db_conn()).await?;
+                for (index, txid) in txids.iter().enumerate() {
+                    let transaction = get_transaction_by_txid(&trial.db_conn(), txid)
+                        .await?
+                        .context("missing workload transaction")?;
+                    ensure!(
+                        transaction.confirmed_height == Some(height)
+                            && transaction.tx_index == Some(u32::try_from(index)?)
+                            && get_confirmation_position(&trial.db_conn(), txid).await?
+                                == Some(raw_position(index)?),
+                        "wrong persisted confirmation position for workload transaction {index}"
+                    );
+                    ensure!(transaction.height == execution_height);
+                    if !delivery.batched() {
+                        ensure!(transaction.batch_height.is_none());
+                    }
+                }
+                pruning.check(&trial.db_conn()).await?;
+                if let Some(population) = &retained_history {
+                    population
+                        .check_at(&trial.db_conn(), Some(history::prune_height_at(height)))
+                        .await?;
+                }
+                let mut rows = receipts(&trial.db_conn(), height).await?;
+                for batch in batches {
+                    // Execution remains at the batch anchor. Only confirmation metadata
+                    // moves to the new block, whose lifecycle still runs exactly once.
+                    rows.extend(batch.check(&trial).await?);
+                }
+                rows.sort_by_key(|row| row.id);
+                let all_paid: Vec<_> = rows
+                    .iter()
+                    .filter(|row| row.txid.as_ref().is_some_and(|txid| txids.contains(txid)))
+                    .collect();
+                ensure!(
+                    rows.iter()
+                        .all(|row| row.txid.as_ref().is_none_or(|txid| txids.contains(txid)))
+                );
+                let mut paid = Vec::new();
+                for txid in &txids {
+                    paid.extend(root_receipts(&rows, txid)?);
+                }
+                let effects = if let Some(mixed) = &mixed {
+                    mixed
+                        .check(
+                            &mut trial.runtime,
+                            &all_paid,
+                            &paid,
+                            layout,
+                            execution_height,
+                        )
+                        .await?;
+                    mixed
+                        .check_file_lifecycle(&mut trial.runtime, &rows)
+                        .await?;
+                    if let Some(shape_signers) = &shape_signers {
+                        shape_signers.check(&mut trial.runtime, mixed).await?;
+                    }
+                    mixed.effects(layout)?
+                } else {
+                    ensure!(paid.len() == 3 && all_paid.len() == 3);
+                    if let Some(simulations) = simulations {
+                        simulations.check(&paid)?;
+                    }
+                    for (index, row) in paid.iter().enumerate() {
+                        ensure!(row.height == execution_height);
+                        // Stored receipt positions currently use the filtered transaction index.
+                        ensure!(
+                            row.tx_index == Some(0)
+                                && row.input_index == Some(0)
+                                && row.op_index == Some(index as u32)
+                                && row.result_index == 0
+                        );
+                        ensure!(row.signer_id == payer && row.payer_signer_id == Some(payer));
+                        ensure!(row.contract == addresses[usize::from(index == 1)].to_string());
+                        ensure!(
+                            row.func
+                                == if index == 1 {
+                                    "scan-compound"
+                                } else {
+                                    "write-result-payload"
+                                }
+                        );
+                        ensure!(row.gas > 0 && row.gas <= GAS_LIMIT);
+                    }
+                    ensure!(
+                        paid.iter().map(|row| row.status).collect::<Vec<_>>()
+                            == [OpStatus::Ok, OpStatus::Other, OpStatus::Ok]
+                    );
+                    ensure!(
+                        paid[0].value.as_deref() == Some("\"é\\n\"")
+                            && paid[1].value.is_none()
+                            && paid[2].value.as_deref() == Some("\"é\\né\\n\"")
+                    );
+                    ensure!(state(&mut trial.runtime, &addresses[0]).await? == [1, 0, 0, 1]);
+                    ensure!(state(&mut trial.runtime, &addresses[1]).await? == [0, 0, 0, 0]);
+                    PaidEffects::default()
+                };
+                model = model.check(&mut trial, &rows, &txids, &effects).await?;
+                ensure!(
+                    database_projection(&trial.db_conn()).await? == projection,
+                    "observations mutated state"
+                );
+                projections.push(projection);
+                eprintln!(
+                    "workload_sequence_step_passed={}",
+                    serde_json::json!({"trial":name,"ordinal":ordinal,"height":height,"hash":block.hash,"transactions":txids.len()})
+                );
+            }
+            Ok(projections)
+        };
+        let projections = views::run_steps(
+            directory.path(),
+            name,
+            view_config,
+            &projection_before,
+            steps,
+            work,
         )
         .await?;
-        let projection = database_projection(&trial.db_conn()).await?;
-        for (index, txid) in txids.iter().enumerate() {
-            let transaction = get_transaction_by_txid(&trial.db_conn(), txid)
-                .await?
-                .context("missing workload transaction")?;
-            ensure!(
-                transaction.confirmed_height == Some(SMOKE_HEIGHT)
-                    && transaction.tx_index == Some(u32::try_from(index)?)
-                    && get_confirmation_position(&trial.db_conn(), txid).await?
-                        == Some(raw_position(index)?),
-                "wrong persisted confirmation position for workload transaction {index}"
-            );
-            ensure!(
-                transaction.height
-                    == if delivery.batched() {
-                        ANCHOR_HEIGHT
-                    } else {
-                        SMOKE_HEIGHT
-                    }
-            );
-            if !delivery.batched() {
-                ensure!(transaction.batch_height.is_none());
-            }
-        }
-        pruning.check(&trial.db_conn()).await?;
-        if let Some(population) = &retained_history {
-            population.check(&trial.db_conn(), true).await?;
-        }
-        let mut rows = receipts(&trial.db_conn(), SMOKE_HEIGHT).await?;
-        for batch in batches {
-            // Execution remains at the batch anchor. Only confirmation metadata
-            // moves to the new block, whose lifecycle still runs exactly once.
-            rows.extend(batch.check(&trial).await?);
-        }
-        rows.sort_by_key(|row| row.id);
-        let all_paid: Vec<_> = rows
-            .iter()
-            .filter(|row| row.txid.as_ref().is_some_and(|txid| txids.contains(txid)))
-            .collect();
-        ensure!(
-            rows.iter()
-                .all(|row| row.txid.as_ref().is_none_or(|txid| txids.contains(txid)))
-        );
-        let mut paid = Vec::new();
-        for txid in &txids {
-            paid.extend(root_receipts(&rows, txid)?);
-        }
-        let effects = if let Some(mixed) = &mixed {
-            mixed
-                .check(
-                    &mut trial.runtime,
-                    &all_paid,
-                    &paid,
-                    layout,
-                    if delivery.batched() {
-                        ANCHOR_HEIGHT
-                    } else {
-                        SMOKE_HEIGHT
-                    },
-                )
-                .await?;
-            mixed
-                .check_file_lifecycle(&mut trial.runtime, &rows)
-                .await?;
-            if let Some(shape_signers) = &shape_signers {
-                shape_signers.check(&mut trial.runtime, mixed).await?;
-            }
-            mixed.effects(layout)?
-        } else {
-            ensure!(paid.len() == 3 && all_paid.len() == 3);
-            if let Some(simulations) = simulations {
-                simulations.check(&paid)?;
-            }
-            for (index, row) in paid.iter().enumerate() {
-                ensure!(
-                    row.height
-                        == if delivery.batched() {
-                            ANCHOR_HEIGHT
-                        } else {
-                            SMOKE_HEIGHT
-                        }
-                );
-                // Stored receipt positions currently use the filtered transaction index.
-                ensure!(
-                    row.tx_index == Some(0)
-                        && row.input_index == Some(0)
-                        && row.op_index == Some(index as u32)
-                        && row.result_index == 0
-                );
-                ensure!(row.signer_id == payer && row.payer_signer_id == Some(payer));
-                ensure!(row.contract == addresses[usize::from(index == 1)].to_string());
-                ensure!(
-                    row.func
-                        == if index == 1 {
-                            "scan-compound"
-                        } else {
-                            "write-result-payload"
-                        }
-                );
-                ensure!(row.gas > 0 && row.gas <= GAS_LIMIT);
-            }
-            ensure!(
-                paid.iter().map(|row| row.status).collect::<Vec<_>>()
-                    == [OpStatus::Ok, OpStatus::Other, OpStatus::Ok]
-            );
-            ensure!(
-                paid[0].value.as_deref() == Some("\"é\\n\"")
-                    && paid[1].value.is_none()
-                    && paid[2].value.as_deref() == Some("\"é\\né\\n\"")
-            );
-            ensure!(state(&mut trial.runtime, &addresses[0]).await? == [1, 0, 0, 1]);
-            ensure!(state(&mut trial.runtime, &addresses[1]).await? == [0, 0, 0, 0]);
-            PaidEffects::default()
-        };
-        before.check(&mut trial, &rows, &txids, &effects).await?;
-        ensure!(
-            database_projection(&trial.db_conn()).await? == projection,
-            "observations mutated state"
-        );
         if let Some(expected) = &expected_projection {
-            ensure!(&projection == expected, "populated replay differs");
+            ensure!(
+                &projections == expected,
+                "populated replay checkpoints differ"
+            );
         }
-        expected_projection = Some(projection);
+        expected_projection = Some(projections);
         stop_engine(&mut trial).await?;
     }
     ensure!(database_projection(&history.db_conn()).await? == projection_before);
@@ -844,12 +936,13 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
             .write(
                 &snapshot,
                 &client,
-                &raw,
+                &deserialize(&inputs[0].raw)?,
                 &projection_before,
                 expected_projection
                     .as_ref()
+                    .and_then(|checkpoints| checkpoints.last())
                     .context("missing final projection")?,
-                simulation_requests.as_ref(),
+                simulation_requests[0].as_ref(),
             )
             .await?;
     }

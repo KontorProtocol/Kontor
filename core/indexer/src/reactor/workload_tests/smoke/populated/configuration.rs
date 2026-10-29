@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{Delivery, PopulationConfig, replay};
+use super::{Delivery, PopulationConfig, replay, replay_steps};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -90,6 +90,23 @@ async fn workload_configured_mixed_replays_populations_and_accounting() -> Resul
     );
     eprintln!("workload_configuration={}", serde_json::to_string(&config)?);
     replay(config.population, Delivery::Configured(config.mixed)).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind, KONTOR_WORKLOAD_CONFIG and KONTOR_WORKLOAD_SEQUENCE_BLOCKS; correctness only"]
+async fn workload_configured_sequence_replays_cumulative_state() -> Result<()> {
+    let input = std::env::var("KONTOR_WORKLOAD_CONFIG")
+        .context("sequence requires KONTOR_WORKLOAD_CONFIG")?;
+    let config = Configuration::parse(input.as_bytes())?;
+    let steps: usize = std::env::var("KONTOR_WORKLOAD_SEQUENCE_BLOCKS")
+        .context("sequence requires KONTOR_WORKLOAD_SEQUENCE_BLOCKS")?
+        .parse()?;
+    ensure!(matches!(steps, 2 | 6 | 7));
+    eprintln!(
+        "workload_sequence_configuration={}",
+        serde_json::json!({"config":config,"blocks":steps})
+    );
+    replay_steps(config.population, Delivery::Configured(config.mixed), steps).await
 }
 
 #[test]
