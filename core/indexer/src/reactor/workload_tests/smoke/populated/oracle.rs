@@ -1,3 +1,4 @@
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, ensure};
@@ -112,7 +113,7 @@ impl Before {
             );
             let share = atoms(agreement.storage_weight) * &weight_scale / nodes.len();
             for node in nodes {
-                if !hosts.contains_key(&node.node_id) {
+                if let Entry::Vacant(entry) = hosts.entry(node.node_id) {
                     let holder = HolderRef::SignerId(node.node_id);
                     let stake = staking::get_stake(runtime, &holder.to_string())
                         .await?
@@ -120,15 +121,12 @@ impl Before {
                     ensure!(
                         files::reward_balance(runtime, node.node_id).await?? == Decimal::default()
                     );
-                    hosts.insert(
-                        node.node_id,
-                        Host {
-                            weight: BigInt::from(0),
-                            liquid: balance(runtime, holder).await?,
-                            bond: stake.stake,
-                            reservation: files::get_node_reservation(runtime, node.node_id).await?,
-                        },
-                    );
+                    entry.insert(Host {
+                        weight: BigInt::from(0),
+                        liquid: balance(runtime, holder).await?,
+                        bond: stake.stake,
+                        reservation: files::get_node_reservation(runtime, node.node_id).await?,
+                    });
                 }
                 hosts.get_mut(&node.node_id).context("missing host")?.weight += &share;
             }
@@ -183,7 +181,7 @@ impl Before {
         ensure!(
             usage.next().await?.is_none()
                 && runtime.gas_to_fuel_multiplier == 1000
-                && deposit % 1000 == 0
+                && deposit.is_multiple_of(1000)
         );
         let rounded = user
             .checked_add(deposit)

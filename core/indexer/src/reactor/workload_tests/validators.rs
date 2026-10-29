@@ -41,7 +41,7 @@ fn core() -> Signer {
 }
 
 pub(super) fn execution_fee(runtime: &Runtime, usage: ExecutionUsage) -> Result<Decimal> {
-    ensure!(runtime.gas_to_fuel_multiplier == 1000 && usage.deposit_fuel % 1000 == 0);
+    ensure!(runtime.gas_to_fuel_multiplier == 1000 && usage.deposit_fuel.is_multiple_of(1000));
     let reserved = usage.deposit_fuel / 1000;
     let gas = usage
         .user_fuel

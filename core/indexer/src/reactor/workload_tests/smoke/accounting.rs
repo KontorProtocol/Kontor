@@ -121,7 +121,7 @@ pub(super) async fn check(
         .context("missing persisted transaction usage")?;
     let user_fuel: u64 = usage.get(0)?;
     let deposit_fuel: u64 = usage.get(1)?;
-    ensure!(runtime.gas_to_fuel_multiplier == 1000 && deposit_fuel % 1000 == 0);
+    ensure!(runtime.gas_to_fuel_multiplier == 1000 && deposit_fuel.is_multiple_of(1000));
     let rounded = user_fuel
         .checked_add(deposit_fuel)
         .context("fuel overflow")?
