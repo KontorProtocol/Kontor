@@ -123,21 +123,38 @@ class BoundaryEvidenceTests(unittest.TestCase):
             return hashlib.sha256(json.dumps(value, sort_keys=True,
                                              separators=(",", ":")).encode()).hexdigest()
 
-        validate_balance_transitions(balances, "paid", digest(balances))
+        validate_balance_transitions(balances, "paid", "ok", 100,
+                                     digest(balances))
         false_burn = {**balances, "burned_after": "1"}
         false_supply = {**balances, "supply_after": "99"}
         for altered in (false_burn, false_supply):
             with self.assertRaises(ValueError):
-                validate_balance_transitions(altered, "paid", digest(altered))
+                validate_balance_transitions(altered, "paid", "ok", 100,
+                                             digest(altered))
         with self.assertRaises(ValueError):
-            validate_balance_transitions(balances, "view", digest(balances))
+            validate_balance_transitions(balances, "view", "ok", 100,
+                                         digest(balances))
         no_charge = {**balances, "after": "100", "burned_after": "0",
                      "supply_after": "100"}
         for mode in ("view", "system", "core"):
-            validate_balance_transitions(no_charge, mode, digest(no_charge))
-        core_floor_change = {**no_charge, "floor_after": "1"}
-        validate_balance_transitions(core_floor_change, "core",
-                                     digest(core_floor_change))
+            validate_balance_transitions(no_charge, mode, "ok", 0,
+                                         digest(no_charge))
+        changed_floor = {**no_charge, "floor_before": "2",
+                         "floor_after": "1", "floor_restored": "2"}
+        validate_balance_transitions(changed_floor, "core", "ok", 100,
+                                     digest(changed_floor))
+        for mode in ("paid", "view", "system"):
+            with self.assertRaises(ValueError):
+                validate_balance_transitions(changed_floor, mode, "ok", 100,
+                                             digest(changed_floor))
+        with self.assertRaises(ValueError):
+            validate_balance_transitions(changed_floor, "core",
+                                         "stack_overflow", 100,
+                                         digest(changed_floor))
+        unchanged_floor = {**changed_floor, "floor_after": "2"}
+        with self.assertRaises(ValueError):
+            validate_balance_transitions(unchanged_floor, "core", "ok", 100,
+                                         digest(unchanged_floor))
 
     def test_cell_rejects_wrong_architecture_or_build_profile(self):
         artifact = {"profile": {
@@ -413,6 +430,8 @@ class BoundaryEvidenceTests(unittest.TestCase):
             "timeout_seconds": 600,
             "control_capture": {"path": "control.json", "sha256": "0" * 64},
             "development_discovery": None,
+            "reviewed_discovery": None,
+            "discovery_binary": {"path": "indexer-test", "sha256": "0" * 64},
             "runs": {"x": {}}, "discovered_depths": {},
             "remaining_case_bindings": [],
         }

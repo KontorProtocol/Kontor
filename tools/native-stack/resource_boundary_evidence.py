@@ -325,7 +325,7 @@ def validate_trace(trace, runtime, attempts):
     return compile_counts
 
 
-def validate_balance_transitions(balances, mode, digest):
+def validate_balance_transitions(balances, mode, outcome, depth, digest):
     require(isinstance(balances, dict) and set(balances) == {
         "before", "after", "restored", "burned_before", "burned_after",
         "supply_before", "supply_after", "floor_before", "floor_after",
@@ -345,6 +345,17 @@ def validate_balance_transitions(balances, mode, digest):
                  if mode == "paid" else
                  (amounts["before"] == amounts["after"])),
             "boundary balance debit, burn, supply, or floor differs")
+    before_floor = amounts["floor_before"]
+    after_floor = amounts["floor_after"]
+    if mode == "core":
+        require(after_floor <= before_floor
+                and (outcome == "ok" or after_floor == before_floor)
+                and (outcome != "ok" or depth == 0 or before_floor == 0
+                     or after_floor < before_floor),
+                "Core storage collateral changed outside a successful owner transfer")
+    else:
+        require(after_floor == before_floor,
+                "paid or view storage collateral changed unexpectedly")
     encoded = json.dumps(balances, sort_keys=True,
                          separators=(",", ":")).encode()
     require(digest == hashlib.sha256(encoded).hexdigest(),
@@ -391,6 +402,13 @@ def validate_observation(attempt, summary, manifest, index, cell):
             and observation["async_stack_size"] ==
             (1048576 if configuration == "reduced" else 2097152),
             "boundary Engine stack settings differ from manifest")
+    require(observation["gas_limit"] == 100000
+            and observation["paid_fuel_limit"] == 100000000
+            and observation["view_gas_limit"] == 100000
+            and observation["view_fuel_limit"] == 100000000
+            and observation["system_fuel_ceiling"] == 9223372036854775807
+            and observation["gas_to_fuel_multiplier"] == 1000,
+            "boundary metering limits differ from reviewed fixture")
     outcome = observation["outcome"]
     require(outcome in ("ok", "stack_overflow")
             and observation["error_class"] ==
@@ -461,6 +479,7 @@ def validate_observation(attempt, summary, manifest, index, cell):
             (None if outcome == "ok" else True),
             "boundary full rows/schema or resource reset failed")
     validate_balance_transitions(observation["balance_transitions"], mode,
+                                 outcome, depth,
                                  observation["balance_transitions_sha256"])
     expected_leaf = case_id == "deepest_frame_host_call" and outcome == "ok"
     require(observation["host_io_suspended"] is expected_leaf
