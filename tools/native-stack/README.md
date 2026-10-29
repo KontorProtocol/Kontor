@@ -231,6 +231,17 @@ fuel, and both calls record their Store lifecycle. Each target Store must close,
 while receipts, resources,
 and the full persistent digest remain stable across every trial.
 
+The resource lifecycle adapter publishes a WIT-encoded guest resource through
+the normal `Runtime::publish` path. A successful view explicitly drops the
+resource and returns its destructor count. The trapping view checks that the
+destructor ran before its distinct `UnreachableCodeReached` trap, then a fresh
+successful call verifies reuse. Failed publication covers both out-of-bounds
+data initialization and a core start function that completes `resource.new`
+before trapping. Both failures repeat, followed by valid control calls. The
+worker records each target Store teardown, receipts, resources, and the full
+persistent digest. The start trap proves allocation completed before failure;
+the fixture does not claim that failure invokes the guest destructor.
+
 At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
 development canonical capture completed 12 child processes, 56 attempts, and
 268 closed Store lifecycles. The standalone validator accepted all 12 runs.

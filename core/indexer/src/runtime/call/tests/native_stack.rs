@@ -25,6 +25,7 @@ const CRYPTO_COMPONENT: &[u8] =
 
 mod canonical;
 mod initialization;
+mod lifecycle;
 mod sweep;
 
 pub(super) use sweep::{assert_receipt_stream_initial_state, persistent_digest};
@@ -70,6 +71,14 @@ pub(super) async fn resource_generated_initialization(
     process_role: &str,
 ) -> Result<JsonValue> {
     initialization::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_lifecycle(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    lifecycle::run(case_id, configuration, process_role).await
 }
 
 #[tokio::test]

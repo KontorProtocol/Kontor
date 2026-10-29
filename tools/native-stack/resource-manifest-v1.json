@@ -208,9 +208,33 @@
       "path": "tools/native-stack/capture_resource_diagnostic.py",
       "sha256": "ff85ca819591c23cb182565bbda39356581e30328afa7275dc6d0b3b46004aec"
     },
+    "resource_lifecycle_adapter": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/lifecycle.rs",
+      "sha256": "01d56af7cefd50b13d086c348121f2ed044b93f48ec44f3501d759d27f70ca38"
+    },
+    "resource_lifecycle_capture": {
+      "path": "tools/native-stack/capture_resource_lifecycle.py",
+      "sha256": "48b46df9796b2039985f30498ab1cdfda8c7cb1665cced8f826600cd8c637421"
+    },
+    "resource_lifecycle_validator": {
+      "path": "tools/native-stack/resource_lifecycle_evidence.py",
+      "sha256": "c5050c31cc7e246a925c19e61923cbe2773e2697627c8534c9aaddf55532c720"
+    },
+    "resource_lifecycle_validator_tests": {
+      "path": "tools/native-stack/test_resource_lifecycle_evidence.py",
+      "sha256": "8dd7173b1bd815c3b811ce877a71b3af9f5ca9e1cb03c6af1a2f62831761685a"
+    },
+    "resource_lifecycle_wat": {
+      "path": "test-contracts/resource-lifecycle/fixture.wat",
+      "sha256": "6fa7391092c090b0d52936a74569b5f722390e5c604333abfbd766618cc9b525"
+    },
+    "resource_lifecycle_wit": {
+      "path": "test-contracts/resource-lifecycle/wit/contract.wit",
+      "sha256": "01f63abee71684e0ab9075535518656a3c73c706b566e1e6214397456be24a39"
+    },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "baa1e828f0ac0b92a53a3a8e89e97d5954ee35e9bd5cafaf3e439254e1d56c3e"
+      "sha256": "9bcbe82031d1094373954052836d23c567cc2021d5e2e3c3eed4077042ced631"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -238,7 +262,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "3d7b8f4602eecf1219eb56713aacc9cbc804019477d3d605a3794cf53d8a25f7"
+      "sha256": "707cb19aa129c2b82452b7f960a5c46b799f339693c583bb4a55b75f920f6971"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -254,7 +278,7 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "bcb86e0f524064536036124ae0b78c54c715ea7f09b1a22ad0c990ca887c362b"
+      "sha256": "52d940a48417a1038c82f5cb8a7723fbde902c18d792a7231379d718e18505a9"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
@@ -969,7 +993,14 @@
       },
       "family": "resource_lifecycle",
       "fixtures": [
-        "callback_tests"
+        "callback_tests",
+        "resource_lifecycle_wat",
+        "resource_lifecycle_wit",
+        "resource_lifecycle_adapter",
+        "resource_worker_diagnostic",
+        "resource_lifecycle_capture",
+        "resource_lifecycle_validator",
+        "resource_lifecycle_validator_tests"
       ],
       "id": "explicit_resource_drop",
       "paired_worker_status": "missing",
@@ -986,24 +1017,35 @@
       "existing_unpaired_binding": "runtime::sequential_tests::partial_instantiation_does_not_invoke_registered_destructors",
       "expected_outcomes": {
         "failed_init": "deterministic_error",
+        "failed_start_resource": "deterministic_error",
         "valid_control": "ok"
       },
       "expected_traps": {
-        "failed_init": null,
+        "failed_init": "MemoryOutOfBounds",
+        "failed_start_resource": "UnreachableCodeReached",
         "valid_control": null
       },
       "family": "resource_lifecycle",
       "fixtures": [
-        "callback_tests"
+        "callback_tests",
+        "resource_lifecycle_wat",
+        "resource_lifecycle_wit",
+        "resource_lifecycle_adapter",
+        "resource_worker_diagnostic",
+        "resource_lifecycle_capture",
+        "resource_lifecycle_validator",
+        "resource_lifecycle_validator_tests"
       ],
       "id": "failed_instantiation_cleanup",
       "paired_worker_status": "missing",
       "parameters": {
         "out_of_bounds_data": true,
-        "repeats": 2
+        "repeats": 2,
+        "resource_new_then_start_trap": true
       },
       "sample_keys": [
         "failed_init",
+        "failed_start_resource",
         "valid_control"
       ]
     },
@@ -1715,7 +1757,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "3d7b8f4602eecf1219eb56713aacc9cbc804019477d3d605a3794cf53d8a25f7",
+    "source_sha256": "707cb19aa129c2b82452b7f960a5c46b799f339693c583bb4a55b75f920f6971",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1867,7 +1909,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "3d7b8f4602eecf1219eb56713aacc9cbc804019477d3d605a3794cf53d8a25f7",
+    "sha256": "707cb19aa129c2b82452b7f960a5c46b799f339693c583bb4a55b75f920f6971",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

@@ -654,6 +654,8 @@ fn finite_stack_worker_case() -> Result<()> {
                 | "canonical_realloc"
                 | "canonical_post_return"
                 | "generated_initialization"
+                | "explicit_resource_drop"
+                | "failed_instantiation_cleanup"
         ),
         "unknown finite stack case"
     );
@@ -708,6 +710,16 @@ fn finite_stack_worker_case() -> Result<()> {
                     .await?
             } else if task_case_id == "generated_initialization" {
                 super::native_stack::resource_generated_initialization(
+                    &task_configuration,
+                    &task_role,
+                )
+                .await?
+            } else if matches!(
+                task_case_id.as_str(),
+                "explicit_resource_drop" | "failed_instantiation_cleanup"
+            ) {
+                super::native_stack::resource_lifecycle(
+                    &task_case_id,
                     &task_configuration,
                     &task_role,
                 )

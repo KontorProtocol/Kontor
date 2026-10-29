@@ -47,6 +47,12 @@ class ResourceManifestTests(unittest.TestCase):
             "active_data_success", "active_element_success", "active_data_oob",
             "active_element_oob", "fuel_failure",
         })
+        lifecycle = cases["failed_instantiation_cleanup"]
+        self.assertEqual(lifecycle["sample_keys"], [
+            "failed_init", "failed_start_resource", "valid_control"])
+        self.assertEqual(lifecycle["expected_traps"]["failed_start_resource"],
+                         "UnreachableCodeReached")
+        self.assertTrue(lifecycle["parameters"]["resource_new_then_start_trap"])
         for name, identity in self.manifest["artifacts"].items():
             self.assertEqual(identity["path"], resource_manifest.INPUTS[name])
             self.assertEqual(

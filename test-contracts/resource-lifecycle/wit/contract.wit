@@ -1,0 +1,13 @@
+package root:component;
+
+world root {
+  import kontor:built-in/context;
+  use kontor:built-in/context.{proc-context, view-context, contract};
+
+  export init: func(ctx: borrow<proc-context>) -> contract;
+  export success: func(ctx: borrow<view-context>) -> u32;
+  export trap: func(ctx: borrow<view-context>) -> u32;
+  export lifecycle: interface {
+    resource gadget {}
+  }
+}
