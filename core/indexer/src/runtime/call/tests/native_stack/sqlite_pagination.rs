@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Result, ensure};
+use built_in_types::pagination::CursorRequest;
 use libsql::Connection;
 use serde_json::{Value as JsonValue, json};
 
@@ -107,11 +108,18 @@ async fn query_page(
             expected_nft[end - 1].clone()
         }
     });
+    let request = CursorRequest {
+        after: after.map(str::to_owned),
+        limit: Some(page_size as u64),
+    };
+    // The generated cursor builder has a non-Send future. Its generated WAVE
+    // functions preserve the same request and result contract on Tokio workers.
     if source == "token" {
-        let page = token::api::balances(runtime)
-            .set_after(after)
-            .fetch_with_limit(page_size as u64)
-            .await??;
+        let expression = token::api::wave::balances_call_expr(request);
+        let raw = runtime
+            .execute_api(None, &token::address(), &expression)
+            .await?;
+        let page = token::api::wave::balances_parse_return_expr(&raw)?;
         ensure!(
             page.next == expected_next,
             "token page continuation changed"
@@ -127,10 +135,11 @@ async fn query_page(
         }
         Ok(json!({"items": rows, "next": page.next}))
     } else {
-        let page = nft::api::list_nfts(runtime)
-            .set_after(after)
-            .fetch_with_limit(page_size as u64)
+        let expression = nft::api::wave::list_nfts_call_expr(request);
+        let raw = runtime
+            .execute_api(None, &nft::address(), &expression)
             .await?;
+        let page = nft::api::wave::list_nfts_parse_return_expr(&raw);
         ensure!(page.next == expected_next, "NFT page continuation changed");
         ensure!(page.items.len() == end - start, "NFT page length changed");
         let mut rows = Vec::with_capacity(page.items.len());

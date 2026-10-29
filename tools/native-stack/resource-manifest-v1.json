@@ -302,7 +302,7 @@
     },
     "sqlite_pagination_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_pagination.rs",
-      "sha256": "1482a600e16474a3d8019674b3de7c9e6121cbb6a181e083d46f277c8b8150cd"
+      "sha256": "48fa91728566287a2d9fe7d61912c6212f40febe9da5e78f42dd673c268dab70"
     },
     "sqlite_pagination_capture": {
       "path": "tools/native-stack/capture_resource_sqlite_pagination.py",
