@@ -27,6 +27,7 @@ mod canonical;
 mod foreign_wave;
 mod initialization;
 mod lifecycle;
+mod sqlite_pagination;
 mod sweep;
 mod type_value;
 
@@ -95,6 +96,13 @@ pub(super) async fn resource_type_value(
     process_role: &str,
 ) -> Result<JsonValue> {
     type_value::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_sqlite_pagination(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    sqlite_pagination::run(configuration, process_role).await
 }
 
 #[tokio::test]

@@ -658,6 +658,7 @@ fn finite_stack_worker_case() -> Result<()> {
                 | "failed_instantiation_cleanup"
                 | "foreign_wave_parse_print"
                 | "canonical_type_value_recursion"
+                | "sqlite_pagination"
         ),
         "unknown finite stack case"
     );
@@ -730,6 +731,9 @@ fn finite_stack_worker_case() -> Result<()> {
                 super::native_stack::resource_foreign_wave(&task_configuration, &task_role).await?
             } else if task_case_id == "canonical_type_value_recursion" {
                 super::native_stack::resource_type_value(&task_configuration, &task_role).await?
+            } else if task_case_id == "sqlite_pagination" {
+                super::native_stack::resource_sqlite_pagination(&task_configuration, &task_role)
+                    .await?
             } else if task_case_id.starts_with("canonical_") {
                 super::native_stack::resource_canonical(
                     &task_case_id,

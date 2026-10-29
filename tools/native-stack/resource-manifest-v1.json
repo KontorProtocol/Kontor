@@ -266,7 +266,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "a90e808fe58c401173b0c73ef857e213748f21b7bfff8f979f16a8fa92f2e7e1"
+      "sha256": "7954a4fd36dbd9711f663f845a59eace72dbd04bbe34e7fc0060bd80e1f64e06"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -294,11 +294,27 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "29fd20283ccf74b258f630ab510a64575aade271de8dd2dea1d1622befb80231"
+      "sha256": "88eec2a81c91f2269ce0c9d14dcd8f2519b109b03167c1f769c066364fcba8f7"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
       "sha256": "48ed4901e83e95cec2fd0d928bbe3c06993f916ab0be5398fe84107d8802a69e"
+    },
+    "sqlite_pagination_adapter": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_pagination.rs",
+      "sha256": "5ed48b7e178b71284042bef82063ac3765bfea28b27d61cba94c0a38281fe56d"
+    },
+    "sqlite_pagination_capture": {
+      "path": "tools/native-stack/capture_resource_sqlite_pagination.py",
+      "sha256": "06e334c11085489922a4bbab33876598014b86849e47faa8598c2c94c87001ee"
+    },
+    "sqlite_pagination_validator": {
+      "path": "tools/native-stack/resource_sqlite_pagination_evidence.py",
+      "sha256": "3f195596320c41e81d0c8e4321ee862bc20dec9eb0642d45ddf1bf99e67a2525"
+    },
+    "sqlite_pagination_validator_tests": {
+      "path": "tools/native-stack/test_resource_sqlite_pagination_evidence.py",
+      "sha256": "7d25994466cdc1ae0e21b27f0e537225a28f1897af352d362ba21b221b6a1b0b"
     },
     "stack_probe": {
       "path": "test-contracts/binaries/stack_probe.wasm.br",
@@ -310,7 +326,7 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "11b03962a526bb1a5003a8d067d1ec63a724073e383a5498f93c096a05dbccee"
+      "sha256": "6b3d0f1d308e4fe42005b521ee76456973ebf96cb1459e75d3955e87f776f4d3"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
@@ -1690,7 +1706,12 @@
       "family": "sqlite",
       "fixtures": [
         "token_pages",
-        "nft_pages"
+        "nft_pages",
+        "sqlite_pagination_adapter",
+        "resource_worker_diagnostic",
+        "sqlite_pagination_capture",
+        "sqlite_pagination_validator",
+        "sqlite_pagination_validator_tests"
       ],
       "id": "sqlite_pagination",
       "paired_worker_status": "missing",
@@ -1825,7 +1846,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "29fd20283ccf74b258f630ab510a64575aade271de8dd2dea1d1622befb80231",
+    "source_sha256": "88eec2a81c91f2269ce0c9d14dcd8f2519b109b03167c1f769c066364fcba8f7",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1977,7 +1998,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "29fd20283ccf74b258f630ab510a64575aade271de8dd2dea1d1622befb80231",
+    "sha256": "88eec2a81c91f2269ce0c9d14dcd8f2519b109b03167c1f769c066364fcba8f7",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },
