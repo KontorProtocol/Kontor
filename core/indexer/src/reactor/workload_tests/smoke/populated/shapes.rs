@@ -87,13 +87,13 @@ impl ShapeSigners {
         let bls = [derive_test_key(114), derive_test_key(115)];
         let conn = runtime.get_storage_conn();
         let mut nonces = [0; 2];
-        for index in 0..2 {
-            ensure!(identities[index].next_nonce(&conn).await? == 0);
+        for (index, identity) in identities.iter().enumerate() {
+            ensure!(identity.next_nonce(&conn).await? == 0);
             if aggregate {
                 let proof = RegistrationProof::new(&keys[index], &bls[index].to_bytes())?;
                 runtime
                     .register_bls_key(
-                        &Signer::Id(identities[index].clone()),
+                        &Signer::Id(identity.clone()),
                         &proof.bls_pubkey,
                         &proof.schnorr_sig,
                         &proof.bls_sig,
@@ -101,7 +101,7 @@ impl ShapeSigners {
                     .await?;
                 // Different nonzero starting nonces catch accidental reuse of an
                 // operation index as every signer's global nonce.
-                nonces[index] = identities[index]
+                nonces[index] = identity
                     .advance_nonce(&conn, [6, 18][index], ANCHOR_HEIGHT)
                     .await?;
             }
@@ -235,11 +235,11 @@ impl ShapeSigners {
         let psbt = Psbt::deserialize(&hex::decode(output.psbt_hex)?)?;
         let prevouts: Vec<_> = ordered.iter().map(|tx| tx.output[0].clone()).collect();
         ensure!(reveal.input.len() == ordered.len());
-        for index in 0..ordered.len() {
+        for (index, commit) in ordered.iter().enumerate() {
             ensure!(
                 reveal.input[index].previous_output
                     == OutPoint {
-                        txid: ordered[index].compute_txid(),
+                        txid: commit.compute_txid(),
                         vout: 0
                     }
             );
