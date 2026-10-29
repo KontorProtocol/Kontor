@@ -46,6 +46,7 @@ mod sequence_inputs;
 mod shapes;
 mod simulation;
 mod simulation_requests;
+mod timed;
 mod views;
 
 use batch::BatchProof;

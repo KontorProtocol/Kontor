@@ -39,6 +39,18 @@ impl BlockInput {
         signer: XOnlyPublicKey,
     ) -> Result<Self> {
         ensure!(matches!(funding.len(), 50 | 500));
+        Self::decode_group(raw, height, parent, funding, instructions, signer)
+    }
+
+    pub(super) fn decode_group(
+        raw: Vec<u8>,
+        height: u64,
+        parent: BlockHash,
+        funding: &[Funding],
+        instructions: &[Inst],
+        signer: XOnlyPublicKey,
+    ) -> Result<Self> {
+        ensure!((1..=1_300).contains(&funding.len()));
         ensure!(instructions.len() == funding.len() * 2);
         let bitcoin: BitcoinBlock = deserialize(&raw)?;
         ensure!(bitcoin.weight().to_wu() <= 4_000_000);
@@ -88,10 +100,22 @@ pub(super) async fn generate(
     funding: &[Vec<Funding>],
     instructions: &[Vec<Inst>],
 ) -> Result<Vec<BlockInput>> {
-    ensure!(matches!(funding.len(), 2 | 6 | 7) && instructions.len() == funding.len());
+    ensure!(matches!(funding.len(), 2 | 6 | 7));
+    ensure!(funding.iter().all(|group| matches!(group.len(), 50 | 500)));
+    generate_groups(client, key, address, funding, instructions).await
+}
+
+pub(super) async fn generate_groups(
+    client: &Client,
+    key: &Keypair,
+    address: &Address,
+    funding: &[Vec<Funding>],
+    instructions: &[Vec<Inst>],
+) -> Result<Vec<BlockInput>> {
+    ensure!(!funding.is_empty() && instructions.len() == funding.len());
     let mut distinct = BTreeSet::new();
     for (funding, instructions) in funding.iter().zip(instructions) {
-        ensure!(matches!(funding.len(), 50 | 500) && instructions.len() == funding.len() * 2);
+        ensure!((1..=1_300).contains(&funding.len()) && instructions.len() == funding.len() * 2);
         for (outpoint, output) in funding {
             ensure!(
                 distinct.insert(*outpoint),
@@ -111,7 +135,7 @@ pub(super) async fn generate(
             .context("sequence height overflow")?;
         let (raw, reveals) =
             many::block(client, key, address, funding.clone(), instructions.clone()).await?;
-        let input = BlockInput::decode(
+        let input = BlockInput::decode_group(
             serialize(&raw),
             height,
             parent,

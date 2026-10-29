@@ -108,19 +108,45 @@ pub(super) async fn prepare(
     transactions: usize,
 ) -> Result<Vec<Vec<Funding>>> {
     ensure!(matches!(blocks, 2 | 6 | 7) && matches!(transactions, 50 | 500));
+    prepare_groups(client, key, address, funding, &vec![transactions; blocks]).await
+}
+
+pub(super) async fn prepare_groups(
+    client: &Client,
+    key: &Keypair,
+    address: &Address,
+    funding: Funding,
+    counts: &[usize],
+) -> Result<Vec<Vec<Funding>>> {
+    ensure!(!counts.is_empty() && counts.iter().all(|count| *count > 0));
+    let total = counts.iter().try_fold(0usize, |sum, count| {
+        sum.checked_add(*count).context("funding count overflow")
+    })?;
+    ensure!(
+        total <= 20_000,
+        "funding horizon exceeds bounded setup capacity"
+    );
+    let chunks: Vec<_> = counts
+        .iter()
+        .flat_map(|count| {
+            (0..*count)
+                .step_by(500)
+                .map(|start| (*count - start).min(500))
+        })
+        .collect();
     ensure!(client.get_blockchain_info().await?.blocks == ANCHOR_HEIGHT - 1);
     ensure!(client.get_raw_mempool().await?.is_empty());
     let previous = client.get_block_hash(ANCHOR_HEIGHT - 1).await?;
-    let parent = split(key, address, funding, blocks)?;
+    let parent = split(key, address, funding, chunks.len())?;
     admitted(client, &parent).await?;
     client
         .send_raw_transaction(&hex::encode(serialize(&parent)))
         .await?;
     let mut ordered = vec![parent.clone()];
-    let mut result = Vec::new();
+    let mut flat = Vec::with_capacity(total);
     let mut distinct = BTreeSet::new();
-    for funding in outputs(&parent)? {
-        let child = split(key, address, funding, transactions)?;
+    for (funding, count) in outputs(&parent)?.into_iter().zip(chunks) {
+        let child = split(key, address, funding, count)?;
         // Retaining siblings would exceed Bitcoin's connected-cluster size limit.
         // Each child is admission-checked with only its parent in the mempool.
         ensure!(client.get_raw_mempool().await? == [parent.compute_txid()]);
@@ -130,7 +156,7 @@ pub(super) async fn prepare(
         for (outpoint, _) in &fundings {
             ensure!(distinct.insert(*outpoint), "reused sequence funding output");
         }
-        result.push(fundings);
+        flat.extend(fundings);
         ordered.push(child);
     }
     let raw: Vec<_> = ordered
@@ -154,10 +180,19 @@ pub(super) async fn prepare(
     ensure!(block.header.prev_blockhash == previous && block.txdata[1..] == ordered);
     ensure!(block.weight().to_wu() <= 4_000_000);
     ensure!(client.get_raw_mempool().await?.is_empty());
-    ensure!(result.len() == blocks && distinct.len() == blocks * transactions);
+    ensure!(flat.len() == total && distinct.len() == total);
+    let mut offset = 0;
+    let result = counts
+        .iter()
+        .map(|count| {
+            let group = flat[offset..offset + count].to_vec();
+            offset += count;
+            group
+        })
+        .collect();
     eprintln!(
         "workload_sequence_funding={}",
-        json!({"blocks":blocks,"transactions_per_block":transactions,
+        json!({"groups":counts,
             "confirmed_outputs":distinct.len(),"anchor_height":ANCHOR_HEIGHT,
             "anchor_hash":hash,"raw_block_sha256":hex::encode(Sha256::digest(serialize(&block))),
             "transaction_weights":ordered.iter().map(|tx|tx.weight().to_wu()).collect::<Vec<_>>(),
