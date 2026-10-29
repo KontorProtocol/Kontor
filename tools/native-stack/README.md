@@ -182,6 +182,30 @@ The resulting bundle is a candidate actual binding for 12 cases. The other
 29 cases, production memory profiles, and macOS guard remain missing. The
 full six-cell validator still fails closed until those inputs are proven.
 
+## Stage 1 finite and canonical development evidence
+
+The finite paid, pending host I/O, and canonical callback adapters run through
+the published contract and measured Tokio worker paths. Each isolated child
+uses a reduced or production stack configuration with the teardown probe on
+or off. The pending host fixture records a real `Poll::Pending` before its
+notification releases the host import. Canonical samples cover a 16,384 byte
+string roundtrip, realloc traps, a forbidden realloc import, and light and
+heavy paid post-return traps. The paid worker and validator independently
+check fuel-to-gas conversion and exact actor debit, burner credit, and supply
+reduction. The heavy callback must charge more gas and fee than the light one.
+
+At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
+development canonical capture completed 12 child processes, 56 attempts, and
+268 closed Store lifecycles. The standalone validator accepted all 12 runs.
+The archived capture SHA-256 is
+`e99e60f0f3900f154a9d565f93606941994e5c6183d5cd9e6d6bcb6c236ae91d`;
+its exact-source guard control SHA-256 is
+`91bd618f1db597eca5dab24e0b5f644b28a839f965f318412e9b628ce3871674`.
+The archive is local diagnostic evidence. Its `qualification_status` is
+`missing`, since the other five cells and remaining case families have not
+been captured. The canonical fixture performs no persistent guest write, so
+its reset digest proves cleanup of this fixture, not rollback of a guest write.
+
 Cold publish function size, branch-table size and control nesting remain
 unverified accepted fixtures. The wasmparser source limits alone do not prove
 that a component with that shape passes WIT, serialized transaction and
