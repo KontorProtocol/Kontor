@@ -7,6 +7,7 @@ world root {
 
   export init: func(ctx: borrow<proc-context>) -> contract;
   export recurse: func(ctx: borrow<proc-context>, depth: u32) -> u32;
+  export leaf-host-recurse: func(ctx: borrow<proc-context>, depth: u32) -> u32;
   export wide-recurse: func(ctx: borrow<proc-context>, depth: u32, data: list<u64>) -> u64;
   export huge-frame: func(ctx: borrow<proc-context>, data: list<u64>) -> u64;
   export view-recurse: func(ctx: borrow<view-context>, depth: u32) -> u32;

@@ -1,0 +1,13 @@
+{
+  "discovery_capture_sha256": null,
+  "cases": {
+  "pulley_plain_core": null,
+  "pulley_plain_paid": null,
+  "pulley_plain_system": null,
+  "pulley_plain_view": null,
+  "pulley_wide_core": null,
+  "pulley_wide_paid": null,
+  "pulley_wide_system": null,
+  "pulley_wide_view": null
+  }
+}

@@ -122,7 +122,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "c7366d2c465c86c412093d3771bba29c02c96a0cd0d1801ea6e3578ffb0f69b0"
+      "sha256": "88d9c6dc29bd0e2855432fce492c869dd681c12bbc05e73d7d4e135c3395f198"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -130,19 +130,19 @@
     },
     "stack_probe": {
       "path": "test-contracts/binaries/stack_probe.wasm.br",
-      "sha256": "e396317b4eb14c9a29d47acbe8a9f7b0e29770d47e7df53e4bed12d5c5bfce50"
+      "sha256": "32652cdffc656f2f9d13d1cd5e4083245ef148a5f6bfef85ec4166a10ada26b9"
     },
     "stack_probe_source": {
       "path": "test-contracts/stack-probe/src/lib.rs",
-      "sha256": "88b00501cfe0b47935a3d36072893e205ef53f78fcee074f83df2c50500a09e2"
+      "sha256": "4dd3afe68bdcd3167f0b8bbd34961dcc9f8a9b9cf2a555891cd7a7ce95208fa2"
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "3d0b4e9f7c4e933bc96b2e61e146106a6654967daf8ea9a556e262c5a8a6b4d8"
+      "sha256": "a53f0fdedb317b90217bb8e25d2897295ca8be981234a0902e8a6f05c8adfd9c"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "fff7660ca0ef29b8a6cba28cc682daa75814c862068216a7902ba0b1fa1ed815"
+      "sha256": "477b4d94d5963dc8d15ced124494335ec2673cdbf5b519eeef66008c028371c0"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -1504,7 +1504,7 @@
     "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
   },
   "guard_control_runner": {
-    "source_sha256": "c7366d2c465c86c412093d3771bba29c02c96a0cd0d1801ea6e3578ffb0f69b0",
+    "source_sha256": "88d9c6dc29bd0e2855432fce492c869dd681c12bbc05e73d7d4e135c3395f198",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1656,7 +1656,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "c7366d2c465c86c412093d3771bba29c02c96a0cd0d1801ea6e3578ffb0f69b0",
+    "sha256": "88d9c6dc29bd0e2855432fce492c869dd681c12bbc05e73d7d4e135c3395f198",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

@@ -4,7 +4,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use indexer_types::Payment;
 use libsql::params;
-use serde_json::json;
+use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
 use stdlib::to_wave_expr;
 use wasmtime::Trap;
@@ -27,6 +27,15 @@ pub(super) use sweep::{assert_receipt_stream_initial_state, persistent_digest};
 
 pub(super) async fn resource_smoke(reduced: bool) -> Result<()> {
     sweep::resource_smoke(reduced).await
+}
+
+pub(super) async fn resource_boundary(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+    frozen_depths: Option<(u32, u32)>,
+) -> Result<JsonValue> {
+    sweep::run_resource_boundary(case_id, configuration, process_role, frozen_depths).await
 }
 
 #[tokio::test]

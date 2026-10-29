@@ -1,0 +1,208 @@
+{
+  "auxiliary_expected_counts_by_mode": {
+    "core": {
+      "post_observation": 5,
+      "pre_observation": 0,
+      "rollback_observation": 4,
+      "target_native_auxiliary": 0
+    },
+    "paid": {
+      "post_observation": 5,
+      "pre_observation": 0,
+      "rollback_observation": 4,
+      "target_native_auxiliary": 2
+    },
+    "system": {
+      "post_observation": 5,
+      "pre_observation": 0,
+      "rollback_observation": 4,
+      "target_native_auxiliary": 0
+    },
+    "view": {
+      "post_observation": 5,
+      "pre_observation": 0,
+      "rollback_observation": 4,
+      "target_native_auxiliary": 0
+    }
+  },
+  "boundary_cases": [
+    {
+      "case_id": "pulley_plain_core",
+      "first_failure": null,
+      "last_success": null,
+      "mode": "core",
+      "repeats": 3,
+      "shape": "plain"
+    },
+    {
+      "case_id": "pulley_plain_paid",
+      "first_failure": null,
+      "last_success": null,
+      "mode": "paid",
+      "repeats": 3,
+      "shape": "plain"
+    },
+    {
+      "case_id": "pulley_plain_system",
+      "first_failure": null,
+      "last_success": null,
+      "mode": "system",
+      "repeats": 3,
+      "shape": "plain"
+    },
+    {
+      "case_id": "pulley_plain_view",
+      "first_failure": null,
+      "last_success": null,
+      "mode": "view",
+      "repeats": 3,
+      "shape": "plain"
+    },
+    {
+      "case_id": "pulley_wide_core",
+      "first_failure": null,
+      "last_success": null,
+      "mode": "core",
+      "repeats": 3,
+      "shape": "wide"
+    },
+    {
+      "case_id": "pulley_wide_paid",
+      "first_failure": null,
+      "last_success": null,
+      "mode": "paid",
+      "repeats": 3,
+      "shape": "wide"
+    },
+    {
+      "case_id": "pulley_wide_system",
+      "first_failure": null,
+      "last_success": null,
+      "mode": "system",
+      "repeats": 3,
+      "shape": "wide"
+    },
+    {
+      "case_id": "pulley_wide_view",
+      "first_failure": null,
+      "last_success": null,
+      "mode": "view",
+      "repeats": 3,
+      "shape": "wide"
+    }
+  ],
+  "claim_status": "pending_discovery",
+  "configurations": [
+    "reduced",
+    "production"
+  ],
+  "discovery": {
+    "cell": "Linux-ARM64/dev",
+    "configuration": "production",
+    "initial_depth": 1024,
+    "max_depth": 32768,
+    "process_role": "discovery_production_observed"
+  },
+  "final_roles": [
+    "target_observed",
+    "probe_off_control"
+  ],
+  "leaf_case": {
+    "case_id": "deepest_frame_host_call",
+    "depth_from_case": "pulley_plain_paid",
+    "repeats": 2
+  },
+  "parent_manifest_sha256": "44ac5c5bc7b783643987ebf78531089bad3d9d3206b71fe33cad4aa541867990",
+  "remaining_case_ids": [
+    "brotli_raw_ceiling",
+    "canonical_lift_lower",
+    "canonical_post_return",
+    "canonical_realloc",
+    "canonical_type_value_recursion",
+    "cold_publish_br_table",
+    "cold_publish_control_nesting",
+    "cold_publish_large_function",
+    "deepest_frame_host_call",
+    "explicit_resource_drop",
+    "failed_instantiation_cleanup",
+    "foreign_wave_parse_print",
+    "generated_initialization",
+    "large_frame_paid",
+    "max_gas_paid",
+    "native_filestorage_lifecycle",
+    "native_staking_rewards",
+    "pending_host_io",
+    "pulley_plain_core",
+    "pulley_plain_paid",
+    "pulley_plain_system",
+    "pulley_plain_view",
+    "pulley_wide_core",
+    "pulley_wide_paid",
+    "pulley_wide_system",
+    "pulley_wide_view",
+    "sqlite_large_values",
+    "sqlite_pagination",
+    "sqlite_ranges"
+  ],
+  "remaining_requirements": {
+    "case_bindings": "missing_29",
+    "macos_guard": "missing",
+    "production_memory_profiles": "missing",
+    "six_cell_qualification": "missing",
+    "workload_plan": "awaiting_frozen_workload_plan"
+  },
+  "reviewed_discovery_sha256": null,
+  "schema_sha256": "bf02e554d8c9636495f68568e33dd4f05acf2cc224b1c2fe1225b268cb404953",
+  "schema_version": 1,
+  "source_baseline_commit": "67a52fed58a893ce2c1c05483f86f4fffa02a675",
+  "sources": {
+    "capture": {
+      "path": "tools/native-stack/capture_resource_boundary.py",
+      "sha256": "fe06fea712b53246fe6e2de9a65e878bb9d24222174559952689d2d2bbaaf417"
+    },
+    "depths": {
+      "path": "tools/native-stack/resource-boundary-depths-v1.json",
+      "sha256": "312a847b477922c776c4c2e37b9fad9fbf68ca7eac6e60a39bcf8a9556836121"
+    },
+    "fixture_binary": {
+      "path": "test-contracts/binaries/stack_probe.wasm.br",
+      "sha256": "32652cdffc656f2f9d13d1cd5e4083245ef148a5f6bfef85ec4166a10ada26b9"
+    },
+    "fixture_source": {
+      "path": "test-contracts/stack-probe/src/lib.rs",
+      "sha256": "4dd3afe68bdcd3167f0b8bbd34961dcc9f8a9b9cf2a555891cd7a7ce95208fa2"
+    },
+    "fixture_wit": {
+      "path": "test-contracts/stack-probe/wit/contract.wit",
+      "sha256": "eb20c582c371e45b85fb3224945176ea9c521f7c4c862aa912b999c291a6573f"
+    },
+    "manifest_builder": {
+      "path": "tools/native-stack/resource_boundary_manifest.py",
+      "sha256": "801f48cdc6e837ce1397f138a21e1ca9ed11b145201afa85fe608cc97651edc5"
+    },
+    "plan": {
+      "path": "tools/native-stack/resource-boundary-family.md",
+      "sha256": "56ad4b97d5c64d85149c7007e8c91a3ce5a7feb171707ba27295b14515c64241"
+    },
+    "schema": {
+      "path": "tools/native-stack/resource-boundary-evidence-schema-v1.json",
+      "sha256": "bf02e554d8c9636495f68568e33dd4f05acf2cc224b1c2fe1225b268cb404953"
+    },
+    "sweep": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
+      "sha256": "477b4d94d5963dc8d15ced124494335ec2673cdbf5b519eeef66008c028371c0"
+    },
+    "tests": {
+      "path": "tools/native-stack/test_resource_boundary_evidence.py",
+      "sha256": "607e63fe9c8e40abd4a83006040b51adeb0d694aed901589a1178171e27ac182"
+    },
+    "validator": {
+      "path": "tools/native-stack/resource_boundary_evidence.py",
+      "sha256": "eef4024e98ba063ea53954aeea9e0747468dfae0ac4ee3c83841cf20a3f88d5d"
+    },
+    "worker": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
+      "sha256": "88d9c6dc29bd0e2855432fce492c869dd681c12bbc05e73d7d4e135c3395f198"
+    }
+  }
+}

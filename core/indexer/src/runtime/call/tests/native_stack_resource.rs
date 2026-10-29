@@ -436,6 +436,151 @@ fn chain_worker_case() -> Result<()> {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "run through the bounded Pulley resource child driver"]
+fn pulley_boundary_worker_case() -> Result<()> {
+    let configuration = env::var("KONTOR_RESOURCE_MODE")?;
+    ensure!(
+        matches!(configuration.as_str(), "reduced" | "production"),
+        "unknown resource configuration"
+    );
+    let case_id = env::var("KONTOR_BOUNDARY_CASE")?;
+    let process_role = env::var("KONTOR_BOUNDARY_ROLE")?;
+    let probe = env::var("KONTOR_RESOURCE_TEARDOWN_PROBE")?;
+    ensure!(
+        (process_role == "probe_off_control" && probe == "off")
+            || (process_role != "probe_off_control" && probe == "on"),
+        "boundary process role and teardown probe differ"
+    );
+    let frozen_depths = match (
+        env::var("KONTOR_BOUNDARY_LAST_SUCCESS"),
+        env::var("KONTOR_BOUNDARY_FIRST_FAILURE"),
+    ) {
+        (Ok(last), Ok(first)) => Some((last.parse::<u32>()?, first.parse::<u32>()?)),
+        (Err(env::VarError::NotPresent), Err(env::VarError::NotPresent)) => None,
+        _ => bail!("boundary depth environment is incomplete"),
+    };
+    let reduced = configuration == "reduced";
+    let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    let blocking = runtime
+        .block_on(async { tokio::task::spawn_blocking(current_linux_stack_range).await })?
+        .context("blocking pool stack capacity")?;
+    let caller = current_linux_stack_range().context("block_on caller stack capacity")?;
+    let worker_ids = workers
+        .iter()
+        .map(|worker| worker.thread_id)
+        .collect::<Vec<_>>();
+    ensure!(
+        workers.iter().all(|worker| {
+            worker.thread_id != blocking.thread_id
+                && worker.thread_id != caller.thread_id
+                && worker.os_thread_id != blocking.os_thread_id
+                && worker.os_thread_id != caller.os_thread_id
+        }) && blocking.thread_id != caller.thread_id
+            && blocking.os_thread_id != caller.os_thread_id,
+        "boundary worker, blocking, and caller thread categories overlap"
+    );
+    resource_diagnostics::start_chain();
+    let task_case_id = case_id.clone();
+    let task_configuration = configuration.clone();
+    let task_role = process_role.clone();
+    let result = runtime.block_on(async {
+        tokio::spawn(async move {
+            let start = std::thread::current().id();
+            let summary = super::native_stack::resource_boundary(
+                &task_case_id,
+                &task_configuration,
+                &task_role,
+                frozen_depths,
+            )
+            .await?;
+            Ok::<_, anyhow::Error>((summary, start, std::thread::current().id()))
+        })
+        .await
+    });
+    let events = resource_diagnostics::finish();
+    let (summary, start, end) = result??;
+    ensure!(
+        worker_ids.contains(&start) && worker_ids.contains(&end),
+        "boundary case began or ended outside measured Tokio workers"
+    );
+    for event in &events {
+        if let Some(worker) = workers
+            .iter()
+            .find(|worker| worker.thread_id == event.thread_id)
+        {
+            ensure!(
+                event.os_thread_id == worker.os_thread_id,
+                "boundary worker Rust/kernel thread identity differs: {event:?}"
+            );
+        } else {
+            ensure!(
+                event.name.starts_with("blocking_decode_")
+                    && workers
+                        .iter()
+                        .all(|worker| worker.os_thread_id != event.os_thread_id),
+                "boundary event escaped worker or blocking category: {event:?}"
+            );
+        }
+    }
+    println!(
+        "BOUNDARY_WORKER_RUNTIME={}",
+        json!({
+            "scope": "paired_pulley_boundary_worker",
+            "configuration": configuration,
+            "case_id": case_id,
+            "process_role": process_role,
+            "pid": std::process::id(),
+            "flavor": "multi_thread",
+            "worker_count": workers.len(),
+            "worker_requested_bytes": reduced.then_some(1024 * 1024),
+            "thread_observations": [
+                linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
+                linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+                linux_thread_observation(&blocking, "blocking_pool", None),
+                linux_thread_observation(&caller, "block_on_caller", None),
+            ],
+            "blocking_pool_observed": true,
+            "block_on_caller_observed": true,
+            "embedded_source_sha": built_info::GIT_COMMIT_HASH,
+            "binary_sha256": sha256_file(&env::current_exe()?)?,
+        })
+    );
+    println!(
+        "BOUNDARY_WORKER_TRACE={}",
+        json!({
+            "scope": "paired_pulley_boundary_worker",
+            "configuration": configuration,
+            "case_id": case_id,
+            "process_role": process_role,
+            "events": events.iter().map(|event| json!({
+                "name": event.name,
+                "thread_id": format!("{:?}", event.thread_id),
+                "os_thread_id": event.os_thread_id,
+                "category": if worker_ids.contains(&event.thread_id) {
+                    "tokio_worker"
+                } else {
+                    "blocking_pool"
+                },
+            })).collect::<Vec<_>>(),
+        })
+    );
+    println!("BOUNDARY_PROBE_SUMMARY:{summary}");
+    println!(
+        "BOUNDARY_PROBE_TERMINAL:{}",
+        json!({
+            "case_id": case_id,
+            "process_role": process_role,
+            "configuration": configuration,
+            "pid": std::process::id(),
+            "attempt_count": summary["attempt_count"],
+            "complete": true,
+        })
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 #[ignore = "run explicitly to verify worker guards in isolated child processes"]
 fn linux_worker_guard_fault_control() -> Result<()> {
     let binary = env::current_exe()?;

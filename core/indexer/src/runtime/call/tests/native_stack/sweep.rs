@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::env;
+use std::process;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use indexer_types::Payment;
@@ -10,18 +11,22 @@ use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
 use stdlib::to_wave_expr;
 use tempfile::TempDir;
+use tokio::sync::Notify;
+use tokio::time::timeout;
 use wasmtime::Trap;
 
 use super::super::balance;
 use super::{COMPONENT, SYSTEM_FUEL_CEILING};
-use crate::runtime::invocation::{InvocationBudget, InvocationLimitReached};
+use crate::runtime::invocation::{
+    InvocationBudget, InvocationLimitReached, ResourceProbePhase, ResourceTeardownRecorder,
+};
 use crate::runtime::resource_diagnostics;
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{
-    ContractAddress, Decimal, ExecutionError, MAX_UNTRUSTED_GAS_LIMIT, Runtime, TransactionContext,
-    native_provenance,
+    ContractAddress, Decimal, ExecutionError, Linkers, MAX_UNTRUSTED_GAS_LIMIT, Runtime,
+    TransactionContext, native_provenance,
 };
 use crate::test_utils::test_runtime_with_engine;
 
@@ -52,6 +57,8 @@ struct Fixture {
     funding_ms: u128,
     publication_ms: u128,
     samples: Vec<Sample>,
+    resource_probe: Option<bool>,
+    last_report: Option<JsonValue>,
 }
 
 impl Fixture {
@@ -150,6 +157,8 @@ impl Fixture {
             funding_ms,
             publication_ms,
             samples: Vec::new(),
+            resource_probe: None,
+            last_report: None,
         })
     }
 
@@ -157,6 +166,32 @@ impl Fixture {
         resource_diagnostics::record("sample_preparation_entry");
         let sample_index = self.samples.len();
         let sample_id = format!("{role}:{}:{sample_index:04}", self.kind);
+        let teardown_recorder = (self.resource_probe == Some(true))
+            .then(|| Arc::new(ResourceTeardownRecorder::default()));
+        if let Some(probe) = self.resource_probe {
+            self.budget = Arc::new(match teardown_recorder.as_ref() {
+                Some(recorder) => InvocationBudget::with_teardown_recorder(recorder.clone()),
+                None => InvocationBudget::default(),
+            });
+            self.runtime.invocation_budget = Some(self.budget.clone());
+            self.runtime.resource_probe_phase = Some(ResourceProbePhase::PreObservation);
+            ensure!(
+                probe == teardown_recorder.is_some(),
+                "teardown probe mode differs"
+            );
+        }
+        let state_before_sha256 = if self.resource_probe.is_some() {
+            let conn = self.runtime.get_storage_conn();
+            assert_receipt_stream_initial_state(&conn).await?;
+            let before = persistent_digest(&conn).await?;
+            ensure!(
+                before == self.baseline_digest,
+                "pretrial persistent state drift"
+            );
+            Some(before)
+        } else {
+            None
+        };
         // conversion_probe is the only call-hook install site in this runtime.
         // Reaudit this sentinel if another install path is added.
         let call_hook_installed = self.runtime.conversion_probe.is_some();
@@ -183,6 +218,11 @@ impl Fixture {
         let execution_start = Instant::now();
         resource_diagnostics::record("sample_preparation_exit");
         resource_diagnostics::record("operation_entry");
+        if self.resource_probe.is_some() {
+            self.runtime.resource_probe_phase = Some(ResourceProbePhase::Target(Arc::new(vec![
+                self.address.clone(),
+            ])));
+        }
         let result = if self.kind.starts_with("system_") {
             self.runtime
                 .execute_system_view(&self.address, &expression)
@@ -215,6 +255,10 @@ impl Fixture {
                 .await
         };
         resource_diagnostics::record("operation_exit");
+        if self.resource_probe.is_some() {
+            self.runtime.resource_probe_phase =
+                Some(ResourceProbePhase::PostObservation(self.address.clone()));
+        }
         let execution_ms = execution_start.elapsed().as_millis();
         let postcall_start = Instant::now();
         resource_diagnostics::record("postcall_observation_entry");
@@ -236,8 +280,8 @@ impl Fixture {
             "deposit accounting leak in {sample_id}"
         );
         let usage = self.runtime.finish_usage(previous)?;
-        let (outcome, error_message, value) = match result {
-            Ok(value) => ("ok", None, Some(value)),
+        let (outcome, error_message, value, typed_trap) = match result {
+            Ok(value) => ("ok", None, Some(value), None),
             Err(ExecutionError::Deterministic(error)) => {
                 let trap = error.chain().find_map(|cause| cause.downcast_ref::<Trap>());
                 let outcome = if error
@@ -253,7 +297,12 @@ impl Fixture {
                         None => "other_deterministic",
                     }
                 };
-                (outcome, Some(format!("{error:#}")), None)
+                (
+                    outcome,
+                    Some(format!("{error:#}")),
+                    None,
+                    trap.map(|trap| format!("{trap:?}")),
+                )
             }
             Err(ExecutionError::NonDeterministic(error)) => {
                 bail!("infrastructure failure in {sample_id}: {error:#}")
@@ -278,6 +327,16 @@ impl Fixture {
             .execute(None, None, &self.address, "last-depth()")
             .await?
             .parse::<u32>()?;
+        let after_amounts = if self.resource_probe.is_some() {
+            Some((
+                balance(&mut self.runtime, HolderRef::from(&self.signer)).await?,
+                balance(&mut self.runtime, HolderRef::Burner).await?,
+                token::floor(&mut self.runtime, HolderRef::from(&self.signer)).await?,
+                token::total_supply(&mut self.runtime).await?,
+            ))
+        } else {
+            None
+        };
         let mut child_markers = Vec::new();
         if self.kind == "paid_reenter" {
             for tx_index in 1..self.fixture_contracts {
@@ -325,6 +384,11 @@ impl Fixture {
         resource_diagnostics::record("postcall_observation_exit");
 
         resource_diagnostics::record("teardown_entry");
+        if self.resource_probe.is_some() {
+            self.runtime.resource_probe_phase = Some(ResourceProbePhase::RollbackObservation(
+                self.address.clone(),
+            ));
+        }
         self.runtime.storage.rollback().await?;
         self.runtime.set_context(1, None, None, None).await;
         ensure!(
@@ -333,12 +397,15 @@ impl Fixture {
                 && self.runtime.gauge.is_none(),
             "execution accounting did not reset in {sample_id}"
         );
-        let balances_restored = balance(&mut self.runtime, HolderRef::from(&self.signer)).await?
-            == self.baseline_balance
-            && balance(&mut self.runtime, HolderRef::Burner).await? == self.baseline_burner;
-        let floor_restored = token::floor(&mut self.runtime, HolderRef::from(&self.signer)).await?
-            == self.baseline_floor;
-        let supply_restored = token::total_supply(&mut self.runtime).await? == self.baseline_supply;
+        let balance_restored = balance(&mut self.runtime, HolderRef::from(&self.signer)).await?;
+        let burned_restored = balance(&mut self.runtime, HolderRef::Burner).await?;
+        let floor_restored_amount =
+            token::floor(&mut self.runtime, HolderRef::from(&self.signer)).await?;
+        let supply_restored_amount = token::total_supply(&mut self.runtime).await?;
+        let balances_restored =
+            balance_restored == self.baseline_balance && burned_restored == self.baseline_burner;
+        let floor_restored = floor_restored_amount == self.baseline_floor;
+        let supply_restored = supply_restored_amount == self.baseline_supply;
         assert_receipt_stream_initial_state(&conn).await?;
         let post_digest = persistent_digest(&conn).await?;
         let digest_matches = post_digest == self.baseline_digest;
@@ -364,8 +431,10 @@ impl Fixture {
             "accounting did not reset in {sample_id}"
         );
         resource_diagnostics::record("teardown_exit");
+        let teardown_events = teardown_recorder.as_ref().map(|recorder| recorder.events());
+        self.runtime.resource_probe_phase = None;
 
-        let report = json!({
+        let mut report = json!({
             "role": role,
             "sample_index": sample_index,
             "sample_id": sample_id,
@@ -421,7 +490,35 @@ impl Fixture {
                 },
             },
         });
-        println!("KONTOR_STACK_REPORT:{report}");
+        if self.resource_probe.is_some() {
+            let (balance_after, burned_after, floor_after, supply_after) =
+                after_amounts.context("resource balance observations are missing")?;
+            let transitions = json!({
+                "before": self.baseline_balance.to_string(),
+                "after": balance_after.to_string(),
+                "restored": balance_restored.to_string(),
+                "burned_before": self.baseline_burner.to_string(),
+                "burned_after": burned_after.to_string(),
+                "supply_before": self.baseline_supply.to_string(),
+                "supply_after": supply_after.to_string(),
+                "floor_before": self.baseline_floor.to_string(),
+                "floor_after": floor_after.to_string(),
+                "floor_restored": floor_restored_amount.to_string(),
+            });
+            report["balance_transitions_sha256"] = json!(hex::encode(Sha256::digest(
+                serde_json::to_vec(&transitions)?
+            )));
+            report["balance_transitions"] = transitions;
+            report["state_before_sha256"] = json!(state_before_sha256);
+            report["teardown_events"] = json!(teardown_events);
+            report["teardown_probe_on"] = json!(self.resource_probe == Some(true));
+            report["error_class"] = json!((outcome != "ok").then_some("deterministic"));
+            report["typed_trap"] = json!(typed_trap);
+        }
+        self.last_report = Some(report.clone());
+        if self.resource_probe.is_none() {
+            println!("KONTOR_STACK_REPORT:{report}");
+        }
         println!(
             "KONTOR_STACK_TIMING:{}",
             json!({
@@ -455,6 +552,7 @@ fn expression(kind: &str, depth: u32, address: &ContractAddress) -> Result<Strin
             };
             format!("{function}({depth})")
         }
+        "paid_leaf_host" => format!("leaf-host-recurse({depth})"),
         "paid_wide" | "system_wide" | "view_wide" | "core_wide" => {
             let function = match kind {
                 "paid_wide" => "wide-recurse",
@@ -822,6 +920,298 @@ async fn worker_boundary(
         "last_success": last_success,
         "first_failure": first_failure,
         "first_failure_outcome": first_failure_outcome,
+    }))
+}
+
+struct LeafGate {
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+async fn resource_attempt(
+    fixture: &mut Option<Fixture>,
+    depth: u32,
+    case_id: &str,
+    process_role: &str,
+    configuration: &str,
+    sample_key: &str,
+    repeat_index: usize,
+    leaf_gate: Option<&LeafGate>,
+) -> Result<String> {
+    resource_diagnostics::record("boundary_attempt_start");
+    let mut current = fixture.take().context("resource fixture was consumed")?;
+    let (returned, outcome, host_io_suspended) = if let Some(gate) = leaf_gate {
+        let task_role = process_role.to_owned();
+        let task = tokio::spawn(async move {
+            let outcome = current.observe(depth, &task_role).await?;
+            Ok::<_, anyhow::Error>((current, outcome))
+        });
+        timeout(Duration::from_secs(30), gate.entered.notified()).await?;
+        ensure!(
+            !task.is_finished(),
+            "leaf host import did not suspend the guest"
+        );
+        ensure!(
+            tokio::spawn(async { 42 }).await? == 42,
+            "Tokio worker did not progress while the host import was pending"
+        );
+        gate.release.notify_one();
+        let (current, outcome) = timeout(Duration::from_secs(30), task).await???;
+        (current, outcome, true)
+    } else {
+        let outcome = current.observe(depth, process_role).await?;
+        (current, outcome, false)
+    };
+    let mut observation = returned
+        .last_report
+        .clone()
+        .context("resource observation was not emitted")?;
+    observation["host_io_suspended"] = json!(host_io_suspended);
+    observation["leaf_callback_seen"] = json!(leaf_gate.is_some());
+    let probe_on = returned.resource_probe == Some(true);
+    *fixture = Some(returned);
+    resource_diagnostics::record("boundary_attempt_end");
+    println!(
+        "BOUNDARY_PROBE_ATTEMPT:{}",
+        json!({
+            "case_id": case_id,
+            "process_role": process_role,
+            "configuration": configuration,
+            "probe_on": probe_on,
+            "pid": process::id(),
+            "sample_key": sample_key,
+            "repeat_index": repeat_index,
+            "depth": depth,
+            "complete": true,
+            "observation": observation,
+        })
+    );
+    Ok(outcome)
+}
+
+pub(super) async fn run_resource_boundary(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+    frozen_depths: Option<(u32, u32)>,
+) -> Result<JsonValue> {
+    let (shape, mode) = if case_id == "deepest_frame_host_call" {
+        ("leaf", "paid")
+    } else {
+        let remainder = case_id
+            .strip_prefix("pulley_")
+            .context("unknown resource boundary case")?;
+        let (shape, mode) = remainder
+            .split_once('_')
+            .context("malformed resource boundary case")?;
+        ensure!(
+            matches!(shape, "plain" | "wide")
+                && matches!(mode, "paid" | "view" | "system" | "core"),
+            "unsupported boundary shape or call mode"
+        );
+        (shape, mode)
+    };
+    ensure!(
+        matches!(configuration, "reduced" | "production"),
+        "invalid resource configuration"
+    );
+    ensure!(
+        matches!(
+            process_role,
+            "discovery_production_observed" | "target_observed" | "probe_off_control"
+        ),
+        "invalid boundary process role"
+    );
+    let discovery = process_role == "discovery_production_observed";
+    ensure!(
+        !discovery || (configuration == "production" && shape != "leaf"),
+        "discovery requires a production Pulley boundary"
+    );
+    ensure!(
+        discovery == frozen_depths.is_none(),
+        "frozen depths must be present only for replay"
+    );
+    let probe_on = process_role != "probe_off_control";
+    let kind = match (shape, mode) {
+        ("plain", "paid") => "paid_recurse",
+        ("plain", "view") => "view_recurse",
+        ("plain", "system") => "system_recurse",
+        ("plain", "core") => "core_recurse",
+        ("wide", "paid") => "paid_wide",
+        ("wide", "view") => "view_wide",
+        ("wide", "system") => "system_wide",
+        ("wide", "core") => "core_wide",
+        ("leaf", "paid") => "paid_leaf_host",
+        _ => bail!("unknown Pulley boundary case"),
+    };
+    let mut current = Fixture::new(kind.to_string(), configuration == "reduced").await?;
+    current.resource_probe = Some(probe_on);
+    let leaf_gate = if shape == "leaf" {
+        let gate = LeafGate {
+            entered: Arc::new(Notify::new()),
+            release: Arc::new(Notify::new()),
+        };
+        let mut user = current.runtime.linkers.user.clone();
+        user.allow_shadowing(true)
+            .instance("kontor:built-in/testing")?
+            .func_wrap_async("host-error", {
+                let entered = gate.entered.clone();
+                let release = gate.release.clone();
+                move |_, (): ()| {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    Box::new(async move {
+                        entered.notify_one();
+                        release.notified().await;
+                        Ok((String::new(),))
+                    })
+                }
+            })?;
+        current.runtime.linkers = Arc::new(Linkers {
+            user,
+            native: current.runtime.linkers.native.clone(),
+        });
+        Some(gate)
+    } else {
+        None
+    };
+    let mut fixture = Some(current);
+    let mut attempts = 0_usize;
+    let depths = if discovery {
+        let outcome = resource_attempt(
+            &mut fixture,
+            0,
+            case_id,
+            process_role,
+            configuration,
+            "calibration",
+            attempts,
+            None,
+        )
+        .await?;
+        ensure!(outcome == "ok", "Pulley depth zero failed");
+        attempts += 1;
+        let mut last_success = 0;
+        let mut depth = 1024_u32;
+        let mut first_failure = loop {
+            let outcome = resource_attempt(
+                &mut fixture,
+                depth,
+                case_id,
+                process_role,
+                configuration,
+                "calibration",
+                attempts,
+                None,
+            )
+            .await?;
+            attempts += 1;
+            if outcome != "ok" {
+                ensure!(
+                    outcome == "stack_overflow",
+                    "wrong boundary trap: {outcome}"
+                );
+                break depth;
+            }
+            last_success = depth;
+            ensure!(depth < 32768, "no Pulley stack overflow by depth 32768");
+            depth = depth.saturating_mul(2).min(32768);
+        };
+        while first_failure - last_success > 1 {
+            let midpoint = last_success + (first_failure - last_success) / 2;
+            let outcome = resource_attempt(
+                &mut fixture,
+                midpoint,
+                case_id,
+                process_role,
+                configuration,
+                "calibration",
+                attempts,
+                None,
+            )
+            .await?;
+            attempts += 1;
+            if outcome == "ok" {
+                last_success = midpoint;
+            } else {
+                ensure!(
+                    outcome == "stack_overflow",
+                    "wrong boundary trap: {outcome}"
+                );
+                first_failure = midpoint;
+            }
+        }
+        (last_success, first_failure)
+    } else {
+        let (last_success, first_failure) = frozen_depths.context("missing frozen depths")?;
+        ensure!(
+            last_success > 0 && first_failure == last_success + 1,
+            "frozen Pulley depths are not adjacent"
+        );
+        if shape == "leaf" {
+            for repeat_index in 0..2 {
+                let outcome = resource_attempt(
+                    &mut fixture,
+                    last_success,
+                    case_id,
+                    process_role,
+                    configuration,
+                    "target",
+                    repeat_index,
+                    leaf_gate.as_ref(),
+                )
+                .await?;
+                ensure!(outcome == "ok", "deepest leaf host call failed: {outcome}");
+                attempts += 1;
+            }
+        } else {
+            let order = [
+                ("last_success", last_success, 0),
+                ("first_failure", first_failure, 0),
+                ("first_failure", first_failure, 1),
+                ("last_success", last_success, 1),
+                ("last_success", last_success, 2),
+                ("first_failure", first_failure, 2),
+            ];
+            for (sample_key, depth, repeat_index) in order {
+                let outcome = resource_attempt(
+                    &mut fixture,
+                    depth,
+                    case_id,
+                    process_role,
+                    configuration,
+                    sample_key,
+                    repeat_index,
+                    None,
+                )
+                .await?;
+                ensure!(
+                    (sample_key == "last_success" && outcome == "ok")
+                        || (sample_key == "first_failure" && outcome == "stack_overflow"),
+                    "frozen Pulley boundary changed at depth {depth}: {outcome}"
+                );
+                attempts += 1;
+            }
+        }
+        (last_success, first_failure)
+    };
+    let current = fixture.context("resource fixture was not returned")?;
+    Ok(json!({
+        "case_id": case_id,
+        "process_role": process_role,
+        "configuration": configuration,
+        "probe_on": probe_on,
+        "pid": process::id(),
+        "discovery": discovery,
+        "last_success": depths.0,
+        "first_failure": depths.1,
+        "attempt_count": attempts,
+        "component_sha256": hex::encode(Sha256::digest(COMPONENT)),
+        "engine_target": current.runtime.engine.get_target(),
+        "max_wasm_stack": current.runtime.engine.get_max_wasm_stack(),
+        "async_stack_size": current.runtime.engine.get_async_stack_size(),
+        "cache_mode": "warm_compiled_cache",
+        "complete": true,
     }))
 }
 

@@ -10,12 +10,15 @@ struct StackProbeStorage {
 }
 
 #[inline(never)]
-fn recurse_inner(depth: u32) -> u32 {
+fn recurse_inner(depth: u32, leaf_host_call: bool) -> u32 {
     if depth == 0 {
+        if leaf_host_call {
+            let _ = testing::host_error();
+        }
         return 0;
     }
     // Keep the call non-tail so the requested depth occupies real Wasm frames.
-    black_box(recurse_inner(depth - 1)).wrapping_add(1)
+    black_box(recurse_inner(depth - 1, leaf_host_call)).wrapping_add(1)
 }
 
 macro_rules! retain_frame {
@@ -134,7 +137,12 @@ impl Guest for StackProbe {
 
     fn recurse(ctx: &ProcContext, depth: u32) -> u32 {
         ctx.model().set_last_depth(depth);
-        recurse_inner(depth)
+        recurse_inner(depth, black_box(false))
+    }
+
+    fn leaf_host_recurse(ctx: &ProcContext, depth: u32) -> u32 {
+        ctx.model().set_last_depth(depth);
+        recurse_inner(depth, black_box(true))
     }
 
     fn wide_recurse(ctx: &ProcContext, depth: u32, data: Vec<u64>) -> u64 {
@@ -148,7 +156,7 @@ impl Guest for StackProbe {
     }
 
     fn view_recurse(_ctx: &ViewContext, depth: u32) -> u32 {
-        recurse_inner(depth)
+        recurse_inner(depth, black_box(false))
     }
 
     fn view_wide_recurse(_ctx: &ViewContext, depth: u32, data: Vec<u64>) -> u64 {
@@ -157,7 +165,7 @@ impl Guest for StackProbe {
 
     fn core_recurse(ctx: &CoreContext, depth: u32) -> u32 {
         ctx.proc_context().model().set_last_depth(depth);
-        recurse_inner(depth)
+        recurse_inner(depth, black_box(false))
     }
 
     fn core_wide_recurse(ctx: &CoreContext, depth: u32, data: Vec<u64>) -> u64 {
