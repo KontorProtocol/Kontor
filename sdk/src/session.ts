@@ -44,6 +44,7 @@ import type {
   AggregateInfo,
   AggregateSigner,
   FootprintResponse,
+  TransactionInfo,
   Inst as WireInst,
 } from "./bindings.js";
 import { blsAggregateSignatures } from "./backend/index.js";
@@ -488,6 +489,17 @@ export class KontorSession {
   events(): AsyncIterableIterator<ChainEvent> {
     this.poller.start(); // idempotent — lazy-starts the loop on first use
     return this.poller.events();
+  }
+
+  /**
+   * Current execution and confirmation metadata. Execution events are snapshots:
+   * later confirmation does not emit another execution event. Re-fetch this data
+   * to track confirmation, and after reorg signals invalidate cached coordinates.
+   * Returns null if the transaction is not indexed or its execution was reverted.
+   * This lookup does not start the event loop. Wire heights are numbers.
+   */
+  transaction(txid: string): Promise<TransactionInfo | null> {
+    return this.poller.transaction(txid);
   }
 
   /**

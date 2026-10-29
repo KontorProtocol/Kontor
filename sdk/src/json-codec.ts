@@ -41,6 +41,7 @@ import type { ContractAddress } from "./canonical/ContractAddress.js";
 import type { ContractError } from "./errors.js";
 import type { ProvenanceEntry } from "./provenance.js";
 import type { ExtraOutput } from "./outputs.js";
+import type { ExecutionCoordinates } from "./confirmation.js";
 import type {
   ComposeOutputs,
   FootprintResponse,
@@ -74,6 +75,8 @@ export interface Utxo {
  * retains its WIT error value; other failures and void functions have no value.
  */
 export interface OpResultRaw {
+  /** Persisted receipt metadata at read time; absent for provisional simulation. */
+  coordinates?: ExecutionCoordinates;
   status: OpStatus;
   gas: bigint;
   error?: string;
@@ -100,6 +103,8 @@ export interface OpResultRaw {
  * `contractError`; `await inst` returns `T` or throws the failure.
  */
 export interface OpResult<T> {
+  /** Persisted receipt metadata at read time; absent for provisional simulation. */
+  coordinates?: ExecutionCoordinates;
   status: OpStatus;
   gas: bigint;
   error?: string;

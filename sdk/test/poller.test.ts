@@ -148,8 +148,108 @@ test("ResultsPoller: drains results into a per-tx event", async () => {
   expect(ev.txid).toBe("txAA");
   expect(ev.id).toBe(2); // cursor = last row id in the group
   expect(ev.height).toBe(1n);
+  expect(ev.executionHeight).toBe(1n);
+  expect(ev.confirmedHeight).toBeNull();
+  expect(ev.confirmedBitcoinTxIndex).toBeNull();
   expect(ev.outcomes).toHaveLength(2);
   expect(ev.outcomes[0]!.gas).toBe(10n);
+});
+
+test("execution events remain snapshots while transaction lookups follow confirmation and reorg", async () => {
+  const txid = "aa".repeat(32);
+  const receipt = {
+    ...row(1, txid, 1),
+    execution_height: 1,
+    tx_index: null,
+    confirmed_height: null,
+    confirmed_bitcoin_tx_index: null,
+    batch_height: 9,
+  };
+  let current = {
+    id: 1,
+    txid,
+    height: 1,
+    execution_height: 1,
+    tx_index: null as number | null,
+    confirmed_height: null as number | null,
+    confirmed_bitcoin_tx_index: null as number | null,
+    batch_height: 9,
+  };
+  const eventsFetch = mockFetch({
+    infos: [
+      {
+        height: 1,
+        last_result_id: 0,
+        recent_blocks: [{ height: 1, hash: "a" }],
+        signature: "s0",
+      },
+      {
+        height: 1,
+        last_result_id: 1,
+        recent_blocks: [{ height: 1, hash: "a" }],
+        signature: "s1",
+      },
+    ],
+    results: [receipt],
+  });
+  const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("/transactions/"))
+      return new Response(JSON.stringify({ result: current }));
+    return eventsFetch(input, init);
+  }) as typeof globalThis.fetch;
+  const poller = new ResultsPoller({ baseUrl: "http://test/api", fetch });
+  const iter = poller.events();
+  poller.start();
+  const event = (await iter.next()).value!;
+  poller.stop();
+  expect(event.kind).toBe("tx");
+  if (event.kind !== "tx") throw new Error("expected transaction");
+  expect(event.txIndex).toBeNull();
+  expect(event.batchHeight).toBe(9n);
+  expect(event.confirmedHeight).toBeNull();
+  expect(event.confirmedBitcoinTxIndex).toBeNull();
+  for (const position of [null, 2, null, 4]) {
+    current = {
+      ...current,
+      tx_index: position === null ? null : 0,
+      confirmed_height: position === null ? null : 2,
+      confirmed_bitcoin_tx_index: position,
+    };
+    const info = await poller.transaction(txid);
+    expect(info?.execution_height).toBe(1);
+    expect(info?.batch_height).toBe(9);
+    expect(info?.confirmed_height).toBe(position === null ? null : 2);
+    expect(info?.confirmed_bitcoin_tx_index).toBe(position);
+    expect(event.confirmedBitcoinTxIndex).toBeNull();
+    expect(event.outcomes[0]?.coordinates?.confirmedBitcoinTxIndex).toBeNull();
+  }
+});
+
+test("transaction lookup preserves unknown historical positions and distinguishes errors from absence", async () => {
+  let status = 200;
+  const fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        result: {
+          id: 1,
+          txid: "old",
+          height: 1,
+          tx_index: 0,
+          confirmed_height: 2,
+          batch_height: null,
+        },
+      }),
+      { status },
+    )) as typeof globalThis.fetch;
+  const poller = new ResultsPoller({ baseUrl: "http://test/api", fetch });
+  expect(await poller.transaction("old")).toMatchObject({
+    execution_height: 1,
+    confirmed_bitcoin_tx_index: null,
+  });
+  status = 404;
+  await expect(poller.transaction("missing")).resolves.toBeNull();
+  status = 500;
+  await expect(poller.transaction("failed")).rejects.toThrow(/500/);
 });
 
 test("ResultsPoller: collapses one op's rows to its max-result_index result", async () => {

@@ -27,8 +27,13 @@ import type {
   BlockRow,
   Info,
   PaginatedResponse,
-  ResultRow,
+  ResultInfo,
+  TransactionInfo,
 } from "./bindings.js";
+import {
+  executionCoordinates,
+  transactionInfoFromWire,
+} from "./confirmation.js";
 import type { ChainEvent, EventsFilter } from "./events.js";
 import { DeepReorgError, TransportError } from "./errors.js";
 import type { OpResultRaw } from "./json-codec.js";
@@ -351,7 +356,7 @@ export class ResultsPoller {
    */
   private async drainResults(upTo: number): Promise<void> {
     let cursor = this.cursor;
-    let pending: ResultRow[] = [];
+    let pending: ResultInfo[] = [];
     while (cursor < upTo) {
       const page = await this.getResults(cursor);
       if (page.results.length === 0) break;
@@ -370,7 +375,7 @@ export class ResultsPoller {
   }
 
   /** Group of same-`txid` result rows → one `tx` ChainEvent. */
-  private emitTx(rows: ResultRow[]): void {
+  private emitTx(rows: ResultInfo[]): void {
     const last = rows[rows.length - 1]!;
     // Results with no txid (shouldn't occur for contract calls) carry
     // no transaction to surface — skip the group.
@@ -380,7 +385,7 @@ export class ResultsPoller {
     // `get_op_result`. Drops intermediate sub-results and the implicit
     // gas op (which shares the user op's indices at a lower
     // `result_index`).
-    const canonical = new Map<string, ResultRow>();
+    const canonical = new Map<string, ResultInfo>();
     for (const r of rows) {
       const key = `${r.input_index}:${r.op_index}`;
       const prev = canonical.get(key);
@@ -402,12 +407,14 @@ export class ResultsPoller {
         contract: r.contract,
         inputIndex: r.input_index,
         opIndex: r.op_index,
+        coordinates: executionCoordinates(r),
       }));
     this.emit({
       kind: "tx",
       id: last.id,
       height: BigInt(last.height),
-      txIndex: last.tx_index ?? 0,
+      txIndex: last.tx_index ?? null,
+      ...executionCoordinates(last),
       txid: last.txid,
       outcomes,
     });
@@ -436,7 +443,7 @@ export class ResultsPoller {
 
   // ── HTTP ─────────────────────────────────────────────────────────
 
-  private async fetchResult<T>(path: string): Promise<T> {
+  private async fetchResponse(path: string): Promise<Response> {
     let res: Response;
     try {
       res = await this.opts.fetch(`${this.opts.baseUrl}${path}`);
@@ -446,6 +453,10 @@ export class ResultsPoller {
         details: path,
       });
     }
+    return res;
+  }
+
+  private async readResult<T>(res: Response, path: string): Promise<T> {
     if (!res.ok) {
       throw new TransportError(`indexer poll returned ${res.status}`, {
         details: path,
@@ -453,6 +464,20 @@ export class ResultsPoller {
     }
     const body = (await res.json()) as { result: T };
     return body.result;
+  }
+
+  private async fetchResult<T>(path: string): Promise<T> {
+    return this.readResult<T>(await this.fetchResponse(path), path);
+  }
+
+  /** Fresh metadata without starting the event loop. A missing transaction is null. */
+  async transaction(txid: string): Promise<TransactionInfo | null> {
+    const path = `/transactions/${encodeURIComponent(txid)}`;
+    const response = await this.fetchResponse(path);
+    if (response.status === 404) return null;
+    return transactionInfoFromWire(
+      await this.readResult<TransactionInfo>(response, path),
+    );
   }
 
   private getInfo(): Promise<Info> {
@@ -470,7 +495,7 @@ export class ResultsPoller {
     return this.fetchResult<BlockRow>(`/blocks/${height}`);
   }
 
-  private getResults(cursor: number): Promise<PaginatedResponse<ResultRow>> {
+  private getResults(cursor: number): Promise<PaginatedResponse<ResultInfo>> {
     const params = new URLSearchParams({
       cursor: String(cursor),
       order: "asc",
@@ -480,6 +505,8 @@ export class ResultsPoller {
     if (f?.contract) params.set("contract", f.contract);
     if (f?.func) params.set("func", f.func);
     if (f?.signerId !== undefined) params.set("signer_id", String(f.signerId));
-    return this.fetchResult<PaginatedResponse<ResultRow>>(`/results?${params}`);
+    return this.fetchResult<PaginatedResponse<ResultInfo>>(
+      `/results?${params}`,
+    );
   }
 }

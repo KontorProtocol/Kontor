@@ -264,6 +264,22 @@ export type Input = {
   insts: Insts;
 };
 
+/**
+ * Inspection reads persisted receipts and their current confirmation metadata.
+ * Simulation uses `OpWithResult` instead because its receipts are provisional.
+ */
+export type InspectedOp = {
+  "kind": "Materialized";
+  op: Op;
+  result: ResultInfo | null;
+  error_message: string | null;
+} | {
+  "kind": "Rejected";
+  input_index: number;
+  op_index: number;
+  error_message: string | null;
+};
+
 export type Inst = {
   /**
    * Gas cap for this op. Self-pay default — the input's signer is
@@ -444,11 +460,52 @@ export type ProvenanceEntry = {
  */
 export type RecentBlock = { height: number; hash: string };
 
+/**
+ * A receipt with current confirmation metadata. System receipts without a
+ * transaction have null confirmation and batch coordinates.
+ */
+export type ResultInfo = {
+  execution_height: number;
+  confirmed_height: number | null;
+  confirmed_bitcoin_tx_index: number | null;
+  batch_height: number | null;
+  id: number;
+  height: number;
+  /**
+   * @deprecated Legacy filtered ordinal; use confirmed_bitcoin_tx_index for Bitcoin position.
+   */
+  tx_index: number | null;
+  input_index: number | null;
+  op_index: number | null;
+  result_index: number;
+  func: string;
+  gas: number;
+  /**
+   * Outcome category for this op. `Ok` for successful calls (regardless
+   * of whether the contract returned `ok(...)` or just a value); the
+   * failure variants distinguish what went wrong.
+   */
+  status: OpStatus;
+  value: string | null;
+  contract: string;
+  txid: string | null;
+  signer_id: number;
+  /**
+   * Who funded gas for this op. Equals `signer_id` for self-pay ops;
+   * for BLS-aggregate sponsored ops it's the publisher's signer_id.
+   * `null` for ops that don't go through user-side gas accounting.
+   */
+  payer_signer_id: number | null;
+};
+
 export type ResultResponse<T> = { result: T };
 
 export type ResultRow = {
   id: number;
   height: number;
+  /**
+   * @deprecated Legacy filtered ordinal; use confirmed_bitcoin_tx_index for Bitcoin position.
+   */
   tx_index: number | null;
   input_index: number | null;
   op_index: number | null;
@@ -610,11 +667,36 @@ export type Transaction = {
 
 export type TransactionHex = { hex: string };
 
+/**
+ * Public transaction metadata, separate from retained execution row projections.
+ * `height` is the legacy alias of `execution_height`. `tx_index` is a deprecated
+ * filtered ordinal, never a raw Bitcoin position.
+ */
+export type TransactionInfo = {
+  execution_height: number;
+  /**
+   * Unknown historical positions and unconfirmed transactions are null.
+   */
+  confirmed_bitcoin_tx_index: number | null;
+  id: number;
+  txid: string;
+  height: number;
+  confirmed_height: number | null;
+  /**
+   * @deprecated Legacy filtered ordinal; use confirmed_bitcoin_tx_index for Bitcoin position.
+   */
+  tx_index: number | null;
+  batch_height: number | null;
+};
+
 export type TransactionRow = {
   id: number;
   txid: string;
   height: number;
   confirmed_height: number | null;
+  /**
+   * @deprecated Legacy filtered ordinal; use confirmed_bitcoin_tx_index for Bitcoin position.
+   */
   tx_index: number | null;
   batch_height: number | null;
 };

@@ -60,14 +60,59 @@ using newer protocol rules. Repeating a successful backfill is a no-op. If the
 raw block is unavailable, leave the position unknown; do not infer it from the
 filtered ordinal or substitute zero.
 
-## Remaining acceptance work
+## API and SDK coordinates
 
-Source reviews cover the initial migration, coordinator writes, rollback and
-reconfirmation tests. Rust execution is still pending. The tests use the actual
-Reactor and RuntimeExecutor with synthetic raw Bitcoin fixtures; they do not
-claim mining or mempool acceptance. Their successful guest receipt and state are
-checked before preservation comparisons.
+Transaction, block-transaction and result endpoints expose `execution_height`
+separately from `confirmed_height`, `confirmed_bitcoin_tx_index` and
+`batch_height` (global consensus height). The legacy `height` and `tx_index`
+fields retain their old meaning. `tx_index` is deprecated and is not a raw
+Bitcoin index. `ContractAddress.tx_index` still identifies a deployment's raw
+Bitcoin position, independently of receipt ordinals.
 
-Backfill and command review, current-head Rust tests, existing rollback/reorg/batch
-suites, public API and SDK changes, Explorer consumers and package release paths
-remain required. This document is not a completed-phase or release-readiness claim.
+The block-transaction listing and its `height` filter continue to select
+execution height, including a batch's anchor. They are not a list of everything
+confirmed in that Bitcoin block. Pagination remains ordered by the existing row
+ID; changing confirmation does not move a row across an ID cursor. A cursor does
+not notify consumers of metadata updates to an already-read row.
+
+Every affected endpoint reads legacy rows and confirmation metadata within one
+SQLite read snapshot. Persisted receipts in GET and POST inspect return the same
+`ResultInfo` shape as result queries. Simulation retains provisional receipts
+without confirmation metadata. System receipts without a transaction have null
+confirmation and batch coordinates. Historical positions unavailable to the node
+remain null even when confirmation height is known.
+
+SDK execution events now carry `executionHeight`, nullable `confirmedHeight`,
+`confirmedBitcoinTxIndex`, and `batchHeight`. The deprecated `height` alias is
+execution height; deprecated `txIndex` is a nullable legacy ordinal. A missing
+index is never changed to zero. Event outcomes and decoded persisted receipts
+retain their read-time coordinates. Older nodes without the new fields yield
+unknown confirmation metadata, not a fabricated position.
+
+Execution events are snapshots. Confirmation does not execute a batch again and
+does not produce another execution event. Consumers tracking confirmation must
+refresh with `await session.transaction(txid)`, including after a reorg signal.
+Invalidate cached confirmation coordinates after a reorg even if the transaction's
+execution anchor survives. The lookup returns the current `TransactionInfo` wire
+shape (number-valued heights), or null if the transaction is absent. Transport
+failures still throw. It does not start background polling. A known confirmation
+height with a null raw index means historical position is unavailable, not that
+the transaction is unconfirmed.
+
+## Acceptance status
+
+The migration, coordinator, backfill and initial API slices have passed their
+focused Rust tests and independent source reviews. Database, batch, consensus
+state and aggregate-error regressions passed. The inspect slice passed all 15
+confirmation-related tests, including a signed raw POST-inspect receipt compared
+with the result endpoint across confirmation, reorg and reconfirmation. A separate
+test applies a real writer reorg between the request's two reads and verifies
+that the read snapshot remains consistent. Synthetic Bitcoin fixtures do not
+claim mining or mempool acceptance.
+
+Generated bindings use the full unfiltered indexer-types library suite. SDK,
+final-head integration and full reactor regressions, the actual CLI executable,
+Explorer consumers and their package-release paths still require completion.
+The checked-in SDK is `@kontor/sdk`; the separately located Explorer repositories
+consume older `@kontor/kontor-ts` packages. Updating this source alone does not
+update those deployments. This is not a completed-phase or release-readiness claim.

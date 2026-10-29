@@ -21,9 +21,10 @@
  */
 
 import type { OpResultRaw } from "./json-codec.js";
+import type { ExecutionCoordinates } from "./confirmation.js";
 
 export type ChainEvent =
-  | {
+  | (ExecutionCoordinates & {
       kind: "tx";
       /**
        * Cursor id for this event — the underlying `contract_results`
@@ -31,12 +32,14 @@ export type ChainEvent =
        * to resume the stream after this event.
        */
       id: number;
+      /** @deprecated Alias of executionHeight, not Bitcoin confirmation height. */
       height: bigint;
-      txIndex: number;
+      /** @deprecated Legacy filtered ordinal; use confirmedBitcoinTxIndex. */
+      txIndex: number | null;
       txid: string;
       /** Per-Inst outcomes, raw (WAVE-encoded values + telemetry). */
       outcomes: OpResultRaw[];
-    }
+    })
   | {
       kind: "reorg";
       /**

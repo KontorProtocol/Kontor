@@ -335,6 +335,7 @@ export function rawToOpResult<T>(
     status: raw.status,
     gas: raw.gas,
     error: raw.error,
+    ...(raw.coordinates === undefined ? {} : { coordinates: raw.coordinates }),
   };
   try {
     result.value = raw.value !== undefined ? decode(raw.value) : undefined;

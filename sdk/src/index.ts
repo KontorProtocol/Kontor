@@ -53,6 +53,8 @@ export type { OfferData, OfferInspection } from "./offer";
 export type { ExtraOutput } from "./outputs";
 export { HttpTransport, http } from "./transport/http";
 export type { HttpTransportOptions } from "./transport/http";
+export type { TransactionInfo, ResultInfo, InspectedOp } from "./bindings";
+export type { ExecutionCoordinates } from "./confirmation";
 export type { Utxo } from "./json-codec";
 export { signet } from "./chains";
 export type { Chain } from "./chains";
