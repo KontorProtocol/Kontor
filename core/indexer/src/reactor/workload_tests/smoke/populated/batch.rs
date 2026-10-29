@@ -2,9 +2,9 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::Transaction;
 use indexer_types::{ResultRow, TransactionRow};
 use libsql::params;
-use serde_json::Value;
 
 use super::super::{database_projection, receipts};
+use super::checkpoint::Checkpoint;
 use super::oracle::root_receipts;
 use crate::block::filter_map;
 use crate::consensus::Height;
@@ -27,7 +27,7 @@ struct TransactionProof {
 pub(super) struct BatchProof {
     transactions: Vec<TransactionProof>,
     anchor_height: u64,
-    checkpoint: Value,
+    checkpoint: Checkpoint,
 }
 
 impl BatchProof {
@@ -135,11 +135,11 @@ impl BatchProof {
         Ok(Self {
             transactions,
             anchor_height,
-            checkpoint: database_projection(&conn).await?,
+            checkpoint: Checkpoint::capture(&database_projection(&conn).await?)?,
         })
     }
 
-    pub(super) fn checkpoint(&self) -> &Value {
+    pub(super) fn checkpoint(&self) -> &Checkpoint {
         &self.checkpoint
     }
 

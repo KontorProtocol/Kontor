@@ -29,6 +29,7 @@ use crate::runtime::{ComponentCache, Decimal, Runtime, Storage, TransactionConte
 
 mod batch;
 mod challenges;
+mod checkpoint;
 mod configuration;
 mod files;
 mod history;
@@ -47,6 +48,7 @@ mod simulation_requests;
 mod views;
 
 use batch::BatchProof;
+use checkpoint::Checkpoint;
 use configuration::MixedConfig;
 use history::HistoryPopulation;
 use mixed::{MixedLayout, MixedWorkload};
@@ -724,7 +726,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
             index * 2 + 2
         })?)
     };
-    let mut expected_projection = None;
+    let mut expected_projection: Option<Vec<Checkpoint>> = None;
     for name in ["first.db", "second.db"] {
         snapshot.copy_to(&directory.path().join(name))?;
         let writer = Writer::new(directory.path(), name).await?;
@@ -798,7 +800,11 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                     _ => Vec::new(),
                 };
                 for batch in &batches {
-                    projections.push(batch.checkpoint().clone());
+                    Checkpoint::record(
+                        &mut projections,
+                        batch.checkpoint().clone(),
+                        expected_projection.as_deref(),
+                    )?;
                 }
                 apply(&mut trial, block.clone()).await?;
                 let projection = database_projection(&trial.db_conn()).await?;
@@ -904,7 +910,11 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                     database_projection(&trial.db_conn()).await? == projection,
                     "observations mutated state"
                 );
-                projections.push(projection);
+                Checkpoint::record(
+                    &mut projections,
+                    Checkpoint::capture(&projection)?,
+                    expected_projection.as_deref(),
+                )?;
                 eprintln!(
                     "workload_sequence_step_passed={}",
                     serde_json::json!({"trial":name,"ordinal":ordinal,"height":height,"hash":block.hash,"transactions":txids.len()})
@@ -923,8 +933,8 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
         .await?;
         if let Some(expected) = &expected_projection {
             ensure!(
-                &projections == expected,
-                "populated replay checkpoints differ"
+                projections.len() == expected.len(),
+                "populated replay checkpoint counts differ"
             );
         }
         expected_projection = Some(projections);
@@ -938,10 +948,11 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                 &client,
                 &deserialize(&inputs[0].raw)?,
                 &projection_before,
-                expected_projection
+                &expected_projection
                     .as_ref()
                     .and_then(|checkpoints| checkpoints.last())
-                    .context("missing final projection")?,
+                    .context("missing final projection")?
+                    .load()?,
                 simulation_requests[0].as_ref(),
             )
             .await?;
