@@ -112,6 +112,38 @@
       "path": "tools/native-stack/resource_finite_evidence.py",
       "sha256": "89313d5512bad63c90129006517f44b447212504b03874b21564c50e226fdd71"
     },
+    "foreign_wave_adapter": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/foreign_wave.rs",
+      "sha256": "34bebca5e6fcd9d9dbe16fdb650a1016890609d70f50af6cc327e6191142aca9"
+    },
+    "foreign_wave_caller_wat": {
+      "path": "test-contracts/foreign-wave/caller.wat",
+      "sha256": "e059218e00a9e700bf3be7810ac2f7fa7c05dfea635c7ac2d1e4f4d982b6a738"
+    },
+    "foreign_wave_caller_wit": {
+      "path": "test-contracts/foreign-wave/caller.wit",
+      "sha256": "98b31a84df9e45f94303953c99d6db1e23d4e7d99e393c454bcfa7b8f304c4e8"
+    },
+    "foreign_wave_capture": {
+      "path": "tools/native-stack/capture_resource_foreign_wave.py",
+      "sha256": "65d15b9390f4fb5ba49e6c85b861cdea1f3cb8a91d4dac2fb71bdd9e2d4fcbb6"
+    },
+    "foreign_wave_target_wat": {
+      "path": "test-contracts/foreign-wave/target.wat",
+      "sha256": "4384b8086f5f3016e9ed1a37cd91506896446ef0bdad3bc39a099b4ae703223d"
+    },
+    "foreign_wave_target_wit": {
+      "path": "test-contracts/foreign-wave/target.wit",
+      "sha256": "5e11e4720ee53b10157330694e892780be4d47a5d6ec2ca2bdea0e02b80844e6"
+    },
+    "foreign_wave_validator": {
+      "path": "tools/native-stack/resource_foreign_wave_evidence.py",
+      "sha256": "5ec8838732d41b6b531bfa75eb15d90ecbaff1cdb8546869bdbb71da1f62ce46"
+    },
+    "foreign_wave_validator_tests": {
+      "path": "tools/native-stack/test_resource_foreign_wave_evidence.py",
+      "sha256": "3a5766f0d0f3ab9261ad3a42e475ecbf1e0b22bb577e0bc0de5724ea6787561a"
+    },
     "guest_error_tests": {
       "path": "core/indexer/src/runtime/call/tests/canonical_guest_errors.rs",
       "sha256": "8973f4adc00a1062fe2c1c40e797f7cd94c885b1a55ddae9da142fff3b819f07"
@@ -234,7 +266,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "c02be89134e1fa7f84fc327734026aed8c3565a83a507ae39a60f5781af82104"
+      "sha256": "19f419d6a62800539b66e171556ead3f5124adf6b08bba76cec8066ed1e7e29b"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -262,7 +294,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "707cb19aa129c2b82452b7f960a5c46b799f339693c583bb4a55b75f920f6971"
+      "sha256": "6a58ad923284a1d207be33225f4999cba1aec9bd10bf5a6bdb714f18c3f63b1f"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -278,7 +310,7 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "52d940a48417a1038c82f5cb8a7723fbde902c18d792a7231379d718e18505a9"
+      "sha256": "a6964de1e0d0a6b199d1f400d3c95344ead23c60f6b00d6c8aadb236d6358293"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
@@ -1066,7 +1098,16 @@
       "family": "foreign_call",
       "fixtures": [
         "call_input",
-        "call_output"
+        "call_output",
+        "foreign_wave_target_wit",
+        "foreign_wave_target_wat",
+        "foreign_wave_caller_wit",
+        "foreign_wave_caller_wat",
+        "foreign_wave_adapter",
+        "resource_worker_diagnostic",
+        "foreign_wave_capture",
+        "foreign_wave_validator",
+        "foreign_wave_validator_tests"
       ],
       "id": "foreign_wave_parse_print",
       "paired_worker_status": "missing",
@@ -1753,7 +1794,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "707cb19aa129c2b82452b7f960a5c46b799f339693c583bb4a55b75f920f6971",
+    "source_sha256": "6a58ad923284a1d207be33225f4999cba1aec9bd10bf5a6bdb714f18c3f63b1f",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1905,7 +1946,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "707cb19aa129c2b82452b7f960a5c46b799f339693c583bb4a55b75f920f6971",
+    "sha256": "6a58ad923284a1d207be33225f4999cba1aec9bd10bf5a6bdb714f18c3f63b1f",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

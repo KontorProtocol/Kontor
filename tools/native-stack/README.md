@@ -248,6 +248,18 @@ guest code can create one. Contract policy
 rejects all start sections before compilation, so no resource constructor
 can run during the admitted component's initialization.
 
+The foreign WAVE adapter publishes a caller and a target through the same
+runtime path. The caller generates each expression inside guest memory and
+passes it through `foreign.call`, so the outer `run(index)` expression remains
+shallow and short. The target parses 63 nested record values at the 64-level
+expression boundary and a 16,384-byte string literal. The adjacent rejected
+inputs have 64 nested records or a 16,385-byte literal. Separate target
+exports return 64- and 65-level record values to exercise bounded result
+printing. The validator distinguishes inner parser rejection from result
+visitor rejection using error kinds and canonical conversion events, and
+requires both caller and target Stores to close on every attempt. This fixture
+does not exercise paid-call accounting or arbitrary third-party WIT shapes.
+
 At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
 development canonical capture completed 12 child processes, 56 attempts, and
 268 closed Store lifecycles. The standalone validator accepted all 12 runs.

@@ -24,6 +24,7 @@ const CRYPTO_COMPONENT: &[u8] =
     include_bytes!("../../../../../../test-contracts/binaries/crypto.wasm.br");
 
 mod canonical;
+mod foreign_wave;
 mod initialization;
 mod lifecycle;
 mod sweep;
@@ -79,6 +80,13 @@ pub(super) async fn resource_lifecycle(
     process_role: &str,
 ) -> Result<JsonValue> {
     lifecycle::run(case_id, configuration, process_role).await
+}
+
+pub(super) async fn resource_foreign_wave(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    foreign_wave::run(configuration, process_role).await
 }
 
 #[tokio::test]

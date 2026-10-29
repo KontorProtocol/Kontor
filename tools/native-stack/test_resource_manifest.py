@@ -51,6 +51,12 @@ class ResourceManifestTests(unittest.TestCase):
         self.assertEqual(lifecycle["sample_keys"], ["failed_init", "valid_control"])
         self.assertEqual(lifecycle["expected_traps"]["failed_init"],
                          "MemoryOutOfBounds")
+        foreign = cases["foreign_wave_parse_print"]
+        self.assertEqual(foreign["sample_keys"], [
+            "depth_64", "depth_65_rejected", "literal_16384",
+            "literal_16385_rejected", "print_depth_64",
+            "print_depth_65_rejected"])
+        self.assertEqual(foreign["parameters"]["via"], "foreign.call")
         for name, identity in self.manifest["artifacts"].items():
             self.assertEqual(identity["path"], resource_manifest.INPUTS[name])
             self.assertEqual(
