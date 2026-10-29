@@ -80,6 +80,28 @@ Archive only the final qualified synchronous native artifacts with explicit iden
 Finish recognition, execution, lifecycle, views/committee derivation, simulation,
 and coordinator-rules-v1 boundaries, then perform K2a acceptance and K2b extraction.
 
+Native provenance is still an unresolved retention boundary. Current
+`runtime::native_provenance` embeds the node's build commit in the Postcard
+provenance stored during publication. Rebuilding unchanged guest artifacts at
+another node commit therefore changes the initial persistent state. S2 discovery
+at `d4acc6e8` versus `69169de0` reproduced all 137 non-digest semantic observations
+and boundaries, but its full database baseline hashes differed. Each capture
+restored its own exact baseline. The digest-only archives cannot establish that
+provenance is the only changed row, so they are not full cross-build state-parity
+evidence. K2a/K2b must retain explicit artifact/provenance inputs before freezing
+P1, preserve historical rows, and test the resulting state projection. Do not
+normalize away actual state differences in qualification or silently rewrite old
+provenance records.
+
+K2b build metadata must also account for fastnum's compile-time formatting
+inputs: `RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD`,
+`RUST_FASTNUM_FMT_EXPONENTIAL_UPPER_THRESHOLD`, and
+`RUST_FASTNUM_FMT_MAX_INTEGER_PADDING`. Decimal formatting is guest-visible through
+`host_numbers`. Committee stake conversion splits `decimal_to_string` output on
+'.' and parses the integer portion, which fails if the build configuration produces
+exponent notation. The source extraction preserves that behavior; it does not establish
+that arbitrary formatting build environments are compatible with retained P1.
+
 External Explorer/Indexer work is excluded from the goal and is not a dependency.
 SDK publication remains deferred until completion and review of all in-scope work.
 
@@ -402,3 +424,55 @@ claim that the full coordinator closure has been extracted.
 Production dispatch, complete scheduling/replay isolation, cross-version floor
 selection, S2/OWNERSHIP reconciliation and final K2a acceptance remain outstanding.
 This source does not freeze P1, change any rule, or establish independent graphs.
+
+## Finality and replay policy preparation
+
+Source `bcf438fed64bd80f8fd68677f9c05d041a345436`, based on `ca3e5e5f`,
+continues the coordinator extraction above. The complete `build_finality_events`
+and `build_replay_queue` algorithms now live in `protocol/coordinator/v1/finality.rs`
+and `protocol/coordinator/v1/replay.rs`. The node retains its database probes,
+transactions, runtime ownership, queues and I/O. Its existing call sites and all
+finality/replay tests use imports of the retained implementations without wrappers
+that change their inputs or outputs.
+
+`DeferredDecision` and its `decided_txs`/`decided_txids` accessors now live in
+`protocol/coordinator/decision.rs`, re-exported at the original
+`reactor::consensus_state` path. Fields, visibility, cloning, certified-body
+preservation and the accessors are unchanged. The module imports only Bitcoin
+`Transaction`/`Txid` and consensus `Height`/`Value`; it does not import the reactor.
+The type has no serialization derive, so this relocation adds no wire encoding.
+Those dependency-owned types remain temporary in-tree dependencies, not a final
+cross-graph API.
+
+The replay function still combines deterministic exclusion calculations with
+node-local replay-first queue placement. Its availability walk uses
+`(anchor_height, consensus_height)` independently of queue placement; versioning
+the whole function does not make local queue order a valid input to exclusion
+decisions. Per-height string-keyed exclusions, descendant propagation, later
+re-decisions, and earliest certified bodies across repeated filtering are retained.
+Finality preserves its aligned-input debug assertion, first failing anchor,
+same-anchor invalidation, pending-batch partition and per-decision missing txids.
+
+Operator-visible logging change: the two `Batch finalized` information events and
+the `Cascade invalidation triggered` warning now have tracing target
+`indexer::protocol::coordinator::v1::finality`, previously
+`indexer::reactor::consensus_state`. Their messages, fields and ordering are
+unchanged. Deployments using target-specific log filters should include the new
+target. The replay function has no tracing events.
+
+The mechanical audit
+`.build-cache/k2a-reconcile/coordinator-policy-source-audit.py` compares the complete
+moved bodies, type/accessors, unchanged tests and remaining node source. It passes
+after only imported-type substitutions, visibility and formatting normalization.
+Both independent source reviews approved the exact head; Interlink receipt
+`0d96d1191a85148da70ca814a9b1faa0` was acknowledged. All 46 targeted batch,
+consensus-state and retained-body query tests passed in 0.05 seconds after a
+59.53-second build. Indexer Clippy with tests and warnings denied passed in
+11.84 seconds. Both commands terminated with exit code zero. Commands and log
+hashes are recorded in `.build-cache/k2a-reconcile/coordinator-policy-validation.json`.
+The parent and both independent reviewers accepted this bounded validation and
+documentation; Interlink evidence-review receipt
+`8d6986cd6e7e65ddfbc8bc72b621760d` was acknowledged. These debug checks preserve
+the existing tests and do not replace final phase CI.
+No claim of phase completion, selected rule dispatch or historical isolation is
+made by these relocations.
