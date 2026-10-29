@@ -356,7 +356,8 @@ inclusive and upper exclusive range. For each page size 1, 7, and 100 and range
 length 0, 1, 256, and 1,024, an attempt reads the first page as integers in
 ascending order and the last page as decimals in descending order. Both views
 reach the SQLite range iterator and have independently frozen exact row order,
-values, bounds, fuel, persistent state, and Store teardown. The bounded samples
+values, and bounds. The capture compares measured fuel and persistent state
+across runs and verifies Store teardown. The bounded samples
 cover the empty and singleton ranges and both ends of longer ranges. They do not
 exhaust every interior row of the 256 or 1,024 entry ranges.
 
