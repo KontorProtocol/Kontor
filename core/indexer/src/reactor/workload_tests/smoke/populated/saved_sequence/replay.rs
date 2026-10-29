@@ -14,7 +14,7 @@ use super::super::batch::BatchProof;
 use super::super::checkpoint::Checkpoint;
 use super::super::replay_identity::ReplayIdentity;
 use super::super::views;
-use super::format::{FileRef, Saved};
+use super::format::{FileRef, Inputs, Saved};
 use crate::database::Writer;
 use crate::reactor::Reactor;
 use crate::reactor::executor::RuntimeExecutor;
@@ -40,7 +40,11 @@ pub(super) async fn run(saved: Saved, digest: &str) -> Result<()> {
         &serde_json::to_value(&manifest.source)?,
         &manifest.binary_sha256,
     )?;
-    let (chain, inputs, simulations) = saved.inputs()?;
+    let Inputs {
+        chain,
+        blocks: inputs,
+        simulations,
+    } = saved.inputs()?;
     let initial: Value = serde_json::from_slice(&saved.bytes(&manifest.initial)?)?;
     let snapshot = Snapshot {
         path: saved.root.join(&manifest.snapshot.name),

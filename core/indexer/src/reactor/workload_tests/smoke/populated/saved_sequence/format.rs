@@ -134,11 +134,7 @@ impl Manifest {
                 add(file, &format!("simulation-{ordinal:03}.json"))?;
             }
             let batch_size = self.mixed.batch_operations / 2;
-            let batch_count = if batch_size == 0 {
-                0
-            } else {
-                self.mixed.transactions / batch_size
-            };
+            let batch_count = self.mixed.transactions.checked_div(batch_size).unwrap_or(0);
             ensure!(
                 step.batches.len() == batch_count,
                 "sequence batch count differs"
@@ -178,6 +174,12 @@ impl Manifest {
         }
         Ok(files)
     }
+}
+
+pub(super) struct Inputs {
+    pub(super) chain: Vec<BitcoinBlock>,
+    pub(super) blocks: Vec<BlockInput>,
+    pub(super) simulations: Vec<Option<SimulationRequests>>,
 }
 
 pub(super) struct Saved {
@@ -273,13 +275,7 @@ impl Saved {
         Ok(fs::read(self.root.join(&file.name))?)
     }
 
-    pub(super) fn inputs(
-        &self,
-    ) -> Result<(
-        Vec<BitcoinBlock>,
-        Vec<BlockInput>,
-        Vec<Option<SimulationRequests>>,
-    )> {
+    pub(super) fn inputs(&self) -> Result<Inputs> {
         let encoded: Vec<String> = serde_json::from_slice(&self.bytes(&self.manifest.chain)?)?;
         ensure!(
             encoded.len() == usize::try_from(ANCHOR_HEIGHT)?,
@@ -413,6 +409,10 @@ impl Saved {
             inputs.push(input);
             simulations.push(requests);
         }
-        Ok((chain, inputs, simulations))
+        Ok(Inputs {
+            chain,
+            blocks: inputs,
+            simulations,
+        })
     }
 }

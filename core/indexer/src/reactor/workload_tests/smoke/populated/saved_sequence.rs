@@ -90,11 +90,7 @@ impl Output {
         );
         ensure!(matches!(inputs.len(), 2 | 6 | 7) && simulations.len() == inputs.len());
         let batch_size = self.mixed.batch_operations / 2;
-        let batches_per_step = if batch_size == 0 {
-            0
-        } else {
-            self.mixed.transactions / batch_size
-        };
+        let batches_per_step = self.mixed.transactions.checked_div(batch_size).unwrap_or(0);
         ensure!(
             checkpoints.len() == inputs.len() * (batches_per_step + 1),
             "sequence checkpoint count differs"
