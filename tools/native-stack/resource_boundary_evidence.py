@@ -47,7 +47,7 @@ OBSERVATION_KEYS = {
     "target_arch", "reset", "state_before_sha256", "teardown_events",
     "teardown_probe_on", "error_class", "typed_trap", "host_io_suspended",
     "leaf_callback_seen", "balance_transitions", "balance_transitions_sha256",
-    "live_store_peak",
+    "live_store_peak", "host_import_phase",
 }
 ATTEMPT_KEYS = {
     "case_id", "process_role", "configuration", "probe_on", "pid",
@@ -203,8 +203,12 @@ def validate_discovery_sequence(attempts, summary):
 
 def validate_replay_order(attempts, depths, leaf=False):
     if leaf:
-        expected = [("target", depths[0], index, "ok")
-                    for index in range(2)]
+        expected = [
+            ("last_success", depths[0], 0, "ok"),
+            ("first_failure", depths[1], 0, "stack_overflow"),
+            ("last_success", depths[0], 1, "ok"),
+            ("first_failure", depths[1], 1, "stack_overflow"),
+        ]
     else:
         expected = [
             ("last_success", depths[0], 0, "ok"),
@@ -327,19 +331,35 @@ def validate_trace(trace, runtime, attempts):
     return compile_counts
 
 
+def normalized_boundary_amount(value):
+    require(isinstance(value, str) and 0 < len(value) <= 128
+            and (re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", value)
+                 or re.fullmatch(r"(?:0|[1-9])(?:\.[0-9]+)?E-[1-9][0-9]*", value)
+                 or re.fullmatch(r"(?:0|[1-9][0-9]*)e\+[1-9][0-9]*", value)),
+            "boundary balance spelling is unsupported")
+    normalized = canonical_decimal_amount(value, "boundary")
+    scaled = Fraction(Decimal(value)) * 10**18
+    require(len(normalized) <= 128 and scaled.denominator == 1
+            and 0 <= scaled.numerator <= 2**256 - 1,
+            "boundary balance exceeds the WIT Decimal domain")
+    return normalized
+
+
 def validate_balance_transitions(balances, mode, outcome, depth, digest):
     require(isinstance(balances, dict) and set(balances) == {
         "before", "after", "restored", "burned_before", "burned_after",
         "supply_before", "supply_after", "floor_before", "floor_after",
         "floor_restored",
     }, "boundary balance transition fields are incomplete")
+    encoded = json.dumps(balances, sort_keys=True,
+                         separators=(",", ":")).encode()
+    require(digest == hashlib.sha256(encoded).hexdigest(),
+            "boundary balance transition digest differs")
     try:
-        require(all(isinstance(value, str)
-                    and canonical_decimal_amount(value, "boundary") == value
-                    for value in balances.values()),
-                "boundary balance amount is noncanonical")
+        normalized = {key: normalized_boundary_amount(value)
+                      for key, value in balances.items()}
         amounts = {key: Fraction(Decimal(value))
-                   for key, value in balances.items()}
+                   for key, value in normalized.items()}
     except (InvalidOperation, OverflowError, TypeError, ValueError) as error:
         raise ValueError("boundary balance amount is invalid") from error
     require(all(amount >= 0 for amount in amounts.values())
@@ -363,10 +383,7 @@ def validate_balance_transitions(balances, mode, outcome, depth, digest):
     else:
         require(after_floor == before_floor,
                 "paid or view storage collateral changed unexpectedly")
-    encoded = json.dumps(balances, sort_keys=True,
-                         separators=(",", ":")).encode()
-    require(digest == hashlib.sha256(encoded).hexdigest(),
-            "boundary balance transition digest differs")
+    return normalized
 
 
 def validate_observation(attempt, summary, manifest, index, cell):
@@ -488,10 +505,20 @@ def validate_observation(attempt, summary, manifest, index, cell):
     validate_balance_transitions(observation["balance_transitions"], mode,
                                  outcome, depth,
                                  observation["balance_transitions_sha256"])
-    expected_leaf = case_id == "deepest_frame_host_call" and outcome == "ok"
-    require(observation["host_io_suspended"] is expected_leaf
-            and observation["leaf_callback_seen"] is expected_leaf,
-            "leaf host import was not proven pending and resumed")
+    phase = observation["host_import_phase"]
+    if case_id == "deepest_frame_host_call":
+        require(phase in ("before_import", "after_host_release")
+                and (outcome != "ok" or phase == "after_host_release")
+                and (role == DISCOVERY_ROLE or outcome == "ok"
+                     or attempt["sample_key"] == "first_failure"),
+                "leaf host import phase or replay outcome is invalid")
+    else:
+        require(phase == "not_applicable",
+                "nonleaf attempt claimed a host import phase")
+    expected_suspended = phase == "after_host_release"
+    require(observation["host_io_suspended"] is expected_suspended
+            and observation["leaf_callback_seen"] is expected_suspended,
+            "leaf host import phase differs from pending and resumed proof")
     if attempt["probe_on"]:
         counts = validate_teardown(observation["teardown_events"], 1, 0)
         expected_auxiliary = manifest["auxiliary_expected_counts_by_mode"][mode]
@@ -505,6 +532,11 @@ def validate_observation(attempt, summary, manifest, index, cell):
 
 def semantic_signature(attempt):
     value = attempt["observation"]
+    # Raw spelling stays bound to the child log; parity compares exact values.
+    balances = {key: normalized_boundary_amount(raw)
+                for key, raw in value["balance_transitions"].items()}
+    balance_digest = hashlib.sha256(json.dumps(
+        balances, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {
         "sample_key": attempt["sample_key"],
         "depth": attempt["depth"],
@@ -517,12 +549,13 @@ def semantic_signature(attempt):
         "rolled_back": value["rolled_back"],
         "fuel": value["fuel"],
         "live_store_peak": value["live_store_peak"],
-        "balance_transitions": value["balance_transitions"],
-        "balance_transitions_sha256": value["balance_transitions_sha256"],
+        "balance_transitions": balances,
+        "balance_transitions_sha256": balance_digest,
         "state_before_sha256": value["state_before_sha256"],
         "reset": value["reset"],
         "host_io_suspended": value["host_io_suspended"],
         "leaf_callback_seen": value["leaf_callback_seen"],
+        "host_import_phase": value["host_import_phase"],
     }
 
 

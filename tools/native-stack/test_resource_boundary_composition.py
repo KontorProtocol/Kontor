@@ -10,9 +10,11 @@ from unittest.mock import patch
 
 from resource_boundary_evidence import (TEST_NAME, expected_case_env,
                                         run_name, validate_bundle,
+                                        validate_final_parity,
                                         validate_reviewed_discovery,
                                         validate_run)
-from resource_boundary_manifest import (DISCOVERY_ROLE, MANIFEST,
+from resource_boundary_manifest import (CONFIGURATIONS, DISCOVERY_ROLE,
+                                        FINAL_ROLES, MANIFEST,
                                         build_boundary_manifest)
 from resource_evidence import sha256
 from resource_manifest import ROOT, build_manifest
@@ -76,6 +78,9 @@ def observation(case_id, index, depth, component_sha, mutations=None,
     wide = "_wide_" in case_id
     mode = "paid" if leaf else case_id.rsplit("_", 1)[1]
     outcome = "ok" if depth < 2 else "stack_overflow"
+    phase = ("not_applicable" if not leaf else
+             "after_host_release" if outcome == "ok" or depth == 2
+             else "before_import")
     charged = mode == "paid"
     balances = {
         "before": "100", "after": "99" if charged else "100",
@@ -118,8 +123,9 @@ def observation(case_id, index, depth, component_sha, mutations=None,
         "teardown_probe_on": role != "probe_off_control",
         "error_class": None if outcome == "ok" else "deterministic",
         "typed_trap": None if outcome == "ok" else "StackOverflow",
-        "host_io_suspended": leaf and outcome == "ok",
-        "leaf_callback_seen": leaf and outcome == "ok",
+        "host_io_suspended": phase == "after_host_release",
+        "leaf_callback_seen": phase == "after_host_release",
+        "host_import_phase": phase,
         "live_store_peak": 1, "state_before_sha256": "b" * 64,
         "balance_transitions": balances,
         "reset": {
@@ -167,7 +173,8 @@ def make_run(directory, case_id, pid, binary_path, binary_sha,
         samples = [("calibration", depth, index)
                    for index, depth in enumerate(calibration_depths())]
     elif case_id == "deepest_frame_host_call":
-        samples = [("target", 1, index) for index in range(2)]
+        samples = [("last_success", 1, 0), ("first_failure", 2, 0),
+                   ("last_success", 1, 1), ("first_failure", 2, 1)]
     else:
         samples = [("last_success", 1, 0),
                    ("first_failure", 2, 0),
@@ -284,6 +291,64 @@ def make_run(directory, case_id, pid, binary_path, binary_sha,
 
 
 class BoundaryCompositionTests(unittest.TestCase):
+    def test_leaf_replay_phase_stable_within_and_across_raw_children(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            case_id = "deepest_frame_host_call"
+            binary_path = str(directory / "indexer-test")
+            binary_sha = "b" * 64
+            manifest_sha = sha256(MANIFEST)
+            component_sha = sha256(ROOT / "test-contracts/binaries/stack_probe.wasm.br")
+            bundle = {
+                "phase": "pilot_replay", "cell": "Linux-ARM64/dev",
+                "source_sha": SOURCE_SHA, "binary_path": binary_path,
+                "binary_sha256": binary_sha, "manifest_sha256": manifest_sha,
+                "timeout_seconds": 600,
+                "discovered_depths": {case_id: {"last_success": 1,
+                                                "first_failure": 2}},
+            }
+            manifest = build_boundary_manifest()
+            signatures = {}
+            runs = {}
+            for configuration in CONFIGURATIONS:
+                for role in FINAL_ROLES:
+                    run = make_run(directory, case_id, len(runs) + 300,
+                                   binary_path, binary_sha, manifest_sha,
+                                   component_sha, role=role,
+                                   configuration=configuration)
+                    signatures[case_id, role, configuration], _ = validate_run(
+                        run, bundle, manifest, directory)
+                    runs[run_name(case_id, role, configuration)] = run
+            validate_final_parity(signatures, runs, [case_id])
+
+            def change_phase(case, index, value):
+                if case == case_id and index == 3:
+                    value.update(host_import_phase="before_import",
+                                 host_io_suspended=False,
+                                 leaf_callback_seen=False)
+
+            run = make_run(directory, case_id, 400, binary_path,
+                           binary_sha, manifest_sha, component_sha,
+                           change_phase, role="target_observed",
+                           configuration="production")
+            with self.assertRaises(ValueError):
+                validate_run(run, bundle, manifest, directory)
+
+            def change_both_failures(case, index, value):
+                if case == case_id and index in (1, 3):
+                    value.update(host_import_phase="before_import",
+                                 host_io_suspended=False,
+                                 leaf_callback_seen=False)
+
+            run = make_run(directory, case_id, 401, binary_path,
+                           binary_sha, manifest_sha, component_sha,
+                           change_both_failures, role="target_observed",
+                           configuration="production")
+            changed, _ = validate_run(run, bundle, manifest, directory)
+            signatures[case_id, "target_observed", "production"] = changed
+            with self.assertRaises(ValueError):
+                validate_final_parity(signatures, runs, [case_id])
+
     def test_historical_archive_binds_all_nine_raw_runs_and_binary(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -690,6 +755,12 @@ class BoundaryCompositionTests(unittest.TestCase):
                     ("leaf", lambda case, index, value:
                      value.update(host_io_suspended=False) if
                      case == "deepest_frame_host_call" and index == 0 else None),
+                    ("leaf failure phase", lambda case, index, value:
+                     value.update(host_import_phase="not_applicable") if
+                     case == "deepest_frame_host_call" and value["depth"] == 2 else None),
+                    ("leaf failure suspension", lambda case, index, value:
+                     value.update(host_io_suspended=False) if
+                     case == "deepest_frame_host_call" and value["depth"] == 2 else None),
                     ("accounting", lambda case, index, value:
                      value["balance_transitions"].update(burned_after="0") if
                      case == "pulley_plain_paid" and index == 0 else None),

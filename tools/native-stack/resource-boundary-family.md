@@ -20,9 +20,10 @@ must be frozen before depth discovery.
 Development discovery runs one production-capacity observed child for each of
 the eight boundary cases and the leaf host call on Linux ARM64 development,
 nine children total. The leaf call has its own adjacent stack boundary. A
-pre-import typed stack overflow is a failed calibration attempt; each
-successful leaf attempt must enter the host import, suspend, allow another
-Tokio task to progress, and resume after release.
+typed stack overflow is a failed calibration attempt. The transcript records
+whether it occurred before host import or after the pending import was
+released. Each successful leaf attempt must enter the host import, suspend,
+allow another Tokio task to progress, and resume after release.
 Each child starts at zero, doubles from 1024 up to 32768, then bisects the
 first typed stack-overflow interval. It emits every calibration attempt,
 including worker phases, full state reset, and Store teardown. The validator
@@ -37,9 +38,11 @@ one `target_observed` and one `probe_off_control` child. Each child replays
 the frozen last success and first failure three times in the fixed order
 `success, failure, failure, success, success, failure`. These 32 fresh
 children supply 192 target attempts per cell. The leaf case adds one observed
-and one probe-off child per configuration, two repeated suspended host calls
-per child at the frozen leaf last-success depth. Final capture is 36
-children and 200 target attempts per cell. The observed child is independent
+and one probe-off child per configuration. Each leaf child repeats both a
+successful suspended call at its own last-success depth and a typed failure
+at the adjacent first-failure depth. The failure phase must agree across
+repeats, configurations, and process roles. Final capture is 36 children
+and 208 target attempts per cell. The observed child is independent
 of discovery and supplies the fresh-process control; a third observed child
 is not part of this gate.
 
@@ -56,17 +59,23 @@ receipts, typed traps, and rollback must match
 across repeats, probe states, and reduced/production configurations. Frozen
 depths and semantic outputs must match across nodes in the eventual six-cell
 gate. No local hardware or timing values enter protocol semantic equality.
+Raw balance strings and their source digest remain bound to each child log.
+The boundary validator accepts only bounded decimal spellings supported by
+the pinned formatter, converts them exactly to fixed form for semantic
+comparison, and checks the 18-place, 256-bit WIT Decimal domain without
+floating-point arithmetic. Existing v1 and v2 accounting rules are unchanged.
 
 The resource boundary manifest intentionally begins with null depths and
 `pending_discovery`. The final capture driver fails closed until all nine
 depths and the reviewed discovery hash are pinned. Existing source and guard
 capture rules remain mandatory. A fixture or runtime frame-path edit after
 discovery requires new reviewed discovery and a fresh final binary.
-The v1 case contract now records `adjacent_leaf_boundary: true` instead of
-borrowing `pulley_plain_paid` depth. This amends the generated v1 manifest
-hash to
+The v1 case contract records `adjacent_leaf_boundary: true` instead of
+borrowing `pulley_plain_paid` depth. At the reviewed `5bdf08fe` source baseline,
+this amended the generated v1 manifest hash to
 `4434676b208b9d9059dbc77a8a5976367ea1c647cc36c43bd0cbf1fba3a56fba`
 while retaining all 41 case IDs and the approved resource amendment bytes.
+Later source commits regenerate the manifest hash from their exact inputs.
 The historical a355 chain archive remains unchanged. The v1 validator
 requires the leaf observation to equal the reviewed frozen leaf depth.
 
@@ -91,9 +100,9 @@ copies the complete archive, and verifies source, binary, manifest, and
 depth parity. The pilot is diagnostic and never supplies final binding.
 
 Each discovery child has at most 21 target attempts. The eight boundary replay
-children have six each, while the four leaf replay children have two each.
-The pilot has at most 119 target attempts in fifteen children. Full nine-case
-discovery has at most 189. Final capture has 200 per cell, or 1200
+children have six each, while the four leaf replay children have four each.
+The pilot has at most 127 target attempts in fifteen children. Full nine-case
+discovery has at most 189. Final capture has 208 per cell, or 1248
 across six cells, plus fixture setup and observation queries. The existing
 600-second per-child timeout is a failure bound, not a runtime estimate.
 Pilot outputs record whole-child wall time, per-attempt time, and matched

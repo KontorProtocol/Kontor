@@ -10,6 +10,8 @@ from unittest.mock import patch
 from jsonschema import Draft202012Validator
 
 from resource_boundary_evidence import (parse_worker_log,
+                                        normalized_boundary_amount,
+                                        semantic_signature,
                                         validate_balance_transitions,
                                         validate_cell_identity,
                                         validate_discovery_sequence,
@@ -33,6 +35,77 @@ def attempt(depth, outcome, sample_key="calibration", repeat_index=0):
 
 
 class BoundaryEvidenceTests(unittest.TestCase):
+    def test_real_paid_decimal_spellings_preserve_raw_hash_and_exact_semantics(self):
+        def digest(values):
+            return hashlib.sha256(json.dumps(values, sort_keys=True,
+                                             separators=(",", ":")).encode()).hexdigest()
+
+        cases = (
+            ("plain", "99.999999918", "8.2E-8", "ok", 0,
+             "556d5f5ec796f7fd45ec05cf0ea0fe6317f6ec301913f248ef101c96f5103438"),
+            ("plain boundary", "99.999999796", "2.04E-7",
+             "stack_overflow", 8187,
+             "c99b442c70084f675cde58aa001d60c23ea53b300fe63740dd3c3ec106e4b33d"),
+            ("wide", "99.999999913", "8.7E-8", "ok", 0,
+             "1e543949caae9e9b5bbc20e614fc33a0cc6cfce82a540c081dc2a8d61928693d"),
+            ("wide boundary", "99.99999918", "8.2E-7",
+             "stack_overflow", 1723,
+             "8b839883fa317bdeda79aea320a437e782acb4913be25f58b44a97042290e71c"),
+            ("leaf", "99.999999796", "2.04E-7", "stack_overflow", 8184,
+             "c99b442c70084f675cde58aa001d60c23ea53b300fe63740dd3c3ec106e4b33d"),
+        )
+        for name, after, burned_after, outcome, depth, raw_digest in cases:
+            with self.subTest(case=name):
+                balances = {
+                    "before": "99.999999959", "after": after,
+                    "restored": "99.999999959",
+                    "burned_before": "4.1E-8", "burned_after": burned_after,
+                    "supply_before": "99.999999959", "supply_after": after,
+                    "floor_before": "3E-9", "floor_after": "3E-9",
+                    "floor_restored": "3E-9",
+                }
+                self.assertEqual(digest(balances), raw_digest)
+                normalized = validate_balance_transitions(
+                    balances, "paid", outcome, depth, raw_digest)
+                self.assertEqual(normalized["floor_before"], "0.000000003")
+                self.assertEqual(normalized["burned_after"],
+                                 normalized_boundary_amount(burned_after))
+                fixed = {key: normalized_boundary_amount(value)
+                         for key, value in balances.items()}
+                sample = {"sample_key": "first_failure", "depth": depth,
+                          "observation": {
+                              "outcome": outcome, "error_class": "deterministic",
+                              "typed_trap": "StackOverflow", "value": None,
+                              "receipt": {"status": "Trap", "gas": 167},
+                              "last_depth": 0, "rolled_back": True,
+                              "fuel": {"user": 1, "system": 1, "deposit": 1},
+                              "live_store_peak": 1,
+                              "balance_transitions": balances,
+                              "balance_transitions_sha256": digest(balances),
+                              "state_before_sha256": "a" * 64, "reset": {},
+                              "host_io_suspended": True,
+                              "leaf_callback_seen": True,
+                              "host_import_phase": "after_host_release",
+                          }}
+                fixed_sample = copy.deepcopy(sample)
+                fixed_sample["observation"]["balance_transitions"] = fixed
+                fixed_sample["observation"]["balance_transitions_sha256"] = digest(fixed)
+                self.assertEqual(semantic_signature(sample),
+                                 semantic_signature(fixed_sample))
+                with self.assertRaises(ValueError):
+                    validate_balance_transitions(balances, "paid", outcome,
+                                                 depth, digest(fixed))
+
+    def test_boundary_decimal_domain_rejects_malformed_and_subgrid_values(self):
+        for value in ("0", "0.00", "0E-18", "0e+16", "1.0E-7", "1e+16"):
+            with self.subTest(valid=value):
+                normalized_boundary_amount(value)
+        for value in ("1e-7", "1E+7", "01", "1E-019", "1,0", "NaN",
+                      "Infinity", " 1", "+1E-7", "-0", "1E-19",
+                      "1e+129", "9" * 129, str(2**256)):
+            with self.subTest(invalid=value), self.assertRaises(ValueError):
+                normalized_boundary_amount(value)
+
     def test_reviewed_nine_pairs_include_independent_leaf(self):
         case_ids = [f"pulley_{shape}_{mode}"
                     for shape in ("plain", "wide")
@@ -198,6 +271,7 @@ class BoundaryEvidenceTests(unittest.TestCase):
                     "depth": 100,
                     "fuel": {"user": 100, "system": 0, "deposit": 0},
                     "receipt": {"status": "Ok", "gas": 10},
+                    "host_import_phase": "after_host_release",
                 }]
                 runs[run_name(case_id, role, configuration)] = {
                     "runtime": {"thread_observations": [
@@ -213,6 +287,11 @@ class BoundaryEvidenceTests(unittest.TestCase):
             different_semantics[case_id, role, "reduced"][0]["fuel"]["user"] += 1
         with self.assertRaises(ValueError):
             validate_final_parity(different_semantics, runs, [case_id])
+        different_phase = copy.deepcopy(signatures)
+        different_phase[case_id, "target_observed", "reduced"][0][
+            "host_import_phase"] = "before_import"
+        with self.assertRaises(ValueError):
+            validate_final_parity(different_phase, runs, [case_id])
         insufficient_capacity = copy.deepcopy(runs)
         for role in ("target_observed", "probe_off_control"):
             key = run_name(case_id, role, "production")
@@ -381,9 +460,14 @@ class BoundaryEvidenceTests(unittest.TestCase):
         for mutated in (valid[:-1], wrong_order, wrong_trap):
             with self.assertRaises(ValueError):
                 validate_replay_order(mutated, depths)
-        leaf = [attempt(1722, "ok", "target", index) for index in range(2)]
+        leaf = [
+            attempt(1722, "ok", "last_success", 0),
+            attempt(1723, "stack_overflow", "first_failure", 0),
+            attempt(1722, "ok", "last_success", 1),
+            attempt(1723, "stack_overflow", "first_failure", 1),
+        ]
         validate_replay_order(leaf, depths, leaf=True)
-        leaf[1]["depth"] = 1721
+        leaf[1]["depth"] = 1722
         with self.assertRaises(ValueError):
             validate_replay_order(leaf, depths, leaf=True)
 

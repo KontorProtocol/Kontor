@@ -941,7 +941,7 @@ async fn resource_attempt(
 ) -> Result<String> {
     resource_diagnostics::record("boundary_attempt_start");
     let mut current = fixture.take().context("resource fixture was consumed")?;
-    let (returned, outcome, host_io_suspended) = if let Some(gate) = leaf_gate {
+    let (returned, outcome, host_io_suspended, host_import_phase) = if let Some(gate) = leaf_gate {
         let task_role = process_role.to_owned();
         let mut task = tokio::spawn(async move {
             let outcome = current.observe(depth, &task_role).await?;
@@ -962,7 +962,7 @@ async fn resource_attempt(
                 outcome == "stack_overflow",
                 "leaf completed without entering its host import: {outcome}"
             );
-            (current, outcome, false)
+            (current, outcome, false, "before_import")
         } else {
             ensure!(
                 !task.is_finished(),
@@ -974,7 +974,7 @@ async fn resource_attempt(
             );
             gate.release.notify_one();
             let (current, outcome) = timeout(Duration::from_secs(30), task).await???;
-            if outcome != "ok" {
+            if outcome != "ok" && outcome != "stack_overflow" {
                 println!(
                     "BOUNDARY_LEAF_FAILURE_DIAGNOSTIC:{}",
                     json!({
@@ -993,14 +993,17 @@ async fn resource_attempt(
                 );
             }
             ensure!(
-                outcome == "ok",
-                "leaf trapped after its host import entered"
+                outcome == "ok"
+                    || (outcome == "stack_overflow"
+                        && (process_role == "discovery_production_observed"
+                            || sample_key == "first_failure")),
+                "leaf trapped after its host import entered: {outcome}"
             );
-            (current, outcome, true)
+            (current, outcome, true, "after_host_release")
         }
     } else {
         let outcome = current.observe(depth, process_role).await?;
-        (current, outcome, false)
+        (current, outcome, false, "not_applicable")
     };
     let mut observation = returned
         .last_report
@@ -1008,6 +1011,7 @@ async fn resource_attempt(
         .context("resource observation was not emitted")?;
     observation["host_io_suspended"] = json!(host_io_suspended);
     observation["leaf_callback_seen"] = json!(host_io_suspended);
+    observation["host_import_phase"] = json!(host_import_phase);
     let probe_on = returned.resource_probe == Some(true);
     *fixture = Some(returned);
     resource_diagnostics::record("boundary_attempt_end");
@@ -1189,19 +1193,28 @@ pub(super) async fn run_resource_boundary(
             "frozen Pulley depths are not adjacent"
         );
         if shape == "leaf" {
-            for repeat_index in 0..2 {
+            let order = [
+                ("last_success", last_success, 0, "ok"),
+                ("first_failure", first_failure, 0, "stack_overflow"),
+                ("last_success", last_success, 1, "ok"),
+                ("first_failure", first_failure, 1, "stack_overflow"),
+            ];
+            for (sample_key, depth, repeat_index, expected) in order {
                 let outcome = resource_attempt(
                     &mut fixture,
-                    last_success,
+                    depth,
                     case_id,
                     process_role,
                     configuration,
-                    "target",
+                    sample_key,
                     repeat_index,
                     leaf_gate.as_ref(),
                 )
                 .await?;
-                ensure!(outcome == "ok", "deepest leaf host call failed: {outcome}");
+                ensure!(
+                    outcome == expected,
+                    "deepest leaf boundary changed: {outcome}"
+                );
                 attempts += 1;
             }
         } else {
