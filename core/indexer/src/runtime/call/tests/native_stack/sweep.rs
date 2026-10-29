@@ -974,6 +974,20 @@ async fn resource_attempt(
             );
             gate.release.notify_one();
             let (current, outcome) = timeout(Duration::from_secs(30), task).await???;
+            if outcome != "ok" {
+                println!(
+                    "BOUNDARY_LEAF_FAILURE_DIAGNOSTIC:{}",
+                    json!({
+                        "case_id": case_id,
+                        "depth": depth,
+                        "process_role": process_role,
+                        "configuration": configuration,
+                        "phase": "after_host_release",
+                        "outcome": outcome.as_str(),
+                        "observation": current.last_report.as_ref(),
+                    })
+                );
+            }
             ensure!(
                 outcome == "ok",
                 "leaf trapped after its host import entered"

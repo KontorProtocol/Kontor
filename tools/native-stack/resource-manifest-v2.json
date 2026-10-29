@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "4434676b208b9d9059dbc77a8a5976367ea1c647cc36c43bd0cbf1fba3a56fba",
+  "parent_manifest_sha256": "a95835dd19e2960aed36eec11fb7408cd3a447d6c704d72039d6674d60f9cbea",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",

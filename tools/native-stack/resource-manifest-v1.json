@@ -142,7 +142,7 @@
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "d5ed3b2f786bdcc750eae0d98cdb2d0323bdb1db8012711fe43291bdfd5cee98"
+      "sha256": "7d2cd8153323f70272820763c344959cf94f56c915195b3b3d0dca889a9c408f"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
