@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "681f1ba22d6f63f339febd6686d381bb869131654c6540834f3bb2d555745153",
+  "parent_manifest_sha256": "0efedea314956b95ecdcf7feb91626278da5f6d122e2b56f8084ce1070b94e91",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1255,7 +1255,7 @@
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "2b5666fb89cb248ad814e402d3762f4eef206144a39be40d77918fb33771d7f8"
+      "sha256": "e82b125585d4799b7da2815662ab24667ebe6f91907e13f2d51ff4e2e7879cb5"
     }
   }
 }

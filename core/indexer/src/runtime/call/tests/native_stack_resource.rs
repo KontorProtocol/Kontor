@@ -634,6 +634,166 @@ fn pulley_boundary_worker_case() -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+#[ignore = "run through the bounded finite stack resource child driver"]
+fn finite_stack_worker_case() -> Result<()> {
+    let configuration = env::var("KONTOR_RESOURCE_MODE")?;
+    ensure!(
+        matches!(configuration.as_str(), "reduced" | "production"),
+        "unknown resource configuration"
+    );
+    let case_id = env::var("KONTOR_FINITE_STACK_CASE")?;
+    ensure!(
+        matches!(case_id.as_str(), "large_frame_paid" | "max_gas_paid"),
+        "unknown finite paid stack case"
+    );
+    let process_role = env::var("KONTOR_FINITE_STACK_ROLE")?;
+    let probe = env::var("KONTOR_RESOURCE_TEARDOWN_PROBE")?;
+    ensure!(
+        (process_role == "target_observed" && probe == "on")
+            || (process_role == "probe_off_control" && probe == "off"),
+        "finite stack role and teardown probe differ"
+    );
+    let reduced = configuration == "reduced";
+    #[cfg(target_os = "linux")]
+    let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    #[cfg(target_os = "macos")]
+    let (runtime, workers) = macos::measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    #[cfg(target_os = "linux")]
+    let blocking = runtime
+        .block_on(async { tokio::task::spawn_blocking(current_linux_stack_range).await })?
+        .context("blocking pool stack capacity")?;
+    #[cfg(target_os = "macos")]
+    let blocking = runtime
+        .block_on(async { tokio::task::spawn_blocking(macos::current_stack_range).await })?
+        .context("blocking pool stack capacity")?;
+    #[cfg(target_os = "linux")]
+    let caller = current_linux_stack_range().context("block_on caller stack capacity")?;
+    #[cfg(target_os = "macos")]
+    let caller = macos::current_stack_range().context("block_on caller stack capacity")?;
+    let worker_ids = workers
+        .iter()
+        .map(|worker| worker.thread_id)
+        .collect::<Vec<_>>();
+    ensure!(
+        workers
+            .iter()
+            .all(|worker| worker.thread_id != blocking.thread_id
+                && worker.thread_id != caller.thread_id
+                && worker.os_thread_id != blocking.os_thread_id
+                && worker.os_thread_id != caller.os_thread_id)
+            && blocking.thread_id != caller.thread_id
+            && blocking.os_thread_id != caller.os_thread_id,
+        "finite stack worker, blocking, and caller thread categories overlap"
+    );
+    resource_diagnostics::start_chain();
+    let task_case_id = case_id.clone();
+    let task_configuration = configuration.clone();
+    let task_role = process_role.clone();
+    let result = runtime.block_on(async {
+        tokio::spawn(async move {
+            let start = std::thread::current().id();
+            let summary = super::native_stack::resource_finite_paid(
+                &task_case_id,
+                &task_configuration,
+                &task_role,
+            )
+            .await?;
+            Ok::<_, anyhow::Error>((summary, start, std::thread::current().id()))
+        })
+        .await
+    });
+    let events = resource_diagnostics::finish();
+    let (summary, start, end) = result??;
+    ensure!(
+        worker_ids.contains(&start) && worker_ids.contains(&end),
+        "finite stack call began or ended outside measured Tokio workers"
+    );
+    for event in &events {
+        if let Some(worker) = workers
+            .iter()
+            .find(|worker| worker.thread_id == event.thread_id)
+        {
+            ensure!(
+                event.os_thread_id == worker.os_thread_id,
+                "finite stack worker Rust/kernel thread identity differs: {event:?}"
+            );
+        } else {
+            ensure!(
+                event.name.starts_with("blocking_decode_")
+                    && workers
+                        .iter()
+                        .all(|worker| worker.os_thread_id != event.os_thread_id),
+                "finite stack event escaped worker or blocking category: {event:?}"
+            );
+        }
+    }
+    #[cfg(target_os = "linux")]
+    let thread_observations = [
+        linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
+        linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+        linux_thread_observation(&blocking, "blocking_pool", None),
+        linux_thread_observation(&caller, "block_on_caller", None),
+    ];
+    #[cfg(target_os = "macos")]
+    let thread_observations = [
+        macos::thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
+        macos::thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+        macos::thread_observation(&blocking, "blocking_pool", None),
+        macos::thread_observation(&caller, "block_on_caller", None),
+    ];
+    println!(
+        "FINITE_STACK_RUNTIME={}",
+        json!({
+            "scope": "paired_finite_stack_worker",
+            "configuration": configuration,
+            "case_id": case_id,
+            "process_role": process_role,
+            "pid": std::process::id(),
+            "flavor": "multi_thread",
+            "worker_count": workers.len(),
+            "worker_requested_bytes": reduced.then_some(1024 * 1024),
+            "thread_observations": thread_observations,
+            "blocking_pool_observed": true,
+            "block_on_caller_observed": true,
+            "embedded_source_sha": built_info::GIT_COMMIT_HASH,
+            "binary_sha256": sha256_file(&env::current_exe()?)?,
+        })
+    );
+    println!(
+        "FINITE_STACK_TRACE={}",
+        json!({
+            "scope": "paired_finite_stack_worker",
+            "configuration": configuration,
+            "case_id": case_id,
+            "process_role": process_role,
+            "events": events.iter().map(|event| json!({
+                "name": event.name,
+                "thread_id": format!("{:?}", event.thread_id),
+                "os_thread_id": event.os_thread_id,
+                "category": if worker_ids.contains(&event.thread_id) {
+                    "tokio_worker"
+                } else {
+                    "blocking_pool"
+                },
+            })).collect::<Vec<_>>(),
+        })
+    );
+    println!(
+        "FINITE_STACK_TERMINAL={}",
+        json!({
+            "case_id": case_id,
+            "process_role": process_role,
+            "configuration": configuration,
+            "pid": std::process::id(),
+            "sample_count": summary["sample_count"],
+            "complete": true,
+        })
+    );
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "run explicitly to verify macOS worker guards in isolated child processes"]

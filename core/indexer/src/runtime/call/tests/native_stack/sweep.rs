@@ -639,6 +639,68 @@ pub(super) async fn resource_smoke(reduced: bool) -> Result<()> {
     Ok(())
 }
 
+pub(super) async fn run_resource_finite_paid(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    let repeats = match case_id {
+        "large_frame_paid" => 3,
+        "max_gas_paid" => 2,
+        _ => bail!("unknown finite paid stack case"),
+    };
+    ensure!(
+        matches!(configuration, "reduced" | "production"),
+        "unknown finite paid stack configuration"
+    );
+    ensure!(
+        matches!(process_role, "target_observed" | "probe_off_control"),
+        "unknown finite paid stack role"
+    );
+    let mut fixture = Fixture::new("paid_huge".to_string(), configuration == "reduced").await?;
+    fixture.resource_probe = Some(process_role == "target_observed");
+    let mut observations = Vec::with_capacity(repeats);
+    for repeat_index in 0..repeats {
+        resource_diagnostics::record("finite_stack_attempt_start");
+        ensure!(
+            fixture.observe(0, process_role).await? == "ok",
+            "finite paid stack sample failed"
+        );
+        resource_diagnostics::record("finite_stack_attempt_end");
+        let observation = fixture
+            .last_report
+            .take()
+            .context("finite paid stack sample lacks semantic evidence")?;
+        ensure!(
+            observation["gas_limit"] == MAX_UNTRUSTED_GAS_LIMIT,
+            "finite paid stack sample did not use the maximum paid gas limit"
+        );
+        println!(
+            "FINITE_STACK_ATTEMPT:{}",
+            json!({
+                "case_id": case_id,
+                "configuration": configuration,
+                "process_role": process_role,
+                "sample_key": "target",
+                "repeat_index": repeat_index,
+                "pid": process::id(),
+                "observation": observation,
+            })
+        );
+        observations.push(observation);
+    }
+    let summary = json!({
+        "case_id": case_id,
+        "configuration": configuration,
+        "process_role": process_role,
+        "sample_count": observations.len(),
+        "outcomes": observations.iter().map(|value| value["outcome"].clone()).collect::<Vec<_>>(),
+        "complete": true,
+    });
+    println!("FINITE_STACK_SUMMARY:{summary}");
+    Ok(summary)
+}
+
 pub(crate) async fn persistent_digest(conn: &Connection) -> Result<String> {
     let mut rows = conn
         .query(

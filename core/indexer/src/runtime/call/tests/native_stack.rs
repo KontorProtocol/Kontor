@@ -38,6 +38,14 @@ pub(super) async fn resource_boundary(
     sweep::run_resource_boundary(case_id, configuration, process_role, frozen_depths).await
 }
 
+pub(super) async fn resource_finite_paid(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    sweep::run_resource_finite_paid(case_id, configuration, process_role).await
+}
+
 #[tokio::test]
 #[ignore = "run through tools/native-stack/qualify.py so process aborts are observable"]
 async fn qualification_probe() -> Result<()> {

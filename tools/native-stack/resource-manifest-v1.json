@@ -44,6 +44,30 @@
       "path": "core/indexer/src/runtime/filestorage/settlement_tests.rs",
       "sha256": "fa0317e10858d796e37d4f85021589f12297ace947d67e0d1bf61a4ac618785f"
     },
+    "finite_stack_boundary_validator": {
+      "path": "tools/native-stack/resource_boundary_evidence.py",
+      "sha256": "1a1f9ead282df2c8702e6d4061469170240f5bdbd6d0f6afc3dee608c002cee8"
+    },
+    "finite_stack_capture": {
+      "path": "tools/native-stack/capture_resource_finite.py",
+      "sha256": "ef8afc484d5cb50778ec267aa6fdff6de68843c4aaadc27aaf79b654b9adcf47"
+    },
+    "finite_stack_control_copy": {
+      "path": "tools/native-stack/capture_resource_chain_v2.py",
+      "sha256": "8e21441f81ad1ac0e2eba8c6566cf23c9cf67cc82915c6a33d4cee70534cd858"
+    },
+    "finite_stack_teardown_validator": {
+      "path": "tools/native-stack/resource_evidence_v2.py",
+      "sha256": "57d60151882def73fb2a1d8679a15fa7cca9177d1e2e4393341e9d9fbf24a071"
+    },
+    "finite_stack_tests": {
+      "path": "tools/native-stack/test_resource_finite_evidence.py",
+      "sha256": "e65cef75dfc1ebabfe035ab86f3ddda6f442cd667d8cc07c8c008dafbcc9ec16"
+    },
+    "finite_stack_validator": {
+      "path": "tools/native-stack/resource_finite_evidence.py",
+      "sha256": "89313d5512bad63c90129006517f44b447212504b03874b21564c50e226fdd71"
+    },
     "guest_error_tests": {
       "path": "core/indexer/src/runtime/call/tests/canonical_guest_errors.rs",
       "sha256": "8973f4adc00a1062fe2c1c40e797f7cd94c885b1a55ddae9da142fff3b819f07"
@@ -110,7 +134,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "fd57ff3494c8ce7ad7c01ad6967bda0e5d2056228ab7fae59f3cee3f55fedc8e"
+      "sha256": "4f0fd262c6f2cafc8c6314918307bdc1e4190e804b704449529a4ffbf5285269"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -130,7 +154,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "2b5666fb89cb248ad814e402d3762f4eef206144a39be40d77918fb33771d7f8"
+      "sha256": "e82b125585d4799b7da2815662ab24667ebe6f91907e13f2d51ff4e2e7879cb5"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -146,11 +170,11 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "a53f0fdedb317b90217bb8e25d2897295ca8be981234a0902e8a6f05c8adfd9c"
+      "sha256": "8c88f52f7df774901e819e4e674e6255185ac31730239e6cf5118a34e1b0c395"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "a8faa6b4d84f13d34796d6f3a1c3273135164ce342a8259ea64f8c980b929672"
+      "sha256": "9ddfa4faac13826463cde2f0175d42291af3438d3cece61cd5c94f98b8c31a2a"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -1529,7 +1553,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "2b5666fb89cb248ad814e402d3762f4eef206144a39be40d77918fb33771d7f8",
+    "source_sha256": "e82b125585d4799b7da2815662ab24667ebe6f91907e13f2d51ff4e2e7879cb5",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -1681,7 +1705,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "2b5666fb89cb248ad814e402d3762f4eef206144a39be40d77918fb33771d7f8",
+    "sha256": "e82b125585d4799b7da2815662ab24667ebe6f91907e13f2d51ff4e2e7879cb5",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

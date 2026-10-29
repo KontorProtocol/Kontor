@@ -234,7 +234,8 @@ def validate_replay_order(attempts, depths, leaf=False):
             "boundary replay omitted or reordered frozen depth samples")
 
 
-def validate_trace(trace, runtime, attempts, os_name="linux"):
+def validate_trace(trace, runtime, attempts, os_name="linux",
+                   attempt_markers=("boundary_attempt_start", "boundary_attempt_end")):
     require(set(trace) == TRACE_KEYS
             and trace["scope"] == runtime["scope"]
             and all(trace[key] == runtime[key] for key in
@@ -255,9 +256,7 @@ def validate_trace(trace, runtime, attempts, os_name="linux"):
     events = trace["events"]
     require(isinstance(events, list) and events,
             "boundary thread trace is empty")
-    allowed = {name for pair in PHASES for name in pair} | EXTRA_EVENTS | {
-        "boundary_attempt_start", "boundary_attempt_end",
-    }
+    allowed = {name for pair in PHASES for name in pair} | EXTRA_EVENTS | set(attempt_markers)
     for event in events:
         require(isinstance(event, dict) and set(event) == TRACE_EVENT_KEYS
                 and event["name"] in allowed,
@@ -273,9 +272,9 @@ def validate_trace(trace, runtime, attempts, os_name="linux"):
                     "boundary blocking event lacks measured stack")
     names = [event["name"] for event in events]
     starts = [index for index, name in enumerate(names)
-              if name == "boundary_attempt_start"]
+              if name == attempt_markers[0]]
     ends = [index for index, name in enumerate(names)
-            if name == "boundary_attempt_end"]
+            if name == attempt_markers[1]]
     require(len(starts) == len(ends) == len(attempts)
             and all(start < end
                     and (index == 0 or ends[index - 1] < start)
