@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -16,7 +17,9 @@ sys.dont_write_bytecode = True
 from capture_resource_chain import (CROSS_MODE_FIXTURE_REASONS, STACK_MODES,
                                     WORKER_TEST, cross_mode_initial_states,
                                     parse_worker)
-from resource_evidence import file_evidence, load_json_strict, require, sha256
+from capture_resource_diagnostic import validate_control
+from resource_evidence import (file_evidence, load_json_strict, no_duplicate_keys,
+                               no_nonfinite_constants, require, sha256)
 from resource_manifest import MANIFEST as V1_MANIFEST
 from resource_manifest import ROOT, build_manifest
 from resource_manifest_v2 import MANIFEST, ROLES, SCHEMA, build_manifest_v2
@@ -121,8 +124,34 @@ def validate_teardown(events, expected_nested, expect_depth_gate):
             "all_ids_closed": True}
 
 
-def marker_positions(path, report):
+def marker_positions(path, report, role, configuration, pid, process_attempt_index=0):
     lines = path.read_text().splitlines()
+    def parse_marked(marker):
+        positions = [(index, json.loads(line.split(marker, 1)[1],
+                                        object_pairs_hook=no_duplicate_keys,
+                                        parse_constant=no_nonfinite_constants))
+                     for index, line in enumerate(lines) if marker in line]
+        return positions
+
+    attempts = parse_marked("CHAIN_PROBE_ATTEMPT:")
+    terminal = parse_marked("CHAIN_PROBE_TERMINAL:")
+    require(len(attempts) == 3 and len(terminal) == 1,
+            "missing or duplicate raw role-bound attempt or terminal marker")
+    expected_keys = expected_trial_keys(role)
+    for (position, event), key in zip(attempts, expected_keys, strict=True):
+        require(event == {
+            "case_id": report["case_id"], "process_role": role,
+            "configuration": configuration,
+            "process_attempt_index": process_attempt_index, "pid": pid,
+            "sample_key": key["sample_key"],
+            "repeat_index": key["repeat_index"], "complete": True,
+        }, f"raw attempt at line {position} differs from process role or trial")
+    require(terminal[0][1] == {
+        "case_id": report["case_id"], "process_role": role,
+        "configuration": configuration,
+        "process_attempt_index": process_attempt_index, "pid": pid,
+        "trial_count": len(attempts), "complete": True,
+    }, "raw terminal differs from child identity or attempt count")
     prefixes = {
         "report_position": "CHAIN_PROBE_REPORT:",
         "runtime_position": "KONTOR_CHAIN_WORKER_RUNTIME=",
@@ -141,12 +170,20 @@ def marker_positions(path, report):
             "duplicate or missing child terminal marker")
     result["complete_position"] = complete[0]
     result["harness_position"] = harness[0]
-    require(result["report_position"] < result["complete_position"]
+    result["attempt_positions"] = [position for position, _ in attempts]
+    result["terminal_position"] = terminal[0][0]
+    require(result["attempt_positions"] == sorted(result["attempt_positions"])
+            and result["attempt_positions"][-1] < result["report_position"]
+            < result["terminal_position"] < result["complete_position"]
             < result["runtime_position"] < result["trace_position"]
             < result["harness_position"], "child markers are out of order")
-    result["trial_keys"] = [{"sample_key": trial["sample_key"],
-                             "repeat_index": trial["repeat_index"]}
-                            for trial in report["trials"]]
+    result["trial_keys"] = [{"sample_key": event["sample_key"],
+                             "repeat_index": event["repeat_index"]}
+                            for _, event in attempts]
+    require(result["trial_keys"] == [
+        {"sample_key": trial["sample_key"], "repeat_index": trial["repeat_index"]}
+        for trial in report["trials"]],
+        "raw trial markers differ from final report")
     require(len(result["trial_keys"]) == len({(item["sample_key"], item["repeat_index"])
                                                for item in result["trial_keys"]}),
             "duplicate child trial marker")
@@ -176,6 +213,24 @@ def validate_process_record(run):
             "test binary changed during child run")
 
 
+def validate_engine_measurement(run):
+    require(run["engine"]["target"] == run["report"]["engine_target"]
+            and run["engine"]["pulley_stack_bytes"] == run["report"]["max_wasm_stack"]
+            and run["engine"]["fiber_requested_bytes"] ==
+                run["report"]["async_stack_size"]
+            and run["engine"]["derivation_rule"] ==
+                "round_up_requested_bytes_to_host_page",
+            "child engine identity differs")
+    page = run["engine"]["page_size_bytes"]
+    require(type(page) is int and page > 0 and page & (page - 1) == 0
+            and page == os.sysconf("SC_PAGE_SIZE")
+            and all(thread["page_size_bytes"] == page for thread in
+                    run["runtime"]["thread_observations"])
+            and run["engine"]["fiber_effective_writable_bytes"] ==
+                (run["engine"]["fiber_requested_bytes"] + page - 1) // page * page,
+            "child fiber capacity derivation differs")
+
+
 def run_semantics(run, v1_manifest, v2_manifest, directory):
     case_id, role, configuration = (run[key] for key in
                                     ("case_id", "process_role", "configuration"))
@@ -199,7 +254,9 @@ def run_semantics(run, v1_manifest, v2_manifest, directory):
     require(run["report"]["teardown_probe_mode"] == ("on" if observed else "off")
             and run["report"]["target_os"] == "linux"
             and run["report"]["target_arch"] == "aarch64"
-            and run["markers"] == marker_positions(raw_path, run["report"])
+            and run["markers"] == marker_positions(raw_path, run["report"], role,
+                                                    configuration, process["pid"],
+                                                    run["process_attempt_index"])
             and run["markers"]["trial_keys"] == expected_trial_keys(role),
             "run role or ordered trial markers differ")
     counts = []
@@ -224,18 +281,7 @@ def run_semantics(run, v1_manifest, v2_manifest, directory):
             counts.append(None)
     require(run["observations"] == observations and run["role_counts"] == counts,
             "observations or teardown counts differ from raw process")
-    require(run["engine"]["target"] == run["report"]["engine_target"]
-            and run["engine"]["pulley_stack_bytes"] == run["report"]["max_wasm_stack"]
-            and run["engine"]["fiber_requested_bytes"] ==
-                run["report"]["async_stack_size"]
-            and run["engine"]["derivation_rule"] ==
-                "round_up_requested_bytes_to_host_page",
-            "child engine identity differs")
-    page = run["engine"]["page_size_bytes"]
-    require(type(page) is int and page > 0 and page & (page - 1) == 0
-            and run["engine"]["fiber_effective_writable_bytes"] ==
-                (run["engine"]["fiber_requested_bytes"] + page - 1) // page * page,
-            "child fiber capacity derivation differs")
+    validate_engine_measurement(run)
     return observations
 
 
@@ -289,10 +335,13 @@ def validate_bundle(bundle, directory, allow_pilot=False):
         require(bundle["auxiliary_count_status"] == "frozen",
                 "auxiliary Store counts are not frozen")
     file_evidence(directory, bundle["control_capture"])
-    control = load_json_strict(directory / bundle["control_capture"]["path"])
+    control, binary = validate_control(
+        directory / bundle["control_capture"]["path"],
+        bundle["control_capture"]["sha256"], v1_manifest)
     require(control["source_sha"] == bundle["source_sha"]
             and control["binary_path"] == bundle["binary_path"]
             and control["binary_sha256"] == bundle["binary_sha256"]
+            and str(binary) == bundle["binary_path"]
             and control["manifest_sha256"] == sha256(V1_MANIFEST),
             "guard/source control differs from v2 run")
     control_entries = [control["cargo_artifacts"], control["cargo_metadata"],
@@ -335,6 +384,17 @@ def validate_bundle(bundle, directory, allow_pilot=False):
         for role in ROLES:
             if (case_id, role, "reduced") not in signatures:
                 continue
+            reduced_workers = [thread["usable_bytes"] for thread in
+                               runs[run_name(case_id, role, "reduced")]["runtime"]
+                               ["thread_observations"]
+                               if thread["thread_category"] == "tokio_worker"]
+            production_workers = [thread["usable_bytes"] for thread in
+                                  runs[run_name(case_id, role, "production")]["runtime"]
+                                  ["thread_observations"]
+                                  if thread["thread_category"] == "tokio_worker"]
+            require(reduced_workers and production_workers
+                    and min(production_workers) >= 2 * max(reduced_workers),
+                    "actual worker usable-capacity ratio is below two")
             require(signatures[case_id, role, "reduced"] ==
                     signatures[case_id, role, "production"],
                     "full observations differ across worker stack configurations")

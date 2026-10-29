@@ -24,6 +24,8 @@ SOURCES = {
     "invocation": "core/indexer/src/runtime/invocation.rs",
     "runtime": "core/indexer/src/runtime/mod.rs",
     "call": "core/indexer/src/runtime/call.rs",
+    "fees": "core/indexer/src/runtime/fees.rs",
+    "token": "core/indexer/src/runtime/token.rs",
 }
 ROLES = (
     "target_observed", "trap_control_observed",
@@ -33,7 +35,8 @@ ROLES = (
 AUXILIARY_EXPECTED_COUNTS = {}
 AUXILIARY_CALLSITES = {
     "target_native_auxiliary": [
-        "core/indexer/src/runtime/call.rs::invoke_unsettled: target-phase non-chain contract address",
+        "core/indexer/src/runtime/fees.rs::with_payment: token::api::hold and token::api::release around paid calls",
+        "core/indexer/src/runtime/token.rs::address: token_0_0 is the only target-phase native address",
     ],
     "pre_observation": [
         "core/indexer/src/runtime/call/tests/sequential_chains.rs::run_chain_probe: balance, floor, supply before target",

@@ -99,7 +99,6 @@ def capture(control_path, control_sha256, historical_path, evidence_dir,
                 before = sha256(binary)
                 child, started, ended, output, timed_out = run_bounded_process(
                     command, timeout_seconds, environment)
-                after = sha256(binary)
                 raw_path = evidence_dir / f"{name}.log"
                 with raw_path.open("xb") as destination:
                     destination.write(output)
@@ -115,6 +114,7 @@ def capture(control_path, control_sha256, historical_path, evidence_dir,
                 raw = {"path": raw_path.name, "sha256": sha256(raw_path)}
                 active_process = process
                 active_log = raw
+                after = sha256(binary)
                 require(before == after == control["binary_sha256"],
                         f"{name}: binary changed during child")
                 require(process["complete"], f"{name}: child failed or timed out")
@@ -153,7 +153,8 @@ def capture(control_path, control_sha256, historical_path, evidence_dir,
                     "thread_trace": parsed["thread_trace"],
                     "worker_execution": parsed["worker_execution"],
                     "observations": parsed["observations"],
-                    "markers": marker_positions(raw_path, report),
+                    "markers": marker_positions(raw_path, report, role,
+                                                configuration, child.pid),
                     "role_counts": role_counts,
                     "engine": {
                         "target": report["engine_target"],
@@ -166,8 +167,7 @@ def capture(control_path, control_sha256, historical_path, evidence_dir,
                     },
                 }
                 active_name = None
-        control_sha = sha256(control_copy)
-        verify_final_closure(control, binary, control_dir, control_copy, control_sha)
+        verify_final_closure(control, binary, control_dir, control_copy, control_sha256)
         captured = {}
         for case_id in (item["id"] for item in v1_manifest["cases"]
                         if item["family"] == "distinct_contract_chain"):
@@ -185,7 +185,7 @@ def capture(control_path, control_sha256, historical_path, evidence_dir,
             "binary_sha256": control["binary_sha256"],
             "timeout_seconds": timeout_seconds,
             "control_capture": {"path": "control/resource-control-capture.json",
-                                "sha256": control_sha},
+                                "sha256": control_sha256},
             "historical_reference": {"path": historical_copy.name,
                                      "sha256": HISTORICAL_BUNDLE_SHA256},
             "runs": run_registry,

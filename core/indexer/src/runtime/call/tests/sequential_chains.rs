@@ -1,4 +1,5 @@
 use std::env;
+use std::process;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -334,6 +335,13 @@ async fn run_chain_probe(
         _ => bail!("invalid resource teardown probe mode"),
     };
     assert!(teardown_probe_mode.is_none() || diagnostic_reduced.is_some());
+    let process_role = teardown_probe_mode.map(|probe| match (target_only, probe) {
+        (true, "on") => "target_observed",
+        (false, "on") => "trap_control_observed",
+        (true, "off") => "target_probe_off_control",
+        (false, "off") => "trap_control_probe_off_control",
+        _ => unreachable!(),
+    });
     let root_id = runtime.storage.contract_id(&root).await?.unwrap();
     let baseline_resources = runtime.table.lock().await.iter_mut().count();
     let mut over_cap_observation = None;
@@ -422,7 +430,7 @@ async fn run_chain_probe(
         let (returned, result) = timeout(Duration::from_secs(30), task).await??;
         runtime = returned;
         runtime.resource_probe_phase =
-            teardown_probe_mode.map(|_| ResourceProbePhase::PostObservation);
+            teardown_probe_mode.map(|_| ResourceProbePhase::PostObservation(chain[0].clone()));
         if diagnostic_reduced.is_some() {
             resource_diagnostics::record("chain_operation_exit");
             resource_diagnostics::record("chain_postcall_entry");
@@ -558,7 +566,7 @@ async fn run_chain_probe(
             resource_diagnostics::record("chain_teardown_entry");
         }
         runtime.resource_probe_phase =
-            teardown_probe_mode.map(|_| ResourceProbePhase::RollbackObservation);
+            teardown_probe_mode.map(|_| ResourceProbePhase::RollbackObservation(chain[0].clone()));
         runtime.storage.rollback().await?;
         let state_after_sha256 = persistent_digest(&conn).await?;
         assert_eq!(state_before_sha256, state_after_sha256);
@@ -628,11 +636,27 @@ async fn run_chain_probe(
             "receipt_count": receipt_count,
             "rollback_clean": rollback_clean,
         }));
+        if let Some(role) = process_role {
+            println!(
+                "CHAIN_PROBE_ATTEMPT:{}",
+                json!({
+                    "case_id": format!("chain_{}_{}", depth + 1, mode),
+                    "process_role": role,
+                    "configuration": if diagnostic_reduced == Some(true) { "reduced" } else { "production" },
+                    "process_attempt_index": 0,
+                    "pid": process::id(),
+                    "sample_key": if fail { "trap_control" } else { "target" },
+                    "repeat_index": repeat_index,
+                    "complete": true,
+                })
+            );
+        }
         if diagnostic_reduced.is_some() {
             resource_diagnostics::record("chain_teardown_exit");
             resource_diagnostics::record("chain_attempt_end");
         }
     }
+    let trial_count = trials.len();
     println!(
         "CHAIN_PROBE_REPORT:{}",
         json!({
@@ -655,6 +679,20 @@ async fn run_chain_probe(
             "target_arch": env::consts::ARCH,
         })
     );
+    if let Some(role) = process_role {
+        println!(
+            "CHAIN_PROBE_TERMINAL:{}",
+            json!({
+                "case_id": format!("chain_{}_{}", depth + 1, mode),
+                "process_role": role,
+                "configuration": if diagnostic_reduced == Some(true) { "reduced" } else { "production" },
+                "process_attempt_index": 0,
+                "pid": process::id(),
+                "trial_count": trial_count,
+                "complete": true,
+            })
+        );
+    }
     println!("CHAIN_PROBE_COMPLETE mode={mode} stores={}", depth + 1);
     Ok(())
 }

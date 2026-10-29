@@ -22,7 +22,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "f5fa8755cfb7729209fc16e8be1baa8867c28ba0e29db90129ea0a5b80b9bc70"
+      "sha256": "74726bb9da6424b52f1fd3fe480431cfb9684c28c3fd2cbd0730a5f6bf68bc79"
     },
     "core_lockfile": {
       "path": "core/Cargo.lock",
@@ -54,7 +54,7 @@
     },
     "invocation_budget": {
       "path": "core/indexer/src/runtime/invocation.rs",
-      "sha256": "5ed59299e2d76fd57085197313f756a455fc01fa71d9af1570b121339cd487c9"
+      "sha256": "dbd847eb87b6678ad9b134739ba6dcc48771fef3e94a615d5df1eb615a165669"
     },
     "native_filestorage": {
       "path": "native-contracts/filestorage/src/lib.rs",

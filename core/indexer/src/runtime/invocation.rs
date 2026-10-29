@@ -18,9 +18,9 @@ use wasmtime::{AsContext, AsContextMut, Store, StoreContext, StoreContextMut};
 #[cfg(test)]
 use serde_json::{Value as JsonValue, json};
 
-#[cfg(test)]
-use super::ContractAddress;
 use super::Runtime;
+#[cfg(test)]
+use super::{ContractAddress, token};
 
 pub(super) const MAX_LIVE_INVOCATIONS: u32 = 64;
 
@@ -63,19 +63,26 @@ impl ResourceProbeRole {
 pub(crate) enum ResourceProbePhase {
     Target(Arc<Vec<ContractAddress>>),
     PreObservation,
-    PostObservation,
-    RollbackObservation,
+    PostObservation(ContractAddress),
+    RollbackObservation(ContractAddress),
 }
 
 #[cfg(test)]
 impl ResourceProbePhase {
     pub(crate) fn classify(&self, address: &ContractAddress) -> ResourceProbeRole {
+        let token = token::address();
         match self {
             Self::Target(chain) if chain.contains(address) => ResourceProbeRole::NestedChain,
-            Self::Target(_) => ResourceProbeRole::TargetNativeAuxiliary,
-            Self::PreObservation => ResourceProbeRole::PreObservation,
-            Self::PostObservation => ResourceProbeRole::PostObservation,
-            Self::RollbackObservation => ResourceProbeRole::RollbackObservation,
+            // with_payment invokes token hold/release around paid guest calls.
+            Self::Target(_) if address == &token => ResourceProbeRole::TargetNativeAuxiliary,
+            Self::PreObservation if address == &token => ResourceProbeRole::PreObservation,
+            Self::PostObservation(root) if address == &token || address == root => {
+                ResourceProbeRole::PostObservation
+            }
+            Self::RollbackObservation(root) if address == &token || address == root => {
+                ResourceProbeRole::RollbackObservation
+            }
+            _ => panic!("unreviewed resource probe contract address: {address}"),
         }
     }
 }
@@ -420,6 +427,7 @@ mod tests {
 
     use super::{InvocationBudget, InvocationLease, ResourceProbePhase, ResourceTeardownRecorder};
     use crate::runtime::ContractAddress;
+    use crate::runtime::token;
 
     #[test]
     fn lease_underflow_panics_without_wrapping_the_count() {
@@ -468,5 +476,26 @@ mod tests {
         assert_eq!(events[2]["table_alive"], true);
         assert_eq!(events[3]["kind"], "lease_released");
         Ok(())
+    }
+
+    #[test]
+    fn target_phase_rejects_unreviewed_contract_address() {
+        let chain_address = ContractAddress {
+            name: "deep-errors".into(),
+            height: 1,
+            tx_index: 0,
+        };
+        let unknown = ContractAddress {
+            name: "unknown".into(),
+            height: 1,
+            tx_index: 0,
+        };
+        let phase = ResourceProbePhase::Target(Arc::new(vec![chain_address.clone()]));
+        assert_eq!(phase.classify(&chain_address).name(), "nested_chain");
+        assert_eq!(
+            phase.classify(&token::address()).name(),
+            "target_native_auxiliary"
+        );
+        assert!(catch_unwind(AssertUnwindSafe(|| phase.classify(&unknown))).is_err());
     }
 }

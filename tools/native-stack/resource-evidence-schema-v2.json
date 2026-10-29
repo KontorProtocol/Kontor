@@ -1012,17 +1012,24 @@
     "v2_markers": {
       "additionalProperties": false,
       "properties": {
-        "complete_position": {},
-        "harness_position": {},
-        "report_position": {},
-        "runtime_position": {},
-        "trace_position": {},
+        "attempt_positions": {
+          "items": {"minimum": 0, "type": "integer"},
+          "minItems": 3,
+          "maxItems": 3,
+          "type": "array"
+        },
+        "complete_position": {"minimum": 0, "type": "integer"},
+        "harness_position": {"minimum": 0, "type": "integer"},
+        "report_position": {"minimum": 0, "type": "integer"},
+        "runtime_position": {"minimum": 0, "type": "integer"},
+        "terminal_position": {"minimum": 0, "type": "integer"},
+        "trace_position": {"minimum": 0, "type": "integer"},
         "trial_keys": {
           "items": {
             "additionalProperties": false,
             "properties": {
-              "repeat_index": {},
-              "sample_key": {}
+              "repeat_index": {"minimum": 0, "type": "integer"},
+              "sample_key": {"enum": ["target", "trap_control"]}
             },
             "required": [
               "sample_key",
@@ -1036,8 +1043,10 @@
         }
       },
       "required": [
+        "attempt_positions",
         "trial_keys",
         "report_position",
+        "terminal_position",
         "complete_position",
         "runtime_position",
         "trace_position",

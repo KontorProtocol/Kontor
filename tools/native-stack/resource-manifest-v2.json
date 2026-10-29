@@ -10,7 +10,8 @@
       "core/indexer/src/runtime/call/tests/sequential_chains.rs::run_chain_probe: balance, floor, supply, storage-state after rollback"
     ],
     "target_native_auxiliary": [
-      "core/indexer/src/runtime/call.rs::invoke_unsettled: target-phase non-chain contract address"
+      "core/indexer/src/runtime/fees.rs::with_payment: token::api::hold and token::api::release around paid calls",
+      "core/indexer/src/runtime/token.rs::address: token_0_0 is the only target-phase native address"
     ]
   },
   "auxiliary_count_status": "pilot_pending",
@@ -588,7 +589,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "2c9cfbb08c2ddc4050fc2c15e0012aa557d9062c66625d23baf14a3c2e1fe7d3",
+  "parent_manifest_sha256": "b548ae136c747e01e54cc595ecf3447038001a2b3a5e099ea0606aefd4f787c8",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -633,7 +634,7 @@
     "production_memory_profiles": "missing",
     "workload_plan": "awaiting_frozen_workload_plan"
   },
-  "schema_sha256": "0d4565e14ee0479b1ff20ee70c898cc838ae61f4ae43a2f974581ce5a0e77fcd",
+  "schema_sha256": "28011a094db6c6d7bd5a92012b1a0a13ab70159a57860bc7f0e9cc38f4d06c2e",
   "schema_version": 2,
   "source_baseline_commit": "67a52fed58a893ce2c1c05483f86f4fffa02a675",
   "sources": {
@@ -643,15 +644,23 @@
     },
     "chain_fixture": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "f5fa8755cfb7729209fc16e8be1baa8867c28ba0e29db90129ea0a5b80b9bc70"
+      "sha256": "74726bb9da6424b52f1fd3fe480431cfb9684c28c3fd2cbd0730a5f6bf68bc79"
+    },
+    "fees": {
+      "path": "core/indexer/src/runtime/fees.rs",
+      "sha256": "f744a02e4049b55876b5be4edf79f1ca94afd62c88f24bea63a06f4ce8c7540f"
     },
     "invocation": {
       "path": "core/indexer/src/runtime/invocation.rs",
-      "sha256": "5ed59299e2d76fd57085197313f756a455fc01fa71d9af1570b121339cd487c9"
+      "sha256": "dbd847eb87b6678ad9b134739ba6dcc48771fef3e94a615d5df1eb615a165669"
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
       "sha256": "a733da4444ca07f1fa884c4249df6d624b0a3389bbfff3c324a0663f3fb65dde"
+    },
+    "token": {
+      "path": "core/indexer/src/runtime/token.rs",
+      "sha256": "d4ffa4866ff51a6c6d78aaa19560cd05037455a0f5c29efed612319636dbac1f"
     },
     "v1_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -663,23 +672,23 @@
     },
     "v2_capture": {
       "path": "tools/native-stack/capture_resource_chain_v2.py",
-      "sha256": "d26d70530cb1f8dedc32745c708e854b3b5429f2732dc54106b781c905ea3848"
+      "sha256": "8e21441f81ad1ac0e2eba8c6566cf23c9cf67cc82915c6a33d4cee70534cd858"
     },
     "v2_manifest_builder": {
       "path": "tools/native-stack/resource_manifest_v2.py",
-      "sha256": "c9863c9577a63bff022f36ae0534070c570d5a47ea01ac203833890ab17f0baa"
+      "sha256": "a250e87a7edce3ed537f53a797427871b0d89615af4546c84629c9e20649d96a"
     },
     "v2_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v2.json",
-      "sha256": "0d4565e14ee0479b1ff20ee70c898cc838ae61f4ae43a2f974581ce5a0e77fcd"
+      "sha256": "28011a094db6c6d7bd5a92012b1a0a13ab70159a57860bc7f0e9cc38f4d06c2e"
     },
     "v2_tests": {
       "path": "tools/native-stack/test_resource_evidence_v2.py",
-      "sha256": "aee317e357c98df0900b61611a1c28f23288d422dfa64e8f26d9827c5bdb7583"
+      "sha256": "360ae3c91eda4eadc2bc74021e7b5f4244b549a1dfb8015ad760bd251bf656bd"
     },
     "v2_validator": {
       "path": "tools/native-stack/resource_evidence_v2.py",
-      "sha256": "3ab1ba1345c2949a44d1bc0ae0f68f99229286025b5e85c3c03f7dd47275f98c"
+      "sha256": "72be472ec38c64bd125bf43a40107d48dba2eda5b7cab198fc53b19bd4f3d32b"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
