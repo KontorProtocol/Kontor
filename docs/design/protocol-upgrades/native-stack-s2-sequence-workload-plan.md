@@ -122,6 +122,10 @@ links and changed intermediate expected state, not only final-state equality.
 
 ## Timed arrivals after correctness
 
+The [agreed timed-workload amendment](native-stack-s2-timed-workload-plan.md)
+refines this outline with additive fresh/confirmation budgets, fixed event
+ordering, finality processing and a complete historical replay schedule.
+
 Use a deterministic trace with fixed event tie ordering and canonical anchor
 dependencies. Record intended enqueue time, actual dispatch, full service through
 pruning and completion separately. Input preparation and oracle reads are not

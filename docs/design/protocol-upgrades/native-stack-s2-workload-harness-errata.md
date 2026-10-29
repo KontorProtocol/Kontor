@@ -1255,3 +1255,71 @@ All cases use four initial validators, two replacements, two active agreements w
 The executable SHA-256 is `6600db2f4255e5f38d3435375ab007d6a782d6d3d65efe073caaea8c33a96646`. The schema-1 fixture manifest is `df5f56795433e4c6a9ca3dcc21ed200740e0feaceaac08da3174e4d496253c71`. Logs, source/binary/PID/command records, input hashes and limitations are in `.build-cache/workload-reconcile/sequence-runner-validation.json`. Clippy session 62574 returned exactly the six inherited S2 findings, with no changed-file findings; none were suppressed. Those findings still require resolution when the native branch is integrated.
 
 This is bounded Linux ARM64 development correctness evidence. The input-generation and most runtime logs rely on wrapper/executor records for source and process identity; the legacy saved fixture additionally retains its existing embedded identity evidence. Multi-block raw inputs and complete checkpoints are not yet preserved as a portable replay artifact. The existing schema-1 format remains supported, while multi-block saved output is explicitly rejected pending schema 2. Full populations, 500-transaction execution, challenge expiry/cleanup, long root-window eviction, real-clock arrivals, resource-capacity and six-cell S1/S2 qualification remain open. No protocol-upgrade phase or full S2 acceptance is implied.
+
+
+## Saved multi-block replay
+
+Source `bd67889bb210e53f5689db13ae83516512626a6d` adds schema 2 for
+multi-block workload archives while retaining schema 1. It binds the initial
+SQLite snapshot and full projection, Bitcoin setup chain, raw consecutive
+blocks, ordered batch and simulation inputs, and complete before/after
+checkpoints for every canonical batch and block. The manifest is written last,
+after two initial-snapshot restores pass independent semantic checks and agree
+at every checkpoint. Fresh-process replay checks the complete inventory and
+hashes, imports the real Bitcoin chain, and repeats all canonical checkpoints
+over two fresh restores. It does not add projection exclusions.
+
+The two-block batch/simulation/eight-view fixture has manifest
+`f2f48c439db4d9352a26fec3a749a03e1e634aed5c949a176c99916ba4926495`.
+Generation passed in 279.66s and fresh-process replay in 223.31s, with 12
+canonical checkpoints per restore. Its 20 files remain unchanged. Reordered
+batch associations were rejected, and a rehashed altered intermediate projection
+passed structural loading but failed the actual full checkpoint comparison.
+
+The six-block fresh fixture has manifest
+`239fd239b15960ba31bc59e0d9b56423acaea605e51ac975ccd381cc3ba0797b`.
+Generation passed in 141.60s and fresh-process replay in 94.97s. Its 16 files
+cover six checkpoints per restore and 300 unique transaction fundings. This
+case has no batches, simulations, competing views or new file registrations.
+Both bounded fixture records and raw evidence received all three reviews.
+
+Test-only follow-ups through `488e62286dc929cc7d24a29fa51f5f2db24a8279`
+add regular-file/symlink and reused-funding controls. Review found that the
+original funding mutation recreated a previous transaction ID and would stop
+at the wrong rejection gate. The corrected mutation changes the commit lock
+time, derives a distinct reveal ID and repairs the surrounding commitments.
+The actual test now reaches `sequence reused or unknown initial funding`.
+This is a structural preflight negative, not a valid Bitcoin spend or proof of
+signature/PoW rejection.
+
+At `488e6228`, exact compilation and three unit checks passed. Clippy still
+reports the six inherited S2 findings, with no suppression. The new binary
+`40c05829714a33eacc72acaaf3842a296c810d310180b5181a784f9692a80db6`
+correctly rejects the earlier fixture by default. An explicitly pinned external
+consumer run manifest permits replay without changing the producer archive.
+That replay passed in 233.06s, with both restores matching all 12 checkpoints
+and all eight view clients progressing during each restore’s writer interval. This demonstrates the
+explicit identity seam across test-only revisions, not real S1/S2 compatibility.
+
+The seven-block batched archive has manifest
+`de3dc8a7335e2b8a38732bf44304133ae7e061557cbd99ca08454dc7acbca6f1`.
+Generation passed in 169.95s and fresh-process replay in 121.69s. Both use two
+restores with 42 canonical checkpoints each. The 53-file archive binds 350
+distinct funding inputs, 35 batches, seven confirmation blocks and 35 cumulative
+file registrations. This case has no simulations or competing views. All three reviewers accepted generation and terminal replay evidence.
+
+The legacy schema-1 fixture from `c3ab8d5a`, manifest
+`df5f56795433e4c6a9ca3dcc21ed200740e0feaceaac08da3174e4d496253c71`,
+also replayed successfully under the explicitly pinned `488e6228` consumer in
+63.26s. Both fresh restores passed their full projections and confirmation
+checks; all six original files remain unchanged. This is legacy-reader
+compatibility through the same explicit identity seam. The build, negative
+controls and replay records are retained under `.build-cache/workload-reconcile`,
+including all original fixtures and logs.
+
+These are Linux ARM64 development correctness diagnostics with small fixed
+populations. They do not establish real-clock arrival rates, backlog service,
+historical replay throughput, resource ceilings or six-cell qualification.
+The agreed timed-workload amendment adds those traces separately and includes
+normal post-block finality processing, which the bounded handle_block helper
+does not exercise. Full S2 and the protocol-upgrade system remain incomplete.
