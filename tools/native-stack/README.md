@@ -380,6 +380,36 @@ not establish SQL query counts, comparative timing, or cross-node and six-cell
 semantic equality. The measured calls are unsigned views; paid-call, guest
 write rollback, cancellation, and trap unwind remain separate cases.
 
+The SQLite large-value adapter publishes the `counter` guest, funds a signer,
+and writes 101 ordered map keys through paid operations. A paid 16 KiB write
+succeeds. A paid 1 MiB write deterministically exceeds the storage deposit
+budget; the adapter checks its single error receipt and fee effects, then
+rolls back an outer fixture savepoint and verifies complete persistent-state
+restoration. A Core-signed 1 MiB write prepares the read fixture. The measured
+unsigned views return pages of 1, 7, and 100 entries for both value sizes. The
+host checks every returned byte, key, and continuation before recording compact
+hashes. The outer savepoint isolates the test fixture; it does not imply that
+a failed paid operation refunds its execution fee in production.
+
+At source `7f118635ba2f24805ca19d680241b59680079b3b`, the Linux ARM64
+development large-value capture completed four isolated children and 48
+attempts. The standalone validator accepted all four runs. The two observed
+children recorded 24 created and 24 destroyed target Stores, with zero live
+invocations after every attempt. Exact page contents, cursors, fuel, receipts,
+and full persistent-state digests matched across observed and probe-off roles
+and reduced and production worker stacks. The exact-source build attestation
+SHA-256 is
+`fc49fef3d13ef5a039538742d2f4e28597627a4fcd9de384bd25fd5b09019a37`;
+the test binary SHA-256 is
+`55619541b260800f90377756b34ea5faf87351ad2aa2d2a72aa60c2440fbb9e3`.
+The guard control SHA-256 is
+`3af5c03263038935c73edef6d0ac5d8bd585de74df962009a105ad29c6c68a21`,
+and the capture SHA-256 is
+`1c27db9dca4191d550cdc266d2c02e51a4fcdaad0587003da8f1004111baca5b`.
+This is one local diagnostic cell with `qualification_status: missing`. The
+1 MiB write is Core fixture setup after a paid rejection. The other five cells
+and cross-node semantic comparisons remain required for S2 qualification.
+
 At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
 development canonical capture completed 12 child processes, 56 attempts, and
 268 closed Store lifecycles. The standalone validator accepted all 12 runs.
