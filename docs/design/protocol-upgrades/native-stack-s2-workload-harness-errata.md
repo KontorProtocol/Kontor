@@ -910,3 +910,52 @@ Clippy reported exactly the six inherited S2 findings, with no history-workload
 finding. No suppression was added. They remain assigned to native-branch
 integration. All parent build and runtime processes finished before handing the
 shared build slot back to the native implementer.
+
+## Configured batches and saved confirmation replay
+
+Source `e5207e2cbc740269c6e4d3bde81228aaf3487749` adds an optional
+`mixed.batch_operations` setting. Zero preserves fresh block execution; 20 or
+40 groups the existing signed two-operation reveals into complete decided
+batches. The fixture preserves reveal order and advances global consensus
+height per batch. These already-decided calls use empty certificates and do
+not qualify consensus authorization.
+
+Transactions execute at anchor 101 and confirm in block 102. The checks preserve
+the transaction ID, execution height, batch height, execution usage and paid
+receipts, allowing only the joined confirmation ordinal to change. Exact raw
+Bitcoin positions and receipt counts are checked. Full mixed accounting,
+rollback, lifecycle, retained-history and pruning checks remain enabled. Each
+configured generation case executes twice from independent snapshot restores.
+
+The saved fixture records the batch size and reconstructs those same reveals
+from the original Bitcoin block. A fresh process replays the groups before
+confirmation, checks both restored databases against the full expected logical
+state, and verifies the saved baseline remains unchanged. This is same-source,
+same-binary replay, not cross-build or S1/S2 compatibility qualification.
+
+The build passed in 47.70s and the configuration validation test passed. Actual
+runtime cases all passed:
+
+| Case | Shape | Total duration |
+| --- | --- | ---: |
+| Representative batch fixture | 50 reveals, 100 operations, five 20-operation batches; 64 live keys, 150 history rows, five paid files | 88.78s |
+| Fresh-process saved replay | Same representative fixture, two restores | 47.85s |
+| Stress batch fixture | 500 reveals, 1,000 operations, twenty-five 40-operation batches; 257 live keys, 529 history rows, 100 paid files | 134.85s |
+| Original single-batch regression | Original three-operation fixture | 53.53s |
+| Original simulation regression | Repeated rolled-back simulations, then batch execution and confirmation | 97.87s |
+
+Native populations remain four validators, two replacements, two agreements and
+three members. These are correctness diagnostics, not full W_op populations,
+arrival scheduling, eight-view competition or performance acceptance. Durations
+include setup and assertions. The saved replay's `service_ns` covers only block
+application through pruning, explicitly excluding the earlier batch execution.
+
+Executable SHA-256:
+`ea4fe1fa5cea4efd99336effc92e6e3dc9da7e8b5c4dc60102a41de6426f139f`.
+Saved manifest SHA-256:
+`5a41ecc29cdd8ce5736ce030debc8627de3af5d047ce60e8e70c6a2ce56f466d`.
+All five input hashes were verified; the six-file bundle totals 3,135,547 bytes.
+
+Clippy reported the same six inherited S2 findings, with no configured-workload
+finding. No suppression was added. The fixes remain assigned to native-branch
+integration. All parent build and runtime processes are terminal.
