@@ -33,6 +33,7 @@ SOURCES = {
     "validator": "tools/native-stack/resource_boundary_evidence.py",
     "tests": "tools/native-stack/test_resource_boundary_evidence.py",
     "composition_tests": "tools/native-stack/test_resource_boundary_composition.py",
+    "synthetic_guard_tests": "tools/native-stack/test_resource_report.py",
     "schema": "tools/native-stack/resource-boundary-evidence-schema-v1.json",
     "depths": "tools/native-stack/resource-boundary-depths-v1.json",
     "plan": "tools/native-stack/resource-boundary-family.md",

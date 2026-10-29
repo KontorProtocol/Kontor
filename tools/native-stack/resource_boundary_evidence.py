@@ -729,6 +729,15 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
                 run_name(case_id, DISCOVERY_ROLE, "production")
                 for case_id in cases},
             "reviewed archive lacks nine production discovery children")
+    process_ids = [(run["process"]["pid"],
+                    run["process"]["started_unix_ns"])
+                   for run in archive["runs"].values()]
+    require(len(process_ids) == len(set(process_ids)),
+            "reviewed discovery child process identity is duplicated")
+    logs = [run["raw_log"]["path"] for run in archive["runs"].values()]
+    require(len(logs) == len(set(logs))
+            and set(logs) == {entry.name for entry in path.parent.glob("*.log")},
+            "reviewed discovery raw logs are missing or duplicated")
     source_sha = archive["source_sha"]
     old_manifest = validate_source_freeze(
         source_sha, current_source_sha, archive["manifest_sha256"])
@@ -738,6 +747,10 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
     file_evidence(path.parent, archive["control_capture"])
     archived_control = load_json_strict(path.parent /
                                         archive["control_capture"]["path"])
+    guard_process = archived_control["guard_control"]["process"]
+    require((guard_process["pid"], guard_process["started_unix_ns"])
+            not in process_ids,
+            "reviewed discovery guard reused a child process identity")
     old_v1_bytes = historical_file(
         source_sha, "tools/native-stack/resource-manifest-v1.json")
     old_v1_sha = hashlib.sha256(old_v1_bytes).hexdigest()

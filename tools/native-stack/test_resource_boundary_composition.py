@@ -15,6 +15,7 @@ from resource_boundary_manifest import (DISCOVERY_ROLE, MANIFEST,
                                         build_boundary_manifest)
 from resource_evidence import sha256
 from resource_manifest import ROOT, build_manifest
+from test_resource_report import guard_control
 
 
 SOURCE_SHA = "1" * 40
@@ -308,7 +309,7 @@ class BoundaryCompositionTests(unittest.TestCase):
             cases.append(old_manifest["leaf_case"]["case_id"])
             runs = {
                 run_name(case_id, DISCOVERY_ROLE, "production"):
-                make_run(evidence, case_id, 100 + index,
+                make_run(evidence, case_id, 200 + index,
                          original_binary, binary_sha, old_manifest_sha,
                          component_sha, source_sha=discovery_sha)
                 for index, case_id in enumerate(cases)
@@ -336,10 +337,8 @@ class BoundaryCompositionTests(unittest.TestCase):
                 "workspace_root": str(root / "core"),
                 "packages": [{"name": "indexer", "id": "indexer-package"}],
             }) + "\n")
-            guard_log = control_file("guard.log", "\n".join(
-                "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps({
-                    "mode": mode, "target": {"page_size_bytes": 4096},
-                }) for mode in ("reduced", "production")) + "\n")
+            guard = guard_control(control_dir, build_manifest(),
+                                  original_binary, binary_sha, discovery_sha)
             fiber = control_file("fiber.txt", "pinned fiber source\n")
             fiber_sources = {"crates/fiber/src/lib.rs": fiber["sha256"]}
             control = {
@@ -350,7 +349,7 @@ class BoundaryCompositionTests(unittest.TestCase):
                 "cargo_artifact": artifact,
                 "cargo_artifacts": artifacts,
                 "cargo_metadata": metadata,
-                "guard_control": {"process": {}, "raw_log": guard_log},
+                "guard_control": guard,
                 "wasmtime_source_files": {
                     "crates/fiber/src/lib.rs": fiber,
                 },
@@ -392,11 +391,9 @@ class BoundaryCompositionTests(unittest.TestCase):
             final_sha = commit("freeze reviewed depths")
             with patch("resource_boundary_evidence.ROOT", root), patch(
                     "resource_boundary_evidence.FIBER_SOURCE_FILES",
-                    fiber_sources), patch(
-                    "resource_boundary_evidence.check_guard_control") as guard_check:
+                    fiber_sources):
                 validate_reviewed_discovery(archive_path, sha256(archive_path),
                                             final_manifest, final_sha)
-                guard_check.assert_called_once()
                 wrong_pair = copy.deepcopy(final_manifest)
                 wrong_pair["leaf_case"]["last_success"] = 2
                 with self.assertRaises(ValueError):
