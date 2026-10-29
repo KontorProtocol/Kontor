@@ -238,7 +238,7 @@
     },
     "native_staking_rewards_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/native_staking_rewards.rs",
-      "sha256": "5af0311bd64d71dc381d5079cc7bc5a22f00c2ece5a416bfb5915f31bdda76b4"
+      "sha256": "db30ef746919feb26e4447dbea81ec1e2dc389f89c6fd9b70f229e22e9d99b91"
     },
     "native_staking_rewards_capture": {
       "path": "tools/native-stack/capture_resource_native_staking_rewards.py",
@@ -246,11 +246,11 @@
     },
     "native_staking_rewards_validator": {
       "path": "tools/native-stack/resource_native_staking_rewards_evidence.py",
-      "sha256": "3c3d8559214686dec4924a5e62bad49e4b7d245e5d4317439a1556bd41437611"
+      "sha256": "43c9db6d00de16b47024d9e644a5a48fa6f5b552514914a89e3734dbfa5b078c"
     },
     "native_staking_rewards_validator_tests": {
       "path": "tools/native-stack/test_resource_native_staking_rewards_evidence.py",
-      "sha256": "3aea96b930959ff414345be7bd57e616200755a2b20fea7bf5155c77d1091dd9"
+      "sha256": "481545839266abbcde773f80888839a1fe96e3d3d07fa2eb0103b6479476b62b"
     },
     "native_staking_wit": {
       "path": "native-contracts/staking/wit/contract.wit",

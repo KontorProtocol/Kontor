@@ -4,11 +4,12 @@ use std::time::Instant;
 
 use anyhow::{Result, ensure};
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey, XOnlyPublicKey};
-use libsql::Connection;
+use libsql::{Connection, params};
 use serde_json::{Value as JsonValue, json};
 
 use super::sweep::persistent_digest;
 use crate::database::queries::{get_contract_id_from_address, get_contract_signer_id};
+use crate::database::types::CORE_SIGNER_ID;
 use crate::runtime::invocation::{InvocationBudget, ResourceProbePhase, ResourceTeardownRecorder};
 use crate::runtime::numerics::{add_decimal, div_decimal, mul_decimal, sub_decimal};
 use crate::runtime::resource_diagnostics;
@@ -29,6 +30,117 @@ async fn receipt_count(conn: &Connection) -> Result<u64> {
         .query("SELECT COUNT(*) FROM contract_results", ())
         .await?;
     Ok(rows.next().await?.unwrap().get(0)?)
+}
+
+async fn latest_receipt_id(conn: &Connection) -> Result<u64> {
+    let mut rows = conn
+        .query("SELECT COALESCE(MAX(id), 0) FROM contract_results", ())
+        .await?;
+    Ok(rows.next().await?.unwrap().get(0)?)
+}
+
+async fn new_receipts(
+    conn: &Connection,
+    previous_id: u64,
+    population: usize,
+) -> Result<Vec<JsonValue>> {
+    let mut rows = conn
+        .query(
+            "SELECT c.name, r.func, r.status, r.gas, r.size, r.value, \
+         r.signer_id, r.payer_signer_id, r.height, r.tx_id, \
+         r.input_index, r.op_index, r.result_index \
+         FROM contract_results r JOIN contracts c ON c.id = r.contract_id \
+         WHERE r.id > ? ORDER BY r.id",
+            params![previous_id],
+        )
+        .await?;
+    let expected = if population == 0 {
+        vec![("staking", "distribute-ordering-reward")]
+    } else {
+        vec![
+            ("token", "transfer-ordering-reward"),
+            ("staking", "distribute-ordering-reward"),
+        ]
+    };
+    let mut result = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let contract: String = row.get(0)?;
+        let function: String = row.get(1)?;
+        let status: String = row.get(2)?;
+        let gas: u64 = row.get(3)?;
+        let size: u64 = row.get(4)?;
+        let value: Option<String> = row.get(5)?;
+        let signer_id: u64 = row.get(6)?;
+        let payer_signer_id: Option<u64> = row.get(7)?;
+        let height: u64 = row.get(8)?;
+        let tx_id: Option<u64> = row.get(9)?;
+        let input_index: Option<u64> = row.get(10)?;
+        let op_index: Option<u64> = row.get(11)?;
+        let result_index: u64 = row.get(12)?;
+        ensure!(
+            expected.get(result.len()) == Some(&(contract.as_str(), function.as_str()))
+                && status == "Ok"
+                && gas > 0
+                && value
+                    .as_ref()
+                    .is_some_and(|value| !value.is_empty() && value.len() as u64 == size)
+                && signer_id == CORE_SIGNER_ID
+                && payer_signer_id.is_none()
+                && height == 1
+                && tx_id.is_none()
+                && input_index.is_none()
+                && op_index.is_none()
+                && result_index == result.len() as u64,
+            "staking reward receipt fields or order changed"
+        );
+        result.push(json!({
+            "contract": contract, "function": function, "status": status,
+            "gas": gas, "size": size, "value": value,
+            "signer_id": signer_id, "payer_signer_id": payer_signer_id,
+            "height": height, "tx_id": tx_id,
+            "input_index": input_index, "op_index": op_index,
+            "result_index": result_index,
+        }));
+    }
+    ensure!(
+        result.len() == expected.len(),
+        "staking reward receipt count changed"
+    );
+    Ok(result)
+}
+
+async fn validator_metadata(
+    runtime: &mut Runtime,
+    expected: &ActiveValidatorInfo,
+) -> Result<JsonValue> {
+    let info = staking_api::get_validator(runtime, &expected.x_only_pubkey)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("staking reward validator metadata missing"))?;
+    let stake = staking_api::get_stake(runtime, &expected.x_only_pubkey)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("staking reward stake metadata missing"))?;
+    let status = format!("{:?}", info.status);
+    ensure!(
+        info.x_only_pubkey == expected.x_only_pubkey
+            && info.ed25519_pubkey == expected.ed25519_pubkey
+            && info.stake == expected.stake
+            && stake.stake == expected.stake
+            && status == "Active"
+            && info.activation_height == 0
+            && info.deactivation_height == 0
+            && stake.withdrawal_height.is_none(),
+        "staking reward validator status or metadata changed"
+    );
+    Ok(json!({
+        "holder": info.x_only_pubkey,
+        "ed25519_pubkey": hex::encode(&info.ed25519_pubkey),
+        "validator_stake": info.stake.to_string(),
+        "bonded_stake": stake.stake.to_string(),
+        "status": status,
+        "activation_height": info.activation_height,
+        "deactivation_height": info.deactivation_height,
+        "withdrawal_height": stake.withdrawal_height,
+    }))
 }
 
 async fn balance(runtime: &mut Runtime, holder: HolderRef) -> Result<Decimal> {
@@ -135,6 +247,10 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                     && a.stake == b.stake),
             "staking reward active holders changed order or metadata"
         );
+        let mut metadata_before = Vec::with_capacity(population);
+        for validator in &active_before {
+            metadata_before.push(validator_metadata(&mut runtime, validator).await?);
+        }
         let eligible = staking_api::has_reward_recipients(&mut runtime).await?;
         ensure!(eligible == (population > 0), "reward eligibility changed");
         let supply_pre_mint = token::total_supply(&mut runtime).await?;
@@ -143,6 +259,11 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
         ensure!(
             minted.ordering_minted == expected_amount,
             "reward emission differs from the independently ordered supply calculation"
+        );
+        let storage_budget_before = token::storage_emission_budget(&mut runtime).await?;
+        ensure!(
+            storage_budget_before == Some(minted.storage_unminted),
+            "reward storage emission budget differs from scheduled amount"
         );
         runtime.set_context(1, None, None, None).await;
         let conn = runtime.get_storage_conn();
@@ -180,13 +301,16 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 )));
             let resources_before = runtime.table.lock().await.iter_mut().count();
             let receipts_before = receipt_count(&conn).await?;
+            let receipt_before_id = latest_receipt_id(&conn).await?;
             resource_diagnostics::record("finite_stack_attempt_start");
+            resource_diagnostics::record("operation_entry");
             let started = Instant::now();
             let previous = runtime.start_usage();
             let paid =
                 staking_api::distribute_ordering_reward(&mut runtime, &core, expected_amount)
                     .await??;
             let usage = runtime.finish_usage(previous)?;
+            resource_diagnostics::record("operation_exit");
             let teardown_events = recorder.as_ref().map(|recorder| recorder.events());
             let live_invocations = budget.live();
             runtime.invocation_budget = None;
@@ -195,10 +319,16 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
             let stack_empty = runtime.stack.is_empty().await;
             let savepoint_restored =
                 runtime.storage.savepoint_stack.peek().await == outer_savepoint;
+            resource_diagnostics::record("postcall_observation_entry");
             let active_after = staking_api::get_active_set(&mut runtime).await?;
+            ensure!(
+                active_after.len() == population,
+                "staking reward active set cardinality changed"
+            );
             let expected_after = expected_stakes(&active_before, expected_amount)?;
             let mut credited = Decimal::default();
             let mut accounts = Vec::with_capacity(population);
+            let mut metadata_after = Vec::with_capacity(population);
             for ((before, after), expected) in
                 active_before.iter().zip(&active_after).zip(&expected_after)
             {
@@ -208,6 +338,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                         && after.stake == *expected,
                     "staking reward changed account metadata or rounded share"
                 );
+                metadata_after.push(validator_metadata(&mut runtime, after).await?);
                 credited = add_decimal(credited, sub_decimal(after.stake, before.stake)?)?;
                 accounts.push(json!({
                     "holder": after.x_only_pubkey,
@@ -217,6 +348,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 }));
             }
             let supply_after = token::total_supply(&mut runtime).await?;
+            let storage_budget_after = token::storage_emission_budget(&mut runtime).await?;
             let escrow_after = staking_escrow(&mut runtime).await?;
             let pool_after = balance(&mut runtime, HolderRef::OrderingPool).await?;
             let total_stake_after = staking_api::get_staking_info(&mut runtime)
@@ -224,11 +356,14 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 .total_stake;
             let last_reward_height = staking_api::last_reward_height(&mut runtime).await?;
             let receipts_after = receipt_count(&conn).await?;
+            let measured_receipts = new_receipts(&conn, receipt_before_id, population).await?;
             let state_after_sha256 = persistent_digest(&conn).await?;
+            resource_diagnostics::record("postcall_observation_exit");
             ensure!(
                 paid == expected_amount
                     && credited == expected_amount
                     && supply_after == supply_before
+                    && storage_budget_after == storage_budget_before
                     && sub_decimal(escrow_after, escrow_before)? == expected_amount
                     && sub_decimal(pool_before, pool_after)? == expected_amount
                     && sub_decimal(total_stake_after, total_stake_before)? == expected_amount
@@ -262,9 +397,13 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 "paid": paid.to_string(),
                 "credited": credited.to_string(),
                 "accounts": accounts,
+                "validator_metadata_before": metadata_before,
+                "validator_metadata_after": metadata_after,
                 "supply_pre_mint": supply_pre_mint.to_string(),
                 "supply_before": supply_before.to_string(),
                 "supply_after": supply_after.to_string(),
+                "storage_emission_budget_before": storage_budget_before.map(|value| value.to_string()),
+                "storage_emission_budget_after": storage_budget_after.map(|value| value.to_string()),
                 "escrow_before": escrow_before.to_string(),
                 "escrow_after": escrow_after.to_string(),
                 "pool_before": pool_before.to_string(),
@@ -280,6 +419,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 "state_restored_sha256": state_restored_sha256,
                 "receipts_before": receipts_before,
                 "receipts_after": receipts_after,
+                "measured_receipts": measured_receipts,
                 "receipts_restored": receipts_restored,
                 "resources_before": resources_before,
                 "resources_after": resources_after,

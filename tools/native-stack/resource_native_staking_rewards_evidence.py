@@ -29,12 +29,15 @@ KEY_FINGERPRINTS = {
 }
 OBSERVATION_KEYS = {
     "sample_key", "outcome", "population", "eligible", "amount", "paid",
-    "credited", "accounts", "supply_pre_mint", "supply_before", "supply_after",
+    "credited", "accounts", "validator_metadata_before",
+    "validator_metadata_after", "supply_pre_mint", "supply_before", "supply_after",
+    "storage_emission_budget_before", "storage_emission_budget_after",
     "escrow_before", "escrow_after", "pool_before", "pool_after",
     "total_stake_before", "total_stake_after", "last_reward_height",
     "system_fuel", "user_fuel", "deposit_fuel", "state_before_sha256",
     "state_after_sha256", "state_restored_sha256", "receipts_before",
-    "receipts_after", "receipts_restored", "resources_before", "resources_after",
+    "receipts_after", "measured_receipts", "receipts_restored",
+    "resources_before", "resources_after",
     "stack_empty", "savepoint_restored", "savepoint_empty", "live_invocations",
     "teardown_probe_on", "teardown_events", "engine_target", "max_wasm_stack",
     "async_stack_size",
@@ -62,6 +65,43 @@ def expected_emission(supply, eligible):
     if not eligible:
         return Decimal(0)
     return q(q(q(q(supply * 5) / 100) / 52560) / 10)
+
+
+def expected_storage_budget(supply):
+    scheduled = q(q(q(supply * 5) / 100) / 52560)
+    ordering = q(scheduled / 10)
+    return q(scheduled - ordering)
+
+
+def validate_receipts(receipts, population):
+    expected = ([('staking', 'distribute-ordering-reward')] if population == 0
+                else [('token', 'transfer-ordering-reward'),
+                      ('staking', 'distribute-ordering-reward')])
+    require(isinstance(receipts, list) and len(receipts) == len(expected),
+            "staking reward measured receipt count changed")
+    keys = {"contract", "function", "status", "gas", "size", "value",
+            "signer_id", "payer_signer_id", "height", "tx_id",
+            "input_index", "op_index", "result_index"}
+    for index, (receipt, (contract, function)) in enumerate(zip(
+            receipts, expected, strict=True)):
+        require(isinstance(receipt, dict) and set(receipt) == keys
+                and receipt["contract"] == contract
+                and receipt["function"] == function
+                and receipt["status"] == "Ok"
+                and type(receipt["gas"]) is int and receipt["gas"] > 0
+                and isinstance(receipt["value"], str) and receipt["value"]
+                and type(receipt["size"]) is int
+                and receipt["size"] == len(receipt["value"].encode())
+                and type(receipt["signer_id"]) is int
+                and receipt["signer_id"] == 1
+                and receipt["payer_signer_id"] is None
+                and type(receipt["height"]) is int
+                and receipt["height"] == 1
+                and all(receipt[field] is None for field in
+                        ("tx_id", "input_index", "op_index"))
+                and type(receipt["result_index"]) is int
+                and receipt["result_index"] == index,
+                "staking reward measured receipt content changed")
 
 
 def run_name(case_id, role, configuration):
@@ -128,8 +168,14 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
         "supply_after", "escrow_before", "escrow_after", "pool_before",
         "pool_after", "total_stake_before", "total_stake_after")}
     expected = expected_emission(amounts["supply_pre_mint"], population > 0)
+    budget_before = amount(value["storage_emission_budget_before"],
+                           "storage_emission_budget_before")
+    budget_after = amount(value["storage_emission_budget_after"],
+                          "storage_emission_budget_after")
     require(amounts["supply_pre_mint"] == Decimal(population * 1000)
             and amounts["amount"] == amounts["paid"] == amounts["credited"] == expected
+            and budget_before == budget_after ==
+                expected_storage_budget(amounts["supply_pre_mint"])
             and amounts["supply_before"] == amounts["supply_pre_mint"] + expected
             and amounts["supply_after"] == amounts["supply_before"]
             and amounts["escrow_before"] == amounts["total_stake_before"] ==
@@ -139,9 +185,15 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
             and amounts["pool_before"] == expected
             and amounts["pool_after"] == 0,
             "staking reward emission or conservation changed")
+    validate_receipts(value["measured_receipts"], population)
     accounts = value["accounts"]
     require(isinstance(accounts, list) and len(accounts) == population,
             "staking reward account population changed")
+    metadata_before = value["validator_metadata_before"]
+    metadata_after = value["validator_metadata_after"]
+    require(isinstance(metadata_before, list) and isinstance(metadata_after, list)
+            and len(metadata_before) == len(metadata_after) == population,
+            "staking reward validator metadata population changed")
     fingerprint_parts = []
     credited = Decimal(0)
     prior_holder = None
@@ -165,6 +217,25 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
         require(stake_before == Decimal(1000)
                 and stake_after == stake_before + share,
                 "staking reward share or final-holder remainder changed")
+        for metadata, expected_stake in ((metadata_before[index], stake_before),
+                                         (metadata_after[index], stake_after)):
+            require(isinstance(metadata, dict) and set(metadata) == {
+                "holder", "ed25519_pubkey", "validator_stake", "bonded_stake",
+                "status", "activation_height", "deactivation_height",
+                "withdrawal_height"}
+                and metadata["holder"] == holder
+                and metadata["ed25519_pubkey"] == edkey
+                and amount(metadata["validator_stake"], "validator_stake") ==
+                    expected_stake
+                and amount(metadata["bonded_stake"], "bonded_stake") ==
+                    expected_stake
+                and metadata["status"] == "Active"
+                and type(metadata["activation_height"]) is int
+                and metadata["activation_height"] == 0
+                and type(metadata["deactivation_height"]) is int
+                and metadata["deactivation_height"] == 0
+                and metadata["withdrawal_height"] is None,
+                "staking reward validator status or transition metadata changed")
         credited += share
     fingerprint = hashlib.sha256("\n".join(fingerprint_parts).encode()).hexdigest()
     require(fingerprint == KEY_FINGERPRINTS[population] and credited == expected,
@@ -179,7 +250,15 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
         require(value["teardown_events"] is None,
                 "probe-off staking reward emitted teardown events")
     return {"sample_key": sample, "repeat_index": repeat_index,
-            "accounts": accounts, "amount": value["amount"],
+            "accounts": accounts,
+            "validator_metadata_before": metadata_before,
+            "validator_metadata_after": metadata_after,
+            "measured_receipts": value["measured_receipts"],
+            "storage_emission_budget_before":
+                value["storage_emission_budget_before"],
+            "storage_emission_budget_after":
+                value["storage_emission_budget_after"],
+            "amount": value["amount"],
             "paid": value["paid"], "credited": value["credited"],
             "supply_pre_mint": value["supply_pre_mint"],
             "supply_before": value["supply_before"],
@@ -194,6 +273,38 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
             "receipts_before": value["receipts_before"],
             "receipts_after": value["receipts_after"],
             "state_before_sha256": before, "state_after_sha256": after}
+
+
+def validate_operation_phases(events):
+    names = [event["name"] for event in events]
+    require(names[0] == "operation_entry" and names[-1] == "operation_exit",
+            "staking reward operation markers are incomplete")
+    input_open = {}
+    input_count = output_count = completed_input = output_depth = 0
+    for event in events[1:-1]:
+        name, thread, os_thread = (event[key] for key in
+                                   ("name", "thread_id", "os_thread_id"))
+        if name == "canonical_input_entry":
+            require(thread not in input_open,
+                    "staking reward canonical input overlapped on one worker")
+            input_open[thread] = os_thread
+            input_count += 1
+        elif name == "canonical_input_exit":
+            require(input_open.pop(thread, None) == os_thread,
+                    "staking reward canonical input exit lacks its worker entry")
+            completed_input += 1
+        elif name == "canonical_output_entry":
+            require(output_count < completed_input,
+                    "staking reward canonical output preceded its input")
+            output_count += 1
+            output_depth += 1
+        elif name == "canonical_output_exit":
+            require(output_depth > 0,
+                    "staking reward canonical output exit lacks an entry")
+            output_depth -= 1
+    require(input_count == completed_input == output_count > 0
+            and not input_open and output_depth == 0,
+            "staking reward canonical phases are missing or unbalanced")
 
 
 def validate_trace(trace, runtime, attempts, os_name):
@@ -215,6 +326,8 @@ def validate_trace(trace, runtime, attempts, os_name):
                 for item in threads["blocking_pool"]}
     allowed = {"fixture_preparation_entry", "fixture_preparation_exit",
                "finite_stack_attempt_start", "finite_stack_attempt_end",
+               "operation_entry", "operation_exit",
+               "postcall_observation_entry", "postcall_observation_exit",
                "compiler_entry", "compiler_exit", "blocking_decode_entry",
                "blocking_decode_exit", "canonical_input_entry",
                "canonical_input_exit", "canonical_output_entry",
@@ -252,11 +365,21 @@ def validate_trace(trace, runtime, attempts, os_name):
                     enumerate(zip(setups, setup_ends, strict=True))),
             "staking reward setup or attempt intervals changed")
     for start, end in zip(starts, ends, strict=True):
-        segment = names[start:end+1]
-        require("fixture_preparation_entry" not in segment
-                and segment.count("canonical_input_entry") >= 1
-                and segment.count("canonical_output_entry") >= 1,
-                "staking reward did not reach its native call boundary")
+        segment = trace["events"][start:end+1]
+        segment_names = [event["name"] for event in segment]
+        require("fixture_preparation_entry" not in segment_names
+                and all(segment_names.count(marker) == 1 for marker in
+                        ("operation_entry", "operation_exit",
+                         "postcall_observation_entry", "postcall_observation_exit")),
+                "staking reward operation or observer markers are missing")
+        operation_start = segment_names.index("operation_entry")
+        operation_end = segment_names.index("operation_exit")
+        observer_start = segment_names.index("postcall_observation_entry")
+        observer_end = segment_names.index("postcall_observation_exit")
+        require(0 < operation_start < operation_end < observer_start
+                < observer_end < len(segment_names) - 1,
+                "staking reward operation and observer intervals overlap")
+        validate_operation_phases(segment[operation_start:operation_end+1])
 
 
 def validate_run(run, bundle, directory):

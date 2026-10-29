@@ -4,8 +4,10 @@ import copy
 import unittest
 from decimal import Decimal
 
-from resource_native_staking_rewards_evidence import (expected_emission, q,
-                                                      validate_observation)
+from resource_native_staking_rewards_evidence import (expected_emission,
+                                                      expected_storage_budget, q,
+                                                      validate_observation,
+                                                      validate_operation_phases)
 
 
 KEYS = (
@@ -29,6 +31,8 @@ def attempt(population):
     emission = expected_emission(Decimal(population * 1000), population > 0)
     credited = Decimal(0)
     accounts = []
+    metadata_before = []
+    metadata_after = []
     for index, (holder, key_index) in enumerate(KEYS[:population]):
         remaining = emission - credited
         share = remaining if index + 1 == population else min(
@@ -37,7 +41,29 @@ def attempt(population):
                          "ed25519_pubkey": bytes([key_index] * 32).hex(),
                          "stake_before": "1000",
                          "stake_after": str(Decimal(1000) + share)})
+        metadata = {"holder": holder,
+                    "ed25519_pubkey": bytes([key_index] * 32).hex(),
+                    "status": "Active", "activation_height": 0,
+                    "deactivation_height": 0, "withdrawal_height": None}
+        metadata_before.append({**metadata, "validator_stake": "1000",
+                                "bonded_stake": "1000"})
+        metadata_after.append({**metadata,
+                               "validator_stake": str(Decimal(1000) + share),
+                               "bonded_stake": str(Decimal(1000) + share)})
         credited += share
+    receipts = []
+    expected_receipts = ([('staking', 'distribute-ordering-reward')]
+                         if population == 0 else
+                         [('token', 'transfer-ordering-reward'),
+                          ('staking', 'distribute-ordering-reward')])
+    for index, (contract, function) in enumerate(expected_receipts):
+        receipts.append({"contract": contract, "function": function,
+                         "status": "Ok", "gas": 100 + index,
+                         "size": 2, "value": "ok", "signer_id": 1,
+                         "payer_signer_id": None, "height": 1,
+                         "tx_id": None, "input_index": None,
+                         "op_index": None, "result_index": index})
+    storage_budget = str(expected_storage_budget(Decimal(population * 1000)))
     return {"case_id": "native_staking_rewards", "configuration": "production",
             "process_role": "target_observed",
             "sample_key": f"population_{population}", "repeat_index": 0, "pid": 7,
@@ -46,9 +72,13 @@ def attempt(population):
                 "population": population, "eligible": population > 0,
                 "amount": str(emission), "paid": str(emission),
                 "credited": str(emission), "accounts": accounts,
+                "validator_metadata_before": metadata_before,
+                "validator_metadata_after": metadata_after,
                 "supply_pre_mint": str(population * 1000),
                 "supply_before": str(Decimal(population * 1000) + emission),
                 "supply_after": str(Decimal(population * 1000) + emission),
+                "storage_emission_budget_before": storage_budget,
+                "storage_emission_budget_after": storage_budget,
                 "escrow_before": str(population * 1000),
                 "escrow_after": str(Decimal(population * 1000) + emission),
                 "pool_before": str(emission), "pool_after": "0",
@@ -60,6 +90,7 @@ def attempt(population):
                 "state_after_sha256": "b" * 64,
                 "state_restored_sha256": "a" * 64,
                 "receipts_before": 10, "receipts_after": 11 if population == 0 else 12,
+                "measured_receipts": receipts,
                 "receipts_restored": 10,
                 "resources_before": 0, "resources_after": 0,
                 "stack_empty": True, "savepoint_restored": True,
@@ -113,11 +144,84 @@ class NativeStakingRewardsEvidenceTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.validate(item)
 
+    def test_rejects_validator_transitions_and_storage_budget_drift(self):
+        baseline = attempt(4)
+        for key, replacement in (("status", "PendingExit"),
+                                 ("activation_height", 1),
+                                 ("deactivation_height", 1),
+                                 ("withdrawal_height", 1),
+                                 ("holder", "ff" * 32),
+                                 ("bonded_stake", "999")):
+            with self.subTest(key=key):
+                item = copy.deepcopy(baseline)
+                item["observation"]["validator_metadata_after"][0][key] = replacement
+                with self.assertRaises(ValueError):
+                    self.validate(item)
+        for key in ("storage_emission_budget_before",
+                    "storage_emission_budget_after"):
+            with self.subTest(key=key):
+                item = copy.deepcopy(baseline)
+                item["observation"][key] = "0"
+                with self.assertRaises(ValueError):
+                    self.validate(item)
+        item = copy.deepcopy(baseline)
+        item["observation"]["validator_metadata_after"].pop()
+        with self.assertRaises(ValueError):
+            self.validate(item)
+
+    def test_rejects_measured_receipt_content_and_order_drift(self):
+        baseline = attempt(4)
+        for key, replacement in (("contract", "staking"),
+                                 ("function", "hold"),
+                                 ("status", "ContractErr"),
+                                 ("gas", 0),
+                                 ("size", 1),
+                                 ("value", ""),
+                                 ("signer_id", 2),
+                                 ("payer_signer_id", 1),
+                                 ("height", 2),
+                                 ("tx_id", 1),
+                                 ("result_index", 1)):
+            with self.subTest(key=key):
+                item = copy.deepcopy(baseline)
+                item["observation"]["measured_receipts"][0][key] = replacement
+                with self.assertRaises(ValueError):
+                    self.validate(item)
+        item = copy.deepcopy(baseline)
+        item["observation"]["measured_receipts"].pop()
+        with self.assertRaises(ValueError):
+            self.validate(item)
+
     def test_zero_branch_and_store_lifecycle_are_distinct(self):
         item = attempt(0)
         item["observation"]["receipts_after"] = 12
         with self.assertRaises(ValueError):
             self.validate(item)
+
+    def test_operation_canonical_phases_reject_missing_reversed_and_cross_attempt(self):
+        def event(name, thread="w1"):
+            return {"name": name, "thread_id": thread,
+                    "os_thread_id": 1 if thread == "w1" else 2}
+
+        first = [event("operation_entry"), event("canonical_input_entry"),
+                 event("canonical_input_exit"), event("canonical_output_entry"),
+                 event("canonical_output_exit", "w2"), event("operation_exit")]
+        validate_operation_phases(first)
+        for changed in (
+            first[:4] + first[5:],
+            first[:2] + first[3:],
+            [first[0], first[3], first[1], first[2], first[4], first[5]],
+            first[:4] + [first[5]],
+            [first[0], event("canonical_input_entry", "w2"),
+             first[2], first[3], first[4], first[5]],
+        ):
+            with self.subTest(changed=[item["name"] for item in changed]):
+                with self.assertRaises(ValueError):
+                    validate_operation_phases(changed)
+        second = [event("operation_entry"), event("canonical_output_exit"),
+                  event("operation_exit")]
+        with self.assertRaises(ValueError):
+            validate_operation_phases(second)
         item = attempt(0)
         item["observation"]["teardown_events"] = events(2)
         with self.assertRaises(ValueError):
