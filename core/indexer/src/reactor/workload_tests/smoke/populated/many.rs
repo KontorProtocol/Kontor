@@ -86,7 +86,7 @@ pub(super) async fn block(
     ensure!(instructions.len() == funding.len() * 2);
     let mut ordered = Vec::new();
     let mut reveals = Vec::new();
-    for (funding, ops) in funding.into_iter().zip(instructions.chunks_exact(2)) {
+    for (funding, ops) in funding.into_iter().zip(instructions.as_chunks::<2>().0) {
         let (commit, reveal, _) = signed_instructions(client, key, funding, ops.to_vec()).await?;
         ordered.extend([commit, reveal.clone()]);
         reveals.push(reveal);
