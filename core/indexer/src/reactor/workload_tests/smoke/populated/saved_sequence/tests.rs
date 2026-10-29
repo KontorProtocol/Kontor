@@ -4,6 +4,7 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
+use bitcoin::absolute::LockTime;
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::Hash;
 use bitcoin::{Block as BitcoinBlock, ScriptBuf};
@@ -276,8 +277,24 @@ fn workload_saved_sequence_rejects_reused_initial_funding() -> Result<()> {
     let path = directory.path().join("block-001.bin");
     let mut second: BitcoinBlock = deserialize(&fs::read(&path)?)?;
     second.txdata[1].input[0].previous_output = first.txdata[1].input[0].previous_output;
+    // The first operation is repeated across blocks, so changing only funding
+    // can recreate the first commit/reveal and hit duplicate-ID checks instead.
+    second.txdata[1].lock_time = LockTime::from_consensus(
+        first.txdata[1]
+            .lock_time
+            .to_consensus_u32()
+            .checked_add(1)
+            .context("control lock time overflow")?,
+    );
     second.txdata[2].input[0].previous_output.txid = second.txdata[1].compute_txid();
     let reveal_txid = second.txdata[2].compute_txid();
+    ensure!(
+        first
+            .txdata
+            .iter()
+            .all(|transaction| transaction.compute_txid() != reveal_txid),
+        "funding control duplicated a prior transaction"
+    );
     let reserved = second.txdata[0].input[0]
         .witness
         .iter()
