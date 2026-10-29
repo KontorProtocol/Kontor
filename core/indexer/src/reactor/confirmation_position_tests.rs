@@ -14,6 +14,7 @@ use bitcoin::{
 use indexer_types::{Block, Inst, InstKind, Insts, serialize};
 use libsql::{Connection, Value, params};
 use malachitebft_engine::node::NodeRef;
+use testlib::sample_provenance;
 use tokio::time::timeout;
 
 use super::aggregate_error_tests::reactor;
@@ -27,7 +28,6 @@ use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{
     ContractAddress, Decimal, GenesisValidator, Runtime, TransactionContext, from_wave_expr,
-    native_provenance,
 };
 use crate::test_utils::{
     PublicKey, build_inscription, new_mock_block_hash, new_mock_transaction, sign_script_spend,
@@ -209,7 +209,7 @@ async fn run_case(batched: bool) -> Result<()> {
             runtime.core_payment(),
             "confirmation-fixture",
             include_bytes!("../../../../test-contracts/binaries/error_test.wasm.br"),
-            &native_provenance()?,
+            &sample_provenance(),
         )
         .await?;
     let address = ContractAddress {
