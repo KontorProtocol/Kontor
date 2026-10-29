@@ -18,7 +18,8 @@ use super::{
 use crate::bitcoin_client::client::RegtestRpc;
 use crate::bls::taproot_derivation_path;
 use crate::database::Writer;
-use crate::database::queries::{get_confirmation_position, get_identity, get_transaction_by_txid};
+use crate::database::confirmation::get_confirmation_position;
+use crate::database::queries::{get_identity, get_transaction_by_txid};
 use crate::reactor::create_runtime_executor;
 use crate::reg_tester::{derive_taproot_keypair_from_seed, workload_bitcoin};
 use crate::runtime::token::api as token;
