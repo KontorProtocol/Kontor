@@ -67,14 +67,23 @@ pub(super) async fn prepare(runtime: &mut Runtime, entries: usize) -> Result<Con
     Ok(contract)
 }
 
-fn page(round: usize, count: usize) -> (usize, bool) {
+fn page(round: usize, count: usize, rounds: usize) -> (usize, bool) {
     let pages = count.div_ceil(PAGE_SIZE);
+    if pages * 2 > rounds + 1 {
+        let descending = round % 2 == 1;
+        let samples = if descending {
+            rounds / 2
+        } else {
+            rounds.div_ceil(2)
+        };
+        return ((round / 2) * (pages - 1) / (samples - 1), descending);
+    }
     let position = round % (2 * pages);
     (position % pages, position >= pages)
 }
 
-pub(super) fn call(round: usize, count: usize) -> String {
-    let (page, descending) = page(round, count);
+pub(super) fn call(round: usize, count: usize, rounds: usize) -> String {
+    let (page, descending) = page(round, count, rounds);
     let cursor = (page > 0).then(|| {
         key(if descending {
             count - page * PAGE_SIZE
@@ -94,8 +103,8 @@ fn entries(indices: impl Iterator<Item = usize>) -> Vec<Entry> {
         .collect()
 }
 
-pub(super) fn check(round: usize, count: usize, value: &str) -> Result<()> {
-    let (page, descending) = page(round, count);
+pub(super) fn check(round: usize, count: usize, rounds: usize, value: &str) -> Result<()> {
+    let (page, descending) = page(round, count, rounds);
     let offset = page * PAGE_SIZE;
     let expected = if descending {
         let end = count - offset;
@@ -125,4 +134,28 @@ pub(super) async fn check_boundaries(
         ensure!(from_wave_expr::<Vec<Entry>>(&value) == expected);
     }
     Ok(())
+}
+
+#[test]
+fn workload_pagination_samples_both_ends_and_directions() {
+    assert_eq!(
+        (0..5).map(|round| page(round, 257, 5)).collect::<Vec<_>>(),
+        [(0, false), (1, false), (2, false), (0, true), (1, true)]
+    );
+    assert_eq!(
+        (0..5)
+            .map(|round| page(round, 10_000, 5))
+            .collect::<Vec<_>>(),
+        [(0, false), (0, true), (39, false), (78, true), (78, false)]
+    );
+    assert_eq!(page(48, 100_000, 50), (781, false));
+    assert_eq!(page(49, 100_000, 50), (781, true));
+    assert_eq!(
+        call(4, 10_000, 5),
+        "entries-page(some(\"entry-00009983\"), 128, false)"
+    );
+    assert_eq!(
+        call(3, 10_000, 5),
+        "entries-page(some(\"entry-00000016\"), 128, true)"
+    );
 }

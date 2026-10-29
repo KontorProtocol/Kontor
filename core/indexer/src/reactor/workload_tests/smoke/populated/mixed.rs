@@ -210,7 +210,8 @@ impl MixedWorkload {
             "transfers": self.rounds * 8,
             "storage": self.rounds * 5,
             "pagination": if self.paginated.is_some() { self.rounds } else { 0 },
-            "nested_calls": self.rounds * 3,
+            "proxy_calls": self.rounds * 3,
+            "nested_receipts": self.rounds * 5 - files,
             "staking": self.rounds * 2 - files,
             "file_registrations": files,
             "hashes": self.rounds * 2,
@@ -235,7 +236,12 @@ impl MixedWorkload {
                     9 => (self.counter.clone(), format!("fill-blob({BLOB_BYTES})")),
                     10 => self.paginated.as_ref().map_or_else(
                         || (self.counter.clone(), "get-blob()".into()),
-                        |(contract, count)| (contract.clone(), pagination::call(round, *count)),
+                        |(contract, count)| {
+                            (
+                                contract.clone(),
+                                pagination::call(round, *count, self.rounds),
+                            )
+                        },
                     ),
                     11..=12 => (
                         self.failed.clone(),
@@ -383,6 +389,7 @@ impl MixedWorkload {
                     pagination::check(
                         round,
                         self.paginated.as_ref().context("missing page contract")?.1,
+                        self.rounds,
                         value,
                     )?;
                 }
