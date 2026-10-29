@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{Result, ensure};
 use bitcoin::key::Secp256k1;
@@ -29,8 +30,16 @@ fn workload_timed_schedule_preserves_rates_and_boundary_order() -> Result<()> {
             intervals: 2,
         })?;
         ensure!(schedule.funding_counts()? == [transactions, transactions]);
-        ensure!(schedule.required_before(600)? == batches + simulations);
-        let boundary = schedule.required_before(600)?;
+        ensure!(schedule.required_before(Duration::from_secs(600))? == batches + simulations);
+        let boundary = schedule.required_before(Duration::from_secs(600))?;
+        ensure!(
+            schedule.required_before(Duration::from_secs(600) + Duration::from_nanos(1))?
+                == boundary + 3
+        );
+        ensure!(
+            schedule.required_before(Duration::from_secs(600) - Duration::from_nanos(1))?
+                == boundary
+        );
         ensure!(matches!(
             schedule.event(boundary)?.action,
             Action::Block { block: 0 }
@@ -81,8 +90,12 @@ fn workload_timed_schedule_preserves_rates_and_boundary_order() -> Result<()> {
                 .count()
                 == 2 * (batches + 1)
         );
-        ensure!(schedule.required_before(1_200)? == schedule.events.len() - 1);
-        ensure!(schedule.required_before(1_201).is_err());
+        ensure!(schedule.required_before(Duration::from_secs(1_200))? == schedule.events.len() - 1);
+        ensure!(
+            schedule
+                .required_before(Duration::from_secs(1_201))
+                .is_err()
+        );
         ensure!(schedule.event(schedule.events.len()).is_err());
         let encoded = serde_json::to_vec(&schedule)?;
         let decoded: Schedule = serde_json::from_slice(&encoded)?;
@@ -112,7 +125,7 @@ fn workload_timed_schedule_rejects_missing_reordered_or_reanchored_work() -> Res
             ..
         }
     ));
-    ensure!(original.required_before(600)? == 6 + 40 + 600);
+    ensure!(original.required_before(Duration::from_secs(600))? == 6 + 40 + 600);
     for change in 0..8 {
         let mut invalid = original.clone();
         match change {

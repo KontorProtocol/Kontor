@@ -1,10 +1,12 @@
 use std::ops::Range;
+use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::super::ANCHOR_HEIGHT;
 
+mod dispatch;
 mod tests;
 
 const BLOCK_SECONDS: u64 = 600;
@@ -231,15 +233,19 @@ impl Schedule {
             .collect())
     }
 
-    pub(super) fn required_before(&self, seconds: u64) -> Result<usize> {
+    pub(super) fn required_before(&self, elapsed: Duration) -> Result<usize> {
         self.validate()?;
+        self.required_before_validated(elapsed)
+    }
+
+    fn required_before_validated(&self, elapsed: Duration) -> Result<usize> {
         ensure!(
-            seconds <= self.horizon_seconds,
+            elapsed <= Duration::from_secs(self.horizon_seconds),
             "workload event horizon exhausted"
         );
         Ok(self
             .events
-            .partition_point(|event| event.at_seconds < seconds))
+            .partition_point(|event| Duration::from_secs(event.at_seconds) < elapsed))
     }
 
     pub(super) fn event(&self, ordinal: usize) -> Result<&Event> {
