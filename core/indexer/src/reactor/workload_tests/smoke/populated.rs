@@ -826,6 +826,25 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                         expected_projection.as_deref(),
                     )?;
                 }
+                if delivery.batched() {
+                    let effects = mixed
+                        .as_ref()
+                        .map(|mixed| mixed.effects(layout))
+                        .transpose()?
+                        .unwrap_or_default();
+                    let anchor_rows = receipts(&trial.db_conn(), trial.last_height).await?;
+                    let before_checks = database_projection(&trial.db_conn()).await?;
+                    model = model
+                        .check_batch(&mut trial, &anchor_rows, &txids, &effects)
+                        .await?;
+                    let duplicate = model
+                        .check_batch(&mut trial, &anchor_rows, &txids, &effects)
+                        .await
+                        .err()
+                        .context("batch accounting accepted a duplicate charge")?;
+                    ensure!(duplicate.to_string() == "paid execution payer balance mismatch");
+                    ensure!(database_projection(&trial.db_conn()).await? == before_checks);
+                }
                 apply(&mut trial, block.clone()).await?;
                 let projection = database_projection(&trial.db_conn()).await?;
                 for (index, txid) in txids.iter().enumerate() {
@@ -925,7 +944,11 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                     ensure!(state(&mut trial.runtime, &addresses[1]).await? == [0, 0, 0, 0]);
                     PaidEffects::default()
                 };
-                model = model.check(&mut trial, &rows, &txids, &effects).await?;
+                model = if delivery.batched() {
+                    model.check_lifecycle(&mut trial, &rows).await?
+                } else {
+                    model.check(&mut trial, &rows, &txids, &effects).await?
+                };
                 ensure!(
                     database_projection(&trial.db_conn()).await? == projection,
                     "observations mutated state"

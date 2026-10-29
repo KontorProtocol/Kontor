@@ -233,18 +233,42 @@ impl Before {
         txids: &[String],
         effects: &PaidEffects,
     ) -> Result<Self> {
-        let height = reactor.last_height;
+        self.account_paid(&mut reactor.runtime, rows, txids, effects)
+            .await?
+            .check_lifecycle(reactor, rows)
+            .await
+    }
+
+    pub(super) async fn check_batch(
+        &self,
+        reactor: &mut Reactor<RuntimeExecutor>,
+        rows: &[ResultRow],
+        txids: &[String],
+        effects: &PaidEffects,
+    ) -> Result<Self> {
         ensure!(
-            height
-                == self
-                    .height
-                    .checked_add(1)
-                    .context("oracle height overflow")?
+            reactor.last_height == self.height,
+            "batch changed canonical height"
         );
-        let hash = reactor.last_hash.context("missing applied block hash")?;
+        let next = self
+            .account_paid(&mut reactor.runtime, rows, txids, effects)
+            .await?;
+        ensure!(token::total_supply(&mut reactor.runtime).await? == next.supply);
+        ensure!(escrow(&mut reactor.runtime, &staking_address()).await? == next.staking_escrow);
+        ensure!(escrow(&mut reactor.runtime, &storage_address()).await? == self.storage_escrow);
+        ensure!(reward_integer(&mut reactor.runtime, 14).await? == self.reward_index);
+        ensure!(reward_integer(&mut reactor.runtime, 16).await? == self.reward_remainder);
+        Ok(next)
+    }
+
+    async fn account_paid(
+        &self,
+        runtime: &mut Runtime,
+        rows: &[ResultRow],
+        txids: &[String],
+        effects: &PaidEffects,
+    ) -> Result<Self> {
         let mut next = self.clone();
-        next.height = height;
-        let runtime = &mut reactor.runtime;
         let mut roots = Vec::new();
         let mut transaction_ids = BTreeSet::new();
         for txid in txids {
@@ -321,7 +345,8 @@ impl Before {
                 == sub_decimal(
                     sub_decimal(sub_decimal(self.payer_balance, fee)?, effects.transferred)?,
                     effects.payer_staked
-                )?
+                )?,
+            "paid execution payer balance mismatch"
         );
         next.payer_balance = sub_decimal(
             sub_decimal(sub_decimal(self.payer_balance, fee)?, effects.transferred)?,
@@ -329,7 +354,34 @@ impl Before {
         )?;
         next.burner = add_decimal(self.burner, fee)?;
         ensure!(balance(runtime, HolderRef::Burner).await? == next.burner);
-        let supply = sub_decimal(self.supply, fee)?;
+        next.supply = sub_decimal(self.supply, fee)?;
+        next.staking_escrow = add_decimal(self.staking_escrow, effects.staked)?;
+        Ok(next)
+    }
+
+    pub(super) async fn check_lifecycle(
+        &self,
+        reactor: &mut Reactor<RuntimeExecutor>,
+        rows: &[ResultRow],
+    ) -> Result<Self> {
+        let height = reactor.last_height;
+        ensure!(
+            height
+                == self
+                    .height
+                    .checked_add(1)
+                    .context("oracle height overflow")?
+        );
+        let hash = reactor.last_hash.context("missing applied block hash")?;
+        let mut next = self.clone();
+        next.height = height;
+        let runtime = &mut reactor.runtime;
+        ensure!(
+            balance(runtime, HolderRef::XOnlyPubkey(self.payer.clone())).await?
+                == self.payer_balance
+        );
+        ensure!(balance(runtime, HolderRef::Burner).await? == self.burner);
+        let supply = self.supply;
         let scheduled = div_decimal(
             div_decimal(
                 mul_decimal(supply, Decimal::from("5"))?,
@@ -465,11 +517,10 @@ impl Before {
         ensure!(changed.activated == activated && changed.deactivated == deactivated);
         ensure!(
             escrow(runtime, &staking_address()).await?
-                == add_decimal(add_decimal(self.staking_escrow, ordering)?, effects.staked)?
+                == add_decimal(self.staking_escrow, ordering)?
         );
 
-        next.staking_escrow =
-            add_decimal(add_decimal(self.staking_escrow, ordering)?, effects.staked)?;
+        next.staking_escrow = add_decimal(self.staking_escrow, ordering)?;
         let index_scale = BigInt::from(10u64).pow(36);
         let weight_scale = BigInt::from(10u64).pow(18);
         let step = atoms(budget) * &index_scale / (&self.omega * &weight_scale);
