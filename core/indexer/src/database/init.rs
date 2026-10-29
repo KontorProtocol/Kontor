@@ -3,6 +3,8 @@ use std::path::Path;
 use libsql::{Connection, Error, TransactionBehavior};
 use tokio::fs;
 
+use super::confirmation::initialize_confirmation_metadata;
+
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const CRYPTO_LIB: &[u8] = include_bytes!("../../sqlean-0.28.5/macos-arm64/crypto.dylib");
 
@@ -47,6 +49,7 @@ pub async fn initialize_database(data_dir: &Path, conn: &libsql::Connection) -> 
     // does the one-time VACUUM conversion (called from the prune-enabled path).
     conn.query("PRAGMA auto_vacuum = INCREMENTAL;", ()).await?;
     conn.execute_batch(CREATE_SCHEMA).await?;
+    initialize_confirmation_metadata(conn).await?;
     conn.execute(CREATE_CONTRACT_STATE_TRIGGER, ()).await?;
     ensure_current_state(conn).await?;
     conn.query("PRAGMA journal_mode = WAL;", ()).await?;
