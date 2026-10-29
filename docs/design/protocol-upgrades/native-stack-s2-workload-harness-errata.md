@@ -549,3 +549,59 @@ required. Parent and both independent reviewers accepted this evidence and docum
 including Interlink receipt `800ee73f8cafc2cdcf55f0224ca97624`. Historical binary
 identity, commands and terminal exit codes are recorded parent observations
 consistent with the logs; reviewers did not rerun the shared binary after release.
+
+
+## Multiple inputs and distinct BLS signers
+
+The signed shape variants reuse the 100-operation mixed workload, its 125
+receipts, validator and storage lifecycle checks, pruning, and two independent
+snapshot restores. Both have two distinct Bitcoin identities and one fee payer.
+The direct variant puts 50 executable operations in each of two inputs. A
+Sponsor directive at the end of input zero pays for input one; it emits no
+contract receipt. The aggregate variant puts all 100 operations in one input,
+alternates two BLS signers, and opts every operation into publisher sponsorship.
+
+The fixture signs every commit and every reveal input, requires actual Bitcoin
+mempool acceptance before broadcast, and mines the transactions in a fixed order.
+The raw confirmation ordinal is three for the two-commit direct variant and two
+for the one-commit aggregate variant. Decoded instructions, signatures, Bitcoin
+input keys, stored confirmation metadata and every receipt position are checked.
+The test checks each operation's actual signer and payer separately, including
+nested receipts. Each signer's transfers and bond follow its own operations.
+The secondary balance loses exactly its transfers and stake, with no gas charge;
+the primary pays all gas and only its own transfers and stake. Total staking
+escrow and supply continue to reconcile independently.
+
+For aggregates, fixture nonces start at 7 and 19 and must finish at 57 and 69.
+Deterministic contract errors still consume their signer's nonce. BLS registration
+uses Runtime::register_bls_key with valid RegistrationProof values; nonce seeds
+use advance_nonce, and Core funds the secondary with 100 tokens. These are
+prepared state, not signed registration, issuance or nonce-initialization
+transactions. The contract fixtures are also Core-published during setup.
+
+These cases do not establish unsponsored aggregate coverage, the 10,000-operation
+aggregate boundary, larger populations, cold compilation, arrival/load behavior
+or full cross-platform qualification. Final source `a8ccf3e8eece49a41c8fbffdc46d27de8e83eca4`, based on
+`0dd5d8227d1d7e0ac70b61164cf38ee54c431268`, passed all three source reviews,
+including Interlink receipt `7de9051deea45f05e3e01cb7006097ed`. The locked offline
+two-job build passed (reported 1m00s). Binary SHA-256:
+`f6b6e82abc524f219c4453cd0a014ee237c8c759bc9d91765f7138f938c002b1`.
+All eight modes passed on this binary in 549.88 seconds, including the six
+existing delivery modes. Each case executes twice from independent snapshots.
+These durations include setup and are not performance qualification.
+
+The aggregate block contained three Bitcoin transactions, 7,951 bytes and
+weight 9,319. The two-input block contained four Bitcoin transactions,
+7,897 bytes and weight 9,799. Both carry 100 executable operations; the direct
+input instruction counts are 51 and 50 because Sponsor is a directive.
+Final Clippy still reports exactly six inherited S2 findings and no workload
+finding. Their separate native-branch fixes await integration; this is not a
+green merge candidate and no lint has been suppressed.
+
+The ignored `.build-cache/workload-reconcile/shapes-validation.json` records
+source/binary identity, terminal results, exact shapes and hashes of three logs.
+The raw block hashes identify this regtest run, not frozen qualification inputs.
+Parent and both independent reviewers accepted this evidence and documentation,
+including Interlink receipt `f45d28841b53f7fc3eebc17141ad37a0`. Historical binary
+identity, commands and terminal exit codes are parent-recorded observations
+consistent with the logs; reviewers did not rerun the shared binary after release.
