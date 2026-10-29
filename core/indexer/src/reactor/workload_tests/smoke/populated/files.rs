@@ -127,6 +127,10 @@ impl FileWorkload {
         })
     }
 
+    pub(super) fn len(&self) -> usize {
+        self.agreements.len()
+    }
+
     pub(super) fn call(&self, round: usize) -> String {
         api::wave::create_agreement_call_expr(self.agreements[round].descriptor.clone())
     }

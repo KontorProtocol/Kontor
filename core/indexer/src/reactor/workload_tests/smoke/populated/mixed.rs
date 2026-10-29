@@ -1,8 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, ensure};
 use bitcoin::Network;
 use indexer_types::{ContractAddress, Inst, InstKind, OpStatus, ResultRow};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::super::{ANCHOR_HEIGHT, GAS_LIMIT, SMOKE_HEIGHT, test_provenance};
@@ -83,7 +84,7 @@ pub(super) struct MixedWorkload {
     crypto: ContractAddress,
     recipient: u64,
     rounds: usize,
-    paginated: Option<ContractAddress>,
+    paginated: Option<(ContractAddress, usize)>,
     files: Option<FileWorkload>,
 }
 
@@ -172,16 +173,32 @@ impl MixedWorkload {
         })
     }
 
-    pub(super) async fn with_pagination(mut self, runtime: &mut Runtime) -> Result<Self> {
-        ensure!(self.rounds == 5);
-        self.paginated = Some(pagination::prepare(runtime).await?);
+    pub(super) async fn with_pagination(
+        mut self,
+        runtime: &mut Runtime,
+        entries: usize,
+    ) -> Result<Self> {
+        self.paginated = Some((pagination::prepare(runtime, entries).await?, entries));
         Ok(self)
     }
 
-    pub(super) async fn with_files(mut self, runtime: &mut Runtime) -> Result<Self> {
-        ensure!(self.rounds == 5);
-        self.files = Some(FileWorkload::prepare(runtime, self.rounds).await?);
+    pub(super) async fn with_files(mut self, runtime: &mut Runtime, count: usize) -> Result<Self> {
+        ensure!(count > 0 && count <= self.rounds * 2);
+        self.files = Some(FileWorkload::prepare(runtime, count).await?);
         Ok(self)
+    }
+
+    fn file_index(&self, round: usize, slot: usize) -> Option<usize> {
+        let count = self.files.as_ref()?.len();
+        let doubled_rounds = count.saturating_sub(self.rounds);
+        // Descriptors must follow execution order, since creation assigns the
+        // next ledger index and that index affects the collateral calculation.
+        let index = match slot {
+            16 if round < doubled_rounds => round * 2,
+            17 => round + round.min(doubled_rounds),
+            _ => return None,
+        };
+        (index < count).then_some(index)
     }
 
     pub(super) async fn check_file_lifecycle(
@@ -193,6 +210,22 @@ impl MixedWorkload {
             files.check(runtime, rows).await?;
         }
         Ok(())
+    }
+
+    pub(super) fn operation_counts(&self) -> Value {
+        let files = self.files.as_ref().map_or(0, FileWorkload::len);
+        json!({
+            "operations": self.rounds * 20,
+            "transfers": self.rounds * 8,
+            "storage": self.rounds * 5,
+            "pagination": if self.paginated.is_some() { self.rounds } else { 0 },
+            "nested_calls": self.rounds * 3,
+            "staking": self.rounds * 2 - files,
+            "file_registrations": files,
+            "hashes": self.rounds * 2,
+            "successes": self.rounds * 18,
+            "failures_after_write": self.rounds * 2,
+        })
     }
 
     pub(super) fn instructions(&self) -> Vec<Inst> {
@@ -211,16 +244,19 @@ impl MixedWorkload {
                     9 => (self.counter.clone(), format!("fill-blob({BLOB_BYTES})")),
                     10 => self.paginated.as_ref().map_or_else(
                         || (self.counter.clone(), "get-blob()".into()),
-                        |contract| (contract.clone(), pagination::call(round)),
+                        |(contract, count)| (contract.clone(), pagination::call(round, *count)),
                     ),
                     11..=12 => (
                         self.failed.clone(),
                         "set-blob-then-fail(\"must roll back\")".into(),
                     ),
                     13..=15 => (self.proxy.clone(), "increment()".into()),
-                    17 if self.files.is_some() => (
+                    16..=17 if self.file_index(round, slot).is_some() => (
                         storage_address(),
-                        self.files.as_ref().expect("file workload").call(round),
+                        self.files
+                            .as_ref()
+                            .expect("file workload")
+                            .call(self.file_index(round, slot).expect("file index")),
                     ),
                     16..=17 => (
                         staking_address(),
@@ -249,7 +285,9 @@ impl MixedWorkload {
         let indices = (0..self.rounds * 20).filter(|index| layout.signer(*index) == signer);
         let transfers = indices.clone().filter(|index| index % 20 <= 7).count();
         let stakes = indices
-            .filter(|index| index % 20 == 16 || (index % 20 == 17 && self.files.is_none()))
+            .filter(|index| {
+                matches!(index % 20, 16..=17) && self.file_index(index / 20, index % 20).is_none()
+            })
             .count();
         Ok((
             mul_decimal(
@@ -270,7 +308,9 @@ impl MixedWorkload {
             payer_staked,
             staked: mul_decimal(
                 Decimal::from("0.001"),
-                Decimal::try_from((self.rounds * if self.files.is_some() { 1 } else { 2 }) as u64)?,
+                Decimal::try_from(
+                    (self.rounds * 2 - self.files.as_ref().map_or(0, FileWorkload::len)) as u64,
+                )?,
             )?,
         })
     }
@@ -285,7 +325,7 @@ impl MixedWorkload {
         let payer = layout.payer();
         ensure!(
             roots.len() == self.rounds * 20
-                && all.len() == self.rounds * if self.files.is_some() { 24 } else { 25 }
+                && all.len() == self.rounds * 25 - self.files.as_ref().map_or(0, FileWorkload::len)
         );
         let conn = runtime.get_storage_conn();
         let staking_id = get_contract_id_from_address(&conn, &staking_address())
@@ -300,7 +340,9 @@ impl MixedWorkload {
             let (tx_index, input_index, op_index) = layout.position(index)?;
             let slot = index % 20;
             let round = index / 20;
-            let nested = matches!(slot, 13..=16) || (slot == 17 && self.files.is_none());
+            let file_index = self.file_index(round, slot);
+            let nested =
+                matches!(slot, 13..=15) || (matches!(slot, 16..=17) && file_index.is_none());
             ensure!(
                 root.height == SMOKE_HEIGHT
                     && root.tx_index == Some(tx_index)
@@ -343,10 +385,15 @@ impl MixedWorkload {
                                 .paginated
                                 .as_ref()
                                 .context("missing page contract")?
+                                .0
                                 .to_string()
                             && root.func == "entries-page"
                     );
-                    pagination::check(round, value)?;
+                    pagination::check(
+                        round,
+                        self.paginated.as_ref().context("missing page contract")?.1,
+                        value,
+                    )?;
                 }
                 8..=10 => {
                     ensure!(root.contract == self.counter.to_string());
@@ -372,7 +419,7 @@ impl MixedWorkload {
                         && root.func == "fallback"
                         && value.is_empty()
                 ),
-                17 if self.files.is_some() => {
+                16..=17 if file_index.is_some() => {
                     ensure!(
                         root.contract == storage_address().to_string()
                             && root.func == "create-agreement"
@@ -380,7 +427,7 @@ impl MixedWorkload {
                     self.files
                         .as_ref()
                         .context("missing file workload")?
-                        .check_receipt(round, value)?;
+                        .check_receipt(file_index.context("missing file index")?, value)?;
                 }
                 16..=17 => {
                     ensure!(
@@ -482,14 +529,25 @@ impl MixedWorkload {
                     Decimal::try_from((self.rounds * 8) as u64)?
                 )?)
         );
-        for (signer, expected_stake) in expected_stakes {
-            let stake = staking::get_stake(runtime, &HolderRef::SignerId(signer).to_string())
-                .await?
-                .context("missing mixed signer bond")?;
-            ensure!(stake.stake == expected_stake && stake.withdrawal_height.is_none());
+        for signer in roots
+            .iter()
+            .map(|row| row.signer_id)
+            .collect::<BTreeSet<_>>()
+        {
+            let stake =
+                staking::get_stake(runtime, &HolderRef::SignerId(signer).to_string()).await?;
+            if let Some(expected_stake) = expected_stakes.get(&signer) {
+                let stake = stake.context("missing mixed signer bond")?;
+                ensure!(stake.stake == *expected_stake && stake.withdrawal_height.is_none());
+            } else {
+                ensure!(
+                    stake.is_none(),
+                    "file-only signer unexpectedly acquired a bond"
+                );
+            }
         }
-        if let Some(contract) = &self.paginated {
-            pagination::check_boundaries(runtime, contract).await?;
+        if let Some((contract, count)) = &self.paginated {
+            pagination::check_boundaries(runtime, contract, *count).await?;
         }
         Ok(())
     }

@@ -28,6 +28,7 @@ use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{ComponentCache, Decimal, Runtime, Storage, TransactionContext};
 
 mod batch;
+mod configuration;
 mod files;
 mod many;
 mod mixed;
@@ -38,6 +39,7 @@ mod shapes;
 mod simulation;
 
 use batch::BatchProof;
+use configuration::MixedConfig;
 use mixed::{MixedLayout, MixedWorkload};
 use oracle::{PaidEffects, root_receipts};
 use pruning::PruningProof;
@@ -55,6 +57,7 @@ enum Delivery {
     MixedAggregate,
     MixedPagination,
     MixedFiles,
+    Configured(MixedConfig),
 }
 
 impl Delivery {
@@ -66,6 +69,15 @@ impl Delivery {
             | Self::MixedPagination
             | Self::MixedFiles => Some(5),
             Self::MixedTransactions(count) => Some(count / 10),
+            Self::Configured(config) => Some(config.transactions / 10),
+            _ => None,
+        }
+    }
+
+    fn transaction_count(self) -> Option<usize> {
+        match self {
+            Self::MixedTransactions(count) => Some(count),
+            Self::Configured(config) => Some(config.transactions),
             _ => None,
         }
     }
@@ -332,10 +344,9 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let mined = client
         .generate_to_address(
             ANCHOR_HEIGHT
-                - u64::from(matches!(
-                    delivery,
-                    Delivery::MixedTransactions(_) | Delivery::MixedMultiInput
-                )),
+                - u64::from(
+                    delivery.transaction_count().is_some() || delivery == Delivery::MixedMultiInput,
+                ),
             &address.to_string(),
         )
         .await?;
@@ -347,7 +358,7 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
         },
         funding_block.txdata[0].output[0].clone(),
     );
-    let fundings = if let Delivery::MixedTransactions(count) = delivery {
+    let fundings = if let Some(count) = delivery.transaction_count() {
         many::fund(&client, &key, &address, funding.clone(), count).await?
     } else if delivery == Delivery::MixedMultiInput {
         many::fund_to(
@@ -467,7 +478,7 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     let layout = shape_signers.as_ref().map_or(
         MixedLayout::Single {
             payer,
-            operations_per_transaction: if matches!(delivery, Delivery::MixedTransactions(_)) {
+            operations_per_transaction: if delivery.transaction_count().is_some() {
                 2
             } else {
                 100
@@ -478,19 +489,30 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     ensure!(layout.payer() == payer);
     let mixed = if let Some(rounds) = delivery.mixed_rounds() {
         let workload = MixedWorkload::prepare(&mut history.runtime, payer, rounds).await?;
-        let workload = if matches!(delivery, Delivery::MixedPagination | Delivery::MixedFiles) {
-            workload.with_pagination(&mut history.runtime).await?
+        let (entries, files) = match delivery {
+            Delivery::MixedPagination => (Some(257), 0),
+            Delivery::MixedFiles => (Some(257), 5),
+            Delivery::Configured(config) => (Some(config.live_keys), config.new_files),
+            _ => (None, 0),
+        };
+        let workload = if let Some(entries) = entries {
+            workload
+                .with_pagination(&mut history.runtime, entries)
+                .await?
         } else {
             workload
         };
-        Some(if delivery == Delivery::MixedFiles {
-            workload.with_files(&mut history.runtime).await?
+        Some(if files > 0 {
+            workload.with_files(&mut history.runtime, files).await?
         } else {
             workload
         })
     } else {
         None
     };
+    if let Some(mixed) = &mixed {
+        eprintln!("workload_operation_mix={}", mixed.operation_counts());
+    }
     let projection_before = database_projection(&history.db_conn()).await?;
     let pruning = PruningProof::capture(&history.db_conn(), 89, 96).await?;
     let before = oracle::Before::capture(
@@ -518,7 +540,7 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
                     .instructions(),
             )
             .await?
-    } else if matches!(delivery, Delivery::MixedTransactions(_)) {
+    } else if delivery.transaction_count().is_some() {
         many::block(
             &client,
             &key,
@@ -554,7 +576,7 @@ async fn replay(config: PopulationConfig, delivery: Delivery) -> Result<()> {
     };
     for (index, (decoded, reveal)) in block.transactions.iter().zip(&reveals).enumerate() {
         ensure!(decoded.index == raw_position(index)? && decoded.txid == reveal.compute_txid());
-        if matches!(delivery, Delivery::MixedTransactions(_)) {
+        if delivery.transaction_count().is_some() {
             ensure!(decoded.inputs.len() == 1 && decoded.inputs[0].insts.ops.len() == 2);
         }
         if let Some(shape_signers) = &shape_signers {
