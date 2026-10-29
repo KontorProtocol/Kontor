@@ -1,7 +1,6 @@
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use bitcoin::hashes::Hash;
 use indexer_types::{Block, BlockRow, Event, OpWithResult};
 use metrics::{counter, gauge};
 use tracing::{debug, info, warn};
@@ -14,21 +13,7 @@ use crate::database::queries::{
     insert_block_execution_usage, insert_transaction, select_block_at_height, select_block_latest,
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
-use crate::runtime::{
-    filestorage::api::{
-        accrue_storage_rewards, expire_challenges, generate_challenges_for_block,
-        record_block_root, settle_expired_challenges,
-    },
-    staking::{
-        address as staking_address,
-        api::{
-            distribute_ordering_reward, process_pending_validators,
-            wave::{has_reward_recipients_call_expr, has_reward_recipients_parse_return_expr},
-        },
-    },
-    token::api::mint_emission,
-    wit::Signer,
-};
+use crate::protocol::v1::lifecycle;
 use crate::test_utils::new_mock_block_hash;
 
 use super::Reactor;
@@ -332,69 +317,10 @@ impl<E: Executor> Reactor<E> {
     /// Run block lifecycle operations: challenge expiry/generation and epoch transitions.
     async fn run_block_lifecycle(&mut self, block: &Block) -> Result<()> {
         let previous = self.runtime.start_usage();
-        let result = self.run_block_lifecycle_inner(block).await;
+        let result = lifecycle::run_block_lifecycle(&mut self.runtime, block).await;
         let usage = self.runtime.finish_usage(previous);
         result?;
         insert_block_execution_usage(&self.db_conn(), block.height, usage?).await
-    }
-
-    async fn run_block_lifecycle_inner(&mut self, block: &Block) -> Result<()> {
-        let core_signer = Signer::Core(Box::new(Signer::Nobody));
-        let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
-        self.runtime
-            .set_context(block.height, None, None, None)
-            .await;
-        let result = self
-            .runtime
-            .execute_system_view(&staking_address(), &has_reward_recipients_call_expr())
-            .await?;
-        let eligible = has_reward_recipients_parse_return_expr(&result);
-        let emission = mint_emission(&mut self.runtime, &core_signer, eligible).await??;
-        // Credit the block-start active set before penalties can exhaust its last
-        // member. A minted reward must not be stranded behind an empty recipient set.
-        distribute_ordering_reward(&mut self.runtime, &core_signer, emission.ordering_minted)
-            .await??;
-        accrue_storage_rewards(&mut self.runtime, &core_signer).await??;
-        // Finalize the registry root for the block's `create_agreement`s (deferred
-        // off the user's gas) before the challenge lifecycle. No-op if no files
-        // were added this block.
-        record_block_root(&mut self.runtime, &core_signer)
-            .await
-            .context("Failed to record block root")?
-            .map_err(|e| anyhow::anyhow!("{e:?}"))
-            .context("record_block_root returned error")?;
-        expire_challenges(&mut self.runtime, &core_signer, block.height)
-            .await
-            .context("Failed to expire challenges")?;
-        settle_expired_challenges(&mut self.runtime, &core_signer).await??;
-        let challenges = generate_challenges_for_block(
-            &mut self.runtime,
-            &core_signer,
-            block.height,
-            block_hash,
-        )
-        .await
-        .context("Failed to generate challenges")?;
-        if !challenges.is_empty() {
-            info!(
-                "Generated {} challenges at block height {}",
-                challenges.len(),
-                block.height
-            );
-        }
-
-        let change = process_pending_validators(&mut self.runtime, &core_signer, block.height)
-            .await
-            .context("Failed to call process_pending_validators")?
-            .map_err(|e| anyhow::anyhow!("{e:?}"))
-            .context("process_pending_validators returned error")?;
-        if change.activated > 0 || change.deactivated > 0 {
-            info!(
-                "Validator set change at height {}: {} activated, {} deactivated",
-                block.height, change.activated, change.deactivated
-            );
-        }
-        Ok(())
     }
 
     /// Execute `block` and record the decision that certifies it in the SAME
