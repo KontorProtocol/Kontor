@@ -1,11 +1,19 @@
 use anyhow::{Result, ensure};
 use indexer_types::ContractAddress;
+use stdlib::Wavey;
 
+use super::super::{ANCHOR_HEIGHT, test_provenance};
 use crate::runtime::wit::Signer;
-use crate::runtime::{Runtime, from_wave_expr, to_wave_expr};
+use crate::runtime::{Runtime, TransactionContext, from_wave_expr, to_wave_expr};
 
 const ENTRIES: usize = 257;
 const PAGE_SIZE: usize = 128;
+
+#[derive(PartialEq, Wavey)]
+struct Entry {
+    key: String,
+    value: String,
+}
 
 fn key(index: usize) -> String {
     format!("entry-{index:08}")
@@ -18,20 +26,42 @@ fn expression(cursor: Option<String>, limit: usize, descending: bool) -> String 
     )
 }
 
-pub(super) async fn seed(runtime: &mut Runtime, contract: &ContractAddress) -> Result<()> {
+pub(super) async fn prepare(runtime: &mut Runtime) -> Result<ContractAddress> {
     let core = Signer::Core(Box::new(Signer::Nobody));
+    let contract = ContractAddress {
+        name: "mixedpages".into(),
+        height: ANCHOR_HEIGHT,
+        tx_index: 7,
+    };
+    runtime
+        .set_context(
+            ANCHOR_HEIGHT,
+            Some(TransactionContext::builder().tx_index(7).build()),
+            None,
+            None,
+        )
+        .await;
+    runtime
+        .publish(
+            &core,
+            runtime.core_payment(),
+            &contract.name,
+            include_bytes!("../../../../../../../test-contracts/binaries/workload_storage.wasm.br"),
+            &test_provenance()?,
+        )
+        .await?;
     for start in (0..ENTRIES).step_by(PAGE_SIZE) {
         let count = PAGE_SIZE.min(ENTRIES - start);
         runtime
             .execute(
                 Some(&core),
                 Some(runtime.core_payment()),
-                contract,
+                &contract,
                 &format!("seed-entries({start}, {count})"),
             )
             .await?;
     }
-    Ok(())
+    Ok(contract)
 }
 
 pub(super) fn call(round: usize) -> String {
@@ -46,9 +76,12 @@ pub(super) fn call(round: usize) -> String {
     expression(cursor, PAGE_SIZE, descending)
 }
 
-fn entries(indices: impl Iterator<Item = usize>) -> Vec<(String, String)> {
+fn entries(indices: impl Iterator<Item = usize>) -> Vec<Entry> {
     indices
-        .map(|index| (key(index), format!("value-{index:08}")))
+        .map(|index| Entry {
+            key: key(index),
+            value: format!("value-{index:08}"),
+        })
         .collect()
 }
 
@@ -61,7 +94,7 @@ pub(super) fn check(round: usize, value: &str) -> Result<()> {
         4 => entries((1..129).rev()),
         _ => unreachable!("pagination workload has five rounds"),
     };
-    ensure!(from_wave_expr::<Vec<(String, String)>>(value) == expected);
+    ensure!(from_wave_expr::<Vec<Entry>>(value) == expected);
     Ok(())
 }
 
@@ -79,7 +112,7 @@ pub(super) async fn check_boundaries(
         let value = runtime
             .execute_system_view(contract, &expression(cursor, limit, descending))
             .await?;
-        ensure!(from_wave_expr::<Vec<(String, String)>>(&value) == expected);
+        ensure!(from_wave_expr::<Vec<Entry>>(&value) == expected);
     }
     Ok(())
 }

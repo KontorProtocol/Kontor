@@ -706,6 +706,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "workload-storage"
+version = "0.1.0"
+dependencies = [
+ "built-in-types",
+ "stdlib",
+]
+
+[[package]]
 name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -81,7 +81,7 @@ pub(super) struct MixedWorkload {
     crypto: ContractAddress,
     recipient: u64,
     rounds: usize,
-    paginated: bool,
+    paginated: Option<ContractAddress>,
 }
 
 impl MixedWorkload {
@@ -164,14 +164,13 @@ impl MixedWorkload {
             crypto,
             recipient,
             rounds,
-            paginated: false,
+            paginated: None,
         })
     }
 
     pub(super) async fn with_pagination(mut self, runtime: &mut Runtime) -> Result<Self> {
         ensure!(self.rounds == 5);
-        pagination::seed(runtime, &self.counter).await?;
-        self.paginated = true;
+        self.paginated = Some(pagination::prepare(runtime).await?);
         Ok(self)
     }
 
@@ -189,13 +188,9 @@ impl MixedWorkload {
                     ),
                     8 => (self.counter.clone(), "increment()".into()),
                     9 => (self.counter.clone(), format!("fill-blob({BLOB_BYTES})")),
-                    10 => (
-                        self.counter.clone(),
-                        if self.paginated {
-                            pagination::call(round)
-                        } else {
-                            "get-blob()".into()
-                        },
+                    10 => self.paginated.as_ref().map_or_else(
+                        || (self.counter.clone(), "get-blob()".into()),
+                        |contract| (contract.clone(), pagination::call(round)),
                     ),
                     11..=12 => (
                         self.failed.clone(),
@@ -313,9 +308,15 @@ impl MixedWorkload {
                             && transfer.amt == Decimal::from("0.001")
                     );
                 }
-                10 if self.paginated => {
+                10 if self.paginated.is_some() => {
                     ensure!(
-                        root.contract == self.counter.to_string() && root.func == "entries-page"
+                        root.contract
+                            == self
+                                .paginated
+                                .as_ref()
+                                .context("missing page contract")?
+                                .to_string()
+                            && root.func == "entries-page"
                     );
                     pagination::check(round, value)?;
                 }
@@ -449,8 +450,8 @@ impl MixedWorkload {
                 .context("missing mixed signer bond")?;
             ensure!(stake.stake == expected_stake && stake.withdrawal_height.is_none());
         }
-        if self.paginated {
-            pagination::check_boundaries(runtime, &self.counter).await?;
+        if let Some(contract) = &self.paginated {
+            pagination::check_boundaries(runtime, contract).await?;
         }
         Ok(())
     }
