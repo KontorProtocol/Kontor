@@ -1323,3 +1323,49 @@ historical replay throughput, resource ceilings or six-cell qualification.
 The agreed timed-workload amendment adds those traces separately and includes
 normal post-block finality processing, which the bounded handle_block helper
 does not exercise. Full S2 and the protocol-upgrade system remain incomplete.
+
+
+## Timed workload input schedule
+
+Source `4fa903ce5b09dfb326ab04e71012239bab13c5e3` implements the frozen
+event schedule and Bitcoin input preparation from the agreed timed-workload
+amendment. The schedule preserves 20/40 batches per 600-second interval,
+separate simulation request ordinals, fixed anchors, canonical dependencies,
+block/batch/simulation tie ordering and explicit finite-horizon exhaustion.
+Confirming blocks include prior batches plus 50/500 fresh transactions, giving
+250/1,300 transactions in steady state. A six-block fresh backlog precedes the
+first new batch. Shared funding preparation uses standard-sized children with
+at most 500 outputs; existing sequence wrappers keep their prior input bounds.
+
+Exact-source compilation and two schedule tests passed in a 58.72s wrapper run.
+The unit tests cover rates, partitioning, tie order, anchors, dependencies,
+strict-before boundary observations, missing/duplicate/reordered events and
+exhaustion. The real Bitcoin input test passed in 162.29s wrapper time
+(161.62s reported by the test), covering these concrete schedules:
+
+| Input case | Bitcoin blocks | Reveals | Batch events | Simulation metadata |
+| --- | ---: | ---: | ---: | ---: |
+| Two representative intervals | 2 | 500 | 40 | 120 |
+| Six fresh stress blocks, then two stress intervals | 8 | 5,600 | 80 | 1,200 |
+| Six stress historical intervals | 6 | 7,800 | 240 | 3,600 |
+
+Every canonical transaction consumes distinct confirmed initial funding. The
+test checks ordered commit/reveal linkage, decoded operations and signer, block
+parents, batch/confirmation partitioning and exactly-once coverage. Bitcoin
+accepted the funding tree and workload blocks. Funding children were individually
+admission-checked with their parent, not simultaneously admitted as one large
+mempool cluster. Maximum recorded workload weight was 1,580,444 WU; maximum
+individual funding transaction weight was 86,280 WU. The existing two-/seven-block
+50-/500-transaction input regression passed in 29.30s wrapper time. Clippy
+finished in 16.95s with exactly the six inherited S2 findings and no suppression.
+
+This is input admission and ordering evidence for `increment()` and
+`fill-blob()` calls, not admission of the eventual full mixed workload. Contracts
+are not executed and simulation events are metadata only. No actual wall-clock
+arrival, pending-confirmation database model, normal finality processing or
+performance gate is established. Raw Bitcoin inputs are not retained as a
+portable event archive; independent review combines source assertions with
+recorded hashes, weights and complete schedules. Wrapper records, raw logs and
+the consolidated `timed-input-validation.json` remain in the workload evidence
+cache. The dispatcher must preserve complete event order, including simulations,
+and use full-resolution elapsed time for strict-before completion observations.
