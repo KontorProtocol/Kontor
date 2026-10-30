@@ -70,6 +70,19 @@ jobs:
           path: ${{ runner.temp }}/native-stack-s2-discovery/archive
           if-no-files-found: warn
           retention-days: 90
+      - name: Preserve discovery failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-s2-diagnostics-discovery
+          path: |
+            ${{ runner.temp }}/native-stack-s2-discovery/build/*.json*
+            ${{ runner.temp }}/native-stack-s2-discovery/build/*.log
+            ${{ runner.temp }}/native-stack-s2-discovery/build/*.rs
+            ${{ runner.temp }}/native-stack-s2-discovery/control/**
+            ${{ runner.temp }}/native-stack-s2-discovery/*-result.json
+          if-no-files-found: warn
+          retention-days: 90
 
   guard:
     name: S2 macOS guard (${{ matrix.profile }})
@@ -119,6 +132,18 @@ jobs:
         with:
           name: native-stack-s2-macos-guard-${{ matrix.profile }}
           path: ${{ runner.temp }}/native-stack-s2-guard/archive
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Preserve macOS guard failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-s2-diagnostics-macos-guard-${{ matrix.profile }}
+          path: |
+            ${{ runner.temp }}/native-stack-s2-guard/build/*.json*
+            ${{ runner.temp }}/native-stack-s2-guard/build/*.log
+            ${{ runner.temp }}/native-stack-s2-guard/build/*.rs
+            ${{ runner.temp }}/native-stack-s2-guard/guard-result.json
           if-no-files-found: warn
           retention-days: 90
 
@@ -217,6 +242,19 @@ jobs:
         with:
           name: native-stack-s2-cell-${{ matrix.os }}-${{ matrix.profile }}
           path: ${{ runner.temp }}/native-stack-s2/archive
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Preserve cell failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-s2-diagnostics-${{ matrix.os }}-${{ matrix.profile }}
+          path: |
+            ${{ runner.temp }}/native-stack-s2/build/*.json*
+            ${{ runner.temp }}/native-stack-s2/build/*.log
+            ${{ runner.temp }}/native-stack-s2/build/*.rs
+            ${{ runner.temp }}/native-stack-s2/control/**
+            ${{ runner.temp }}/native-stack-s2/*-result.json
           if-no-files-found: warn
           retention-days: 90
 
