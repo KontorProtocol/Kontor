@@ -145,6 +145,7 @@ def build_registry():
         "remaining_gates": {
             "boundary_discovery": boundary["claim_status"],
             "macos_guard_capture": "missing",
+            "suspended_64_capacity": "required_in_pending_host_io",
             "production_memory_profiles": "missing",
             "common_head_six_cell_capture": "missing",
             "offline_archive_validation": "source_ready_unmeasured",

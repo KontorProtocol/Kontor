@@ -9,6 +9,8 @@ from decimal import Decimal
 from pathlib import Path
 
 from capture_resource_diagnostic import bundle_page_size, validate_control
+from capture_resource_chain import (check_repeated_observations,
+                                    observation_from_trial)
 from resource_boundary_evidence import (normalized_boundary_amount,
                                         validate_balance_transitions,
                                         validate_cell_identity, validate_trace)
@@ -16,7 +18,7 @@ from resource_evidence import (file_evidence, load_json_strict, no_duplicate_key
                                no_nonfinite_constants, require, sha256)
 from resource_evidence_v2 import validate_teardown
 from resource_finite_evidence import CONFIGURATIONS, ROLES, WORKER_TEST
-from resource_manifest import MANIFEST, build_manifest
+from resource_manifest import MANIFEST, ROOT, build_manifest
 
 
 CASE_ID = "pending_host_io"
@@ -42,6 +44,12 @@ MARKERS = {
     "trace": "FINITE_STACK_TRACE=",
     "terminal": "FINITE_STACK_TERMINAL=",
 }
+MEMORY_MARKERS = {
+    "memory_baseline": "SUSPENDED_64_BASELINE:",
+    "memory_peak": "SUSPENDED_64_PEAK:",
+    "memory_completion": "SUSPENDED_64_COMPLETION:",
+}
+MEMORY_PLAN = ROOT / "tools/native-stack/resource-suspended-64-plan-v1.json"
 
 
 def run_name(role, configuration):
@@ -81,7 +89,31 @@ def parse_worker_log(path):
         positions[key] = [index for index, _ in matched]
         records[key] = ([value for _, value in matched]
                         if key in {"attempts", "controls"} else matched[0][1])
+    for key, marker in MEMORY_MARKERS.items():
+        matched = [(index, json.loads(line.split(marker, 1)[1],
+                                      object_pairs_hook=no_duplicate_keys,
+                                      parse_constant=no_nonfinite_constants))
+                   for index, line in enumerate(lines) if marker in line]
+        require(len(matched) <= 1, f"pending host transcript duplicated {key}")
+        positions[key] = [index for index, _ in matched]
+        records[key] = matched[0][1] if matched else None
     a, c = positions["attempts"], positions["controls"]
+    if any(positions[key] for key in MEMORY_MARKERS):
+        require(all(positions[key] for key in MEMORY_MARKERS)
+                and positions["memory_baseline"][0]
+                < positions["memory_peak"][0]
+                < positions["memory_completion"][0] < a[0],
+                "suspended-64 memory phases are missing or out of order")
+        chain_reports = [(index, json.loads(line.split("CHAIN_PROBE_REPORT:", 1)[1],
+                                           object_pairs_hook=no_duplicate_keys,
+                                           parse_constant=no_nonfinite_constants))
+                         for index, line in enumerate(lines)
+                         if "CHAIN_PROBE_REPORT:" in line]
+        require(len(chain_reports) == 1
+                and positions["memory_peak"][0] < chain_reports[0][0]
+                < positions["memory_completion"][0]
+                and chain_reports[0][1] == records["memory_completion"]["report"],
+                "suspended-64 chain report is missing or differs from completion")
     timings = [index for index, line in enumerate(lines) if "KONTOR_STACK_TIMING:" in line]
     require(len(timings) == 4
             and a[0] < timings[0] < a[1] < timings[1] < c[0]
@@ -241,8 +273,13 @@ def validate_run(run, bundle, manifest, directory):
     file_evidence(directory, run["raw_log"])
     parsed = parse_worker_log(directory / run["raw_log"]["path"])
     require(all(run[key] == parsed[key] for key in
-                ("attempts", "controls", "summary", "runtime", "trace", "terminal")),
+                ("attempts", "controls", "summary", "runtime", "trace", "terminal",
+                 *MEMORY_MARKERS)),
             "pending host records differ from raw process transcript")
+    memory_present = [parsed[key] is not None for key in MEMORY_MARKERS]
+    require(all(memory_present) if role == "target_observed" and
+            configuration == "production" else not any(memory_present),
+            "suspended-64 profile is missing or ran outside production target")
     attempts = parsed["attempts"]
     controls = parsed["controls"]
     validate_phase_attempts(attempts, role, configuration, process["pid"])
@@ -291,6 +328,179 @@ def validate_run(run, bundle, manifest, directory):
         validate_control_parity(resumed_signature, control_signature)
         signatures.append(resumed_signature)
     return signatures
+
+
+def validate_suspended_64(run, manifest, cell):
+    plan = load_json_strict(MEMORY_PLAN)
+    require(sha256(MEMORY_PLAN) ==
+            manifest["artifacts"]["suspended_64_plan"]["sha256"]
+            and plan["schema_version"] == 1
+            and plan["claim_status"] == "frozen_source_unmeasured"
+            and plan["profile_id"] == "suspended_64"
+            and plan["simultaneous_stores"] == 64
+            and plan["view_roots"] == 0
+            and plan["reactor_roots"] == 1
+            and plan["nested_invocation_depth"] == 64
+            and plan["configuration"] == "production"
+            and plan["process_role"] == "target_observed"
+            and plan["deliberate_guest_memory_pressure_bytes"] == 0
+            and plan["cache_state"] == "warm_compiled_cache"
+            and plan["required_service"] == {
+                "host_calls_pending_at_peak": 1,
+                "other_tokio_task_progressed": True,
+                "successful_root_resumptions": 3,
+                "closed_store_lifecycles_per_resumption": 64,
+            },
+            "suspended-64 source plan differs from frozen capacity policy")
+    reference = next(item for item in manifest["memory_profiles"]
+                     if item["id"] == "suspended_64")
+    require(reference["simultaneous_stores"] == 64
+            and reference["production_capacity_only"] is True
+            and reference["reactor_roots"] == 1
+            and reference["view_roots"] == 0,
+            "suspended-64 memory profile differs from case manifest")
+    baseline = run["memory_baseline"]
+    peak_record = run["memory_peak"]
+    completion = run["memory_completion"]
+    require(isinstance(baseline, dict) and isinstance(peak_record, dict)
+            and isinstance(completion, dict)
+            and set(peak_record) == {"memory", "pending_host_calls", "reactor_roots",
+                                 "view_roots", "live_stores",
+                                 "reservations", "other_task_progressed",
+                                 "deliberate_guest_memory_pressure_bytes", "cache_state",
+                                 "configuration", "profile_id"}
+            and peak_record["pending_host_calls"] == 1
+            and peak_record["reactor_roots"] == 1
+            and peak_record["view_roots"] == 0
+            and peak_record["live_stores"] == peak_record["reservations"] == 64
+            and peak_record["other_task_progressed"] is True
+            and peak_record["deliberate_guest_memory_pressure_bytes"] ==
+                plan["deliberate_guest_memory_pressure_bytes"]
+            and peak_record["cache_state"] == plan["cache_state"]
+            and peak_record["configuration"] == "production"
+            and peak_record["profile_id"] == "suspended_64"
+            and set(completion) == {"memory", "report",
+                                    "completed_store_lifecycles",
+                                    "pending_host_calls_after", "live_stores_after"}
+            and completion["completed_store_lifecycles"] == 64
+            and completion["pending_host_calls_after"] ==
+                completion["live_stores_after"] == 0,
+            "suspended-64 overlap, cache, or completion differs")
+    os_name = "macos" if cell.startswith("macOS-") else "linux"
+    sources = ({
+        "mapped_reservation": "/proc/self/status:VmSize",
+        "resident": "/proc/self/status:VmRSS",
+        "private": "/proc/self/smaps_rollup:Private_Clean+Private_Dirty",
+    } if os_name == "linux" else {
+        "mapped_reservation": "task_vm_info.virtual_size",
+        "resident": "task_vm_info.resident_size",
+        "private": "task_vm_info.internal",
+        "accounted_scope": "task_vm_info.phys_footprint",
+    })
+    snapshots = (baseline, peak_record["memory"], completion["memory"])
+    for snapshot in snapshots:
+        require(isinstance(snapshot, dict)
+                and set(snapshot) == {"os", "pid", "cpu_count",
+                                      "physical_memory_bytes", "enforcement",
+                                      "mapped_reservation", "resident",
+                                      "private", "accounted_scope"}
+                and snapshot["os"] == os_name
+                and snapshot["pid"] == run["process"]["pid"]
+                and type(snapshot["cpu_count"]) is int
+                and snapshot["cpu_count"] > 0
+                and type(snapshot["physical_memory_bytes"]) is int
+                and snapshot["physical_memory_bytes"] > 0
+                and isinstance(snapshot["enforcement"], dict)
+                and set(snapshot["enforcement"]) ==
+                    {"memory_field", "memory_source"},
+                "suspended-64 host or process memory identity differs")
+        for metric in ("mapped_reservation", "resident", "private",
+                       "accounted_scope"):
+            value = snapshot[metric]
+            require(isinstance(value, dict)
+                    and set(value) == ({"bytes", "source", "scope"}
+                                       if metric == "accounted_scope"
+                                       else {"bytes", "source"})
+                    and type(value["bytes"]) is int and value["bytes"] >= 0
+                    and isinstance(value["source"], str) and value["source"],
+                    f"suspended-64 {metric} measurement is invalid")
+            if metric in sources:
+                require(value["source"] == sources[metric],
+                        f"suspended-64 {metric} OS source differs")
+        if os_name == "linux":
+            charge_source = snapshot["accounted_scope"]["source"]
+            limit_source = snapshot["enforcement"]["memory_source"]
+            require(charge_source.startswith("/sys/fs/cgroup/")
+                    and ".." not in Path(charge_source).parts
+                    and ((charge_source.endswith("/memory.current")
+                          and limit_source == charge_source.removesuffix("current") + "max")
+                         or (charge_source.endswith("/memory.usage_in_bytes")
+                             and limit_source == charge_source.removesuffix(
+                                 "usage_in_bytes") + "limit_in_bytes"))
+                and snapshot["accounted_scope"]["scope"] ==
+                    "cgroup_total_including_other_processes_and_cache"
+                and re.fullmatch(r"max|[0-9]+",
+                                 snapshot["enforcement"]["memory_field"]),
+                "suspended-64 Linux cgroup memory accounting is invalid")
+        else:
+            require(snapshot["enforcement"] ==
+                    {"memory_field": "none", "memory_source": "none"}
+                    and snapshot["accounted_scope"]["scope"] ==
+                    "process_task_phys_footprint",
+                    "suspended-64 macOS enforcement label differs")
+    require(all(snapshot["cpu_count"] == baseline["cpu_count"]
+                and snapshot["physical_memory_bytes"] ==
+                    baseline["physical_memory_bytes"]
+                and snapshot["enforcement"] == baseline["enforcement"]
+                for snapshot in snapshots),
+            "suspended-64 host hardware or enforcement changed during run")
+    peak = peak_record["memory"]
+    private_growth = max(0, peak["private"]["bytes"] - baseline["private"]["bytes"])
+    require(private_growth <= plan["per_root_private_growth_allowance_bytes"]
+            + plan["shared_private_growth_allowance_bytes"]
+            and peak["mapped_reservation"]["bytes"] <=
+                plan["mapped_reservation_allowance_bytes"]
+            and peak["resident"]["bytes"] <= plan["resident_allowance_bytes"]
+            and peak["accounted_scope"]["bytes"] <=
+                plan["accounted_scope_allowance_bytes"],
+            "suspended-64 private, mapped, resident, or charged allowance exceeded")
+    workers = [item for item in run["runtime"]["thread_observations"]
+               if item["thread_category"] == "tokio_worker"]
+    require(len(workers) == 2 and all(item["usable_bytes"] > 0 for item in workers),
+            "suspended-64 production worker capacity was not measured")
+    report = completion["report"]
+    require(isinstance(report, dict)
+            and report["case_id"] == "chain_64_paid"
+            and report["mode"] == "paid"
+            and report["resource_mode"] == "production"
+            and report["teardown_probe_mode"] == "on"
+            and report["target_only"] is True
+            and report["call_hook_installed"] is False
+            and report["stores"] == 64
+            and report["engine_target"] == "pulley64-unknown-unknown-elf"
+            and report["max_wasm_stack"] == 524288
+            and report["async_stack_size"] == 2097152
+            and report["target_os"] == os_name
+            and report["target_arch"] ==
+                ("x86_64" if cell.startswith("Linux-X64/") else "aarch64")
+            and report["component_sha256"] == {
+                "error_test": manifest["artifacts"]["error_test"]["sha256"],
+                "proxy": manifest["artifacts"]["proxy"]["sha256"],
+            }, "suspended-64 paid root or production engine differs")
+    trials = report["trials"]
+    require(isinstance(trials, list) and len(trials) == 3
+            and [trial["repeat_index"] for trial in trials] == [0, 1, 2],
+            "suspended-64 repeated root reports are incomplete")
+    schema = load_json_strict(
+        ROOT / "tools/native-stack/resource-evidence-schema-v1.json")
+    signatures = []
+    for trial in trials:
+        signatures.append(observation_from_trial(
+            trial, "chain_64_paid", "ok", schema))
+        validate_teardown(trial["teardown_events"], 64, 0)
+    check_repeated_observations(signatures, False, "suspended_64")
+    return {"profile_id": "suspended_64", "simultaneous_stores": 64,
+            "reactor_roots": 1, "observation": signatures[0]}
 
 
 def validate_bundle(bundle, directory, archive_binary=None):
@@ -346,6 +556,9 @@ def validate_bundle(bundle, directory, archive_binary=None):
                       if item["thread_category"] == "tokio_worker"]
         require(reduced and production and min(production) >= 2 * max(reduced),
                 "pending host measured worker-capacity ratio is below two")
+    memory_run = bundle["runs"][run_name("target_observed", "production")]
+    signatures["suspended_64", "production"] = validate_suspended_64(
+        memory_run, manifest, bundle["cell"])
     return signatures
 
 

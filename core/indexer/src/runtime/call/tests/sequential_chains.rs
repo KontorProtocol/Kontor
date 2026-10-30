@@ -1,6 +1,8 @@
 use std::env;
+use std::future::{Future, poll_fn};
 use std::process;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -13,7 +15,7 @@ use tokio::sync::Notify;
 use tokio::time::timeout;
 use wasmtime::Trap;
 
-use super::native_stack::{assert_receipt_stream_initial_state, persistent_digest};
+use super::native_stack::{assert_receipt_stream_initial_state, memory, persistent_digest};
 use super::{balance, funded, funded_with_pubkey};
 use crate::database::queries::live_deposit_gas_sum;
 use crate::runtime::invocation::{
@@ -263,11 +265,11 @@ async fn nested_depth_rejection_preserves_the_typed_limit_marker() -> Result<()>
 async fn chain_probe_child() -> Result<()> {
     let mode = env::var("KONTOR_CHAIN_MODE")?;
     let depth: u32 = env::var("KONTOR_CHAIN_DEPTH")?.parse()?;
-    run_chain_probe(mode, depth, None, false).await
+    run_chain_probe(mode, depth, None, false, false).await
 }
 
 pub(super) async fn resource_chain_probe(mode: String, depth: u32, reduced: bool) -> Result<()> {
-    run_chain_probe(mode, depth, Some(reduced), true).await
+    run_chain_probe(mode, depth, Some(reduced), true, false).await
 }
 
 pub(super) async fn resource_chain_trap_control(
@@ -275,7 +277,11 @@ pub(super) async fn resource_chain_trap_control(
     depth: u32,
     reduced: bool,
 ) -> Result<()> {
-    run_chain_probe(mode, depth, Some(reduced), false).await
+    run_chain_probe(mode, depth, Some(reduced), false, false).await
+}
+
+pub(super) async fn run_suspended_64_profile() -> Result<()> {
+    run_chain_probe("paid".to_owned(), 63, Some(false), true, true).await
 }
 
 async fn run_chain_probe(
@@ -283,10 +289,15 @@ async fn run_chain_probe(
     depth: u32,
     diagnostic_reduced: Option<bool>,
     target_only: bool,
+    capacity_profile: bool,
 ) -> Result<()> {
     assert!(matches!(mode.as_str(), "paid" | "view" | "core"));
     assert!(matches!(depth, 32 | 62 | 63 | 64));
     let over_cap = depth == 64;
+    assert!(
+        !capacity_profile
+            || (mode == "paid" && depth == 63 && diagnostic_reduced == Some(false) && target_only)
+    );
     let (mut runtime, _dir, _name) = match diagnostic_reduced {
         Some(reduced) => {
             let engine = if reduced {
@@ -316,8 +327,21 @@ async fn run_chain_probe(
             let entered = host_entered.clone();
             let release = host_release.clone();
             Box::new(async move {
-                entered.notify_one();
-                release.notified().await;
+                let wait = release.notified();
+                tokio::pin!(wait);
+                let mut signaled = false;
+                poll_fn(|cx| match wait.as_mut().poll(cx) {
+                    Poll::Pending => {
+                        if !signaled {
+                            // The observer may sample memory only after the host future has polled Pending.
+                            entered.notify_one();
+                            signaled = true;
+                        }
+                        Poll::Pending
+                    }
+                    Poll::Ready(()) => Poll::Ready(()),
+                })
+                .await;
                 Ok((String::new(),))
             })
         })?;
@@ -334,6 +358,7 @@ async fn run_chain_probe(
         Err(env::VarError::NotPresent) => None,
         _ => bail!("invalid resource teardown probe mode"),
     };
+    assert!(!capacity_profile || teardown_probe_mode == Some("on"));
     assert!(teardown_probe_mode.is_none() || diagnostic_reduced.is_some());
     let process_role = teardown_probe_mode.map(|probe| match (target_only, probe) {
         (true, "on") => "target_observed",
@@ -402,6 +427,9 @@ async fn run_chain_probe(
         }
         runtime.resource_probe_phase =
             teardown_probe_mode.map(|_| ResourceProbePhase::Target(chain_addresses.clone()));
+        if capacity_profile && repeat_index == 0 {
+            println!("SUSPENDED_64_BASELINE:{}", memory::snapshot()?);
+        }
         let target = root.clone();
         let task = tokio::spawn(async move {
             resource_diagnostics::record("chain_guest_task_entry");
@@ -423,6 +451,25 @@ async fn run_chain_probe(
             assert!(host_io_suspended);
             assert_eq!(budget.live(), depth + 1);
             assert_eq!(tokio::spawn(async { 42 }).await?, 42);
+            if capacity_profile && repeat_index == 0 {
+                assert_eq!(budget.peak(), 64);
+                println!(
+                    "SUSPENDED_64_PEAK:{}",
+                    json!({
+                        "memory": memory::snapshot()?,
+                        "pending_host_calls": 1,
+                        "reactor_roots": 1,
+                        "view_roots": 0,
+                        "live_stores": budget.live(),
+                        "reservations": budget.peak(),
+                        "other_task_progressed": true,
+                        "deliberate_guest_memory_pressure_bytes": 0,
+                        "cache_state": "warm_compiled_cache",
+                        "configuration": "production",
+                        "profile_id": "suspended_64",
+                    })
+                );
+            }
             release.notify_one();
             true
         } else {
@@ -659,28 +706,44 @@ async fn run_chain_probe(
         }
     }
     let trial_count = trials.len();
-    println!(
-        "CHAIN_PROBE_REPORT:{}",
-        json!({
-            "case_id": format!("chain_{}_{}", depth + 1, mode),
-            "mode": mode,
-            "resource_mode": diagnostic_reduced.map(|reduced| if reduced { "reduced" } else { "production" }),
-            "teardown_probe_mode": teardown_probe_mode,
-            "target_only": target_only,
-            "call_hook_installed": runtime.conversion_probe.is_some(),
-            "stores": depth + 1,
-            "trials": trials,
-            "component_sha256": {
-                "error_test": hex::encode(Sha256::digest(include_bytes!("../../../../../../test-contracts/binaries/error_test.wasm.br"))),
-                "proxy": hex::encode(Sha256::digest(include_bytes!("../../../../../../test-contracts/binaries/proxy.wasm.br"))),
-            },
-            "engine_target": runtime.engine.get_target(),
-            "max_wasm_stack": runtime.engine.get_max_wasm_stack(),
-            "async_stack_size": runtime.engine.get_async_stack_size(),
-            "target_os": env::consts::OS,
-            "target_arch": env::consts::ARCH,
-        })
-    );
+    if capacity_profile {
+        assert!(trials.iter().all(|trial| trial["live_stores_after"] == 0
+            && trial["live_store_peak"] == 64
+            && trial["host_io_suspended"] == true
+            && trial["outcome"] == "ok"));
+    }
+    let report = json!({
+        "case_id": format!("chain_{}_{}", depth + 1, mode),
+        "mode": mode,
+        "resource_mode": diagnostic_reduced.map(|reduced| if reduced { "reduced" } else { "production" }),
+        "teardown_probe_mode": teardown_probe_mode,
+        "target_only": target_only,
+        "call_hook_installed": runtime.conversion_probe.is_some(),
+        "stores": depth + 1,
+        "trials": trials,
+        "component_sha256": {
+            "error_test": hex::encode(Sha256::digest(include_bytes!("../../../../../../test-contracts/binaries/error_test.wasm.br"))),
+            "proxy": hex::encode(Sha256::digest(include_bytes!("../../../../../../test-contracts/binaries/proxy.wasm.br"))),
+        },
+        "engine_target": runtime.engine.get_target(),
+        "max_wasm_stack": runtime.engine.get_max_wasm_stack(),
+        "async_stack_size": runtime.engine.get_async_stack_size(),
+        "target_os": env::consts::OS,
+        "target_arch": env::consts::ARCH,
+    });
+    println!("CHAIN_PROBE_REPORT:{report}");
+    if capacity_profile {
+        println!(
+            "SUSPENDED_64_COMPLETION:{}",
+            json!({
+                "memory": memory::snapshot()?,
+                "report": report,
+                "completed_store_lifecycles": 64,
+                "pending_host_calls_after": 0,
+                "live_stores_after": 0,
+            })
+        );
+    }
     if let Some(role) = process_role {
         println!(
             "CHAIN_PROBE_TERMINAL:{}",

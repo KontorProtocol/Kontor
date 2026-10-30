@@ -82,7 +82,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "84bbd07d8b2a139410eabe0d00cc93f903a8858556be689d60f448b63b9a69fd"
+      "sha256": "1ab2b8869e4a9e147ce1f2ff2230a1d1803ffd7fb5c57a3dd90f9e01c290ac4b"
     },
     "cold_publication_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/cold_publication.rs",
@@ -338,15 +338,15 @@
     },
     "pending_host_capture": {
       "path": "tools/native-stack/capture_resource_pending.py",
-      "sha256": "476586e9e804fda34fe110ea922916de5760dbbb7c4a0a032be6d28df564ebe6"
+      "sha256": "bec70482b2d69ec732148a86ce46bbbc55cb81c2ecd6e7ab3af4a21f83e1f2a0"
     },
     "pending_host_tests": {
       "path": "tools/native-stack/test_resource_pending_evidence.py",
-      "sha256": "532eefc60f0eecfa6091eac05edf2edab8fddbd711e4072eb6d20743901803c3"
+      "sha256": "ff1b11ccad630b34f33fa609036ed6fbfa6a9830d8f6bacb25be685f423f192a"
     },
     "pending_host_validator": {
       "path": "tools/native-stack/resource_pending_evidence.py",
-      "sha256": "e7c355b161e7706bcf8479622424897aba00fd906dc93e14ab3c8030caac6806"
+      "sha256": "869b86058904910bc9e3641adb12f271561bf7fe141d42ba0dfd239187bf9f65"
     },
     "pricing_source": {
       "path": "core/indexer/src/runtime/pricing.rs",
@@ -414,7 +414,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "4dee451967e00b582834d4250f363cb7d3615705d69320b5d8a9540ab01a0e51"
+      "sha256": "a4bfb96c0edf067c35e327b99f2094fdc20ec51d0dcb22880327f51d8f82f83e"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -506,11 +506,11 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "afadf09e0232ee13b7f907299ac7d6cbefb6600932aa9bf0e128990b2a82ff82"
+      "sha256": "1e1cbcd8945155446f19920bc91e0c7e21b039dafe3b7dec2bf94766d11b4bb3"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "c8e352ae727bdebbc3c89c4b4eee4710ab6a74c3a510e9e2c1ee7e660dd450cd"
+      "sha256": "a9798a3da68a4b5695c90823bc59dbc9e6eeff4771b589d0773731b6b2eb275f"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -546,7 +546,7 @@
     },
     "suite_registry_builder": {
       "path": "tools/native-stack/resource_suite_registry.py",
-      "sha256": "00a420e5c5b58206c4304d9640094a3c7ff9ece58b0583bbc530cfba8eafc312"
+      "sha256": "92c408f930a75adeedcc951162f5e9b65a9d955c177a0a38567f7e575ded77fe"
     },
     "suite_registry_tests": {
       "path": "tools/native-stack/test_resource_suite_registry.py",
@@ -554,11 +554,19 @@
     },
     "suite_runbook": {
       "path": "tools/native-stack/resource-suite-runbook.md",
-      "sha256": "34db6febed9e58522e4abc51608ce9e5c0dfe22f35d3f176eb6dd6d4c90ccde8"
+      "sha256": "9a05471ab3928bcfc755e672b191ca7ddc22b7a9303b0cb6a8d9358d9d266b5a"
     },
     "suite_workflow": {
       "path": ".github/workflows/native-stack-s2.yml",
       "sha256": "7d5f8a91ebd1de0a35bf3d79f6be85e4a2ed484f0afb863882eda31a402fbfe9"
+    },
+    "suspended_64_plan": {
+      "path": "tools/native-stack/resource-suspended-64-plan-v1.json",
+      "sha256": "84ad83b050c51a6d48db3b5d23101fcc73d0452bd9ded4f6afde6913424d15a5"
+    },
+    "suspended_memory_source": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/memory.rs",
+      "sha256": "3a4ba218b8b790f22dcd569a2c322adfca919d88835ac310a998dbb81f75bff3"
     },
     "test_runtime_setup": {
       "path": "core/indexer/src/test_utils.rs",
@@ -1631,17 +1639,23 @@
         "crypto_source",
         "crypto_wit",
         "stack_probe_tests",
+        "chain_tests",
+        "error_test",
+        "proxy",
         "stack_sweep",
         "resource_worker_diagnostic",
         "pending_host_capture",
         "pending_host_validator",
-        "pending_host_tests"
+        "pending_host_tests",
+        "suspended_memory_source",
+        "suspended_64_plan"
       ],
       "id": "pending_host_io",
       "paired_worker_status": "missing",
       "parameters": {
         "pending_import": true,
-        "repeats": 2
+        "repeats": 2,
+        "simultaneous_suspended_stores": 64
       },
       "sample_keys": [
         "suspended",

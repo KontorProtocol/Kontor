@@ -66,7 +66,7 @@
         "blocking_decode"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_brotli_raw_ceiling_evidence.py",
         "sha256": "be4f67204fee9f75b68f3c836ee9913e25887f7cde2989dac852bdf2d586f67e"
@@ -87,7 +87,7 @@
         "canonical_abi"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_canonical_evidence.py",
         "sha256": "0121c164b067bdca1497f2b98861bc5bbeb393d55acd6321b42476a62f646aa4"
@@ -106,7 +106,7 @@
         "canonical_abi"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_type_value_evidence.py",
         "sha256": "601d5cca284c16948b24ba129d91a778c22e03404c2860024076401eb6f3ff30"
@@ -136,7 +136,7 @@
         "distinct_contract_chain"
       ],
       "manifest": "v2",
-      "manifest_sha256": "624024623e0a5444910467ed3dc8ced79a7400eb133e6905429b6aeb10cb40aa",
+      "manifest_sha256": "520936a8469965069f5a1e96c0979c3bad8fc04c5acd1869152ad2c787fc61b8",
       "validator": {
         "path": "tools/native-stack/resource_evidence_v2.py",
         "sha256": "d7b22eb8a4e90485a60c96aa74f40ae774485ffc77d58bd20720a9147260b814"
@@ -157,7 +157,7 @@
         "cold_compile"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_cold_publication_evidence.py",
         "sha256": "77fe58805dbde865564df5cff99a1f795c7004e067f57f4cd42bd6b894461d18"
@@ -178,7 +178,7 @@
         "paid_limit"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_finite_evidence.py",
         "sha256": "b5771c046b0cebb678628dd96b589bc63355386c0db7256eef5d1c7d12aace89"
@@ -197,7 +197,7 @@
         "foreign_call"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_foreign_wave_evidence.py",
         "sha256": "d0904ddc24da4088ace027fa05ade57860944f57532eeb62591c4141a4ab2f66"
@@ -216,7 +216,7 @@
         "initialization"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_initialization_evidence.py",
         "sha256": "4248f4dac2edb1acede5425d1476be2a3b7131b67b3dd6872afd2c1ccdc9ee56"
@@ -235,7 +235,7 @@
         "native_core"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_native_filestorage_lifecycle_evidence.py",
         "sha256": "2b8ba25756e7f8de676750a7282824a4d2097223fbd3e19a92577efb89217eec"
@@ -254,7 +254,7 @@
         "native_core"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_native_staking_rewards_evidence.py",
         "sha256": "58fc80021b1c98305a4752de6d3744eebbb7e05db4fa8dd9876a69c08e9033de"
@@ -263,7 +263,7 @@
     "pending_host_io": {
       "capture": {
         "path": "tools/native-stack/capture_resource_pending.py",
-        "sha256": "476586e9e804fda34fe110ea922916de5760dbbb7c4a0a032be6d28df564ebe6"
+        "sha256": "bec70482b2d69ec732148a86ce46bbbc55cb81c2ecd6e7ab3af4a21f83e1f2a0"
       },
       "capture_name": "pending-host-io-capture.json",
       "case_ids": [
@@ -273,10 +273,10 @@
         "suspension"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_pending_evidence.py",
-        "sha256": "e7c355b161e7706bcf8479622424897aba00fd906dc93e14ab3c8030caac6806"
+        "sha256": "869b86058904910bc9e3641adb12f271561bf7fe141d42ba0dfd239187bf9f65"
       }
     },
     "pulley_boundary": {
@@ -301,7 +301,7 @@
         "pulley_host_callback"
       ],
       "manifest": "boundary",
-      "manifest_sha256": "7d48e57b193d214d44495b1e12343da9846aaef1b5fd6c68ab32fe6568fc66d4",
+      "manifest_sha256": "84377344d3acfb161908c204477fcbdb572543a335cd7c582b8e8c9b5cd1b896",
       "validator": {
         "path": "tools/native-stack/resource_boundary_evidence.py",
         "sha256": "4bf448dd83eb4b79ed2464786e10728a34175cde1016bd8b16af1f55d68fc783"
@@ -321,7 +321,7 @@
         "resource_lifecycle"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_lifecycle_evidence.py",
         "sha256": "184266d6cd8068d75e5488ba88e959599ac61f53704b3533463667b7133fb948"
@@ -340,7 +340,7 @@
         "sqlite"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_sqlite_large_values_evidence.py",
         "sha256": "7fc466b9469d134fe319f78c44e0f0d744ddcfb0f9f04b4fdde4eaeb25ace5f6"
@@ -359,7 +359,7 @@
         "sqlite"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_sqlite_pagination_evidence.py",
         "sha256": "7bc05505e2a4f4036e7d5c2c59533d86317ca26b8a407813df301b0ee376cf86"
@@ -378,7 +378,7 @@
         "sqlite"
       ],
       "manifest": "v1",
-      "manifest_sha256": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
+      "manifest_sha256": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
       "validator": {
         "path": "tools/native-stack/resource_sqlite_ranges_evidence.py",
         "sha256": "f2616420c101bd1861d57a2937e332d49ee81223872888edfa4ce63563956964"
@@ -386,9 +386,9 @@
     }
   },
   "parent_manifests": {
-    "boundary": "7d48e57b193d214d44495b1e12343da9846aaef1b5fd6c68ab32fe6568fc66d4",
-    "v1": "f4a009527d42d4308fd0b0642cb04ec58147a2e1885d3108425ffb83ad840e21",
-    "v2": "624024623e0a5444910467ed3dc8ced79a7400eb133e6905429b6aeb10cb40aa"
+    "boundary": "84377344d3acfb161908c204477fcbdb572543a335cd7c582b8e8c9b5cd1b896",
+    "v1": "e0ac926ec7cdb9c778b5e544f537ccf539b575dd52dd612fa53350ace49f9692",
+    "v2": "520936a8469965069f5a1e96c0979c3bad8fc04c5acd1869152ad2c787fc61b8"
   },
   "remaining_gates": {
     "boundary_discovery": "pending_discovery",
@@ -396,7 +396,8 @@
     "cross_cell_semantic_comparison": "source_ready_unmeasured",
     "macos_guard_capture": "missing",
     "offline_archive_validation": "source_ready_unmeasured",
-    "production_memory_profiles": "missing"
+    "production_memory_profiles": "missing",
+    "suspended_64_capacity": "required_in_pending_host_io"
   },
   "schema_version": 1
 }

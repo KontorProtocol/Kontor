@@ -17,7 +17,7 @@ def main():
     parser.add_argument("--control-capture", type=Path, required=True)
     parser.add_argument("--control-sha256", required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
-    parser.add_argument("--timeout-seconds", type=int, default=300)
+    parser.add_argument("--timeout-seconds", type=int, default=1200)
     args = parser.parse_args()
     path = capture(
         args.cell, args.control_capture, args.control_sha256,
