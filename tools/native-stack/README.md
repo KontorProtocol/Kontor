@@ -505,11 +505,33 @@ control. The `br_table` fixture has 7,654,308 zero-depth entries in a
 7,654,321-byte body; adding one entry crosses the function-body size gate.
 Although wasmparser names a 7,654,321-entry `br_table` cap, this encoding
 cannot reach it inside an admitted body. The 256-block control-nesting
-fixture is a candidate, not a claimed engine maximum. All three cases still
-have `fixture_admission_status: unverified` until the bounded children pass
-and the captured evidence is validated. Postcard size checks establish a
+fixture is a candidate, not a claimed engine maximum. The source manifest
+retains `fixture_admission_status: unverified` pending the remaining cells
+and phase review. Postcard size checks establish a
 serialized instruction proxy, not a complete signed transaction admission
 result. Cross-node parity and the other qualification cells remain open.
+
+At source `7ce943e66bd3b3412cf9554011a0e977119ae9b9`, the Linux ARM64
+development cold-publication capture completed 12 isolated children and 40
+attempts. The 7,654,321-byte large-function body and the 7,654,308-entry
+`br_table` body were admitted in every role and worker stack setting. Their
+one-byte-over bodies returned the same deterministic function-body-size error
+before a Store, receipt, or metered fuel use. The 256-block control-nesting
+fixture was admitted in every child. The 24 accepted attempts each produced
+the expected `init` receipt and closed its Store; 16 rejected attempts
+restored state without a receipt. The standalone validator accepted all 12
+runs and equal semantics across repeats, roles, and stack settings. The
+exact-source build attestation SHA-256 is
+`c48199d1c97236aa5aef0793e3096ea3d55afa033b6d5729487834b3e173a525`;
+the test binary SHA-256 is
+`54bf5e4dce315b82ff4359cb5f14eb4aef0dd83fa2e5e629560beb4b4de9aa56`.
+The guard control SHA-256 is
+`9671e231db487d2e836985a26797dcaf790deebbf97da6ed847d5b219c180b14`,
+and the combined capture SHA-256 is
+`c028121e35e21c780d20da323c5b2b8b7d28586ea21a628335969984b6de18fe`.
+This is one local diagnostic cell with `qualification_status: missing`.
+The capture does not establish full signed-transaction admission,
+cross-node parity, or service timing.
 
 The amendment is copied unchanged into
 `docs/design/protocol-upgrades/native-stack-s2-resource-amendment-v1.md`.
