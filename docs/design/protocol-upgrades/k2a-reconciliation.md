@@ -654,3 +654,37 @@ review required the same-protocol reorg/cache identity correction above. Parent
 review corrected production queue capacity, rejected a finite WAL bound inferred
 from cancellation deadlines, and retained full-state/provenance comparison rather
 than excluding rows. No runtime code or qualification acceptance changed.
+
+
+## Retention reconciliation and simulation ingress checks
+
+Source `e81ea3df` carries the existing S2 retention correction into the versioned
+coordinator policy. The rollback floor retains the finality window plus its
+predecessor block. Both pruning and rollback use that versioned floor. Startup
+always loads the persisted pruning watermark, and rollback checks it even after
+pruning is disabled or retention is increased. A configuration change cannot
+restore deleted history.
+
+Regression `b37dc6b0` uses real contract-state pruning: before pruning at tip 108,
+rollback to the anchor predecessor 101 is allowed; after pruning to watermark
+102, rollback to 101 is refused under the original, increased and disabled
+pruning configurations. This is not a substitute for the complete finality
+redelivery regression after prerequisite integration.
+
+Test-only source `77b2b4db` characterizes simulation HTTP ingress before moving
+recognition behind executor selection. Invalid hex, truncated Bitcoin bytes and
+a non-Kontor transaction return HTTP 400 without queueing. A partly recognized
+transaction preserves its original input index, outpoint, instructions, txid and
+raw multi-push OP_RETURN bytes. A reactor rejection retains the HTTP 400 envelope.
+These tests use the real parser and HTTP handler with a supplied reactor response;
+they do not establish execution, fee or full-state parity.
+
+On exact head `77b2b4dbda0915afc7c45bd962738958fa8e859e`, all 49 selected
+retention, simulation, batch, finality and retained-body tests passed in 6.79
+seconds after compilation (87.40 seconds total). Indexer Clippy with tests and
+warnings denied passed in 22.79 seconds. Both used pinned Rust 1.99.1, locked
+offline resolution and at most two build jobs. Commands, terminal results and
+raw-log hashes are in `.build-cache/k2a-reconcile/retention-simulation-77b2b4db/`.
+These checks validate the preparation branch only. S2/OWNERSHIP-1 integration,
+selected executor/context wiring, full phase acceptance, independent reviews and
+release CI remain required. No P1 freeze or phase merge is claimed.
