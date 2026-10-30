@@ -1092,34 +1092,13 @@ fn linux_worker_guard_fault_child() -> Result<()> {
         tokio::spawn(async move {
             let stack = current_linux_stack_range()?;
             ensure!(stack.guard_bytes > 0, "worker has no reported guard");
-            // An adjacent PROT_NONE VMA can span far more than pthread's guard.
-            // Rust recognizes faults only within one guard width of the stack base.
-            let address = if stack.guard_end == stack.mapped_start {
-                stack
-                    .mapped_start
-                    .checked_sub(stack.page_size_bytes / 2)
-                    .context("guard target underflow")?
-            } else {
-                stack
-                    .mapped_start
-                    .checked_add(stack.page_size_bytes / 2)
-                    .context("guard target overflow")?
-            };
-            let rust_guard_start = stack
-                .mapped_start
-                .checked_sub(stack.guard_bytes)
-                .context("Rust guard range underflow")?;
-            let rust_guard_end = stack
-                .mapped_start
-                .checked_add(stack.guard_bytes)
-                .context("Rust guard range overflow")?;
-            ensure!(
-                stack.guard_start <= address
-                    && address < stack.guard_end
-                    && rust_guard_start <= address
-                    && address < rust_guard_end,
-                "guard target is outside protected interval or Rust handler range"
-            );
+            let address = linux_guard_fault_address(
+                stack.mapped_start,
+                stack.guard_start,
+                stack.guard_end,
+                stack.guard_bytes,
+                stack.page_size_bytes,
+            )?;
             println!(
                 "KONTOR_RESOURCE_GUARD_TARGET={}",
                 json!({
@@ -1147,6 +1126,65 @@ fn linux_worker_guard_fault_child() -> Result<()> {
         .await
     })??;
     bail!("worker guard access did not fault")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_guard_fault_address(
+    mapped_start: usize,
+    guard_start: usize,
+    guard_end: usize,
+    guard_bytes: usize,
+    page_size: usize,
+) -> Result<usize> {
+    // A merged PROT_NONE VMA can be wider than pthread's guard. Rust's handler
+    // recognizes faults only within one reported guard width of the stack base.
+    let address = if guard_end == mapped_start {
+        mapped_start
+            .checked_sub(page_size / 2)
+            .context("guard target underflow")?
+    } else {
+        mapped_start
+            .checked_add(page_size / 2)
+            .context("guard target overflow")?
+    };
+    let rust_guard_start = mapped_start
+        .checked_sub(guard_bytes)
+        .context("Rust guard range underflow")?;
+    let rust_guard_end = mapped_start
+        .checked_add(guard_bytes)
+        .context("Rust guard range overflow")?;
+    ensure!(
+        guard_start <= address
+            && address < guard_end
+            && rust_guard_start <= address
+            && address < rust_guard_end,
+        "guard target is outside protected interval or Rust handler range"
+    );
+    Ok(address)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn merged_external_guard_targets_the_page_beside_the_stack() -> Result<()> {
+    let mapped_start = 0x100000;
+    let page_size = 4096;
+    let external = linux_guard_fault_address(
+        mapped_start,
+        mapped_start - 16 * page_size,
+        mapped_start,
+        page_size,
+        page_size,
+    )?;
+    assert_eq!(external, mapped_start - page_size / 2);
+    let internal = linux_guard_fault_address(
+        mapped_start,
+        mapped_start,
+        mapped_start + page_size,
+        page_size,
+        page_size,
+    )?;
+    assert_eq!(internal, mapped_start + page_size / 2);
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
