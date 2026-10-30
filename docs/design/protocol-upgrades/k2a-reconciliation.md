@@ -770,3 +770,41 @@ tests and warnings denied passed in 7.67 seconds. All three commands used Rust
 lockfile hashes, terminal results and raw-log hashes are recorded in
 `.build-cache/k2a-reconcile/gas-extraction/`. These focused checks preserve the
 existing behavior; they do not establish complete historical executor isolation.
+
+## Ownership integration preflight, 30 October
+
+A read-only merge preview compared K2a `4e2823b604bdc647940c2e3061a5a28a4eff1207`
+with OWNERSHIP-1 `0a9af2171153089b7ec4207edb2bc9cb263e736a`, using merge base
+`af04da0d992450905c54f8d8b903ea240820e8bb`. It reports fourteen conflict regions
+in eight files. The raw preview and machine-readable inventory are preserved in
+`.build-cache/k2a-reconcile/k2a-ownership-0a9-preview.patch` and
+`ownership-integration-preflight.json`. No production files were merged or changed.
+
+Resolve the conflicts after the qualified prerequisite merges as follows:
+
+- In `runtime/storage.rs`, retain ownership fields, tracked blocking decode, and
+  test hooks alongside K2a's retained storage callbacks. `commit` must call
+  `ensure_commit_authorized` before invoking `storage_session::commit`: the latter
+  pops the savepoint stack before issuing COMMIT/RELEASE, so authorization after
+  that call would be too late. Keep the rollback-failure injection before the
+  retained rollback function clears the stack or invokes SQL. Neither branch's
+  entire method is a sufficient resolution by itself.
+- Keep K2a's coordinator policy exports in `consensus/finality_types.rs` and its
+  `minimum_prune_retention_blocks()` calls in `reactor/blocks.rs`. The retained
+  coordinator already defines the finality window and predecessor rollback depth.
+  Do not reintroduce a competing node-local constant or discard the ownership
+  branch's durable pruning-watermark behavior. Resolve associated configuration
+  and reactor comments to describe the resulting retained-policy floor.
+- Combine the API simulation and ownership test modules. Combine retained
+  publication tests with S2 native-stack test modules. Keep the pruning boundary
+  assertions from K2a and the owner service required by the updated reactor
+  constructor. Import reconciliation must retain `OwnerService` without restoring
+  the pre-extraction committee implementation.
+
+Automatic merges also need semantic inspection. A conflict-free result does not
+prove that the node storage adapter preserves owner lifetime, commit authorization,
+tracked blocking jobs, cancellation rollback, or retained coordinator dispatch.
+The integration checks must cover the existing storage differential tests, ownership
+commit/cancellation and rollback-failure tests, pruning predecessor boundaries, and
+real startup/finality shutdown tests. This preflight neither freezes P1 nor replaces
+final S2 parity, affected six-cell qualification, or the consolidated K2a review.
