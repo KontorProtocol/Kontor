@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::env;
-use std::future::{Future, poll_fn};
 use std::process;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -20,6 +18,7 @@ use wasmtime::component::Access;
 use wasmtime::{AsContextMut, Error as WasmtimeError, Trap};
 
 use super::super::balance;
+use super::super::sequential_chains;
 use super::{COMPONENT, CRYPTO_COMPONENT, SYSTEM_FUEL_CEILING, canonical};
 use crate::database::queries::live_deposit_gas_sum;
 use crate::runtime::invocation::{
@@ -916,6 +915,15 @@ pub(super) async fn run_resource_pending_host_io(
         matches!(process_role, "target_observed" | "probe_off_control"),
         "unknown pending host I/O role"
     );
+    if configuration == "production" && process_role == "target_observed" {
+        sequential_chains::run_suspended_64_profile().await?;
+        let memory_trace = resource_diagnostics::finish();
+        ensure!(
+            !memory_trace.is_empty(),
+            "suspended-64 runtime trace is empty"
+        );
+        resource_diagnostics::start_chain();
+    }
     let mut current = Fixture::new("view_crypto".to_owned(), configuration == "reduced").await?;
     current.resource_probe = Some(process_role == "target_observed");
     let gate = LeafGate {

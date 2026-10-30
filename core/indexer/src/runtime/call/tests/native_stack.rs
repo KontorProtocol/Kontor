@@ -29,6 +29,7 @@ mod cold_publication;
 mod foreign_wave;
 mod initialization;
 mod lifecycle;
+pub(super) mod memory;
 mod native_filestorage_lifecycle;
 mod native_staking_rewards;
 mod sqlite_large_values;

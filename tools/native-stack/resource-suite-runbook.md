@@ -8,6 +8,17 @@ receipts, fuel, rollback, target, and group semantic signatures. The result
 remains `qualification_status: missing` until production memory profiles and
 phase review are complete.
 
+The pending-host group also runs the frozen `suspended_64` profile in each
+cell's production target child. Its warm baseline is measured after publishing
+the real distinct-contract paid chain. One paid reactor root retains 64 nested
+invocation Stores while its leaf host import is pending. The child measures
+mapped, resident, private, and node-accounted memory at that point, then resumes
+the root and checks three full semantic results, 64 Store lifecycles per call,
+rollback, and after-cleanup memory. The source-only plan fixes zero deliberate
+guest occupancy, warm cache state, and separate private-growth, mapping,
+resident, and node-accounted allowances. This six-cell capacity evidence does
+not replace the Linux ARM64 reference-host overlap and service measurements.
+
 ## Select and freeze the nine Pulley depths
 
 Start from a clean Linux ARM64 development checkout whose boundary manifest
