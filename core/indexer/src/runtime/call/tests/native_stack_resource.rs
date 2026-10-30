@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::env;
 use std::sync::mpsc::channel;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::sync::{Arc, Barrier};
 use std::thread::ThreadId;
 use std::time::Duration;
 
@@ -525,7 +527,10 @@ fn pulley_boundary_worker_case() -> Result<()> {
             && blocking.os_thread_id != caller.os_thread_id,
         "boundary worker, blocking, and caller thread categories overlap"
     );
-    resource_diagnostics::start_chain();
+    #[cfg(target_os = "linux")]
+    resource_diagnostics::start_chain_with_stack_probe(linux_blocking_thread_observation);
+    #[cfg(target_os = "macos")]
+    resource_diagnostics::start_chain_with_stack_probe(macos::blocking_thread_observation);
     let task_case_id = case_id.clone();
     let task_configuration = configuration.clone();
     let task_role = process_role.clone();
@@ -569,19 +574,20 @@ fn pulley_boundary_worker_case() -> Result<()> {
         }
     }
     #[cfg(target_os = "linux")]
-    let thread_observations = [
+    let mut thread_observations = vec![
         linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
         linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
         linux_thread_observation(&blocking, "blocking_pool", None),
         linux_thread_observation(&caller, "block_on_caller", None),
     ];
     #[cfg(target_os = "macos")]
-    let thread_observations = [
+    let mut thread_observations = vec![
         macos::thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
         macos::thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
         macos::thread_observation(&blocking, "blocking_pool", None),
         macos::thread_observation(&caller, "block_on_caller", None),
     ];
+    collect_boundary_blocking_observations(&events, &worker_ids, &mut thread_observations)?;
     println!(
         "BOUNDARY_WORKER_RUNTIME={}",
         json!({
@@ -630,6 +636,93 @@ fn pulley_boundary_worker_case() -> Result<()> {
             "attempt_count": summary["attempt_count"],
             "complete": true,
         })
+    );
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn collect_boundary_blocking_observations(
+    events: &[ThreadEvent],
+    worker_ids: &[ThreadId],
+    thread_observations: &mut Vec<JsonValue>,
+) -> Result<()> {
+    for event in events {
+        if let Some(observation) = &event.stack_observation {
+            let thread_id = format!("{:?}", event.thread_id);
+            ensure!(
+                observation["thread_id"].as_str() == Some(thread_id.as_str())
+                    && observation["os_thread_id"].as_i64() == Some(event.os_thread_id.into()),
+                "boundary blocking stack measurement differs from preparation trace: {event:?}"
+            );
+            if !thread_observations
+                .iter()
+                .any(|item| item["thread_id"] == observation["thread_id"])
+            {
+                thread_observations.push(observation.clone());
+            }
+        }
+    }
+    for event in events
+        .iter()
+        .filter(|event| !worker_ids.contains(&event.thread_id))
+    {
+        let thread_id = format!("{:?}", event.thread_id);
+        ensure!(
+            thread_observations.iter().any(|observation| {
+                observation["thread_id"].as_str() == Some(thread_id.as_str())
+                    && observation["os_thread_id"].as_i64() == Some(event.os_thread_id.into())
+                    && observation["thread_category"].as_str() == Some("blocking_pool")
+            }),
+            "boundary blocking event has no measured stack: {event:?}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+#[ignore = "run explicitly to exercise two real blocking threads"]
+fn boundary_stack_probe_records_two_actual_blocking_threads() -> Result<()> {
+    let runtime = Builder::new_multi_thread()
+        .worker_threads(1)
+        .max_blocking_threads(2)
+        .enable_all()
+        .build()?;
+    #[cfg(target_os = "linux")]
+    resource_diagnostics::start_chain_with_stack_probe(linux_blocking_thread_observation);
+    #[cfg(target_os = "macos")]
+    resource_diagnostics::start_chain_with_stack_probe(macos::blocking_thread_observation);
+    let barrier = Arc::new(Barrier::new(2));
+    runtime.block_on(async {
+        let first_barrier = barrier.clone();
+        let first = tokio::task::spawn_blocking(move || {
+            let _scope = resource_diagnostics::scope("compiler_entry", "compiler_exit");
+            first_barrier.wait();
+        });
+        let second = tokio::task::spawn_blocking(move || {
+            let _scope = resource_diagnostics::scope("compiler_entry", "compiler_exit");
+            barrier.wait();
+        });
+        first.await?;
+        second.await?;
+        Ok::<(), anyhow::Error>(())
+    })?;
+    let events = resource_diagnostics::finish();
+    let entries = events
+        .iter()
+        .filter(|event| event.name == "compiler_entry")
+        .collect::<Vec<_>>();
+    ensure!(entries.len() == 2, "two compiler entries were not recorded");
+    ensure!(
+        entries[0].thread_id != entries[1].thread_id
+            && entries[0].os_thread_id != entries[1].os_thread_id,
+        "blocking compiler entries did not use distinct threads"
+    );
+    let mut observations = Vec::new();
+    collect_boundary_blocking_observations(&events, &[], &mut observations)?;
+    ensure!(
+        observations.len() == 2,
+        "both blocking stacks were not measured"
     );
     Ok(())
 }
