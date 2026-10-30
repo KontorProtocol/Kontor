@@ -2,6 +2,7 @@
 """Validate the bounded, per-process Pulley boundary family evidence."""
 
 import argparse
+import copy
 import hashlib
 import json
 import platform
@@ -17,7 +18,8 @@ from jsonschema import Draft202012Validator
 sys.dont_write_bytecode = True
 
 from capture_resource_chain import harness_position
-from capture_resource_diagnostic import validate_control
+from capture_resource_control import validate_build_attestation
+from capture_resource_diagnostic import bundle_page_size, validate_control
 from resource_evidence import (canonical_decimal_amount,
                                check_guard_control, file_evidence,
                                load_json_strict, no_duplicate_keys,
@@ -28,6 +30,8 @@ from resource_boundary_manifest import (CONFIGURATIONS, DISCOVERY_CELL,
                                         DISCOVERY_ROLE, FINAL_ROLES, MANIFEST,
                                         SCHEMA, build_boundary_manifest)
 from resource_manifest import FIBER_SOURCE_FILES, ROOT, build_manifest
+from resource_suite_registry import MANIFEST as REGISTRY_MANIFEST
+from resource_suite_registry import build_registry
 
 
 TEST_NAME = "runtime::call::tests::native_stack_resource::pulley_boundary_worker_case"
@@ -107,12 +111,19 @@ def expected_case_env(case_id, role, configuration, depths=None):
 
 
 def validate_cell_identity(cell, cargo_artifact, check_host=True):
-    match = re.fullmatch(r"Linux-(ARM64|X64)/(dev|release)", cell)
-    require(match is not None and sys.platform == "linux",
+    match = re.fullmatch(r"(Linux-ARM64|Linux-X64|macOS-ARM64)/(dev|release)", cell)
+    require(match is not None,
             "boundary cell OS, architecture, or profile is unsupported")
-    arch, build_profile = match.groups()
-    expected_arch = {"ARM64": "aarch64", "X64": "x86_64"}[arch]
-    require(not check_host or platform.machine() == expected_arch,
+    cell_host, build_profile = match.groups()
+    expected_os, expected_arch = {
+        "Linux-ARM64": ("linux", "aarch64"),
+        "Linux-X64": ("linux", "x86_64"),
+        "macOS-ARM64": ("darwin", "aarch64"),
+    }[cell_host]
+    host_arches = ({"arm64", "aarch64"} if cell_host == "macOS-ARM64"
+                   else {expected_arch})
+    require(not check_host or (sys.platform == expected_os and
+                               platform.machine() in host_arches),
             "boundary cell architecture differs from validation host")
     profile = cargo_artifact["profile"]
     require(profile["test"] is True
@@ -227,7 +238,8 @@ def validate_replay_order(attempts, depths, leaf=False):
             "boundary replay omitted or reordered frozen depth samples")
 
 
-def validate_trace(trace, runtime, attempts):
+def validate_trace(trace, runtime, attempts, os_name="linux",
+                   attempt_markers=("boundary_attempt_start", "boundary_attempt_end")):
     require(set(trace) == TRACE_KEYS
             and trace["scope"] == runtime["scope"]
             and all(trace[key] == runtime[key] for key in
@@ -240,7 +252,7 @@ def validate_trace(trace, runtime, attempts):
          if key not in {"scope", "configuration", "case_id",
                         "process_role", "pid", "embedded_source_sha",
                         "binary_sha256"}},
-        runtime["configuration"], page, "linux", runtime["pid"])
+        runtime["configuration"], page, os_name, runtime["pid"])
     workers = {item["thread_id"]: item["os_thread_id"]
                for item in threads["tokio_worker"]}
     blocking = {item["thread_id"]: item["os_thread_id"]
@@ -248,9 +260,7 @@ def validate_trace(trace, runtime, attempts):
     events = trace["events"]
     require(isinstance(events, list) and events,
             "boundary thread trace is empty")
-    allowed = {name for pair in PHASES for name in pair} | EXTRA_EVENTS | {
-        "boundary_attempt_start", "boundary_attempt_end",
-    }
+    allowed = {name for pair in PHASES for name in pair} | EXTRA_EVENTS | set(attempt_markers)
     for event in events:
         require(isinstance(event, dict) and set(event) == TRACE_EVENT_KEYS
                 and event["name"] in allowed,
@@ -266,9 +276,9 @@ def validate_trace(trace, runtime, attempts):
                     "boundary blocking event lacks measured stack")
     names = [event["name"] for event in events]
     starts = [index for index, name in enumerate(names)
-              if name == "boundary_attempt_start"]
+              if name == attempt_markers[0]]
     ends = [index for index, name in enumerate(names)
-            if name == "boundary_attempt_end"]
+            if name == attempt_markers[1]]
     require(len(starts) == len(ends) == len(attempts)
             and all(start < end
                     and (index == 0 or ends[index - 1] < start)
@@ -453,7 +463,7 @@ def validate_observation(attempt, summary, manifest, index, cell):
             and observation["engine_target"] == summary["engine_target"]
             and observation["max_wasm_stack"] == summary["max_wasm_stack"]
             and observation["async_stack_size"] == summary["async_stack_size"]
-            and observation["target_os"] == "linux"
+            and observation["target_os"] == ("macos" if cell.startswith("macOS-") else "linux")
             and observation["target_arch"] ==
             {"ARM64": "aarch64", "X64": "x86_64"}[
                 cell.split("/", 1)[0].split("-", 1)[1]]
@@ -705,7 +715,8 @@ def validate_run(run, bundle, manifest, directory):
                 "boundary attempt escaped its child process")
         validate_observation(attempt, summary, manifest, index,
                              bundle["cell"])
-    counts = validate_trace(parsed["thread_trace"], runtime, parsed["attempts"])
+    counts = validate_trace(parsed["thread_trace"], runtime, parsed["attempts"],
+                            "macos" if bundle["cell"].startswith("macOS-") else "linux")
     require(len(parsed["timings"]) == len(parsed["attempts"])
             and all(set(timing) == {
                 "role", "kind", "sample_index", "setup_ms", "funding_ms",
@@ -756,6 +767,7 @@ def validate_source_freeze(source_sha, current_source_sha, manifest_sha256):
     require(set(changed) == {
         "tools/native-stack/resource-boundary-depths-v1.json",
         "tools/native-stack/resource-boundary-manifest-v1.json",
+        "tools/native-stack/resource-suite-registry-v1.json",
     }, "runtime or fixture source changed after reviewed discovery")
 
     old_manifest_bytes = historical_file(source_sha,
@@ -763,9 +775,39 @@ def validate_source_freeze(source_sha, current_source_sha, manifest_sha256):
     require(hashlib.sha256(old_manifest_bytes).hexdigest() ==
             manifest_sha256,
             "reviewed discovery manifest differs from source commit")
-    return json.loads(old_manifest_bytes,
-                      object_pairs_hook=no_duplicate_keys,
-                      parse_constant=no_nonfinite_constants)
+    old_manifest = json.loads(old_manifest_bytes,
+                              object_pairs_hook=no_duplicate_keys,
+                              parse_constant=no_nonfinite_constants)
+    final_manifest = load_json_strict(MANIFEST)
+    old_registry = json.loads(historical_file(
+        source_sha, "tools/native-stack/resource-suite-registry-v1.json"),
+        object_pairs_hook=no_duplicate_keys, parse_constant=no_nonfinite_constants)
+    final_registry = load_json_strict(REGISTRY_MANIFEST)
+    require(final_registry == build_registry(),
+            "final suite registry differs from deterministic source regeneration")
+    old_boundary_sha = hashlib.sha256(old_manifest_bytes).hexdigest()
+    final_boundary_sha = sha256(MANIFEST)
+    require(old_manifest["claim_status"] == "pending_discovery"
+            and final_manifest["claim_status"] == "candidate_only"
+            and old_registry["parent_manifests"]["boundary"] == old_boundary_sha
+            and old_registry["groups"]["pulley_boundary"]["manifest_sha256"]
+                == old_boundary_sha
+            and old_registry["remaining_gates"]["boundary_discovery"]
+                == old_manifest["claim_status"]
+            and final_registry["parent_manifests"]["boundary"] == final_boundary_sha
+            and final_registry["groups"]["pulley_boundary"]["manifest_sha256"]
+                == final_boundary_sha
+            and final_registry["remaining_gates"]["boundary_discovery"]
+                == final_manifest["claim_status"],
+            "suite registry boundary digest or status differs from source freeze")
+    permitted = copy.deepcopy(old_registry)
+    permitted["parent_manifests"]["boundary"] = final_boundary_sha
+    permitted["groups"]["pulley_boundary"]["manifest_sha256"] = final_boundary_sha
+    permitted["remaining_gates"]["boundary_discovery"] = (
+        final_manifest["claim_status"])
+    require(permitted == final_registry,
+            "suite registry changed beyond derived boundary metadata")
+    return old_manifest
 
 
 def historical_file(source_sha, relative):
@@ -842,11 +884,17 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
     old_v1_sha = hashlib.sha256(old_v1_bytes).hexdigest()
     old_v1 = json.loads(old_v1_bytes, object_pairs_hook=no_duplicate_keys,
                         parse_constant=no_nonfinite_constants)
-    require(set(archived_control) == {
+    expected_control_keys = {
         "manifest_sha256", "source_sha", "binary_path", "binary_sha256",
         "cargo_artifact", "cargo_artifacts", "cargo_metadata",
         "guard_control", "wasmtime_source_files",
-    } and archived_control["source_sha"] == source_sha
+    }
+    if "resource_test_builder" in old_v1["artifacts"]:
+        expected_control_keys.update({"build_attestation", "build_log"})
+    if "fastnum_generated" in old_v1["build_policy"]:
+        expected_control_keys.add("fastnum_files")
+    require(set(archived_control) == expected_control_keys
+            and archived_control["source_sha"] == source_sha
             and archived_control["binary_sha256"] == archive["binary_sha256"]
             and archived_control["manifest_sha256"] == old_v1_sha,
             "reviewed discovery control differs from historical source")
@@ -859,9 +907,16 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
             "reviewed discovery binary bytes or path differ from control")
     control_dir = (path.parent /
                    archive["control_capture"]["path"]).parent
+    build_entries = ([archived_control["build_attestation"],
+                      archived_control["build_log"]]
+                     if "build_attestation" in archived_control else [])
+    fastnum_entries = (list(archived_control["fastnum_files"].values())
+                       if "fastnum_files" in archived_control else [])
     for entry in (archived_control["cargo_artifacts"],
                   archived_control["cargo_metadata"],
+                  *build_entries,
                   archived_control["guard_control"]["raw_log"],
+                  *fastnum_entries,
                   *archived_control["wasmtime_source_files"].values()):
         file_evidence(control_dir, entry)
     require(set(archived_control["wasmtime_source_files"]) ==
@@ -902,6 +957,21 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
             and records[-1].get("reason") == "build-finished"
             and records[-1].get("success") is True,
             "reviewed discovery binary lacks exact Cargo artifact identity")
+    if "build_attestation" in archived_control:
+        attestation, build_log = validate_build_attestation(
+            control_dir / archived_control["build_attestation"]["path"],
+            control_dir / archived_control["cargo_artifacts"]["path"],
+            control_dir / archived_control["cargo_metadata"]["path"],
+            source_sha, old_v1, Path(archive["binary_path"]), selected[0],
+            manifest_sha256=old_v1_sha, core_root=workspace,
+            binary_sha256=archive["binary_sha256"])
+        require(build_log == control_dir / archived_control["build_log"]["path"],
+                "reviewed discovery build log path differs")
+        if "fastnum_files" in archived_control:
+            require(archived_control["fastnum_files"] == {
+                "build_script": attestation["fastnum_build_script"],
+                **attestation["fastnum_generated"],
+            }, "reviewed discovery fastnum settings differ from build")
     guard_lines = (control_dir /
                    archived_control["guard_control"]["raw_log"]["path"])
     guard_markers = [json.loads(line.split("KONTOR_RESOURCE_GUARD_CONTROL=", 1)[1],
@@ -937,7 +1007,7 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
     validate_frozen_discovery_pairs(archive, manifest)
 
 
-def validate_bundle(bundle, directory):
+def validate_bundle(bundle, directory, archive_binary=None):
     schema = load_json_strict(SCHEMA)
     error = next(Draft202012Validator(schema).iter_errors(bundle), None)
     require(error is None, f"boundary evidence schema failed: {error}")
@@ -950,8 +1020,11 @@ def validate_bundle(bundle, directory):
     file_evidence(directory, bundle["control_capture"])
     control, binary = validate_control(
         control_path, bundle["control_capture"]["sha256"],
-        build_manifest())
-    validate_cell_identity(bundle["cell"], control["cargo_artifact"])
+        build_manifest(),
+        page_size=bundle_page_size(bundle) if archive_binary is not None else None,
+        archive_binary=archive_binary, expected_cell=bundle["cell"])
+    validate_cell_identity(bundle["cell"], control["cargo_artifact"],
+                           check_host=archive_binary is None)
     require(control["source_sha"] == bundle["source_sha"]
             and control["binary_sha256"] == bundle["binary_sha256"]
             and str(binary) == bundle["binary_path"],

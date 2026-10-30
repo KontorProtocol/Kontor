@@ -28,70 +28,70 @@
   "boundary_cases": [
     {
       "case_id": "pulley_plain_core",
-      "first_failure": 8188,
-      "last_success": 8187,
+      "first_failure": null,
+      "last_success": null,
       "mode": "core",
       "repeats": 3,
       "shape": "plain"
     },
     {
       "case_id": "pulley_plain_paid",
-      "first_failure": 8187,
-      "last_success": 8186,
+      "first_failure": null,
+      "last_success": null,
       "mode": "paid",
       "repeats": 3,
       "shape": "plain"
     },
     {
       "case_id": "pulley_plain_system",
-      "first_failure": 8188,
-      "last_success": 8187,
+      "first_failure": null,
+      "last_success": null,
       "mode": "system",
       "repeats": 3,
       "shape": "plain"
     },
     {
       "case_id": "pulley_plain_view",
-      "first_failure": 8188,
-      "last_success": 8187,
+      "first_failure": null,
+      "last_success": null,
       "mode": "view",
       "repeats": 3,
       "shape": "plain"
     },
     {
       "case_id": "pulley_wide_core",
-      "first_failure": 1723,
-      "last_success": 1722,
+      "first_failure": null,
+      "last_success": null,
       "mode": "core",
       "repeats": 3,
       "shape": "wide"
     },
     {
       "case_id": "pulley_wide_paid",
-      "first_failure": 1723,
-      "last_success": 1722,
+      "first_failure": null,
+      "last_success": null,
       "mode": "paid",
       "repeats": 3,
       "shape": "wide"
     },
     {
       "case_id": "pulley_wide_system",
-      "first_failure": 1723,
-      "last_success": 1722,
+      "first_failure": null,
+      "last_success": null,
       "mode": "system",
       "repeats": 3,
       "shape": "wide"
     },
     {
       "case_id": "pulley_wide_view",
-      "first_failure": 1723,
-      "last_success": 1722,
+      "first_failure": null,
+      "last_success": null,
       "mode": "view",
       "repeats": 3,
       "shape": "wide"
     }
   ],
-  "claim_status": "candidate_only",
+  "claim_status": "pending_discovery",
   "configurations": [
     "reduced",
     "production"
@@ -109,12 +109,12 @@
   ],
   "leaf_case": {
     "case_id": "deepest_frame_host_call",
-    "first_failure": 8181,
-    "last_success": 8180,
+    "first_failure": null,
+    "last_success": null,
     "own_adjacent_boundary": true,
     "repeats": 2
   },
-  "parent_manifest_sha256": "3c47d1ba4610a907694ceb50abba6fb7641d57e41c224f1c68778565854fb0b0",
+  "parent_manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -153,22 +153,22 @@
     "six_cell_qualification": "missing",
     "workload_plan": "awaiting_frozen_workload_plan"
   },
-  "reviewed_discovery_sha256": "9c04b001175fc2bc39b7b535f7c184662ea39c6457ac222c132a2c6b28a474f6",
+  "reviewed_discovery_sha256": null,
   "schema_sha256": "36023c14bd0faa5e35df8525dda3a4293ccdaa46a4829781239a0f310c8cf96f",
   "schema_version": 1,
   "source_baseline_commit": "67a52fed58a893ce2c1c05483f86f4fffa02a675",
   "sources": {
     "capture": {
       "path": "tools/native-stack/capture_resource_boundary.py",
-      "sha256": "20d5fec463f10fd1a67ac800040eaccea8b7f13dd5f553585feb922d68909fbc"
+      "sha256": "e5b963813fbb946e654208ad5367b786210c18aeb527fd68d78642d996104187"
     },
     "composition_tests": {
       "path": "tools/native-stack/test_resource_boundary_composition.py",
-      "sha256": "a2f9bbccfe5d9f95a34230694987ed6f79f718939c41d8be3317790fb3ddd531"
+      "sha256": "810f4faaff021d849098ba9a0640e4688d5d5098d5c74cfd4e9a1627be90c6ab"
     },
     "depths": {
       "path": "tools/native-stack/resource-boundary-depths-v1.json",
-      "sha256": "bf08438df438b6e1c3037240e7a72f54166ff003cb5b532ce4da017fe70501af"
+      "sha256": "14a4cf8804797ad77fe2f6b1dfce9d067c002816db77511475ed4ea71b0e9b68"
     },
     "fixture_binary": {
       "path": "test-contracts/binaries/stack_probe.wasm.br",
@@ -196,23 +196,23 @@
     },
     "sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "985e95718d973f834feffd6bda79019c1d6e7219e1641c3777ae0a41c744f241"
+      "sha256": "c8e352ae727bdebbc3c89c4b4eee4710ab6a74c3a510e9e2c1ee7e660dd450cd"
     },
     "synthetic_guard_tests": {
       "path": "tools/native-stack/test_resource_report.py",
-      "sha256": "b20dfa41e4be49d3e417d99faa138053162093d0cd0aec82212ff559a5b0e36e"
+      "sha256": "d11cdaa61a409e0bd00c892302c36e0001198daa023e8e862d4ef5615309ea1a"
     },
     "tests": {
       "path": "tools/native-stack/test_resource_boundary_evidence.py",
-      "sha256": "a7c83d16e8e86f2426f11cdc6317a37c3608ca6c526a40849f440e5374450ce3"
+      "sha256": "056eb5c5d11635e6b2e89a848d6fce0742d11aee4453832ded257adb582c50a4"
     },
     "validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "d210ef4f305405a0feaa3495bf82cd0fdaedf2335bab9b9006098c95957a5c9d"
+      "sha256": "4bf448dd83eb4b79ed2464786e10728a34175cde1016bd8b16af1f55d68fc783"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "88d9c6dc29bd0e2855432fce492c869dd681c12bbc05e73d7d4e135c3395f198"
+      "sha256": "943dd5b4f7f1ee68cb3467efdcffabe094521de39c284293b4c020376529371c"
     }
   }
 }

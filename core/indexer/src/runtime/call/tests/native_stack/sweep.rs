@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::env;
+use std::future::{Future, poll_fn};
 use std::process;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -9,14 +12,15 @@ use indexer_types::Payment;
 use libsql::{Connection, Value as SqlValue, params};
 use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
-use stdlib::{KeyPath, to_wave_expr};
+use stdlib::{KeyPath, from_wave_expr, to_wave_expr};
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use tokio::time::timeout;
-use wasmtime::Trap;
+use wasmtime::component::Access;
+use wasmtime::{AsContextMut, Error as WasmtimeError, Trap};
 
 use super::super::balance;
-use super::{COMPONENT, SYSTEM_FUEL_CEILING};
+use super::{COMPONENT, CRYPTO_COMPONENT, SYSTEM_FUEL_CEILING, canonical};
 use crate::database::queries::live_deposit_gas_sum;
 use crate::runtime::invocation::{
     InvocationBudget, InvocationLimitReached, ResourceProbePhase, ResourceTeardownRecorder,
@@ -27,8 +31,8 @@ use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{
-    ContractAddress, Decimal, ExecutionError, Linkers, MAX_UNTRUSTED_GAS_LIMIT, Runtime,
-    TransactionContext, native_provenance,
+    CheckedArithmetics, ContractAddress, Decimal, ExecutionError, Linkers, MAX_UNTRUSTED_GAS_LIMIT,
+    Runtime, TransactionContext, native_provenance,
 };
 use crate::test_utils::test_runtime_with_engine;
 
@@ -44,6 +48,7 @@ struct Fixture {
     runtime: Runtime,
     _dir: TempDir,
     kind: String,
+    component_sha256: String,
     signer: Signer,
     payment: Payment,
     address: ContractAddress,
@@ -102,6 +107,14 @@ impl Fixture {
             gas_limit: MAX_UNTRUSTED_GAS_LIMIT,
         };
         let fixture_contracts = if kind == "paid_reenter" { 65 } else { 1 };
+        let (name, component) = if kind == "view_crypto" {
+            ("crypto", CRYPTO_COMPONENT.to_vec())
+        } else if kind.contains("_canonical_") {
+            ("canonical-probe", canonical::fixture_bytes_for_kind(&kind)?)
+        } else {
+            ("stack-probe", COMPONENT.to_vec())
+        };
+        let component_sha256 = hex::encode(Sha256::digest(&component));
         let publication_start = Instant::now();
         resource_diagnostics::record("publication_entry");
         for tx_index in 0..fixture_contracts {
@@ -117,8 +130,8 @@ impl Fixture {
                 .publish(
                     &signer,
                     payment.clone(),
-                    "stack-probe",
-                    COMPONENT,
+                    name,
+                    &component,
                     &native_provenance()?,
                 )
                 .await
@@ -128,7 +141,7 @@ impl Fixture {
         runtime.set_context(1, None, None, None).await;
         let publication_ms = publication_start.elapsed().as_millis();
         let address = ContractAddress {
-            name: "stack-probe".into(),
+            name: name.into(),
             height: 1,
             tx_index: 0,
         };
@@ -151,9 +164,15 @@ impl Fixture {
         let baseline_live_deposit_gas =
             live_deposit_gas_sum(&conn, signer.signer_id().unwrap()).await?;
         ensure!(
-            baseline_live_deposit_gas == 3 * u64::from(fixture_contracts)
-                && baseline_floor == Pricing::storage_collateral(baseline_live_deposit_gas)?,
-            "boundary fixture baseline storage deposit changed"
+            (if kind == "view_crypto" {
+                baseline_live_deposit_gas > 0
+            } else if kind.contains("_canonical_") {
+                baseline_live_deposit_gas == 0
+            } else {
+                baseline_live_deposit_gas == 3 * u64::from(fixture_contracts)
+            }) && baseline_floor == Pricing::storage_collateral(baseline_live_deposit_gas)?,
+            "boundary fixture baseline storage deposit changed: kind={kind} live={baseline_live_deposit_gas} floor={baseline_floor} expected={}",
+            Pricing::storage_collateral(baseline_live_deposit_gas)?
         );
         let baseline_supply = token::total_supply(&mut runtime).await?;
         ensure!(budget.live() == 0, "fixture left live invocation Stores");
@@ -164,6 +183,7 @@ impl Fixture {
             runtime,
             _dir: dir,
             kind,
+            component_sha256,
             signer,
             payment,
             address,
@@ -355,11 +375,14 @@ impl Fixture {
         } else {
             None
         };
-        let last_depth = self
-            .runtime
-            .execute(None, None, &self.address, "last-depth()")
-            .await?
-            .parse::<u32>()?;
+        let last_depth = if self.kind == "view_crypto" || self.kind.contains("_canonical_") {
+            0
+        } else {
+            self.runtime
+                .execute(None, None, &self.address, "last-depth()")
+                .await?
+                .parse::<u32>()?
+        };
         let live_deposit_gas_after = if self.resource_probe.is_some() {
             Some(live_deposit_gas_sum(&conn, self.signer.signer_id().unwrap()).await?)
         } else {
@@ -507,7 +530,7 @@ impl Fixture {
             "max_wasm_stack": self.runtime.engine.get_max_wasm_stack(),
             "async_stack_size": self.runtime.engine.get_async_stack_size(),
             "engine_target": self.runtime.engine.get_target(),
-            "component_sha256": hex::encode(Sha256::digest(COMPONENT)),
+            "component_sha256": self.component_sha256,
             "target_os": env::consts::OS,
             "target_arch": env::consts::ARCH,
             "reset": {
@@ -626,6 +649,15 @@ fn expression(kind: &str, depth: u32, address: &ContractAddress) -> Result<Strin
                 ..address.clone()
             })
         ),
+        "view_crypto" => format!("sha256({})", to_wave_expr(b"native-stack-pending".to_vec())),
+        "view_canonical_echo" => {
+            format!("view-echo({})", to_wave_expr("x".repeat(16_384)))
+        }
+        "view_canonical_realloc_trap" | "view_canonical_realloc_import" => {
+            format!("view-run({})", to_wave_expr("x".repeat(16_384)))
+        }
+        "paid_canonical_post_light" => "paid-light()".to_owned(),
+        "paid_canonical_post_heavy" => "paid-heavy()".to_owned(),
         _ => bail!("unknown probe kind {kind}"),
     })
 }
@@ -637,6 +669,440 @@ pub(super) async fn resource_smoke(reduced: bool) -> Result<()> {
         "large-frame paid contract call failed on the Tokio worker"
     );
     Ok(())
+}
+
+pub(super) async fn run_resource_finite_paid(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    let repeats = match case_id {
+        "large_frame_paid" => 3,
+        "max_gas_paid" => 2,
+        _ => bail!("unknown finite paid stack case"),
+    };
+    ensure!(
+        matches!(configuration, "reduced" | "production"),
+        "unknown finite paid stack configuration"
+    );
+    ensure!(
+        matches!(process_role, "target_observed" | "probe_off_control"),
+        "unknown finite paid stack role"
+    );
+    let mut fixture = Fixture::new("paid_huge".to_string(), configuration == "reduced").await?;
+    fixture.resource_probe = Some(process_role == "target_observed");
+    let mut observations = Vec::with_capacity(repeats);
+    for repeat_index in 0..repeats {
+        resource_diagnostics::record("finite_stack_attempt_start");
+        ensure!(
+            fixture.observe(0, process_role).await? == "ok",
+            "finite paid stack sample failed"
+        );
+        resource_diagnostics::record("finite_stack_attempt_end");
+        let observation = fixture
+            .last_report
+            .take()
+            .context("finite paid stack sample lacks semantic evidence")?;
+        ensure!(
+            observation["gas_limit"] == MAX_UNTRUSTED_GAS_LIMIT,
+            "finite paid stack sample did not use the maximum paid gas limit"
+        );
+        println!(
+            "FINITE_STACK_ATTEMPT:{}",
+            json!({
+                "case_id": case_id,
+                "configuration": configuration,
+                "process_role": process_role,
+                "sample_key": "target",
+                "repeat_index": repeat_index,
+                "pid": process::id(),
+                "observation": observation,
+            })
+        );
+        observations.push(observation);
+    }
+    let summary = json!({
+        "case_id": case_id,
+        "configuration": configuration,
+        "process_role": process_role,
+        "sample_count": observations.len(),
+        "outcomes": observations.iter().map(|value| value["outcome"].clone()).collect::<Vec<_>>(),
+        "complete": true,
+    });
+    println!("FINITE_STACK_SUMMARY:{summary}");
+    Ok(summary)
+}
+
+pub(super) async fn run_resource_canonical(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    ensure!(
+        matches!(configuration, "reduced" | "production"),
+        "unknown canonical stack configuration"
+    );
+    ensure!(
+        matches!(process_role, "target_observed" | "probe_off_control"),
+        "unknown canonical stack role"
+    );
+    let samples: &[(&str, &str, &str, Option<&str>)] = match case_id {
+        "canonical_lift_lower" => &[
+            ("success", "view_canonical_echo", "ok", None),
+            (
+                "failure",
+                "view_canonical_realloc_import",
+                "other_trap",
+                Some("CannotLeaveComponent"),
+            ),
+        ],
+        "canonical_realloc" => &[
+            ("success_lowering", "view_canonical_echo", "ok", None),
+            (
+                "realloc_trap",
+                "view_canonical_realloc_trap",
+                "other_trap",
+                Some("UnreachableCodeReached"),
+            ),
+            (
+                "forbidden_import",
+                "view_canonical_realloc_import",
+                "other_trap",
+                Some("CannotLeaveComponent"),
+            ),
+        ],
+        "canonical_post_return" => &[
+            (
+                "light",
+                "paid_canonical_post_light",
+                "other_trap",
+                Some("CannotLeaveComponent"),
+            ),
+            (
+                "heavy",
+                "paid_canonical_post_heavy",
+                "other_trap",
+                Some("CannotLeaveComponent"),
+            ),
+        ],
+        _ => bail!("unknown canonical stack case {case_id}"),
+    };
+    let mut observations = Vec::with_capacity(samples.len() * 2);
+    let mut paid_fees = Vec::new();
+    for (sample_key, kind, expected_outcome, expected_trap) in samples {
+        let mut fixture = Fixture::new((*kind).to_owned(), configuration == "reduced").await?;
+        fixture.resource_probe = Some(process_role == "target_observed");
+        for repeat_index in 0..2 {
+            resource_diagnostics::record("finite_stack_attempt_start");
+            let outcome = fixture.observe(0, process_role).await?;
+            resource_diagnostics::record("finite_stack_attempt_end");
+            let observation = fixture
+                .last_report
+                .take()
+                .context("canonical sample lacks semantic observation")?;
+            ensure!(
+                outcome == *expected_outcome
+                    && observation["typed_trap"].as_str() == *expected_trap,
+                "canonical {sample_key} returned {outcome}: {observation}"
+            );
+            if *expected_outcome == "ok" {
+                ensure!(
+                    observation["value"] == to_wave_expr("x".repeat(16_384)),
+                    "canonical string lowering or lifting changed"
+                );
+            }
+            if kind.starts_with("paid_") {
+                paid_fees.push(canonical_paid_accounting(
+                    &observation,
+                    &fixture.runtime.pricing,
+                    fixture.runtime.gas_to_fuel_multiplier,
+                )?);
+            }
+            println!(
+                "CANONICAL_STACK_ATTEMPT:{}",
+                json!({
+                    "case_id": case_id,
+                    "configuration": configuration,
+                    "process_role": process_role,
+                    "sample_key": sample_key,
+                    "repeat_index": repeat_index,
+                    "pid": process::id(),
+                    "observation": observation,
+                })
+            );
+            observations.push(((*sample_key).to_owned(), observation));
+        }
+    }
+    if case_id == "canonical_post_return" {
+        let light = observations[0].1["fuel"]["user"]
+            .as_u64()
+            .context("canonical light user fuel is missing")?;
+        let heavy = observations[2].1["fuel"]["user"]
+            .as_u64()
+            .context("canonical heavy user fuel is missing")?;
+        ensure!(
+            heavy >= light + 16_384
+                && paid_fees.len() == 4
+                && paid_fees[2].0 > paid_fees[0].0
+                && paid_fees[2].1 > paid_fees[0].1,
+            "canonical post-return loop or fee was not charged"
+        );
+    }
+    let summary = json!({
+        "case_id": case_id,
+        "configuration": configuration,
+        "process_role": process_role,
+        "sample_count": observations.len(),
+        "sample_keys": samples.iter().map(|(key, ..)| *key).collect::<Vec<_>>(),
+        "outcomes": observations.iter().map(|(_, value)| value["outcome"].clone()).collect::<Vec<_>>(),
+        "complete": true,
+    });
+    println!("CANONICAL_STACK_SUMMARY:{summary}");
+    Ok(summary)
+}
+
+fn canonical_paid_accounting(
+    observation: &JsonValue,
+    pricing: &Pricing,
+    multiplier: u64,
+) -> Result<(u64, Decimal)> {
+    let fuel = &observation["fuel"];
+    let user = fuel["user"]
+        .as_u64()
+        .context("canonical user fuel is missing")?;
+    ensure!(
+        user > 0 && fuel["deposit"].as_u64() == Some(0) && multiplier == 1_000,
+        "canonical fixture used deposit fuel or changed gas scale"
+    );
+    let expected_gas = user.div_ceil(multiplier).max(1);
+    let receipt_gas = observation["receipt"]["gas"]
+        .as_u64()
+        .context("canonical paid receipt gas is missing")?;
+    ensure!(
+        receipt_gas == expected_gas && receipt_gas <= MAX_UNTRUSTED_GAS_LIMIT,
+        "canonical paid receipt gas differs from user fuel"
+    );
+    ensure!(
+        pricing.execution_fee(1)? == Decimal::from("1e-9"),
+        "canonical fixture pricing changed"
+    );
+    let expected_fee = pricing.execution_fee(expected_gas)?;
+    let balances = &observation["balance_transitions"];
+    let amount = |name| -> Result<Decimal> {
+        Ok(Decimal::from(
+            balances[name]
+                .as_str()
+                .context("canonical balance amount is missing")?,
+        ))
+    };
+    ensure!(
+        amount("before")?.sub(amount("after")?)? == expected_fee
+            && amount("burned_after")?.sub(amount("burned_before")?)? == expected_fee
+            && amount("supply_before")?.sub(amount("supply_after")?)? == expected_fee,
+        "canonical paid debit, burn, or supply differs from priced gas"
+    );
+    Ok((expected_gas, expected_fee))
+}
+
+pub(super) async fn run_resource_pending_host_io(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    ensure!(
+        matches!(configuration, "reduced" | "production"),
+        "unknown pending host I/O configuration"
+    );
+    ensure!(
+        matches!(process_role, "target_observed" | "probe_off_control"),
+        "unknown pending host I/O role"
+    );
+    let mut current = Fixture::new("view_crypto".to_owned(), configuration == "reduced").await?;
+    current.resource_probe = Some(process_role == "target_observed");
+    let gate = LeafGate {
+        entered: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let pending_polls = Arc::new(AtomicUsize::new(0));
+    let production_linkers = current.runtime.linkers.clone();
+    let mut user = current.runtime.linkers.user.clone();
+    user.allow_shadowing(true)
+        .instance("kontor:built-in/crypto")?
+        .func_wrap_async("sha256", {
+            let entered = gate.entered.clone();
+            let release = gate.release.clone();
+            let calls = calls.clone();
+            let pending_polls = pending_polls.clone();
+            move |mut store, (input,): (Vec<u8>,)| {
+                let entered = entered.clone();
+                let release = release.clone();
+                let calls = calls.clone();
+                let pending_polls = pending_polls.clone();
+                Box::new(async move {
+                    if input != b"native-stack-pending" {
+                        return Err(WasmtimeError::msg("unexpected pending host input"));
+                    }
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    let wait = release.notified();
+                    tokio::pin!(wait);
+                    let mut signaled = false;
+                    poll_fn(|cx| match wait.as_mut().poll(cx) {
+                        Poll::Pending => {
+                            // Signal only after the host future really returns Pending.
+                            if !signaled {
+                                pending_polls.fetch_add(1, Ordering::SeqCst);
+                                entered.notify_one();
+                                signaled = true;
+                            }
+                            Poll::Pending
+                        }
+                        Poll::Ready(()) => Poll::Ready(()),
+                    })
+                    .await;
+                    let mut access =
+                        Access::<Runtime, Runtime>::new(store.as_context_mut(), |runtime| runtime);
+                    let runtime = access.get().clone();
+                    let digest = runtime
+                        ._sha256(&mut access, input)
+                        .await
+                        .map_err(WasmtimeError::from_anyhow)?;
+                    Ok((digest,))
+                })
+            }
+        })?;
+    current.runtime.linkers = Arc::new(Linkers {
+        user,
+        native: current.runtime.linkers.native.clone(),
+    });
+    let suspended_linkers = current.runtime.linkers.clone();
+    let mut fixture = Some(current);
+    for repeat_index in 0..2 {
+        resource_diagnostics::record("finite_stack_attempt_start");
+        let mut current = fixture
+            .take()
+            .context("pending host fixture was consumed")?;
+        let role = process_role.to_owned();
+        let mut task = tokio::spawn(async move {
+            let outcome = current.observe(0, &role).await?;
+            Ok::<_, anyhow::Error>((current, outcome))
+        });
+        tokio::select! {
+            () = gate.entered.notified() => {},
+            result = &mut task => {
+                let _ = result??;
+                bail!("pending host call completed before suspension");
+            },
+            () = tokio::time::sleep(Duration::from_secs(30)) => bail!("pending host import did not enter"),
+        }
+        ensure!(
+            !task.is_finished()
+                && calls.load(Ordering::SeqCst) == repeat_index + 1
+                && pending_polls.load(Ordering::SeqCst) == repeat_index + 1,
+            "guest was not suspended at exactly one production host import"
+        );
+        ensure!(
+            tokio::spawn(async { 42 }).await? == 42,
+            "Tokio executor did not progress while guest was suspended"
+        );
+        println!(
+            "PENDING_HOST_IO_ATTEMPT:{}",
+            json!({
+                "case_id": "pending_host_io",
+                "configuration": configuration,
+                "process_role": process_role,
+                "sample_key": "suspended",
+                "repeat_index": repeat_index,
+                "pid": process::id(),
+                "host_import": "kontor:built-in/crypto.sha256",
+                "host_entered": true,
+                "host_poll_pending_count": pending_polls.load(Ordering::SeqCst),
+                "guest_task_pending": true,
+                "other_task_progressed": true,
+                "observation": JsonValue::Null,
+            })
+        );
+        gate.release.notify_one();
+        let (mut current, outcome) = timeout(Duration::from_secs(30), task).await???;
+        ensure!(outcome == "ok", "pending host call failed: {outcome}");
+        let observation = current
+            .last_report
+            .take()
+            .context("resumed host call lacks semantic observation")?;
+        let value = observation["value"]
+            .as_str()
+            .context("missing crypto view value")?;
+        ensure!(
+            from_wave_expr::<Vec<u8>>(value) == Sha256::digest(b"native-stack-pending").to_vec(),
+            "resumed host result differs from production SHA-256"
+        );
+        println!(
+            "PENDING_HOST_IO_ATTEMPT:{}",
+            json!({
+                "case_id": "pending_host_io",
+                "configuration": configuration,
+                "process_role": process_role,
+                "sample_key": "resumed",
+                "repeat_index": repeat_index,
+                "pid": process::id(),
+                "host_import": "kontor:built-in/crypto.sha256",
+                "host_entered": true,
+                "host_poll_pending_count": pending_polls.load(Ordering::SeqCst),
+                "guest_task_pending": false,
+                "other_task_progressed": true,
+                "observation": observation.clone(),
+            })
+        );
+        resource_diagnostics::record("finite_stack_attempt_end");
+        current.runtime.linkers = production_linkers.clone();
+        resource_diagnostics::record("finite_stack_attempt_start");
+        ensure!(
+            current.observe(0, process_role).await? == "ok",
+            "unshadowed production host control failed"
+        );
+        resource_diagnostics::record("finite_stack_attempt_end");
+        let control = current
+            .last_report
+            .take()
+            .context("unshadowed host control lacks semantic observation")?;
+        ensure!(
+            control["value"] == observation["value"]
+                && control["fuel"] == observation["fuel"]
+                && control["receipt"] == observation["receipt"]
+                && control["balance_transitions"] == observation["balance_transitions"]
+                && control["state_before_sha256"] == observation["state_before_sha256"]
+                && control["reset"]["post"]["persistent_digest_sha256"]
+                    == observation["reset"]["post"]["persistent_digest_sha256"],
+            "unshadowed production host semantics differ from suspended host call"
+        );
+        println!(
+            "PENDING_HOST_IO_CONTROL:{}",
+            json!({
+                "case_id": "pending_host_io",
+                "configuration": configuration,
+                "process_role": process_role,
+                "sample_key": "unshadowed_control",
+                "repeat_index": repeat_index,
+                "pid": process::id(),
+                "host_import": "kontor:built-in/crypto.sha256",
+                "linker": "production",
+                "observation": control,
+            })
+        );
+        current.runtime.linkers = suspended_linkers.clone();
+        fixture = Some(current);
+    }
+    let summary = json!({
+        "case_id": "pending_host_io",
+        "configuration": configuration,
+        "process_role": process_role,
+        "sample_count": 4,
+        "control_count": 2,
+        "host_calls": calls.load(Ordering::SeqCst),
+        "host_poll_pending_count": pending_polls.load(Ordering::SeqCst),
+        "complete": true,
+    });
+    println!("PENDING_HOST_IO_SUMMARY:{summary}");
+    Ok(summary)
 }
 
 pub(crate) async fn persistent_digest(conn: &Connection) -> Result<String> {

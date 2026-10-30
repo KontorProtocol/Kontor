@@ -20,8 +20,22 @@ use crate::test_utils::test_runtime;
 
 const COMPONENT: &[u8] =
     include_bytes!("../../../../../../test-contracts/binaries/stack_probe.wasm.br");
+const CRYPTO_COMPONENT: &[u8] =
+    include_bytes!("../../../../../../test-contracts/binaries/crypto.wasm.br");
 
+mod brotli_ceiling;
+mod canonical;
+mod cold_publication;
+mod foreign_wave;
+mod initialization;
+mod lifecycle;
+mod native_filestorage_lifecycle;
+mod native_staking_rewards;
+mod sqlite_large_values;
+mod sqlite_pagination;
+mod sqlite_ranges;
 mod sweep;
+mod type_value;
 
 pub(super) use sweep::{assert_receipt_stream_initial_state, persistent_digest};
 
@@ -36,6 +50,115 @@ pub(super) async fn resource_boundary(
     frozen_depths: Option<(u32, u32)>,
 ) -> Result<JsonValue> {
     sweep::run_resource_boundary(case_id, configuration, process_role, frozen_depths).await
+}
+
+pub(super) async fn resource_finite_paid(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    sweep::run_resource_finite_paid(case_id, configuration, process_role).await
+}
+
+pub(super) async fn resource_canonical(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    sweep::run_resource_canonical(case_id, configuration, process_role).await
+}
+
+pub(super) async fn resource_pending_host_io(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    sweep::run_resource_pending_host_io(configuration, process_role).await
+}
+
+pub(super) async fn resource_generated_initialization(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    initialization::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_lifecycle(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    lifecycle::run(case_id, configuration, process_role).await
+}
+
+pub(super) async fn resource_foreign_wave(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    foreign_wave::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_type_value(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    type_value::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_sqlite_pagination(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    sqlite_pagination::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_sqlite_ranges(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    sqlite_ranges::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_sqlite_large_values(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    sqlite_large_values::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_native_staking_rewards(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    native_staking_rewards::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_native_filestorage_lifecycle(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    native_filestorage_lifecycle::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_brotli_raw_ceiling(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    brotli_ceiling::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_cold_publication(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    cold_publication::run(case_id, configuration, process_role).await
+}
+
+#[tokio::test]
+#[ignore = "run through the bounded resource child driver"]
+async fn pending_host_io_diagnostic() -> Result<()> {
+    resource_pending_host_io("production", "target_observed").await?;
+    Ok(())
 }
 
 #[tokio::test]

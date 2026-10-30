@@ -4,7 +4,6 @@
 import argparse
 import json
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -18,7 +17,7 @@ from capture_resource_chain import (CROSS_MODE_FIXTURE_REASONS, STACK_MODES,
 from capture_resource_control import run_bounded_process
 from capture_resource_diagnostic import validate_control
 from resource_evidence import file_evidence, load_json_strict, require, sha256
-from resource_evidence_v2 import (HISTORICAL_BUNDLE_SHA256, expected_case_env,
+from resource_evidence_v2 import (HISTORICAL_BUNDLE_SHA256, cell_target, expected_case_env,
                                   marker_positions, run_name, validate_bundle,
                                   validate_teardown)
 from resource_manifest import MANIFEST as V1_MANIFEST
@@ -30,7 +29,9 @@ def copy_control(control_path, control_sha256, evidence_dir, control):
     control_dir = evidence_dir / "control"
     control_dir.mkdir()
     entries = [control["cargo_artifacts"], control["cargo_metadata"],
+               control["build_attestation"], control["build_log"],
                control["guard_control"]["raw_log"],
+               *control["fastnum_files"].values(),
                *control["wasmtime_source_files"].values()]
     for entry in entries:
         source = control_path.parent / entry["path"]
@@ -46,10 +47,9 @@ def copy_control(control_path, control_sha256, evidence_dir, control):
     return control_dir, target
 
 
-def capture(control_path, control_sha256, historical_path, evidence_dir,
+def capture(cell, control_path, control_sha256, historical_path, evidence_dir,
             timeout_seconds, pilot):
-    require(sys.platform == "linux", "v2 chain capture is Linux-only")
-    require(platform.machine() == "aarch64", "this v2 slice requires Linux ARM64")
+    target_os, _ = cell_target(cell, check_host=True)
     require(1 <= timeout_seconds <= 1200, "timeout must be 1 to 1200 seconds")
     v1_manifest = build_manifest()
     v2_manifest = build_manifest_v2()
@@ -61,6 +61,7 @@ def capture(control_path, control_sha256, historical_path, evidence_dir,
     require(sha256(historical_path) == HISTORICAL_BUNDLE_SHA256,
             "historical phase10 bundle hash differs")
     control, binary = validate_control(control_path, control_sha256, v1_manifest)
+    cell_target(cell, control["cargo_artifact"], check_host=True)
     require(not evidence_dir.exists() or not any(evidence_dir.iterdir()),
             "evidence output directory is not empty")
     evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -120,7 +121,7 @@ def capture(control_path, control_sha256, historical_path, evidence_dir,
                 require(process["complete"], f"{name}: child failed or timed out")
                 parsed = parse_worker(raw_path, configuration, stores, child.pid,
                                       v1_manifest, v1_schema, chain_mode,
-                                      trap_control)
+                                      trap_control, os_name=target_os)
                 report = parsed["report"]
                 require(report["teardown_probe_mode"] ==
                         ("on" if observed else "off"),
@@ -141,7 +142,7 @@ def capture(control_path, control_sha256, historical_path, evidence_dir,
                 requested = report["async_stack_size"]
                 run_registry[name] = {
                     "run_id": name, "case_id": case_id, "process_role": role,
-                    "cell": "Linux-ARM64/dev", "configuration": configuration,
+                    "cell": cell, "configuration": configuration,
                     "process_attempt_index": 0, "argv": command,
                     "case_env": env_values, "process": process,
                     "timeout_seconds": timeout_seconds, "raw_log": raw,
@@ -178,7 +179,7 @@ def capture(control_path, control_sha256, historical_path, evidence_dir,
             captured, CROSS_MODE_FIXTURE_REASONS)
         bundle = {
             "schema_version": 2, "status": "candidate_actual_binding",
-            "qualification_status": "missing", "cell": "Linux-ARM64/dev",
+            "qualification_status": "missing", "cell": cell,
             "source_sha": control["source_sha"],
             "manifest_sha256": sha256(MANIFEST),
             "binary_path": str(binary),
@@ -212,6 +213,7 @@ def capture(control_path, control_sha256, historical_path, evidence_dir,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cell", required=True)
     parser.add_argument("--control-capture", type=Path, required=True)
     parser.add_argument("--control-sha256", required=True)
     parser.add_argument("--historical-bundle", type=Path, required=True)
@@ -219,7 +221,7 @@ def main():
     parser.add_argument("--timeout-seconds", type=int, default=600)
     parser.add_argument("--pilot", action="store_true")
     args = parser.parse_args()
-    path = capture(args.control_capture, args.control_sha256,
+    path = capture(args.cell, args.control_capture, args.control_sha256,
                    args.historical_bundle, args.evidence_dir,
                    args.timeout_seconds, args.pilot)
     print(json.dumps({"capture_path": str(path), "sha256": sha256(path)},

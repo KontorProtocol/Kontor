@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import platform
 import re
 import subprocess
 import sys
@@ -20,12 +21,17 @@ from capture_resource_diagnostic import validate_control
 from resource_evidence import (file_evidence, load_json_strict, no_duplicate_keys,
                                no_nonfinite_constants, require, sha256)
 from resource_manifest import MANIFEST as V1_MANIFEST
-from resource_manifest import ROOT, build_manifest
+from resource_manifest import CELLS, ROOT, build_manifest
 from resource_manifest_v2 import MANIFEST, ROLES, SCHEMA, build_manifest_v2
 
 
 HISTORICAL_SOURCE = "b760345fab4f36ca85f35e1ff53e42b156f6e66a"
 HISTORICAL_BUNDLE_SHA256 = "9d325af8461ca482104886c8add17c6a790405411c0454ce90b1b840bb9f0534"
+CELL_TARGETS = {
+    "Linux-X64": ("linux", "x86_64", {"x86_64"}),
+    "Linux-ARM64": ("linux", "aarch64", {"aarch64"}),
+    "macOS-ARM64": ("macos", "aarch64", {"arm64", "aarch64"}),
+}
 TEARDOWN_ROLES = {
     "nested_chain", "target_native_auxiliary", "pre_observation",
     "post_observation", "rollback_observation",
@@ -36,6 +42,23 @@ CASE_ENV_KEYS = {
     "KONTOR_RESOURCE_MODE", "KONTOR_CHAIN_MODE", "KONTOR_CHAIN_STORES",
     "KONTOR_CHAIN_TRAP_CONTROL", "KONTOR_RESOURCE_TEARDOWN_PROBE",
 }
+
+
+def cell_target(cell, artifact=None, check_host=False):
+    require(cell in CELLS, "unknown v2 resource cell")
+    host, profile = cell.split("/")
+    target_os, target_arch, host_arches = CELL_TARGETS[host]
+    if check_host:
+        actual_os = "macos" if sys.platform == "darwin" else sys.platform
+        require(actual_os == target_os and platform.machine() in host_arches,
+                "v2 resource cell differs from the capture host")
+    if artifact is not None:
+        settings = artifact["profile"]
+        require(settings["test"] is True
+                and settings["opt_level"] == ("0" if profile == "dev" else "3")
+                and settings["debug_assertions"] is (profile == "dev"),
+                "v2 Cargo test artifact profile differs from cell")
+    return target_os, target_arch
 
 
 def run_name(case_id, role, configuration):
@@ -237,6 +260,7 @@ def run_semantics(run, v1_manifest, v2_manifest, directory):
     require(identity is not None and (not trap_control or identity.group(1) == "64"),
             "unknown target or trap-control case")
     stores, chain_mode = int(identity.group(1)), identity.group(2)
+    target_os, target_arch = cell_target(run["cell"])
     validate_process_record(run)
     process = run["process"]
     file_evidence(directory, run["raw_log"])
@@ -244,15 +268,15 @@ def run_semantics(run, v1_manifest, v2_manifest, directory):
     schema_v1 = load_json_strict(V1_MANIFEST.with_name("resource-evidence-schema-v1.json"))
     parsed = parse_worker(raw_path, configuration, stores, process["pid"],
                           v1_manifest, schema_v1, chain_mode, trap_control,
-                          run["engine"]["page_size_bytes"])
+                          run["engine"]["page_size_bytes"], target_os)
     require(run["report"] == parsed["report"]
             and run["runtime"] == parsed["runtime"]
             and run["thread_trace"] == parsed["thread_trace"]
             and run["worker_execution"] == parsed["worker_execution"],
             "run differs from complete raw child transcript")
     require(run["report"]["teardown_probe_mode"] == ("on" if observed else "off")
-            and run["report"]["target_os"] == "linux"
-            and run["report"]["target_arch"] == "aarch64"
+            and run["report"]["target_os"] == target_os
+            and run["report"]["target_arch"] == target_arch
             and run["markers"] == marker_positions(raw_path, run["report"], role,
                                                     configuration, process["pid"],
                                                     run["process_attempt_index"])
@@ -300,7 +324,7 @@ def historical_semantics(observations):
     return normalized
 
 
-def validate_bundle(bundle, directory, allow_pilot=False):
+def validate_bundle(bundle, directory, allow_pilot=False, archive_binary=None):
     require(bundle.get("schema_version") == 2, "v2 validator rejects v1 evidence")
     schema = load_json_strict(SCHEMA)
     Draft202012Validator.check_schema(schema)
@@ -317,7 +341,7 @@ def validate_bundle(bundle, directory, allow_pilot=False):
     require(bundle["source_sha"] == head,
             "v2 bundle source differs from checkout")
     require(bundle["qualification_status"] == "missing"
-            and bundle["cell"] == "Linux-ARM64/dev"
+            and bundle["cell"] in CELLS
             and bundle["auxiliary_count_status"] == v2_manifest["auxiliary_count_status"]
             and bundle["auxiliary_expected_counts"] ==
                 v2_manifest["auxiliary_expected_counts"]
@@ -340,7 +364,10 @@ def validate_bundle(bundle, directory, allow_pilot=False):
     control, binary = validate_control(
         directory / bundle["control_capture"]["path"],
         bundle["control_capture"]["sha256"], v1_manifest,
-        page_size=next(iter(archive_pages)))
+        page_size=next(iter(archive_pages)),
+        archive_binary=archive_binary, expected_cell=bundle["cell"])
+    cell_target(bundle["cell"], control["cargo_artifact"],
+                check_host=archive_binary is None)
     require(control["source_sha"] == bundle["source_sha"]
             and control["binary_path"] == bundle["binary_path"]
             and control["binary_sha256"] == bundle["binary_sha256"]
@@ -348,7 +375,9 @@ def validate_bundle(bundle, directory, allow_pilot=False):
             and control["manifest_sha256"] == sha256(V1_MANIFEST),
             "guard/source control differs from v2 run")
     control_entries = [control["cargo_artifacts"], control["cargo_metadata"],
+                       control["build_attestation"], control["build_log"],
                        control["guard_control"]["raw_log"],
+                       *control["fastnum_files"].values(),
                        *control["wasmtime_source_files"].values()]
     control_directory = directory / "control"
     for entry in control_entries:

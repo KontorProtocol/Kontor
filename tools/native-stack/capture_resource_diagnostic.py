@@ -12,11 +12,12 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-from capture_resource_control import run_bounded_process, selected_binary
+from capture_resource_control import (run_bounded_process, selected_binary,
+                                      validate_build_attestation)
 from resource_evidence import (check_guard_control, file_evidence, load_json_strict,
                                no_duplicate_keys, no_nonfinite_constants, require,
                                sha256, thread_capacities)
-from resource_manifest import FIBER_SOURCE_FILES, MANIFEST, ROOT, build_manifest
+from resource_manifest import CELLS, FIBER_SOURCE_FILES, MANIFEST, ROOT, build_manifest
 
 
 TEST_NAME = "runtime::call::tests::native_stack_resource::real_paid_large_frame_on_tokio_worker"
@@ -38,7 +39,7 @@ def one_marker(lines, marker):
                                       parse_constant=no_nonfinite_constants)
 
 
-def parse_worker_log(raw_path, mode, pid):
+def parse_worker_log(raw_path, mode, pid, os_name="linux"):
     lines = raw_path.read_text().splitlines()
     require(sum(line.strip() == "running 1 test" for line in lines) == 1,
             f"{mode}: worker transcript lacks one selected test")
@@ -59,7 +60,7 @@ def parse_worker_log(raw_path, mode, pid):
     capacities = {key: value for key, value in runtime.items()
                   if key not in {"scope", "mode", "pid"}}
     by_category = thread_capacities(capacities, mode, os.sysconf("SC_PAGE_SIZE"),
-                                    "linux", pid)
+                                    os_name, pid)
     workers = {thread["thread_id"]: thread["os_thread_id"]
                for thread in by_category["tokio_worker"]}
     blocking = {thread["thread_id"]: thread["os_thread_id"]
@@ -117,12 +118,41 @@ def parse_worker_log(raw_path, mode, pid):
     return runtime, trace, uncovered
 
 
-def validate_control(path, expected_sha256, manifest, page_size=None):
+def bundle_page_size(bundle):
+    require(isinstance(bundle.get("runs"), dict) and bundle["runs"],
+            "resource bundle has no measured runs")
+    pages = set()
+    for run in bundle["runs"].values():
+        runtime = run.get("runtime") if isinstance(run, dict) else None
+        observations = (runtime.get("thread_observations")
+                        if isinstance(runtime, dict) else None)
+        require(isinstance(observations, list) and observations,
+                "resource run lacks measured thread pages")
+        for thread in observations:
+            require(isinstance(thread, dict)
+                    and type(thread.get("page_size_bytes")) is int
+                    and thread["page_size_bytes"] > 0,
+                    "resource thread page size is invalid")
+            pages.add(thread["page_size_bytes"])
+    require(len(pages) == 1,
+            "resource runs disagree on host page size")
+    return pages.pop()
+
+
+def validate_control(path, expected_sha256, manifest, page_size=None,
+                     archive_binary=None, expected_cell=None):
+    require(sys.platform in ("linux", "darwin"), "unsupported resource diagnostic host")
+    if archive_binary is None:
+        os_name = "macos" if sys.platform == "darwin" else "linux"
+    else:
+        require(expected_cell in CELLS, "archive control needs a known cell")
+        os_name = "macos" if expected_cell.startswith("macOS-") else "linux"
     require(sha256(path) == expected_sha256, "control capture hash changed")
     control = load_json_strict(path)
     require(set(control) == {
         "manifest_sha256", "source_sha", "binary_path", "binary_sha256",
-        "cargo_artifact", "cargo_artifacts", "cargo_metadata", "guard_control",
+        "cargo_artifact", "cargo_artifacts", "cargo_metadata",
+        "build_attestation", "build_log", "fastnum_files", "guard_control",
         "wasmtime_source_files",
     } and control["manifest_sha256"] == sha256(MANIFEST),
             "control capture differs from resource manifest")
@@ -134,7 +164,9 @@ def validate_control(path, expected_sha256, manifest, page_size=None):
             "control source revision differs from checkout")
     directory = path.parent
     for entry in (control["cargo_artifacts"], control["cargo_metadata"],
-                  control["guard_control"]["raw_log"]):
+                  control["build_attestation"], control["build_log"],
+                  control["guard_control"]["raw_log"],
+                  *control["fastnum_files"].values()):
         file_evidence(directory, entry)
     require(set(control["wasmtime_source_files"]) == set(FIBER_SOURCE_FILES),
             "control capture lacks pinned fiber sources")
@@ -143,20 +175,64 @@ def validate_control(path, expected_sha256, manifest, page_size=None):
                 f"fiber source hash differs: {relative}")
         file_evidence(directory, entry)
     paths = [entry["path"] for entry in (control["cargo_artifacts"],
-             control["cargo_metadata"], control["guard_control"]["raw_log"],
+             control["cargo_metadata"], control["build_attestation"],
+             control["build_log"], control["guard_control"]["raw_log"],
+             *control["fastnum_files"].values(),
              *control["wasmtime_source_files"].values())]
     require(len(paths) == len(set(paths)) and path.name not in paths,
             "control evidence file paths overlap")
     metadata = load_json_strict(directory / control["cargo_metadata"]["path"])
-    require(metadata["workspace_root"] == str(ROOT / "core"),
+    workspace = Path(metadata["workspace_root"])
+    require((workspace.is_absolute() and workspace.name == "core")
+            if archive_binary is not None else workspace == ROOT / "core",
             "control Cargo workspace differs from checkout")
-    binary, artifact = selected_binary(directory / control["cargo_artifacts"]["path"], metadata)
+    binary, artifact = selected_binary(
+        directory / control["cargo_artifacts"]["path"], metadata,
+        require_local_binary=archive_binary is None)
+    actual_binary = binary if archive_binary is None else Path(archive_binary)
     require(str(binary) == control["binary_path"] and artifact == control["cargo_artifact"]
-            and sha256(binary) == control["binary_sha256"],
+            and actual_binary.is_file()
+            and actual_binary.name == binary.name
+            and sha256(actual_binary) == control["binary_sha256"],
             "control Cargo artifact or binary differs")
-    page = page_size if page_size is not None else os.sysconf("SC_PAGE_SIZE")
+    attestation, build_log = validate_build_attestation(
+        directory / control["build_attestation"]["path"],
+        directory / control["cargo_artifacts"]["path"],
+        directory / control["cargo_metadata"]["path"],
+        control["source_sha"], manifest, binary, artifact,
+        core_root=workspace if archive_binary is not None else None,
+        binary_sha256=control["binary_sha256"] if archive_binary is not None else None)
+    if archive_binary is not None:
+        target_triple = {
+            "Linux-X64": "x86_64-unknown-linux-gnu",
+            "Linux-ARM64": "aarch64-unknown-linux-gnu",
+            "macOS-ARM64": "aarch64-apple-darwin",
+        }[expected_cell.split("/")[0]]
+        require(f"host: {target_triple}" in attestation["rustc_verbose"].splitlines(),
+                "archive compiler host differs from cell target")
+    require(build_log == directory / control["build_log"]["path"],
+            "control Cargo build log path differs from attestation")
+    require(control["fastnum_files"] == {
+        "build_script": attestation["fastnum_build_script"],
+        **attestation["fastnum_generated"],
+    }, "control fastnum source or generated setting differs from build")
+    if page_size is not None:
+        page = page_size
+    elif archive_binary is None:
+        page = os.sysconf("SC_PAGE_SIZE")
+    else:
+        lines = (directory / control["guard_control"]["raw_log"]["path"])
+        markers = [json.loads(line.split("KONTOR_RESOURCE_GUARD_CONTROL=", 1)[1],
+                              object_pairs_hook=no_duplicate_keys,
+                              parse_constant=no_nonfinite_constants)
+                   for line in lines.read_text().splitlines()
+                   if "KONTOR_RESOURCE_GUARD_CONTROL=" in line]
+        pages = {marker["target"]["page_size_bytes"] for marker in markers}
+        require(len(markers) == 2 and len(pages) == 1,
+                "archive guard page size is missing or inconsistent")
+        page = pages.pop()
     report_view = {
-        "host": {"os": "linux"}, "binary_path": str(binary),
+        "host": {"os": os_name}, "binary_path": str(binary),
         "binary_sha256": control["binary_sha256"], "source_sha": control["source_sha"],
         "configurations": {mode: {"engine": {"page_size_bytes": page},
                                  "process_log": {"path": f"{mode}-worker.log"}}
@@ -168,8 +244,9 @@ def validate_control(path, expected_sha256, manifest, page_size=None):
 
 
 def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
-    if sys.platform != "linux":
-        raise ValueError("paired resource diagnostic is Linux-only")
+    if sys.platform not in ("linux", "darwin"):
+        raise ValueError("paired resource diagnostic is unsupported on this host")
+    os_name = "macos" if sys.platform == "darwin" else "linux"
     manifest = build_manifest()
     require(load_json_strict(MANIFEST) == manifest, "resource manifest changed")
     control, binary = validate_control(control_path, control_sha256, manifest)
@@ -179,7 +256,9 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
     control_dir = evidence_dir / "control"
     control_dir.mkdir()
     control_entries = [control["cargo_artifacts"], control["cargo_metadata"],
+                       control["build_attestation"], control["build_log"],
                        control["guard_control"]["raw_log"],
+                       *control["fastnum_files"].values(),
                        *control["wasmtime_source_files"].values()]
     for entry in control_entries:
         source = control_path.parent / entry["path"]
@@ -215,7 +294,7 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
         try:
             require(not timed_out and child.returncode == 0,
                     f"{mode}: worker process failed or timed out")
-            runtime, trace, uncovered = parse_worker_log(raw_path, mode, child.pid)
+            runtime, trace, uncovered = parse_worker_log(raw_path, mode, child.pid, os_name)
             require(sha256(binary) == control["binary_sha256"],
                     f"{mode}: selected binary changed during diagnostic")
             modes[mode] = {
@@ -267,7 +346,7 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
                                         for case in manifest["cases"]),
             "workload_plan": manifest["workload_plan"]["status"],
             "attestation": manifest["attestation_status"],
-            "macos_guard": "missing",
+            "macos_guard": "diagnostic_only" if os_name == "macos" else "missing",
             "production_memory_profiles": "missing",
         },
     }

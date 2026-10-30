@@ -616,6 +616,8 @@ def check_build_artifact(report, manifest, directory):
     fiber_nodes = [node for node in resolve["nodes"]
                    if isinstance(node, dict) and node.get("id") == fiber["id"]]
     require(len(indexer_nodes) == len(wasmtime_nodes) == 1
+            and indexer_nodes[0].get("features") ==
+                manifest["build_policy"]["resolved_indexer_test_features"]
             and isinstance(indexer_nodes[0].get("deps"), list)
             and any(isinstance(dependency, dict)
                     and dependency.get("name") == "wasmtime"
@@ -685,7 +687,8 @@ def check_build_artifact(report, manifest, directory):
     wasmtime_artifact = wasmtime_artifacts[0]
     fiber_artifact = fiber_artifacts[0]
     require(indexer_artifact["executable"] == report["binary_path"]
-            and indexer_artifact.get("features") == closure["cargo_features"]
+            and indexer_artifact.get("features") ==
+                manifest["build_policy"]["resolved_indexer_test_features"]
             and indexer_artifact["profile"].get("opt_level") ==
                 ("3" if profile == "release" else "0")
             and indexer_artifact["profile"].get("debug_assertions") is (profile == "debug")
@@ -696,7 +699,10 @@ def check_build_artifact(report, manifest, directory):
 
 
 def check_guard_control(report, manifest, directory):
-    require(report["host"]["os"] == "linux", "macOS guard control is not implemented")
+    os_name = report["host"]["os"]
+    require(os_name in {"linux", "macos"}, "unsupported guard control host")
+    test_name = (manifest["guard_control_runner"]["test_name"] if os_name == "linux"
+                 else manifest["guard_control_runner"]["macos_test_name"])
     control = report["guard_control"]
     require(set(control) == {"process", "raw_log"}, "guard control evidence is incomplete")
     process = control["process"]
@@ -712,7 +718,7 @@ def check_guard_control(report, manifest, directory):
             and process["test_harness_passed"] is True,
             "guard control process failed or transcript is incomplete")
     require(process["command"] == [
-        report["binary_path"], "--exact", manifest["guard_control_runner"]["test_name"],
+        report["binary_path"], "--exact", test_name,
         "--ignored", "--nocapture",
     ], "guard control command differs from compiled test")
     require(manifest["guard_control_runner"]["source_sha256"] ==
@@ -787,16 +793,20 @@ def check_guard_control(report, manifest, directory):
                 and target["guard_start"] >= 0
                 and target["guard_end"] - target["guard_start"] >= page
                 and target["guard_start"] <= target["address"] < target["guard_end"]
-                and target["guard_verification"] in {
-                    "guard protected inside pthread stack range",
-                    "guard protected below pthread stack range",
-                    "inaccessible interval verified below pthread stack range by /proc/self/mem EIO",
-                }, "guard child PID, TID, or target is unverified")
+                and target["guard_verification"] in (
+                    {"guard protected inside pthread stack range",
+                     "guard protected below pthread stack range",
+                     "inaccessible interval verified below pthread stack range by /proc/self/mem EIO"}
+                    if os_name == "linux" else {"macos_mach_vm_region_prot_none"}),
+                "guard child PID, TID, or target is unverified")
         child_pids.add(pid)
         child_tids.add(tid)
         stdout = child["child_stdout"]
         stderr = child["child_stderr"]
-        require(type(child["signal"]) is int and child["signal"] == signal.SIGABRT
+        # Darwin SIGBUS is 10; the verifier may be Linux, where SIGBUS is 7.
+        expected_signals = ({signal.SIGABRT} if os_name == "linux"
+                            else {10, 11})
+        require(type(child["signal"]) is int and child["signal"] in expected_signals
                 and child["child_binary"] == report["binary_path"]
                 and isinstance(stdout, str) and isinstance(stderr, str),
                 "guard child signal or binary differs from compiled control")
@@ -808,8 +818,9 @@ def check_guard_control(report, manifest, directory):
             parse_constant=no_nonfinite_constants) == target
                 and stdout.count("running 1 test") == 1
                 and "test result:" not in stdout
-                and f"({tid}) has overflowed its stack" in stderr
-                and "fatal runtime error: stack overflow" in stderr,
+                and (os_name == "macos" or
+                     (f"({tid}) has overflowed its stack" in stderr and
+                      "fatal runtime error: stack overflow" in stderr)),
                 "guard child raw output does not corroborate its fault")
     require(list(seen) == ["reduced", "production"],
             "guard control lacks one distinct child per configuration")

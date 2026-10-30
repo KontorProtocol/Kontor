@@ -1,0 +1,402 @@
+{
+  "case_count": 41,
+  "case_to_group": {
+    "brotli_raw_ceiling": "brotli_ceiling",
+    "canonical_lift_lower": "canonical_abi",
+    "canonical_post_return": "canonical_abi",
+    "canonical_realloc": "canonical_abi",
+    "canonical_type_value_recursion": "canonical_type_value",
+    "chain_33_core": "chain_v2",
+    "chain_33_paid": "chain_v2",
+    "chain_33_view": "chain_v2",
+    "chain_63_core": "chain_v2",
+    "chain_63_paid": "chain_v2",
+    "chain_63_view": "chain_v2",
+    "chain_64_core": "chain_v2",
+    "chain_64_paid": "chain_v2",
+    "chain_64_view": "chain_v2",
+    "chain_65_core": "chain_v2",
+    "chain_65_paid": "chain_v2",
+    "chain_65_view": "chain_v2",
+    "cold_publish_br_table": "cold_publication",
+    "cold_publish_control_nesting": "cold_publication",
+    "cold_publish_large_function": "cold_publication",
+    "deepest_frame_host_call": "pulley_boundary",
+    "explicit_resource_drop": "resource_lifecycle",
+    "failed_instantiation_cleanup": "resource_lifecycle",
+    "foreign_wave_parse_print": "foreign_wave",
+    "generated_initialization": "initialization",
+    "large_frame_paid": "finite_paid",
+    "max_gas_paid": "finite_paid",
+    "native_filestorage_lifecycle": "native_filestorage",
+    "native_staking_rewards": "native_staking",
+    "pending_host_io": "pending_host_io",
+    "pulley_plain_core": "pulley_boundary",
+    "pulley_plain_paid": "pulley_boundary",
+    "pulley_plain_system": "pulley_boundary",
+    "pulley_plain_view": "pulley_boundary",
+    "pulley_wide_core": "pulley_boundary",
+    "pulley_wide_paid": "pulley_boundary",
+    "pulley_wide_system": "pulley_boundary",
+    "pulley_wide_view": "pulley_boundary",
+    "sqlite_large_values": "sqlite_large_values",
+    "sqlite_pagination": "sqlite_pagination",
+    "sqlite_ranges": "sqlite_ranges"
+  },
+  "cells": [
+    "Linux-X64/dev",
+    "Linux-X64/release",
+    "Linux-ARM64/dev",
+    "Linux-ARM64/release",
+    "macOS-ARM64/dev",
+    "macOS-ARM64/release"
+  ],
+  "claim_status": "source_registry_only",
+  "groups": {
+    "brotli_ceiling": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_brotli_raw_ceiling.py",
+        "sha256": "69589e5cef7af9ebadb35bc732d8f6b3b21ae72a2cd27414b5388f426bfac391"
+      },
+      "capture_name": "brotli-raw-ceiling-capture.json",
+      "case_ids": [
+        "brotli_raw_ceiling"
+      ],
+      "families": [
+        "blocking_decode"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_brotli_raw_ceiling_evidence.py",
+        "sha256": "be4f67204fee9f75b68f3c836ee9913e25887f7cde2989dac852bdf2d586f67e"
+      }
+    },
+    "canonical_abi": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_canonical.py",
+        "sha256": "62ff6e5b9df8aada2288830ff161abd2a680d41bdf6ecd7cac3176a19c06a319"
+      },
+      "capture_name": "canonical-stack-capture.json",
+      "case_ids": [
+        "canonical_lift_lower",
+        "canonical_realloc",
+        "canonical_post_return"
+      ],
+      "families": [
+        "canonical_abi"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_canonical_evidence.py",
+        "sha256": "0121c164b067bdca1497f2b98861bc5bbeb393d55acd6321b42476a62f646aa4"
+      }
+    },
+    "canonical_type_value": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_type_value.py",
+        "sha256": "be7b8fbb3a11d26c7fc4fd6b1affc190489ba427c25b0aefefefad25599be015"
+      },
+      "capture_name": "type-value-capture.json",
+      "case_ids": [
+        "canonical_type_value_recursion"
+      ],
+      "families": [
+        "canonical_abi"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_type_value_evidence.py",
+        "sha256": "601d5cca284c16948b24ba129d91a778c22e03404c2860024076401eb6f3ff30"
+      }
+    },
+    "chain_v2": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_chain_v2.py",
+        "sha256": "7707313795afa9588acd806c20d5107f44f13ce4d55f50614bb3e8961bb65667"
+      },
+      "capture_name": "resource-chain-v2-capture.json",
+      "case_ids": [
+        "chain_33_core",
+        "chain_33_paid",
+        "chain_33_view",
+        "chain_63_core",
+        "chain_63_paid",
+        "chain_63_view",
+        "chain_64_core",
+        "chain_64_paid",
+        "chain_64_view",
+        "chain_65_core",
+        "chain_65_paid",
+        "chain_65_view"
+      ],
+      "families": [
+        "distinct_contract_chain"
+      ],
+      "manifest": "v2",
+      "manifest_sha256": "3f4287b8422a1e4dad9982e65d061c742c2a46793251387ac71a7262fa502da9",
+      "validator": {
+        "path": "tools/native-stack/resource_evidence_v2.py",
+        "sha256": "d7b22eb8a4e90485a60c96aa74f40ae774485ffc77d58bd20720a9147260b814"
+      }
+    },
+    "cold_publication": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_cold_publication.py",
+        "sha256": "2b969ba25d87d7c23c5ad8ddda03dd539fc33c1f63e3ee48520f8b5347792f19"
+      },
+      "capture_name": "cold-publication-capture.json",
+      "case_ids": [
+        "cold_publish_br_table",
+        "cold_publish_control_nesting",
+        "cold_publish_large_function"
+      ],
+      "families": [
+        "cold_compile"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_cold_publication_evidence.py",
+        "sha256": "77fe58805dbde865564df5cff99a1f795c7004e067f57f4cd42bd6b894461d18"
+      }
+    },
+    "finite_paid": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_finite.py",
+        "sha256": "fcdc7247b6574f494996a514b403dd45aa510ad3001201b733ff0cedd48b42a3"
+      },
+      "capture_name": "finite-stack-capture.json",
+      "case_ids": [
+        "large_frame_paid",
+        "max_gas_paid"
+      ],
+      "families": [
+        "large_frame",
+        "paid_limit"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_finite_evidence.py",
+        "sha256": "b5771c046b0cebb678628dd96b589bc63355386c0db7256eef5d1c7d12aace89"
+      }
+    },
+    "foreign_wave": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_foreign_wave.py",
+        "sha256": "65d15b9390f4fb5ba49e6c85b861cdea1f3cb8a91d4dac2fb71bdd9e2d4fcbb6"
+      },
+      "capture_name": "foreign-wave-capture.json",
+      "case_ids": [
+        "foreign_wave_parse_print"
+      ],
+      "families": [
+        "foreign_call"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_foreign_wave_evidence.py",
+        "sha256": "d0904ddc24da4088ace027fa05ade57860944f57532eeb62591c4141a4ab2f66"
+      }
+    },
+    "initialization": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_initialization.py",
+        "sha256": "0b897134f8a975ca3a1b6e6570c59b75e2c33a462c314cea7354419803e2c15b"
+      },
+      "capture_name": "generated-initialization-capture.json",
+      "case_ids": [
+        "generated_initialization"
+      ],
+      "families": [
+        "initialization"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_initialization_evidence.py",
+        "sha256": "4248f4dac2edb1acede5425d1476be2a3b7131b67b3dd6872afd2c1ccdc9ee56"
+      }
+    },
+    "native_filestorage": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_native_filestorage_lifecycle.py",
+        "sha256": "8cc4580796d4cac4316eae7316e1991e3433b70f61416b64ecf87063a37214b7"
+      },
+      "capture_name": "native-filestorage-lifecycle-capture.json",
+      "case_ids": [
+        "native_filestorage_lifecycle"
+      ],
+      "families": [
+        "native_core"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_native_filestorage_lifecycle_evidence.py",
+        "sha256": "2b8ba25756e7f8de676750a7282824a4d2097223fbd3e19a92577efb89217eec"
+      }
+    },
+    "native_staking": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_native_staking_rewards.py",
+        "sha256": "d3cde759c009ac8ab7c2b17da8d772882057bd0aa9d7e670a94bb0fe6c344c24"
+      },
+      "capture_name": "native-staking-rewards-capture.json",
+      "case_ids": [
+        "native_staking_rewards"
+      ],
+      "families": [
+        "native_core"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_native_staking_rewards_evidence.py",
+        "sha256": "58fc80021b1c98305a4752de6d3744eebbb7e05db4fa8dd9876a69c08e9033de"
+      }
+    },
+    "pending_host_io": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_pending.py",
+        "sha256": "476586e9e804fda34fe110ea922916de5760dbbb7c4a0a032be6d28df564ebe6"
+      },
+      "capture_name": "pending-host-io-capture.json",
+      "case_ids": [
+        "pending_host_io"
+      ],
+      "families": [
+        "suspension"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_pending_evidence.py",
+        "sha256": "e7c355b161e7706bcf8479622424897aba00fd906dc93e14ab3c8030caac6806"
+      }
+    },
+    "pulley_boundary": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_boundary.py",
+        "sha256": "e5b963813fbb946e654208ad5367b786210c18aeb527fd68d78642d996104187"
+      },
+      "capture_name": "resource-boundary-capture.json",
+      "case_ids": [
+        "pulley_plain_core",
+        "pulley_plain_paid",
+        "pulley_plain_system",
+        "pulley_plain_view",
+        "pulley_wide_core",
+        "pulley_wide_paid",
+        "pulley_wide_system",
+        "pulley_wide_view",
+        "deepest_frame_host_call"
+      ],
+      "families": [
+        "pulley_boundary",
+        "pulley_host_callback"
+      ],
+      "manifest": "boundary",
+      "manifest_sha256": "1580ea080f43f2b7f3ecf84fe531879b6286f6913a0b233792c8fb1eb898211b",
+      "validator": {
+        "path": "tools/native-stack/resource_boundary_evidence.py",
+        "sha256": "4bf448dd83eb4b79ed2464786e10728a34175cde1016bd8b16af1f55d68fc783"
+      }
+    },
+    "resource_lifecycle": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_lifecycle.py",
+        "sha256": "48b46df9796b2039985f30498ab1cdfda8c7cb1665cced8f826600cd8c637421"
+      },
+      "capture_name": "resource-lifecycle-capture.json",
+      "case_ids": [
+        "explicit_resource_drop",
+        "failed_instantiation_cleanup"
+      ],
+      "families": [
+        "resource_lifecycle"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_lifecycle_evidence.py",
+        "sha256": "184266d6cd8068d75e5488ba88e959599ac61f53704b3533463667b7133fb948"
+      }
+    },
+    "sqlite_large_values": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_sqlite_large_values.py",
+        "sha256": "67cdd8066a22dc1274d4e5355be20b9912ab5eb7a9407788a93e4f5264ee5ad7"
+      },
+      "capture_name": "sqlite-large-values-capture.json",
+      "case_ids": [
+        "sqlite_large_values"
+      ],
+      "families": [
+        "sqlite"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_sqlite_large_values_evidence.py",
+        "sha256": "7fc466b9469d134fe319f78c44e0f0d744ddcfb0f9f04b4fdde4eaeb25ace5f6"
+      }
+    },
+    "sqlite_pagination": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_sqlite_pagination.py",
+        "sha256": "06e334c11085489922a4bbab33876598014b86849e47faa8598c2c94c87001ee"
+      },
+      "capture_name": "sqlite-pagination-capture.json",
+      "case_ids": [
+        "sqlite_pagination"
+      ],
+      "families": [
+        "sqlite"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_sqlite_pagination_evidence.py",
+        "sha256": "7bc05505e2a4f4036e7d5c2c59533d86317ca26b8a407813df301b0ee376cf86"
+      }
+    },
+    "sqlite_ranges": {
+      "capture": {
+        "path": "tools/native-stack/capture_resource_sqlite_ranges.py",
+        "sha256": "db3befc19395d08b74e925c6d3fe8dad35048e65748d937290987073a85f2441"
+      },
+      "capture_name": "sqlite-ranges-capture.json",
+      "case_ids": [
+        "sqlite_ranges"
+      ],
+      "families": [
+        "sqlite"
+      ],
+      "manifest": "v1",
+      "manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+      "validator": {
+        "path": "tools/native-stack/resource_sqlite_ranges_evidence.py",
+        "sha256": "f2616420c101bd1861d57a2937e332d49ee81223872888edfa4ce63563956964"
+      }
+    }
+  },
+  "parent_manifests": {
+    "boundary": "1580ea080f43f2b7f3ecf84fe531879b6286f6913a0b233792c8fb1eb898211b",
+    "v1": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+    "v2": "3f4287b8422a1e4dad9982e65d061c742c2a46793251387ac71a7262fa502da9"
+  },
+  "remaining_gates": {
+    "boundary_discovery": "pending_discovery",
+    "common_head_six_cell_capture": "missing",
+    "cross_cell_semantic_comparison": "source_ready_unmeasured",
+    "macos_guard_capture": "missing",
+    "offline_archive_validation": "source_ready_unmeasured",
+    "production_memory_profiles": "missing"
+  },
+  "schema_version": 1
+}

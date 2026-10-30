@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "3c47d1ba4610a907694ceb50abba6fb7641d57e41c224f1c68778565854fb0b0",
+  "parent_manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1187,7 +1187,7 @@
   "remaining_requirements": {
     "attestation": {
       "cargo_binary_capture": "unimplemented",
-      "macos_thread_guard_capacity": "unimplemented",
+      "macos_thread_guard_capacity": "capture_pending",
       "per_cell_guard_fault_control": "missing",
       "source_revision_capture": "unimplemented",
       "wasmtime_fiber_effective_capacity": "missing"
@@ -1215,7 +1215,7 @@
     },
     "invocation": {
       "path": "core/indexer/src/runtime/invocation.rs",
-      "sha256": "4e767d07aa26053467cf8ae24fe38d6da7e66206b2c1180e5a5c7a5918a4ad08"
+      "sha256": "4b92bc61d40beba9e537381f3eba4cf514e2807b1930cfcc3a1569daa6c5f524"
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
@@ -1227,15 +1227,15 @@
     },
     "v1_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
-      "sha256": "8f2ad3cbb0fa5afe88870464a96c79d34f7eceb2c860a7758a4dbb0f8bd32169"
+      "sha256": "5e7df10a116c5519209c74d8c88e1f463e77a1b0647118fdf4f5005b749d0c5a"
     },
     "v1_validator": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "2a70fda3f7c992d6bf2004cf6887badbdf48ddfb774f8fddf71185bd64ee0637"
+      "sha256": "258df4d56e54f839e80ff92c6a2e057c2833e4a454045b091e1958c1e5bc1c4c"
     },
     "v2_capture": {
       "path": "tools/native-stack/capture_resource_chain_v2.py",
-      "sha256": "8e21441f81ad1ac0e2eba8c6566cf23c9cf67cc82915c6a33d4cee70534cd858"
+      "sha256": "7707313795afa9588acd806c20d5107f44f13ce4d55f50614bb3e8961bb65667"
     },
     "v2_manifest_builder": {
       "path": "tools/native-stack/resource_manifest_v2.py",
@@ -1247,15 +1247,15 @@
     },
     "v2_tests": {
       "path": "tools/native-stack/test_resource_evidence_v2.py",
-      "sha256": "95edf2989fff5a0bf0fd134701b5344fa8d58599ed8f0ce875361664deb47130"
+      "sha256": "3b1dd2bc42a027962480c9d2724fd048118c988182c1870601785ca952368523"
     },
     "v2_validator": {
       "path": "tools/native-stack/resource_evidence_v2.py",
-      "sha256": "57d60151882def73fb2a1d8679a15fa7cca9177d1e2e4393341e9d9fbf24a071"
+      "sha256": "d7b22eb8a4e90485a60c96aa74f40ae774485ffc77d58bd20720a9147260b814"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "88d9c6dc29bd0e2855432fce492c869dd681c12bbc05e73d7d4e135c3395f198"
+      "sha256": "943dd5b4f7f1ee68cb3467efdcffabe094521de39c284293b4c020376529371c"
     }
   }
 }

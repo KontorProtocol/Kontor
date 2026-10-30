@@ -304,7 +304,8 @@ def synthetic_report(directory):
                           "src_path": str(checkout / "crates/fiber/src/lib.rs")}]},
         ],
         "resolve": {"nodes": [
-            {"id": indexer_id, "deps": [{"name": "wasmtime", "pkg": wasmtime_id}]},
+            {"id": indexer_id, "features": policy["resolved_indexer_test_features"],
+             "deps": [{"name": "wasmtime", "pkg": wasmtime_id}]},
             {"id": wasmtime_id,
              "deps": [{"name": "wasmtime_fiber", "pkg": fiber_id}]},
             {"id": fiber_id, "deps": [], "features": ["std"]},
@@ -315,7 +316,7 @@ def synthetic_report(directory):
         {"reason": "compiler-artifact", "package_id": indexer_id,
          "target": {"name": "indexer", "kind": ["lib"]},
          "profile": {"test": True, "opt_level": "0", "debug_assertions": True},
-         "features": [], "executable": binary_path},
+         "features": policy["resolved_indexer_test_features"], "executable": binary_path},
         {"reason": "compiler-artifact", "package_id": wasmtime_id,
          "target": {"name": "wasmtime", "kind": ["lib"]},
          "features": manifest["wasmtime_features"]["qualification"]},
@@ -372,6 +373,67 @@ def synthetic_report(directory):
 
 
 class ResourceReportControls(unittest.TestCase):
+    def test_macos_worker_capacity_requires_guard_below_mapped_stack(self):
+        pid = 401
+        records = [
+            thread("tokio_worker", "worker-1", 1_048_576, 1_048_576, pid),
+            thread("tokio_worker", "worker-2", 1_048_576, 1_048_576, pid),
+            thread("blocking_pool", "blocking", 8_388_608, None, pid),
+            thread("block_on_caller", "caller", 8_388_608, None, pid),
+        ]
+        for record in records:
+            record["identity_api"] = "macos_pthread_threadid_np"
+            record["guard_verification"] = "macos_mach_vm_region_prot_none"
+            record["mapped_start"] = record["usable_start"]
+            record["mapped_bytes"] = record["usable_bytes"]
+            record["guard_treatment"] = "guard protected below pthread stack range"
+        runtime = {
+            "flavor": "multi_thread", "worker_count": 2,
+            "worker_requested_bytes": 1_048_576,
+            "thread_observations": records,
+            "blocking_pool_observed": True, "block_on_caller_observed": True,
+        }
+        resource_evidence.thread_capacities(runtime, "reduced", 4096, "macos", pid)
+        records[0]["guard_end"] += 4096
+        with self.assertRaisesRegex(ValueError, "thread guard interval"):
+            resource_evidence.thread_capacities(runtime, "reduced", 4096, "macos", pid)
+
+    def test_macos_guard_control_accepts_faulted_children_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            manifest, _, report = synthetic_report(directory)
+            report["host"]["os"] = "macos"
+            control = report["guard_control"]
+            control["process"]["command"][2] = manifest["guard_control_runner"]["macos_test_name"]
+            path = directory / control["raw_log"]["path"]
+            lines = path.read_text().splitlines()
+            for index in (1, 2):
+                child = json.loads(lines[index].split("=", 1)[1])
+                child["signal"] = 11
+                child["target"]["guard_verification"] = "macos_mach_vm_region_prot_none"
+                child["child_stdout"] = (
+                    "running 1 test\nKONTOR_RESOURCE_GUARD_TARGET=" +
+                    json.dumps(child["target"]) + "\n")
+                child["child_stderr"] = ""
+                lines[index] = "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child)
+            lines[4] = lines[4].replace("linux_worker_guard_fault_control",
+                                        "macos_worker_guard_fault_control")
+            path.write_text("\n".join(lines) + "\n")
+            control["raw_log"]["sha256"] = resource_evidence.sha256(path)
+            resource_evidence.check_guard_control(report, manifest, directory)
+            child = json.loads(lines[1].split("=", 1)[1])
+            child["signal"] = 10
+            lines[1] = "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child)
+            path.write_text("\n".join(lines) + "\n")
+            control["raw_log"]["sha256"] = resource_evidence.sha256(path)
+            resource_evidence.check_guard_control(report, manifest, directory)
+            child["signal"] = 7
+            lines[1] = "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child)
+            path.write_text("\n".join(lines) + "\n")
+            control["raw_log"]["sha256"] = resource_evidence.sha256(path)
+            with self.assertRaisesRegex(ValueError, "guard child signal"):
+                resource_evidence.check_guard_control(report, manifest, directory)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -427,7 +489,8 @@ class ResourceReportControls(unittest.TestCase):
 
     def test_build_artifact_and_child_identity_mutations(self):
         for mutation in ("metadata", "resolved_fork", "indexer_package", "artifact_path",
-                         "compiled_features", "profile", "failed_build",
+                         "compiled_features", "indexer_artifact_feature",
+                         "indexer_graph_feature", "profile", "failed_build",
                          "cargo_target", "rustc_log", "process_command",
                          "binary_bytes", "binary_sha", "git_head", "dirty_tree",
                          "claimed_source_sha",
@@ -445,6 +508,8 @@ class ResourceReportControls(unittest.TestCase):
                     "indexer_package": "unique indexer, Wasmtime, or fiber artifacts",
                     "artifact_path": "Cargo artifact path, profile, or compiled features",
                     "compiled_features": "Cargo artifact path, profile, or compiled features",
+                    "indexer_artifact_feature": "Cargo artifact path, profile, or compiled features",
+                    "indexer_graph_feature": "does not resolve indexer to the pinned Wasmtime fork",
                     "profile": "Cargo artifact path, profile, or compiled features",
                     "failed_build": "Cargo JSON build did not complete",
                     "cargo_target": "Cargo build command differs",
@@ -485,15 +550,19 @@ class ResourceReportControls(unittest.TestCase):
                     digest = resource_evidence.sha256(path)
                     closure["cargo_metadata_log"]["sha256"] = digest
                     closure["cargo_metadata_sha256"] = digest
-                elif mutation == "resolved_fork":
+                elif mutation in {"resolved_fork", "indexer_graph_feature"}:
                     path = directory / closure["cargo_metadata_log"]["path"]
                     metadata = json.loads(path.read_text())
-                    metadata["resolve"]["nodes"][0]["deps"][0]["pkg"] += "-other"
+                    if mutation == "resolved_fork":
+                        metadata["resolve"]["nodes"][0]["deps"][0]["pkg"] += "-other"
+                    else:
+                        metadata["resolve"]["nodes"][0]["features"].append("profiling")
                     path.write_text(json.dumps(metadata))
                     digest = resource_evidence.sha256(path)
                     closure["cargo_metadata_log"]["sha256"] = digest
                     closure["cargo_metadata_sha256"] = digest
                 elif mutation in {"indexer_package", "artifact_path", "compiled_features",
+                                  "indexer_artifact_feature",
                                   "profile", "failed_build", "wrong_fiber_artifact"}:
                     path = directory / closure["build_log"]["path"]
                     entries = [json.loads(line) for line in path.read_text().splitlines()]
@@ -503,6 +572,8 @@ class ResourceReportControls(unittest.TestCase):
                         entries[0]["executable"] += "-other"
                     elif mutation == "compiled_features":
                         entries[1]["features"].append("profiling")
+                    elif mutation == "indexer_artifact_feature":
+                        entries[0]["features"].append("profiling")
                     elif mutation == "wrong_fiber_artifact":
                         entries[2]["package_id"] += "-other"
                     elif mutation == "profile":

@@ -3830,6 +3830,7 @@ dependencies = [
  "kontor-crypto",
  "libc",
  "libsql",
+ "mach2",
  "macros",
  "metrics",
  "metrics-exporter-prometheus",

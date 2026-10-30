@@ -115,16 +115,42 @@ and these six file hashes from their resolved package roots, then archives
 the files under `wasmtime-source/`.
 `capture_resource_control.py` binds the selected indexer test executable to
 one successful Cargo JSON artifact stream, requires a clean checkout at the
-explicit source revision, runs the Linux guard control with a process deadline,
+explicit source revision, runs the host's guard control with a process deadline,
 validates its complete raw transcript, and archives the Cargo inputs and six
-pinned fiber source files. Run it with the artifact stream from the exact
-`cargo test --no-run --message-format=json` build and `cargo metadata` from
-the same checkout:
+pinned fiber source files. `build_resource_test.py` runs the pinned test build
+and records the compiler version, lockfile, Cargo command, resolved `testing`
+feature, and compiler environment. The three `RUST_FASTNUM_FMT_*` variables
+are removed from that environment and recorded as explicit null values.
+Empty Rust flag and wrapper variables override inherited Cargo settings.
+The builder starts Cargo with a small allowlisted environment, so inherited
+native compiler flags, include paths, package discovery settings, and
+crate-specific build variables cannot alter the artifact. It selects `cc`,
+`c++`, and `ar` from a fixed search path, records the selected native tool
+paths and file hashes, and rejects a tool change during the build. It uses
+an empty, build-specific Cargo target directory under the output directory
+with incremental compilation disabled. This avoids reusing artifacts built
+under other settings. The builder also rejects either Cargo config filename
+in every parent `.cargo` directory or the active Cargo home, and records the
+searched paths for the aggregate gate.
+Live validation checks the native tool files again. Archived validation checks
+their recorded paths and hashes without requiring the original tool files on
+the verifier's host. These hashes identify the tool drivers, not their
+subprograms, system headers, or dynamic libraries. The qualification still
+needs workload and state parity across nodes.
+The Cargo build-script record identifies fastnum's generated output directory.
+The builder archives its pinned build script and the generated formatter,
+rounding, and serde constants, then checks their exact contents. The control
+archive copies and revalidates those files against the same Cargo artifact.
+A build with a different formatter setting or missing attestation fails the
+control gate. Run both commands from the same clean checkout:
 
 ```sh
+python3 tools/native-stack/build_resource_test.py \
+  --profile dev --output-dir path/to/new-build-directory
 python3 tools/native-stack/capture_resource_control.py \
-  --cargo-artifacts path/to/cargo-artifacts.jsonl \
-  --metadata path/to/cargo-metadata.json \
+  --cargo-artifacts path/to/new-build-directory/cargo-artifacts.jsonl \
+  --metadata path/to/new-build-directory/cargo-metadata.json \
+  --build-attestation path/to/new-build-directory/resource-build-attestation.json \
   --source-sha COMMITTED_HEAD_SHA \
   --evidence-dir path/to/new-evidence-directory
 ```
@@ -182,11 +208,367 @@ The resulting bundle is a candidate actual binding for 12 cases. The other
 29 cases, production memory profiles, and macOS guard remain missing. The
 full six-cell validator still fails closed until those inputs are proven.
 
-Cold publish function size, branch-table size and control nesting remain
-unverified accepted fixtures. The wasmparser source limits alone do not prove
-that a component with that shape passes WIT, serialized transaction and
-publication admission. The validator keeps those gates open until near-boundary
-accepted fixtures and reject controls are frozen and source reviewed.
+## Stage 1 finite and canonical development evidence
+
+The finite paid, pending host I/O, and canonical callback adapters run through
+the published contract and measured Tokio worker paths. Each isolated child
+uses a reduced or production stack configuration with the teardown probe on
+or off. The pending host fixture records a real `Poll::Pending` before its
+notification releases the host import. Canonical samples cover a 16,384 byte
+string roundtrip, realloc traps, a forbidden realloc import, and light and
+heavy paid post-return traps. The paid worker and validator independently
+check fuel-to-gas conversion and exact actor debit, burner credit, and supply
+reduction. The heavy callback must charge more gas and fee than the light one.
+
+The generated initialization adapter uses the production Pulley engine on a
+measured Tokio worker. It publishes WIT-encoded components with active data
+and element segments, then calls the valid variants through `Runtime::execute`.
+Out-of-bounds variants trap during publish-time `init()` and must roll back.
+A published component with a 4,096-byte active data segment exhausts a positive
+view budget during instantiation, after input precharge and before canonical
+input conversion. The same published component first succeeds with sufficient
+fuel, and both calls record their Store lifecycle. Each target Store must close,
+while receipts, resources,
+and the full persistent digest remain stable across every trial.
+
+The resource lifecycle adapter publishes a WIT-encoded guest resource through
+the normal `Runtime::publish` path. A successful view explicitly drops the
+resource and returns its destructor count. The trapping view checks that the
+destructor ran before its distinct `UnreachableCodeReached` trap, then a fresh
+successful call verifies reuse. The trapping call drops its gadget before it
+traps, so this case proves explicit destructor dispatch and Store closure,
+not reclamation of a guest resource still live at the trap. Failed publication
+repeats an out-of-bounds active data segment, followed by valid control calls.
+The worker records each
+target Store teardown, receipts, resources, and the full persistent digest.
+The failed initialization case proves that its Store and table lease close
+after a component instantiation trap, before the `init` export is called. It
+cannot prove guest resource cleanup because the active data trap occurs before
+guest code can create one. Contract policy
+rejects all start sections before compilation, so no resource constructor
+can run during the admitted component's initialization.
+
+The canonical type/value adapter publishes one component and directly calls
+exports for nested record and variant values, a list of 64 records, a 16,384-byte
+result string, and adjacent 64- and 65-level record results. It compares full
+WAVE values and deterministic errors across the two stack settings and both
+probe roles, with a fresh Store per attempt.
+
+At source `3add2e56bbd0c28f6eef33883263f954dc4d67aa`, the Linux ARM64
+development canonical type/value capture completed four isolated child
+processes and 48 attempts. Each child ran the six declared samples twice
+through one published component. Full returned WAVE values, system fuel, and
+reset state matched across observed and probe-off roles and reduced and
+production worker stacks. The 64-level result succeeded and the adjacent
+65-level result was rejected deterministically at the result visitor. The two
+observed children recorded 24 closed Store lifecycles in total, with zero
+live invocations after each attempt. The standalone validator and three
+evidence reviews accepted the capture. The exact-source build attestation
+SHA-256 is
+`75d93bcd532eb1e0ab9818154cf0756697f6729d100afed58daeac8bb674d20d`;
+the test binary SHA-256 is
+`dccb75d75bd264ac8078eb4709c1a9650f802fb9734c7399a710e14e1b8b581d`.
+The guard control SHA-256 is
+`a5b73fd0f8744cd02583b00fcce9b431bafc67897aa76556f8341476b1a85bfe`,
+and the capture SHA-256 is
+`bf3c7276fdcc25356888322edb774e4b6c03389d5cc3fdb7d0499708cd56efa9`.
+This is one local diagnostic cell with `qualification_status: missing`. The
+capture does not establish the 100-level component type boundary or the
+maximum legal result size. It uses unsigned views and system fuel, and provides
+no paid-call, cancellation, guest-write rollback, or trap-unwind proof. The
+typed trap field is null. The other five cells and remaining case families
+are required for S2 qualification.
+
+The foreign WAVE adapter publishes a caller and a target through the same
+runtime path. The caller generates each expression inside guest memory and
+passes it through `foreign.call`, so the outer `run(index)` expression remains
+shallow and short. The target parses 63 nested record values at the 64-level
+expression boundary and a 16,384-byte string literal. The adjacent rejected
+inputs have 64 nested records or a 16,385-byte literal. Separate target
+exports return 64- and 65-level record values to exercise bounded result
+printing. The validator distinguishes inner parser rejection from result
+visitor rejection using error kinds and canonical conversion events. It checks
+the full returned foreign WAVE string, including the nested record value, and
+requires both caller and target Stores to close on every attempt. This fixture
+does not exercise paid-call accounting or arbitrary third-party WIT shapes.
+
+At source `b9405164a29a1872edb57bb7ec579b2d4d386748`, the Linux ARM64
+development foreign WAVE capture completed four isolated child processes and
+48 attempts. Each child ran the six boundary samples twice through the
+published caller and target. Full returned WAVE strings, deterministic error
+kinds, fuel, and reset state matched across observed and probe-off roles and
+reduced and production stack settings. The two observed children recorded 48
+closed Store lifecycles in total, with zero live invocations after each attempt.
+The standalone validator and three evidence reviews accepted the capture.
+The exact-source build attestation SHA-256 is
+`c09ea40a24f7a7fa368a3c086718c7084e78f3145a9dc7a066079b487df5eeba`;
+the test binary SHA-256 is
+`5c505e2433e8086b567d90907d94adc41a5fbba8b23ffbb8e258a27328137531`.
+The guard control SHA-256 is
+`dfb5dad7937171958310b0995a7294b19122cbcadc66bac118396d349fa77891`,
+and the capture SHA-256 is
+`0d235dcb74a0ade9521b7789af3f720c2282ef902ab966a2fa874b2c23132256`.
+This is one local diagnostic cell with `qualification_status: missing`. The
+fixture uses unsigned views and system fuel. It provides no paid-call,
+cancellation, guest-write, or trap-unwind proof; the typed trap field is null.
+The other five cells and remaining case families are required for S2
+qualification.
+
+The SQLite pagination adapter prepares 1,024 token accounts, tests token
+pages, then mints 1,024 NFTs and tests NFT pages. It uses the generated WAVE
+request and result helpers around `Runtime::execute_api`, which reaches the
+native contract invocation Store on a measured Tokio worker. The generated
+`AsyncCursorQuery` builder has a non-`Send` future and is not used inside the
+worker task. The adapter freezes the first, middle, and final page at sizes
+1, 7, and 100 for both contracts, then checks every returned account, amount,
+NFT ID, agreement ID, owner, creator, and continuation. The first external
+signer is ID 7 after Core and five native contract signers at genesis. The
+validator rejects the earlier ID 2 assumption and missing, duplicated,
+shifted, or altered rows.
+
+At source `743cb3e711afcb3bea7b428a736fa3ad9f9fb370`, the Linux ARM64
+development pagination capture completed four isolated children and 144
+attempts. All 18 declared samples ran twice per child. Exact full pages,
+continuations, system fuel, and full persistent-state digests matched across
+both probe roles and reduced and production worker stacks. The two observed
+children recorded 72 closed target Stores in total, with zero live
+invocations after every attempt. The standalone validator accepted all four
+runs. The exact-source build attestation SHA-256 is
+`3a007a63ff272d537a16ff17fee70cb61b3da3151ea5d66248567ac3cfc05ac9`;
+the test binary SHA-256 is
+`a33eef41d86954f11519dd11fd4f6b7c4bcdf48d65a7f12db3a6703bd3d515ae`.
+The guard control SHA-256 is
+`df2cdea2b57ecadfd4b192d1c140f766e5137195ae9358cc7e522d5f5eeee154`,
+and the capture SHA-256 is
+`5aeeb3073c1d1cee32a58155946afdc05b977c0cfe6de1a1d1cfbbdd1f97aa60`.
+This is one local diagnostic cell with `qualification_status: missing`. The
+adapter measures page semantics, fuel, state, and Store cleanup. It records
+per-attempt elapsed time for diagnostics but does not establish SQL query
+counts or comparative timing as performance evidence. It uses unsigned views
+and provides no paid-call, cancellation, guest-write rollback, or
+trap-unwind proof. The other five cells and remaining case families are
+required for S2 qualification.
+
+The SQLite range adapter publishes the pinned `arith` guest through
+`Runtime::publish`, funds a signer, and writes 1,024 numeric map entries through
+paid guest operations. The measured `number-entries` views use a lower
+inclusive and upper exclusive range. For each page size 1, 7, and 100 and range
+length 0, 1, 256, and 1,024, an attempt reads the first page as integers in
+ascending order and the last page as decimals in descending order. Both views
+reach the SQLite range iterator and have independently frozen exact row order,
+values, and bounds. The capture compares measured fuel and persistent state
+across runs and verifies Store teardown. The bounded samples
+cover the empty and singleton ranges and both ends of longer ranges. They do not
+exhaust every interior row of the 256 or 1,024 entry ranges.
+
+At source `4a57b3a193b4a2126a000158ed0dba16408a1833`, the Linux ARM64
+development range capture completed four isolated children, 24 attempts each,
+and 96 attempts overall. The standalone validator accepted all four runs. The
+two observed children recorded 96 created and 96 destroyed target Stores, with
+zero live invocations after each attempt. Exact results, system fuel, and full
+persistent-state digests matched across both probe roles and reduced and
+production worker stacks. The exact-source build attestation SHA-256 is
+`8ccfe03694e2890e34772b3eb9f2a158be70adfd4bafb0dae59f36815a2fe0b1`;
+the test binary SHA-256 is
+`da35dc7541faead4c1c89e9fa3f1a1a43cac9a00fe414cf7211a3304ed66d8a1`.
+The guard control SHA-256 is
+`3b8779a6ac34b00a9ac9331e5d94616d7abd73c527bdc98cf52b730ded8c2554`,
+and the capture SHA-256 is
+`458742df7d8460a53ae9eb7c7da60fa1e568154aaed117b63e8e7518cd7f7e23`.
+This is one local diagnostic cell with `qualification_status: missing`. It does
+not establish SQL query counts, comparative timing, or cross-node and six-cell
+semantic equality. The measured calls are unsigned views; paid-call, guest
+write rollback, cancellation, and trap unwind remain separate cases.
+
+The SQLite large-value adapter publishes the `counter` guest, funds a signer,
+and writes 101 ordered map keys through paid operations. A paid 16 KiB write
+succeeds. A paid 1 MiB write deterministically exceeds the storage deposit
+budget; the adapter checks its single error receipt and fee effects, then
+rolls back an outer fixture savepoint and verifies complete persistent-state
+restoration. A Core-signed 1 MiB write prepares the read fixture. The measured
+unsigned views return pages of 1, 7, and 100 entries for both value sizes. The
+host checks every returned byte, key, and continuation before recording compact
+hashes. The outer savepoint isolates the test fixture; it does not imply that
+a failed paid operation refunds its execution fee in production.
+
+At source `7f118635ba2f24805ca19d680241b59680079b3b`, the Linux ARM64
+development large-value capture completed four isolated children and 48
+attempts. The standalone validator accepted all four runs. The two observed
+children recorded 24 created and 24 destroyed target Stores, with zero live
+invocations after every attempt. Exact page contents, cursors, fuel, receipts,
+and full persistent-state digests matched across observed and probe-off roles
+and reduced and production worker stacks. The exact-source build attestation
+SHA-256 is
+`fc49fef3d13ef5a039538742d2f4e28597627a4fcd9de384bd25fd5b09019a37`;
+the test binary SHA-256 is
+`55619541b260800f90377756b34ea5faf87351ad2aa2d2a72aa60c2440fbb9e3`.
+The guard control SHA-256 is
+`3af5c03263038935c73edef6d0ac5d8bd585de74df962009a105ad29c6c68a21`,
+and the capture SHA-256 is
+`1c27db9dca4191d550cdc266d2c02e51a4fcdaad0587003da8f1004111baca5b`.
+This is one local diagnostic cell with `qualification_status: missing`. The
+1 MiB write is Core fixture setup after a paid rejection. The other five cells
+and cross-node semantic comparisons remain required for S2 qualification.
+
+At source `b696727cbf0e189370399a1d3f29b0fbd7227da8`, the Linux ARM64
+development native staking reward capture completed four isolated children and
+32 attempts at populations 0, 4, 32, and 128, each repeated twice. The
+standalone validator accepted all four runs. The two observed children recorded
+28 created and 28 destroyed Stores, with no live invocation after any attempt.
+Valid seeded x-only keys resolved to canonical signer IDs in the guest; the
+validator checked that binding and holder-string ordering, including the final
+holder's rounding residue. It also checked the independently calculated
+emission, unchanged storage emission budget, validator status and withdrawal
+metadata, full measured receipts, and state restoration across roles, repeats,
+and worker stack settings. The exact-source build attestation SHA-256 is
+`da76d2b90f2fd1dd2f0aa9e29646e376745b1afa92de240215f9a761ee96d359`;
+the test binary SHA-256 is
+`cc7a4162c528df1f10ebe7344fe4adafec511ec89293ecf6fe2f7b99090facf9`.
+The guard control SHA-256 is
+`dbe86e1ff4947ac3f5304947385423b3ff53a4e0e1b91097fe269c4e424cedd0`,
+and the capture SHA-256 is
+`bc889579a15ef6929073d2c67395293fdf92032553ff1be1e33c22c6f556e2f4`.
+This is one local diagnostic cell with `qualification_status: missing`. The
+other five cells and cross-node comparisons remain required for S2
+qualification. It does not establish performance, production recovery, or
+capacity policy.
+
+At source `9a80bf5ff32f9df4b6cc40842099b9d995236c5e`, the Linux ARM64
+development native filestorage lifecycle capture completed four isolated
+children and 24 attempts. Each child repeated expiry of 32 due challenges,
+settlement of 32 expired penalties, and a nine-step cleanup call within the
+separate 32-step cleanup budget. Deterministic regtest setup created the
+backlog; the measured operations used the real native Core calls. The
+standalone validator accepted all four runs and checked the exact one,
+65, and one receipt graph, each penalty's decimal burn and remaining stake
+in challenge-ID order, collateral reservations, obligations, and full
+persistent-state restoration across repeats, roles, and worker stack settings.
+The two observed children recorded 268 created and 268 destroyed Stores.
+Each child measured all three blocking decode threads actually used by the
+default pool, including their stack guards. The exact-source build attestation
+SHA-256 is
+`a56c1ed903e5ad9095e147dba77e71bc76d338ad9be4dadb6767a2aa5a06195c`;
+the test binary SHA-256 is
+`cf5f285dfc19c472fbdefee6db14c6e8cb40a740dbff3a73e9d79a52da3f9add`.
+The guard control SHA-256 is
+`99e3d298df5904f22f9c92ac321ba59f5510329fd04fe883ff203867c200f7ec`,
+and the capture SHA-256 is
+`29a101e571de0f22d1214cc2ec9b274c0494453d2372419acebccfaaffa0c166`.
+This is one local diagnostic cell with `qualification_status: missing`.
+The other five cells and cross-node comparisons remain required for S2
+qualification. Larger-replica staged cleanup, injected recovery failures,
+complete reward accounting, and isolated service timing remain untested.
+
+At source `f678cf541e1aef3c8c1813fe8a87638f4b070cf7`, the Linux ARM64
+development Brotli raw-ceiling capture completed four isolated children and
+16 attempts. Each child twice published a valid component whose decompressed
+module was exactly 67,108,864 bytes, then twice submitted a module with one
+more padding byte in its trailing custom section. The accepted publication
+reached `init`, used 40,523 system fuel, and wrote one `Ok` receipt with gas 41
+and the expected contract address. The over-ceiling publication returned a
+deterministic content error before compilation, a Store, metered fuel use, or
+a receipt. The standalone validator accepted all four runs. It checked the
+exact raw-byte hashes, blocking-thread decode traces and stack capacities,
+the init receipt, full persistent-state restoration, and equal outcomes across
+repeats, roles, and worker stack settings. The exact-source build attestation
+SHA-256 is
+`8f703b94d01c59af3d8489bb15d0d7855a19c32b26e339e70dea70ab0b8fe11f`;
+the test binary SHA-256 is
+`7d5e186a08c66542151b8728b1be3efd8cb376a26e1d15940bb8023a795f2d81`.
+The guard control SHA-256 is
+`7695d9c969ba78168823ce8e8d80df142924f21494ccac357698da69e243f8eb`,
+and the capture SHA-256 is
+`fcc44584bc1201646d412781552c7c1f8099f956030bfb57fb00c536d3105fd8`.
+This is one local diagnostic cell with `qualification_status: missing`.
+The other five cells, cross-node parity, and operational qualification remain
+open. The capture does not establish that all valid components fit within
+the ceiling or that near-boundary publication meets service targets.
+
+At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
+development canonical capture completed 12 child processes, 56 attempts, and
+268 closed Store lifecycles. The standalone validator accepted all 12 runs.
+The archived capture SHA-256 is
+`e99e60f0f3900f154a9d565f93606941994e5c6183d5cd9e6d6bcb6c236ae91d`;
+its exact-source guard control SHA-256 is
+`91bd618f1db597eca5dab24e0b5f644b28a839f965f318412e9b628ce3871674`.
+The archive is local diagnostic evidence. Its `qualification_status` is
+`missing`, since the other five cells and remaining case families have not
+been captured. The canonical fixture performs no persistent guest write, so
+its reset digest proves cleanup of this fixture, not rollback of a guest write.
+
+The cold publication source now generates three variants of the pinned stack
+probe module and submits them through `Runtime::publish`. It checks the
+postcard-serialized instruction size against the compose limit, then observes
+componentization, compilation, initialization receipts, rollback, and Store
+teardown. The function-body candidate is 7,654,321 bytes with a one-byte-over
+control. The `br_table` fixture has 7,654,308 zero-depth entries in a
+7,654,321-byte body; adding one entry crosses the function-body size gate.
+Although wasmparser names a 7,654,321-entry `br_table` cap, this encoding
+cannot reach it inside an admitted body. The 256-block control-nesting
+fixture is a candidate, not a claimed engine maximum. The source manifest
+retains `fixture_admission_status: unverified` pending the remaining cells
+and phase review. Postcard size checks establish a
+serialized instruction proxy, not a complete signed transaction admission
+result. Cross-node parity and the other qualification cells remain open.
+
+At source `7ce943e66bd3b3412cf9554011a0e977119ae9b9`, the Linux ARM64
+development cold-publication capture completed 12 isolated children and 40
+attempts. The 7,654,321-byte large-function body and the 7,654,308-entry
+`br_table` body were admitted in every role and worker stack setting. Their
+one-byte-over bodies returned the same deterministic function-body-size error
+before a Store, receipt, or metered fuel use. The 256-block control-nesting
+fixture was admitted in every child. The 24 accepted attempts each produced
+the expected `init` receipt and closed its Store; 16 rejected attempts
+restored state without a receipt. The standalone validator accepted all 12
+runs and equal semantics across repeats, roles, and stack settings. The
+exact-source build attestation SHA-256 is
+`c48199d1c97236aa5aef0793e3096ea3d55afa033b6d5729487834b3e173a525`;
+the test binary SHA-256 is
+`54bf5e4dce315b82ff4359cb5f14eb4aef0dd83fa2e5e629560beb4b4de9aa56`.
+The guard control SHA-256 is
+`9671e231db487d2e836985a26797dcaf790deebbf97da6ed847d5b219c180b14`,
+and the combined capture SHA-256 is
+`c028121e35e21c780d20da323c5b2b8b7d28586ea21a628335969984b6de18fe`.
+This is one local diagnostic cell with `qualification_status: missing`.
+The capture does not establish full signed-transaction admission,
+cross-node parity, or service timing.
+
+The S2 suite source registry maps all 41 required cases to 16 capture and
+validator groups. `resource_suite_registry.py` checks unique case coverage and
+pins each group's capture source, validator source, and parent manifest. Its
+`source_registry_only` status is a source inventory, not a measurement.
+`resource_suite_closure.py` accepts an archive rooted at
+`<cell with slash replaced by underscore>/<group>/<capture name>` for each
+of the six cells. It requires one source commit, the same binary and guard
+control within each cell, all 16 groups and all 41 cases, and final boundary
+captures. It emits `closure_only` because group semantics and cross-cell
+parity still require their own validators and comparator. Run it only from the
+clean checkout at the capture source commit, with `--root` set to the archive
+root and `--output` set to a new index path outside the checkout.
+
+The v2 chain capture and validator now accept every S2 host/profile cell and
+bind the trace parser to its host OS. Actual capture is still required on each
+host. `capture_resource_suite.py` runs all 16 capture groups for one cell in
+registry order after checking the clean source commit, exact control, reviewed
+boundary discovery, and frozen v2 auxiliary Store counts. It writes each group
+under the archive layout used by the closure index and copies the exact Cargo
+test executable once per cell. Run it separately on every
+required host and profile with one common source commit. Its output is a
+capture inventory, not a qualification decision.
+
+The six-cell suite remains gated by reviewed boundary depths, a measured
+macOS guard control, production memory profiles, and a common-source capture
+run. `compare_resource_suite.py` checks the clean checkout at the archived
+source commit, revalidates each copied binary, recorded Cargo artifact,
+guard transcript, and child raw log, then compares the validators' semantic
+signatures across all six cells. Archive validation uses the captured host OS
+and page size instead of the verifier host. The original executable path
+remains bound to the Cargo record and each child command; its bytes come from
+the archived copy. The current source package has no measured macOS capture
+or six-cell archive yet, so the comparator has only synthetic tests. The
+`native-stack-s2.yml` workflow and `resource-suite-runbook.md` describe the
+discovery, review, final capture, and comparison commands. Production memory
+profiles and phase review remain separate acceptance gates.
 
 The amendment is copied unchanged into
 `docs/design/protocol-upgrades/native-stack-s2-resource-amendment-v1.md`.

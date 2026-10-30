@@ -91,7 +91,9 @@ def bundle_fixture(directory):
     control_dir = directory / "control"
     control_dir.mkdir()
     control_entries = {}
-    for name in ("cargo-artifacts.json", "cargo-metadata.json", "guard.log"):
+    for name in ("cargo-artifacts.json", "cargo-metadata.json",
+                 "resource-build-attestation.json", "cargo-build.log",
+                 "fastnum-build.rs", "guard.log"):
         path = control_dir / name
         path.write_text(name)
         control_entries[name] = {"path": name, "sha256": sha256(path)}
@@ -99,8 +101,13 @@ def bundle_fixture(directory):
         "source_sha": head, "binary_path": binary_path,
         "binary_sha256": binary_hash,
         "manifest_sha256": sha256(ROOT / "tools/native-stack/resource-manifest-v1.json"),
+        "cargo_artifact": {"profile": {"test": True, "opt_level": "0",
+                                       "debug_assertions": True}},
         "cargo_artifacts": control_entries["cargo-artifacts.json"],
         "cargo_metadata": control_entries["cargo-metadata.json"],
+        "build_attestation": control_entries["resource-build-attestation.json"],
+        "build_log": control_entries["cargo-build.log"],
+        "fastnum_files": {"build_script": control_entries["fastnum-build.rs"]},
         "guard_control": {"process": {"pid": 1, "started_unix_ns": 1},
                           "raw_log": control_entries["guard.log"]},
         "wasmtime_source_files": {},
@@ -293,6 +300,30 @@ def bundle_fixture(directory):
 
 
 class EvidenceV2Tests(unittest.TestCase):
+    def test_cell_target_rejects_mislabeled_host_or_profile(self):
+        dev = {"profile": {"test": True, "opt_level": "0",
+                            "debug_assertions": True}}
+        release = {"profile": {"test": True, "opt_level": "3",
+                                "debug_assertions": False}}
+        self.assertEqual(resource_evidence_v2.cell_target("Linux-X64/dev", dev),
+                         ("linux", "x86_64"))
+        self.assertEqual(resource_evidence_v2.cell_target("Linux-ARM64/release", release),
+                         ("linux", "aarch64"))
+        self.assertEqual(resource_evidence_v2.cell_target("macOS-ARM64/dev", dev),
+                         ("macos", "aarch64"))
+        with self.assertRaisesRegex(ValueError, "profile differs"):
+            resource_evidence_v2.cell_target("macOS-ARM64/release", dev)
+        with self.assertRaisesRegex(ValueError, "unknown v2 resource cell"):
+            resource_evidence_v2.cell_target("Linux-PPC/dev", dev)
+        with (patch.object(resource_evidence_v2.sys, "platform", "darwin"),
+              patch.object(resource_evidence_v2.platform, "machine",
+                           return_value="arm64")):
+            self.assertEqual(resource_evidence_v2.cell_target(
+                "macOS-ARM64/dev", dev, check_host=True), ("macos", "aarch64"))
+            with self.assertRaisesRegex(ValueError, "capture host"):
+                resource_evidence_v2.cell_target(
+                    "Linux-ARM64/dev", dev, check_host=True)
+
     def test_complete_bundle_closure_and_guard_revalidation(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)

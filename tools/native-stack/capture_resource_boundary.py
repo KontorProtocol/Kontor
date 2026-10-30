@@ -31,12 +31,16 @@ def capture(phase, cell, discovery_path, discovery_sha256,
             reviewed_path, reviewed_sha256,
             control_path, control_sha256,
             evidence_dir, timeout_seconds):
-    require(sys.platform == "linux", "boundary child capture requires Linux guard support")
+    require(sys.platform in {"linux", "darwin"},
+            "boundary child capture requires a supported guard control")
     require(cell in {"Linux-ARM64/dev", "Linux-ARM64/release",
-                     "Linux-X64/dev", "Linux-X64/release"},
+                     "Linux-X64/dev", "Linux-X64/release",
+                     "macOS-ARM64/dev", "macOS-ARM64/release"},
             "unsupported local boundary cell")
-    actual_arch = {"aarch64": "ARM64", "x86_64": "X64"}.get(platform.machine())
-    require(cell.startswith(f"Linux-{actual_arch}/"),
+    actual_arch = {"aarch64": "ARM64", "arm64": "ARM64",
+                   "x86_64": "X64"}.get(platform.machine())
+    actual_os = "macOS" if sys.platform == "darwin" else "Linux"
+    require(cell.startswith(f"{actual_os}-{actual_arch}/"),
             "boundary cell architecture differs from local host")
     require(1 <= timeout_seconds <= 1200,
             "boundary child timeout must be 1 to 1200 seconds")
