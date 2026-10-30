@@ -688,3 +688,22 @@ raw-log hashes are in `.build-cache/k2a-reconcile/retention-simulation-77b2b4db/
 These checks validate the preparation branch only. S2/OWNERSHIP-1 integration,
 selected executor/context wiring, full phase acceptance, independent reviews and
 release CI remain required. No P1 freeze or phase merge is claimed.
+
+## Retained pricing extraction
+
+Source `63c343b229f2c15cdefbdf6a04e268b62deaec17` moves the existing `Pricing`
+implementation into `protocol::v1::pricing`, preserving the `runtime::Pricing`
+re-export and existing tests. Methods, constants and error strings are unchanged
+after adjusting imports. This is code organization for retained semantics, not
+selected-context wiring or a change to gas allowances.
+
+All four existing pricing tests passed on that exact clean source in 9.62 seconds
+(80.82 seconds including compilation). They cover rate independence and retained
+storage reservations, free execution with collateral, overflow and legacy bounds,
+and the property that a hold covers execution plus collateral. Indexer Clippy,
+including tests with warnings denied, passed in 17.52 seconds. Both checks used
+Rust 1.99.1, locked offline resolution and two jobs. Reproducible commands, source
+and lockfile hashes, terminal results and raw-log hashes are retained under
+`.build-cache/k2a-reconcile/pricing-extraction/`. These checks do not qualify the
+complete executor extraction or replace the prerequisite integration and parity
+evidence described above.
