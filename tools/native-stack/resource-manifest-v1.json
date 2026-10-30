@@ -34,7 +34,7 @@
     },
     "brotli_ceiling_validator_tests": {
       "path": "tools/native-stack/test_resource_brotli_raw_ceiling_evidence.py",
-      "sha256": "f360371ab68408232149153119316e3ba588edc7b45d8bf98b1874a06fea6e92"
+      "sha256": "540819a816e271940702a5238f7ec227d2f127490ee5436701e7fbb3e223c414"
     },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",

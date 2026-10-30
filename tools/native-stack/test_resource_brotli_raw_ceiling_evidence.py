@@ -130,7 +130,7 @@ class BrotliCeilingEvidenceTests(unittest.TestCase):
             decode.update(thread_id="w", os_thread_id=1, category="tokio_worker")
             with self.assertRaises(ValueError):
                 validate_trace(forged, runtime, attempts, "linux")
-            for mutation in ("omit", "duplicate", "relocate"):
+            for mutation in ("omit", "duplicate", "cross_attempt", "orphan"):
                 with self.subTest(mutation=mutation):
                     forged = copy.deepcopy(trace)
                     events = forged["events"]
@@ -140,6 +140,11 @@ class BrotliCeilingEvidenceTests(unittest.TestCase):
                         events.pop(index)
                     elif mutation == "duplicate":
                         events.insert(index, copy.deepcopy(events[index]))
+                    elif mutation == "cross_attempt":
+                        moved = events.pop(index)
+                        second_start = [i for i, item in enumerate(events)
+                                        if item["name"] == "finite_stack_attempt_start"][1]
+                        events.insert(second_start + 1, moved)
                     else:
                         events.append(events.pop(index))
                     with self.assertRaises(ValueError):
