@@ -141,6 +141,27 @@ struct TrackedBatch {
     hash: BlockHash,
     txids: Vec<Txid>,
     bytes: Vec<Vec<u8>>,
+    bodies_retained: bool,
+}
+
+fn settle_bodies(tracked: &mut [TrackedBatch], previous_tip: u64, tip: u64) {
+    if !tracked.iter().any(|batch| {
+        batch.anchor + FINALITY_WINDOW > previous_tip && batch.anchor + FINALITY_WINDOW <= tip
+    }) {
+        return;
+    }
+    // Body GC runs only at a due settlement and retains the inclusive window,
+    // even though in-memory finality removes batches at their deadline.
+    let floor = tracked
+        .iter()
+        .filter(|batch| batch.anchor >= tip.saturating_sub(FINALITY_WINDOW))
+        .map(|batch| batch.height)
+        .min();
+    for batch in tracked {
+        if floor.is_none_or(|floor| batch.height < floor) {
+            batch.bodies_retained = false;
+        }
+    }
 }
 
 pub(super) struct TimedWork<'a> {
@@ -247,7 +268,7 @@ impl<'a> TimedWork<'a> {
         for batch in tracked {
             let mut actual =
                 select_unconfirmed_batch_txs(&self.reactor.db_conn(), batch.height).await?;
-            let mut expected = if batch.anchor + FINALITY_WINDOW > height {
+            let mut expected = if batch.bodies_retained {
                 batch.bytes.clone()
             } else {
                 Vec::new()
@@ -493,6 +514,7 @@ impl Work for TimedWork<'_> {
                     hash: input.block.prev_hash,
                     txids: reveals.iter().map(Transaction::compute_txid).collect(),
                     bytes: reveals.iter().map(serialize).collect(),
+                    bodies_retained: true,
                 });
                 updated_range = Some((*block, range.end));
             }
@@ -562,6 +584,7 @@ impl Work for TimedWork<'_> {
                 consensus = consensus
                     .checked_add(1)
                     .context("consensus height overflow")?;
+                settle_bodies(&mut tracked, self.tip.0, input.block.height);
                 updated_range = Some((*block, range.end));
             }
             Action::Simulation {
@@ -630,5 +653,45 @@ impl Work for TimedWork<'_> {
         self.executed = false;
         self.ordinal += 1;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::BlockHash;
+    use bitcoin::hashes::Hash;
+
+    use super::{TrackedBatch, settle_bodies};
+
+    fn batch(height: u64, anchor: u64) -> TrackedBatch {
+        TrackedBatch {
+            height,
+            anchor,
+            hash: BlockHash::all_zeros(),
+            txids: Vec::new(),
+            bytes: Vec::new(),
+            bodies_retained: true,
+        }
+    }
+
+    #[test]
+    fn workload_timed_body_retention_includes_deadline_and_waits_for_settlement() {
+        let mut consecutive = vec![batch(20, 101), batch(22, 102)];
+        settle_bodies(&mut consecutive, 106, 107);
+        assert!(consecutive.iter().all(|batch| batch.bodies_retained));
+        settle_bodies(&mut consecutive, 107, 108);
+        assert!(!consecutive[0].bodies_retained);
+        assert!(consecutive[1].bodies_retained);
+
+        let mut gap = vec![batch(20, 101)];
+        settle_bodies(&mut gap, 106, 107);
+        settle_bodies(&mut gap, 107, 108);
+        assert!(gap[0].bodies_retained);
+        gap.push(batch(30, 109));
+        settle_bodies(&mut gap, 114, 115);
+        assert!(!gap[0].bodies_retained);
+        assert!(gap[1].bodies_retained);
+        settle_bodies(&mut gap, 115, 116);
+        assert!(gap[1].bodies_retained);
     }
 }

@@ -67,8 +67,35 @@ impl Settings {
                 && self.mixed.view_concurrency == 8
         );
         ensure!(!self.real_clock_drain || self.schedule.fresh_backlog == 6);
-        Schedule::new(self.schedule)
+        let schedule = Schedule::new(self.schedule)?;
+        ensure!(
+            schedule.funding_counts()?.iter().sum::<usize>() < 20_000,
+            "timed funding must reserve one output for the independent API signer"
+        );
+        Ok(schedule)
     }
+}
+
+#[test]
+fn workload_timed_settings_reserve_api_funding() -> Result<()> {
+    let mut settings: Settings = serde_json::from_str(
+        r#"{
+            "population": {"active_validators":4,"replacements":2,"agreements":2,"members_per_agreement":3},
+            "mixed": {"transactions":50,"live_keys":257,"new_files":5,"batch_operations":20,"simulation_operations":2,"view_concurrency":8},
+            "schedule": {"profile":"representative","fresh_backlog":0,"intervals":79}
+        }"#,
+    )?;
+    ensure!(settings.validate()?.funding_counts()?.iter().sum::<usize>() == 19_750);
+    settings.schedule.intervals = 80;
+    ensure!(
+        Schedule::new(settings.schedule)?
+            .funding_counts()?
+            .iter()
+            .sum::<usize>()
+            == 20_000
+    );
+    ensure!(settings.validate().is_err());
+    Ok(())
 }
 
 async fn warm(runtime: &mut Runtime, enabled: bool) -> Result<()> {
