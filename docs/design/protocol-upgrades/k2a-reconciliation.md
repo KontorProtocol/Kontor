@@ -879,11 +879,10 @@ At `5272200b`, 24 listener tests, three retention/witness/snapshot tests and the
 three-node batch-confirmation test passed. The indexer/testlib all-target check
 passed. Lead review then moved initial recognition before consensus startup to
 preserve the startup barrier and removed an unused import. No phase acceptance is
-claimed: protocol reselection and cache identity, witness freshness across async
-proposal validation, and preserving candidate rejection policy when rebuilding a
-selection remain required. Reconnect-snapshot recognition currently awaits its
-blocking worker on the reactor loop; the selected preparation job must allow
-consensus progress while preserving snapshot/delta ordering.
+claimed: protocol reselection and cache identity remain required. The subsequent
+preparation change below addresses reconnect parsing on the reactor loop, exact
+witness freshness across async validation, and suppression during pending parsing.
+It does not yet implement rebuilding candidates under a different protocol.
 
 ### Bounded mempool preparation and witness freshness
 
@@ -916,3 +915,15 @@ helper import) were corrected before the successful run. Protocol selection stam
 reselection at activation/recovery, and retained implementation dispatch remain
 unfinished. These checks do not establish those later capabilities or final K2a
 acceptance.
+
+
+On `f1c84c4e1939e496a8b129a31754424eef42261f`, the 29 focused tests,
+existing banked-verdict and pending-RPC block-progress consensus regressions,
+and indexer/testlib all-target compile check passed. The preserved P1 comparison
+was explicitly run with `--ignored` and passed, producing candidate report
+SHA-256 `554d781fa0dda9236709a5b3730145da125827b007101077e11cca3858d0f7a3`.
+The first parity invocation skipped the opt-in fixture and is not acceptance
+evidence. A sandboxed consensus attempt could not bind localhost; the test process
+was stopped and the checks passed with local networking enabled. Logs and the lead
+review are in `.build-cache/selected-executor-baseline/f1c84c4e-local-network/`
+and `.build-cache/selected-executor-baseline/f1c84c4e-parity/`.
