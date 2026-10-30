@@ -1038,12 +1038,16 @@ impl ReactorCluster {
         while self.join_set.join_next().await.is_some() {}
     }
 
-    async fn shutdown_with_owners(mut self) {
+    async fn shutdown_with_owners(mut self) -> Result<()> {
         self.cancel.cancel();
         for owner in self.owner_services.lock().unwrap().iter().flatten() {
             owner.shutdown();
         }
-        while self.join_set.join_next().await.is_some() {}
+        while let Some(joined) = self.join_set.join_next().await {
+            joined
+                .map_err(|error| anyhow!("reactor task failed during owner shutdown: {error}"))?;
+        }
+        Ok(())
     }
 }
 
@@ -1746,7 +1750,7 @@ async fn shutdown_during_finality_replay_waits_for_active_replay() -> Result<()>
     .await;
     if all_replaying.is_err() {
         gate.release();
-        cluster.shutdown_with_owners().await;
+        cluster.shutdown_with_owners().await?;
         return Err(anyhow!("not all reactors reached finality replay"));
     }
     let owners: Vec<OwnerService> = cluster
@@ -1767,7 +1771,7 @@ async fn shutdown_during_finality_replay_waits_for_active_replay() -> Result<()>
         retained,
         "shutdown released reactors while replay was active"
     );
-    timeout(Duration::from_secs(30), shutdown).await??;
+    timeout(Duration::from_secs(30), shutdown).await???;
     let errors = reactor_errors.lock().unwrap().clone();
     assert!(
         errors
