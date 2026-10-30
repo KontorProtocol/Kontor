@@ -341,7 +341,10 @@ def validate_trace(trace, runtime, attempts, os_name):
         else:
             require(event["category"] == "blocking_pool"
                     and blocking.get(event["thread_id"]) == event["os_thread_id"]
-                    and event["name"].startswith("blocking_decode_"),
+                    and event["name"] in {
+                        "blocking_decode_entry", "blocking_decode_exit",
+                        "compiler_entry", "compiler_exit",
+                    },
                     "filestorage blocking decode lacks measured capacity")
         names.append(event["name"])
     starts = [i for i, name in enumerate(names)

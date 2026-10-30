@@ -124,7 +124,8 @@ class SqlitePaginationEvidenceTests(unittest.TestCase):
                     "os_thread_id": worker + 10, "category": category}
 
         events = [event("fixture_preparation_entry"),
-                  event("compiler_entry"), event("compiler_exit"),
+                  event("compiler_entry", 3, "blocking_pool"),
+                  event("compiler_exit", 3, "blocking_pool"),
                   event("blocking_decode_entry", 3, "blocking_pool"),
                   event("blocking_decode_exit", 3, "blocking_pool"),
                   event("fixture_preparation_exit")]
@@ -153,6 +154,17 @@ class SqlitePaginationEvidenceTests(unittest.TestCase):
         with patch("resource_sqlite_pagination_evidence.thread_capacities",
                    return_value=threads):
             validate_trace(trace, runtime, attempts, "linux")
+            for mutation in ({"thread_id": "unmeasured"},
+                             {"os_thread_id": 999},
+                             {"category": "block_on_caller"},
+                             {"name": "canonical_input_entry"}):
+                forged_compiler = copy.deepcopy(trace)
+                compiler = next(item for item in forged_compiler["events"]
+                                if item["name"] == "compiler_entry")
+                compiler.update(mutation)
+                with self.subTest(compiler_mutation=mutation):
+                    with self.assertRaises(ValueError):
+                        validate_trace(forged_compiler, runtime, attempts, "linux")
             bad = copy.deepcopy(trace)
             bad["events"].pop(-2)
             with self.assertRaises(ValueError):

@@ -94,7 +94,7 @@ class BrotliCeilingEvidenceTests(unittest.TestCase):
 
     def test_decode_must_run_on_a_measured_blocking_thread(self):
         def event(name):
-            blocking = name.startswith("blocking_decode_")
+            blocking = name.startswith(("blocking_decode_", "compiler_"))
             return {"name": name, "thread_id": "b" if blocking else "w",
                     "os_thread_id": 2 if blocking else 1,
                     "category": "blocking_pool" if blocking else "tokio_worker"}
@@ -124,6 +124,17 @@ class BrotliCeilingEvidenceTests(unittest.TestCase):
         with patch("resource_brotli_raw_ceiling_evidence.thread_capacities",
                    return_value=capacities):
             validate_trace(trace, runtime, attempts, "linux")
+            for mutation in ({"thread_id": "unmeasured"},
+                             {"os_thread_id": 999},
+                             {"category": "block_on_caller"},
+                             {"name": "canonical_input_entry"}):
+                forged_compiler = copy.deepcopy(trace)
+                compiler = next(item for item in forged_compiler["events"]
+                                if item["name"] == "compiler_entry")
+                compiler.update(mutation)
+                with self.subTest(compiler_mutation=mutation):
+                    with self.assertRaises(ValueError):
+                        validate_trace(forged_compiler, runtime, attempts, "linux")
             forged = copy.deepcopy(trace)
             decode = next(item for item in forged["events"]
                           if item["name"] == "blocking_decode_entry")

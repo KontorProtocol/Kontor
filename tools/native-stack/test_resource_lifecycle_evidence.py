@@ -97,10 +97,10 @@ class ResourceLifecycleEvidenceTests(unittest.TestCase):
         samples = ["failed_init", "failed_init", "valid_control", "valid_control"]
 
         def publication():
-            events.extend((event("publication_entry"), event("compiler_entry"),
+            events.extend((event("publication_entry"), event("compiler_entry", True),
                            event("blocking_decode_entry", True),
                            event("blocking_decode_exit", True),
-                           event("compiler_exit"), event("publication_exit")))
+                           event("compiler_exit", True), event("publication_exit")))
 
         for index, sample in enumerate(samples):
             if index == 2:
@@ -130,6 +130,17 @@ class ResourceLifecycleEvidenceTests(unittest.TestCase):
         with patch("resource_lifecycle_evidence.thread_capacities",
                    return_value=capacities):
             validate_trace(trace, runtime, attempts, "linux")
+            for mutation in ({"thread_id": "unmeasured"},
+                             {"os_thread_id": 999},
+                             {"category": "block_on_caller"},
+                             {"name": "canonical_input_entry"}):
+                forged_compiler = copy.deepcopy(trace)
+                compiler = next(item for item in forged_compiler["events"]
+                                if item["name"] == "compiler_entry")
+                compiler.update(mutation)
+                with self.subTest(compiler_mutation=mutation):
+                    with self.assertRaises(ValueError):
+                        validate_trace(forged_compiler, runtime, attempts, "linux")
             changed = copy.deepcopy(trace)
             start = next(index for index, item in enumerate(changed["events"])
                          if item["name"] == "finite_stack_attempt_start")

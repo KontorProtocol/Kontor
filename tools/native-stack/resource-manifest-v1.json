@@ -30,11 +30,11 @@
     },
     "brotli_ceiling_validator": {
       "path": "tools/native-stack/resource_brotli_raw_ceiling_evidence.py",
-      "sha256": "be4f67204fee9f75b68f3c836ee9913e25887f7cde2989dac852bdf2d586f67e"
+      "sha256": "a35dd29132d08634f1e8719cea7a3b436bd87de7be03961c95fc0492fc6d217b"
     },
     "brotli_ceiling_validator_tests": {
       "path": "tools/native-stack/test_resource_brotli_raw_ceiling_evidence.py",
-      "sha256": "4849c5bfe0625e5ae3e58b875cbd9681a5192b5357d1357cb59d69244e389e81"
+      "sha256": "dff57733a6ee3788bb37d72c82aca56d3c6b722c6c6801f8996fe0b7531478cf"
     },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
@@ -94,7 +94,7 @@
     },
     "cold_publication_validator": {
       "path": "tools/native-stack/resource_cold_publication_evidence.py",
-      "sha256": "77fe58805dbde865564df5cff99a1f795c7004e067f57f4cd42bd6b894461d18"
+      "sha256": "12e6bba8e1e41545c17cc00c1d9df106ca8524e3690b045958e87d8d894741dd"
     },
     "cold_publication_validator_tests": {
       "path": "tools/native-stack/test_resource_cold_publication_evidence.py",
@@ -206,11 +206,11 @@
     },
     "foreign_wave_validator": {
       "path": "tools/native-stack/resource_foreign_wave_evidence.py",
-      "sha256": "d0904ddc24da4088ace027fa05ade57860944f57532eeb62591c4141a4ab2f66"
+      "sha256": "3a860d2423bccab8a315984c945221f5c3af0eedb96d6c1b2092daba3a0b1f59"
     },
     "foreign_wave_validator_tests": {
       "path": "tools/native-stack/test_resource_foreign_wave_evidence.py",
-      "sha256": "c1cea8d8ff6e009b261c69b5c30addce331002c2f6b7097b20c9909d47eff32b"
+      "sha256": "1f1b81bb2e83fbf7d5bc8a08c48a0ddf3481b39e08f0e168955f677d2648db96"
     },
     "guest_build_metadata": {
       "path": "test-contracts/binaries/build.json",
@@ -242,7 +242,7 @@
     },
     "initialization_validator": {
       "path": "tools/native-stack/resource_initialization_evidence.py",
-      "sha256": "4248f4dac2edb1acede5425d1476be2a3b7131b67b3dd6872afd2c1ccdc9ee56"
+      "sha256": "9591f4252ad462ab9d5633eeee21c3c97d3221c5278ef60d423cb855f9c0d562"
     },
     "initialization_validator_tests": {
       "path": "tools/native-stack/test_resource_initialization_evidence.py",
@@ -282,7 +282,7 @@
     },
     "native_filestorage_lifecycle_validator": {
       "path": "tools/native-stack/resource_native_filestorage_lifecycle_evidence.py",
-      "sha256": "2b8ba25756e7f8de676750a7282824a4d2097223fbd3e19a92577efb89217eec"
+      "sha256": "f0fd30b156ec8a5620f118efe8f001cd74ef3955bd2b81b292ccb91ea2fc14dc"
     },
     "native_filestorage_lifecycle_validator_tests": {
       "path": "tools/native-stack/test_resource_native_filestorage_lifecycle_evidence.py",
@@ -314,7 +314,7 @@
     },
     "native_staking_rewards_validator": {
       "path": "tools/native-stack/resource_native_staking_rewards_evidence.py",
-      "sha256": "58fc80021b1c98305a4752de6d3744eebbb7e05db4fa8dd9876a69c08e9033de"
+      "sha256": "7ecad976d3a11605343446a87c09e1a7d15a09647c10f9470cdfcd0bb21dadd7"
     },
     "native_staking_rewards_validator_tests": {
       "path": "tools/native-stack/test_resource_native_staking_rewards_evidence.py",
@@ -402,11 +402,11 @@
     },
     "resource_lifecycle_validator": {
       "path": "tools/native-stack/resource_lifecycle_evidence.py",
-      "sha256": "184266d6cd8068d75e5488ba88e959599ac61f53704b3533463667b7133fb948"
+      "sha256": "599e27044864e6da78ab2cd13b2471ce47a1c931a7d8ac89acceb6168d9cede5"
     },
     "resource_lifecycle_validator_tests": {
       "path": "tools/native-stack/test_resource_lifecycle_evidence.py",
-      "sha256": "3cf38be376f1ca19e13969dd7ea5d069ff2acd6ec65d57135783d5dd7892c3fe"
+      "sha256": "ee6da01f1c352b6a0008c305f03a3168c09fb30c77d6f666051d6536cfc4b0bc"
     },
     "resource_lifecycle_wat": {
       "path": "test-contracts/resource-lifecycle/fixture.wat",
@@ -462,7 +462,7 @@
     },
     "sqlite_large_values_validator": {
       "path": "tools/native-stack/resource_sqlite_large_values_evidence.py",
-      "sha256": "7fc466b9469d134fe319f78c44e0f0d744ddcfb0f9f04b4fdde4eaeb25ace5f6"
+      "sha256": "b504ef177bd8e7f5c70be75ee212e45acfc6eaf6dcbd9e816620234ef1aad340"
     },
     "sqlite_large_values_validator_tests": {
       "path": "tools/native-stack/test_resource_sqlite_large_values_evidence.py",
@@ -478,11 +478,11 @@
     },
     "sqlite_pagination_validator": {
       "path": "tools/native-stack/resource_sqlite_pagination_evidence.py",
-      "sha256": "7bc05505e2a4f4036e7d5c2c59533d86317ca26b8a407813df301b0ee376cf86"
+      "sha256": "298afbb34824e800426c30e60f37292752a264dbbe8748187c32a81b1dd19d70"
     },
     "sqlite_pagination_validator_tests": {
       "path": "tools/native-stack/test_resource_sqlite_pagination_evidence.py",
-      "sha256": "094b88a343013172a4706c1ecd6c9d44861f6281dd88f592ae5ea4807a970985"
+      "sha256": "130cb50c36fd5190d4439a39248653410cc764793cacf86e0a397dfeff559c80"
     },
     "sqlite_ranges_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_ranges.rs",
@@ -494,7 +494,7 @@
     },
     "sqlite_ranges_validator": {
       "path": "tools/native-stack/resource_sqlite_ranges_evidence.py",
-      "sha256": "f2616420c101bd1861d57a2937e332d49ee81223872888edfa4ce63563956964"
+      "sha256": "5af70b117ad430cb2562d176a3647eedccb139a66f343b620127df9e94adef5c"
     },
     "sqlite_ranges_validator_tests": {
       "path": "tools/native-stack/test_resource_sqlite_ranges_evidence.py",
@@ -598,11 +598,11 @@
     },
     "type_value_validator": {
       "path": "tools/native-stack/resource_type_value_evidence.py",
-      "sha256": "601d5cca284c16948b24ba129d91a778c22e03404c2860024076401eb6f3ff30"
+      "sha256": "2451ac3992604107b37a9246e5ad8d51113f581a0fcdca531fdbcd3c314e7f59"
     },
     "type_value_validator_tests": {
       "path": "tools/native-stack/test_resource_type_value_evidence.py",
-      "sha256": "01e5dce9b69aaefba22e7d99b0d470ce6048165fef68dd6560f67f6dcc59b81d"
+      "sha256": "8ed5d2e9b69f19dacf43194318ce53d5eb80320aa29102f86f32492b891b2fa6"
     },
     "type_value_wat": {
       "path": "test-contracts/type-value/fixture.wat",
