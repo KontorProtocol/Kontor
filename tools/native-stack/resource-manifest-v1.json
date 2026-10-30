@@ -228,6 +228,22 @@
       "path": "native-contracts/filestorage/src/lib.rs",
       "sha256": "b13919f9d9abe52ceb801ddc697887f60cfc5e1e99be3dced2c311cc882fb698"
     },
+    "native_filestorage_lifecycle_adapter": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/native_filestorage_lifecycle.rs",
+      "sha256": "b334ad27bcd8c66e9f5db21d81ce0184ec22239edfbd742de0e19f66fb468219"
+    },
+    "native_filestorage_lifecycle_capture": {
+      "path": "tools/native-stack/capture_resource_native_filestorage_lifecycle.py",
+      "sha256": "8cc4580796d4cac4316eae7316e1991e3433b70f61416b64ecf87063a37214b7"
+    },
+    "native_filestorage_lifecycle_validator": {
+      "path": "tools/native-stack/resource_native_filestorage_lifecycle_evidence.py",
+      "sha256": "97aaaecd471bfe68d041af0c6fea990b127ba876c9ba285dd3a2568c1084c694"
+    },
+    "native_filestorage_lifecycle_validator_tests": {
+      "path": "tools/native-stack/test_resource_native_filestorage_lifecycle_evidence.py",
+      "sha256": "9813a0a395c68f5d489981f016e0ba716fb61de52dc79ef42baf122bfe7316a3"
+    },
     "native_staking": {
       "path": "native-contracts/staking/src/lib.rs",
       "sha256": "d7cf3419b2c84dc3389a9bf19ade05a42aa69799f6dfb84b00c47f39313f2dce"
@@ -346,7 +362,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "416ac9a0d9c3bf2477de29399632a9d96f4058b5539465694ddef5d8ee67af6b"
+      "sha256": "2140f57a43add0f9ebd8c6914578127545ff89e936ccdc7db2a285877771282b"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -374,7 +390,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "fab32ada83cba13d16e786cda82f3eeaba302112ce8b4fc49d9ce537de103d09"
+      "sha256": "1e6abf28ee57768c18c46c68e893594ce278a6e06a3cd5ef2d70ec42ecd53830"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -438,7 +454,7 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "080a8bb2d71beb5de325340a272f9a660e0ccc38c5e0fab43dba22b65b99ad65"
+      "sha256": "a33a99eac8e3009e6e3aca83e09523241fc529f41fb02f5ee1f367cd778066c7"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
@@ -1393,7 +1409,12 @@
       "fixtures": [
         "filestorage_costs",
         "filestorage_settlement",
-        "native_filestorage"
+        "native_filestorage",
+        "native_filestorage_lifecycle_adapter",
+        "resource_worker_diagnostic",
+        "native_filestorage_lifecycle_capture",
+        "native_filestorage_lifecycle_validator",
+        "native_filestorage_lifecycle_validator_tests"
       ],
       "id": "native_filestorage_lifecycle",
       "paired_worker_status": "missing",
@@ -1993,7 +2014,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "fab32ada83cba13d16e786cda82f3eeaba302112ce8b4fc49d9ce537de103d09",
+    "source_sha256": "1e6abf28ee57768c18c46c68e893594ce278a6e06a3cd5ef2d70ec42ecd53830",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -2145,7 +2166,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "fab32ada83cba13d16e786cda82f3eeaba302112ce8b4fc49d9ce537de103d09",
+    "sha256": "1e6abf28ee57768c18c46c68e893594ce278a6e06a3cd5ef2d70ec42ecd53830",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

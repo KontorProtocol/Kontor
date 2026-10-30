@@ -27,6 +27,7 @@ mod canonical;
 mod foreign_wave;
 mod initialization;
 mod lifecycle;
+mod native_filestorage_lifecycle;
 mod native_staking_rewards;
 mod sqlite_large_values;
 mod sqlite_pagination;
@@ -127,6 +128,13 @@ pub(super) async fn resource_native_staking_rewards(
     process_role: &str,
 ) -> Result<JsonValue> {
     native_staking_rewards::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_native_filestorage_lifecycle(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    native_filestorage_lifecycle::run(configuration, process_role).await
 }
 
 #[tokio::test]

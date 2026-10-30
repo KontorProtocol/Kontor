@@ -662,6 +662,7 @@ fn finite_stack_worker_case() -> Result<()> {
                 | "sqlite_ranges"
                 | "sqlite_large_values"
                 | "native_staking_rewards"
+                | "native_filestorage_lifecycle"
         ),
         "unknown finite stack case"
     );
@@ -744,6 +745,12 @@ fn finite_stack_worker_case() -> Result<()> {
                     .await?
             } else if task_case_id == "native_staking_rewards" {
                 super::native_stack::resource_native_staking_rewards(
+                    &task_configuration,
+                    &task_role,
+                )
+                .await?
+            } else if task_case_id == "native_filestorage_lifecycle" {
+                super::native_stack::resource_native_filestorage_lifecycle(
                     &task_configuration,
                     &task_role,
                 )
