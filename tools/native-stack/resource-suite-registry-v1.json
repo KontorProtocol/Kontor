@@ -301,7 +301,7 @@
         "pulley_host_callback"
       ],
       "manifest": "boundary",
-      "manifest_sha256": "4aa4fc7e00c0e66f09f20e0882f675ad7884f07fa8b6a82ceb8f7863249a7cc2",
+      "manifest_sha256": "080a079e77de453cdfa5191374bed5d2699dc494e72e4e3387958d6c9ced0ab6",
       "validator": {
         "path": "tools/native-stack/resource_boundary_evidence.py",
         "sha256": "adcbd999065858e561305c04fce7e689cf7d884e7ea0742f398beffca75e87af"
@@ -386,12 +386,12 @@
     }
   },
   "parent_manifests": {
-    "boundary": "4aa4fc7e00c0e66f09f20e0882f675ad7884f07fa8b6a82ceb8f7863249a7cc2",
+    "boundary": "080a079e77de453cdfa5191374bed5d2699dc494e72e4e3387958d6c9ced0ab6",
     "v1": "f9dfcd602c4bb8105267fc528f3f8702e3639047cb46889665b8c07db99cd0db",
     "v2": "9adc91e5a150209480c6ab330e36f089b9de195e500c02309b1b3a48c19770ff"
   },
   "remaining_gates": {
-    "boundary_discovery": "pending_discovery",
+    "boundary_discovery": "candidate_only",
     "common_head_six_cell_capture": "missing",
     "cross_cell_semantic_comparison": "source_ready_unmeasured",
     "macos_guard_capture": "missing",
