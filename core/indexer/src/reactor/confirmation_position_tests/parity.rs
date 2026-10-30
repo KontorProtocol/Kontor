@@ -16,11 +16,12 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-use super::{StopEngine, confirmation_block, fixture, reactor};
+use super::{StopEngine, fixture, raw_confirmation_block, reactor};
 use crate::block::filter_map;
 use crate::built_info::GIT_COMMIT_HASH;
 use crate::consensus::Height;
 use crate::database::connection::new_connection;
+use crate::reactor::executor::Executor;
 use crate::runtime::{ComponentCache, Runtime, Storage};
 use crate::test_utils::new_mock_block_hash;
 
@@ -168,7 +169,8 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
                 .states
                 .insert(format!("{label}/executed"), state(&conn).await?);
         }
-        let block = confirmation_block(&raw, 2)?;
+        let block =
+            raw_confirmation_block(&raw, 2)?.recognize(|tx| reactor.executor.parse_transaction(tx));
         let (count, ops, errors) = reactor.execute_block(&block).await?;
         ensure!(count == usize::from(!batched) && ops == u64::from(!batched));
         ensure!(errors.iter().flatten().flatten().all(Option::is_none));
@@ -181,7 +183,8 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
             report
                 .states
                 .insert(format!("{label}/rollback"), state(&conn).await?);
-            let replacement = confirmation_block(&raw, 4)?;
+            let replacement = raw_confirmation_block(&raw, 4)?
+                .recognize(|tx| reactor.executor.parse_transaction(tx));
             let (count, ops, _) = reactor.execute_block(&replacement).await?;
             ensure!(
                 (count, ops) == (0, 0),

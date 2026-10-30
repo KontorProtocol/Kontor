@@ -20,6 +20,7 @@ use malachitebft_engine::host::Next;
 use prost::Message;
 use sha3::Digest;
 
+use crate::bitcoin_follower::block::BlockInput;
 use crate::consensus::codec::decode_commit_certificate;
 use crate::consensus::finality_types::*;
 use crate::consensus::signing::Ed25519Provider;
@@ -95,7 +96,7 @@ pub struct ConsensusState {
 
     // Blocks received from the poller, keyed by height. Consumed when a
     // Value::Block decision is finalized.
-    pub pending_blocks: BTreeMap<u64, indexer_types::Block>,
+    pub pending_blocks: BTreeMap<u64, BlockInput>,
 
     // Cached validator set — updated after each block decision.
     // Used by height_params() to provide Malachite with the current set.

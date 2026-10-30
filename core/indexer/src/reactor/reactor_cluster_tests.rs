@@ -2203,7 +2203,8 @@ async fn prod_reactor_pending_blocks_bounded_under_stalled_consensus() -> Result
                 hash: crate::test_utils::new_mock_block_hash(height as u32),
                 prev_hash: crate::test_utils::new_mock_block_hash(height.saturating_sub(1) as u32),
                 transactions: Vec::new(),
-            },
+            }
+            .into(),
         };
         match tokio::time::timeout(Duration::from_secs(5), producer.send(event)).await {
             Ok(Ok(())) => accepted += 1,

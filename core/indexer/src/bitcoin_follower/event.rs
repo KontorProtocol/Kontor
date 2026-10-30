@@ -1,14 +1,19 @@
 use std::collections::HashMap;
 
+use super::block::BlockInput;
 use bitcoin::Txid;
-use indexer_types::Block;
 
 use crate::bitcoin_client::types::MempoolEntry;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlockEvent {
-    BlockInsert { target_height: u64, block: Block },
-    Rollback { to_height: u64 },
+    BlockInsert {
+        target_height: u64,
+        block: BlockInput,
+    },
+    Rollback {
+        to_height: u64,
+    },
 }
 
 /// Kontor-relevant transaction: the raw Bitcoin tx plus the parsed Kontor

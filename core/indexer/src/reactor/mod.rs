@@ -331,7 +331,7 @@ impl<E: Executor> Reactor<E> {
                 target_height,
                 block,
             } => {
-                let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
+                let txids = block.txids();
                 for txid in &txids {
                     self.consensus.pending_transactions.remove(txid);
                 }

@@ -2,7 +2,10 @@ use super::*;
 use crate::bitcoin_client::mock::MockBitcoinRpc;
 use crate::stopper::Shutdown;
 use crate::test_utils::new_numbered_blockchain;
+use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::hashes::Hash;
+use bitcoin::{Network, Witness};
+use indexer_types::{Block, Transaction};
 
 fn hash(n: u8) -> BlockHash {
     BlockHash::from_byte_array([n; 32])
@@ -180,9 +183,9 @@ fn deliver_blocks_in_order() {
         prev_hash: b1.hash,
         transactions: vec![],
     };
-    let mut pending: HashMap<u64, Block> = HashMap::new();
-    pending.insert(1, b1.clone());
-    pending.insert(2, b2.clone());
+    let mut pending: HashMap<u64, BlockInput> = HashMap::new();
+    pending.insert(1, b1.clone().into());
+    pending.insert(2, b2.clone().into());
 
     match deliver_blocks(&mut pending, &mut cache, 1, 3, 10) {
         DeliveryResult::Ok {
@@ -215,7 +218,7 @@ fn deliver_blocks_detects_reorg() {
         transactions: vec![],
     };
     let mut pending = HashMap::new();
-    pending.insert(1, bad_block);
+    pending.insert(1, bad_block.into());
 
     match deliver_blocks(&mut pending, &mut cache, 1, 2, 10) {
         DeliveryResult::Reorg { mismatch_height } => {
@@ -231,7 +234,7 @@ fn deliver_blocks_no_cache_entry_skips_check() {
     let mut cache = BlockHashCache::new(10);
     let b1 = make_block(5, hash(99));
     let mut pending = HashMap::new();
-    pending.insert(5, b1);
+    pending.insert(5, b1.into());
 
     match deliver_blocks(&mut pending, &mut cache, 5, 6, 10) {
         DeliveryResult::Ok {
@@ -260,9 +263,9 @@ fn deliver_blocks_reorg_mid_batch() {
     };
     let b3 = make_block(3, hash(20));
     let mut pending = HashMap::new();
-    pending.insert(1, b1);
-    pending.insert(2, b2);
-    pending.insert(3, b3);
+    pending.insert(1, b1.into());
+    pending.insert(2, b2.into());
+    pending.insert(3, b3.into());
 
     match deliver_blocks(&mut pending, &mut cache, 1, 4, 10) {
         DeliveryResult::Reorg { mismatch_height } => {
@@ -274,15 +277,54 @@ fn deliver_blocks_reorg_mid_batch() {
     }
 }
 
+#[test]
+fn delivery_preserves_unknown_transactions_and_witnesses_until_recognition() {
+    let mut first = genesis_block(Network::Regtest).txdata.remove(0);
+    first.input[0].witness = Witness::from_slice(&[b"unknown".as_slice()]);
+    let mut second = first.clone();
+    second.input[0].witness = Witness::from_slice(&[b"new format".as_slice()]);
+    assert_eq!(first.compute_txid(), second.compute_txid());
+    let raw = vec![first, second];
+    let input = BlockInput::new(1, hash(1), hash(0), raw.clone());
+    let mut pending = HashMap::from([(1, input)]);
+    let mut cache = BlockHashCache::new(10);
+    cache.insert(0, hash(0));
+    let DeliveryResult::Ok { mut events, .. } = deliver_blocks(&mut pending, &mut cache, 1, 2, 1)
+    else {
+        panic!("expected block delivery");
+    };
+    let BlockEvent::BlockInsert { block, .. } = events.remove(0) else {
+        panic!("expected raw block");
+    };
+    assert_eq!(
+        block.txids(),
+        raw.iter().map(|tx| tx.compute_txid()).collect::<Vec<_>>()
+    );
+    assert!(block.clone().recognize(|_| None).transactions.is_empty());
+    let mut seen = Vec::new();
+    let parsed = block.recognize(|tx| {
+        seen.push(tx.clone());
+        (tx.input[0].witness == raw[1].input[0].witness).then(|| Transaction {
+            txid: tx.compute_txid(),
+            index: 0,
+            inputs: vec![],
+            op_return_raw: None,
+        })
+    });
+    assert_eq!(seen, raw);
+    assert_eq!(parsed.transactions.len(), 1);
+    assert_eq!(parsed.transactions[0].index, 1);
+    assert_eq!(
+        (parsed.height, parsed.hash, parsed.prev_hash),
+        (1, hash(1), hash(0))
+    );
+}
+
 // -- run() integration tests --
 
 use crate::test_utils::gen_numbered_blocks;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-
-fn noop_filter(_: (usize, bitcoin::Transaction)) -> Option<indexer_types::Transaction> {
-    None
-}
 
 fn fast_config() -> PollerConfig {
     PollerConfig {
@@ -303,7 +345,6 @@ async fn run_delivers_blocks_in_order() {
     let handle = tokio::spawn(async move {
         run(
             rpc,
-            noop_filter,
             tx,
             cancel2,
             1,
@@ -342,7 +383,6 @@ async fn run_delivers_new_blocks_at_tip() {
     let handle = tokio::spawn(async move {
         run(
             rpc2,
-            noop_filter,
             tx,
             cancel2,
             1,
@@ -395,7 +435,6 @@ async fn run_detects_reorg() {
     let handle = tokio::spawn(async move {
         run(
             rpc2,
-            noop_filter,
             tx,
             cancel2,
             1,
@@ -464,7 +503,6 @@ async fn run_rollback_on_chain_shrink() {
     let handle = tokio::spawn(async move {
         run(
             rpc2,
-            noop_filter,
             tx,
             cancel2,
             1,
@@ -523,7 +561,6 @@ async fn run_detects_offline_reorg() {
     let handle = tokio::spawn(async move {
         run(
             rpc,
-            noop_filter,
             tx,
             cancel2,
             6,
@@ -573,7 +610,6 @@ async fn run_no_offline_reorg_when_hashes_match() {
     let handle = tokio::spawn(async move {
         run(
             rpc,
-            noop_filter,
             tx,
             cancel2,
             4,
@@ -626,7 +662,6 @@ async fn run_offline_reorg_deeper_than_cache_errors() {
 
     let result = run(
         rpc,
-        noop_filter,
         tx,
         cancel.signal(),
         6,
@@ -653,7 +688,6 @@ async fn run_start_height_1_skips_offline_check() {
     let handle = tokio::spawn(async move {
         run(
             rpc,
-            noop_filter,
             tx,
             cancel2,
             1,
@@ -695,7 +729,6 @@ async fn run_reorg_during_catchup() {
     let handle = tokio::spawn(async move {
         run(
             rpc2,
-            noop_filter,
             tx,
             cancel2,
             1,
@@ -767,7 +800,6 @@ async fn run_cancellation_stops_cleanly() {
 
     let result = run(
         rpc,
-        noop_filter,
         tx,
         cancel.signal(),
         1,
@@ -821,7 +853,6 @@ async fn run_replay_redelivers_blocks() {
     let handle = tokio::spawn(async move {
         run(
             rpc,
-            noop_filter,
             tx,
             cancel2,
             1,

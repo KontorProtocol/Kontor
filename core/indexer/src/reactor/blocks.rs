@@ -7,6 +7,7 @@ use indexer_types::{Block, BlockRow, Event, OpWithResult};
 use metrics::{counter, gauge};
 use tracing::{debug, info, warn};
 
+use crate::bitcoin_follower::block::BlockInput;
 use crate::block;
 use crate::consensus::finality_types::StateEvent;
 use crate::database::confirmation::set_confirmation_position;
@@ -384,10 +385,11 @@ impl<E: Executor> Reactor<E> {
     /// has always taken the savepoint first, and the block path was the outlier.
     pub(super) async fn handle_block(
         &mut self,
-        block: Block,
+        block: impl Into<BlockInput>,
         decision: &consensus_state::DeferredDecision,
     ) -> Result<()> {
         let started_at = Instant::now();
+        let block = block.into();
         let height = block.height;
         let hash = block.hash;
         let prev_hash = block.prev_hash;
@@ -419,6 +421,7 @@ impl<E: Executor> Reactor<E> {
             .owner_service
             .begin_canonical(&mut self.runtime, false)
             .await?;
+        let block = block.recognize(|raw| self.executor.parse_transaction(raw));
         self.runtime
             .storage
             .savepoint()

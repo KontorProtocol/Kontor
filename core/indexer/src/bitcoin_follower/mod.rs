@@ -19,6 +19,7 @@ use self::{
     poller::PollerConfig,
 };
 
+pub mod block;
 pub mod event;
 pub mod listener;
 pub mod messages;
@@ -52,7 +53,6 @@ pub async fn run<C: BitcoinRpc>(
         let poll_notify = Arc::new(Notify::new());
         let poller_handle = tokio::spawn(poller::run(
             bitcoin.clone(),
-            f,
             block_tx,
             shutdown.clone(),
             start_height,
