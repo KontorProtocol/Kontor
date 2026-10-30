@@ -100,7 +100,8 @@ async fn require_available(
     next: Next,
 ) -> std::result::Result<axum::response::Response, super::error::Error> {
     let reactor_ready = env.reactor_ready.load(std::sync::atomic::Ordering::Relaxed);
-    let failed = env.failed.load(std::sync::atomic::Ordering::Relaxed);
+    let failed =
+        env.failed.load(std::sync::atomic::Ordering::Relaxed) || env.owner_service.is_fatal();
     let has_chain_state = env.info_rx.borrow().height.is_some();
     if !reactor_ready || failed || !has_chain_state {
         return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());

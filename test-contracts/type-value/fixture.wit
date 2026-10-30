@@ -1,0 +1,81 @@
+package root:component;
+
+world root {
+  import kontor:built-in/context;
+  use kontor:built-in/context.{proc-context, view-context, contract};
+
+  record level-1 { child: u32 }
+  record level-2 { child: level-1 }
+  record level-3 { child: level-2 }
+  record level-4 { child: level-3 }
+  record level-5 { child: level-4 }
+  record level-6 { child: level-5 }
+  record level-7 { child: level-6 }
+  record level-8 { child: level-7 }
+  record level-9 { child: level-8 }
+  record level-10 { child: level-9 }
+  record level-11 { child: level-10 }
+  record level-12 { child: level-11 }
+  record level-13 { child: level-12 }
+  record level-14 { child: level-13 }
+  record level-15 { child: level-14 }
+  record level-16 { child: level-15 }
+  record level-17 { child: level-16 }
+  record level-18 { child: level-17 }
+  record level-19 { child: level-18 }
+  record level-20 { child: level-19 }
+  record level-21 { child: level-20 }
+  record level-22 { child: level-21 }
+  record level-23 { child: level-22 }
+  record level-24 { child: level-23 }
+  record level-25 { child: level-24 }
+  record level-26 { child: level-25 }
+  record level-27 { child: level-26 }
+  record level-28 { child: level-27 }
+  record level-29 { child: level-28 }
+  record level-30 { child: level-29 }
+  record level-31 { child: level-30 }
+  record level-32 { child: level-31 }
+  record level-33 { child: level-32 }
+  record level-34 { child: level-33 }
+  record level-35 { child: level-34 }
+  record level-36 { child: level-35 }
+  record level-37 { child: level-36 }
+  record level-38 { child: level-37 }
+  record level-39 { child: level-38 }
+  record level-40 { child: level-39 }
+  record level-41 { child: level-40 }
+  record level-42 { child: level-41 }
+  record level-43 { child: level-42 }
+  record level-44 { child: level-43 }
+  record level-45 { child: level-44 }
+  record level-46 { child: level-45 }
+  record level-47 { child: level-46 }
+  record level-48 { child: level-47 }
+  record level-49 { child: level-48 }
+  record level-50 { child: level-49 }
+  record level-51 { child: level-50 }
+  record level-52 { child: level-51 }
+  record level-53 { child: level-52 }
+  record level-54 { child: level-53 }
+  record level-55 { child: level-54 }
+  record level-56 { child: level-55 }
+  record level-57 { child: level-56 }
+  record level-58 { child: level-57 }
+  record level-59 { child: level-58 }
+  record level-60 { child: level-59 }
+  record level-61 { child: level-60 }
+  record level-62 { child: level-61 }
+  record level-63 { child: level-62 }
+  record level-64 { child: level-63 }
+  record level-65 { child: level-64 }
+
+  variant shape-variant { branch(level-2), empty }
+  export init: func(ctx: borrow<proc-context>) -> contract;
+  export view-nested-record: func(ctx: borrow<view-context>, value: level-2) -> level-2;
+  export view-nested-variant: func(ctx: borrow<view-context>, value: shape-variant) -> shape-variant;
+  export view-list-of-records: func(ctx: borrow<view-context>, values: list<level-2>) -> list<level-2>;
+  export view-large-result: func(ctx: borrow<view-context>) -> string;
+  export view-result-depth64: func(ctx: borrow<view-context>) -> level-64;
+  export view-result-depth65: func(ctx: borrow<view-context>) -> level-65;
+}

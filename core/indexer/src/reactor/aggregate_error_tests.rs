@@ -23,6 +23,7 @@ use crate::bls::{KONTOR_BLS_DST, RegistrationProof};
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Height, Value};
 use crate::database::queries::{ensure_identity, get_identity};
+use crate::runtime::ownership::OwnerService;
 use crate::runtime::token::{address as token_address, api as token};
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -73,6 +74,7 @@ pub(super) async fn reactor(
     Ok(Reactor::new(
         RuntimeExecutor::new(client),
         runtime,
+        OwnerService::new(),
         block_rx,
         mempool_rx,
         shutdown.signal(),
@@ -90,7 +92,7 @@ pub(super) async fn reactor(
     ))
 }
 
-async fn snapshot(conn: &Connection) -> Result<Vec<Vec<Vec<SqlValue>>>> {
+pub(super) async fn snapshot(conn: &Connection) -> Result<Vec<Vec<Vec<SqlValue>>>> {
     let mut tables = Vec::new();
     for table in [
         "blocks",

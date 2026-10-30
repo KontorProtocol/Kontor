@@ -1,0 +1,5 @@
+fixture_wat: (module (func $start) (start $start))
+fixture_wasm_sha256: 76d9b48da62c8fded2f05b26bffd542357f49c09e5f43e359fad5e8afb2fad1b
+/tmp/kontor-native-stack-encoder/start.wasm bytes=148 embedded_modules=1 core_starts=1 component_starts=0
+Error: "encoded component contains a start section"
+exit_status: 1

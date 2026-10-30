@@ -3,19 +3,12 @@ use bon::Builder;
 use glob::Paths;
 use indexer::{
     bls::KONTOR_BLS_DST,
-    database::{
-        queries::{
-            contract_has_state, create_contract_signer, get_checkpoint_latest,
-            get_transaction_by_txid, insert_contract, insert_transaction,
-        },
-        types::{ContractRow, OpResultId},
-    },
+    database::types::OpResultId,
     reg_tester::{self, PublishedContract},
-    runtime::{Runtime as IndexerRuntime, TransactionContext},
-    test_utils::new_mock_transaction,
+    test_utils::OwnedTestRuntime,
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
-use indexer_types::{Inst, InstKind, Insts, Payment, TransactionRow};
+use indexer_types::{Inst, InstKind, Insts};
 use std::{cell::Cell, collections::HashMap, path::PathBuf, rc::Rc};
 use tempfile::TempDir;
 pub use tokio;
@@ -178,19 +171,6 @@ pub struct RuntimeConfig<'a> {
     pub contracts_dir: &'a str,
 }
 
-/// Test helper: build a `Payment` for a user-driven call where the caller
-/// pays for their own gas. Returns None when the signer has no resolvable
-/// signer_id (e.g. `Signer::Nobody` standalone). The gas_limit mirrors the
-/// runtime's `gas_limit_for_non_procs` so test-driven user calls have the
-/// same fuel budget as the pre-refactor stateful `set_gas_limit` path.
-/// Used by test wrappers and by tests that drive the indexer runtime directly.
-pub fn user_payment(runtime: &IndexerRuntime, signer: &Signer) -> Option<Payment> {
-    signer.signer_id().map(|id| Payment {
-        signer_id: id,
-        gas_limit: runtime.gas_limit_for_non_procs,
-    })
-}
-
 #[async_trait]
 pub trait RuntimeImpl: Send {
     async fn identity(&mut self) -> Result<Signer>;
@@ -285,7 +265,7 @@ pub enum SubmitGroup<'a> {
 }
 
 pub struct RuntimeLocal {
-    runtime: IndexerRuntime,
+    runtime: OwnedTestRuntime,
     _db_dir: TempDir,
     _db_name: String,
 }
@@ -296,98 +276,11 @@ impl RuntimeLocal {
         signer: &Signer,
         contracts: &[(&str, &[u8])],
     ) -> Result<()> {
-        let height = 1u64;
-        let tx_index = 0u32;
-        let conn = self.runtime.get_storage_conn();
-        let tx = new_mock_transaction(1);
-        if get_transaction_by_txid(&conn, &tx.txid.to_string())
-            .await?
-            .is_none()
-        {
-            insert_transaction(
-                &conn,
-                TransactionRow::builder()
-                    .height(height)
-                    .tx_index(0)
-                    .txid(tx.txid.to_string())
-                    .build(),
-            )
-            .await?;
-        };
-
-        for (name, bytes) in contracts {
-            let signer_id = create_contract_signer(&conn, height).await?;
-            let contract_id = insert_contract(
-                &conn,
-                ContractRow::builder()
-                    .height(height)
-                    .tx_index(tx_index)
-                    .name(name.to_string())
-                    .bytes(bytes.to_vec())
-                    .signer_id(signer_id)
-                    .build(),
-            )
-            .await?;
-            if !contract_has_state(&conn, contract_id).await? {
-                // User-driven publish in test setup: the publisher pays for
-                // init() out of their own (test-issued) balance.
-                let payment = Payment {
-                    signer_id: signer.signer_id().expect("test signer must have id"),
-                    gas_limit: self.runtime.gas_limit_for_non_procs,
-                };
-                self.runtime
-                    .execute(
-                        Some(signer),
-                        Some(payment),
-                        &ContractAddress {
-                            name: name.to_string(),
-                            height,
-                            tx_index,
-                        },
-                        "init()",
-                    )
-                    .await
-                    .map_err(anyhow::Error::from)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn into_parts(self) -> (IndexerRuntime, TempDir) {
-        (self.runtime, self._db_dir)
+        self.runtime.load_contracts(signer, contracts).await
     }
 
     pub async fn new() -> Result<Self> {
-        let (mut runtime, _db_dir, _db_name) = indexer::test_utils::test_runtime().await?;
-        runtime.gas_limit_for_non_procs = DEFAULT_TEST_GAS_LIMIT;
-        let conn = runtime.get_storage_conn();
-        let height = 1u64;
-        let tx_index = 1u32;
-        let txid = new_mock_transaction(0).txid;
-        let tx_id = insert_transaction(
-            &conn,
-            TransactionRow::builder()
-                .height(height)
-                .txid(txid.to_string())
-                .tx_index(tx_index)
-                .confirmed_height(height)
-                .build(),
-        )
-        .await?;
-        runtime
-            .set_context(
-                height,
-                Some(
-                    TransactionContext::builder()
-                        .tx_id(tx_id)
-                        .tx_index(tx_index)
-                        .txid(txid)
-                        .build(),
-                ),
-                None,
-                None,
-            )
-            .await;
+        let (runtime, _db_dir, _db_name) = OwnedTestRuntime::new(DEFAULT_TEST_GAS_LIMIT).await?;
         Ok(Self {
             runtime,
             _db_dir,
@@ -399,17 +292,7 @@ impl RuntimeLocal {
 #[async_trait]
 impl RuntimeImpl for RuntimeLocal {
     async fn identity(&mut self) -> Result<Signer> {
-        let x_only_pubkey = reg_tester::random_x_only_pubkey();
-        let conn = self.runtime.get_storage_conn();
-        let identity = indexer::database::queries::ensure_identity(
-            &conn,
-            &x_only_pubkey,
-            self.runtime.storage.height,
-        )
-        .await?;
-        let signer = Signer::Id(identity);
-        self.issuance(&signer).await?;
-        Ok(signer)
+        self.runtime.identity().await
     }
 
     async fn publish(
@@ -427,13 +310,7 @@ impl RuntimeImpl for RuntimeLocal {
     }
 
     async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
-        let contract_id = self
-            .runtime
-            .storage
-            .contract_id(contract_address)
-            .await?
-            .ok_or(anyhow!("Contract not found"))?;
-        self.runtime.storage.component_wit(contract_id).await
+        self.runtime.wit(contract_address).await
     }
 
     async fn execute(
@@ -442,17 +319,9 @@ impl RuntimeImpl for RuntimeLocal {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        // Test ergonomics: user-driven calls pay for their own gas, with the
-        // same fuel budget as `execute_api` and `publish` within this runtime.
-        let payment = signer.and_then(|s| user_payment(&self.runtime, s));
-        let result = self
-            .runtime
-            .execute(signer, payment, contract_address, expr)
-            .await;
-        if let Some(c) = self.runtime.tx_context_mut() {
-            c.op_index += 1;
-        }
-        result.map_err(Into::into)
+        self.runtime
+            .execute(signer, contract_address, expr, false)
+            .await
     }
 
     async fn execute_api(
@@ -461,24 +330,17 @@ impl RuntimeImpl for RuntimeLocal {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        let result = self
-            .runtime
-            .execute_api(signer, contract_address, expr)
-            .await;
-        if let Some(c) = self.runtime.tx_context_mut() {
-            c.op_index += 1;
-        }
-        result.map_err(Into::into)
+        self.runtime
+            .execute(signer, contract_address, expr, true)
+            .await
     }
 
     async fn issuance(&mut self, signer: &Signer) -> Result<()> {
-        self.runtime.issuance(signer).await.map_err(Into::into)
+        self.runtime.issuance(signer).await
     }
 
     async fn checkpoint(&mut self) -> Result<Option<String>> {
-        Ok(get_checkpoint_latest(&self.runtime.storage.conn)
-            .await?
-            .map(|r| r.hash))
+        self.runtime.checkpoint().await
     }
 }
 

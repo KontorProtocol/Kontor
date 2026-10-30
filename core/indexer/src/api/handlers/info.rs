@@ -111,7 +111,7 @@ pub async fn get_status(State(env): State<Env>) -> Json<NodeStatus> {
         consensus_mode: env.config.consensus_mode,
         reactor_ready: env.reactor_ready.load(Ordering::Relaxed),
         shutting_down: env.shutdown.is_cancelled(),
-        failed: env.failed.load(Ordering::Relaxed),
+        failed: env.failed.load(Ordering::Relaxed) || env.owner_service.is_fatal(),
         consensus_listen_addr: env.consensus_listen_addr.borrow().clone(),
     })
 }
@@ -155,9 +155,9 @@ pub async fn get_healthz_live() -> &'static str {
 pub async fn get_healthz_ready(State(env): State<Env>) -> (StatusCode, Json<Healthz>) {
     let reactor_ready = env.reactor_ready.load(Ordering::Relaxed);
     let shutting_down = env.shutdown.is_cancelled();
-    let failed = env.failed.load(Ordering::Relaxed);
+    let failed = env.failed.load(Ordering::Relaxed) || env.owner_service.is_fatal();
     let height = env.info_rx.borrow().height;
-    let ready = reactor_ready && !shutting_down && height.is_some();
+    let ready = reactor_ready && !shutting_down && !failed && height.is_some();
     let code = if ready {
         StatusCode::OK
     } else {

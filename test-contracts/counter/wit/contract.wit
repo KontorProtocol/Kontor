@@ -5,6 +5,16 @@ world root {
 	use kontor:built-in/context.{view-context, proc-context, contract};
 	use kontor:built-in/error.{error};
 
+	record map-entry {
+		key: string,
+		value: string,
+	}
+
+	record map-page {
+		items: list<map-entry>,
+		next: option<string>,
+	}
+
 	export init: func(ctx: borrow<proc-context>) -> contract;
 
 	export increment: func(ctx: borrow<proc-context>);
@@ -33,4 +43,5 @@ world root {
 	// block confirmation), each owning its own keys — a whole-map clear would free
 	// other tests' rows mid-flight.
 	export remove-entry: func(ctx: borrow<proc-context>, key: string);
+	export entry-page: func(ctx: borrow<view-context>, after: option<string>, limit: u64) -> map-page;
 }

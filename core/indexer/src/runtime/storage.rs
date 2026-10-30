@@ -8,8 +8,16 @@ use futures_util::TryStreamExt;
 use libsql::Connection;
 use regex::bytes::RegexBuilder;
 use std::io::Read;
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(test)]
+use std::sync::{Condvar, Mutex as StdMutex};
 use wit_component::{ComponentEncoder, WitPrinter};
 
+#[cfg(test)]
+use super::resource_diagnostics;
 use crate::database::queries::{core_callbacks, identity_callbacks, nonce_callbacks};
 use crate::database::storage_contracts_v1::contract_callbacks;
 use crate::database::storage_session_v1::session_callbacks;
@@ -31,7 +39,7 @@ use crate::{
         prune_contract_state, rollback_to_height, row_callbacks, select_block_at_height,
         state_callbacks,
     },
-    runtime::{ContractAddress, counter::Counter, stack::Stack},
+    runtime::{ContractAddress, counter::Counter, ownership::ChildContext, stack::Stack},
     test_utils::new_mock_transaction,
 };
 
@@ -53,6 +61,30 @@ pub const BLOCK_ENTROPY_WINDOW: u64 = 144;
 pub enum ComponentDecodeError {
     Content(anyhow::Error),
     Infrastructure(anyhow::Error),
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct BlockingGate {
+    pub(crate) entered: AtomicBool,
+    released: StdMutex<bool>,
+    wake: Condvar,
+}
+
+#[cfg(test)]
+impl BlockingGate {
+    pub(super) fn block(&self) {
+        self.entered.store(true, Ordering::SeqCst);
+        let mut released = self.released.lock().expect("blocking gate poisoned");
+        while !*released {
+            released = self.wake.wait(released).expect("blocking gate poisoned");
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        *self.released.lock().expect("blocking gate poisoned") = true;
+        self.wake.notify_all();
+    }
 }
 
 /// Decode the WIT embedded in already-encoded component bytes, unmodified
@@ -88,10 +120,18 @@ pub struct TransactionContext {
 #[derive(Builder, Clone)]
 pub struct Storage {
     pub conn: Connection,
+    #[builder(skip)]
+    pub(super) ownership: Option<ChildContext>,
     #[builder(default = Counter::builder().build())]
     pub savepoint_counter: Counter,
     #[builder(default = Stack::builder().build())]
     pub savepoint_stack: Stack<u64>,
+    #[cfg(test)]
+    #[builder(skip)]
+    pub(super) fail_rollback_once: Arc<AtomicBool>,
+    #[cfg(test)]
+    #[builder(skip)]
+    pub(crate) decode_gate: Option<Arc<BlockingGate>>,
     #[builder(default = 1)]
     pub height: u64,
     pub tx_context: Option<TransactionContext>,
@@ -324,7 +364,16 @@ impl Storage {
             })?;
         // Split the join from the work: a JoinError is this node's task machinery
         // failing, everything inside is a property of the bytes.
-        let decompressed = tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        let gate = self.decode_gate.clone();
+        let encode = move || -> Result<Vec<u8>> {
+            #[cfg(test)]
+            let _trace =
+                resource_diagnostics::scope("blocking_decode_entry", "blocking_decode_exit");
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                gate.block();
+            }
             // Cap decompressed size: a tiny on-chain brotli blob can otherwise
             // inflate without bound in memory on every node that loads the
             // contract (decompression bomb). 64 MiB is far above any legitimate
@@ -339,18 +388,27 @@ impl Storage {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "decompressed contract component exceeds maximum size",
-                ));
+                )
+                .into());
             }
-            Ok::<_, std::io::Error>(module_bytes)
-        })
-        .await
-        .map_err(|e| ComponentDecodeError::Infrastructure(e.into()))?
-        .map_err(|e| ComponentDecodeError::Content(e.into()))?;
+            // Component encoding has a deep native call chain. Keep it on the
+            // blocking thread to avoid adding it to the async worker's existing
+            // stack depth during an otherwise valid paid operation.
+            ComponentEncoder::default()
+                .module(&module_bytes)?
+                .validate(true)
+                .encode()
+        };
+        let encoded = match &self.ownership {
+            Some(owner) => owner.run_blocking(encode).await,
+            None => tokio::task::spawn_blocking(encode)
+                .await
+                .map_err(anyhow::Error::from),
+        }
+        .map_err(ComponentDecodeError::Infrastructure)?
+        .map_err(ComponentDecodeError::Content)?;
 
-        ComponentEncoder::default()
-            .module(&decompressed)
-            .and_then(|m| m.validate(true).encode())
-            .map_err(ComponentDecodeError::Content)
+        Ok(encoded)
     }
 
     pub async fn component_wit(&self, contract_id: u64) -> Result<String> {
@@ -506,10 +564,17 @@ impl Storage {
     }
 
     pub async fn commit(&self) -> Result<()> {
+        if let Some(owner) = &self.ownership {
+            owner.ensure_commit_authorized()?;
+        }
         storage_session::commit(session_callbacks(&self.conn), &self.savepoint_stack).await
     }
 
     pub async fn rollback_transaction(&self) -> Result<()> {
+        #[cfg(test)]
+        if self.fail_rollback_once.swap(false, Ordering::SeqCst) {
+            return Err(anyhow!("injected rollback transaction failure"));
+        }
         storage_session::rollback_transaction(session_callbacks(&self.conn), &self.savepoint_stack)
             .await
     }

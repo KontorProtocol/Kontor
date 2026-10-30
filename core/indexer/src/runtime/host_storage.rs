@@ -324,6 +324,12 @@ impl Runtime {
                 .on_set(contract_id, &path, depositor, deposited_gas)
                 .await?;
         }
+        #[cfg(test)]
+        if let Some((target, gate)) = &self.init_host_gate
+            && *target == contract_id
+        {
+            gate.wait().await;
+        }
         self.storage
             .set(contract_id, &path, bs, depositor, deposited_gas)
             .await

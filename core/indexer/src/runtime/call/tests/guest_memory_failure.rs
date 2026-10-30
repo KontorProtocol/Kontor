@@ -14,6 +14,7 @@ use wasmtime::{
 };
 
 use super::funded;
+use crate::runtime::component_policy::validate_no_starts;
 use crate::runtime::guest_memory::{GuestMemoryLimiter, GuestMemoryLimits};
 use crate::runtime::{ContractAddress, ExecutionError, Runtime, TransactionContext};
 use crate::test_utils::test_runtime;
@@ -123,7 +124,6 @@ fn failure_engine(kind: Kind, failures: Arc<AtomicUsize>) -> Result<Engine> {
         .consume_fuel(true)
         .allocation_strategy(InstanceAllocationStrategy::OnDemand)
         .wasm_custom_page_sizes(false)
-        .wasm_threads(false)
         .memory_init_cow(false)
         .memory_may_move(true)
         .signals_based_traps(false)
@@ -227,9 +227,10 @@ async fn swallowed_gc_backing_failure_aborts_before_result_persistence() -> Resu
         )
         .await;
     let contract_id = runtime.storage.insert_contract("gc-backing", &[]).await?;
+    validate_no_starts(&wat::parse_str(WAT)?)?;
     runtime
         .component_cache
-        .put(contract_id, Component::new(&engine, WAT)?, WAT.len())
+        .put_admitted(contract_id, Component::new(&engine, WAT)?, WAT.len())
         .await;
     let address = ContractAddress {
         name: "gc-backing".into(),

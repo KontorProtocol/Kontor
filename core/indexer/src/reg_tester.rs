@@ -52,6 +52,11 @@ use tokio::{
     sync::Mutex,
 };
 
+#[cfg(test)]
+mod workload_service;
+#[cfg(test)]
+pub(crate) use workload_service::WorkloadBitcoin;
+
 fn regtest_conf(rpc_port: u16, zmq_port: u16) -> String {
     format!(
         r#"regtest=1
@@ -162,6 +167,19 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, 
         "bitcoind exited on every one of {BITCOIND_BIND_ATTEMPTS} port attempts \
          (last exit: {last_exit:?}) — likely sustained port pressure"
     )
+}
+
+#[cfg(test)]
+pub(crate) async fn workload_bitcoin(data_dir: &Path) -> Result<(WorkloadBitcoin, BitcoinClient)> {
+    if let Some(url) = std::env::var_os("KONTOR_WORKLOAD_BITCOIN_RPC_URL") {
+        return workload_service::connect(
+            url.to_str()
+                .ok_or_else(|| anyhow!("invalid workload Bitcoin URL"))?,
+        )
+        .await;
+    }
+    let (child, client, _, _) = run_bitcoin(data_dir).await?;
+    Ok((WorkloadBitcoin::Owned(child), client))
 }
 
 /// Outcome of waiting on a freshly-spawned bitcoind.

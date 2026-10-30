@@ -1,0 +1,41 @@
+{
+  "cases": {
+    "deepest_frame_host_call": {
+      "first_failure": 8181,
+      "last_success": 8180
+    },
+    "pulley_plain_core": {
+      "first_failure": 8188,
+      "last_success": 8187
+    },
+    "pulley_plain_paid": {
+      "first_failure": 8187,
+      "last_success": 8186
+    },
+    "pulley_plain_system": {
+      "first_failure": 8188,
+      "last_success": 8187
+    },
+    "pulley_plain_view": {
+      "first_failure": 8188,
+      "last_success": 8187
+    },
+    "pulley_wide_core": {
+      "first_failure": 1723,
+      "last_success": 1722
+    },
+    "pulley_wide_paid": {
+      "first_failure": 1723,
+      "last_success": 1722
+    },
+    "pulley_wide_system": {
+      "first_failure": 1723,
+      "last_success": 1722
+    },
+    "pulley_wide_view": {
+      "first_failure": 1723,
+      "last_success": 1722
+    }
+  },
+  "discovery_capture_sha256": "4cf03721ac9cd81a8f8e75171050532ed5949e80f3cfb50c712653cc6d806702"
+}

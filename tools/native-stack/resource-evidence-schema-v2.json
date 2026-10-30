@@ -1,0 +1,1496 @@
+{
+  "$defs": {
+    "balance_transitions": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/decimal_amount"
+        },
+        "before": {
+          "$ref": "#/$defs/decimal_amount"
+        },
+        "burned_after": {
+          "$ref": "#/$defs/decimal_amount"
+        },
+        "burned_before": {
+          "$ref": "#/$defs/decimal_amount"
+        },
+        "floor_after": {
+          "$ref": "#/$defs/decimal_amount"
+        },
+        "floor_before": {
+          "$ref": "#/$defs/decimal_amount"
+        },
+        "floor_restored": {
+          "$ref": "#/$defs/decimal_amount"
+        },
+        "restored": {
+          "$ref": "#/$defs/decimal_amount"
+        },
+        "supply_after": {
+          "$ref": "#/$defs/decimal_amount"
+        },
+        "supply_before": {
+          "$ref": "#/$defs/decimal_amount"
+        }
+      },
+      "required": [
+        "before",
+        "after",
+        "restored",
+        "burned_before",
+        "burned_after",
+        "supply_before",
+        "supply_after",
+        "floor_before",
+        "floor_after",
+        "floor_restored"
+      ],
+      "type": "object"
+    },
+    "case": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/observation"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "parameters": {
+          "type": "object"
+        },
+        "raw_log": {
+          "$ref": "#/$defs/raw_log"
+        },
+        "worker_execution": {
+          "$ref": "#/$defs/worker_execution"
+        }
+      },
+      "required": [
+        "id",
+        "parameters",
+        "observations",
+        "raw_log",
+        "worker_execution"
+      ],
+      "type": "object"
+    },
+    "cleanup": {
+      "additionalProperties": false,
+      "properties": {
+        "invocation_table_released": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "savepoint_restored": {
+          "type": "boolean"
+        },
+        "stack_empty": {
+          "type": "boolean"
+        },
+        "table_after": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "table_before": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "table_before",
+        "table_after",
+        "savepoint_restored",
+        "stack_empty",
+        "invocation_table_released"
+      ],
+      "type": "object"
+    },
+    "configuration": {
+      "additionalProperties": false,
+      "properties": {
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/case"
+          },
+          "minItems": 41,
+          "type": "array"
+        },
+        "engine": {
+          "$ref": "#/$defs/engine"
+        },
+        "process": {
+          "$ref": "#/$defs/process"
+        },
+        "process_log": {
+          "$ref": "#/$defs/raw_log"
+        },
+        "raw_logs": {
+          "items": {
+            "$ref": "#/$defs/raw_log"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "source_artifact_sha256": {
+          "additionalProperties": {
+            "$ref": "#/$defs/sha256"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "process",
+        "process_log",
+        "engine",
+        "runtime",
+        "cases",
+        "raw_logs",
+        "source_artifact_sha256"
+      ],
+      "type": "object"
+    },
+    "counts": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "before": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "during": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "before",
+        "during",
+        "after"
+      ],
+      "type": "object"
+    },
+    "decimal_amount": {
+      "pattern": "^-?(0|[1-9][0-9]*)([.][0-9]+)?$",
+      "type": "string"
+    },
+    "engine": {
+      "additionalProperties": false,
+      "properties": {
+        "allocator": {
+          "type": "string"
+        },
+        "fiber_effective_writable_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "fiber_requested_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "guard_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "page_size_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pulley_stack_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "sanitizer_mode": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "wasmtime_revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "wasmtime_revision",
+        "target",
+        "pulley_stack_bytes",
+        "fiber_requested_bytes",
+        "fiber_effective_writable_bytes",
+        "page_size_bytes",
+        "guard_bytes",
+        "allocator",
+        "sanitizer_mode"
+      ],
+      "type": "object"
+    },
+    "feature_list": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "fuel": {
+      "additionalProperties": false,
+      "properties": {
+        "deposit": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "system": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "user": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "user",
+        "system",
+        "deposit"
+      ],
+      "type": "object"
+    },
+    "memory_profile": {
+      "additionalProperties": false,
+      "properties": {
+        "actual_cpus": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "actual_memory_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "baseline": {
+          "$ref": "#/$defs/memory_snapshot"
+        },
+        "cache_state": {
+          "type": "string"
+        },
+        "cpu_enforcement_field": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "enforced_cpus": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "enforced_memory_bytes": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "guest_memory_occupancy_bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "mapped_reservation_allowance_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "memory_enforcement_field": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "peak": {
+          "$ref": "#/$defs/memory_snapshot"
+        },
+        "per_node_allowance_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "per_root_allowance_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "production_capacity_only": {
+          "const": true
+        },
+        "raw_os_log": {
+          "$ref": "#/$defs/raw_log"
+        },
+        "reactor_roots": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reference_cpus": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reference_memory_bytes": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "shared_overhead_allowance_bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uninstrumented": {
+          "const": true
+        },
+        "view_roots": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workload_plan_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "id",
+        "production_capacity_only",
+        "uninstrumented",
+        "reference_cpus",
+        "reference_memory_bytes",
+        "actual_cpus",
+        "actual_memory_bytes",
+        "enforced_cpus",
+        "enforced_memory_bytes",
+        "cpu_enforcement_field",
+        "memory_enforcement_field",
+        "guest_memory_occupancy_bytes",
+        "cache_state",
+        "per_root_allowance_bytes",
+        "shared_overhead_allowance_bytes",
+        "mapped_reservation_allowance_bytes",
+        "per_node_allowance_bytes",
+        "workload_plan_sha256",
+        "view_roots",
+        "reactor_roots",
+        "baseline",
+        "peak",
+        "raw_os_log"
+      ],
+      "type": "object"
+    },
+    "memory_snapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "active_reactor_roots": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "active_view_roots": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "committed_or_private": {
+          "$ref": "#/$defs/metric"
+        },
+        "fibers": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "live_stores": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mapped_reservation": {
+          "$ref": "#/$defs/metric"
+        },
+        "node_accounted": {
+          "$ref": "#/$defs/metric"
+        },
+        "reservations": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resident": {
+          "$ref": "#/$defs/metric"
+        }
+      },
+      "required": [
+        "active_view_roots",
+        "active_reactor_roots",
+        "live_stores",
+        "reservations",
+        "fibers",
+        "mapped_reservation",
+        "resident",
+        "committed_or_private",
+        "node_accounted"
+      ],
+      "type": "object"
+    },
+    "metric": {
+      "additionalProperties": false,
+      "properties": {
+        "definition": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "platform_field": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "value_bytes": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "value_bytes",
+        "platform_field",
+        "definition"
+      ],
+      "type": "object"
+    },
+    "observation": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "error_class": {
+          "enum": [
+            "deterministic",
+            "nondeterministic",
+            null
+          ]
+        },
+        "fresh_store": {
+          "type": "boolean"
+        },
+        "fuel": {
+          "$ref": "#/$defs/fuel"
+        },
+        "live_stores": {
+          "$ref": "#/$defs/counts"
+        },
+        "observed_depth": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "ok",
+            "deterministic_error",
+            "nondeterministic_error",
+            "trap",
+            "invocation_limit",
+            "stack_overflow",
+            "out_of_fuel"
+          ]
+        },
+        "receipts": {
+          "items": {
+            "$ref": "#/$defs/receipt"
+          },
+          "type": "array"
+        },
+        "reservations": {
+          "$ref": "#/$defs/counts"
+        },
+        "resource_cleanup": {
+          "$ref": "#/$defs/cleanup"
+        },
+        "reused": {
+          "type": "boolean"
+        },
+        "rollback": {
+          "type": "boolean"
+        },
+        "sample_key": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/state"
+        },
+        "suspended": {
+          "type": "boolean"
+        },
+        "trap": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "case_id",
+        "sample_key",
+        "outcome",
+        "error_class",
+        "trap",
+        "value",
+        "fuel",
+        "receipts",
+        "state",
+        "rollback",
+        "live_stores",
+        "reservations",
+        "resource_cleanup",
+        "fresh_store",
+        "suspended",
+        "reused",
+        "observed_depth"
+      ],
+      "type": "object"
+    },
+    "process": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "ended_unix_ns": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "pid": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "signal": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "started_unix_ns": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "test_harness_passed": {
+          "type": "boolean"
+        },
+        "timed_out": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pid",
+        "command",
+        "started_unix_ns",
+        "ended_unix_ns",
+        "exit_code",
+        "signal",
+        "timed_out",
+        "complete",
+        "test_harness_passed"
+      ],
+      "type": "object"
+    },
+    "raw_log": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "receipt": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_id": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gas": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "contract_id",
+        "status",
+        "gas",
+        "value"
+      ],
+      "type": "object"
+    },
+    "runtime": {
+      "additionalProperties": false,
+      "properties": {
+        "block_on_caller_observed": {
+          "type": "boolean"
+        },
+        "blocking_pool_observed": {
+          "type": "boolean"
+        },
+        "flavor": {
+          "const": "multi_thread"
+        },
+        "thread_observations": {
+          "items": {
+            "$ref": "#/$defs/thread"
+          },
+          "minItems": 3,
+          "type": "array"
+        },
+        "worker_count": {
+          "minimum": 2,
+          "type": "integer"
+        },
+        "worker_requested_bytes": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "flavor",
+        "worker_count",
+        "worker_requested_bytes",
+        "thread_observations",
+        "blocking_pool_observed",
+        "block_on_caller_observed"
+      ],
+      "type": "object"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "state": {
+      "additionalProperties": false,
+      "properties": {
+        "after_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "balance_transitions": {
+          "$ref": "#/$defs/balance_transitions"
+        },
+        "balances_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "before_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "marker": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "before_sha256",
+        "after_sha256",
+        "marker",
+        "balances_sha256"
+      ],
+      "type": "object"
+    },
+    "thread": {
+      "additionalProperties": false,
+      "properties": {
+        "guard_bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "guard_end": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "guard_start": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "guard_treatment": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "guard_verification": {
+          "enum": [
+            "linux_maps_prot_none",
+            "linux_proc_self_mem_eio",
+            "macos_mach_vm_region_prot_none",
+            "pthread_reports_none"
+          ]
+        },
+        "guard_verified": {
+          "const": true
+        },
+        "identity_api": {
+          "enum": [
+            "linux_gettid",
+            "macos_pthread_threadid_np"
+          ]
+        },
+        "mapped_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "mapped_end": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "mapped_start": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "measurement_api": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "os_thread_id": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "page_size_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "process_id": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "requested_bytes": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "thread_category": {
+          "enum": [
+            "tokio_worker",
+            "blocking_pool",
+            "block_on_caller"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "usable_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "usable_end": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "usable_start": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "thread_category",
+        "thread_id",
+        "process_id",
+        "os_thread_id",
+        "identity_api",
+        "page_size_bytes",
+        "requested_bytes",
+        "mapped_bytes",
+        "guard_bytes",
+        "guard_start",
+        "guard_end",
+        "guard_verification",
+        "usable_bytes",
+        "mapped_start",
+        "mapped_end",
+        "usable_start",
+        "usable_end",
+        "measurement_api",
+        "guard_treatment",
+        "guard_verified"
+      ],
+      "type": "object"
+    },
+    "thread_ids": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "v2_chain_report": {
+      "additionalProperties": false,
+      "properties": {
+        "async_stack_size": {},
+        "call_hook_installed": {},
+        "case_id": {},
+        "component_sha256": {},
+        "engine_target": {},
+        "max_wasm_stack": {},
+        "mode": {},
+        "resource_mode": {},
+        "stores": {},
+        "target_arch": {},
+        "target_only": {},
+        "target_os": {},
+        "teardown_probe_mode": {
+          "enum": [
+            "on",
+            "off"
+          ]
+        },
+        "trials": {
+          "items": {
+            "$ref": "#/$defs/v2_chain_trial"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "required": [
+        "async_stack_size",
+        "call_hook_installed",
+        "case_id",
+        "component_sha256",
+        "engine_target",
+        "max_wasm_stack",
+        "mode",
+        "resource_mode",
+        "stores",
+        "target_arch",
+        "target_only",
+        "target_os",
+        "trials",
+        "teardown_probe_mode"
+      ],
+      "type": "object"
+    },
+    "v2_chain_trial": {
+      "additionalProperties": false,
+      "properties": {
+        "balances": {},
+        "balances_sha256": {},
+        "balances_snapshot": {},
+        "baseline_resource_count": {},
+        "error_class": {},
+        "fuel": {},
+        "host_io_suspended": {},
+        "leaf_callback_seen": {},
+        "live_store_peak": {},
+        "live_stores_after": {},
+        "live_stores_before": {},
+        "outcome": {},
+        "receipt": {},
+        "receipt_count": {},
+        "repeat_index": {},
+        "resource_count": {},
+        "rollback_clean": {},
+        "rolled_back": {},
+        "sample_key": {},
+        "savepoint_restored": {},
+        "stack_empty": {},
+        "state_after_sha256": {},
+        "state_before_sha256": {},
+        "storage_state": {},
+        "teardown_events": {
+          "items": {
+            "$ref": "#/$defs/v2_teardown_event"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "trap": {},
+        "value": {}
+      },
+      "required": [
+        "balances",
+        "balances_sha256",
+        "balances_snapshot",
+        "baseline_resource_count",
+        "error_class",
+        "fuel",
+        "host_io_suspended",
+        "leaf_callback_seen",
+        "live_store_peak",
+        "live_stores_after",
+        "live_stores_before",
+        "outcome",
+        "receipt",
+        "receipt_count",
+        "repeat_index",
+        "resource_count",
+        "rollback_clean",
+        "rolled_back",
+        "sample_key",
+        "savepoint_restored",
+        "stack_empty",
+        "state_after_sha256",
+        "state_before_sha256",
+        "storage_state",
+        "trap",
+        "value",
+        "teardown_events"
+      ],
+      "type": "object"
+    },
+    "v2_engine": {
+      "additionalProperties": false,
+      "properties": {
+        "derivation_rule": {},
+        "fiber_effective_writable_bytes": {},
+        "fiber_requested_bytes": {},
+        "page_size_bytes": {},
+        "pulley_stack_bytes": {},
+        "target": {}
+      },
+      "required": [
+        "target",
+        "pulley_stack_bytes",
+        "fiber_requested_bytes",
+        "page_size_bytes",
+        "fiber_effective_writable_bytes",
+        "derivation_rule"
+      ],
+      "type": "object"
+    },
+    "v2_markers": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_positions": {
+          "items": {"minimum": 0, "type": "integer"},
+          "minItems": 3,
+          "maxItems": 3,
+          "type": "array"
+        },
+        "complete_position": {"minimum": 0, "type": "integer"},
+        "harness_position": {"minimum": 0, "type": "integer"},
+        "report_position": {"minimum": 0, "type": "integer"},
+        "runtime_position": {"minimum": 0, "type": "integer"},
+        "terminal_position": {"minimum": 0, "type": "integer"},
+        "trace_position": {"minimum": 0, "type": "integer"},
+        "trial_keys": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "repeat_index": {"minimum": 0, "type": "integer"},
+              "sample_key": {"enum": ["target", "trap_control"]}
+            },
+            "required": [
+              "sample_key",
+              "repeat_index"
+            ],
+            "type": "object"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "required": [
+        "attempt_positions",
+        "trial_keys",
+        "report_position",
+        "terminal_position",
+        "complete_position",
+        "runtime_position",
+        "trace_position",
+        "harness_position"
+      ],
+      "type": "object"
+    },
+    "v2_run": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "binary_sha256_after": {
+          "$ref": "#/$defs/sha256"
+        },
+        "binary_sha256_before": {
+          "$ref": "#/$defs/sha256"
+        },
+        "case_env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "case_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "cell": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "configuration": {
+          "enum": [
+            "reduced",
+            "production"
+          ]
+        },
+        "engine": {
+          "$ref": "#/$defs/v2_engine"
+        },
+        "manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "markers": {
+          "$ref": "#/$defs/v2_markers"
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/observation"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "process": {
+          "$ref": "#/$defs/process"
+        },
+        "process_attempt_index": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "process_role": {
+          "enum": [
+            "target_observed",
+            "trap_control_observed",
+            "target_probe_off_control",
+            "trap_control_probe_off_control"
+          ]
+        },
+        "raw_log": {
+          "$ref": "#/$defs/raw_log"
+        },
+        "report": {
+          "$ref": "#/$defs/v2_chain_report"
+        },
+        "role_counts": {
+          "items": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "run_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "runtime": {
+          "$ref": "#/$defs/v2_runtime"
+        },
+        "source_sha": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "thread_trace": {
+          "$ref": "#/$defs/v2_trace"
+        },
+      "timeout_seconds": {
+        "minimum": 1,
+        "maximum": 1200,
+        "type": "integer"
+      },
+        "worker_execution": {
+          "$ref": "#/$defs/worker_execution"
+        }
+      },
+      "required": [
+        "run_id",
+        "case_id",
+        "process_role",
+        "cell",
+        "configuration",
+        "process_attempt_index",
+        "argv",
+        "case_env",
+        "process",
+        "raw_log",
+        "binary_sha256_before",
+        "binary_sha256_after",
+        "source_sha",
+        "manifest_sha256",
+        "report",
+        "runtime",
+        "thread_trace",
+      "timeout_seconds",
+        "worker_execution",
+        "observations",
+        "engine",
+        "markers",
+        "role_counts"
+      ],
+      "type": "object"
+    },
+    "v2_runtime": {
+      "additionalProperties": false,
+      "properties": {
+        "block_on_caller_observed": {},
+        "blocking_pool_observed": {},
+        "chain_mode": {},
+        "flavor": {},
+        "mode": {},
+        "pid": {},
+        "scope": {},
+        "stores": {},
+        "thread_observations": {
+          "items": {
+            "$ref": "#/$defs/thread"
+          },
+          "minItems": 3,
+          "type": "array"
+        },
+        "trap_control": {},
+        "worker_count": {},
+        "worker_requested_bytes": {}
+      },
+      "required": [
+        "scope",
+        "mode",
+        "stores",
+        "chain_mode",
+        "trap_control",
+        "pid",
+        "flavor",
+        "worker_count",
+        "worker_requested_bytes",
+        "thread_observations",
+        "blocking_pool_observed",
+        "block_on_caller_observed"
+      ],
+      "type": "object"
+    },
+    "v2_teardown_event": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "reserved",
+            "store_created",
+            "store_initialization_failed",
+            "table_destroyed",
+            "lease_released",
+            "depth_gate_rejected",
+            "physical_capacity_rejected",
+            "reserve_rejected"
+          ]
+        },
+        "role": {
+          "enum": [
+            "nested_chain",
+            "target_native_auxiliary",
+            "pre_observation",
+            "post_observation",
+            "rollback_observation"
+          ]
+        },
+        "table_alive": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "kind",
+        "table_alive"
+      ],
+      "type": "object"
+    },
+    "v2_trace": {
+      "additionalProperties": false,
+      "properties": {
+        "chain_mode": {},
+        "events": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "category": {},
+              "name": {},
+              "os_thread_id": {},
+              "thread_id": {}
+            },
+            "required": [
+              "name",
+              "thread_id",
+              "os_thread_id",
+              "category"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "mode": {},
+        "scope": {},
+        "stores": {},
+        "trap_control": {}
+      },
+      "required": [
+        "scope",
+        "mode",
+        "stores",
+        "chain_mode",
+        "trap_control",
+        "events"
+      ],
+      "type": "object"
+    },
+    "worker_attempt": {
+      "additionalProperties": false,
+      "properties": {
+        "blocking_thread_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "cache_state": {
+          "enum": [
+            "cold",
+            "warm",
+            "mixed",
+            "not_applicable"
+          ]
+        },
+        "phase_threads": {
+          "additionalProperties": false,
+          "properties": {
+            "conversion": {
+              "$ref": "#/$defs/thread_ids"
+            },
+            "operation": {
+              "$ref": "#/$defs/thread_ids"
+            },
+            "preparation": {
+              "$ref": "#/$defs/thread_ids"
+            },
+            "teardown": {
+              "$ref": "#/$defs/thread_ids"
+            }
+          },
+          "required": [
+            "preparation",
+            "operation",
+            "conversion",
+            "teardown"
+          ],
+          "type": "object"
+        },
+        "repeat_index": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sample_key": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "sample_key",
+        "repeat_index",
+        "phase_threads",
+        "blocking_thread_ids",
+        "cache_state"
+      ],
+      "type": "object"
+    },
+    "worker_execution": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/worker_attempt"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "whole_operation_spawned": {
+          "const": true
+        }
+      },
+      "required": [
+        "whole_operation_spawned",
+        "source_sha256",
+        "attempts"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "auxiliary_count_status": {
+      "enum": [
+        "pilot_pending",
+        "frozen"
+      ]
+    },
+    "auxiliary_expected_counts": {
+      "type": "object"
+    },
+    "binary_path": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "binary_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "cell": {
+      "enum": [
+        "Linux-X64/dev",
+        "Linux-X64/release",
+        "Linux-ARM64/dev",
+        "Linux-ARM64/release",
+        "macOS-ARM64/dev",
+        "macOS-ARM64/release"
+      ]
+    },
+    "control_capture": {
+      "$ref": "#/$defs/raw_log"
+    },
+    "cross_mode_initial_states": {
+      "type": "object"
+    },
+    "historical_reference": {
+      "$ref": "#/$defs/raw_log"
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "qualification_status": {
+      "const": "missing"
+    },
+    "remaining_case_bindings": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 29,
+      "minItems": 29,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "runs": {
+      "additionalProperties": {
+        "$ref": "#/$defs/v2_run"
+      },
+      "maxProperties": 60,
+      "minProperties": 60,
+      "type": "object"
+    },
+    "schema_version": {
+      "const": 2
+    },
+    "source_sha": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "status": {
+      "const": "candidate_actual_binding"
+    },
+    "timeout_seconds": {
+      "maximum": 1200,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "status",
+    "qualification_status",
+    "manifest_sha256",
+    "source_sha",
+    "binary_path",
+    "binary_sha256",
+    "cell",
+    "timeout_seconds",
+    "control_capture",
+    "historical_reference",
+    "runs",
+    "remaining_case_bindings",
+    "auxiliary_count_status",
+    "auxiliary_expected_counts",
+    "cross_mode_initial_states"
+  ],
+  "title": "S2 candidate per-process resource evidence v2",
+  "type": "object"
+}

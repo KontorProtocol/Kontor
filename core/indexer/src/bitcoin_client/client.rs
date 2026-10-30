@@ -146,6 +146,37 @@ impl Client {
         Self::handle_response(response)
     }
 
+    #[cfg(test)]
+    pub(crate) async fn submit_workload_block(&self, block: &Block) -> Result<(), Error> {
+        let request = Request {
+            jsonrpc: JSONRPC.to_owned(),
+            id: "0".to_owned(),
+            method: "submitblock".to_owned(),
+            params: vec![hex::encode(encode::serialize(block)).into()],
+        };
+        // submitblock succeeds with an explicit null result. Response's
+        // Option<Value> representation loses the distinction from a missing
+        // result, so retain the raw envelope in this test-only path.
+        let response: Value = self
+            .client
+            .post(&self.url)
+            .json(&request)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        if response.get("id") != Some(&Value::String("0".to_owned()))
+            || response.get("result") != Some(&Value::Null)
+            || response.get("error").is_some_and(|error| !error.is_null())
+        {
+            return Err(Error::Unexpected(format!(
+                "workload submitblock rejected: {response}"
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn batch_call<T>(
         &self,
         calls: Vec<(String, Vec<Value>)>,

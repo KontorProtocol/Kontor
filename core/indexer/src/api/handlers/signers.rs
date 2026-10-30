@@ -5,13 +5,13 @@ use indexer_types::{ContractFootprint, FootprintResponse, SignerResponse};
 use libsql::Connection;
 use numerics::{Decimal, add_decimal, decimal_to_string, mul_decimal, u64_to_decimal};
 
-use crate::api::{Env, error::Error, error::HttpError, result::Result};
+use crate::api::{Env, error::HttpError, result::Result};
 use crate::database::queries::{
     FootprintRow, find_footprint_by_depositor, get_signer_entry_by_bls_pubkey,
     get_signer_entry_by_id, get_signer_entry_by_x_only_pubkey,
 };
 use crate::database::types::SignerEntry;
-use crate::runtime::pricing::Pricing;
+use crate::runtime::{ownership::RootOutcome, pricing::Pricing};
 
 /// Identifier accepted by the signer routes. Disambiguated by shape — numeric is
 /// a signer_id, 64-char hex is an x-only pubkey, 192-char hex is a BLS pubkey.
@@ -21,10 +21,7 @@ fn is_hex_of_len(s: &str, len: usize) -> bool {
 
 /// Resolve any of the accepted identifier forms to the signer's full entry, or a
 /// `BadRequest`/`NotFound` — shared by every signer sub-resource.
-async fn resolve_signer_entry(
-    conn: &Connection,
-    identifier: &str,
-) -> std::result::Result<SignerEntry, Error> {
+async fn resolve_signer_entry(conn: &Connection, identifier: &str) -> anyhow::Result<SignerEntry> {
     let entry = if let Ok(signer_id) = identifier.parse::<u64>() {
         get_signer_entry_by_id(conn, signer_id).await
     } else if is_hex_of_len(identifier, 64) {
@@ -50,16 +47,25 @@ pub async fn get_signer(
     Path(identifier): Path<String>,
     State(env): State<Env>,
 ) -> Result<SignerResponse> {
-    let runtime = env.runtime_pool.get().await?;
-    let conn = runtime.get_storage_conn();
-    let e = resolve_signer_entry(&conn, &identifier).await?;
-    Ok(SignerResponse {
-        signer_id: e.signer_id,
-        x_only_pubkey: e.x_only_pubkey,
-        bls_pubkey: e.bls_pubkey,
-        next_nonce: e.next_nonce,
-    }
-    .into())
+    let object = env.runtime_pool.get().await?;
+    let mut owned = env
+        .owner_service
+        .start_pooled(object, move |runtime| {
+            Box::pin(async move {
+                let e = resolve_signer_entry(&runtime.storage.conn, &identifier).await?;
+                Ok(RootOutcome {
+                    value: SignerResponse {
+                        signer_id: e.signer_id,
+                        x_only_pubkey: e.x_only_pubkey,
+                        bls_pubkey: e.bls_pubkey,
+                        next_nonce: e.next_nonce,
+                    },
+                    commit: false,
+                })
+            })
+        })
+        .await?;
+    Ok(owned.result().await?.into())
 }
 
 /// `GET /api/signers/{identifier}/footprint` — the signer's storage-deposit
@@ -70,26 +76,32 @@ pub async fn get_signer_footprint(
     Path(identifier): Path<String>,
     State(env): State<Env>,
 ) -> Result<FootprintResponse> {
-    let runtime = env.runtime_pool.get().await?;
-    let conn = runtime.get_storage_conn();
-    let entry = resolve_signer_entry(&conn, &identifier).await?;
-
-    // Query + aggregation failures are server/data faults → 500, not 400. Per-row
-    // deposits are integer gas; price to token with the fixed collateral denomination
-    // (the same `Decimal` the consensus floor uses — pass it straight through).
-    let rows = find_footprint_by_depositor(&conn, entry.signer_id).await?;
-    let (total_deposit, total_footprint_bytes, by_contract) =
-        aggregate_footprint(rows, Pricing::collateral_unit_price().into())
-            .map_err(|e| anyhow::anyhow!("footprint aggregation failed: {e:?}"))?;
-
-    Ok(FootprintResponse {
-        signer_id: entry.signer_id,
-        x_only_pubkey: entry.x_only_pubkey,
-        total_deposit,
-        total_footprint_bytes,
-        by_contract,
-    }
-    .into())
+    let object = env.runtime_pool.get().await?;
+    let mut owned = env
+        .owner_service
+        .start_pooled(object, move |runtime| {
+            Box::pin(async move {
+                let conn = &runtime.storage.conn;
+                let entry = resolve_signer_entry(conn, &identifier).await?;
+                // Keep the lookup and aggregation in the same owned read transaction.
+                let rows = find_footprint_by_depositor(conn, entry.signer_id).await?;
+                let (total_deposit, total_footprint_bytes, by_contract) =
+                    aggregate_footprint(rows, Pricing::collateral_unit_price().into())
+                        .map_err(|e| anyhow::anyhow!("footprint aggregation failed: {e:?}"))?;
+                Ok(RootOutcome {
+                    value: FootprintResponse {
+                        signer_id: entry.signer_id,
+                        x_only_pubkey: entry.x_only_pubkey,
+                        total_deposit,
+                        total_footprint_bytes,
+                        by_contract,
+                    },
+                    commit: false,
+                })
+            })
+        })
+        .await?;
+    Ok(owned.result().await?.into())
 }
 
 /// Fold per-row deposits into a per-contract breakdown + totals. Per-row deposits
