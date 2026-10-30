@@ -601,10 +601,10 @@ fn linux_worker_guard_fault_control() -> Result<()> {
         let started = Instant::now();
         while child.try_wait()?.is_none() {
             if started.elapsed() >= Duration::from_secs(30) {
-                if let Err(error) = child.kill() {
-                    if child.try_wait()?.is_none() {
-                        return Err(error.into());
-                    }
+                if let Err(error) = child.kill()
+                    && child.try_wait()?.is_none()
+                {
+                    return Err(error.into());
                 }
                 let output = child.wait_with_output()?;
                 bail!(
@@ -983,7 +983,10 @@ fn current_linux_stack_range() -> Result<LinuxStackRange> {
 
 #[cfg(target_os = "linux")]
 fn guard_bytes_match(start: usize, end: usize, size: usize, page_size: usize) -> bool {
-    start <= end && end - start >= size && start % page_size == 0 && end % page_size == 0
+    start <= end
+        && end - start >= size
+        && start.is_multiple_of(page_size)
+        && end.is_multiple_of(page_size)
 }
 
 #[test]

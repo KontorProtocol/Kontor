@@ -1025,7 +1025,7 @@ async fn paid_post_return_callback_work_charges_fuel_gas_and_burn() -> Result<()
             if let Some(expected) = &repeated {
                 assert_eq!(&observation, expected);
             } else {
-                repeated = Some(observation.clone());
+                repeated = Some(observation);
             }
         }
         observations.push(repeated.unwrap());
