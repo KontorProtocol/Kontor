@@ -1535,9 +1535,12 @@ async fn restore<T>(keeper: &RootKeeper, result: Result<RootOutcome<T>>) -> Resu
 mod tests {
     use super::*;
     use crate::reg_tester::random_x_only_pubkey;
+    use crate::runtime::call::CallOutcome;
     use crate::runtime::fuel::ExecutionUsage;
     use crate::runtime::wit::{Signer, kontor::built_in::context::HolderRef};
-    use crate::runtime::{ContractAddress, Decimal, ExecutionError, native_provenance, token};
+    use crate::runtime::{
+        ContractAddress, Decimal, ExecutionError, Linkers, native_provenance, to_wave_expr, token,
+    };
     use crate::test_utils::test_runtime;
     use bitcoin::Network;
     use deadpool::managed::Pool;
@@ -1790,6 +1793,61 @@ mod tests {
         ))
     }
 
+    async fn seeded_nested_paid_oracle()
+    -> Result<(Runtime, TempDir, Signer, ContractAddress, ContractAddress)> {
+        let (mut runtime, dir, signer, leaf) = seeded_paid_oracle().await?;
+        let mut next = leaf.clone();
+        for index in 0..2 {
+            let name = format!("ownership-proxy-{index}");
+            runtime
+                .publish(
+                    &signer,
+                    Payment {
+                        signer_id: signer.signer_id().context("test payer missing")?,
+                        gas_limit: runtime.gas_limit_for_non_procs,
+                    },
+                    &name,
+                    include_bytes!("../../../../test-contracts/binaries/proxy.wasm.br"),
+                    &native_provenance()?,
+                )
+                .await
+                .map_err(anyhow::Error::from)?;
+            let address = ContractAddress {
+                name,
+                height: 0,
+                tx_index: 0,
+            };
+            runtime
+                .execute_api(
+                    Some(&signer),
+                    &address,
+                    &format!("set-contract-address({})", to_wave_expr(next)),
+                )
+                .await
+                .map_err(anyhow::Error::from)?;
+            next = address;
+        }
+        runtime
+            .storage
+            .conn
+            .execute("DELETE FROM contract_results", ())
+            .await?;
+        Ok((runtime, dir, signer, next, leaf))
+    }
+
+    async fn receipt_count(runtime: &Runtime) -> Result<i64> {
+        let mut rows = runtime
+            .storage
+            .conn
+            .query("SELECT COUNT(*) FROM contract_results", ())
+            .await?;
+        Ok(rows
+            .next()
+            .await?
+            .context("receipt count missing")?
+            .get(0)?)
+    }
+
     #[tokio::test]
     async fn dropped_view_keeps_pool_object_until_guest_store_is_joined() -> Result<()> {
         let dir = TempDir::new()?;
@@ -1968,6 +2026,212 @@ mod tests {
                 .get::<i64>(0)?,
             1
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_after_real_payment_hold_rolls_back_without_receipt() -> Result<()> {
+        let (mut runtime, _dir, signer, _address) = seeded_paid_oracle().await?;
+        let service = OwnerService::new();
+        let payer_before = token::api::balance(&mut runtime, HolderRef::from(&signer)).await?;
+        let burner_before = token::api::balance(&mut runtime, HolderRef::Burner).await?;
+        let payment = Payment {
+            signer_id: signer.signer_id().context("test payer missing")?,
+            gas_limit: runtime.gas_limit_for_non_procs,
+        };
+        let owned = OwnedRuntimeSession::with_service(runtime, service.clone());
+        let held = Arc::new(Notify::new());
+        let observed = held.notified();
+        tokio::pin!(observed);
+        observed.as_mut().enable();
+        let host_held = held.clone();
+        let call_signer = signer.clone();
+        let expected_payer = payer_before;
+        let handle = service
+            .start_stateful(&owned.session, move |runtime| {
+                Box::pin(async move {
+                    runtime
+                        .with_payment(&payment, 1_000_000, async |runtime| {
+                            let current =
+                                token::api::balance(runtime, HolderRef::from(&call_signer))
+                                    .await
+                                    .map_err(ExecutionError::NonDeterministic)?;
+                            if !matches!(
+                                (current.as_ref(), expected_payer.as_ref()),
+                                (Some(current), Some(expected)) if current < expected
+                            ) {
+                                return Err(ExecutionError::NonDeterministic(anyhow!(
+                                    "payment hold did not reduce payer balance"
+                                )));
+                            }
+                            host_held.notify_one();
+                            pending::<Result<CallOutcome, ExecutionError>>().await
+                        })
+                        .await
+                        .map_err(anyhow::Error::from)?;
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: true,
+                    })
+                })
+            })
+            .await?;
+        timeout(Duration::from_secs(10), observed).await?;
+        drop(handle);
+        let mut checkout = timeout(Duration::from_secs(4), owned.session.checkout()).await??;
+        let recovered = checkout
+            .runtime
+            .as_mut()
+            .context("restored runtime missing")?;
+        assert_eq!(
+            token::api::balance(recovered, HolderRef::from(&signer)).await?,
+            payer_before
+        );
+        assert_eq!(
+            token::api::balance(recovered, HolderRef::Burner).await?,
+            burner_before
+        );
+        assert_eq!(receipt_count(recovered).await?, 0);
+        assert!(recovered.storage.conn.is_autocommit());
+        assert!(recovered.storage.savepoint_stack.is_empty().await);
+        assert!(recovered.stack.is_empty().await);
+        assert_eq!(service.active_roots().await, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_real_nested_host_write_joins_all_stores_and_rolls_back() -> Result<()> {
+        let (mut runtime, _dir, signer, root, leaf) = seeded_nested_paid_oracle().await?;
+        let payer_before = token::api::balance(&mut runtime, HolderRef::from(&signer)).await?;
+        let burner_before = token::api::balance(&mut runtime, HolderRef::Burner).await?;
+        let observed_guest = Arc::new(Mutex::new(None));
+        let guest_observation = observed_guest.clone();
+        let entered = Arc::new(Notify::new());
+        let host_entered = entered.clone();
+        let mut user = runtime.linkers.user.clone();
+        user.allow_shadowing(true)
+            .instance("kontor:built-in/testing")?
+            .func_wrap_async("host-error", move |store, (): ()| {
+                let depth = store.data().ownership.as_ref().map(|owner| owner.depth);
+                let interval = store
+                    .data()
+                    .ownership
+                    .as_ref()
+                    .and_then(ChildContext::fuel_yield_interval);
+                let budget = store.data().invocation_budget.clone();
+                let guest_observation = guest_observation.clone();
+                let host_entered = host_entered.clone();
+                Box::new(async move {
+                    *guest_observation.lock().await = Some((depth, interval, budget));
+                    host_entered.notify_one();
+                    pending::<()>().await;
+                    Ok((String::new(),))
+                })
+            })?;
+        runtime.linkers = Arc::new(Linkers {
+            user,
+            native: runtime.linkers.native.clone(),
+        });
+        let service = OwnerService::new();
+        let owned = OwnedRuntimeSession::with_service(runtime, service.clone());
+        let observed = entered.notified();
+        tokio::pin!(observed);
+        observed.as_mut().enable();
+        let call_signer = signer.clone();
+        let handle = service
+            .start_stateful(&owned.session, move |runtime| {
+                Box::pin(async move {
+                    let value = runtime
+                        .execute_api(Some(&call_signer), &root, "chain-probe(false)")
+                        .await
+                        .map_err(anyhow::Error::from)?;
+                    Ok(RootOutcome {
+                        value,
+                        commit: true,
+                    })
+                })
+            })
+            .await?;
+        timeout(Duration::from_secs(30), observed).await?;
+        let (depth, interval, budget) = observed_guest
+            .lock()
+            .await
+            .take()
+            .context("nested guest observation missing")?;
+        assert_eq!(depth, Some(3));
+        assert_eq!(interval, Some(API_FUEL_YIELD_INTERVAL));
+        let budget = budget.context("nested invocation budget missing")?;
+        assert_eq!(budget.live(), 3);
+        drop(handle);
+        let mut checkout = timeout(Duration::from_secs(4), owned.session.checkout()).await??;
+        let recovered = checkout
+            .runtime
+            .as_mut()
+            .context("restored runtime missing")?;
+        assert_eq!(budget.live(), 0);
+        assert_eq!(receipt_count(recovered).await?, 0);
+        assert_eq!(
+            token::api::balance(recovered, HolderRef::from(&signer)).await?,
+            payer_before
+        );
+        assert_eq!(
+            token::api::balance(recovered, HolderRef::Burner).await?,
+            burner_before
+        );
+        assert!(recovered.storage.conn.is_autocommit());
+        assert!(recovered.storage.savepoint_stack.is_empty().await);
+        assert!(recovered.stack.is_empty().await);
+        assert_eq!(recovered.table.lock().await.iter_mut().count(), 0);
+        assert_eq!(
+            recovered
+                .execute_api(None, &leaf, "storage-state()")
+                .await?,
+            "[0, 0, 0, 0]"
+        );
+        assert_eq!(service.active_roots().await, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn caught_paid_host_panic_quarantines_writer_without_durable_receipt() -> Result<()> {
+        let (runtime, _dir, signer, address) = seeded_paid_oracle().await?;
+        let conn = runtime.get_storage_conn();
+        let service = OwnerService::new();
+        let owned = OwnedRuntimeSession::with_service(runtime, service.clone());
+        let result = owned
+            .run(true, move |runtime| {
+                Box::pin(async move {
+                    runtime
+                        .execute_api(Some(&signer), &address, "host-panic()")
+                        .await
+                        .map_err(anyhow::Error::from)
+                })
+            })
+            .await;
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("host panic")),
+            "unexpected owned host panic result: {result:?}"
+        );
+        assert!(
+            timeout(Duration::from_secs(2), owned.session.checkout())
+                .await?
+                .is_err(),
+            "caught host panic returned the writer to service"
+        );
+        assert!(conn.is_autocommit());
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM contract_results", ())
+            .await?;
+        assert_eq!(
+            rows.next()
+                .await?
+                .context("panic receipt count missing")?
+                .get::<i64>(0)?,
+            0
+        );
+        assert_eq!(service.active_roots().await, 0);
         Ok(())
     }
 
@@ -2188,7 +2452,7 @@ mod tests {
         let (mut seed, dir, name) = test_runtime().await?;
         let baseline = token::api::balance(&mut seed, HolderRef::Burner).await?;
         drop(seed);
-        let pool = Pool::builder(Manager::new(
+        let pool: Pool<Manager> = Pool::builder(Manager::new(
             dir.path().to_path_buf(),
             name,
             Network::Regtest,
@@ -2200,7 +2464,24 @@ mod tests {
         for _ in 0..8 {
             prewarmed.push(pool.get().await?);
         }
+        for object in &mut prewarmed {
+            assert_eq!(
+                token::api::balance(object, HolderRef::Burner).await?,
+                baseline
+            );
+        }
         drop(prewarmed);
+        let unowned_started = Instant::now();
+        let mut unowned = JoinSet::new();
+        for _ in 0..8 {
+            let mut object = pool.get().await?;
+            unowned.spawn(async move { token::api::balance(&mut object, HolderRef::Burner).await });
+        }
+        while let Some(result) = unowned.join_next().await {
+            assert_eq!(result??, baseline);
+        }
+        let unowned_elapsed = unowned_started.elapsed();
+        assert_eq!(pool.status().available, 8);
         let service = OwnerService::new();
         let normal_started = Instant::now();
         let mut normal = Vec::new();
@@ -2270,7 +2551,8 @@ mod tests {
         .await?;
         let cancelled_elapsed = cancelled_started.elapsed();
         println!(
-            "eight owned view roots: normal_ms={}, cancel_drain_ms={}",
+            "eight view roots: unowned_ms={}, owned_ms={}, cancel_drain_ms={}",
+            unowned_elapsed.as_millis(),
             normal_elapsed.as_millis(),
             cancelled_elapsed.as_millis()
         );
