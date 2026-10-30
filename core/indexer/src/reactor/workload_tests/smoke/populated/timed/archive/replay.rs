@@ -120,7 +120,6 @@ pub(super) async fn run(saved: Saved) -> Result<()> {
             .build();
         let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
         runtime.network = Network::Regtest;
-        warm(&mut runtime, manifest.settings.mixed.warm_simulation_cache).await?;
         let payer = get_identity(&writer.connection(), &manifest.canonical_signer)
             .await?
             .context("saved canonical signer missing")?
@@ -207,6 +206,16 @@ pub(super) async fn run(saved: Saved) -> Result<()> {
                     * 2,
             )?;
         let engine_directory = TempDir::new_in(directory.path())?;
+        // Model reconstruction performs contract views. Its cache and transient
+        // execution state must not leak into the declared replay setup.
+        drop(runtime);
+        let storage = Storage::builder()
+            .height(ANCHOR_HEIGHT)
+            .conn(writer.connection())
+            .build();
+        let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+        runtime.network = Network::Regtest;
+        warm(&mut runtime, manifest.settings.mixed.warm_simulation_cache).await?;
         let mut trial = reactor(
             runtime,
             client.clone(),
