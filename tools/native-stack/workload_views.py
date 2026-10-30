@@ -39,6 +39,10 @@ def view(connection, address, expression):
     return result["value"]
 
 
+def overlapping_calls(intervals, begin, end):
+    return sum(begin <= started <= finished <= end for started, finished in intervals)
+
+
 class ViewService:
     def __init__(self, output):
         self.output = output
@@ -93,7 +97,7 @@ class ViewService:
 
         def client(index):
             completed = 0
-            during_writer = 0
+            page_intervals = []
             last = 0
             transport = http.client.HTTPConnection("127.0.0.1", request["port"], timeout=30)
             try:
@@ -105,8 +109,10 @@ class ViewService:
                         return None
                 while not stopped.is_set() and not self.stopping.is_set():
                     sample = request["samples"][(index + completed) % 5]
+                    page_started = time.monotonic_ns()
                     value = view(transport, request["pages"], sample["expr"])
-                    overlap = not stopped.is_set()
+                    page_intervals.append((page_started, time.monotonic_ns()))
+                    require(len(page_intervals) <= 100_000, "view call count exceeded finite harness limit")
                     require(value == sample["expected"], "pagination response differs from fixture oracle")
                     value = view(transport, request["counter"], "get()")
                     require(value.isascii() and value.isdecimal(), "counter is not an unsigned integer")
@@ -114,12 +120,13 @@ class ViewService:
                     require(last <= value <= request["maximum"], "view counter regressed or exceeded work")
                     last = value
                     completed += 1
-                    during_writer += int(overlap)
                 if finish.get("succeeded"):
                     require(view(transport, request["counter"], "get()") == str(finish["completed"]),
                             "view retained stale committed counter")
                 return {"client": index, "completed": completed,
-                        "completed_during_writer": during_writer,
+                        "completed_during_writer": overlapping_calls(
+                            page_intervals, finish.get("writer_started_ns", 0),
+                            finish.get("writer_finished_ns", 0)),
                         "last_counter_during_work": last}
             except BaseException:
                 ready.abort()
@@ -147,6 +154,12 @@ class ViewService:
                         and 0 <= finish["completed"] <= request["maximum"],
                         "view finish control differs")
                 trial["stop_ns"] = time.monotonic_ns()
+                begin, end = finish.get("writer_started_ns"), finish.get("writer_finished_ns")
+                require(type(begin) is int and type(end) is int
+                        and trial["start_ns"] <= begin <= end <= trial["stop_ns"],
+                        "writer timestamps differ from local monotonic clock")
+                trial["writer_started_ns"], trial["writer_finished_ns"] = begin, end
+                trial["writer_clock"] = "CLOCK_MONOTONIC"
                 stopped.set()
                 trial["workers"] = [future.result() for future in futures]
                 require(finish["succeeded"], "canonical writer did not succeed")

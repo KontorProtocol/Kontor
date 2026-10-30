@@ -711,7 +711,9 @@ contract execution remain inside the node.
 
 Each external view session checks initial readiness, all five pagination
 samples against fixture-derived expected values, monotonic counters, overlap
-with writer work, and a fresh final committed counter after the writer ends.
+with writer work using the writer's exact Linux monotonic-clock interval, and
+a fresh final committed counter after the writer ends. Calls during the control
+handshake or final drain do not count as writer overlap.
 The runner verifies the client process is outside the measured cgroup and
 matches both node reports to `views.json`. Client errors or a control disconnect
 fail the session and stop its workers. HTTP calls and control reads have bounded

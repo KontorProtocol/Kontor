@@ -19,6 +19,7 @@ use tokio::net::{TcpListener, UnixStream};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
+use super::super::clock::monotonic_ns;
 use super::{CLIENTS, CounterProgress, MixedConfig, PAGE_SAMPLES, pagination};
 use crate::api::Env;
 use crate::api::handlers::post_contract;
@@ -146,20 +147,23 @@ pub(super) async fn run<T>(
             receive(&mut stream).await? == json!({"ready": true}),
             "external view readiness differs"
         );
-        state.writing.store(true, Ordering::SeqCst);
         send(&mut stream, json!({"start": true})).await?;
         ensure!(
             receive(&mut stream).await? == json!({"started": true}),
             "external view start differs"
         );
+        state.writing.store(true, Ordering::SeqCst);
+        let writer_started_ns = monotonic_ns()?;
         let started = Instant::now();
         let result = AssertUnwindSafe(work).catch_unwind().await;
         let writer_ns = started.elapsed().as_nanos();
+        let writer_finished_ns = monotonic_ns()?;
         state.writing.store(false, Ordering::SeqCst);
         let succeeded = matches!(&result, Ok(Ok(_)));
         send(
             &mut stream,
-            json!({"succeeded": succeeded, "completed": progress.completed.load(Ordering::SeqCst)}),
+            json!({"succeeded": succeeded, "completed": progress.completed.load(Ordering::SeqCst),
+                "writer_started_ns": writer_started_ns, "writer_finished_ns": writer_finished_ns}),
         )
         .await?;
         let report = receive(&mut stream).await;

@@ -7,7 +7,7 @@ import threading
 import time
 import unittest
 
-from workload_views import ViewService, receive, send
+from workload_views import ViewService, overlapping_calls, receive, send
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -26,6 +26,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *_):
         pass
+
+
+class IntervalChecks(unittest.TestCase):
+    def test_handshake_and_drain_calls_do_not_count_as_writer_overlap(self):
+        self.assertEqual(overlapping_calls([(0, 5), (5, 15), (10, 20), (15, 25), (30, 40)], 10, 20), 1)
 
 
 class ViewChecks(unittest.TestCase):
@@ -59,13 +64,16 @@ class ViewChecks(unittest.TestCase):
         self.assertEqual(receive(reader)[0], {"ready": True})
         send(control, {"start": True})
         self.assertEqual(receive(reader)[0], {"started": True})
+        self.writer_started_ns = time.monotonic_ns()
         return control, reader
 
     def test_clients_observe_progress_and_drain_with_fresh_final_counter(self):
         control, reader = self.connect()
         time.sleep(0.3)
         self.http.counter = 10
-        send(control, {"succeeded": True, "completed": 10})
+        send(control, {"succeeded": True, "completed": 10,
+                       "writer_started_ns": self.writer_started_ns,
+                       "writer_finished_ns": time.monotonic_ns()})
         result, _ = receive(reader)
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["completed_counter"], 10)
@@ -97,7 +105,9 @@ class ViewChecks(unittest.TestCase):
     def test_stale_final_counter_fails(self):
         control, reader = self.connect()
         time.sleep(0.3)
-        send(control, {"succeeded": True, "completed": 10})
+        send(control, {"succeeded": True, "completed": 10,
+                       "writer_started_ns": self.writer_started_ns,
+                       "writer_finished_ns": time.monotonic_ns()})
         self.failure("stale committed counter")
         reader.close()
         control.close()
