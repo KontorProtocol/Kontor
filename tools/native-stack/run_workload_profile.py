@@ -86,6 +86,37 @@ def check_result(log, before, after):
             "workload incurred an out-of-memory event")
 
 
+def trial_measurements(log, pid, directory, enforced):
+    prefix = "workload_trial_memory="
+    trials = [json.loads(line.removeprefix(prefix)) for line in log.splitlines()
+              if line.startswith(prefix)]
+    require([trial["restore"] for trial in trials] == ["timed-one.db", "timed-two.db"],
+            "expected exactly two ordered trial memory records")
+    for trial in trials:
+        require(trial["schema_version"] == 1 and trial["pid"] == pid
+                and trial["cgroup"] == str(directory)
+                and trial["peak_reset"] == "same_open_file_description",
+                "trial memory identity or reset method differs")
+        require(trial["limits"] == {key: str(value) for key, value in enforced.items()},
+                "trial limits differ from enforced profile")
+        require(type(trial["elapsed_ns"]) is int and trial["elapsed_ns"] > 0
+                and type(trial["peak_bytes"]) is int and trial["peak_bytes"] > 0,
+                "trial has no measured duration or peak")
+        before, after = trial["before"], trial["after"]
+        for sample in (before, after):
+            require(sample["swap_current_bytes"] == 0,
+                    "trial used swap")
+            require(sample["memory_current_bytes"] > 0 and sample["process_rss_bytes"] > 0,
+                    "trial memory sample is empty")
+        require(trial["peak_bytes"] >= after["memory_current_bytes"],
+                "trial peak is below its final memory sample")
+        for key in ("high", "max", "oom", "oom_kill", "oom_group_kill"):
+            require(key in before["memory_events"] and key in after["memory_events"]
+                    and before["memory_events"][key] == after["memory_events"][key],
+                    f"trial incurred memory pressure or lacks counter: {key}")
+    return trials
+
+
 def host_resources():
     environment = dict(os.environ, LC_ALL="C", LANG="C")
 
@@ -143,6 +174,7 @@ def worker(spec_path):
         "host_resources": resources,
         "claim": "local constrained measurement; not production hardware equivalence",
         "binary_sha256_before": digest(binary), "status": "running",
+        "cgroup": str(directory),
         "external_bitcoin": external_identity,
         "measurement_scope": ("test process and in-process harness/oracles; external Bitcoin excluded"
                               if external else "whole service including test children and setup"),
@@ -173,6 +205,9 @@ def worker(spec_path):
                          observation["memory_events_after"])
             require(not external or "workload_external_bitcoin=true\n" in transcript,
                     "workload did not confirm use of the external Bitcoin service")
+            if spec.get("trial_memory"):
+                observation["trials"] = trial_measurements(
+                    transcript, child.pid, directory, enforced)
             observation["validation"] = "passed"
     except ValueError as error:
         observation["validation_error"] = str(error)
@@ -195,6 +230,15 @@ def run(args):
     output.mkdir(parents=True, exist_ok=False)
     require("KONTOR_WORKLOAD_BITCOIN_RPC_URL" not in environment,
             "external Bitcoin must be owned and verified by this supervisor")
+    require("KONTOR_WORKLOAD_TRIAL_MEMORY" not in environment,
+            "use --trial-memory to require verified per-trial records")
+    if args.trial_memory:
+        prefix = "reactor::workload_tests::smoke::populated::timed::archive::"
+        require(args.bitcoin_binary and args.test in (
+            prefix + "workload_saved_timed_events_replay",
+            prefix + "workload_saved_timed_historical_replay"),
+            "trial memory requires a saved timed replay and external Bitcoin")
+        environment["KONTOR_WORKLOAD_TRIAL_MEMORY"] = "1"
     bitcoin = None
     try:
         if args.bitcoin_binary:
@@ -208,7 +252,7 @@ def run(args):
 
 def run_service(args, environment, binary, output, bitcoin):
     cpus, memory = PROFILES[args.profile]
-    spec = {"profile": args.profile, "binary": str(binary),
+    spec = {"profile": args.profile, "binary": str(binary), "trial_memory": args.trial_memory,
             "binary_sha256": digest(binary), "test": args.test,
             "environment": environment}
     if bitcoin:
@@ -257,6 +301,8 @@ def main():
     parser.add_argument("--timeout", type=int, required=True)
     parser.add_argument("--bitcoin-binary", type=Path,
                         help="start fresh regtest outside the measured service, owned by this supervisor")
+    parser.add_argument("--trial-memory", action="store_true",
+                        help="require two replay-window memory records with individually reset peaks")
     return run(parser.parse_args())
 
 

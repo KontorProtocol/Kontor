@@ -1,11 +1,50 @@
+import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from run_workload_profile import check_ancestors, check_result, limits
+from run_workload_profile import check_ancestors, check_result, limits, trial_measurements
 
 
 class ProfileChecks(unittest.TestCase):
+    def test_trial_records_reject_missing_reset_wrong_owner_and_memory_pressure(self):
+        enforced = {"cpu.max": "200000 100000", "memory.max": 12 * 1024**3,
+                    "memory.swap.max": 0}
+        sample = {"swap_current_bytes": 0, "memory_current_bytes": 1024,
+                  "process_rss_bytes": 512, "memory_events": {
+                      "high": 0, "max": 0, "oom": 0, "oom_kill": 0, "oom_group_kill": 0}}
+        trials = [{"restore": name, "schema_version": 1, "pid": 100,
+                   "cgroup": "/test", "peak_reset": "same_open_file_description",
+                   "limits": {key: str(value) for key, value in enforced.items()},
+                   "elapsed_ns": 1, "peak_bytes": 2048,
+                   "before": copy.deepcopy(sample), "after": copy.deepcopy(sample)}
+                  for name in ("timed-one.db", "timed-two.db")]
+
+        def check(records):
+            log = "\n".join("workload_trial_memory=" + json.dumps(item) for item in records)
+            return trial_measurements(log, 100, Path("/test"), enforced)
+
+        self.assertEqual(check(trials), trials)
+        for records in ([], trials[:1], trials[::-1], trials + trials):
+            with self.subTest(records=len(records)), self.assertRaises(ValueError):
+                check(records)
+        for key, value in (("pid", 101), ("cgroup", "/other"),
+                           ("peak_reset", "reopened"), ("peak_bytes", 1023)):
+            changed = copy.deepcopy(trials)
+            changed[0][key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                check(changed)
+        for key in sample["memory_events"]:
+            changed = copy.deepcopy(trials)
+            changed[1]["after"]["memory_events"][key] = 1
+            with self.subTest(counter=key), self.assertRaises(ValueError):
+                check(changed)
+        changed = copy.deepcopy(trials)
+        changed[1]["before"]["swap_current_bytes"] = 1
+        with self.assertRaises(ValueError):
+            check(changed)
+
     def test_requires_actual_cpu_memory_and_swap_limits(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

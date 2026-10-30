@@ -25,6 +25,7 @@ use super::super::dispatch::historical;
 use super::super::run::warm;
 use super::super::work::{InputPlan, TimedWork};
 use super::format::{Inputs, Saved};
+use super::measurement::TrialMemory;
 use crate::database::Writer;
 use crate::database::queries::{get_identity, select_latest_consensus_height};
 use crate::reg_tester::workload_bitcoin;
@@ -255,6 +256,7 @@ async fn run_mode(saved: Saved, paced_api: bool) -> Result<()> {
                 history.as_ref(),
             )
             .await?;
+            let measurement = TrialMemory::start()?;
             if paced_api {
                 let report = historical::run(plan.schedule.clone(), &mut adapter).await?;
                 ensure!(adapter.api_results.is_empty());
@@ -279,6 +281,9 @@ async fn run_mode(saved: Saved, paced_api: bool) -> Result<()> {
                 ensure!(adapter.api_results.len() == expected_api.len());
             }
             ensure!(adapter.checkpoints.len() == expected.len());
+            if let Some(measurement) = measurement {
+                measurement.finish(name, paced_api)?;
+            }
             Ok(())
         };
         views::run_progress(

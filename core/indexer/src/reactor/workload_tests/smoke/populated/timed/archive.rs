@@ -18,6 +18,7 @@ use crate::bitcoin_client::Client;
 mod controls;
 mod deadline;
 mod format;
+mod measurement;
 mod replay;
 mod tests;
 

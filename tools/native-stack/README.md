@@ -659,6 +659,22 @@ node-only, per-trial peak-memory acceptance gate. Do not supply
 `KONTOR_WORKLOAD_BITCOIN_RPC_URL` in the environment JSON: the supervisor derives
 and verifies that setting from the service it owns.
 
+For either saved timed replay test, add `--trial-memory` together with
+`--bitcoin-binary`. Each restore records baseline and post-trial cgroup memory,
+swap, memory events, memory statistics, CPU counters, memory pressure and
+process RSS, plus a peak reset for that restore. Measurement begins after
+adapter setup and view initialization and ends after replay checkpoint checks,
+while competing views remain active. The same open `memory.peak` descriptor
+is retained across reset and read, as required by Linux's per-descriptor reset
+semantics. A kernel without writable reset support fails the run.
+
+The wrapper requires exactly two ordered records from the measured PID and
+cgroup with unchanged limits. Swap, OOM and memory-limit pressure events fail
+validation. Raw records remain in `workload.log` on failure. These windows still
+include in-process scheduling and semantic verification; they do not establish
+external load-generator separation, cache/root telemetry, or the full phase
+memory acceptance gate. The whole-service peak remains separately reported.
+
 ## Historical replay with live API arrivals
 
 The ignored test
