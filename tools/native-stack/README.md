@@ -640,3 +640,40 @@ zero selected tests and ignored tests. A successful measurement establishes
 only the recorded local resource constraints. It does not establish production
 hardware equivalence, freeze the workload envelope, compare S1 against S2, or
 satisfy the phase's performance acceptance criteria by itself.
+
+## Historical replay with live API arrivals
+
+The ignored test
+`reactor::workload_tests::smoke::populated::timed::archive::workload_saved_timed_historical_replay`
+consumes the same frozen archive and explicit consumer identity as
+`workload_saved_timed_events_replay`. It requires complete mixed historical
+intervals (`fresh_backlog: 0`). Canonical blocks and all their batches replay
+without waiting for their historical timestamps. Eight existing view clients
+remain active throughout each of the two independent database restores.
+
+An independent monotonic producer enqueues external API requests every ten
+seconds for the representative profile and every second for stress, starting
+at time zero. Requests use the archive's distinct signed API inputs exactly
+once, in order. At each canonical boundary, at most one due request runs; after
+the final boundary, all requests due strictly before the completion observation
+must drain. This keeps both canonical work and API work progressing while
+making overload visible. No future request is awaited to fill out the archive.
+Exceeding the archive's finite real-time input horizon fails the run.
+
+Historical API occurrences are omitted from execution but their frozen
+poststate checkpoints are still checked, since those calls originally rolled
+back. Each external API request executes at the current canonical tip, checks
+its results against the independent recipe oracle, and verifies complete
+database rollback and restored runtime context. Its actual tip and results are
+logged separately. Original-position API result equality remains the job of
+the existing semantic replay test; both tests are needed.
+
+`workload_historical_replay` reports the canonical historical seconds, canonical
+completion time, end-to-end completion time, separate canonical/API execution
+service totals, and per-request intended arrival, enqueue, dispatch and
+completion times. The reported queue peak is the maximum observed at dispatch
+boundaries, not a continuously sampled peak. Oracle/checkpoint work is included
+in elapsed time and excluded from execution service. Historical throughput is
+`historical_seconds / (completion_ns / 1e9)`; API requests never increase its
+historical numerator. These records do not by themselves establish release
+performance, paired S1/S2 results, or isolated node memory usage.

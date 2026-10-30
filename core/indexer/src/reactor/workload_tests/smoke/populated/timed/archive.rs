@@ -202,3 +202,14 @@ async fn workload_saved_timed_events_replay() -> Result<()> {
     let digest = std::env::var("KONTOR_WORKLOAD_TIMED_MANIFEST_SHA256")?;
     replay::run(Saved::load(&path, &digest)?).await
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires bitcoind and frozen timed archive; real-clock external API arrivals"]
+async fn workload_saved_timed_historical_replay() -> Result<()> {
+    let path = PathBuf::from(
+        std::env::var_os("KONTOR_WORKLOAD_TIMED_MANIFEST")
+            .context("timed manifest path missing")?,
+    );
+    let digest = std::env::var("KONTOR_WORKLOAD_TIMED_MANIFEST_SHA256")?;
+    replay::run_historical(Saved::load(&path, &digest)?).await
+}
