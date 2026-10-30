@@ -204,7 +204,7 @@
     },
     "tests": {
       "path": "tools/native-stack/test_resource_boundary_evidence.py",
-      "sha256": "15de90748e0b4534b10e1ecd48795799b8330f1e7ea8af2e825debed268a67d2"
+      "sha256": "bab624d1eb424ffc469c893e5c1eb04076094c5f14e9e38ed88526a8166ab2e3"
     },
     "validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",

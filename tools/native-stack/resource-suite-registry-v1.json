@@ -301,7 +301,7 @@
         "pulley_host_callback"
       ],
       "manifest": "boundary",
-      "manifest_sha256": "d2a5da77810f09de7eb6916d54ad3b65e8f6aee4297808de5a142c81799f37ea",
+      "manifest_sha256": "b336f514fef4b40cf596a7fa01719290d2feb5ed526a097fc1acb8e56b3d27bb",
       "validator": {
         "path": "tools/native-stack/resource_boundary_evidence.py",
         "sha256": "adcbd999065858e561305c04fce7e689cf7d884e7ea0742f398beffca75e87af"
@@ -386,7 +386,7 @@
     }
   },
   "parent_manifests": {
-    "boundary": "d2a5da77810f09de7eb6916d54ad3b65e8f6aee4297808de5a142c81799f37ea",
+    "boundary": "b336f514fef4b40cf596a7fa01719290d2feb5ed526a097fc1acb8e56b3d27bb",
     "v1": "4f577035e33905ae4ceb2d3427254a4fb344a2f1accb97c03a0f93734037831e",
     "v2": "e4c5cb17a4951c478aa368ad10f12158ef0d1fe37b6e0d1903ab6fba646dcb3a"
   },

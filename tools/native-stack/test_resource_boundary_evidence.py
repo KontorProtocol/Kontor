@@ -650,6 +650,16 @@ class BoundaryEvidenceTests(unittest.TestCase):
                     item.update(event(item["name"], number, "blocking_pool"))
             with self.assertRaises(ValueError):
                 validate_trace(unmeasured_compiler, runtime, observed)
+        extra_blocking_thread = copy.deepcopy(runtime)
+        extra_blocking_thread["thread_observations"].append(
+            thread("blocking_pool", 5, 0x5000000, None))
+        extra_compiler = copy.deepcopy(blocking_compiler)
+        for item in extra_compiler["events"]:
+            if item["name"].startswith("compiler_"):
+                item.update(event(item["name"], 5, "blocking_pool"))
+        self.assertEqual(
+            validate_trace(extra_compiler, extra_blocking_thread, observed)[
+                "compiler_entry"], 1)
         mismatched_tid = copy.deepcopy(blocking_compiler)
         mismatched_tid["events"][2]["os_thread_id"] = 99
         with self.assertRaises(ValueError):
