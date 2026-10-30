@@ -84,40 +84,55 @@ pub(super) fn current_stack_range() -> Result<MacStackRange> {
     let pthread = unsafe { pthread_self() };
     let high = unsafe { pthread_get_stackaddr_np(pthread) } as usize;
     let stack_size = unsafe { pthread_get_stacksize_np(pthread) };
-    ensure!(
-        high > 0 && stack_size >= page_size,
-        "pthread stack range is invalid"
-    );
-    let low = high
-        .checked_sub(stack_size)
-        .context("pthread stack underflow")?;
-    ensure!(
-        low % page_size == 0 && high % page_size == 0,
-        "pthread stack range is not page aligned"
-    );
+    let stack_pointer: usize;
+    unsafe {
+        #[cfg(target_arch = "aarch64")]
+        asm!("mov {stack_pointer}, sp", stack_pointer = out(reg) stack_pointer, options(nomem, nostack, preserves_flags));
+        #[cfg(target_arch = "x86_64")]
+        asm!("mov {stack_pointer}, rsp", stack_pointer = out(reg) stack_pointer, options(nomem, nostack, preserves_flags));
+    }
     let mut os_thread_id = 0_u64;
     let thread_status = unsafe { pthread_threadid_np(pthread, &mut os_thread_id) };
     ensure!(
         thread_status == 0 && os_thread_id > 0,
-        "pthread thread ID is unavailable"
+        "pthread thread ID is unavailable: status={thread_status}, pthread={pthread:p}, high={high:#x}, size={stack_size:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}"
     );
-    let os_thread_id = i64::try_from(os_thread_id)?;
-    let (writable_start, writable_end, protection) = region_at(low)?;
+    let os_thread_id = i64::try_from(os_thread_id).context("pthread thread ID overflow")?;
+    ensure!(
+        high > 0 && stack_size >= page_size,
+        "pthread stack range is invalid: low=unknown, high={high:#x}, size={stack_size:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}"
+    );
+    let low = high
+        .checked_sub(stack_size)
+        .with_context(|| format!("pthread stack underflow: high={high:#x}, size={stack_size:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}"))?;
+    // Darwin can place pthread_t inside the top stack page, so high need not be page aligned.
+    ensure!(
+        low % page_size == 0,
+        "pthread stack lower bound is not page aligned: low={low:#x}, high={high:#x}, size={stack_size:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}"
+    );
+    ensure!(
+        low <= stack_pointer && stack_pointer < high,
+        "current stack pointer is outside pthread stack range: low={low:#x}, high={high:#x}, size={stack_size:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}"
+    );
+    let (writable_start, writable_end, protection) = region_at(low).with_context(|| {
+        format!("pthread stack Mach region lookup failed: low={low:#x}, high={high:#x}, size={stack_size:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}")
+    })?;
     ensure!(
         writable_start <= low
             && writable_end >= high
             && protection & (VM_PROT_READ | VM_PROT_WRITE) == VM_PROT_READ | VM_PROT_WRITE,
-        "pthread stack is not one contiguous writable Mach VM region"
+        "pthread stack is not one contiguous writable Mach VM region: low={low:#x}, high={high:#x}, size={stack_size:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}, region_start={writable_start:#x}, region_end={writable_end:#x}, protection={protection:#x}"
     );
     let guard_start = low
         .checked_sub(page_size)
-        .context("pthread guard underflow")?;
-    let (guard_region_start, guard_region_end, guard_protection) = region_at(guard_start)?;
+        .with_context(|| format!("pthread guard underflow: low={low:#x}, high={high:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}"))?;
+    let (guard_region_start, guard_region_end, guard_protection) = region_at(guard_start)
+        .with_context(|| format!("pthread guard Mach region lookup failed: guard_start={guard_start:#x}, low={low:#x}, high={high:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}"))?;
     ensure!(
         guard_region_start <= guard_start
             && guard_region_end >= low
             && guard_protection == VM_PROT_NONE,
-        "pthread guard page is not a protected Mach VM region"
+        "pthread guard page is not a protected Mach VM region: guard_start={guard_start:#x}, low={low:#x}, high={high:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}, region_start={guard_region_start:#x}, region_end={guard_region_end:#x}, protection={guard_protection:#x}"
     );
     Ok(MacStackRange {
         thread_id: thread::current().id(),
