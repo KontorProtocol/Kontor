@@ -1535,6 +1535,7 @@ async fn restore<T>(keeper: &RootKeeper, result: Result<RootOutcome<T>>) -> Resu
 mod tests {
     use super::*;
     use crate::reg_tester::random_x_only_pubkey;
+    use crate::runtime::fuel::ExecutionUsage;
     use crate::runtime::wit::{Signer, kontor::built_in::context::HolderRef};
     use crate::runtime::{ContractAddress, Decimal, native_provenance, token};
     use crate::test_utils::test_runtime;
@@ -1566,6 +1567,8 @@ mod tests {
             (canon lift (core func $code "run"))))
     "#;
 
+    type YieldObservations = Arc<Mutex<Vec<(u32, Val, u64, bool)>>>;
+
     fn rooted_store(runtime: &Runtime, kind: RootKind, fuel: u64) -> Result<InvocationStore> {
         let mut runtime = runtime.clone();
         let (sender, _receiver) = mpsc::channel(1);
@@ -1586,8 +1589,17 @@ mod tests {
         count: u32,
         fuel: u64,
     ) -> Result<(Val, u64, bool)> {
-        let mut store = rooted_store(runtime, kind, fuel)?;
-        let linker = Linker::<Runtime>::new(&runtime.engine);
+        let (observation, _store) =
+            run_pure_loop_in_store(rooted_store(runtime, kind, fuel)?, component, count).await?;
+        Ok(observation)
+    }
+
+    async fn run_pure_loop_in_store(
+        mut store: InvocationStore,
+        component: &Component,
+        count: u32,
+    ) -> Result<((Val, u64, bool), InvocationStore)> {
+        let linker = Linker::<Runtime>::new(&store.data().engine);
         let instance = linker.instantiate_async(&mut store, component).await?;
         let run = instance
             .get_func(&mut store, "run")
@@ -1608,7 +1620,55 @@ mod tests {
                 }
             }
         };
-        Ok((results[0].clone(), store.get_fuel()?, yielded))
+        Ok(((results[0].clone(), store.get_fuel()?, yielded), store))
+    }
+
+    fn nested_yield_guest(
+        mut runtime: Runtime,
+        owner: ChildContext,
+        component: Arc<Component>,
+        depth: u32,
+        observations: YieldObservations,
+    ) -> BoxFuture<'static, GuestCompletion> {
+        Box::pin(async move {
+            runtime.ownership = Some(owner.clone());
+            runtime.storage.ownership = Some(owner.clone());
+            let (observation, store) = run_pure_loop_in_store(
+                runtime.make_store(20_000_000).expect("nested Store"),
+                &component,
+                200_000,
+            )
+            .await
+            .expect("nested pure guest call");
+            observations
+                .lock()
+                .await
+                .push((depth, observation.0, observation.1, observation.2));
+            if depth < 2 {
+                let child_runtime = runtime.clone();
+                let child_component = component.clone();
+                let child_observations = observations.clone();
+                let child = owner
+                    .run_guest(move |next| {
+                        nested_yield_guest(
+                            child_runtime,
+                            next,
+                            child_component,
+                            depth + 1,
+                            child_observations,
+                        )
+                    })
+                    .await
+                    .expect("nested child completed");
+                assert!(matches!(&child.result, Ok(Ok(()))));
+            }
+            GuestCompletion {
+                result: Ok(Ok(())),
+                results: Vec::new(),
+                store,
+                host_panicked: false,
+            }
+        })
     }
 
     async fn one_object_pool(dir: &TempDir) -> Result<Pool<Manager>> {
@@ -1620,6 +1680,48 @@ mod tests {
         )?)
         .max_size(1)
         .build()?)
+    }
+
+    async fn paid_receipt_snapshot(
+        runtime: &mut Runtime,
+        signer: &Signer,
+        address: &ContractAddress,
+    ) -> Result<(
+        String,
+        ExecutionUsage,
+        (u64, String, u64, Option<String>),
+        Option<Decimal>,
+        Option<Decimal>,
+    )> {
+        let before = runtime.start_usage();
+        let value = runtime
+            .execute_api(Some(signer), address, "write-result-payload(1)")
+            .await?;
+        let usage = runtime.finish_usage(before)?;
+        let mut rows = runtime
+            .storage
+            .conn
+            .query(
+                "SELECT contract_id, status, gas, value FROM contract_results ORDER BY id",
+                (),
+            )
+            .await?;
+        let row = rows.next().await?.context("paid receipt missing")?;
+        let receipt = (
+            row.get::<u64>(0)?,
+            row.get::<String>(1)?,
+            row.get::<u64>(2)?,
+            row.get::<Option<String>>(3)?,
+        );
+        ensure!(rows.next().await?.is_none(), "duplicate paid receipt");
+        drop(rows);
+        Ok((
+            value,
+            usage,
+            receipt,
+            token::api::balance(runtime, HolderRef::from(signer)).await?,
+            token::api::balance(runtime, HolderRef::Burner).await?,
+        ))
     }
 
     #[tokio::test]
@@ -1695,6 +1797,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owned_paid_call_matches_direct_value_fuel_receipt_and_settlement() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let signer = Signer::Id(
+            runtime
+                .get_or_create_identity(&random_x_only_pubkey())
+                .await?,
+        );
+        token::api::issue_to(
+            &mut runtime,
+            &Signer::Core(Box::new(Signer::Nobody)),
+            HolderRef::from(&signer),
+            Decimal::from("1000000000000"),
+        )
+        .await??;
+        runtime
+            .publish(
+                &signer,
+                Payment {
+                    signer_id: signer.signer_id().context("test payer missing")?,
+                    gas_limit: runtime.gas_limit_for_non_procs,
+                },
+                "ownership-paid-oracle",
+                include_bytes!("../../../../test-contracts/binaries/error_test.wasm.br"),
+                &native_provenance()?,
+            )
+            .await
+            .map_err(anyhow::Error::from)?;
+        runtime
+            .storage
+            .conn
+            .execute("DELETE FROM contract_results", ())
+            .await?;
+        let address = ContractAddress {
+            name: "ownership-paid-oracle".to_string(),
+            height: 0,
+            tx_index: 0,
+        };
+        let contract_id = runtime
+            .storage
+            .contract_id(&address)
+            .await?
+            .context("paid oracle contract missing")?;
+        let payer_before = token::api::balance(&mut runtime, HolderRef::from(&signer)).await?;
+        let burner_before = token::api::balance(&mut runtime, HolderRef::Burner).await?;
+        runtime.storage.savepoint().await?;
+        let direct = paid_receipt_snapshot(&mut runtime, &signer, &address).await?;
+        let (value, _usage, receipt, payer_after, burner_after) = &direct;
+        assert_eq!(value, "\"é\\n\"");
+        assert_eq!(receipt.0, contract_id);
+        assert_eq!(receipt.1, "Ok");
+        assert!(receipt.2 > 0);
+        assert!(payer_after < &payer_before);
+        assert!(burner_after > &burner_before);
+        runtime.storage.rollback().await?;
+        assert!(runtime.storage.conn.is_autocommit());
+        let owned = OwnedRuntimeSession::new(runtime);
+        let owned_value = owned
+            .run(true, move |runtime| {
+                Box::pin(async move { paid_receipt_snapshot(runtime, &signer, &address).await })
+            })
+            .await?;
+        assert_eq!(owned_value, direct);
+        let checkout = owned.session.checkout().await?;
+        let recovered = checkout.runtime.as_ref().context("owned runtime missing")?;
+        assert!(recovered.storage.conn.is_autocommit());
+        let mut rows = recovered
+            .storage
+            .conn
+            .query("SELECT COUNT(*) FROM contract_results", ())
+            .await?;
+        assert_eq!(
+            rows.next()
+                .await?
+                .context("receipt count missing")?
+                .get::<i64>(0)?,
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn canonical_lease_drains_native_guest_before_releasing_runtime() -> Result<()> {
         let (mut runtime, _dir, _name) = test_runtime().await?;
         let service = OwnerService::new();
@@ -1727,6 +1910,67 @@ mod tests {
             runtime.gas_consumed(fuel, api.1),
             runtime.gas_consumed(fuel, canonical.1)
         );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn nested_api_children_inherit_actual_fuel_yields() -> Result<()> {
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let service = OwnerService::new();
+        let owned = OwnedRuntimeSession::with_service(runtime, service.clone());
+        let mut handle = service
+            .start_stateful(&owned.session, |runtime| {
+                Box::pin(async move {
+                    let component = Arc::new(Component::new(&runtime.engine, PURE_LOOP_COMPONENT)?);
+                    let owner = runtime.ownership.clone().context("root context missing")?;
+                    let (root_observation, root_store) = run_pure_loop_in_store(
+                        runtime.make_store(20_000_000)?,
+                        &component,
+                        200_000,
+                    )
+                    .await?;
+                    let observations = Arc::new(Mutex::new(vec![(
+                        0,
+                        root_observation.0,
+                        root_observation.1,
+                        root_observation.2,
+                    )]));
+                    let child_runtime = runtime.clone();
+                    let child_component = component.clone();
+                    let child_observations = observations.clone();
+                    let child = owner
+                        .run_guest(move |next| {
+                            nested_yield_guest(
+                                child_runtime,
+                                next,
+                                child_component,
+                                1,
+                                child_observations,
+                            )
+                        })
+                        .await?;
+                    ensure!(matches!(&child.result, Ok(Ok(()))), "nested call failed");
+                    drop(child);
+                    drop(root_store);
+                    let values = observations.lock().await.clone();
+                    Ok(RootOutcome {
+                        value: values,
+                        commit: false,
+                    })
+                })
+            })
+            .await?;
+        let observations = handle.result().await?;
+        assert_eq!(observations.len(), 3);
+        let expected_fuel = observations[0].2;
+        for (index, (depth, value, remaining, yielded)) in observations.into_iter().enumerate() {
+            assert_eq!(depth as usize, index);
+            assert!(yielded, "depth {depth} API child did not yield");
+            assert_eq!(value, Val::U32(200_000));
+            assert_eq!(remaining, expected_fuel);
+        }
+        assert!(expected_fuel < 20_000_000);
+        assert_eq!(service.active_roots().await, 0);
         Ok(())
     }
 
