@@ -548,9 +548,16 @@ root and `--output` set to a new index path outside the checkout.
 
 The v2 chain capture and validator now accept every S2 host/profile cell and
 bind the trace parser to its host OS. Actual capture is still required on each
-host. The six-cell suite remains gated by reviewed boundary depths, a frozen
-v2 auxiliary Store count fixture, a measured macOS guard control, production
-memory profiles, and a common-source capture run. Each specialized validator
+host. `capture_resource_suite.py` runs all 16 capture groups for one cell in
+registry order after checking the clean source commit, exact control, reviewed
+boundary discovery, and frozen v2 auxiliary Store counts. It writes each group
+under the archive layout used by the closure index. Run it separately on every
+required host and profile with one common source commit. Its output is a
+capture inventory, not a qualification decision.
+
+The six-cell suite remains gated by reviewed boundary depths, a measured
+macOS guard control, production memory profiles, and a common-source capture
+run. Each specialized validator
 currently checks local checkout and host identity, so an independent verifier
 cannot yet validate downloaded cross-host archives from one machine. A final
 qualification decision also needs semantic comparison of the six validated

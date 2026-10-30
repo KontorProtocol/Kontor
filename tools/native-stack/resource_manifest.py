@@ -111,6 +111,8 @@ INPUTS = {
     "suite_registry_tests": "tools/native-stack/test_resource_suite_registry.py",
     "suite_closure_builder": "tools/native-stack/resource_suite_closure.py",
     "suite_closure_tests": "tools/native-stack/test_resource_suite_closure.py",
+    "suite_capture_runner": "tools/native-stack/capture_resource_suite.py",
+    "suite_capture_tests": "tools/native-stack/test_capture_resource_suite.py",
     "finite_stack_capture": "tools/native-stack/capture_resource_finite.py",
     "finite_stack_validator": "tools/native-stack/resource_finite_evidence.py",
     "finite_stack_tests": "tools/native-stack/test_resource_finite_evidence.py",

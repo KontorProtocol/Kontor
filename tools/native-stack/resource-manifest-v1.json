@@ -410,7 +410,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "b6373e50ed616a6b2269ea3d110fb55effa5cd1d90c216fe600c176a6ed9acd4"
+      "sha256": "5f95a454e1b66ef6802245d9d2a6a31636c6226833d33575f3dffb134d84583e"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -511,6 +511,14 @@
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
       "sha256": "32378420a60b94c4fea214933e28f56a1d2fd91194a47577f8a3ab4c9fe3ab1f"
+    },
+    "suite_capture_runner": {
+      "path": "tools/native-stack/capture_resource_suite.py",
+      "sha256": "3bd48dfa0d5870fe713601f241edf8cf2cf744c6bd9f75e221f7af73adcd0261"
+    },
+    "suite_capture_tests": {
+      "path": "tools/native-stack/test_capture_resource_suite.py",
+      "sha256": "229f34914bd5f9e55f51250c5897ff8384067c8893fe8bbcc9245af24ec35ab4"
     },
     "suite_closure_builder": {
       "path": "tools/native-stack/resource_suite_closure.py",
