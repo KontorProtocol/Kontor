@@ -224,3 +224,33 @@ Run the comparator's negative controls with `python3 -m unittest discover -s too
 The synchronous probe's compressed SHA-256 is `e396317b4eb14c9a29d47acbe8a9f7b0e29770d47e7df53e4bed12d5c5bfce50`. Its exact encoder inventory is `encoder-inventory/inventory-s2-stack-probe.tsv`, with three embedded modules and zero core or component starts.
 
 S2 replaces S1's default Wasmtime feature selection with the explicit production features in `core/Cargo.toml`: `anyhow`, `async`, `backtrace`, `component-model`, `component-model-async`, `cranelift`, `gc-copying`, `gc-drc`, `gc-null`, `pooling-allocator`, `pulley`, `runtime`, `std`, `threads`, `wat`, `wave`, and `wit-parser`. Cargo additionally resolves `gc`, `once_cell`, and `wasmtime-jit-icache-coherence` through these features. `call-hook` appears only in the indexer's development dependency graph. The `threads` compile feature provides `wasm_threads(false)` for the nine-setting capability check; the runtime disables guest threads. Each cell retains Cargo's build JSON and both raw resolved feature lists. The comparator requires the approved production closure, its test-only `call-hook` addition, and absence of `cache`, `profiling`, and `debug-builtins`. This feature change and the new synchronous binary require fresh target and profile qualification, so S1's earlier measurements cannot be reused. `KONTOR_STACK_TIMING` lines in raw probe logs describe setup, publication, execution, and postcall time; they are diagnostic and excluded from deterministic cross-cell comparisons.
+# Local workload resource profiles
+
+`run_workload_profile.py` runs one ignored Rust workload test in a transient
+user systemd service on Linux. `conservative` enforces two CPUs and 12 GiB;
+`burst` enforces eight CPUs and 16 GiB. Both disable swap. The worker verifies
+the actual cgroup limits and inherited limits before launching the binary,
+restricts CPU affinity, and records whole-service CPU usage, memory peak,
+memory events, binary/log hashes and terminal status. The whole service,
+including test children, is stopped on timeout. Its measurements include
+fixture setup and validation, so use the workload's event records for service
+latency rather than treating total process duration as block application time.
+
+Prepare an environment JSON containing the exact `KONTOR_WORKLOAD_*` settings
+for the saved input and consumer identity. Then run, for example:
+
+```sh
+python3 -B tools/native-stack/run_workload_profile.py \
+  --profile conservative --binary /absolute/path/to/indexer-test-binary \
+  --test reactor::workload_tests::smoke::populated::timed::run::workload_timed_mixed_event_replay \
+  --environment /absolute/path/to/workload-environment.json \
+  --output /absolute/path/to/new-measurement-directory --timeout 1800
+```
+
+The output directory must be new. Inspect both `supervisor.json` and
+`measurement.json`: missing or nonterminal measurement records, failed tests,
+OOM events and nonzero supervisor exits are failures. The wrapper rejects
+zero selected tests and ignored tests. A successful measurement establishes
+only the recorded local resource constraints. It does not establish production
+hardware equivalence, freeze the workload envelope, compare S1 against S2, or
+satisfy the phase's performance acceptance criteria by itself.
