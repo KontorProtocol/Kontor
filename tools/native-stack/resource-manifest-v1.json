@@ -254,7 +254,7 @@
     },
     "macos_worker_capacity_guard": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
-      "sha256": "6e900512430c93ee4715931d28df723ea09debacc5df29db95304d0b9c5ad3ba"
+      "sha256": "398155e936641155aaec96b4fbc81ac942a68f102c9917e75a9d2b7221c78112"
     },
     "native_build_metadata": {
       "path": "native-contracts/binaries/build.json",
@@ -442,7 +442,7 @@
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "258df4d56e54f839e80ff92c6a2e057c2833e4a454045b091e1958c1e5bc1c4c"
+      "sha256": "489ff02e3143adc103601854927f9b534a1373f41329a50a77ed143fa08863e8"
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
