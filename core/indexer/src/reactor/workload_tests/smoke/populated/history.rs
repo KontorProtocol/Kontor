@@ -15,7 +15,7 @@ pub(super) fn prune_height() -> u64 {
 }
 
 pub(super) fn prune_height_at(height: u64) -> u64 {
-    height.saturating_sub(PRUNE_RETAIN.max(FINALITY_WINDOW))
+    height.saturating_sub(PRUNE_RETAIN.max(FINALITY_WINDOW + 1))
 }
 
 pub(super) struct HistoryPopulation {
@@ -232,7 +232,9 @@ fn workload_history_retains_partial_prefix_and_unfinalized_versions() {
     assert_eq!(partial.retained(91, prune_height()), 5);
     assert_eq!(partial.retained(ANCHOR_HEIGHT, prune_height()), 10);
     let across_cutoff = population(85);
-    assert_eq!(across_cutoff.retained(95, prune_height()), 0);
+    assert_eq!(prune_height(), 95);
+    assert_eq!(across_cutoff.retained(94, prune_height()), 0);
+    assert_eq!(across_cutoff.retained(95, prune_height()), 10);
     assert_eq!(across_cutoff.retained(96, prune_height()), 10);
     assert_eq!(across_cutoff.retained(97, prune_height()), 5);
     assert_eq!(across_cutoff.retained(ANCHOR_HEIGHT, prune_height()), 10);
@@ -245,6 +247,6 @@ fn workload_history_retains_partial_prefix_and_unfinalized_versions() {
         (89..101)
             .map(|height| full.retained(height, prune_height()))
             .sum::<usize>(),
-        50
+        60
     );
 }

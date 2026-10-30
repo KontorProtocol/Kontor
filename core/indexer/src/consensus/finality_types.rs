@@ -4,6 +4,10 @@ use super::{Height, Value};
 
 pub const FINALITY_WINDOW: u64 = 6;
 
+// At the deadline, invalidating the anchor restores its predecessor, one block
+// farther back than the confirmation window itself.
+pub const FINALITY_ROLLBACK_DEPTH: u64 = FINALITY_WINDOW + 1;
+
 /// Bitcoin height by which a batch anchored at `anchor_height` must have its
 /// transactions confirmed, or the batch is void and its anchor rolls back.
 pub const fn deadline_for(anchor_height: u64) -> u64 {
