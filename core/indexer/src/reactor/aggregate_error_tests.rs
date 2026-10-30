@@ -90,7 +90,7 @@ pub(super) async fn reactor(
     ))
 }
 
-async fn snapshot(conn: &Connection) -> Result<Vec<Vec<Vec<SqlValue>>>> {
+pub(super) async fn snapshot(conn: &Connection) -> Result<Vec<Vec<Vec<SqlValue>>>> {
     let mut tables = Vec::new();
     for table in [
         "blocks",

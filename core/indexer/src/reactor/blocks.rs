@@ -1,3 +1,4 @@
+use std::mem;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
@@ -248,20 +249,31 @@ impl<E: Executor> Reactor<E> {
     /// Runs the simulation with its out-of-transaction state restored on EVERY
     /// exit, not just the successful one.
     ///
-    /// The savepoint covers the database; these two are outside it. The inner
-    /// function is full of `?`, so restoring at the end of it would silently skip
-    /// on error — which is how the height restore was written, and it survives only
-    /// because the caller kills the node on a simulate error. That makes a `bail!`
-    /// load-bearing for correctness, which it should not be.
+    /// The database savepoint does not cover contract-facing metadata or the
+    /// shared operation counters. Isolate the counters so runtime clones cannot
+    /// mutate the originals, and restore context even on a returned error.
+    /// Outer errors remain fatal; this does not recover their database savepoint
+    /// or cover cancellation while the inner future is pending.
     pub(super) async fn simulate(
         &mut self,
         tx: indexer_types::Transaction,
     ) -> Result<Vec<OpWithResult>> {
         let restore_height = self.runtime.storage.height;
+        let restore_context = self.runtime.storage.tx_context.clone();
+        let restore_output = self.runtime.previous_output;
+        let restore_data = self.runtime.op_return_data.clone();
+        let restore_simulating = self.runtime.simulating;
+        let restore_ids = mem::take(&mut self.runtime.id_generation_counter);
+        let restore_results = mem::take(&mut self.runtime.result_id_counter);
         self.runtime.simulating = true;
         let result = self.simulate_inner(tx).await;
-        self.runtime.simulating = false;
+        self.runtime.simulating = restore_simulating;
         self.runtime.storage.height = restore_height;
+        self.runtime.storage.tx_context = restore_context;
+        self.runtime.previous_output = restore_output;
+        self.runtime.op_return_data = restore_data;
+        self.runtime.id_generation_counter = restore_ids;
+        self.runtime.result_id_counter = restore_results;
         result
     }
 

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, ensure};
 use bitcoin::consensus::{deserialize, serialize};
-use bitcoin::{Block as BitcoinBlock, BlockHash, Transaction, Txid};
+use bitcoin::{Block as BitcoinBlock, BlockHash, OutPoint, Transaction, Txid};
 use indexer_types::{OpWithResult, ResultRow};
 
 use super::super::super::{apply, database_projection, receipts};
@@ -31,6 +31,7 @@ use crate::database::queries::{
 use crate::reactor::Reactor;
 use crate::reactor::batches::BatchOutcome;
 use crate::reactor::executor::RuntimeExecutor;
+use crate::runtime::TransactionContext;
 
 pub(super) struct ApiInput {
     pub(super) commit: Transaction,
@@ -176,6 +177,10 @@ pub(super) struct TimedWork<'a> {
     last_consensus: u64,
     before: Option<Checkpoint>,
     storage_height: u64,
+    transaction_context: Option<TransactionContext>,
+    previous_output: Option<OutPoint>,
+    op_return_data: Option<Arc<[u8]>>,
+    operation_counters: (u64, u64),
     tip: (u64, Option<BlockHash>),
     executed: bool,
     counter: Arc<AtomicU64>,
@@ -217,6 +222,10 @@ impl<'a> TimedWork<'a> {
             last_consensus,
             before: None,
             storage_height: height,
+            transaction_context: None,
+            previous_output: None,
+            op_return_data: None,
+            operation_counters: (0, 0),
             tip,
             executed: false,
             counter,
@@ -390,6 +399,13 @@ impl Work for TimedWork<'_> {
             }
         }
         self.storage_height = self.reactor.runtime.storage.height;
+        self.transaction_context = self.reactor.runtime.storage.tx_context.clone();
+        self.previous_output = self.reactor.runtime.previous_output;
+        self.op_return_data = self.reactor.runtime.op_return_data.clone();
+        self.operation_counters = (
+            self.reactor.runtime.id_generation_counter.get().await,
+            self.reactor.runtime.result_id_counter.get().await,
+        );
         self.tip = (self.reactor.last_height, self.reactor.last_hash);
         Checkpoint::capture(
             self.directory,
@@ -610,6 +626,13 @@ impl Work for TimedWork<'_> {
                     (self.reactor.last_height, self.reactor.last_hash) == self.tip
                         && !self.reactor.runtime.simulating
                         && self.reactor.runtime.storage.height == self.storage_height
+                        && self.reactor.runtime.storage.tx_context == self.transaction_context
+                        && self.reactor.runtime.previous_output == self.previous_output
+                        && self.reactor.runtime.op_return_data == self.op_return_data
+                        && (
+                            self.reactor.runtime.id_generation_counter.get().await,
+                            self.reactor.runtime.result_id_counter.get().await,
+                        ) == self.operation_counters
                         && self.reactor.runtime.stack.is_empty().await
                         && self
                             .reactor

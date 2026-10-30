@@ -17,12 +17,14 @@ pub mod mock_bitcoin;
 #[cfg(test)]
 mod reactor_cluster_tests;
 #[cfg(test)]
+mod simulation_context_tests;
+#[cfg(test)]
 mod startup_tests;
 #[cfg(test)]
 mod storage_penalty_tests;
+pub mod types;
 #[cfg(test)]
 mod workload_tests;
-pub mod types;
 
 use std::collections::VecDeque;
 use std::time::Instant;
