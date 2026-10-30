@@ -39,6 +39,7 @@ mod host_system;
 mod invocation;
 mod lowering;
 pub mod ownership;
+mod selected;
 
 use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
 use bitcoin::XOnlyPublicKey;
@@ -285,6 +286,7 @@ type StoreTableOwners = Arc<StdMutex<Vec<Weak<Mutex<ResourceTable>>>>>;
 pub struct Runtime {
     pub(crate) engine: Engine,
     executor_version: ExecutorVersion,
+    selected_context: Option<Arc<selected::SelectedContext>>,
     pub(crate) linkers: Arc<Linkers>,
     pub(crate) table: Arc<Mutex<ResourceTable>>,
     pub(crate) component_cache: ComponentCache,
@@ -455,6 +457,7 @@ impl Runtime {
         Ok(Self {
             engine,
             executor_version: ExecutorVersion::LegacyP1,
+            selected_context: None,
             linkers,
             table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
@@ -549,14 +552,16 @@ impl Runtime {
     }
 
     pub fn fuel_limit_for_non_procs(&self) -> u64 {
-        self.gas_limit_for_non_procs * self.gas_to_fuel_multiplier
+        let gas = self.selected_gas_policy();
+        gas.non_proc_allowance * gas.fuel_multiplier
     }
 
     /// Fuel budget for a read-only `/view` call.
     pub fn fuel_limit_for_view(&self) -> Result<u64, ExecutionError> {
-        self.view_gas_limit
-            .min(MAX_UNTRUSTED_GAS_LIMIT)
-            .checked_mul(self.gas_to_fuel_multiplier)
+        let gas = self.selected_gas_policy();
+        gas.view_allowance
+            .min(gas.untrusted_allowance)
+            .checked_mul(gas.fuel_multiplier)
             .ok_or_else(|| {
                 ExecutionError::Deterministic(anyhow!("View gas limit exceeds the fuel range"))
             })
@@ -566,12 +571,12 @@ impl Runtime {
     pub fn core_payment(&self) -> Payment {
         Payment {
             signer_id: CORE_SIGNER_ID,
-            gas_limit: self.gas_limit_for_non_procs,
+            gas_limit: self.selected_gas_policy().non_proc_allowance,
         }
     }
 
     pub fn gas_consumed(&self, starting_fuel: u64, ending_fuel: u64) -> u64 {
-        (starting_fuel - ending_fuel).div_ceil(self.gas_to_fuel_multiplier)
+        (starting_fuel - ending_fuel).div_ceil(self.selected_gas_policy().fuel_multiplier)
     }
 
     pub(crate) async fn publish_native_contracts(
@@ -1181,7 +1186,7 @@ impl Runtime {
     ) -> Result<String, ExecutionError> {
         let payment = signer.and_then(|s| s.signer_id()).map(|id| Payment {
             signer_id: id,
-            gas_limit: self.gas_limit_for_non_procs,
+            gas_limit: self.selected_gas_policy().non_proc_allowance,
         });
         self.execute(signer, payment, contract_address, expr).await
     }
@@ -1197,7 +1202,12 @@ impl Runtime {
             .await
             .map_err(ExecutionError::NonDeterministic)?;
         match selection.version() {
-            ExecutorVersion::LegacyP1 => self.execute(None, None, contract_address, expr).await,
+            ExecutorVersion::LegacyP1 => {
+                self.bind_selection(selection)
+                    .map_err(ExecutionError::NonDeterministic)?
+                    .execute(None, None, contract_address, expr)
+                    .await
+            }
         }
     }
 
@@ -1379,6 +1389,7 @@ impl Runtime {
         fuel: u64,
         #[cfg(test)] role: ResourceProbeRole,
     ) -> Result<InvocationStore> {
+        self.verify_selected_runtime()?;
         let depth = self
             .invocation_depth
             .checked_add(1)

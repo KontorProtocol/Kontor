@@ -289,13 +289,13 @@ impl Runtime {
         // the token value is derived (× gas→token) only at the floor read.
         let deposited_gas = if depositor.is_some() {
             let deposit_gas = self
-                .pricing
+                .selected_pricing()
                 .storage_deposit_gas((path.len() + bs.len()) as u64)
                 .ok_or_else(|| {
                     ExecutionError::Deterministic(anyhow!("storage reservation overflow"))
                 })?;
             let deposit_fuel = deposit_gas
-                .checked_mul(self.gas_to_fuel_multiplier)
+                .checked_mul(self.selected_gas_policy().fuel_multiplier)
                 .ok_or_else(|| {
                     ExecutionError::Deterministic(anyhow!("storage reservation overflow"))
                 })?;

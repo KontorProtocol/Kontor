@@ -12,6 +12,7 @@ pub(crate) enum ExecutorVersion {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApplicationPosition {
     View,
+    Committee,
     Preparation {
         anchor_height: u64,
         anchor_hash: Option<BlockHash>,
@@ -60,6 +61,10 @@ impl ExecutionSelection {
         self.version
     }
 
+    pub(crate) fn is_public_view(&self) -> bool {
+        matches!(self.position, ApplicationPosition::View)
+    }
+
     pub(crate) fn ensure_runtime(&self, network: Network, version: ExecutorVersion) -> Result<()> {
         ensure!(
             self.network == network,
@@ -86,6 +91,24 @@ impl ExecutionSelection {
         ensure!(
             !conn.is_autocommit(),
             "public view selection requires a pinned transaction"
+        );
+        self.verify_base(conn).await
+    }
+
+    pub(crate) async fn verify_committee(
+        &self,
+        conn: &Connection,
+        network: Network,
+        version: ExecutorVersion,
+    ) -> Result<()> {
+        self.ensure_runtime(network, version)?;
+        ensure!(
+            matches!(self.position, ApplicationPosition::Committee),
+            "executor selection is not committee derivation"
+        );
+        ensure!(
+            !conn.is_autocommit(),
+            "committee selection requires a pinned transaction"
         );
         self.verify_base(conn).await
     }
@@ -128,6 +151,9 @@ impl ExecutionSelection {
             }
             ApplicationPosition::View => {
                 bail!("view selection cannot execute canonical transactions")
+            }
+            ApplicationPosition::Committee => {
+                bail!("committee selection cannot execute canonical transactions")
             }
         };
         ensure!(
@@ -326,6 +352,15 @@ mod tests {
         ensure!(selected.ensure_execution(Network::Regtest, 2).is_err());
         ensure!(selected.ensure_block(1, new_mock_block_hash(2)).is_err());
         let view = select_legacy_p1(&conn, Network::Regtest, ApplicationPosition::View).await?;
+        let committee =
+            select_legacy_p1(&conn, Network::Regtest, ApplicationPosition::Committee).await?;
+        ensure!(committee.ensure_execution(Network::Regtest, 1).is_err());
+        ensure!(
+            committee
+                .verify_committee(&conn, Network::Regtest, ExecutorVersion::LegacyP1)
+                .await
+                .is_err()
+        );
         ensure!(view.ensure_execution(Network::Regtest, 1).is_err());
         ensure!(
             view.verify_view(&conn, Network::Regtest, ExecutorVersion::LegacyP1)
@@ -333,6 +368,20 @@ mod tests {
                 .is_err()
         );
         conn.execute("BEGIN", ()).await?;
+        committee
+            .verify_committee(&conn, Network::Regtest, ExecutorVersion::LegacyP1)
+            .await?;
+        ensure!(
+            committee
+                .verify_view(&conn, Network::Regtest, ExecutorVersion::LegacyP1)
+                .await
+                .is_err()
+        );
+        ensure!(
+            view.verify_committee(&conn, Network::Regtest, ExecutorVersion::LegacyP1)
+                .await
+                .is_err()
+        );
         view.verify_view(&conn, Network::Regtest, ExecutorVersion::LegacyP1)
             .await?;
         ensure!(

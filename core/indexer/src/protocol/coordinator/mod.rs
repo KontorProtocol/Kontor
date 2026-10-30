@@ -1,3 +1,4 @@
+pub(crate) mod committee;
 pub(crate) mod decision;
 pub(crate) mod selection;
 pub(crate) mod v1;

@@ -18,10 +18,11 @@ use wasmtime::{
 use indexer_types::{OpStatus, Payment};
 
 use crate::database::native_contracts::{TOKEN_CONTRACT_ID, is_native_contract_id};
+#[cfg(test)]
 use crate::protocol::v1::gas::SYSTEM_FUEL_CEILING;
 
 use super::{
-    ContractAddress, MAX_UNTRUSTED_GAS_LIMIT, Runtime,
+    ContractAddress, Runtime,
     fuel::{Fuel, UsageKind, record_fuel},
     invocation::{
         InvocationCapacityExhausted, InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS,
@@ -87,7 +88,7 @@ impl Runtime {
             None,
             None,
             expr,
-            SYSTEM_FUEL_CEILING,
+            self.selected_gas_policy().system_fuel,
             false,
         )
         .await?
@@ -131,6 +132,8 @@ impl Runtime {
         expr: &str,
         fuel_override: Option<u64>,
     ) -> Result<CallOutcome, ExecutionError> {
+        self.verify_selected_runtime()
+            .map_err(ExecutionError::NonDeterministic)?;
         let fuel_limit = self.call_fuel_limit(signer, payment, fuel_override)?;
         if fuel_override.is_none()
             && signer.is_some_and(|signer| !signer.is_core())
@@ -170,6 +173,7 @@ impl Runtime {
         payment: Option<&Payment>,
         fuel_override: Option<u64>,
     ) -> Result<u64, ExecutionError> {
+        let gas = self.selected_gas_policy();
         // The fuel budget is decided ONCE here, from the signer, so it can't drift
         // across the per-context arms below.
         Ok(match fuel_override {
@@ -182,16 +186,17 @@ impl Runtime {
                 // for UNTRUSTED user ops; a finite cap on must-complete system work
                 // would eventually false-halt a healthy network on legitimate growth.
                 // See `SYSTEM_FUEL_CEILING`.
-                (Some(s), _) if s.is_core() => SYSTEM_FUEL_CEILING,
+                (Some(s), _) if s.is_core() => gas.system_fuel,
                 // User op: metered by the payer's committed gas limit.
                 (_, Some(p)) => {
-                    if p.gas_limit > MAX_UNTRUSTED_GAS_LIMIT {
+                    if p.gas_limit > gas.untrusted_allowance {
+                        let maximum = gas.untrusted_allowance;
                         return Err(ExecutionError::Deterministic(anyhow!(
-                            "Gas limit exceeds the maximum of {MAX_UNTRUSTED_GAS_LIMIT}"
+                            "Gas limit exceeds the maximum of {maximum}"
                         )));
                     }
                     p.gas_limit
-                        .checked_mul(self.gas_to_fuel_multiplier)
+                        .checked_mul(gas.fuel_multiplier)
                         .ok_or_else(|| {
                             ExecutionError::Deterministic(anyhow!(
                                 "Gas limit exceeds the fuel range"

@@ -1025,3 +1025,63 @@ Commands, successful exit statuses, log hashes, changed-source hashes and the
 lead's coverage/limitations record are in `.build-cache/snapshot-cache-final/`;
 the initial focused run is `.build-cache/snapshot-cache-focused.log`. These
 checks establish this preparatory behavior, not final protocol-upgrade acceptance.
+
+### Scoped P1 runtime context and committee derivation
+
+Selected transaction execution, lifecycle and public views now bind a private,
+immutable semantic context for their execution scope. Guest-store Runtime clones
+inherit the same context. Nested code cannot replace it with another selection;
+runtime entry and store creation reject a network or executor mismatch. Dropping
+the scope restores the caller's prior context, including when an async caller is
+cancelled. This guard only restores semantic context. It neither creates storage
+authority nor replaces owner-service admission, retained tasks, draining, rollback
+or quarantine.
+
+Whole-call allowances, gas-to-fuel conversion, trusted system fuel and pricing
+resolve from P1's retained policy. Holds, reservation conversion, settlement and
+gas reporting use that same policy. A local view allowance is captured only for a
+public-view selection; canonical, simulation, lifecycle and committee scopes use
+the selected rules' allowance. Nested calls retain their parent's remaining fuel
+without applying a fresh root allowance. No numerical charge or cap changed, and
+no block budget was introduced. Unselected native/test entry still exists during
+this in-tree preparation and retains its existing fixture configuration; K2b must
+close unselected production entry through the actual bundle adapter.
+
+Committee construction and refresh now enter through selected derivation. The
+adapter opens a storage savepoint before selection and rolls it back after the
+staking read; nested savepoints preserve any enclosing application transaction.
+Selection and derivation therefore use one snapshot, including startup before
+the engine starts. Purpose checks keep committee selection separate from public
+views and canonical writes. The existing staking conversion, fractional voting
+power rules, validator ordering and error behavior remain in P1. This is not yet
+a certified historical committee identity or an engine-era handoff.
+
+These bindings complete more of the agreed preparatory call-site wiring. They do
+not provide independently linked executor artifacts, durable protocol/migration
+identity, native-artifact retention, P2 activation or the final resource policy.
+Final-source prerequisite reconciliation, production graph extraction and the
+remaining upgrade phases are still required.
+
+Validation passed 14 distinct tests across the initial focused run and affected
+follow-up: selection purpose/snapshot checks, scope restoration and nested-store
+policy inheritance, real nested success/error/refund/cleanup, root fuel bounds,
+trusted view behavior, HTTP view cleanup/reuse, voting-power rounding/rollback,
+and the real multi-node ordering-reward rollback/restart/late-join test. The P1
+comparison again matched all 11 baseline logical-state stages, with report
+SHA-256 `8da53b418e6f640689c553763f4441a557794f2cd86a6f7cc3bf4e24dad5eab8`.
+Indexer/testlib all-target compilation, formatting and diff checks passed.
+Evidence and lead review are in `.build-cache/selected-context-final/` and
+`.build-cache/selected-context-followup/`. The first committee filter omitted its
+parent test module and ran zero tests; it is excluded from acceptance evidence.
+Both actual committee tests passed after correcting the filter. The follow-up
+also verifies that non-public selections ignore mutable local view settings.
+
+Separately, targeted native-stack correction run `41137129283` at `52a0cf89`
+passed macOS dev and release. The lead independently validated each archived
+binary and its 60-process/180-observation chain evidence. These archives do not
+qualify the later context/cache changes above. The retained reviewed discovery
+input is run `41110674101`, artifact `13003214982`, capture SHA-256
+`4cf03721ac9cd81a8f8e75171050532ed5949e80f3cfb50c712653cc6d806702`.
+Prepare one clean combined candidate, regenerate source manifests, and execute
+the existing final six-cell workflow. Existing production-memory, operational
+performance and consolidated phase-review gates remain separate and open.

@@ -21,7 +21,7 @@ impl Runtime {
             .map_err(ExecutionError::NonDeterministic)?;
         let result = async {
             let payer = Signer::Core(Box::new(Signer::Id(Identity::new(payment.signer_id))));
-            let hold = self.pricing.gas_hold(payment.gas_limit)?;
+            let hold = self.selected_pricing().gas_hold(payment.gas_limit)?;
             let reserved = Box::pin(token::api::hold(self, &payer, hold))
                 .await
                 .map_err(ExecutionError::NonDeterministic)?;
@@ -45,7 +45,7 @@ impl Runtime {
                 .max(1);
             let reserved_deposit = self.deposit.take().await;
             let burn = self
-                .pricing
+                .selected_pricing()
                 .execution_fee(gas.saturating_sub(reserved_deposit))?;
             Box::pin(token::api::release(self, &payer, burn))
                 .await

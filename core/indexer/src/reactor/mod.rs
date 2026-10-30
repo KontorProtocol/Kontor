@@ -58,10 +58,10 @@ use crate::bitcoin_client::Client;
 use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
+use crate::protocol::coordinator::committee::build_validator_set;
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
 };
-use crate::protocol::v1::committee::build_validator_set;
 #[cfg(test)]
 use crate::protocol::v1::committee::stake_to_voting_power;
 use crate::runtime::ownership::OwnerService;
