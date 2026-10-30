@@ -637,6 +637,27 @@ class BoundaryEvidenceTests(unittest.TestCase):
         }
         observed = [{"observation": {"outcome": "ok"}}]
         self.assertEqual(validate_trace(trace, runtime, observed)["compiler_entry"], 1)
+        blocking_compiler = copy.deepcopy(trace)
+        for item in blocking_compiler["events"]:
+            if item["name"].startswith("compiler_"):
+                item.update(event(item["name"], 3, "blocking_pool"))
+        self.assertEqual(
+            validate_trace(blocking_compiler, runtime, observed)["compiler_entry"], 1)
+        for number in (4, 5):
+            unmeasured_compiler = copy.deepcopy(blocking_compiler)
+            for item in unmeasured_compiler["events"]:
+                if item["name"].startswith("compiler_"):
+                    item.update(event(item["name"], number, "blocking_pool"))
+            with self.assertRaises(ValueError):
+                validate_trace(unmeasured_compiler, runtime, observed)
+        mismatched_tid = copy.deepcopy(blocking_compiler)
+        mismatched_tid["events"][2]["os_thread_id"] = 99
+        with self.assertRaises(ValueError):
+            validate_trace(mismatched_tid, runtime, observed)
+        blocking_operation = copy.deepcopy(blocking_compiler)
+        blocking_operation["events"][11] = event("operation_entry", 3, "blocking_pool")
+        with self.assertRaises(ValueError):
+            validate_trace(blocking_operation, runtime, observed)
         wrong_worker = copy.deepcopy(trace)
         wrong_worker["events"][11]["thread_id"] = "ThreadId(3)"
         wrong_worker["events"][11]["os_thread_id"] = 3

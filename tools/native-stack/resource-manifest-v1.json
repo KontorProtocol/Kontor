@@ -158,7 +158,7 @@
     },
     "finite_stack_boundary_validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "4bf448dd83eb4b79ed2464786e10728a34175cde1016bd8b16af1f55d68fc783"
+      "sha256": "adcbd999065858e561305c04fce7e689cf7d884e7ea0742f398beffca75e87af"
     },
     "finite_stack_capture": {
       "path": "tools/native-stack/capture_resource_finite.py",

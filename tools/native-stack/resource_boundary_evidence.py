@@ -272,8 +272,11 @@ def validate_trace(trace, runtime, attempts, os_name="linux",
         else:
             require(event["category"] == "blocking_pool"
                     and blocking.get(thread) == tid
-                    and event["name"].startswith("blocking_decode_"),
-                    "boundary blocking event lacks measured stack")
+                    and event["name"] in {
+                        "blocking_decode_entry", "blocking_decode_exit",
+                        "compiler_entry", "compiler_exit",
+                    },
+                    "boundary blocking event has an unmeasured stack or invalid phase")
     names = [event["name"] for event in events]
     starts = [index for index, name in enumerate(names)
               if name == attempt_markers[0]]
