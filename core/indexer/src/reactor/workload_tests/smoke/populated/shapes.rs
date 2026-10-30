@@ -301,6 +301,21 @@ impl ShapeSigners {
     pub(super) async fn check(&self, runtime: &mut Runtime, mixed: &MixedWorkload) -> Result<()> {
         let secondary = self.identities[1].signer_id();
         let (transferred, staked) = mixed.signer_effects(self.layout(), secondary)?;
+        self.check_effects(runtime, transferred, staked).await
+    }
+
+    pub(super) async fn check_counter(&self, runtime: &mut Runtime) -> Result<()> {
+        self.check_effects(runtime, Decimal::default(), Decimal::default())
+            .await
+    }
+
+    async fn check_effects(
+        &self,
+        runtime: &mut Runtime,
+        transferred: Decimal,
+        staked: Decimal,
+    ) -> Result<()> {
+        let secondary = self.identities[1].signer_id();
         ensure!(
             token::balance(runtime, HolderRef::SignerId(secondary)).await?
                 == Some(sub_decimal(

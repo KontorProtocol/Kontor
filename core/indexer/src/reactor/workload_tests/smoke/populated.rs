@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::key::Secp256k1;
 use bitcoin::{Address, BlockHash, Network, OutPoint};
-use indexer_types::{ContractAddress, OpStatus};
+use indexer_types::{ContractAddress, Inst, OpStatus};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
@@ -27,6 +27,7 @@ use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{ComponentCache, Decimal, Runtime, Storage, TransactionContext};
 
+mod aggregate_boundary;
 mod batch;
 mod challenges;
 mod checkpoint;
@@ -51,6 +52,7 @@ mod simulation_requests;
 mod timed;
 mod views;
 
+use aggregate_boundary::CounterBoundary;
 use batch::BatchProof;
 use batch::pending::Pending;
 use checkpoint::Checkpoint;
@@ -88,7 +90,6 @@ impl Delivery {
             | Self::MixedAggregate
             | Self::MixedPagination
             | Self::MixedFiles => Some(5),
-            Self::AggregateBoundary => Some(500),
             Self::MixedTransactions(count) => Some(count / 10),
             Self::Configured(config) => Some(config.transactions / 10),
             _ => None,
@@ -627,6 +628,11 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
     if let Some(mixed) = &mixed {
         eprintln!("workload_operation_mix={}", mixed.operation_counts());
     }
+    let counter_boundary = if delivery == Delivery::AggregateBoundary {
+        Some(CounterBoundary::prepare(&mut history.runtime).await?)
+    } else {
+        None
+    };
     let projection_before = database_projection(&history.db_conn()).await?;
     let before = oracle::Before::capture(
         &mut history.runtime,
@@ -706,16 +712,20 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
         sequence_inputs::generate(&client, &key, &address, fundings, &instructions).await?
     } else {
         let mixed = &workloads[0];
-        let (raw, reveals) = if let Some(shape_signers) = &shape_signers {
-            shape_signers
-                .block(
-                    &client,
-                    fundings,
-                    mixed
+        let shape_instructions = || -> Result<Vec<Inst>> {
+            counter_boundary.as_ref().map_or_else(
+                || {
+                    Ok(mixed
                         .as_ref()
                         .context("missing mixed fixture")?
-                        .instructions(),
-                )
+                        .instructions())
+                },
+                |boundary| Ok(boundary.instructions()),
+            )
+        };
+        let (raw, reveals) = if let Some(shape_signers) = &shape_signers {
+            shape_signers
+                .block(&client, fundings, shape_instructions()?)
                 .await?
         } else if delivery.transaction_count().is_some() {
             many::block(
@@ -763,13 +773,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                 ensure!(decoded.inputs.len() == 1 && decoded.inputs[0].insts.ops.len() == 2);
             }
             if let Some(shape_signers) = &shape_signers {
-                shape_signers.check_inputs(
-                    &decoded.inputs,
-                    mixed
-                        .as_ref()
-                        .context("missing mixed fixture")?
-                        .instructions(),
-                )?;
+                shape_signers.check_inputs(&decoded.inputs, shape_instructions()?)?;
             }
         }
         vec![BlockInput {
@@ -1017,7 +1021,18 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                 for txid in &txids {
                     paid.extend(root_receipts(&rows, txid)?);
                 }
-                let effects = if let Some(mixed) = &mixed {
+                let effects = if let Some(boundary) = &counter_boundary {
+                    ensure!(all_paid.len() == paid.len());
+                    boundary
+                        .check(&mut trial.runtime, &paid, layout, execution_height)
+                        .await?;
+                    shape_signers
+                        .as_ref()
+                        .context("missing boundary signers")?
+                        .check_counter(&mut trial.runtime)
+                        .await?;
+                    PaidEffects::default()
+                } else if let Some(mixed) = &mixed {
                     mixed
                         .check(
                             &mut trial.runtime,
