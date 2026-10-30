@@ -102,6 +102,51 @@ inputs: `RUST_FASTNUM_FMT_EXPONENTIAL_LOWER_THRESHOLD`,
 exponent notation. The source extraction preserves that behavior; it does not establish
 that arbitrary formatting build environments are compatible with retained P1.
 
+### Native artifact and provenance integration
+
+The implementation must retain both the artifact bytes and the inputs written to
+state. Archiving only Wasm is insufficient. The current genesis path obtains one
+`BuildProvenance` from `native_provenance`, then publishes the ordered native set.
+That helper uses `built_info::GIT_COMMIT_HASH`, with an all-zero fallback, while
+`GenesisConfig` contains only `sigma_min` and validators. Neither the existing
+configuration nor the committed binary build metadata selects a stable provenance
+commit. Existing publication returns early for an already present address, so a
+successful restart does not prove that a fresh node would reproduce those rows.
+
+Implement the already required retention boundary as follows, after prerequisite
+integration and before the P1 baseline freeze:
+
+1. Archive the qualified synchronous native set inside the retained protocol source.
+   Record its ordered names, reserved IDs, privilege/deposit rules, exact compressed
+   bytes and hashes, build image, platform and reproducing source revision. The old
+   archive in `protocol-semantic-api` pins `804cd9e0`; it predates the reconciled
+   prerequisite and must not be copied forward as the final set.
+2. Retain the exact serialized provenance supplied to native publication alongside
+   those artifacts. Decode it using the retained protocol's codec and validate it
+   at build/qualification time. Runtime publication must use these retained values,
+   never the current node commit, checkout state, an environment override or the
+   all-zero fallback. Ordinary user publication still uses its transaction payload.
+   Node build provenance remains diagnostic metadata outside canonical state.
+3. Bind this artifact/provenance set to the initial protocol/network definition.
+   Later native-contract changes use an explicit protocol migration; selecting a
+   new node binary cannot republish or change the old genesis set. Keep historical
+   sets resident with their executor and include the retained files in K2b's source
+   and artifact identity checks.
+4. Inspect actual prelaunch database provenance before claiming compatibility.
+   Preserve existing rows. A database created with another build-derived genesis
+   input is not proven replay-compatible merely because its Wasm matches. Record
+   any such mismatch and resolve its network-definition mapping explicitly before
+   accepting that database; do not rewrite provenance or reset state implicitly.
+
+Use the same explicit artifact/provenance inputs for both sides of K2a's baseline
+comparison. Compare fresh genesis state and newly published provenance, not only
+reopened databases. Build two node revisions with the retained inputs unchanged
+and require equal provenance bytes and full logical state. Separately verify that
+artifact/provenance tampering is rejected by identity validation and that loading
+an existing database leaves historical provenance untouched. These are the existing
+retention/parity gates made concrete, not permission to freeze inputs before S2
+and OWNERSHIP-1 qualify or to exclude provenance from state comparisons.
+
 External Explorer/Indexer work is excluded from the goal and is not a dependency.
 SDK publication remains deferred until completion and review of all in-scope work.
 
