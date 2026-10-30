@@ -1537,7 +1537,7 @@ mod tests {
     use crate::reg_tester::random_x_only_pubkey;
     use crate::runtime::fuel::ExecutionUsage;
     use crate::runtime::wit::{Signer, kontor::built_in::context::HolderRef};
-    use crate::runtime::{ContractAddress, Decimal, native_provenance, token};
+    use crate::runtime::{ContractAddress, Decimal, ExecutionError, native_provenance, token};
     use crate::test_utils::test_runtime;
     use bitcoin::Network;
     use deadpool::managed::Pool;
@@ -1569,6 +1569,15 @@ mod tests {
 
     type YieldObservations = Arc<Mutex<Vec<(u32, Val, u64, bool)>>>;
 
+    #[derive(Debug, PartialEq)]
+    struct PaidReceiptSnapshot {
+        outcome: std::result::Result<String, String>,
+        usage: ExecutionUsage,
+        receipt: (u64, String, u64, Option<String>),
+        payer: Option<Decimal>,
+        burner: Option<Decimal>,
+    }
+
     fn rooted_store(runtime: &Runtime, kind: RootKind, fuel: u64) -> Result<InvocationStore> {
         let mut runtime = runtime.clone();
         let (sender, _receiver) = mpsc::channel(1);
@@ -1590,7 +1599,8 @@ mod tests {
         fuel: u64,
     ) -> Result<(Val, u64, bool)> {
         let (observation, _store) =
-            run_pure_loop_in_store(rooted_store(runtime, kind, fuel)?, component, count).await?;
+            run_pure_loop_in_store(rooted_store(runtime, kind, fuel)?, component, count, None)
+                .await?;
         Ok(observation)
     }
 
@@ -1598,6 +1608,7 @@ mod tests {
         mut store: InvocationStore,
         component: &Component,
         count: u32,
+        first_yield: Option<&AtomicBool>,
     ) -> Result<((Val, u64, bool), InvocationStore)> {
         let linker = Linker::<Runtime>::new(&store.data().engine);
         let instance = linker.instantiate_async(&mut store, component).await?;
@@ -1615,6 +1626,9 @@ mod tests {
                     false
                 }
                 Poll::Pending => {
+                    if let Some(first_yield) = first_yield {
+                        first_yield.store(true, Ordering::SeqCst);
+                    }
                     timeout(Duration::from_secs(10), invocation.as_mut()).await??;
                     true
                 }
@@ -1629,14 +1643,22 @@ mod tests {
         component: Arc<Component>,
         depth: u32,
         observations: YieldObservations,
+        leaf_count: u32,
+        fuel: u64,
+        first_yield: Option<Arc<AtomicBool>>,
     ) -> BoxFuture<'static, GuestCompletion> {
         Box::pin(async move {
             runtime.ownership = Some(owner.clone());
             runtime.storage.ownership = Some(owner.clone());
             let (observation, store) = run_pure_loop_in_store(
-                runtime.make_store(20_000_000).expect("nested Store"),
+                runtime.make_store(fuel).expect("nested Store"),
                 &component,
-                200_000,
+                if depth == 2 { leaf_count } else { 200_000 },
+                if depth == 2 {
+                    first_yield.as_deref()
+                } else {
+                    None
+                },
             )
             .await
             .expect("nested pure guest call");
@@ -1656,6 +1678,9 @@ mod tests {
                             child_component,
                             depth + 1,
                             child_observations,
+                            leaf_count,
+                            fuel,
+                            first_yield,
                         )
                     })
                     .await
@@ -1686,17 +1711,14 @@ mod tests {
         runtime: &mut Runtime,
         signer: &Signer,
         address: &ContractAddress,
-    ) -> Result<(
-        String,
-        ExecutionUsage,
-        (u64, String, u64, Option<String>),
-        Option<Decimal>,
-        Option<Decimal>,
-    )> {
+        expr: &str,
+    ) -> Result<PaidReceiptSnapshot> {
         let before = runtime.start_usage();
-        let value = runtime
-            .execute_api(Some(signer), address, "write-result-payload(1)")
-            .await?;
+        let outcome = match runtime.execute_api(Some(signer), address, expr).await {
+            Ok(value) => Ok(value),
+            Err(ExecutionError::Deterministic(error)) => Err(error.to_string()),
+            Err(error) => return Err(anyhow!("nondeterministic paid oracle: {error}")),
+        };
         let usage = runtime.finish_usage(before)?;
         let mut rows = runtime
             .storage
@@ -1715,12 +1737,56 @@ mod tests {
         );
         ensure!(rows.next().await?.is_none(), "duplicate paid receipt");
         drop(rows);
-        Ok((
-            value,
+        Ok(PaidReceiptSnapshot {
+            outcome,
             usage,
             receipt,
-            token::api::balance(runtime, HolderRef::from(signer)).await?,
-            token::api::balance(runtime, HolderRef::Burner).await?,
+            payer: token::api::balance(runtime, HolderRef::from(signer)).await?,
+            burner: token::api::balance(runtime, HolderRef::Burner).await?,
+        })
+    }
+
+    async fn seeded_paid_oracle() -> Result<(Runtime, TempDir, Signer, ContractAddress)> {
+        let (mut runtime, dir, _name) = test_runtime().await?;
+        let signer = Signer::Id(
+            runtime
+                .get_or_create_identity(&random_x_only_pubkey())
+                .await?,
+        );
+        token::api::issue_to(
+            &mut runtime,
+            &Signer::Core(Box::new(Signer::Nobody)),
+            HolderRef::from(&signer),
+            Decimal::from("1000000000000"),
+        )
+        .await??;
+        runtime
+            .publish(
+                &signer,
+                Payment {
+                    signer_id: signer.signer_id().context("test payer missing")?,
+                    gas_limit: runtime.gas_limit_for_non_procs,
+                },
+                "ownership-paid-oracle",
+                include_bytes!("../../../../test-contracts/binaries/error_test.wasm.br"),
+                &native_provenance()?,
+            )
+            .await
+            .map_err(anyhow::Error::from)?;
+        runtime
+            .storage
+            .conn
+            .execute("DELETE FROM contract_results", ())
+            .await?;
+        Ok((
+            runtime,
+            dir,
+            signer,
+            ContractAddress {
+                name: "ownership-paid-oracle".to_string(),
+                height: 0,
+                tx_index: 0,
+            },
         ))
     }
 
@@ -1798,42 +1864,7 @@ mod tests {
 
     #[tokio::test]
     async fn owned_paid_call_matches_direct_value_fuel_receipt_and_settlement() -> Result<()> {
-        let (mut runtime, _dir, _name) = test_runtime().await?;
-        let signer = Signer::Id(
-            runtime
-                .get_or_create_identity(&random_x_only_pubkey())
-                .await?,
-        );
-        token::api::issue_to(
-            &mut runtime,
-            &Signer::Core(Box::new(Signer::Nobody)),
-            HolderRef::from(&signer),
-            Decimal::from("1000000000000"),
-        )
-        .await??;
-        runtime
-            .publish(
-                &signer,
-                Payment {
-                    signer_id: signer.signer_id().context("test payer missing")?,
-                    gas_limit: runtime.gas_limit_for_non_procs,
-                },
-                "ownership-paid-oracle",
-                include_bytes!("../../../../test-contracts/binaries/error_test.wasm.br"),
-                &native_provenance()?,
-            )
-            .await
-            .map_err(anyhow::Error::from)?;
-        runtime
-            .storage
-            .conn
-            .execute("DELETE FROM contract_results", ())
-            .await?;
-        let address = ContractAddress {
-            name: "ownership-paid-oracle".to_string(),
-            height: 0,
-            tx_index: 0,
-        };
+        let (mut runtime, _dir, signer, address) = seeded_paid_oracle().await?;
         let contract_id = runtime
             .storage
             .contract_id(&address)
@@ -1842,20 +1873,24 @@ mod tests {
         let payer_before = token::api::balance(&mut runtime, HolderRef::from(&signer)).await?;
         let burner_before = token::api::balance(&mut runtime, HolderRef::Burner).await?;
         runtime.storage.savepoint().await?;
-        let direct = paid_receipt_snapshot(&mut runtime, &signer, &address).await?;
-        let (value, _usage, receipt, payer_after, burner_after) = &direct;
-        assert_eq!(value, "\"é\\n\"");
-        assert_eq!(receipt.0, contract_id);
-        assert_eq!(receipt.1, "Ok");
-        assert!(receipt.2 > 0);
-        assert!(payer_after < &payer_before);
-        assert!(burner_after > &burner_before);
+        let direct =
+            paid_receipt_snapshot(&mut runtime, &signer, &address, "write-result-payload(1)")
+                .await?;
+        assert_eq!(direct.outcome, Ok("\"é\\n\"".to_string()));
+        assert_eq!(direct.receipt.0, contract_id);
+        assert_eq!(direct.receipt.1, "Ok");
+        assert!(direct.receipt.2 > 0);
+        assert!(direct.payer.as_ref() < payer_before.as_ref());
+        assert!(direct.burner.as_ref() > burner_before.as_ref());
         runtime.storage.rollback().await?;
         assert!(runtime.storage.conn.is_autocommit());
         let owned = OwnedRuntimeSession::new(runtime);
         let owned_value = owned
             .run(true, move |runtime| {
-                Box::pin(async move { paid_receipt_snapshot(runtime, &signer, &address).await })
+                Box::pin(async move {
+                    paid_receipt_snapshot(runtime, &signer, &address, "write-result-payload(1)")
+                        .await
+                })
             })
             .await?;
         assert_eq!(owned_value, direct);
@@ -1871,6 +1906,65 @@ mod tests {
             rows.next()
                 .await?
                 .context("receipt count missing")?
+                .get::<i64>(0)?,
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn paid_out_of_fuel_matches_with_and_without_api_yielding() -> Result<()> {
+        let (mut runtime, _dir, signer, address) = seeded_paid_oracle().await?;
+        ensure!(runtime.ownership.is_none(), "direct oracle has an owner");
+        let contract_id = runtime
+            .storage
+            .contract_id(&address)
+            .await?
+            .context("out-of-fuel oracle contract missing")?;
+        let payer_before = token::api::balance(&mut runtime, HolderRef::from(&signer)).await?;
+        let burner_before = token::api::balance(&mut runtime, HolderRef::Burner).await?;
+        runtime.storage.savepoint().await?;
+        let direct =
+            paid_receipt_snapshot(&mut runtime, &signer, &address, "trap-out-of-fuel()").await?;
+        assert!(direct.outcome.is_err());
+        assert_eq!(direct.receipt.0, contract_id);
+        assert_eq!(direct.receipt.1, "OutOfFuel");
+        assert!(direct.receipt.2 > 0);
+        assert!(direct.receipt.3.is_none());
+        assert!(direct.usage.user_fuel >= API_FUEL_YIELD_INTERVAL);
+        assert!(direct.payer.as_ref() < payer_before.as_ref());
+        assert!(direct.burner.as_ref() > burner_before.as_ref());
+        runtime.storage.rollback().await?;
+        assert!(runtime.storage.conn.is_autocommit());
+        let owned = OwnedRuntimeSession::new(runtime);
+        let owned_value = owned
+            .run(true, move |runtime| {
+                Box::pin(async move {
+                    ensure!(
+                        runtime
+                            .ownership
+                            .as_ref()
+                            .and_then(ChildContext::fuel_yield_interval)
+                            == Some(API_FUEL_YIELD_INTERVAL),
+                        "owned paid oracle did not enable API yielding"
+                    );
+                    paid_receipt_snapshot(runtime, &signer, &address, "trap-out-of-fuel()").await
+                })
+            })
+            .await?;
+        assert_eq!(owned_value, direct);
+        let checkout = owned.session.checkout().await?;
+        let recovered = checkout.runtime.as_ref().context("owned runtime missing")?;
+        assert!(recovered.storage.conn.is_autocommit());
+        let mut rows = recovered
+            .storage
+            .conn
+            .query("SELECT COUNT(*) FROM contract_results", ())
+            .await?;
+        assert_eq!(
+            rows.next()
+                .await?
+                .context("out-of-fuel receipt count missing")?
                 .get::<i64>(0)?,
             1
         );
@@ -1927,6 +2021,7 @@ mod tests {
                         runtime.make_store(20_000_000)?,
                         &component,
                         200_000,
+                        None,
                     )
                     .await?;
                     let observations = Arc::new(Mutex::new(vec![(
@@ -1946,6 +2041,9 @@ mod tests {
                                 child_component,
                                 1,
                                 child_observations,
+                                200_000,
+                                20_000_000,
+                                None,
                             )
                         })
                         .await?;
@@ -1970,6 +2068,60 @@ mod tests {
             assert_eq!(remaining, expected_fuel);
         }
         assert!(expected_fuel < 20_000_000);
+        assert_eq!(service.active_roots().await, 0);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelling_nested_yielding_api_guest_joins_before_runtime_reuse() -> Result<()> {
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let service = OwnerService::new();
+        let owned = OwnedRuntimeSession::with_service(runtime, service.clone());
+        let leaf_yielded = Arc::new(AtomicBool::new(false));
+        let observed_yield = leaf_yielded.clone();
+        let handle = service
+            .start_stateful(&owned.session, move |runtime| {
+                Box::pin(async move {
+                    let component = Arc::new(Component::new(&runtime.engine, PURE_LOOP_COMPONENT)?);
+                    let owner = runtime.ownership.clone().context("root context missing")?;
+                    let child_runtime = runtime.clone();
+                    let observations = Arc::new(Mutex::new(Vec::new()));
+                    owner
+                        .run_guest(move |next| {
+                            nested_yield_guest(
+                                child_runtime,
+                                next,
+                                component,
+                                1,
+                                observations,
+                                100_000_000,
+                                2_000_000_000,
+                                Some(observed_yield),
+                            )
+                        })
+                        .await?;
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: false,
+                    })
+                })
+            })
+            .await?;
+        timeout(Duration::from_secs(10), async {
+            while !leaf_yielded.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        drop(handle);
+        let mut checkout = timeout(Duration::from_secs(4), owned.session.checkout()).await??;
+        let recovered = checkout
+            .runtime
+            .as_mut()
+            .context("restored runtime missing")?;
+        assert!(recovered.storage.conn.is_autocommit());
+        assert!(recovered.storage.savepoint_stack.is_empty().await);
+        assert!(recovered.stack.is_empty().await);
         assert_eq!(service.active_roots().await, 0);
         Ok(())
     }
