@@ -275,7 +275,7 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
             "state_before_sha256": before, "state_after_sha256": after}
 
 
-def validate_operation_phases(events):
+def validate_operation_phases(events, expected_count):
     names = [event["name"] for event in events]
     require(names[0] == "operation_entry" and names[-1] == "operation_exit",
             "staking reward operation markers are incomplete")
@@ -302,9 +302,9 @@ def validate_operation_phases(events):
             require(output_depth > 0,
                     "staking reward canonical output exit lacks an entry")
             output_depth -= 1
-    require(input_count == completed_input == output_count > 0
+    require(input_count == completed_input == output_count == expected_count
             and not input_open and output_depth == 0,
-            "staking reward canonical phases are missing or unbalanced")
+            "staking reward canonical call count or phases changed")
 
 
 def validate_trace(trace, runtime, attempts, os_name):
@@ -364,7 +364,7 @@ def validate_trace(trace, runtime, attempts, os_name):
                     for i, (start, end) in
                     enumerate(zip(setups, setup_ends, strict=True))),
             "staking reward setup or attempt intervals changed")
-    for start, end in zip(starts, ends, strict=True):
+    for attempt_index, (start, end) in enumerate(zip(starts, ends, strict=True)):
         segment = trace["events"][start:end+1]
         segment_names = [event["name"] for event in segment]
         require("fixture_preparation_entry" not in segment_names
@@ -379,7 +379,9 @@ def validate_trace(trace, runtime, attempts, os_name):
         require(0 < operation_start < operation_end < observer_start
                 < observer_end < len(segment_names) - 1,
                 "staking reward operation and observer intervals overlap")
-        validate_operation_phases(segment[operation_start:operation_end+1])
+        expected_count = 1 if POPULATIONS[attempt_index // 2] == 0 else 2
+        validate_operation_phases(segment[operation_start:operation_end+1],
+                                  expected_count)
 
 
 def validate_run(run, bundle, directory):

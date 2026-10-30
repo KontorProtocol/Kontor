@@ -206,7 +206,7 @@ class NativeStakingRewardsEvidenceTests(unittest.TestCase):
         first = [event("operation_entry"), event("canonical_input_entry"),
                  event("canonical_input_exit"), event("canonical_output_entry"),
                  event("canonical_output_exit", "w2"), event("operation_exit")]
-        validate_operation_phases(first)
+        validate_operation_phases(first, 1)
         for changed in (
             first[:4] + first[5:],
             first[:2] + first[3:],
@@ -217,11 +217,22 @@ class NativeStakingRewardsEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(changed=[item["name"] for item in changed]):
                 with self.assertRaises(ValueError):
-                    validate_operation_phases(changed)
+                    validate_operation_phases(changed, 1)
         second = [event("operation_entry"), event("canonical_output_exit"),
                   event("operation_exit")]
         with self.assertRaises(ValueError):
-            validate_operation_phases(second)
+            validate_operation_phases(second, 1)
+        cycle = first[1:-1]
+        two_cycles = [first[0], *cycle, *cycle, first[-1]]
+        three_cycles = [first[0], *cycle, *cycle, *cycle, first[-1]]
+        validate_operation_phases(two_cycles, 2)
+        for changed, expected in ((first, 2), (two_cycles, 1)):
+            with self.subTest(actual=len(changed), expected=expected):
+                with self.assertRaises(ValueError):
+                    validate_operation_phases(changed, expected)
+        for relocated_repeat in (first, three_cycles):
+            with self.assertRaises(ValueError):
+                validate_operation_phases(relocated_repeat, 2)
         item = attempt(0)
         item["observation"]["teardown_events"] = events(2)
         with self.assertRaises(ValueError):

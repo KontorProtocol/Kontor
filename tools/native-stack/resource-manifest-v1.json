@@ -246,11 +246,11 @@
     },
     "native_staking_rewards_validator": {
       "path": "tools/native-stack/resource_native_staking_rewards_evidence.py",
-      "sha256": "43c9db6d00de16b47024d9e644a5a48fa6f5b552514914a89e3734dbfa5b078c"
+      "sha256": "17fb8f4c1a98faf8b24afd81ecc87a8850d76d093b0949ce19bbf82aafdd83f9"
     },
     "native_staking_rewards_validator_tests": {
       "path": "tools/native-stack/test_resource_native_staking_rewards_evidence.py",
-      "sha256": "481545839266abbcde773f80888839a1fe96e3d3d07fa2eb0103b6479476b62b"
+      "sha256": "e8ad67ae820719bc03d0743f62d25219e8a73f8d7a573fcbfd1130087c7f1f3f"
     },
     "native_staking_wit": {
       "path": "native-contracts/staking/wit/contract.wit",
