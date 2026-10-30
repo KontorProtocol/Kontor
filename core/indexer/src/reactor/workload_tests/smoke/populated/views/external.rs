@@ -16,8 +16,8 @@ use indexer_types::{ContractAddress, ViewExpr, ViewResult};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, UnixStream};
+use tokio::sync::oneshot;
 use tokio::time::timeout;
-use tokio_util::sync::CancellationToken;
 
 use super::super::clock::monotonic_ns;
 use super::{CLIENTS, CounterProgress, MixedConfig, PAGE_SAMPLES, pagination};
@@ -116,12 +116,13 @@ pub(super) async fn run<T>(
     let router = Router::new()
         .route("/view/{address}", post(view))
         .with_state(state.clone());
-    let shutdown = CancellationToken::new();
-    let _shutdown_on_drop = shutdown.clone().drop_guard();
-    let token = shutdown.clone();
+    let (shutdown, shutdown_rx) = oneshot::channel::<()>();
     let server = tokio::spawn(async move {
         serve(listener, router)
-            .with_graceful_shutdown(token.cancelled_owned())
+            .with_graceful_shutdown(async {
+                // Dropping the harness future also closes this test-only listener.
+                let _ = shutdown_rx.await;
+            })
             .await
     });
     let result = async {
@@ -194,7 +195,7 @@ pub(super) async fn run<T>(
         Ok(value)
     }
     .await;
-    shutdown.cancel();
+    let _ = shutdown.send(());
     timeout(Duration::from_secs(60), server).await???;
     result
 }
