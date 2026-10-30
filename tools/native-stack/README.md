@@ -680,6 +680,21 @@ memory acceptance gate. The whole-service peak remains separately reported.
 
 ## Historical replay with live API arrivals
 
+With the constrained runner, `--external-arrivals` schedules historical replay
+API arrivals in the supervisor, outside the measured cgroup. Each restore sends
+its finite schedule and Linux `CLOCK_MONOTONIC` epoch through a private local
+socket. The supervisor emits arrivals independently of node progress; the node
+checks their order and timestamps against that same clock. It does not move the
+epoch forward when the node falls behind. Contract calls and execution remain
+inside the node process.
+
+`arrivals.json` records the scheduler process identity, each schedule hash and
+actual emission timestamps. The runner verifies cgroup separation and matches
+both restore reports to the supervisor's emissions. Disconnect and supervisor
+shutdown stop the scheduler. This option currently covers frozen historical
+replay API arrivals; competing view calls and semantic verification still use
+the in-process harness.
+
 The ignored test
 `reactor::workload_tests::smoke::populated::timed::archive::workload_saved_timed_historical_replay`
 consumes the same frozen archive and explicit consumer identity as

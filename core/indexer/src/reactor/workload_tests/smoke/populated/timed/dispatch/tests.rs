@@ -158,7 +158,7 @@ async fn workload_replay_timing_stops_at_a_failed_stage() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workload_timed_dispatch_arrivals_do_not_wait_for_execution() -> Result<()> {
-    let mut arrivals = Arrivals::new(schedule(Profile::Stress)?)?;
+    let mut arrivals = Arrivals::new(schedule(Profile::Stress)?).await?;
     timeout(Duration::from_secs(5), async {
         // No Work implementation runs here. The next real-clock arrival must
         // still be delivered after the initial backlog and time-zero API work.
@@ -198,7 +198,7 @@ async fn workload_timed_dispatch_does_not_continue_after_failure() -> Result<()>
         ensure!(work.executed == (0..executed).collect::<Vec<_>>());
         ensure!(work.checked == (0..6).collect::<Vec<_>>());
     }
-    let arrivals = Arrivals::new(schedule(Profile::Stress)?)?;
+    let arrivals = Arrivals::new(schedule(Profile::Stress)?).await?;
     let producer = arrivals.producer.as_ref().unwrap().abort_handle();
     drop(arrivals);
     timeout(Duration::from_secs(5), async {

@@ -15,6 +15,7 @@ import time
 import uuid
 
 from workload_bitcoin import BitcoinService, verify_separation
+from workload_arrivals import ArrivalService
 
 
 PROFILES = {"conservative": (2, 12 * 1024**3), "burst": (8, 16 * 1024**3)}
@@ -161,6 +162,9 @@ def worker(spec_path):
     external = spec.get("external_bitcoin")
     external_identity = (verify_separation(external["identity"], directory)
                          if external else None)
+    arrival_service = spec.get("external_arrivals")
+    arrival_identity = (verify_separation(arrival_service["identity"], directory)
+                        if arrival_service else None)
     started = time.monotonic()
     before_cpu = counters(directory / "cpu.stat")
     before_events = counters(directory / "memory.events")
@@ -176,6 +180,7 @@ def worker(spec_path):
         "binary_sha256_before": digest(binary), "status": "running",
         "cgroup": str(directory),
         "external_bitcoin": external_identity,
+        "external_arrivals": arrival_identity,
         "measurement_scope": ("test process and in-process harness/oracles; external Bitcoin excluded"
                               if external else "whole service including test children and setup"),
     }
@@ -208,6 +213,14 @@ def worker(spec_path):
             if spec.get("trial_memory"):
                 observation["trials"] = trial_measurements(
                     transcript, child.pid, directory, enforced)
+            if arrival_service:
+                markers = [json.loads(line.split("=", 1)[1]) for line in transcript.splitlines()
+                           if line.startswith("workload_external_arrivals=")]
+                require(len(markers) == 2 and all(
+                    item["socket"] == arrival_service["socket"]
+                    and item["clock"] == "CLOCK_MONOTONIC" and item["api_only"]
+                    for item in markers), "workload did not use both external arrival streams")
+                observation["arrival_streams"] = markers
             observation["validation"] = "passed"
     except ValueError as error:
         observation["validation_error"] = str(error)
@@ -232,6 +245,8 @@ def run(args):
             "external Bitcoin must be owned and verified by this supervisor")
     require("KONTOR_WORKLOAD_TRIAL_MEMORY" not in environment,
             "use --trial-memory to require verified per-trial records")
+    require("KONTOR_WORKLOAD_ARRIVAL_SOCKET" not in environment,
+            "use --external-arrivals to supervise the external scheduler")
     if args.trial_memory:
         prefix = "reactor::workload_tests::smoke::populated::timed::archive::"
         require(args.bitcoin_binary and args.test in (
@@ -239,24 +254,52 @@ def run(args):
             prefix + "workload_saved_timed_historical_replay"),
             "trial memory requires a saved timed replay and external Bitcoin")
         environment["KONTOR_WORKLOAD_TRIAL_MEMORY"] = "1"
+    if args.external_arrivals:
+        require(args.test == "reactor::workload_tests::smoke::populated::timed::archive::workload_saved_timed_historical_replay",
+                "external arrivals currently require the frozen historical replay")
     bitcoin = None
+    arrivals = None
     try:
         if args.bitcoin_binary:
             bitcoin = BitcoinService(args.bitcoin_binary, output / "bitcoin").start()
             environment["KONTOR_WORKLOAD_BITCOIN_RPC_URL"] = bitcoin.url
-        return run_service(args, environment, binary, output, bitcoin)
+        if args.external_arrivals:
+            arrivals = ArrivalService(output / "arrivals.json")
+            environment["KONTOR_WORKLOAD_ARRIVAL_SOCKET"] = arrivals.path
+        code = run_service(args, environment, binary, output, bitcoin, arrivals)
     finally:
-        if bitcoin:
-            bitcoin.close()
+        try:
+            if arrivals:
+                arrivals.close()
+        finally:
+            if bitcoin:
+                bitcoin.close()
+    if arrivals and code == 0:
+        measurement = json.loads((output / "measurement.json").read_text())
+        markers = measurement["arrival_streams"]
+        require([item["epoch_ns"] for item in markers]
+                == [trial["epoch_ns"] for trial in arrivals.trials],
+                "external arrival sessions differ from measured sessions")
+        reports = [json.loads(line.split("=", 1)[1])["report"]
+                   for line in (output / "workload.log").read_text().splitlines()
+                   if line.startswith("workload_historical_replay=")]
+        require(len(reports) == 2, "missing external replay reports")
+        for trial, report in zip(arrivals.trials, reports, strict=True):
+            emitted = {item["ordinal"]: item["enqueued_ns"] for item in trial["sent"]}
+            require(all(emitted.get(item["timing"]["event"]["ordinal"]) == item["enqueued_ns"]
+                        for item in report["api"]), "reported arrival differs from external emission")
+    return code
 
 
-def run_service(args, environment, binary, output, bitcoin):
+def run_service(args, environment, binary, output, bitcoin, arrivals):
     cpus, memory = PROFILES[args.profile]
     spec = {"profile": args.profile, "binary": str(binary), "trial_memory": args.trial_memory,
             "binary_sha256": digest(binary), "test": args.test,
             "environment": environment}
     if bitcoin:
         spec["external_bitcoin"] = {"identity": bitcoin.identity, "rpc_url": bitcoin.url}
+    if arrivals:
+        spec["external_arrivals"] = {"identity": arrivals.identity, "socket": arrivals.path}
     spec_path = output / "request.json"
     spec_path.write_text(json.dumps(spec, indent=2) + "\n")
     unit = f"kontor-workload-{uuid.uuid4().hex}"
@@ -303,6 +346,8 @@ def main():
                         help="start fresh regtest outside the measured service, owned by this supervisor")
     parser.add_argument("--trial-memory", action="store_true",
                         help="require two replay-window memory records with individually reset peaks")
+    parser.add_argument("--external-arrivals", action="store_true",
+                        help="schedule historical replay API arrivals outside the measured cgroup")
     return run(parser.parse_args())
 
 

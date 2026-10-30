@@ -53,7 +53,7 @@ pub(in super::super) async fn run(
         schedule.spec.fresh_backlog == 0,
         "historical replay requires complete mixed intervals, not fresh backlog blocks"
     );
-    let mut arrivals = Arrivals::filtered(schedule, true)?;
+    let mut arrivals = Arrivals::filtered(schedule, true).await?;
     let result = run_inner(&mut arrivals, work).await;
     let stopped = arrivals.stop().await;
     let report = result?;
@@ -81,7 +81,7 @@ async fn run_inner(arrivals: &mut Arrivals, work: &mut impl HistoricalWork) -> R
         api: Vec::new(),
     };
     for event in &schedule.events {
-        required(arrivals.start.elapsed(), period, api_ordinals.len())?;
+        required(arrivals.start.elapsed()?, period, api_ordinals.len())?;
         if !event.action.canonical() {
             work.skip_historical_api(event).await?;
             continue;
@@ -92,7 +92,7 @@ async fn run_inner(arrivals: &mut Arrivals, work: &mut impl HistoricalWork) -> R
             .checked_add(timing.service_ns)
             .context("canonical service overflow")?;
         report.canonical.push(timing);
-        report.canonical_completed_ns = nanos(arrivals.start.elapsed())?;
+        report.canonical_completed_ns = nanos(arrivals.start.elapsed()?)?;
         // One due request per canonical boundary prevents a growing API queue
         // from starving history. After the last boundary, drain all due work.
         serve_due(arrivals, work, &api_ordinals, period, &mut report).await?;
@@ -116,7 +116,7 @@ async fn serve_due(
     period: Duration,
     report: &mut Report,
 ) -> Result<bool> {
-    let observed = arrivals.start.elapsed();
+    let observed = arrivals.start.elapsed()?;
     let pending = required(observed, period, api_ordinals.len())?
         .checked_sub(report.api.len())
         .context("API request ran before its arrival")?;
@@ -136,12 +136,12 @@ async fn serve_due(
     );
     let event = arrivals.schedule.event(arrival.ordinal)?;
     let intended = Duration::from_secs(event.at_seconds);
-    let started = arrivals.start.elapsed();
+    let started = arrivals.start.elapsed()?;
     let pending = required(started, period, api_ordinals.len())? - report.api.len();
     ensure!(arrival.enqueued >= intended && started >= arrival.enqueued);
     report.peak_api_pending_at_observation = report.peak_api_pending_at_observation.max(pending);
     let timing = work.external_api(event).await?;
-    let completed = arrivals.start.elapsed();
+    let completed = arrivals.start.elapsed()?;
     required(completed, period, api_ordinals.len())?;
     report.api_service_ns = report
         .api_service_ns
