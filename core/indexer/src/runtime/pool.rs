@@ -12,6 +12,9 @@ use crate::{
     runtime::{ComponentCache, Linkers, Runtime},
 };
 
+#[cfg(test)]
+mod snapshot_tests;
+
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error("Failed to create runtime: {0}")]

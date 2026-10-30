@@ -353,15 +353,28 @@ impl Storage {
         &self,
         contract_id: u64,
     ) -> std::result::Result<Vec<u8>, ComponentDecodeError> {
-        let compressed_bytes = self
-            .contract_bytes(contract_id)
+        let compressed_bytes = self.stored_component_bytes(contract_id).await?;
+        self.decode_stored_component_bytes(compressed_bytes).await
+    }
+
+    pub(crate) async fn stored_component_bytes(
+        &self,
+        contract_id: u64,
+    ) -> std::result::Result<Vec<u8>, ComponentDecodeError> {
+        self.contract_bytes(contract_id)
             .await
             .map_err(ComponentDecodeError::Infrastructure)?
             .ok_or_else(|| {
                 ComponentDecodeError::Infrastructure(anyhow!(
                     "Contract not found when trying to load component"
                 ))
-            })?;
+            })
+    }
+
+    pub(crate) async fn decode_stored_component_bytes(
+        &self,
+        compressed_bytes: Vec<u8>,
+    ) -> std::result::Result<Vec<u8>, ComponentDecodeError> {
         // Split the join from the work: a JoinError is this node's task machinery
         // failing, everything inside is a property of the bytes.
         #[cfg(test)]

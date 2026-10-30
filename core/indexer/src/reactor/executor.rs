@@ -63,6 +63,7 @@ pub(crate) trait Executor: Sync {
         runtime: &mut Runtime,
         block: &Block,
     ) -> Result<()> {
+        selection.ensure_runtime(runtime.network, runtime.executor_version())?;
         selection.ensure_execution(runtime.network, block.height)?;
         selection.ensure_block(block.height, block.hash)?;
         match selection.version() {
@@ -128,6 +129,7 @@ pub(crate) trait Executor: Sync {
         tx_id: u64,
         tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
+        selection.ensure_runtime(runtime.network, runtime.executor_version())?;
         selection.ensure_execution(runtime.network, height)?;
         let previous = runtime.start_usage();
         let result = self

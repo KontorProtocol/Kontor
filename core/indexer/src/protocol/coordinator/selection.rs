@@ -4,13 +4,14 @@ use anyhow::{Context, Result, bail, ensure};
 use bitcoin::{BlockHash, Network};
 use libsql::Connection;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ExecutorVersion {
     LegacyP1,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApplicationPosition {
+    View,
     Preparation {
         anchor_height: u64,
         anchor_hash: Option<BlockHash>,
@@ -59,6 +60,36 @@ impl ExecutionSelection {
         self.version
     }
 
+    pub(crate) fn ensure_runtime(&self, network: Network, version: ExecutorVersion) -> Result<()> {
+        ensure!(
+            self.network == network,
+            "executor selection network mismatch"
+        );
+        ensure!(
+            self.version == version,
+            "runtime does not match selected executor"
+        );
+        Ok(())
+    }
+
+    pub(crate) async fn verify_view(
+        &self,
+        conn: &Connection,
+        network: Network,
+        version: ExecutorVersion,
+    ) -> Result<()> {
+        self.ensure_runtime(network, version)?;
+        ensure!(
+            matches!(self.position, ApplicationPosition::View),
+            "executor selection is not a public view"
+        );
+        ensure!(
+            !conn.is_autocommit(),
+            "public view selection requires a pinned transaction"
+        );
+        self.verify_base(conn).await
+    }
+
     pub(crate) fn same_recognition_rules(&self, current: &Self) -> bool {
         self.version == current.version && self.network == current.network
     }
@@ -94,6 +125,9 @@ impl ExecutionSelection {
             ApplicationPosition::Batch { anchor_height, .. } => anchor_height,
             ApplicationPosition::Preparation { .. } => {
                 bail!("preparation selection cannot execute")
+            }
+            ApplicationPosition::View => {
+                bail!("view selection cannot execute canonical transactions")
             }
         };
         ensure!(
@@ -291,6 +325,28 @@ mod tests {
         ensure!(selected.ensure_execution(Network::Bitcoin, 1).is_err());
         ensure!(selected.ensure_execution(Network::Regtest, 2).is_err());
         ensure!(selected.ensure_block(1, new_mock_block_hash(2)).is_err());
+        let view = select_legacy_p1(&conn, Network::Regtest, ApplicationPosition::View).await?;
+        ensure!(view.ensure_execution(Network::Regtest, 1).is_err());
+        ensure!(
+            view.verify_view(&conn, Network::Regtest, ExecutorVersion::LegacyP1)
+                .await
+                .is_err()
+        );
+        conn.execute("BEGIN", ()).await?;
+        view.verify_view(&conn, Network::Regtest, ExecutorVersion::LegacyP1)
+            .await?;
+        ensure!(
+            selected
+                .verify_view(&conn, Network::Regtest, ExecutorVersion::LegacyP1)
+                .await
+                .is_err()
+        );
+        ensure!(
+            view.verify_view(&conn, Network::Bitcoin, ExecutorVersion::LegacyP1)
+                .await
+                .is_err()
+        );
+        conn.execute("ROLLBACK", ()).await?;
         conn.execute("DELETE FROM receipt_stream_state", ()).await?;
         ensure!(
             select_legacy_p1(&conn, Network::Regtest, preparation(1))

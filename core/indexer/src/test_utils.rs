@@ -29,11 +29,12 @@ use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::database::queries::insert_block;
 use crate::database::types::{ContractRow, FileMeta};
 use crate::database::{Reader, Writer, queries};
+use crate::protocol::coordinator::selection::ExecutorVersion;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::token::api as token_api;
 use crate::runtime::wit::{Signer, prover_challenge_key};
 use crate::runtime::{
-    ComponentCache, ContractAddress, Decimal, GenesisParameters, GenesisValidator,
+    ComponentCache, ComponentSource, ContractAddress, Decimal, GenesisParameters, GenesisValidator,
     RawFileDescriptor, Runtime, Storage, TransactionContext,
     ownership::{OwnedRuntimeSession, OwnerService},
 };
@@ -356,7 +357,7 @@ pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
 
 /// A prewarmed native contract: id, compiled component, and its cache weight
 /// (encoded binary size).
-type PrewarmedComponent = (u64, wasmtime::component::Component, u32);
+type PrewarmedComponent = (ComponentSource, wasmtime::component::Component, u32);
 
 /// Shared engine + pre-compiled native contract components.
 /// First caller compiles all native contracts; subsequent callers get cached results.
@@ -396,8 +397,8 @@ async fn shared_test_engine() -> (wasmtime::Engine, Vec<PrewarmedComponent>) {
         // `Runtime::publish_native_contracts`.
         let mut components = Vec::new();
         for id in 1..=NATIVE_CONTRACTS.len() as u64 {
-            if let Some((component, size, true)) = cache.get_weighted(&id).await {
-                components.push((id, component, size));
+            if let Some((source, component, size, true)) = cache.get_weighted(&id).await {
+                components.push((source, component, size));
             }
         }
 
@@ -722,10 +723,15 @@ async fn test_runtime_with_genesis_config_and_engine(
         None => shared_test_engine().await,
     };
     let cache = ComponentCache::new();
-    for (id, component, size) in &prewarmed {
+    for (source, component, size) in &prewarmed {
         cache
-            .put_admitted(*id, component.clone(), *size as usize)
-            .await;
+            .put_selected(
+                *source,
+                ExecutorVersion::LegacyP1,
+                component.clone(),
+                *size as usize,
+            )
+            .await?;
     }
     let linkers = Runtime::new_linkers(&engine)?;
     let mut runtime = Runtime::new_with(engine, linkers, cache, storage).await?;

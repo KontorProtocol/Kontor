@@ -973,3 +973,55 @@ Logs, commands, exit status, hashes and the lead's scope/limitations record are 
 ignored in the ordinary confirmation suite; only its separate `--exact --ignored`
 run is counted here. These are preparatory integration checks, not the final
 phase's independent reviews or full protocol-upgrade qualification.
+
+### Snapshot-bound public reads and compile caches (30 October 2026)
+
+Public contract reads now select explicit P1 rules inside the owner service's
+existing read transaction. Evaluation checks the selection's view purpose,
+network, runtime version and pinned database base. A selection is not storage
+authority and cannot authorize canonical execution. Cleanup, cancellation and
+pool admission remain owned by OWNERSHIP-1. Reusing a pooled runtime does not
+reuse the previous request's selection.
+
+Compiled component lookup first reads the stored contract bytes from that root's
+database snapshot. Its key combines the contract row ID, SHA-256 of those stored
+bytes, executor version and actual Wasmtime engine identity. A cache miss decodes
+and compiles the same owned bytes, without another database lookup. Publication
+admission inserts into that same namespace. The engine registry uses weak engine
+references and checked monotonic identifiers; it does not itself retain engines.
+All namespaces within a cache share its existing 256 MiB encoded-byte weight
+limit. Existing separate canonical and pool caches remain separate; this is not
+yet the final node-wide retained-bundle resource policy or an exact compiled-memory
+measurement. Cache hits now read and hash stored bytes, an additional cost not
+quantified by these correctness checks.
+
+The held-view regression executes real Wasm before and after an actual database
+rollback and republication that reuses the same contract ID and block hash. Old
+and fresh views share an engine and cache, yet repeatedly return their own code's
+result. Recycling then rejects the old selection and admits a new one. Additional
+controls cover foreign-engine entries, the shared weight budget, invalidation,
+publication admission, simulation cache suppression, and pooled cleanup.
+
+The runtime's P1 version field is private and matched at selected transaction and
+lifecycle entry. Complete immutable root/operation policy, nested-entry binding,
+committee dispatch, independently locked artifacts, durable migration identities
+and actual P2 activation remain required. This checkpoint does not freeze P1,
+complete K2a/K2b, or resolve S2 performance and final-source qualification.
+
+Validation covered 24 distinct tests: 20 passed in the initial focused run, the
+remaining engine-isolation test passed after correcting its fixture address,
+both real HTTP contract-view tests passed, and the opt-in P1 parity fixture
+passed. The initial engine test requested height 1 after genesis setup left its
+fixture at height 0; reading the stored address corrected the test without a
+production change. HTTP coverage includes normal view/pool reuse and shutdown
+while cold decode is pending. The indexer/testlib all-target check, formatting and
+diff checks also passed. No extra independent review round was requested for this
+intermediate checkpoint.
+
+The P1 report matched all 11 saved logical-state stages, including receipts and
+provenance, with SHA-256
+`2095169ae05bd69c353561a0b462e94e98dab361c3dedf6d8ebd7983a3598332`.
+Commands, successful exit statuses, log hashes, changed-source hashes and the
+lead's coverage/limitations record are in `.build-cache/snapshot-cache-final/`;
+the initial focused run is `.build-cache/snapshot-cache-focused.log`. These
+checks establish this preparatory behavior, not final protocol-upgrade acceptance.

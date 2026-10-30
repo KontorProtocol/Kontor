@@ -12,6 +12,7 @@ use super::validate_query;
 use crate::api::{Env, error::HttpError, result::Result};
 use crate::database::queries;
 use crate::database::types::ContractQuery;
+use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
 use crate::runtime::{ContractAddress, ownership::RootOutcome};
 
 pub async fn post_contract(
@@ -28,6 +29,12 @@ pub async fn post_contract(
         .owner_service
         .start_pooled(object, move |runtime| {
             Box::pin(async move {
+                let selection = select_legacy_p1(
+                    &runtime.get_storage_conn(),
+                    runtime.network,
+                    ApplicationPosition::View,
+                )
+                .await?;
                 warn_if_stale_view_snapshot(
                     &diagnostic_env,
                     &runtime.storage.conn,
@@ -35,7 +42,10 @@ pub async fn post_contract(
                     &expr,
                 )
                 .await;
-                let value = match runtime.execute(None, None, &contract_address, &expr).await {
+                let value = match runtime
+                    .execute_selected_view(&selection, &contract_address, &expr)
+                    .await
+                {
                     Ok(value) => ViewResult::Ok { value },
                     Err(error) => ViewResult::Err {
                         message: format!("{:?}", error),

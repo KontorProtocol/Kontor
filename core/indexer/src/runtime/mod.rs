@@ -40,9 +40,11 @@ mod invocation;
 mod lowering;
 pub mod ownership;
 
+use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
 use bitcoin::XOnlyPublicKey;
 use call::CallOutcome;
 pub use component_cache::ComponentCache;
+pub(crate) use component_cache::ComponentSource;
 use guest_memory::{GuestMemoryLimiter, GuestMemoryLimits};
 use invocation::{InvocationBudget, InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS};
 #[cfg(test)]
@@ -282,6 +284,7 @@ type StoreTableOwners = Arc<StdMutex<Vec<Weak<Mutex<ResourceTable>>>>>;
 #[derive(Clone)]
 pub struct Runtime {
     pub(crate) engine: Engine,
+    executor_version: ExecutorVersion,
     pub(crate) linkers: Arc<Linkers>,
     pub(crate) table: Arc<Mutex<ResourceTable>>,
     pub(crate) component_cache: ComponentCache,
@@ -338,25 +341,17 @@ pub struct Runtime {
     /// lite executor); production paths (reactor, runtime pool) set it from
     /// `config.network`.
     pub(crate) network: bitcoin::Network,
-    /// Set while `simulate` runs a fabricated block it is going to throw away.
-    ///
-    /// The savepoint undoes everything in the DATABASE, but the component cache
-    /// lives outside it and is keyed by `contracts.id` — a rowid the rollback
-    /// frees for reuse (`INTEGER PRIMARY KEY`, no `AUTOINCREMENT`). A `Publish`
-    /// inside a simulation would otherwise leave its compiled WASM cached under
-    /// an id a later real publish can be assigned, and `load_component` would
-    /// serve the simulated contract's code — on this node only, so it diverges
-    /// from the network.
-    ///
-    /// A flag rather than a compensating invalidate: the cache has TWO write
-    /// sites (`component_bytes_and_compiled` and `validate_publishable`), each
-    /// carrying its own `!simulating` guard, so not writing is one check per
-    /// site rather than a cleanup to remember in a function whose first two
-    /// hazards (`height`, then this) were both missed.
+    /// Simulation does not populate the shared compile cache. Keep speculative
+    /// compilation from evicting canonical hot code; snapshot code identity also
+    /// prevents a rolled-back row ID from resolving to a different cached module.
     pub(crate) simulating: bool,
 }
 
 impl Runtime {
+    pub(crate) fn executor_version(&self) -> ExecutorVersion {
+        self.executor_version
+    }
+
     pub fn new_engine() -> Result<Engine> {
         Self::engine_with_async_stack_size(2 * 1024 * 1024)
     }
@@ -459,6 +454,7 @@ impl Runtime {
     ) -> Result<Self> {
         Ok(Self {
             engine,
+            executor_version: ExecutorVersion::LegacyP1,
             linkers,
             table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
@@ -955,9 +951,18 @@ impl Runtime {
         // But only the CONTENT half. The read and the task join are this node's own
         // machinery; calling those deterministic would make one node reject a publish
         // its peers accept — the same divergence, silently and in the other direction.
+        let stored = self
+            .storage
+            .stored_component_bytes(contract_id)
+            .await
+            .map_err(|e| match e {
+                ComponentDecodeError::Content(e) => ExecutionError::Deterministic(e),
+                ComponentDecodeError::Infrastructure(e) => ExecutionError::NonDeterministic(e),
+            })?;
+        let source = ComponentSource::new(contract_id, &stored);
         let bytes = self
             .storage
-            .decode_component_bytes(contract_id)
+            .decode_stored_component_bytes(stored)
             .await
             .map_err(|e| match e {
                 ComponentDecodeError::Content(e) => ExecutionError::Deterministic(
@@ -1000,8 +1005,9 @@ impl Runtime {
         // Publish can run inside a simulation under an id that rollback reuses.
         if !self.simulating {
             self.component_cache
-                .put_admitted(contract_id, component, bytes.len())
-                .await;
+                .put_selected(source, self.executor_version, component, bytes.len())
+                .await
+                .map_err(ExecutionError::NonDeterministic)?;
         }
         Ok(())
     }
@@ -1180,6 +1186,21 @@ impl Runtime {
         self.execute(signer, payment, contract_address, expr).await
     }
 
+    pub(crate) async fn execute_selected_view(
+        &mut self,
+        selection: &ExecutionSelection,
+        contract_address: &ContractAddress,
+        expr: &str,
+    ) -> Result<String, ExecutionError> {
+        selection
+            .verify_view(&self.storage.conn, self.network, self.executor_version)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?;
+        match selection.version() {
+            ExecutorVersion::LegacyP1 => self.execute(None, None, contract_address, expr).await,
+        }
+    }
+
     pub(crate) async fn execute(
         &mut self,
         signer: Option<&Signer>,
@@ -1236,8 +1257,18 @@ impl Runtime {
     /// returning the encoded `bytes` too so a caller that also needs the embedded
     /// WIT pays the decompress/encode/compile exactly once. The bytes are not
     /// cached — only the compiled `Component`.
-    async fn component_bytes_and_compiled(&self, contract_id: u64) -> Result<(Vec<u8>, Component)> {
-        let bytes = self.storage.component_bytes(contract_id).await?;
+    async fn component_bytes_and_compiled(
+        &self,
+        source: ComponentSource,
+        stored: Vec<u8>,
+    ) -> Result<(Vec<u8>, Component)> {
+        let bytes = self
+            .storage
+            .decode_stored_component_bytes(stored)
+            .await
+            .map_err(|e| match e {
+                ComponentDecodeError::Content(e) | ComponentDecodeError::Infrastructure(e) => e,
+            })?;
         component_policy::validate_no_starts(&bytes)?;
         let (bytes, component) =
             self.compile_component_bytes(bytes)
@@ -1245,22 +1276,37 @@ impl Runtime {
                 .map_err(|e| match e {
                     ComponentDecodeError::Content(e) | ComponentDecodeError::Infrastructure(e) => e,
                 })?;
-        // One of the cache's TWO write sites — `validate_publishable` guards the
-        // other, and its guard is the one the publish path depends on.
-        // See `Runtime::simulating`: caching a speculative contract's code under an
-        // id the rollback frees would let a later real publish be served the wrong
-        // WASM on this node alone.
+        // Match publication's policy: do not warm shared caches speculatively.
         if !self.simulating {
             self.component_cache
-                .put_admitted(contract_id, component.clone(), bytes.len())
-                .await;
+                .put_selected(
+                    source,
+                    self.executor_version,
+                    component.clone(),
+                    bytes.len(),
+                )
+                .await?;
         }
         Ok((bytes, component))
     }
 
     pub(crate) async fn load_component(&self, contract_id: u64) -> Result<Component> {
+        // Resolve code from this root's snapshot before consulting a shared cache.
+        // An old view can retain an ID whose newer canonical row contains new code.
+        let stored = self
+            .storage
+            .stored_component_bytes(contract_id)
+            .await
+            .map_err(|e| match e {
+                ComponentDecodeError::Content(e) | ComponentDecodeError::Infrastructure(e) => e,
+            })?;
+        let source = ComponentSource::new(contract_id, &stored);
         Ok(
-            match self.component_cache.get_admitted(&contract_id).await {
+            match self
+                .component_cache
+                .get_selected(source, self.executor_version, &self.engine)
+                .await?
+            {
                 Some(component) => {
                     if !Engine::same(component.engine(), &self.engine) {
                         return Err(anyhow!(
@@ -1269,9 +1315,31 @@ impl Runtime {
                     }
                     component
                 }
-                None => self.component_bytes_and_compiled(contract_id).await?.1,
+                None => self.component_bytes_and_compiled(source, stored).await?.1,
             },
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn cache_component_fixture(
+        &self,
+        contract_id: u64,
+        component: Component,
+        size: usize,
+    ) -> Result<()> {
+        let stored = self
+            .storage
+            .contract_bytes(contract_id)
+            .await?
+            .ok_or_else(|| anyhow!("fixture contract missing"))?;
+        self.component_cache
+            .put_selected(
+                ComponentSource::new(contract_id, &stored),
+                self.executor_version,
+                component,
+                size,
+            )
+            .await
     }
 
     pub(crate) fn make_store(&self, fuel: u64) -> Result<InvocationStore> {
@@ -1676,9 +1744,8 @@ mod tests {
         );
     }
 
-    /// A failed publish must not leave its compiled component in the cache: the
-    /// contract id is rolled back and SQLite can reuse it for a different
-    /// contract, which would then be served stale WASM by `load_component`.
+    /// Failed publication must release its speculative cache entry even though
+    /// immutable code identity now prevents a reused row ID from aliasing it.
     #[tokio::test]
     async fn failed_publish_evicts_component_cache() {
         use crate::database::native_contracts::{FILESTORAGE, NATIVE_CONTRACTS};
@@ -1715,19 +1782,9 @@ mod tests {
         );
     }
 
-    /// A simulation must leave NOTHING in the component cache. The savepoint undoes
-    /// the database, but the cache lives outside it and is keyed by `contracts.id` —
-    /// a rowid the rollback frees for reuse. A component compiled while simulating
-    /// would then be served to whatever contract is later assigned that id, on this
-    /// node alone, which is a silent divergence from the rest of the network.
-    ///
-    /// SCOPE: the cache has TWO write sites, and both are covered here —
-    /// `component_bytes_and_compiled` (reached by `load_component`, i.e. calls) and
-    /// `validate_publishable` (reached by `publish`). The publish one is the site the
-    /// hazard is actually about, so it is asserted directly rather than assumed to
-    /// share a path with the other. It does not drive a publish through the reactor's
-    /// `simulate`: the lite executor's transactions carry no ops, so the cluster
-    /// harness cannot express one.
+    /// Speculative code must not evict canonical hot entries. Cover both cache
+    /// writers, loading and publication admission, rather than assuming they share
+    /// a guard. This directly exercises runtime policy, not reactor simulation.
     #[tokio::test]
     async fn simulation_does_not_populate_the_component_cache() {
         let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
@@ -1755,8 +1812,7 @@ mod tests {
             .expect("component still compiles while simulating");
         assert!(
             runtime.component_cache.get(&contract_id).await.is_none(),
-            "a component compiled during simulation must not be cached — the id it \
-             is keyed by is freed by the rollback and can be handed to a real publish"
+            "a component compiled during simulation must not warm the shared cache"
         );
 
         // The publish path caches at its OWN site inside `validate_publishable`, so
@@ -1772,8 +1828,7 @@ mod tests {
         let _ = runtime.validate_publishable(publish_id).await;
         assert!(
             runtime.component_cache.get(&publish_id).await.is_none(),
-            "a publish compiled during simulation must not be cached — this is the \
-             site the id-reuse hazard actually runs through"
+            "publication admission during simulation must not warm the shared cache"
         );
 
         // The guard must be scoped to simulation, not a blanket disable: caching is
