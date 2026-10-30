@@ -112,10 +112,6 @@ pub(super) fn current_stack_range() -> Result<MacStackRange> {
         low % page_size == 0,
         "pthread stack lower bound is not page aligned: low={low:#x}, high={high:#x}, size={stack_size:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}"
     );
-    // Darwin arm64 adds a pthread control-structure offset to the reported
-    // stack size. The top partial page is outside the requested stack budget.
-    let usable_end = high & !(page_size - 1);
-    ensure!(usable_end > low, "pthread application stack range is empty");
     ensure!(
         low <= stack_pointer && stack_pointer < high,
         "current stack pointer is outside pthread stack range: low={low:#x}, high={high:#x}, size={stack_size:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}"
@@ -148,7 +144,7 @@ pub(super) fn current_stack_range() -> Result<MacStackRange> {
         mapped_start: low,
         mapped_end: high,
         usable_start: low,
-        usable_end,
+        usable_end: high,
         guard_start,
         guard_end: low,
         guard_bytes: page_size,
