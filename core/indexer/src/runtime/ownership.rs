@@ -295,24 +295,26 @@ impl ChildContext {
 
 struct RootKeeper {
     id: RootId,
-    authority: Mutex<Object<Manager>>,
+    authority: Mutex<Option<Object<Manager>>>,
     state: Arc<AtomicU8>,
     closing_at: Arc<std::sync::Mutex<Option<Instant>>>,
     cancellation: CancellationToken,
     blocking: Arc<BlockingRegistry>,
     caught_host_panic: AtomicBool,
+    quiescent: AtomicBool,
 }
 
 impl RootKeeper {
     fn new(id: RootId, authority: Object<Manager>) -> Self {
         Self {
             id,
-            authority: Mutex::new(authority),
+            authority: Mutex::new(Some(authority)),
             state: Arc::new(AtomicU8::new(RootState::Running as u8)),
             closing_at: Arc::new(std::sync::Mutex::new(None)),
             cancellation: CancellationToken::new(),
             blocking: Arc::new(BlockingRegistry::default()),
             caught_host_panic: AtomicBool::new(false),
+            quiescent: AtomicBool::new(false),
         }
     }
 
@@ -341,6 +343,57 @@ impl RootKeeper {
         self.state
             .store(RootState::Quarantined as u8, Ordering::SeqCst);
         self.cancellation.cancel();
+    }
+
+    fn quarantine_before_commit(&self) -> bool {
+        let mut closing_at = self.closing_at.lock().expect("root closing clock poisoned");
+        loop {
+            let current = RootState::load(&self.state);
+            match current {
+                RootState::Running | RootState::Closing => {
+                    if self
+                        .state
+                        .compare_exchange(
+                            current as u8,
+                            RootState::Quarantined as u8,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        )
+                        .is_ok()
+                    {
+                        if closing_at.is_none() {
+                            *closing_at = Some(Instant::now());
+                        }
+                        self.cancellation.cancel();
+                        return true;
+                    }
+                }
+                RootState::Quarantined => return true,
+                RootState::Committing | RootState::Complete => return false,
+            }
+        }
+    }
+}
+
+impl Drop for RootKeeper {
+    fn drop(&mut self) {
+        if RootState::load(&self.state) != RootState::Quarantined {
+            return;
+        }
+        let object = self
+            .authority
+            .get_mut()
+            .take()
+            .expect("quarantined root authority retained");
+        if self.quiescent.load(Ordering::SeqCst) {
+            drop(Object::take(object));
+        } else {
+            // The last keeper may disappear after a supervisor failure while
+            // detached guest work still has a cloned connection.
+            std::mem::forget(object);
+            #[cfg(not(test))]
+            std::process::abort();
+        }
     }
 }
 
@@ -543,7 +596,7 @@ async fn supervise<T, F>(
             return Err(anyhow!("root cancelled before execution"));
         }
         let mut authority = root_keeper.authority.lock().await;
-        let runtime: &mut Runtime = &mut authority;
+        let runtime: &mut Runtime = authority.as_mut().expect("root authority retained");
         runtime.invocation_budget = Some(Arc::new(InvocationBudget::default()));
         runtime.store_table_owners = Some(Arc::new(std::sync::Mutex::new(Vec::new())));
         runtime.storage.ownership = Some(context.clone());
@@ -704,6 +757,7 @@ async fn supervise<T, F>(
                 .await
                 .is_err()
         {
+            timed_out = true;
             keeper.quarantine();
             if let Some(response) = response.take() {
                 let _ = response.send(Err(anyhow!(
@@ -717,10 +771,18 @@ async fn supervise<T, F>(
     // A closed child receiver remains alive until its parent has joined. Its
     // cancellation must never look like an ordinary guest error to that parent.
     drop(parked_senders);
-    let result = match root_result.expect("root joined before restoration") {
-        Ok(result) => restore(&keeper, result).await,
-        Err(error) => restore(&keeper, Err(anyhow!("root task failed: {error}"))).await,
+    let operation_result = match root_result.expect("root joined before restoration") {
+        Ok(result) => result,
+        Err(error) => Err(anyhow!("root task failed: {error}")),
     };
+    let result = restore_with_deadline(
+        &keeper,
+        operation_result,
+        deadline,
+        timed_out,
+        &mut response,
+    )
+    .await;
     match result {
         Ok(value)
             if RootState::load(&keeper.state) != RootState::Quarantined
@@ -752,9 +814,36 @@ async fn supervise<T, F>(
     }
 }
 
+async fn restore_with_deadline<T>(
+    keeper: &RootKeeper,
+    operation_result: Result<RootOutcome<T>>,
+    deadline: Option<Instant>,
+    timed_out: bool,
+    response: &mut Option<oneshot::Sender<Result<T>>>,
+) -> Result<Result<T>> {
+    let restoration = restore(keeper, operation_result);
+    tokio::pin!(restoration);
+    if let Some(deadline) = deadline.filter(|_| !timed_out) {
+        tokio::select! {
+            biased;
+            _ = sleep_until(deadline) => {
+                if keeper.quarantine_before_commit()
+                    && let Some(response) = response.take()
+                {
+                    let _ = response.send(Err(anyhow!(
+                        "operation restoration exceeded five seconds; root quarantined"
+                    )));
+                }
+            }
+            result = &mut restoration => return result,
+        }
+    }
+    restoration.await
+}
+
 async fn restore<T>(keeper: &RootKeeper, result: Result<RootOutcome<T>>) -> Result<Result<T>> {
     let mut authority = keeper.authority.lock().await;
-    let runtime: &mut Runtime = &mut authority;
+    let runtime: &mut Runtime = authority.as_mut().expect("root authority retained");
     let wants_commit = result.as_ref().is_ok_and(|outcome| outcome.commit);
     let commit_authorized = wants_commit
         && keeper
@@ -809,6 +898,7 @@ async fn restore<T>(keeper: &RootKeeper, result: Result<RootOutcome<T>>) -> Resu
     runtime.invocation_budget = None;
     runtime.store_table_owners = None;
     *runtime.table.lock().await = ResourceTable::new();
+    keeper.quiescent.store(true, Ordering::SeqCst);
     if RootState::load(&keeper.state) == RootState::Closing {
         return Ok(Err(anyhow!(
             "operation cancelled before commit authorization"
@@ -971,6 +1061,7 @@ mod tests {
         let dir = TempDir::new()?;
         let pool = one_object_pool(&dir).await?;
         let object = pool.get().await?;
+        let poisoned_id = Object::id(&object);
         let service = OwnerService::new();
         let mut handle = service
             .start_pooled(object, |_runtime| {
@@ -991,6 +1082,9 @@ mod tests {
                 .await
                 .is_err()
         );
+        drop(service);
+        let fresh = timeout(Duration::from_secs(2), pool.get()).await??;
+        assert_ne!(Object::id(&fresh), poisoned_id);
         Ok(())
     }
 
@@ -1055,6 +1149,53 @@ mod tests {
         assert_eq!(pool.status().available, 0);
         assert_eq!(service.active_roots().await, 1);
         release.send(())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restoration_deadline_responds_while_authority_is_locked() -> Result<()> {
+        let dir = TempDir::new()?;
+        let pool = one_object_pool(&dir).await?;
+        let object = pool.get().await?;
+        let keeper = Arc::new(RootKeeper::new(RootId(9), object));
+        let mut authority = keeper.authority.lock().await;
+        authority
+            .as_mut()
+            .expect("root authority retained")
+            .storage
+            .savepoint()
+            .await?;
+        keeper.close();
+        let (sender, receiver) = oneshot::channel();
+        let restoring = keeper.clone();
+        let task = tokio::spawn(async move {
+            let mut response = Some(sender);
+            restore_with_deadline(
+                &restoring,
+                Err::<RootOutcome<()>, _>(anyhow!("cancelled operation")),
+                Some(Instant::now() + Duration::from_millis(30)),
+                false,
+                &mut response,
+            )
+            .await
+        });
+        assert!(timeout(Duration::from_secs(2), receiver).await??.is_err());
+        assert_eq!(RootState::load(&keeper.state), RootState::Quarantined);
+        assert_eq!(pool.status().available, 0);
+        drop(authority);
+        let restored = timeout(Duration::from_secs(2), task).await??;
+        assert!(restored?.is_err());
+        assert!(
+            keeper
+                .authority
+                .lock()
+                .await
+                .as_ref()
+                .expect("root authority retained")
+                .storage
+                .conn
+                .is_autocommit()
+        );
         Ok(())
     }
 }
