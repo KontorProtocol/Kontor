@@ -26,7 +26,7 @@ use tokio::runtime::{Builder, Runtime as TokioRuntime};
 
 use crate::built_info;
 
-use super::sha256_file;
+use super::{REDUCED_WORKER_STACK_BYTES, sha256_file};
 
 #[derive(Debug)]
 pub(super) struct MacStackRange {
@@ -219,6 +219,19 @@ pub(super) fn measured_tokio_runtime(
         }
     };
     done.store(true, Ordering::Relaxed);
+    if let Some(size) = worker_stack_size {
+        for stack in [&first, &second] {
+            let mapped_bytes = stack.mapped_end - stack.mapped_start;
+            let page_size = stack.page_size_bytes;
+            let pthread_offset = stack.mapped_end % page_size;
+            // Darwin arm64 includes the pthread_t offset in its reported stack
+            // size, so the excess must match the top address's page remainder.
+            ensure!(
+                size % page_size == 0 && mapped_bytes.checked_sub(size) == Some(pthread_offset),
+                "macOS pthread stack layout differs from the requested worker size: requested={size}, mapped={mapped_bytes}, top_remainder={pthread_offset}, page_size={page_size}"
+            );
+        }
+    }
     ensure!(
         first.thread_id != second.thread_id && first.os_thread_id != second.os_thread_id,
         "macOS Tokio workers have duplicate identities"
@@ -355,7 +368,8 @@ pub(super) fn guard_fault_child() -> Result<()> {
         unsafe { setrlimit(RLIMIT_CORE, &limit) } == 0,
         "could not disable core dump"
     );
-    let (runtime, _) = measured_tokio_runtime((mode == "reduced").then_some(1024 * 1024))?;
+    let (runtime, _) =
+        measured_tokio_runtime((mode == "reduced").then_some(REDUCED_WORKER_STACK_BYTES))?;
     runtime.block_on(async move {
         tokio::spawn(async move {
             let stack = current_stack_range()?;
