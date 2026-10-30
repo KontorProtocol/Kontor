@@ -222,7 +222,7 @@ def run_service(args, environment, binary, output, bitcoin):
                "--property=MemorySwapMax=0", "--property=KillMode=control-group",
                "--property=TimeoutStopSec=5", f"--property=RuntimeMaxSec={args.timeout}",
                f"--working-directory={Path.cwd()}", f"--setenv=PATH={os.environ['PATH']}",
-               sys.executable, str(Path(__file__).resolve()), "--worker", str(spec_path)]
+               sys.executable, "-B", str(Path(__file__).resolve()), "--worker", str(spec_path)]
     # The service manager kills the complete process tree on timeout or failure,
     # including bitcoind and detached runtime workers owned by the test process.
     with (output / "supervisor.log").open("xb") as log:

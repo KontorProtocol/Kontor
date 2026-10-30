@@ -129,7 +129,7 @@ class BitcoinService:
                            "-rpcallowip=127.0.0.1", f"-rpcport={port}",
                            "-limitancestorcount=500", "-limitdescendantcount=500"]
                 self.child = subprocess.Popen(
-                    [sys.executable, str(Path(__file__).resolve()), "--owned-child",
+                    [sys.executable, "-B", str(Path(__file__).resolve()), "--owned-child",
                      str(os.getpid()), *command], stdout=self.log, stderr=subprocess.STDOUT)
                 attempt = {"pid": self.child.pid, "command": command, "rpc_url": self.url}
                 self.record["attempts"].append(attempt)
