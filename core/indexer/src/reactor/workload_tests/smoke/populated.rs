@@ -74,6 +74,7 @@ enum Delivery {
     MixedTransactions(usize),
     MixedMultiInput,
     MixedAggregate,
+    AggregateBoundary,
     MixedPagination,
     MixedFiles,
     Configured(MixedConfig),
@@ -87,6 +88,7 @@ impl Delivery {
             | Self::MixedAggregate
             | Self::MixedPagination
             | Self::MixedFiles => Some(5),
+            Self::AggregateBoundary => Some(500),
             Self::MixedTransactions(count) => Some(count / 10),
             Self::Configured(config) => Some(config.transactions / 10),
             _ => None,
@@ -335,6 +337,21 @@ async fn workload_aggregate_preserves_signers_and_nonces() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; actual 10,000-op aggregate diagnostic, not performance acceptance"]
+async fn workload_aggregate_operation_limit_preserves_accounting() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::AggregateBoundary,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires local bitcoind; bounded storage cursor replay, not full W_op qualification"]
 async fn workload_pagination_preserves_order_and_boundaries() -> Result<()> {
     replay(
@@ -548,13 +565,18 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
         .signer_id();
     let shape_signers = if matches!(
         delivery,
-        Delivery::MixedMultiInput | Delivery::MixedAggregate
+        Delivery::MixedMultiInput | Delivery::MixedAggregate | Delivery::AggregateBoundary
     ) {
         Some(
             ShapeSigners::prepare(
                 &mut history.runtime,
                 key,
-                delivery == Delivery::MixedAggregate,
+                delivery != Delivery::MixedMultiInput,
+                if delivery == Delivery::AggregateBoundary {
+                    10_000
+                } else {
+                    100
+                },
             )
             .await?,
         )

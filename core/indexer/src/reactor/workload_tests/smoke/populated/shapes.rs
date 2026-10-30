@@ -16,7 +16,10 @@ use super::many;
 use super::mixed::{MixedLayout, MixedWorkload};
 use crate::api::compose::compose;
 use crate::bitcoin_client::Client;
-use crate::bls::{KONTOR_BLS_DST, RegistrationProof, taproot_derivation_path};
+use crate::bls::{
+    KONTOR_BLS_DST, MAX_BLS_BULK_OPS, MAX_BLS_BULK_TOTAL_MESSAGE_BYTES, RegistrationProof,
+    taproot_derivation_path,
+};
 use crate::database::types::Identity;
 use crate::reg_tester::derive_taproot_keypair_from_seed;
 use crate::runtime::numerics::sub_decimal;
@@ -47,6 +50,7 @@ pub(super) struct ShapeSigners {
     bls: [SecretKey; 2],
     nonces: [u64; 2],
     aggregate: bool,
+    operation_count: usize,
 }
 
 impl ShapeSigners {
@@ -54,7 +58,11 @@ impl ShapeSigners {
         runtime: &mut Runtime,
         primary: Keypair,
         aggregate: bool,
+        operation_count: usize,
     ) -> Result<Self> {
+        ensure!(matches!(operation_count, 100 | 10_000));
+        ensure!(aggregate || operation_count == 100);
+        ensure!(operation_count <= MAX_BLS_BULK_OPS);
         let keys = [primary, secondary_key()?];
         let identities = [
             runtime
@@ -112,6 +120,7 @@ impl ShapeSigners {
             bls,
             nonces,
             aggregate,
+            operation_count,
         })
     }
 
@@ -125,7 +134,7 @@ impl ShapeSigners {
     }
 
     fn groups(&self, mut ops: Vec<Inst>) -> Result<Vec<Insts>> {
-        ensure!(ops.len() == 100);
+        ensure!(ops.len() == self.operation_count);
         if !self.aggregate {
             let second = ops.split_off(50);
             ops.push(Inst {
@@ -137,6 +146,7 @@ impl ShapeSigners {
         let mut nonces = self.nonces;
         let mut signers = Vec::new();
         let mut signatures = Vec::new();
+        let mut message_bytes = 0usize;
         for (index, op) in ops.iter().enumerate() {
             let actor = index % 2;
             let signer = AggregateSigner {
@@ -147,14 +157,25 @@ impl ShapeSigners {
             nonces[actor] = nonces[actor]
                 .checked_add(1)
                 .context("fixture nonce overflow")?;
-            signatures.push(self.bls[actor].sign(
-                &op.aggregate_signing_message(&signer.identity, signer.nonce, signer.sponsored)?,
-                KONTOR_BLS_DST,
-                &[],
-            ));
+            let message =
+                op.aggregate_signing_message(&signer.identity, signer.nonce, signer.sponsored)?;
+            message_bytes = message_bytes
+                .checked_add(message.len())
+                .context("fixture signed-message byte count overflow")?;
+            ensure!(
+                message_bytes <= MAX_BLS_BULK_TOTAL_MESSAGE_BYTES,
+                "aggregate fixture exceeds signed-message byte limit: {message_bytes}"
+            );
+            signatures.push(self.bls[actor].sign(&message, KONTOR_BLS_DST, &[]));
             signers.push(signer);
         }
         let refs: Vec<_> = signatures.iter().collect();
+        eprintln!(
+            "workload_aggregate_admission={}",
+            json!({"operations": ops.len(), "signed_message_bytes": message_bytes,
+                "operation_limit": MAX_BLS_BULK_OPS,
+                "signed_message_byte_limit": MAX_BLS_BULK_TOTAL_MESSAGE_BYTES})
+        );
         let signature = AggregateSignature::aggregate(&refs, true)
             .map_err(|e| anyhow!("aggregate fixture: {e:?}"))?
             .to_signature()
@@ -268,8 +289,8 @@ impl ShapeSigners {
             json!({
                 "aggregate": self.aggregate, "signers": self.identities.each_ref().map(|id| id.signer_id()),
                 "initial_nonces": self.nonces, "publisher_pays_all": true,
-                "inputs": reveal.input.len(), "executable_operations": 100,
-                "instructions_per_input": if self.aggregate { vec![100] } else { vec![51, 50] },
+                "inputs": reveal.input.len(), "executable_operations": self.operation_count,
+                "instructions_per_input": if self.aggregate { vec![self.operation_count] } else { vec![51, 50] },
                 "bitcoin_transactions": block.txdata.len(), "block_bytes": bytes.len(),
                 "block_weight": block.weight().to_wu(), "raw_block_sha256": hex::encode(Sha256::digest(bytes)),
             })
@@ -290,7 +311,12 @@ impl ShapeSigners {
         for (index, id) in self.identities.iter().enumerate() {
             ensure!(
                 id.next_nonce(&runtime.get_storage_conn()).await?
-                    == self.nonces[index] + if self.aggregate { 50 } else { 0 }
+                    == self.nonces[index]
+                        + if self.aggregate {
+                            u64::try_from(self.operation_count / 2)?
+                        } else {
+                            0
+                        }
             );
         }
         Ok(())

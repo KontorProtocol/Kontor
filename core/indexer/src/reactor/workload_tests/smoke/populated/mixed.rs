@@ -192,7 +192,7 @@ impl MixedWorkload {
     }
 
     pub(super) async fn prepare(runtime: &mut Runtime, payer: u64, rounds: usize) -> Result<Self> {
-        ensure!(matches!(rounds, 5 | 50));
+        ensure!(matches!(rounds, 5 | 50 | 500));
         Self::prepare_recipe(runtime, payer, rounds).await
     }
 
