@@ -964,15 +964,15 @@ fn linux_worker_guard_fault_control() -> Result<()> {
             sleep(Duration::from_millis(10));
         }
         let output = child.wait_with_output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let signal = output.status.signal();
         ensure!(
             signal == Some(SIGABRT)
                 && stderr.contains("has overflowed its stack")
                 && stderr.contains("fatal runtime error: stack overflow"),
-            "{mode} guard child did not report a guard fault: status={:?}, stderr={}",
+            "{mode} guard child did not report a guard fault: status={:?}, signal={signal:?}, stdout={stdout}, stderr={stderr}",
             output.status,
-            stderr
         );
         let stdout = String::from_utf8(output.stdout)?;
         let targets = stdout
@@ -1092,10 +1092,33 @@ fn linux_worker_guard_fault_child() -> Result<()> {
         tokio::spawn(async move {
             let stack = current_linux_stack_range()?;
             ensure!(stack.guard_bytes > 0, "worker has no reported guard");
-            let address = stack.guard_start + stack.page_size_bytes / 2;
+            // An adjacent PROT_NONE VMA can span far more than pthread's guard.
+            // Rust recognizes faults only within one guard width of the stack base.
+            let address = if stack.guard_end == stack.mapped_start {
+                stack
+                    .mapped_start
+                    .checked_sub(stack.page_size_bytes / 2)
+                    .context("guard target underflow")?
+            } else {
+                stack
+                    .mapped_start
+                    .checked_add(stack.page_size_bytes / 2)
+                    .context("guard target overflow")?
+            };
+            let rust_guard_start = stack
+                .mapped_start
+                .checked_sub(stack.guard_bytes)
+                .context("Rust guard range underflow")?;
+            let rust_guard_end = stack
+                .mapped_start
+                .checked_add(stack.guard_bytes)
+                .context("Rust guard range overflow")?;
             ensure!(
-                address < stack.guard_end,
-                "guard target is outside protected interval"
+                stack.guard_start <= address
+                    && address < stack.guard_end
+                    && rust_guard_start <= address
+                    && address < rust_guard_end,
+                "guard target is outside protected interval or Rust handler range"
             );
             println!(
                 "KONTOR_RESOURCE_GUARD_TARGET={}",
