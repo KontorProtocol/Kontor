@@ -424,6 +424,7 @@ impl<E: Executor> Reactor<E> {
         let block = match self.executor.parse_block(block).await {
             Ok(block) => block,
             Err(error) => {
+                lease.drain(&self.runtime).await?;
                 lease.complete(&mut self.runtime).await?;
                 return Err(error);
             }

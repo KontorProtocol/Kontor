@@ -833,7 +833,7 @@ explicit `None` result, preserves the existing HTTP 400 response, and does not s
 the reactor. Infrastructure errors retain their fatal treatment. Malformed Bitcoin
 encoding is still rejected before queueing. This prepares the simulation path for
 selected execution; the current production executor remains P1. Protocol selection,
-raw block/mempool ingress, proposal revalidation and admitted executor dispatch are
+raw mempool ingress, proposal revalidation and admitted executor dispatch are
 still required. No activation or historical bundle isolation is claimed here.
 
 Validation of `60fbec07`: the three simulation API tests, four context-restoration
@@ -843,3 +843,26 @@ and signed bytes. It also confirmed that unrecognized input leaves state unchang
 before a subsequent valid simulation. The locked/offline indexer/testlib all-target
 check passed. The only subsequent source cleanup removes an unused test import;
 it does not change execution. The phase-level independent reviews remain pending.
+
+Raw block ingestion now retains complete Bitcoin transactions through poller
+delivery and the reactor's pending-block queue. Recognition happens after canonical
+root admission, using the current executor. P1 still parses on a blocking worker
+with ordered parallel collection. Original Bitcoin transaction indexes and witness
+bytes survive filtering, and confirmed txids are removed from the pending pool.
+The parsed-block conversion exists only for synthetic unit-test fixtures, not
+production ingress. This is preparation for protocol selection, not activation.
+
+Validation at `6f0f3831`: 28 poller tests passed, including retaining unrecognized
+inputs and distinct witnesses under one txid. The real-execution replay matched
+all eleven saved baseline stages. Three-node confirmation-without-reexecution and
+below-tip replay tests passed, as did the indexer/testlib all-target check. An
+earlier cluster attempt was stopped after the sandbox denied its loopback listener;
+the successful run had loopback access. Raw logs, source revisions and checksums
+are under `.build-cache/selected-executor-baseline/6f0f3831/`.
+
+Lead review covered raw delivery, pending queues, original indexes, confirmation
+deduplication, replay, and parser-worker failure cleanup. It found that the latter
+must drain the admitted root before completing it; that ordering is corrected.
+The normal-path checks above precede this error-path correction. Full selected
+dispatch, raw mempool handling, final prerequisite reconciliation and consolidated
+phase reviews remain outstanding.
