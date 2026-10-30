@@ -342,7 +342,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                     && runtime.storage.savepoint_stack.is_empty().await,
                 "filestorage lifecycle repeat did not restore baseline state"
             );
-            let observation = json!({
+            let mut observation = json!({
                 "sample_key": sample, "outcome": "ok", "processed": processed,
                 "challenge_count": challenge_count, "file_count": file_count,
                 "challenge_ids": &challenge_ids,
@@ -359,6 +359,8 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 "pending_before": pending_before, "pending_after": pending_after,
                 "obligations_before": obligations_before, "obligations_after": obligations_after,
                 "memberships_before": memberships_before, "memberships_after": memberships_after,
+            });
+            let diagnostics = json!({
                 "system_fuel": usage.system_fuel, "user_fuel": usage.user_fuel,
                 "deposit_fuel": usage.deposit_fuel,
                 "state_before_sha256": baseline_digest,
@@ -374,6 +376,10 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 "max_wasm_stack": runtime.engine.get_max_wasm_stack(),
                 "async_stack_size": runtime.engine.get_async_stack_size(),
             });
+            observation
+                .as_object_mut()
+                .unwrap()
+                .extend(diagnostics.as_object().unwrap().clone());
             println!(
                 "FINITE_STACK_ATTEMPT:{}",
                 json!({

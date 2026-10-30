@@ -238,7 +238,7 @@
     },
     "native_filestorage_lifecycle_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/native_filestorage_lifecycle.rs",
-      "sha256": "b334ad27bcd8c66e9f5db21d81ce0184ec22239edfbd742de0e19f66fb468219"
+      "sha256": "c42c8eefb54a2a3955009ba1e57871d48e27935bb84581ea17c9e35d23c49133"
     },
     "native_filestorage_lifecycle_capture": {
       "path": "tools/native-stack/capture_resource_native_filestorage_lifecycle.py",
