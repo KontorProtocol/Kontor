@@ -6,13 +6,15 @@ mod startup_recovery_tests;
 use startup_recovery_tests::StartupFaults;
 
 use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::stopper::{Shutdown, ShutdownSignal};
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
+use tokio::time::timeout;
 use tracing::{Instrument, info, info_span};
 
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
@@ -29,7 +31,7 @@ use crate::reactor::mock_bitcoin::MockBitcoin;
 use crate::reactor::{Reactor, Simulation};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::GenesisValidator;
-use crate::runtime::ownership::OwnerService;
+use crate::runtime::ownership::{AsyncGate, OwnerService};
 use bitcoin::hashes::Hash;
 use indexer_types::Event;
 use indexer_types::OpWithResult;
@@ -1680,6 +1682,76 @@ async fn prod_reactor_restart_inside_finality_window_still_rolls_back() -> Resul
     .expect("same-chain finality replay must retain a durable recovery boundary");
     assert_eq!(recovery.surviving_height, 0);
     assert!(recovery.cursor <= before_stream.max_result_id);
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_during_finality_replay_waits_for_active_replay() -> Result<()> {
+    crate::logging::setup();
+    let mut cluster = ReactorCluster::start(3).await?;
+    cluster.wait_for_ready().await;
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
+    for event in cluster.mock_bitcoin().generate_mempool_txs(1) {
+        cluster.send_mempool_event(event);
+    }
+    let batch = cluster.wait_for_batch(1, Duration::from_secs(60)).await;
+    assert_eq!(batch.txids.len(), 1);
+    let mut conns = Vec::new();
+    for index in 0..3 {
+        conns.push(cluster.node_conn(index).await.clone());
+    }
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let mut rows = conns[0]
+                .query(
+                    "SELECT COUNT(*) FROM transactions WHERE batch_height IS NOT NULL",
+                    (),
+                )
+                .await?;
+            if rows.next().await?.expect("batch count").get::<i64>(0)? > 0 {
+                break Ok::<(), anyhow::Error>(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    let gate = Arc::new(AsyncGate::default());
+    cluster.mock_bitcoin().replay_gate = Some(gate.clone());
+    for _ in 0..8 {
+        cluster.mine_empty_and_send();
+    }
+    let all_replaying = timeout(Duration::from_secs(90), async {
+        while gate.entries.load(Ordering::SeqCst) < 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    if all_replaying.is_err() {
+        gate.release();
+        cluster.shutdown().await;
+        return Err(anyhow!("not all reactors reached finality replay"));
+    }
+    let mut shutdown = tokio::spawn(async move { cluster.shutdown().await });
+    let retained = timeout(Duration::from_millis(150), &mut shutdown)
+        .await
+        .is_err();
+    gate.release();
+    assert!(
+        retained,
+        "shutdown released reactors while replay was active"
+    );
+    timeout(Duration::from_secs(30), shutdown).await??;
+    for conn in conns {
+        assert!(conn.is_autocommit());
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM transactions WHERE batch_height IS NOT NULL",
+                (),
+            )
+            .await?;
+        assert_eq!(rows.next().await?.expect("batch count").get::<i64>(0)?, 0);
+    }
     Ok(())
 }
 

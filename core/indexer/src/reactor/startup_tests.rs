@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
@@ -9,14 +11,92 @@ use tokio::time::{interval, sleep, timeout};
 use super::engine::EngineConfig;
 use super::executor::NoopExecutor;
 use super::mempool_fee_index::MempoolFeeIndex;
-use super::{PruneConfig, Reactor, start_consensus};
+use super::{PruneConfig, Reactor, run, start_consensus};
+use crate::bitcoin_client::Client;
 use crate::consensus::signing::PrivateKey;
+use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::logging;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::ownership::OwnerService;
-use crate::runtime::{Decimal, GenesisValidator};
+use crate::runtime::{BlockingGate, Decimal, GenesisValidator};
 use crate::stopper::Shutdown;
-use crate::test_utils::{new_mock_block_hash, test_runtime_with_genesis};
+use crate::test_utils::{
+    new_mock_block_hash, new_test_db, test_genesis, test_runtime_with_genesis,
+};
+
+#[tokio::test]
+async fn shutdown_during_owned_genesis_keeps_writer_until_publication_finishes() -> Result<()> {
+    let (_reader, writer, (dir, _name)) = new_test_db().await?;
+    let conn = writer.connection();
+    let gate = Arc::new(BlockingGate::default());
+    let owner = OwnerService::new();
+    owner.set_startup_compile_gate(gate.clone());
+    let mut driver = owner.take_driver().expect("test owner has a driver");
+    let shutdown = Shutdown::new();
+    let (_block_tx, block_rx) = mpsc::channel(1);
+    let (_mempool_tx, mempool_rx) = mpsc::channel(1);
+    let (addr_tx, _addr_rx) = watch::channel(None);
+    let mut reactor = run(
+        1,
+        shutdown.signal(),
+        owner.clone(),
+        writer,
+        block_rx,
+        mempool_rx,
+        None,
+        None,
+        None,
+        EngineConfig {
+            private_key: PrivateKey::from([77; 32]),
+            listen_addr: "/ip4/127.0.0.1/tcp/0".to_string(),
+            persistent_peers: Vec::new(),
+            data_dir: dir.path().to_path_buf(),
+            consensus_enabled: true,
+            discovery: Default::default(),
+        },
+        Client::new("".to_string(), "".to_string(), "".to_string())?,
+        None,
+        test_genesis(&[]),
+        None,
+        1_000,
+        None,
+        addr_tx,
+        bitcoin::Network::Regtest,
+        PruneConfig {
+            enabled: false,
+            retain_blocks: 144,
+        },
+    );
+    let entered = timeout(Duration::from_secs(30), async {
+        while !gate.entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let live_roots = owner.active_roots().await;
+    shutdown.cancel();
+    let retained = timeout(Duration::from_millis(100), &mut reactor)
+        .await
+        .is_err();
+    gate.release();
+    entered?;
+    assert_eq!(live_roots, 1);
+    assert!(
+        retained,
+        "reactor released its writer while genesis work was live"
+    );
+    timeout(Duration::from_secs(60), reactor).await???;
+    assert!(conn.is_autocommit());
+    let mut rows = conn.query("SELECT COUNT(*) FROM contracts", ()).await?;
+    assert_eq!(
+        rows.next().await?.expect("contract count").get::<i64>(0)?,
+        NATIVE_CONTRACTS.len() as i64
+    );
+    assert_eq!(owner.active_roots().await, 0);
+    owner.shutdown();
+    timeout(Duration::from_secs(2), &mut driver).await???;
+    Ok(())
+}
 
 #[tokio::test]
 async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()> {

@@ -860,6 +860,8 @@ pub(crate) async fn create_runtime_executor(
     let mut runtime = Runtime::new(ComponentCache::new(), storage)
         .await
         .context("Failed to initialize runtime")?;
+    #[cfg(test)]
+    owner_service.apply_startup_compile_gate(&mut runtime);
     // Set the chain network *before* publishing — native-contract `init` reads
     // it via the `network()` built-in to self-condition per-network defaults
     // (e.g. token's dev mint is off at mainnet genesis).

@@ -49,6 +49,8 @@ use invocation::{InvocationBudget, InvocationLimitReached, InvocationStore, MAX_
 use invocation::{ResourceProbePhase, ResourceProbeRole};
 use libsql::Connection;
 use lowering::Linker;
+#[cfg(test)]
+use ownership::AsyncGate;
 use ownership::{ChildContext, OwnerService};
 use sha2::{Digest, Sha256};
 use staking::api::wave::{get_sigma_min_call_expr, get_sigma_min_parse_return_expr};
@@ -303,6 +305,8 @@ pub struct Runtime {
     pub(crate) test_host_error_message: Option<Arc<str>>,
     #[cfg(test)]
     compile_gate: Option<Arc<BlockingGate>>,
+    #[cfg(test)]
+    init_host_gate: Option<(u64, Arc<AsyncGate>)>,
     pub(crate) usage_kind: UsageKind,
     pub(crate) fuel_checkpoint: u64,
     /// Transient per-op accumulator of the storage-deposit GAS reserved this op
@@ -479,6 +483,8 @@ impl Runtime {
             test_host_error_message: None,
             #[cfg(test)]
             compile_gate: None,
+            #[cfg(test)]
+            init_host_gate: None,
             deposit: DepositMeter::new(),
             usage_kind: UsageKind::System,
             fuel_checkpoint: 0,

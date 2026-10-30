@@ -3,6 +3,8 @@ use std::future::{Future, pending};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -20,10 +22,33 @@ use wasmtime::component::{ResourceTable, Val};
 use super::Runtime;
 use super::invocation::{InvocationBudget, InvocationStore};
 use super::pool::Manager;
+#[cfg(test)]
+use super::storage::BlockingGate;
 
 const API_DRAIN_LIMIT: Duration = Duration::from_secs(5);
 const NODE_ADMISSION_CAPACITY: usize = 64;
 const API_FUEL_YIELD_INTERVAL: u64 = 100_000;
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct AsyncGate {
+    pub(crate) entered: AtomicBool,
+    pub(crate) entries: AtomicUsize,
+    release: CancellationToken,
+}
+
+#[cfg(test)]
+impl AsyncGate {
+    pub(crate) async fn wait(&self) {
+        self.entered.store(true, Ordering::SeqCst);
+        self.entries.fetch_add(1, Ordering::SeqCst);
+        self.release.cancelled().await;
+    }
+
+    pub(crate) fn release(&self) {
+        wake_owner(&self.release);
+    }
+}
 
 // These private tokens only wake the owner supervisor. Process shutdown remains
 // controlled by stopper::Shutdown.
@@ -568,6 +593,8 @@ struct OwnerRegistry {
     next_root: AtomicU64,
     roots: Mutex<HashMap<RootId, Arc<RootKeeper>>>,
     fatal: AtomicBool,
+    #[cfg(test)]
+    startup_compile_gate: std::sync::Mutex<Option<Arc<BlockingGate>>>,
 }
 
 type RootStart = Box<dyn FnOnce() -> BoxFuture<'static, ()> + Send>;
@@ -731,6 +758,25 @@ impl OwnerService {
 
     pub fn shutdown(&self) {
         wake_owner(&self.shutdown);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_startup_compile_gate(&self, gate: Arc<BlockingGate>) {
+        *self
+            .registry
+            .startup_compile_gate
+            .lock()
+            .expect("startup gate lock poisoned") = Some(gate);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_startup_compile_gate(&self, runtime: &mut Runtime) {
+        runtime.compile_gate = self
+            .registry
+            .startup_compile_gate
+            .lock()
+            .expect("startup gate lock poisoned")
+            .clone();
     }
 
     pub async fn active_roots(&self) -> usize {
@@ -3203,6 +3249,106 @@ mod tests {
             runtime.compile_gate = None;
             assert_eq!(service.active_roots().await, 0);
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_while_publication_guest_init_is_pending_rolls_back_everything() -> Result<()>
+    {
+        let (mut runtime, _dir, signer, _address) = seeded_paid_oracle().await?;
+        let payer_before = token::api::balance(&mut runtime, HolderRef::from(&signer)).await?;
+        let burner_before = token::api::balance(&mut runtime, HolderRef::Burner).await?;
+        let checkpoint_before = checkpoint_hash(&runtime.get_storage_conn()).await?;
+        let receipts_before = receipt_count(&runtime).await?;
+        let mut rows = runtime
+            .storage
+            .conn
+            .query("SELECT COALESCE(MAX(id), 0) + 1 FROM contracts", ())
+            .await?;
+        let next_contract_id: u64 = rows
+            .next()
+            .await?
+            .context("next contract id missing")?
+            .get(0)?;
+        drop(rows);
+        let gate = Arc::new(AsyncGate::default());
+        runtime.init_host_gate = Some((next_contract_id, gate.clone()));
+        let payment = Payment {
+            signer_id: signer.signer_id().context("test payer missing")?,
+            gas_limit: runtime.gas_limit_for_non_procs,
+        };
+        let service = OwnerService::new();
+        let owned = OwnedRuntimeSession::with_service(runtime, service.clone());
+        let call_signer = signer.clone();
+        let handle = service
+            .start_stateful(&owned.session, move |runtime| {
+                Box::pin(async move {
+                    runtime
+                        .publish(
+                            &call_signer,
+                            payment,
+                            "ownership-init-cancel",
+                            include_bytes!(
+                                "../../../../test-contracts/binaries/error_test.wasm.br"
+                            ),
+                            &native_provenance()?,
+                        )
+                        .await
+                        .map_err(anyhow::Error::from)?;
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: true,
+                    })
+                })
+            })
+            .await?;
+        let entered = timeout(Duration::from_secs(30), async {
+            while !gate.entered.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if entered.is_err() {
+            gate.release();
+            drop(handle);
+            return Err(anyhow!(
+                "publication init did not enter its storage host call"
+            ));
+        }
+        drop(handle);
+        let checkout = timeout(Duration::from_secs(5), owned.session.checkout()).await;
+        gate.release();
+        let mut checkout = checkout??;
+        let runtime = checkout
+            .runtime
+            .as_mut()
+            .context("restored writer missing")?;
+        let address = ContractAddress {
+            name: "ownership-init-cancel".to_string(),
+            height: 0,
+            tx_index: 0,
+        };
+        assert!(runtime.storage.contract_id(&address).await?.is_none());
+        assert_eq!(receipt_count(runtime).await?, receipts_before);
+        assert_eq!(
+            checkpoint_hash(&runtime.get_storage_conn()).await?,
+            checkpoint_before
+        );
+        assert_eq!(
+            token::api::balance(runtime, HolderRef::from(&signer)).await?,
+            payer_before
+        );
+        assert_eq!(
+            token::api::balance(runtime, HolderRef::Burner).await?,
+            burner_before
+        );
+        assert!(runtime.storage.conn.is_autocommit());
+        assert!(runtime.storage.savepoint_stack.is_empty().await);
+        assert!(runtime.stack.is_empty().await);
+        assert_eq!(runtime.table.lock().await.iter_mut().count(), 0);
+        assert!(runtime.invocation_budget.is_none());
+        runtime.init_host_gate = None;
+        assert_eq!(service.active_roots().await, 0);
         Ok(())
     }
 
