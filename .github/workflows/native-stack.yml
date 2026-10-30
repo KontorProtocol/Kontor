@@ -7,6 +7,7 @@ on:
       - "test-contracts/**"
       - "tools/native-stack/**"
       - ".github/workflows/native-stack.yml"
+      - ".github/workflows/native-stack-s2.yml"
   push:
     branches: [main]
     paths:
@@ -14,6 +15,7 @@ on:
       - "test-contracts/**"
       - "tools/native-stack/**"
       - ".github/workflows/native-stack.yml"
+      - ".github/workflows/native-stack-s2.yml"
   workflow_dispatch:
     inputs:
       stage:
@@ -53,12 +55,15 @@ jobs:
       RUSTC_WRAPPER: ""
       CCACHE_DISABLE: "1"
       CARGO_BUILD_JOBS: "2"
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.1
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+      - name: Install Python evidence validator
+        run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
       - name: Test qualification controls
         run: python3 -m unittest discover -s tools/native-stack -p 'test_*.py' -v
       - name: Check runner architecture

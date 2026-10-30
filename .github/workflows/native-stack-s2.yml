@@ -34,15 +34,16 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+      - name: Install Python evidence validator
+        run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
       - name: Check pending discovery source
         run: |
           test "$RUNNER_ARCH" = ARM64
           python3 tools/native-stack/resource_manifest.py
           python3 tools/native-stack/resource_boundary_manifest.py
           jq -e '.claim_status == "pending_discovery"' tools/native-stack/resource-boundary-manifest-v1.json
-      - name: Install evidence and native dependencies
+      - name: Install native dependencies
         run: |
-          python3 -m pip install -r tools/native-stack/requirements-resource.txt
           sudo apt-get update
           sudo apt-get install -y libzmq3-dev libboost-all-dev libevent-dev
       - name: Build and measure discovery boundary
@@ -155,6 +156,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+      - name: Install Python evidence validator
+        run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
       - name: Check runner and frozen source
         run: |
           test "$RUNNER_ARCH" = "${{ matrix.arch }}"
@@ -164,8 +167,6 @@ jobs:
           python3 tools/native-stack/resource_suite_registry.py
           jq -e '.claim_status == "candidate_only"' tools/native-stack/resource-boundary-manifest-v1.json
           jq -e '.auxiliary_count_status == "frozen"' tools/native-stack/resource-manifest-v2.json
-      - name: Install Python evidence validator
-        run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
       - name: Install native dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
