@@ -16,6 +16,7 @@ use wasmtime::{
 use indexer_types::{OpStatus, Payment};
 
 use crate::database::native_contracts::{TOKEN_CONTRACT_ID, is_native_contract_id};
+use crate::protocol::v1::gas::SYSTEM_FUEL_CEILING;
 
 use super::{
     ContractAddress, MAX_UNTRUSTED_GAS_LIMIT, Runtime,
@@ -750,24 +751,6 @@ const MAX_STRING_LITERAL_BYTES: usize = 16 * 1024;
 /// overflows at a few thousand levels. 64 is far beyond any real call and far
 /// below the overflow depth. CONSENSUS-LOAD-BEARING — see `MAX_STRING_LITERAL_BYTES`.
 const MAX_EXPR_DEPTH: usize = 64;
-
-/// Fuel budget for trusted Core calls and internal system views, effectively
-/// unmetered. Selected by a Core signer or the explicit system-view entry point.
-///
-/// `i64::MAX as u64`, NOT `u64::MAX`: the remaining fuel is bound into the storage
-/// read path as a SQL i64 size-budget (`CASE WHEN size <= :fuel`, contract_state.rs),
-/// so it must fit in i64 (`u64::MAX as i64 == -1` would make every core read fail).
-/// i64::MAX is the largest i64-safe budget.
-///
-/// Fork-safe: core fuel never enters the checkpoint hash and the call runs inside the
-/// block savepoint, so an over-budget hang can only stall a node a height behind —
-/// never fork committed state. `gas_consumed` is a start−end difference, so true usage
-/// still records. (The cap does not bound wall-clock work; per-block core work is
-/// bounded by design — see the block-lifecycle hooks.)
-///
-/// CONSENSUS-LOAD-BEARING: all nodes must share this value — a node with a lower budget
-/// would stall on a block the others commit. Change only behind a coordinated upgrade.
-const SYSTEM_FUEL_CEILING: u64 = i64::MAX as u64;
 
 /// Deterministically reject a call expression that would overflow the recursive
 /// WAVE parser — along its two recursion axes: an over-long string literal, or

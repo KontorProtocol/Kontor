@@ -128,6 +128,11 @@ use crate::bls::RegistrationProof;
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
 use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id};
 use crate::database::types::{CORE_SIGNER_ID, Identity};
+pub(crate) use crate::protocol::v1::gas::MAX_UNTRUSTED_GAS_LIMIT;
+use crate::protocol::v1::gas::{
+    DEFAULT_NON_PROC_GAS_LIMIT, GAS_TO_FUEL_MULTIPLIER, LIFT_METADATA_BYTE_FUEL,
+    LIFT_STRING_BYTE_FUEL, LIFT_VALUE_FUEL,
+};
 use crate::runtime::{
     counter::Counter,
     deposit::DepositMeter,
@@ -136,9 +141,6 @@ use crate::runtime::{
     stack::{CallFrame, Stack},
     wit::Signer,
 };
-
-/// Paid-operation limit is consensus critical; views reuse the same ceiling.
-pub(crate) const MAX_UNTRUSTED_GAS_LIMIT: u64 = 100_000;
 
 #[derive(Clone, Debug)]
 pub struct GenesisParameters {
@@ -337,9 +339,9 @@ impl Runtime {
         config.concurrency_support(false);
         config.consume_fuel(true);
         config.consume_lifting_fuel(Some(LiftingPrices {
-            lift_value: 512,
-            string_byte: 16,
-            metadata_byte: 16,
+            lift_value: LIFT_VALUE_FUEL,
+            string_byte: LIFT_STRING_BYTE_FUEL,
+            metadata_byte: LIFT_METADATA_BYTE_FUEL,
         }));
         // Wasmtime 48's Mach receiver aborts on an interrupted receive. Kontor
         // has no Mach-based crash handler, so use POSIX traps on macOS instead.
@@ -420,11 +422,11 @@ impl Runtime {
             deposit: DepositMeter::new(),
             usage_kind: UsageKind::System,
             fuel_checkpoint: 0,
-            gas_limit_for_non_procs: 100_000,
+            gas_limit_for_non_procs: DEFAULT_NON_PROC_GAS_LIMIT,
             // The pool overrides this from node config; trusted internal views
             // select the system budget independently.
             view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
-            gas_to_fuel_multiplier: 1_000,
+            gas_to_fuel_multiplier: GAS_TO_FUEL_MULTIPLIER,
             pricing: Pricing::default(),
             previous_output: None,
             op_return_data: None,
