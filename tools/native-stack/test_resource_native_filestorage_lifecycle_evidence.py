@@ -7,11 +7,10 @@ from resource_native_filestorage_lifecycle_evidence import (
     validate_observation, validate_operation_phases)
 
 
-def teardown(count):
-    return [{"id": index, "role": "nested_chain" if index == 0
-             else "target_native_auxiliary", "kind": kind,
+def teardown(roles):
+    return [{"id": index, "role": role, "kind": kind,
              "table_alive": False if kind == "table_destroyed" else None}
-            for index in range(count)
+            for index, role in enumerate(roles)
             for kind in ("reserved", "store_created", "table_destroyed",
                          "lease_released")]
 
@@ -24,11 +23,24 @@ def attempt(sample):
     active_before = agreements[32:] if cleanup else agreements
     penalty = 960 if sample == "penalty" else 0
     function = "expire-challenges" if sample == "expiry" else "settle-expired-challenges"
-    receipt = {"contract": "filestorage", "function": function,
-               "status": "Ok", "gas": 100, "size": 2, "value": "ok",
-               "signer_id": 1, "payer_signer_id": 1, "height": 2016,
-               "tx_id": None, "input_index": None, "op_index": None,
-               "result_index": 0}
+    pairs = ([("token", "burn"), ("staking", "slash")] * 32
+             if sample == "penalty" else [])
+    pairs.append(("filestorage", function))
+    receipts = []
+    for index, (contract, receipt_function) in enumerate(pairs):
+        value = ("ok({src: signer-id(4), amt: 1})" if contract == "token" else
+                 "ok({burned: 1})" if contract == "staking" else
+                 "32" if sample == "expiry" else
+                 "ok(32)" if sample == "penalty" else "ok(9)")
+        receipts.append({
+            "contract": contract, "function": receipt_function,
+            "status": "Ok", "gas": 100, "size": len(value), "value": value,
+            "signer_id": 4 if contract == "token" else 1,
+            "payer_signer_id": 1 if contract == "filestorage" else None,
+            "height": 2016, "tx_id": None, "input_index": None,
+            "op_index": None, "result_index": index})
+    roles = (["nested_chain"] * (33 if sample == "penalty" else 1)
+             + ["target_native_auxiliary"] * (32 if sample == "penalty" else 0))
     return {"case_id": "native_filestorage_lifecycle",
             "configuration": "production", "process_role": "target_observed",
             "sample_key": sample, "repeat_index": 0, "pid": 7,
@@ -61,12 +73,13 @@ def attempt(sample):
                 "state_before_sha256": "a" * 64,
                 "state_after_sha256": "b" * 64,
                 "state_restored_sha256": "a" * 64,
-                "receipts_before": 10, "receipts_after": 11,
-                "measured_receipts": [receipt], "receipts_restored": 10,
+                "receipts_before": 10,
+                "receipts_after": 10 + len(receipts),
+                "measured_receipts": receipts, "receipts_restored": 10,
                 "resources_before": 0, "resources_after": 0,
                 "stack_empty": True, "savepoint_restored": True,
                 "savepoint_empty": True, "live_invocations": 0,
-                "teardown_probe_on": True, "teardown_events": teardown(1),
+                "teardown_probe_on": True, "teardown_events": teardown(roles),
                 "engine_target": "pulley64-unknown-unknown-elf",
                 "max_wasm_stack": 524_288,
                 "async_stack_size": 2_097_152}}
@@ -129,7 +142,7 @@ class FilestorageLifecycleEvidenceTests(unittest.TestCase):
             ("resources_after", 1),
             ("live_invocations", 1),
             ("savepoint_restored", False),
-            ("teardown_events", teardown(2)),
+            ("teardown_events", teardown(["nested_chain"] * 2)),
         ):
             with self.subTest(key=key):
                 item = copy.deepcopy(baseline)
@@ -140,6 +153,28 @@ class FilestorageLifecycleEvidenceTests(unittest.TestCase):
         item["observation"]["measured_receipts"][0]["function"] = "wrong"
         with self.assertRaises(ValueError):
             self.validate(item)
+
+    def test_penalty_receipt_graph_is_exact(self):
+        baseline = attempt("penalty")
+        self.validate(baseline)
+        for change in ("missing_burn", "reversed_pair", "wrong_signer",
+                       "wrong_payer", "wrong_root_value"):
+            with self.subTest(change=change):
+                item = copy.deepcopy(baseline)
+                receipts = item["observation"]["measured_receipts"]
+                if change == "missing_burn":
+                    receipts.pop(0)
+                    item["observation"]["receipts_after"] -= 1
+                elif change == "reversed_pair":
+                    receipts[0], receipts[1] = receipts[1], receipts[0]
+                elif change == "wrong_signer":
+                    receipts[0]["signer_id"] = 1
+                elif change == "wrong_payer":
+                    receipts[1]["payer_signer_id"] = 1
+                else:
+                    receipts[-1]["value"] = "ok(31)"
+                with self.assertRaises(ValueError):
+                    self.validate(item)
 
     def test_rejects_missing_or_reordered_canonical_phases(self):
         def event(name):

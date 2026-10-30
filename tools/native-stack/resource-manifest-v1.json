@@ -218,7 +218,7 @@
     },
     "macos_worker_capacity_guard": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
-      "sha256": "d3573e8b63aa3491d7462fbc8bf86ea0553085ae0407ecac601557c8bae4489d"
+      "sha256": "32ba8243474ef2d47a97ab44fde7a7029ae01a33687a9de002d8b42374223acf"
     },
     "native_build_metadata": {
       "path": "native-contracts/binaries/build.json",
@@ -238,7 +238,7 @@
     },
     "native_filestorage_lifecycle_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/native_filestorage_lifecycle.rs",
-      "sha256": "c42c8eefb54a2a3955009ba1e57871d48e27935bb84581ea17c9e35d23c49133"
+      "sha256": "059475ab9567e3aea60b7a1789b81f72f7adcc735c7c168f065468b9c2d910ba"
     },
     "native_filestorage_lifecycle_capture": {
       "path": "tools/native-stack/capture_resource_native_filestorage_lifecycle.py",
@@ -246,11 +246,11 @@
     },
     "native_filestorage_lifecycle_validator": {
       "path": "tools/native-stack/resource_native_filestorage_lifecycle_evidence.py",
-      "sha256": "97aaaecd471bfe68d041af0c6fea990b127ba876c9ba285dd3a2568c1084c694"
+      "sha256": "1c14ba778211e6f4779f206f2f4fac9478d70c8b3baaa5c9c9dff58caa347baf"
     },
     "native_filestorage_lifecycle_validator_tests": {
       "path": "tools/native-stack/test_resource_native_filestorage_lifecycle_evidence.py",
-      "sha256": "c4673624490b38aa82738fa9b98860ab2b6320985f6bc5a30468705c5a4c2885"
+      "sha256": "8b74f81e6feeec08f31d0dbab5932c46b9307861ea43987c6a5185cae3c03081"
     },
     "native_filestorage_rewards": {
       "path": "native-contracts/filestorage/src/rewards.rs",
@@ -378,7 +378,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "141a6b033a44cecd3e2abdab5a2ec26ad244e3cb5f44d1f0ae48ff28bcc55f51"
+      "sha256": "637370a2e4ae74e14edcaa7e2c8908645ed662d7e656c29fdf4ee9233a950690"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -398,7 +398,7 @@
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
-      "sha256": "5d94c3654f79c407ed2de2f82cbec5405f2516369996879c775f94e6b826cb46"
+      "sha256": "da7350f2d8797014902c48e2425a74515adfd0803f6ffda5c91e14d00e65205a"
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
@@ -406,7 +406,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "1e6abf28ee57768c18c46c68e893594ce278a6e06a3cd5ef2d70ec42ecd53830"
+      "sha256": "6552dcddd3a1f2fa62ee04b54dd4e5830e230d21108f43dac0a94551d38fff0e"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -1439,6 +1439,8 @@
         "native_build_metadata",
         "native_filestorage_lifecycle_adapter",
         "resource_worker_diagnostic",
+        "resource_thread_trace",
+        "macos_worker_capacity_guard",
         "native_filestorage_lifecycle_capture",
         "native_filestorage_lifecycle_validator",
         "native_filestorage_lifecycle_validator_tests"
@@ -2041,7 +2043,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "1e6abf28ee57768c18c46c68e893594ce278a6e06a3cd5ef2d70ec42ecd53830",
+    "source_sha256": "6552dcddd3a1f2fa62ee04b54dd4e5830e230d21108f43dac0a94551d38fff0e",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -2193,7 +2195,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "1e6abf28ee57768c18c46c68e893594ce278a6e06a3cd5ef2d70ec42ecd53830",
+    "sha256": "6552dcddd3a1f2fa62ee04b54dd4e5830e230d21108f43dac0a94551d38fff0e",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

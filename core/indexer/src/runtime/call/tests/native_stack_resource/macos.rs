@@ -163,6 +163,11 @@ pub(super) fn thread_observation(
     })
 }
 
+pub(super) fn blocking_thread_observation() -> JsonValue {
+    let stack = current_stack_range().expect("blocking decode stack capacity");
+    thread_observation(&stack, "blocking_pool", None)
+}
+
 pub(super) fn measured_tokio_runtime(
     worker_stack_size: Option<usize>,
 ) -> Result<(TokioRuntime, [MacStackRange; 2])> {

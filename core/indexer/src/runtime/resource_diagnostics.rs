@@ -1,5 +1,8 @@
+use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 use std::thread::ThreadId;
+
+use serde_json::Value as JsonValue;
 
 #[cfg(target_os = "linux")]
 use libc::gettid;
@@ -10,6 +13,7 @@ use libc::{pthread_self, pthread_threadid_np};
 pub(crate) struct ThreadEvent {
     pub name: &'static str,
     pub thread_id: ThreadId,
+    pub stack_observation: Option<JsonValue>,
     #[cfg(target_os = "linux")]
     pub os_thread_id: i32,
     #[cfg(target_os = "macos")]
@@ -19,6 +23,8 @@ pub(crate) struct ThreadEvent {
 struct TraceState {
     events: Vec<ThreadEvent>,
     conversion_enabled: bool,
+    stack_probe: Option<fn() -> JsonValue>,
+    stack_probed_threads: HashSet<ThreadId>,
 }
 
 static TRACE: OnceLock<Mutex<Option<TraceState>>> = OnceLock::new();
@@ -55,14 +61,18 @@ pub(crate) fn conversion_scope(entry: &'static str, exit: &'static str) -> Scope
 }
 
 pub(crate) fn start() {
-    start_with_conversion(false);
+    start_with_conversion(false, None);
 }
 
 pub(crate) fn start_chain() {
-    start_with_conversion(true);
+    start_with_conversion(true, None);
 }
 
-fn start_with_conversion(conversion_enabled: bool) {
+pub(crate) fn start_chain_with_stack_probe(probe: fn() -> JsonValue) {
+    start_with_conversion(true, Some(probe));
+}
+
+fn start_with_conversion(conversion_enabled: bool, stack_probe: Option<fn() -> JsonValue>) {
     let trace = TRACE.get_or_init(|| Mutex::new(None));
     let mut current = trace.lock().expect("resource diagnostic trace lock");
     assert!(
@@ -72,6 +82,8 @@ fn start_with_conversion(conversion_enabled: bool) {
     *current = Some(TraceState {
         events: Vec::new(),
         conversion_enabled,
+        stack_probe,
+        stack_probed_threads: HashSet::new(),
     });
 }
 
@@ -83,9 +95,19 @@ fn push(name: &'static str, conversion_only: bool) {
     if let Some(state) = current.as_mut()
         && (!conversion_only || state.conversion_enabled)
     {
+        let thread_id = std::thread::current().id();
+        let stack_observation = if name == "blocking_decode_entry"
+            && state.stack_probe.is_some()
+            && state.stack_probed_threads.insert(thread_id)
+        {
+            state.stack_probe.map(|probe| probe())
+        } else {
+            None
+        };
         state.events.push(ThreadEvent {
             name,
-            thread_id: std::thread::current().id(),
+            thread_id,
+            stack_observation,
             #[cfg(target_os = "linux")]
             os_thread_id: unsafe { gettid() },
             #[cfg(target_os = "macos")]

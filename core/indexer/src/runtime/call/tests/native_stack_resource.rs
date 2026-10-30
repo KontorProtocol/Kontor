@@ -705,7 +705,14 @@ fn finite_stack_worker_case() -> Result<()> {
             && blocking.os_thread_id != caller.os_thread_id,
         "finite stack worker, blocking, and caller thread categories overlap"
     );
-    resource_diagnostics::start_chain();
+    if case_id == "native_filestorage_lifecycle" {
+        #[cfg(target_os = "linux")]
+        resource_diagnostics::start_chain_with_stack_probe(linux_blocking_thread_observation);
+        #[cfg(target_os = "macos")]
+        resource_diagnostics::start_chain_with_stack_probe(macos::blocking_thread_observation);
+    } else {
+        resource_diagnostics::start_chain();
+    }
     let task_case_id = case_id.clone();
     let task_configuration = configuration.clone();
     let task_role = process_role.clone();
@@ -800,19 +807,35 @@ fn finite_stack_worker_case() -> Result<()> {
         }
     }
     #[cfg(target_os = "linux")]
-    let thread_observations = [
+    let mut thread_observations = vec![
         linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
         linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
         linux_thread_observation(&blocking, "blocking_pool", None),
         linux_thread_observation(&caller, "block_on_caller", None),
     ];
     #[cfg(target_os = "macos")]
-    let thread_observations = [
+    let mut thread_observations = vec![
         macos::thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
         macos::thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
         macos::thread_observation(&blocking, "blocking_pool", None),
         macos::thread_observation(&caller, "block_on_caller", None),
     ];
+    for event in &events {
+        if let Some(observation) = &event.stack_observation {
+            let thread_id = format!("{:?}", event.thread_id);
+            ensure!(
+                observation["thread_id"].as_str() == Some(thread_id.as_str())
+                    && observation["os_thread_id"].as_i64() == Some(event.os_thread_id.into()),
+                "blocking stack measurement differs from decode trace: {event:?}"
+            );
+            if !thread_observations
+                .iter()
+                .any(|item| item["thread_id"] == observation["thread_id"])
+            {
+                thread_observations.push(observation.clone());
+            }
+        }
+    }
     println!(
         "FINITE_STACK_RUNTIME={}",
         json!({
@@ -1131,6 +1154,12 @@ fn linux_thread_observation(
         "guard_treatment": stack.guard_treatment,
         "guard_verified": true,
     })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_blocking_thread_observation() -> JsonValue {
+    let stack = current_linux_stack_range().expect("blocking decode stack capacity");
+    linux_thread_observation(&stack, "blocking_pool", None)
 }
 
 #[cfg(target_os = "linux")]

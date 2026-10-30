@@ -275,6 +275,7 @@ def cases():
               "native_token", "native_token_wit", "native_token_binary",
               "native_build_metadata",
               "native_filestorage_lifecycle_adapter", "resource_worker_diagnostic",
+              "resource_thread_trace", "macos_worker_capacity_guard",
               "native_filestorage_lifecycle_capture",
               "native_filestorage_lifecycle_validator",
               "native_filestorage_lifecycle_validator_tests"],

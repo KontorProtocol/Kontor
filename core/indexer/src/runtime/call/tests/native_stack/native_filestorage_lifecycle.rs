@@ -9,11 +9,12 @@ use serde_json::{Value as JsonValue, json};
 
 use super::sweep::persistent_digest;
 use crate::runtime::filestorage::address as filestorage_address;
-use crate::runtime::filestorage::api as storage_api;
+use crate::runtime::filestorage::api::{self as storage_api, ChallengeStatus};
 use crate::runtime::filestorage::settlement_tests::{StorageFixture, at_height};
 use crate::runtime::invocation::{InvocationBudget, ResourceProbePhase, ResourceTeardownRecorder};
 use crate::runtime::numerics::{add_decimal, mul_decimal, sub_decimal};
 use crate::runtime::resource_diagnostics;
+use crate::runtime::staking::address as staking_address;
 use crate::runtime::staking::api as staking_api;
 use crate::runtime::token::api as token_api;
 use crate::runtime::wit::Signer;
@@ -110,7 +111,15 @@ async fn challenge_statuses(runtime: &mut Runtime, ids: &[String]) -> Result<Vec
         let challenge = storage_api::get_challenge(runtime, id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("filestorage challenge disappeared"))?;
-        statuses.push(format!("{:?}", challenge.status));
+        let status = match challenge.status {
+            ChallengeStatus::Active => "Active",
+            ChallengeStatus::Proven => "Proven",
+            ChallengeStatus::Expired => "Expired",
+            ChallengeStatus::Failed => "Failed",
+            ChallengeStatus::Invalid => "Invalid",
+            ChallengeStatus::Settled => "Settled",
+        };
+        statuses.push(status.to_string());
     }
     Ok(statuses)
 }
@@ -228,7 +237,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                             "Settled"
                         }
                 }),
-            "filestorage fixture prestate changed"
+            "filestorage fixture prestate changed: sample={sample} memberships={memberships_before} pending={pending_before} statuses={statuses_before:?}"
         );
         resource_diagnostics::record("fixture_preparation_exit");
         for repeat_index in 0..2 {
@@ -244,6 +253,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
             runtime.invocation_budget = Some(budget.clone());
             runtime.resource_probe_phase = Some(ResourceProbePhase::Target(Arc::new(vec![
                 filestorage_address(),
+                staking_address(),
             ])));
             let resources_before = runtime.table.lock().await.iter_mut().count();
             let receipts_before = receipt_count(&conn).await?;

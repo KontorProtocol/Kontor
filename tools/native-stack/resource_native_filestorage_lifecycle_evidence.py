@@ -73,33 +73,40 @@ def expected_case_env(case_id, role, configuration):
 def validate_receipts(receipts, sample):
     expected_function = ("expire-challenges" if sample == "expiry"
                          else "settle-expired-challenges")
-    require(isinstance(receipts, list) and receipts,
-            "filestorage measured receipts are missing")
-    for index, receipt in enumerate(receipts):
+    root = ("filestorage", expected_function)
+    expected = ([(("token", "burn"), ("staking", "slash"))] * WORK_LIMIT
+                if sample == "penalty" else [])
+    expected = [entry for pair in expected for entry in pair] + [root]
+    root_value = ("32" if sample == "expiry" else
+                  "ok(32)" if sample == "penalty" else "ok(9)")
+    require(isinstance(receipts, list) and len(receipts) == len(expected),
+            "filestorage measured receipt count changed")
+    for index, (receipt, (contract, function)) in enumerate(zip(
+            receipts, expected, strict=True)):
+        expected_signer = 4 if contract == "token" else 1
+        expected_payer = 1 if contract == "filestorage" else None
         require(isinstance(receipt, dict) and set(receipt) == RECEIPT_KEYS
-                and isinstance(receipt["contract"], str)
-                and receipt["contract"] in {"filestorage", "staking", "token"}
-                and isinstance(receipt["function"], str) and receipt["function"]
+                and receipt["contract"] == contract
+                and receipt["function"] == function
                 and receipt["status"] == "Ok"
                 and type(receipt["gas"]) is int and receipt["gas"] > 0
                 and isinstance(receipt["value"], str) and receipt["value"]
+                and (receipt["value"] == root_value
+                     if contract == "filestorage" else
+                     receipt["value"].startswith(
+                         "ok({src: signer-id(4), amt: " if contract == "token"
+                         else "ok({burned: "))
                 and type(receipt["size"]) is int
                 and receipt["size"] == len(receipt["value"].encode())
                 and type(receipt["signer_id"]) is int
-                and receipt["signer_id"] > 0
-                and (receipt["payer_signer_id"] is None
-                     or type(receipt["payer_signer_id"]) is int
-                     and receipt["payer_signer_id"] > 0)
+                and receipt["signer_id"] == expected_signer
+                and receipt["payer_signer_id"] == expected_payer
                 and receipt["height"] == 2016
                 and all(receipt[key] is None for key in
                         ("tx_id", "input_index", "op_index"))
                 and type(receipt["result_index"]) is int
                 and receipt["result_index"] == index,
                 "filestorage receipt content or order changed")
-    require(receipts[-1]["contract"] == "filestorage"
-            and receipts[-1]["function"] == expected_function
-            and (sample != "expiry" or len(receipts) == 1),
-            "filestorage root receipt or expiry call count changed")
 
 
 def validate_observation(attempt, sample, repeat_index, role, configuration, pid):
@@ -205,9 +212,13 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
             "filestorage collateral, supply, reservation, or obligation changed")
     validate_receipts(value["measured_receipts"], sample)
     if role == "target_observed":
-        teardown = validate_teardown(value["teardown_events"], 1, 0)
+        nested = sum(receipt["contract"] != "token"
+                     for receipt in value["measured_receipts"])
+        auxiliary = sum(receipt["contract"] == "token"
+                        for receipt in value["measured_receipts"])
+        teardown = validate_teardown(value["teardown_events"], nested, 0)
         require(teardown["created"]["target_native_auxiliary"] ==
-                    len(value["measured_receipts"]) - 1
+                    auxiliary
                 and teardown["alive_after_teardown_count"] == 0,
                 "filestorage native Store count or cleanup changed")
     else:
@@ -304,6 +315,8 @@ def validate_trace(trace, runtime, attempts, os_name):
                   if name == "fixture_preparation_exit"]
     require(len(starts) == len(ends) == len(attempts) == 6
             and len(setups) == len(setup_ends) == len(SAMPLES)
+            and all(ends[index] < starts[index + 1]
+                    for index in range(len(starts) - 1))
             and all(start < end < starts[2 * index]
                     and (index == 0 or ends[2 * index - 1] < start)
                     for index, (start, end) in
