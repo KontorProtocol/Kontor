@@ -254,7 +254,7 @@
     },
     "macos_worker_capacity_guard": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
-      "sha256": "adfc77c93b0fa3aed73366cbd8555e35c39b3fbea769ddab4b8c25b8c3dec9b1"
+      "sha256": "6e900512430c93ee4715931d28df723ea09debacc5df29db95304d0b9c5ad3ba"
     },
     "native_build_metadata": {
       "path": "native-contracts/binaries/build.json",
