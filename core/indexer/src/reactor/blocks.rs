@@ -259,8 +259,8 @@ impl<E: Executor> Reactor<E> {
     /// The database savepoint does not cover contract-facing metadata or the
     /// shared operation counters. Isolate the counters so runtime clones cannot
     /// mutate the originals, and restore context even on a returned error.
-    /// Outer errors remain fatal; this does not recover their database savepoint
-    /// or cover cancellation while the inner future is pending.
+    /// Outer errors remain fatal; the SQL transaction is rolled back before the
+    /// reactor reports them. The reactor task must not be cancelled mid-flight.
     pub(super) async fn simulate(
         &mut self,
         tx: indexer_types::Transaction,
@@ -274,6 +274,15 @@ impl<E: Executor> Reactor<E> {
         let restore_results = mem::take(&mut self.runtime.result_id_counter);
         self.runtime.simulating = true;
         let result = self.simulate_inner(tx).await;
+        let rollback = if result.is_err() && !self.runtime.storage.conn.is_autocommit() {
+            self.runtime
+                .storage
+                .rollback_transaction()
+                .await
+                .context("Failed to rollback simulation after an execution error")
+        } else {
+            Ok(())
+        };
         self.runtime.simulating = restore_simulating;
         self.runtime.storage.height = restore_height;
         self.runtime.storage.tx_context = restore_context;
@@ -281,6 +290,7 @@ impl<E: Executor> Reactor<E> {
         self.runtime.op_return_data = restore_data;
         self.runtime.id_generation_counter = restore_ids;
         self.runtime.result_id_counter = restore_results;
+        rollback?;
         result
     }
 

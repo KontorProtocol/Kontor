@@ -127,10 +127,12 @@ async fn restores_context(
     if outer_error {
         ensure!(denials.load(Ordering::SeqCst) > 0);
         ensure!(outcome.is_err(), "database failure must remain fatal");
-        // Teardown only. A returned outer error does not promise DB recovery.
-        while !trial.runtime.storage.savepoint_stack.is_empty().await {
-            trial.runtime.storage.rollback().await?;
-        }
+        ensure!(
+            conn.is_autocommit(),
+            "simulation error left a transaction open"
+        );
+        ensure!(trial.runtime.storage.savepoint_stack.is_empty().await);
+        ensure!(snapshot(&conn).await? == before);
     } else {
         let outcome = outcome?;
         ensure!(outcome.len() == 1);

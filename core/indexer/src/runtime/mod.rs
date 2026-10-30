@@ -38,7 +38,7 @@ mod host_storage;
 mod host_system;
 mod invocation;
 mod lowering;
-mod ownership;
+pub mod ownership;
 
 use bitcoin::XOnlyPublicKey;
 use call::CallOutcome;

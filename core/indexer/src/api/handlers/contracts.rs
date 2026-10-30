@@ -12,7 +12,7 @@ use super::validate_query;
 use crate::api::{Env, error::HttpError, result::Result};
 use crate::database::queries;
 use crate::database::types::ContractQuery;
-use crate::runtime::ContractAddress;
+use crate::runtime::{ContractAddress, ownership::RootOutcome};
 
 pub async fn post_contract(
     Path(address): Path<String>,
@@ -22,16 +22,33 @@ pub async fn post_contract(
     let contract_address = address
         .parse::<ContractAddress>()
         .map_err(|_| HttpError::BadRequest("Invalid contract address".to_string()))?;
-    let mut runtime = env.runtime_pool.get().await?;
-    warn_if_stale_view_snapshot(&env, &runtime.storage.conn, &address, &expr).await;
-    let result = runtime.execute(None, None, &contract_address, &expr).await;
-    Ok(match result {
-        Ok(value) => ViewResult::Ok { value },
-        Err(e) => ViewResult::Err {
-            message: format!("{:?}", e),
-        },
-    }
-    .into())
+    let object = env.runtime_pool.get().await?;
+    let diagnostic_env = env.clone();
+    let mut owned = env
+        .owner_service
+        .start_pooled(object, move |runtime| {
+            Box::pin(async move {
+                warn_if_stale_view_snapshot(
+                    &diagnostic_env,
+                    &runtime.storage.conn,
+                    &address,
+                    &expr,
+                )
+                .await;
+                let value = match runtime.execute(None, None, &contract_address, &expr).await {
+                    Ok(value) => ViewResult::Ok { value },
+                    Err(error) => ViewResult::Err {
+                        message: format!("{:?}", error),
+                    },
+                };
+                Ok(RootOutcome {
+                    value,
+                    commit: false,
+                })
+            })
+        })
+        .await?;
+    Ok(owned.result().await?.into())
 }
 
 /// Diagnostic (non-fatal): the `/view` pool serves reads on a *separate* connection
@@ -120,14 +137,26 @@ pub async fn get_contract(
     let contract_address = address
         .parse::<ContractAddress>()
         .map_err(|_| HttpError::BadRequest("Invalid contract address".to_string()))?;
-    let runtime = env.runtime_pool.get().await?;
-    let contract_id = runtime
-        .storage
-        .contract_id(&contract_address)
+    let object = env.runtime_pool.get().await?;
+    let mut owned = env
+        .owner_service
+        .start_pooled(object, move |runtime| {
+            Box::pin(async move {
+                let wit = match runtime.storage.contract_id(&contract_address).await? {
+                    Some(contract_id) => Some(runtime.storage.component_wit(contract_id).await?),
+                    None => None,
+                };
+                Ok(RootOutcome {
+                    value: wit,
+                    commit: false,
+                })
+            })
+        })
+        .await?;
+    let wit = owned
+        .result()
         .await?
         .ok_or(HttpError::NotFound("Contract not found".to_string()))?;
-
-    let wit = runtime.storage.component_wit(contract_id).await?;
     Ok(ContractResponse { wit }.into())
 }
 

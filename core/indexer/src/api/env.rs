@@ -20,6 +20,7 @@ pub struct Env {
     pub event_subscriber: EventSubscriber,
     pub bitcoin: Client,
     pub runtime_pool: Pool<runtime::pool::Manager>,
+    pub owner_service: runtime::ownership::OwnerService,
     pub simulate_tx: Sender<Simulation>,
     /// Set true once the reactor signals ready (consensus up + initial
     /// mempool sync complete). Half of the `require_available` middleware
@@ -76,6 +77,7 @@ impl Env {
                 crate::config::DEFAULT_VIEW_GAS_LIMIT,
             )
             .await?,
+            owner_service: runtime::ownership::OwnerService::new(),
             reader,
             simulate_tx,
             fees_rx,

@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::panic;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -267,6 +268,10 @@ async fn run_daemon(config: Config) -> Result<()> {
     let (simulate_tx, simulate_rx) = mpsc::channel(available_parallelism()?.into());
     let (fees_tx, fees_rx) = tokio::sync::watch::channel(indexer_types::Fees::floor(1));
     let event_subscriber_handle = event_subscriber.run(shutdown.signal(), event_rx);
+    let owner_service = runtime::ownership::OwnerService::new();
+    let owner_service_handle = owner_service
+        .take_driver()
+        .expect("new operation owner has one driver");
     let api_handle = api::run(
         Env {
             config: config.clone(),
@@ -284,6 +289,7 @@ async fn run_daemon(config: Config) -> Result<()> {
                 config.view_gas_limit,
             )
             .await?,
+            owner_service: owner_service.clone(),
             simulate_tx,
             fees_rx,
             info_rx,
@@ -372,6 +378,7 @@ async fn run_daemon(config: Config) -> Result<()> {
     let mut subsystems: Vec<(&'static str, JoinHandle<Result<()>>)> = vec![
         ("reactor", reactor_handle),
         ("bitcoin follower", follower_handle),
+        ("operation owner", owner_service_handle),
         ("api", api_handle),
         ("event subscriber", event_subscriber_handle),
         ("info publisher", info_publisher_handle),
@@ -430,7 +437,19 @@ async fn run_daemon(config: Config) -> Result<()> {
     }
     info!("Initiating shutdown");
     shutdown.cancel();
+    owner_service.shutdown();
     let wedged = drain(subsystems, SHUTDOWN_BUDGET).await;
+    let stop = if matches!(stop, Stop::Signal) {
+        if let Ok(cause) = panic_rx.try_recv() {
+            Stop::Fatal(anyhow::anyhow!("{cause}"))
+        } else if owner_service.is_fatal() {
+            Stop::Fatal(anyhow::anyhow!("operation owner failed during shutdown"))
+        } else {
+            stop
+        }
+    } else {
+        stop
+    };
     if !wedged.is_empty() {
         // A subsystem that ignored its budget may be wedged SYNCHRONOUSLY, and
         // a synchronously-wedged task can hang the runtime's own teardown —
@@ -441,7 +460,6 @@ async fn run_daemon(config: Config) -> Result<()> {
         if let Err(e) = exit_status(stop, &wedged) {
             error!("Exited: {e:#}");
         }
-        use std::io::Write;
         let _ = std::io::stdout().flush();
         let _ = std::io::stderr().flush();
         std::process::exit(1);

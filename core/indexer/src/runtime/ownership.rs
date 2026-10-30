@@ -9,6 +9,7 @@ use anyhow::{Context, Result, anyhow};
 use deadpool::managed::Object;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
+use metrics::gauge;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::{AbortHandle, Id, JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep_until};
@@ -93,12 +94,12 @@ impl BlockingRegistry {
         let active = self.active.clone();
         tokio::spawn(async move {
             let _ = sender.send(task.await);
-            state.done.store(true, Ordering::SeqCst);
-            state.notify.notify_one();
             active
                 .lock()
                 .expect("blocking registry poisoned")
                 .remove(&id);
+            state.done.store(true, Ordering::SeqCst);
+            state.notify.notify_one();
         });
         receiver
     }
@@ -407,9 +408,11 @@ struct OwnerRegistry {
 type RootStart = Box<dyn FnOnce() -> BoxFuture<'static, ()> + Send>;
 
 #[derive(Clone)]
-pub(crate) struct OwnerService {
+pub struct OwnerService {
     registry: Arc<OwnerRegistry>,
     admission: mpsc::Sender<RootStart>,
+    shutdown: CancellationToken,
+    driver: Arc<std::sync::Mutex<Option<JoinHandle<Result<()>>>>>,
 }
 
 pub(crate) struct RootOutcome<T> {
@@ -460,32 +463,61 @@ struct RunningChild {
 }
 
 impl OwnerService {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let registry = Arc::new(OwnerRegistry::default());
         let (admission, receiver) = mpsc::channel(NODE_ADMISSION_CAPACITY);
+        let shutdown = CancellationToken::new();
         let node_registry = registry.clone();
-        tokio::spawn(async move {
-            if std::panic::AssertUnwindSafe(run_node(receiver))
-                .catch_unwind()
-                .await
-                .is_err()
+        let node_shutdown = shutdown.clone();
+        let driver = tokio::spawn(async move {
+            if std::panic::AssertUnwindSafe(run_node(
+                receiver,
+                node_shutdown,
+                node_registry.clone(),
+            ))
+            .catch_unwind()
+            .await
+            .is_err()
             {
                 node_registry.fatal.store(true, Ordering::SeqCst);
-                #[cfg(not(test))]
-                std::process::abort();
+                return Err(anyhow!("operation-owner node supervisor panicked"));
             }
+            Ok(())
         });
         Self {
             registry,
             admission,
+            shutdown,
+            driver: Arc::new(std::sync::Mutex::new(Some(driver))),
         }
     }
 
-    pub(crate) async fn active_roots(&self) -> usize {
+    pub fn take_driver(&self) -> Option<JoinHandle<Result<()>>> {
+        self.driver
+            .lock()
+            .expect("owner driver lock poisoned")
+            .take()
+    }
+
+    pub fn shutdown(&self) {
+        self.shutdown.cancel();
+    }
+
+    pub async fn active_roots(&self) -> usize {
         self.registry.roots.lock().await.len()
     }
 
-    pub(crate) fn is_fatal(&self) -> bool {
+    pub async fn quarantined_roots(&self) -> usize {
+        self.registry
+            .roots
+            .lock()
+            .await
+            .values()
+            .filter(|keeper| RootState::load(&keeper.state) == RootState::Quarantined)
+            .count()
+    }
+
+    pub fn is_fatal(&self) -> bool {
         self.registry.fatal.load(Ordering::SeqCst)
     }
 
@@ -544,8 +576,7 @@ impl OwnerService {
                 {
                     keeper.quarantine();
                     registry.fatal.store(true, Ordering::SeqCst);
-                    #[cfg(not(test))]
-                    std::process::abort();
+                    panic!("operation root supervisor panicked");
                 }
             })
         }));
@@ -553,10 +584,20 @@ impl OwnerService {
     }
 }
 
-async fn run_node(mut receiver: mpsc::Receiver<RootStart>) {
+async fn run_node(
+    mut receiver: mpsc::Receiver<RootStart>,
+    shutdown: CancellationToken,
+    registry: Arc<OwnerRegistry>,
+) {
     let mut supervisors = JoinSet::new();
+    let mut gauge_tick = tokio::time::interval(Duration::from_secs(1));
+    gauge!("operation_owner_quarantined_roots").set(0.0);
     loop {
         tokio::select! {
+            _ = shutdown.cancelled() => {
+                receiver.close();
+                break;
+            }
             start = receiver.recv() => {
                 match start {
                     Some(start) => {
@@ -570,7 +611,20 @@ async fn run_node(mut receiver: mpsc::Receiver<RootStart>) {
                     panic!("operation supervisor task failed: {error}");
                 }
             }
+            _ = gauge_tick.tick() => {
+                let count = registry
+                    .roots
+                    .lock()
+                    .await
+                    .values()
+                    .filter(|keeper| RootState::load(&keeper.state) == RootState::Quarantined)
+                    .count();
+                gauge!("operation_owner_quarantined_roots").set(count as f64);
+            }
         }
+    }
+    while let Some(start) = receiver.recv().await {
+        supervisors.spawn(start());
     }
     while let Some(joined) = supervisors.join_next().await {
         if let Err(error) = joined {
