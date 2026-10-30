@@ -228,6 +228,14 @@
       "path": "native-contracts/filestorage/src/lib.rs",
       "sha256": "b13919f9d9abe52ceb801ddc697887f60cfc5e1e99be3dced2c311cc882fb698"
     },
+    "native_filestorage_binary": {
+      "path": "native-contracts/binaries/filestorage.wasm.br",
+      "sha256": "99d32c4b4951531952fa3d4d02473fd3ae4d5b295130a7669bb103e21f60eecd"
+    },
+    "native_filestorage_cleanup": {
+      "path": "native-contracts/filestorage/src/cleanup.rs",
+      "sha256": "6f068bc0249b0dfe8445de72784fd434e99209f712d6fa91843a8f92352d5902"
+    },
     "native_filestorage_lifecycle_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/native_filestorage_lifecycle.rs",
       "sha256": "b334ad27bcd8c66e9f5db21d81ce0184ec22239edfbd742de0e19f66fb468219"
@@ -243,6 +251,14 @@
     "native_filestorage_lifecycle_validator_tests": {
       "path": "tools/native-stack/test_resource_native_filestorage_lifecycle_evidence.py",
       "sha256": "9813a0a395c68f5d489981f016e0ba716fb61de52dc79ef42baf122bfe7316a3"
+    },
+    "native_filestorage_rewards": {
+      "path": "native-contracts/filestorage/src/rewards.rs",
+      "sha256": "23145880be542f9cd7b500678376ca4cdc3618e1a9f3c334a07523bbe8a52638"
+    },
+    "native_filestorage_wit": {
+      "path": "native-contracts/filestorage/wit/contract.wit",
+      "sha256": "240f1d3dd928f0a8005d05bfb0aa823bd48a7974f6f53fa7ea28e1c16c086d0b"
     },
     "native_staking": {
       "path": "native-contracts/staking/src/lib.rs",
@@ -362,7 +378,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "2140f57a43add0f9ebd8c6914578127545ff89e936ccdc7db2a285877771282b"
+      "sha256": "141a6b033a44cecd3e2abdab5a2ec26ad244e3cb5f44d1f0ae48ff28bcc55f51"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -1410,6 +1426,17 @@
         "filestorage_costs",
         "filestorage_settlement",
         "native_filestorage",
+        "native_filestorage_cleanup",
+        "native_filestorage_rewards",
+        "native_filestorage_wit",
+        "native_filestorage_binary",
+        "native_staking",
+        "native_staking_wit",
+        "native_staking_binary",
+        "native_token",
+        "native_token_wit",
+        "native_token_binary",
+        "native_build_metadata",
         "native_filestorage_lifecycle_adapter",
         "resource_worker_diagnostic",
         "native_filestorage_lifecycle_capture",
