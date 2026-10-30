@@ -927,3 +927,35 @@ evidence. A sandboxed consensus attempt could not bind localhost; the test proce
 was stopped and the checks passed with local networking enabled. Logs and the lead
 review are in `.build-cache/selected-executor-baseline/f1c84c4e-local-network/`
 and `.build-cache/selected-executor-baseline/f1c84c4e-parity/`.
+
+### Selected P1 reactor path (30 October 2026, preparation)
+
+The reactor now captures an explicit P1 selection for block, batch, simulation
+and proposal preparation. The same selection routes recognition, batchability,
+transaction execution and block lifecycle. Block and simulation entry check their
+purpose and coordinates; transaction execution also checks network and height.
+This remains an in-tree P1 implementation, not independently linked historical
+bundles or a functioning upgrade schedule.
+
+The unversioned database provides a local freshness marker from one SQL snapshot:
+receipt epoch and rollback generation, tip height/hash, latest transaction ID and
+checkpoint height/hash. Canonical execution compares this marker again in its
+write snapshot before mutation. The marker is neither a network protocol identity
+nor a migration commitment. K3 must replace legacy admission with persisted
+protocol/migration selection, and K2b must bind the independently built artifact.
+No storage authority is conferred by holding or cloning this selection; the
+existing canonical lease retains that responsibility.
+
+Proposal preparation can survive another batch at the same anchor, because its
+returned Bitcoin verdict still undergoes current database and exact-witness
+checks. It cannot survive a changed anchor, network/rules, receipt epoch or
+rollback generation, even when replay produces the same block hash. This applies
+both when a verdict arrives and when banked candidates are consumed. Pure
+recognition can survive a state-only change; a changed recognition rule causes
+pending mempool preparation to reparse retained raw inputs without resetting
+local suppression.
+
+Public views, matching runtime policy and nested-entry binding, committee
+selection, cache isolation and final K2a/K2b acceptance remain outstanding. No
+activation, historical artifact freeze, resource qualification or performance
+waiver is established by this preparatory wiring.

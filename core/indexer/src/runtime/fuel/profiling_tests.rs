@@ -1,3 +1,4 @@
+use crate::protocol::coordinator::selection::select_test_block;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -295,6 +296,7 @@ async fn fuel_persistence_costs() -> Result<()> {
             let before = token::balance(&mut runtime, HolderRef::Burner)
                 .await?
                 .unwrap_or_default();
+            let selection = select_test_block(&conn, runtime.network, 1).await?;
             let started = Instant::now();
             for tx in &txs {
                 let tx_id = insert_transaction(
@@ -308,20 +310,20 @@ async fn fuel_persistence_costs() -> Result<()> {
                 let failures = match mode {
                     "persisted" => {
                         executor
-                            .execute_transaction(&mut runtime, 1, tx_id, tx)
+                            .execute_transaction(&selection, &mut runtime, 1, tx_id, tx)
                             .await?
                     }
                     "totals" => {
                         let previous = runtime.start_usage();
                         let failures = executor
-                            .execute_transaction_inner(&mut runtime, 1, tx_id, tx)
+                            .execute_transaction_inner(&selection, &mut runtime, 1, tx_id, tx)
                             .await?;
                         runtime.finish_usage(previous)?;
                         failures
                     }
                     _ => {
                         executor
-                            .execute_transaction_inner(&mut runtime, 1, tx_id, tx)
+                            .execute_transaction_inner(&selection, &mut runtime, 1, tx_id, tx)
                             .await?
                     }
                 };

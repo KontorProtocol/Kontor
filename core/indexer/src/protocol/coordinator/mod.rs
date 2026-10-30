@@ -1,4 +1,5 @@
 pub(crate) mod decision;
+pub(crate) mod selection;
 pub(crate) mod v1;
 
 // Pruning is node-local, but must retain every active or historical rule set

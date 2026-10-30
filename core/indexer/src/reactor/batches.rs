@@ -30,9 +30,10 @@ use crate::protocol::coordinator::v1::{build_replay_queue, dependency_sort};
 use futures_util::future::BoxFuture;
 
 use super::consensus_state;
-use super::executor::{Executor, TxPolicy, is_batchable};
+use super::executor::{Executor, TxPolicy};
 use super::mempool_fee_index::MempoolFeeIndex;
 use super::{MAX_DEFERRED_DECISIONS, Reactor};
+use crate::protocol::coordinator::selection::{ApplicationPosition, ExecutionSelection};
 
 /// Multiplier applied to `MempoolFeeIndex::fastest_fee()` to derive the
 /// per-batch acceptance threshold, as an integer ratio: 9/10 means we accept
@@ -66,12 +67,14 @@ pub(super) enum IoApply {
     /// `make_value_snapshot`'s candidate set: on apply, fulfill the held
     /// GetValue reply (if it still stands) with the surviving transactions.
     BuildProposal {
+        selection: ExecutionSelection,
         anchor_height: u64,
         anchor_hash: BlockHash,
     },
     /// An incoming batch proposal: on apply, accept (file under `undecided`,
     /// release the engine's reply with `Some`) or reject (`None`).
     ValidateProposal {
+        selection: ExecutionSelection,
         height: Height,
         round: Round,
         /// The authenticated proposer, carried through so the stored
@@ -94,6 +97,7 @@ pub(super) enum IoApply {
 /// only if the anchor still matches, and membership in the pool is re-checked
 /// then (see `try_fulfill_pending_proposal`).
 pub(super) struct ValidatedCandidates {
+    pub(super) selection: ExecutionSelection,
     pub(super) anchor_height: u64,
     pub(super) anchor_hash: BlockHash,
     pub(super) txs: Vec<bitcoin::Transaction>,
@@ -103,6 +107,7 @@ pub(super) struct ValidatedCandidates {
 enum ProposalSnapshot {
     /// Batch candidates that need the bitcoind I/O phase.
     Batch {
+        selection: ExecutionSelection,
         txs: Vec<bitcoin::Transaction>,
         threshold: u64,
     },
@@ -364,11 +369,18 @@ impl<E: Executor> Reactor<E> {
         // exits again). Proposal validation normally rejects unparseable txs before
         // they are decided; if one is decided anyway, record the batch for sync and
         // skip execution uniformly, rather than crash-looping the network.
+        let selection = self
+            .select_executor(ApplicationPosition::Batch {
+                anchor_height,
+                anchor_hash,
+                consensus_height: consensus_height.as_u64(),
+            })
+            .await?;
         let parsed_txs: Vec<indexer_types::Transaction> = {
             let mut parsed = Vec::with_capacity(batch_txs.len());
             let mut bad: Option<Txid> = None;
             for btx in batch_txs {
-                match self.executor.parse_transaction(btx) {
+                match self.executor.parse_transaction(&selection, btx) {
                     Some(p) => parsed.push(p),
                     None => {
                         bad = Some(btx.compute_txid());
@@ -407,6 +419,7 @@ impl<E: Executor> Reactor<E> {
             .savepoint()
             .await
             .context("Failed to begin batch transaction")?;
+        selection.verify_base(&conn).await?;
 
         insert_batch(
             &conn,
@@ -440,7 +453,7 @@ impl<E: Executor> Reactor<E> {
             // execute_op. Only non-deterministic errors (Result::Err) abort.
             let _failures = self
                 .executor
-                .execute_transaction(&mut self.runtime, anchor_height, tx_id, t)
+                .execute_transaction(&selection, &mut self.runtime, anchor_height, tx_id, t)
                 .await
                 .context("execute_transaction failed")?;
         }
@@ -515,6 +528,7 @@ impl<E: Executor> Reactor<E> {
     /// entirely on the loop (pool, DB, fee index) with no bitcoind
     /// round-trips. They then go through the I/O phase as an [`IoJob`].
     async fn make_value_snapshot(&mut self) -> Result<ProposalSnapshot> {
+        let selection = self.preparation_selection().await?;
         let conn = self.db_conn();
 
         // Pre-filter already-processed txids to avoid unnecessary validation
@@ -546,7 +560,7 @@ impl<E: Executor> Reactor<E> {
             if !unbatched_set.contains(txid) {
                 continue;
             }
-            if is_batchable(&parsed.inputs) {
+            if self.executor.is_batchable(&selection, parsed) {
                 txs.push(raw_tx.clone());
             } else {
                 invalid_txids.push(*txid);
@@ -570,7 +584,11 @@ impl<E: Executor> Reactor<E> {
         // Compute the fee threshold once for this candidate set (the index is
         // a snapshot during this pass) and carry it into the I/O phase.
         let threshold = compute_fee_threshold(&self.consensus.mempool_fee_index);
-        Ok(ProposalSnapshot::Batch { txs, threshold })
+        Ok(ProposalSnapshot::Batch {
+            selection,
+            txs,
+            threshold,
+        })
     }
 
     /// Judge an incoming proposal, answering the engine through `reply` —
@@ -674,6 +692,7 @@ impl<E: Executor> Reactor<E> {
                     let _ = reply.send(None);
                     return Ok(());
                 }
+                let selection = self.preparation_selection().await?;
                 let mut parsed_txs = Vec::with_capacity(transactions.len());
                 for tx in transactions {
                     let txid = tx.compute_txid();
@@ -682,14 +701,14 @@ impl<E: Executor> Reactor<E> {
                     // not commit to, so a same-txid variant sitting in this node's
                     // mempool would otherwise be judged (and later voted on) in
                     // place of the witness the proposer actually streamed.
-                    let parsed = if let Some(p) = self.executor.parse_transaction(tx) {
+                    let parsed = if let Some(p) = self.executor.parse_transaction(&selection, tx) {
                         p
                     } else {
                         warn!(%txid, "Rejecting proposal: transaction failed to parse");
                         let _ = reply.send(None);
                         return Ok(());
                     };
-                    if !is_batchable(&parsed.inputs) {
+                    if !self.executor.is_batchable(&selection, &parsed) {
                         warn!(%txid, "Rejecting proposal: transaction not batchable");
                         let _ = reply.send(None);
                         return Ok(());
@@ -701,6 +720,7 @@ impl<E: Executor> Reactor<E> {
                 self.io_jobs.push_back(IoJob {
                     verdicts,
                     apply: IoApply::ValidateProposal {
+                        selection,
                         height,
                         round,
                         proposer,
@@ -754,6 +774,9 @@ impl<E: Executor> Reactor<E> {
         // and `validate_batch` re-runs; anything stale falls through to a
         // fresh snapshot.
         if let Some(banked) = self.validated_candidates.take()
+            && banked
+                .selection
+                .can_reuse_preparation(&self.preparation_selection().await?)
             && banked.anchor_height == last_height
             && banked.anchor_hash == last_hash
         {
@@ -785,7 +808,11 @@ impl<E: Executor> Reactor<E> {
         let mut idle_retry = false;
         if !build_in_flight {
             match self.make_value_snapshot().await? {
-                ProposalSnapshot::Batch { txs, threshold } => {
+                ProposalSnapshot::Batch {
+                    selection,
+                    txs,
+                    threshold,
+                } => {
                     info!(
                         candidates = txs.len(),
                         "Validating candidate batch off-loop; reply deferred"
@@ -794,6 +821,7 @@ impl<E: Executor> Reactor<E> {
                     self.io_jobs.push_back(IoJob {
                         verdicts,
                         apply: IoApply::BuildProposal {
+                            selection,
                             anchor_height: last_height,
                             anchor_hash: last_hash,
                         },
@@ -865,9 +893,13 @@ impl<E: Executor> Reactor<E> {
         let verdicts = verdicts?;
         match apply {
             IoApply::BuildProposal {
+                selection,
                 anchor_height,
                 anchor_hash,
             } => {
+                if !selection.can_reuse_preparation(&self.preparation_selection().await?) {
+                    return self.try_fulfill_pending_proposal().await.map(|_| ());
+                }
                 // Pool hygiene counts even when the proposal below is stale.
                 let mut kept = Vec::with_capacity(verdicts.len());
                 for (tx, verdict) in verdicts {
@@ -900,6 +932,7 @@ impl<E: Executor> Reactor<E> {
                             "Banking validated candidates for the next proposal"
                         );
                         self.validated_candidates = Some(ValidatedCandidates {
+                            selection,
                             anchor_height,
                             anchor_hash,
                             txs: kept,
@@ -945,6 +978,7 @@ impl<E: Executor> Reactor<E> {
                     .await
             }
             IoApply::ValidateProposal {
+                selection,
                 height,
                 round,
                 proposer,
@@ -953,6 +987,10 @@ impl<E: Executor> Reactor<E> {
                 parsed,
                 reply,
             } => {
+                if !selection.can_reuse_preparation(&self.preparation_selection().await?) {
+                    let _ = reply.send(None);
+                    return Ok(());
+                }
                 for (tx, verdict) in &verdicts {
                     if let TxPolicy::Rejected(reason) = verdict {
                         warn!(

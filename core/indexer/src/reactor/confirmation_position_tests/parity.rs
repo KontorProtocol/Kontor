@@ -1,3 +1,4 @@
+use crate::protocol::coordinator::selection::ApplicationPosition;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
@@ -171,9 +172,23 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
         }
         let block = reactor
             .executor
-            .parse_block(raw_confirmation_block(&raw, 2)?)
+            .parse_block(
+                &reactor.preparation_selection().await?,
+                raw_confirmation_block(&raw, 2)?,
+            )
             .await?;
-        let (count, ops, errors) = reactor.execute_block(&block).await?;
+        let (count, ops, errors) = reactor
+            .execute_block(
+                &reactor
+                    .select_executor(ApplicationPosition::Block {
+                        height: block.height,
+                        hash: block.hash,
+                        consensus_height: 0,
+                    })
+                    .await?,
+                &block,
+            )
+            .await?;
         ensure!(count == usize::from(!batched) && ops == u64::from(!batched));
         ensure!(errors.iter().flatten().flatten().all(Option::is_none));
         report
@@ -187,9 +202,23 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
                 .insert(format!("{label}/rollback"), state(&conn).await?);
             let replacement = reactor
                 .executor
-                .parse_block(raw_confirmation_block(&raw, 4)?)
+                .parse_block(
+                    &reactor.preparation_selection().await?,
+                    raw_confirmation_block(&raw, 4)?,
+                )
                 .await?;
-            let (count, ops, _) = reactor.execute_block(&replacement).await?;
+            let (count, ops, _) = reactor
+                .execute_block(
+                    &reactor
+                        .select_executor(ApplicationPosition::Block {
+                            height: replacement.height,
+                            hash: replacement.hash,
+                            consensus_height: 0,
+                        })
+                        .await?,
+                    &replacement,
+                )
+                .await?;
             ensure!(
                 (count, ops) == (0, 0),
                 "reconfirmation executed or charged again"

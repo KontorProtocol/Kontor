@@ -2,10 +2,18 @@ use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::slice;
 
+use crate::protocol::coordinator::selection::ExecutionSelection;
+use anyhow::Result;
 use bitcoin::{Transaction as BitcoinTransaction, Txid};
+use futures_util::future::BoxFuture;
 use indexer_types::Transaction;
 
 use super::executor::RecognizedTransaction;
+
+pub(super) struct MempoolPreparation {
+    pub selection: ExecutionSelection,
+    pub result: BoxFuture<'static, Result<Vec<RecognizedTransaction>>>,
+}
 
 #[derive(Default)]
 pub struct Mempool {
@@ -22,6 +30,10 @@ impl Mempool {
         for transaction in transactions {
             self.insert(transaction);
         }
+    }
+
+    pub fn raw_inputs(&self) -> Vec<BitcoinTransaction> {
+        self.raw.values().cloned().collect()
     }
 
     pub fn stage_snapshot(&mut self, transactions: &[BitcoinTransaction]) {

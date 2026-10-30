@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::mem;
 use std::time::Instant;
 
@@ -17,7 +18,9 @@ use crate::database::queries::{
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::protocol::coordinator::minimum_prune_retention_blocks;
-use crate::protocol::v1::lifecycle;
+use crate::protocol::coordinator::selection::{
+    ApplicationPosition, ExecutionSelection, select_legacy_p1,
+};
 use crate::test_utils::new_mock_block_hash;
 
 use super::Reactor;
@@ -129,9 +132,11 @@ impl<E: Executor> Reactor<E> {
     /// so `handle_block` has a single place to roll back from.
     async fn block_txn(
         &mut self,
+        selection: &ExecutionSelection,
         block: &Block,
         decision: &consensus_state::DeferredDecision,
     ) -> Result<(usize, u64)> {
+        selection.verify_base(&self.db_conn()).await?;
         insert_batch(
             &self.db_conn(),
             decision.consensus_height.as_u64(),
@@ -144,10 +149,10 @@ impl<E: Executor> Reactor<E> {
         .context("Failed to insert block batch decision")?;
 
         let (unbatched_count, executed_ops, _failures) = self
-            .execute_block(block)
+            .execute_block(selection, block)
             .await
             .context("execute_block failed")?;
-        self.run_block_lifecycle(block)
+        self.run_block_lifecycle(selection, block)
             .await
             .context("run_block_lifecycle failed")?;
         Ok((unbatched_count, executed_ops))
@@ -169,8 +174,10 @@ impl<E: Executor> Reactor<E> {
     /// simulate handler consumes it.
     pub(super) async fn execute_block(
         &mut self,
+        selection: &ExecutionSelection,
         block: &Block,
     ) -> Result<(usize, u64, Vec<Vec<Vec<Option<anyhow::Error>>>>)> {
+        selection.ensure_block_execution(self.runtime.network, block.height, block.hash)?;
         insert_block(
             &self.db_conn(),
             BlockRow::builder()
@@ -227,7 +234,7 @@ impl<E: Executor> Reactor<E> {
 
             let tx_failures = self
                 .executor
-                .execute_transaction(&mut self.runtime, block.height, tx_id, t)
+                .execute_transaction(selection, &mut self.runtime, block.height, tx_id, t)
                 .await
                 .context("execute_transaction failed")?;
             failures.push(tx_failures);
@@ -245,10 +252,36 @@ impl<E: Executor> Reactor<E> {
     ) -> Result<Option<Vec<OpWithResult>>> {
         // Recognition belongs at admission, since the protocol may change while
         // an RPC request waits in the bounded simulation queue.
-        let Some(tx) = self.executor.parse_transaction(&raw) else {
+        let selection = self.simulation_selection().await?;
+        let Some(tx) = self.executor.parse_transaction(&selection, &raw) else {
             return Ok(None);
         };
-        self.simulate(tx).await.map(Some)
+        self.simulate_selected(selection, tx).await.map(Some)
+    }
+
+    fn simulation_selection(
+        &self,
+    ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
+        let conn = self.db_conn();
+        let network = self.runtime.network;
+        async move {
+            let tip = select_block_latest(&conn).await?;
+            let height = tip.map_or(Ok(1), |row| {
+                row.height
+                    .checked_add(1)
+                    .context("simulation height overflow")
+            })?;
+            select_legacy_p1(&conn, network, ApplicationPosition::Simulation { height }).await
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) async fn simulate(
+        &mut self,
+        tx: indexer_types::Transaction,
+    ) -> Result<Vec<OpWithResult>> {
+        let selection = self.simulation_selection().await?;
+        self.simulate_selected(selection, tx).await
     }
 
     /// Simulate a transaction: execute in a temporary block, inspect results,
@@ -264,8 +297,9 @@ impl<E: Executor> Reactor<E> {
     /// mutate the originals, and restore context even on a returned error.
     /// Outer errors remain fatal; the SQL transaction is rolled back before the
     /// reactor reports them. The reactor task must not be cancelled mid-flight.
-    pub(super) async fn simulate(
+    async fn simulate_selected(
         &mut self,
+        selection: ExecutionSelection,
         tx: indexer_types::Transaction,
     ) -> Result<Vec<OpWithResult>> {
         let restore_height = self.runtime.storage.height;
@@ -285,7 +319,7 @@ impl<E: Executor> Reactor<E> {
             .savepoint()
             .await
             .context("Failed to begin simulation savepoint")?;
-        let result = self.simulate_inner(tx).await;
+        let result = self.simulate_inner(&selection, tx).await;
         lease.drain(&self.runtime).await?;
         let rollback = self
             .runtime
@@ -307,6 +341,7 @@ impl<E: Executor> Reactor<E> {
 
     async fn simulate_inner(
         &mut self,
+        selection: &ExecutionSelection,
         tx: indexer_types::Transaction,
     ) -> Result<Vec<OpWithResult>> {
         // Simulation runs against a FABRICATED block one past the tip and then
@@ -317,6 +352,7 @@ impl<E: Executor> Reactor<E> {
         // then inserts `signers(height = <discarded height>)` and trips the
         // `signers.height -> blocks.height` foreign key, which is classified
         // non-deterministic and kills the reactor.
+        selection.verify_base(&self.db_conn()).await?;
         let block_row = select_block_latest(&self.db_conn())
             .await
             .context("Failed to query latest block for simulation")?;
@@ -330,7 +366,7 @@ impl<E: Executor> Reactor<E> {
             transactions: vec![tx],
         };
         let (_unbatched, _executed, failures) = self
-            .execute_block(&block)
+            .execute_block(selection, &block)
             .await
             .context("execute_block failed during simulation")?;
         let mut results = block::inspect(&self.db_conn(), &block.transactions[0]).await?;
@@ -360,9 +396,16 @@ impl<E: Executor> Reactor<E> {
     }
 
     /// Run block lifecycle operations: challenge expiry/generation and epoch transitions.
-    async fn run_block_lifecycle(&mut self, block: &Block) -> Result<()> {
+    async fn run_block_lifecycle(
+        &mut self,
+        selection: &ExecutionSelection,
+        block: &Block,
+    ) -> Result<()> {
         let previous = self.runtime.start_usage();
-        let result = lifecycle::run_block_lifecycle(&mut self.runtime, block).await;
+        let result = self
+            .executor
+            .run_block_lifecycle(selection, &mut self.runtime, block)
+            .await;
         let usage = self.runtime.finish_usage(previous);
         result?;
         insert_block_execution_usage(&self.db_conn(), block.height, usage?).await
@@ -421,7 +464,22 @@ impl<E: Executor> Reactor<E> {
             .owner_service
             .begin_canonical(&mut self.runtime, false)
             .await?;
-        let block = match self.executor.parse_block(block).await {
+        let selection = match self
+            .select_executor(ApplicationPosition::Block {
+                height,
+                hash,
+                consensus_height: decision.consensus_height.as_u64(),
+            })
+            .await
+        {
+            Ok(selection) => selection,
+            Err(error) => {
+                lease.drain(&self.runtime).await?;
+                lease.complete(&mut self.runtime).await?;
+                return Err(error);
+            }
+        };
+        let block = match self.executor.parse_block(&selection, block).await {
             Ok(block) => block,
             Err(error) => {
                 lease.drain(&self.runtime).await?;
@@ -439,7 +497,7 @@ impl<E: Executor> Reactor<E> {
         // on any error rather than left open for process teardown to discard.
         // `last_height`/`last_hash` advance only after the commit, so a failed
         // block leaves no trace in memory either.
-        let txn = self.block_txn(&block, decision).await;
+        let txn = self.block_txn(&selection, &block, decision).await;
         lease.drain(&self.runtime).await?;
         let (unbatched_count, executed_ops) = match txn {
             Ok(counts) => counts,

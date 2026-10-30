@@ -15,10 +15,12 @@ use super::aggregate_error_tests::reactor;
 use super::batches::IoApply;
 use super::consensus_state::PendingProposal;
 use super::executor::{RecognizedTransaction, TxPolicy};
+use super::mempool::MempoolPreparation;
 use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
-use crate::consensus::Height;
 use crate::consensus::signing::PrivateKey;
+use crate::consensus::{Address, Height};
+use crate::database::queries::rollback_to_height;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::{Decimal, GenesisValidator};
 use crate::stopper::Shutdown;
@@ -69,10 +71,13 @@ async fn pending_recognition_keeps_blocks_and_requests_live_with_channel_backpre
         .mempool
         .stage_snapshot(slice::from_ref(&raw));
     let (entered_tx, entered_rx) = oneshot::channel();
-    trial.mempool_preparation = Some(Box::pin(async move {
-        let _ = entered_tx.send(());
-        pending().await
-    }));
+    trial.mempool_preparation = Some(MempoolPreparation {
+        selection: trial.preparation_selection().await?,
+        result: Box::pin(async move {
+            let _ = entered_tx.send(());
+            pending().await
+        }),
+    });
     let drive = async {
         let result: Result<()> = async {
             timeout(Duration::from_secs(5), entered_rx).await??;
@@ -133,6 +138,7 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
         trial
             .apply_io_verdicts(
                 IoApply::BuildProposal {
+                    selection: trial.preparation_selection().await?,
                     anchor_height: 1,
                     anchor_hash: new_mock_block_hash(1),
                 },
@@ -145,6 +151,7 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
     trial
         .apply_io_verdicts(
             IoApply::BuildProposal {
+                selection: trial.preparation_selection().await?,
                 anchor_height: 1,
                 anchor_hash: new_mock_block_hash(1),
             },
@@ -171,5 +178,106 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
         trial.io_jobs.len() == 1,
         "replacement needs fresh validation"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Result<()> {
+    let (runtime, dir, _) = test_runtime_with_genesis(&[GenesisValidator {
+        x_only_pubkey: random_x_only_pubkey(),
+        ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }])
+    .await?;
+    let mut trial = reactor(runtime, &dir).await?;
+    let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
+    let raw = genesis_block(Network::Regtest).txdata.remove(0);
+    trial.consensus.mempool.insert(recognized(raw.clone()));
+    let before = trial.preparation_selection().await?;
+    rollback_to_height(&trial.db_conn(), 1).await?;
+    for verdict in [
+        TxPolicy::Accepted,
+        TxPolicy::Rejected("before rollback".into()),
+    ] {
+        trial
+            .apply_io_verdicts(
+                IoApply::BuildProposal {
+                    selection: before.clone(),
+                    anchor_height: 1,
+                    anchor_hash: new_mock_block_hash(1),
+                },
+                Ok(vec![(raw.clone(), verdict)]),
+            )
+            .await?;
+        ensure!(trial.validated_candidates.is_none());
+        ensure!(trial.consensus.mempool.contains_candidate(&raw));
+    }
+    // An identical proposal is accepted with a fresh selection. This makes a
+    // stale rejection distinguishable from unrelated anchor or fixture failures.
+    for (selection, accepted) in [
+        (before, false),
+        (trial.preparation_selection().await?, true),
+    ] {
+        let (reply, receive) = oneshot::channel();
+        trial
+            .apply_io_verdicts(
+                IoApply::ValidateProposal {
+                    selection,
+                    height: Height::new(1),
+                    round: Round::new(0),
+                    proposer: Address::from_public_key(&PrivateKey::from([17; 32]).public_key()),
+                    anchor_height: 1,
+                    anchor_hash: new_mock_block_hash(1),
+                    parsed: vec![recognized(raw.clone()).parsed.unwrap()],
+                    reply,
+                },
+                Ok(vec![(raw.clone(), TxPolicy::Accepted)]),
+            )
+            .await?;
+        ensure!(receive.await?.is_some() == accepted);
+        ensure!(trial.consensus.undecided.contains_key(&Height::new(1)) == accepted);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()> {
+    let (runtime, dir, _) = test_runtime_with_genesis(&[GenesisValidator {
+        x_only_pubkey: random_x_only_pubkey(),
+        ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }])
+    .await?;
+    let mut trial = reactor(runtime, &dir).await?;
+    let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
+    let raw = genesis_block(Network::Regtest).txdata.remove(0);
+    trial.consensus.mempool.insert(recognized(raw.clone()));
+    trial
+        .apply_io_verdicts(
+            IoApply::BuildProposal {
+                selection: trial.preparation_selection().await?,
+                anchor_height: 1,
+                anchor_hash: new_mock_block_hash(1),
+            },
+            Ok(vec![(raw.clone(), TxPolicy::Accepted)]),
+        )
+        .await?;
+    ensure!(trial.validated_candidates.is_some());
+    rollback_to_height(&trial.db_conn(), 1).await?;
+    let (reply, mut receive) = oneshot::channel();
+    trial.consensus.pending_proposal = Some(PendingProposal {
+        height: Height::new(1),
+        round: Round::new(0),
+        reply,
+        hard_deadline: Instant::now() + Duration::from_secs(60),
+    });
+    ensure!(!trial.try_fulfill_pending_proposal().await?);
+    ensure!(receive.try_recv().is_err());
+    ensure!(trial.validated_candidates.is_none());
+    ensure!(
+        trial.io_jobs.len() == 1,
+        "rollback requires fresh validation"
+    );
+    ensure!(trial.consensus.mempool.contains_candidate(&raw));
     Ok(())
 }

@@ -1,3 +1,4 @@
+use crate::protocol::coordinator::selection::select_test_block;
 use anyhow::{Context, Result, anyhow};
 use bitcoin::absolute::LockTime;
 use bitcoin::consensus::encode::{deserialize, serialize as serialize_bitcoin};
@@ -12,7 +13,8 @@ use super::balance;
 use crate::bitcoin_client::Client;
 use crate::block::filter_map;
 use crate::database::queries::{get_contract_bytes_by_id, insert_transaction};
-use crate::reactor::executor::{Executor, RuntimeExecutor, is_batchable};
+use crate::protocol::v1::transactions::is_batchable;
+use crate::reactor::executor::{Executor, RuntimeExecutor};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -156,7 +158,13 @@ async fn p1_decoded_multi_input_publication_preserves_duplicate_noop_and_distinc
         String::new(),
     )?);
     let failures = executor
-        .execute_transaction(&mut runtime, 1, tx_id, &parsed)
+        .execute_transaction(
+            &select_test_block(&conn, runtime.network, 1).await?,
+            &mut runtime,
+            1,
+            tx_id,
+            &parsed,
+        )
         .await?;
     assert_eq!(failures.iter().map(Vec::len).collect::<Vec<_>>(), [3, 1]);
     assert!(failures.iter().flatten().all(Option::is_none));
@@ -217,7 +225,13 @@ async fn p1_decoded_multi_input_publication_preserves_duplicate_noop_and_distinc
     )
     .await?;
     let next_failures = executor
-        .execute_transaction(&mut runtime, 1, next_tx_id, &next)
+        .execute_transaction(
+            &select_test_block(&conn, runtime.network, 1).await?,
+            &mut runtime,
+            1,
+            next_tx_id,
+            &next,
+        )
         .await?;
     assert_eq!(next_failures.len(), 1);
     assert_eq!(next_failures[0].len(), 1);

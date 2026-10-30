@@ -9,6 +9,7 @@ use crate::database::queries::{
     contract_has_state, get_transaction_by_txid, insert_block, insert_contract, insert_transaction,
 };
 use crate::database::types::ContractRow;
+use crate::protocol::coordinator::selection::ExecutionSelection;
 use crate::reactor::executor::{Executor, TxPolicy};
 use crate::reactor::mock_bitcoin::MockBitcoin;
 use crate::runtime::wit::Signer;
@@ -243,9 +244,6 @@ impl Executor for LiteExecutor {
         })
     }
 
-    async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
-        self.mock_bitcoin.lock().unwrap().get_raw_transaction(txid)
-    }
     async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<bitcoin::Transaction>> {
         let mock = self.mock_bitcoin.lock().unwrap();
         txids.iter().map(|t| mock.get_raw_transaction(t)).collect()
@@ -253,6 +251,7 @@ impl Executor for LiteExecutor {
 
     async fn execute_transaction_inner(
         &self,
+        _selection: &ExecutionSelection,
         runtime: &mut Runtime,
         height: u64,
         tx_id: u64,
@@ -311,7 +310,11 @@ impl Executor for LiteExecutor {
         Ok(())
     }
 
-    fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
+    fn parse_transaction(
+        &self,
+        _selection: &ExecutionSelection,
+        tx: &bitcoin::Transaction,
+    ) -> Option<indexer_types::Transaction> {
         Some(indexer_types::Transaction {
             txid: tx.compute_txid(),
             index: 0,

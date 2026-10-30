@@ -10,9 +10,10 @@ use crate::bitcoin_client::{Client, check_mempool_acceptance};
 use crate::bitcoin_follower::block::BlockInput;
 use crate::block::filter_map;
 use crate::database::queries::insert_transaction_execution_usage;
-use crate::protocol::v1::execution;
+use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
 pub use crate::protocol::v1::execution::process_input;
-pub use crate::protocol::v1::transactions::is_batchable;
+use crate::protocol::v1::{execution, lifecycle, transactions};
+
 use crate::retry::{new_backoff_limited, retry};
 use crate::runtime::Runtime;
 use futures_util::future::BoxFuture;
@@ -49,7 +50,26 @@ fn recognize_mempool(
 /// The consensus orchestration logic (`ConsensusState.process_decided_batch` and
 /// `run_finality_checks`) calls these methods instead of directly manipulating state.
 #[allow(async_fn_in_trait)]
-pub trait Executor: Sync {
+pub(crate) trait Executor: Sync {
+    fn is_batchable(&self, selection: &ExecutionSelection, tx: &Transaction) -> bool {
+        match selection.version() {
+            ExecutorVersion::LegacyP1 => transactions::is_batchable(&tx.inputs),
+        }
+    }
+
+    async fn run_block_lifecycle(
+        &self,
+        selection: &ExecutionSelection,
+        runtime: &mut Runtime,
+        block: &Block,
+    ) -> Result<()> {
+        selection.ensure_execution(runtime.network, block.height)?;
+        selection.ensure_block(block.height, block.hash)?;
+        match selection.version() {
+            ExecutorVersion::LegacyP1 => lifecycle::run_block_lifecycle(runtime, block).await,
+        }
+    }
+
     /// Start the I/O phase of validating `txs` against bitcoind: mempool
     /// policy acceptance plus the fee-threshold check, verdicts in input
     /// order.
@@ -74,11 +94,7 @@ pub trait Executor: Sync {
         threshold_sat_per_vb: u64,
     ) -> BoxFuture<'static, Result<Vec<(bitcoin::Transaction, TxPolicy)>>>;
 
-    /// Resolve a txid to a full bitcoin::Transaction. Used to fetch transaction
-    /// data for batch execution — batches carry only txids.
-    async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction>;
-
-    /// Batched [`resolve_transaction`]: resolve many txids in ONE round trip
+    /// Resolve many txids in one round trip
     /// where the backend supports it (bitcoind's JSON-RPC batch + tx cache),
     /// returning `None` per still-unresolved txid, in input order. The reactor's
     /// replay/sync path resolves whole decided batches at once, so a per-txid
@@ -87,6 +103,7 @@ pub trait Executor: Sync {
 
     async fn execute_transaction_inner(
         &self,
+        selection: &ExecutionSelection,
         runtime: &mut Runtime,
         height: u64,
         tx_id: u64,
@@ -105,14 +122,16 @@ pub trait Executor: Sync {
     /// simulate handler zips it into the response.
     async fn execute_transaction(
         &self,
+        selection: &ExecutionSelection,
         runtime: &mut Runtime,
         height: u64,
         tx_id: u64,
         tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
+        selection.ensure_execution(runtime.network, height)?;
         let previous = runtime.start_usage();
         let result = self
-            .execute_transaction_inner(runtime, height, tx_id, tx)
+            .execute_transaction_inner(selection, runtime, height, tx_id, tx)
             .await;
         let usage = runtime.finish_usage(previous);
         let result = result?;
@@ -126,10 +145,18 @@ pub trait Executor: Sync {
     async fn replay_blocks_after(&mut self, after_height: u64) -> Result<()>;
 
     /// Parse a bitcoin::Transaction into an indexer_types::Transaction.
-    fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction>;
+    fn parse_transaction(
+        &self,
+        selection: &ExecutionSelection,
+        tx: &bitcoin::Transaction,
+    ) -> Option<indexer_types::Transaction>;
 
-    async fn parse_block(&self, block: BlockInput) -> Result<Block> {
-        Ok(block.recognize(|raw| self.parse_transaction(raw)))
+    async fn parse_block(
+        &self,
+        selection: &ExecutionSelection,
+        block: BlockInput,
+    ) -> Result<Block> {
+        Ok(block.recognize(|raw| self.parse_transaction(selection, raw)))
     }
 
     // Owned preparation never carries storage authority across a suspension.
@@ -137,9 +164,11 @@ pub trait Executor: Sync {
     // lightweight executors whose recognizer has no expensive decoding.
     fn parse_mempool(
         &self,
+        selection: &ExecutionSelection,
         transactions: Vec<BitcoinTransaction>,
     ) -> BoxFuture<'static, Result<Vec<RecognizedTransaction>>> {
-        let prepared = recognize_mempool(transactions, |raw| self.parse_transaction(raw));
+        let prepared =
+            recognize_mempool(transactions, |raw| self.parse_transaction(selection, raw));
         Box::pin(async move { Ok(prepared) })
     }
 }
@@ -160,14 +189,12 @@ impl Executor for NoopExecutor {
                 .collect())
         })
     }
-    async fn resolve_transaction(&self, _txid: &Txid) -> Option<bitcoin::Transaction> {
-        None
-    }
     async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<bitcoin::Transaction>> {
         txids.iter().map(|_| None).collect()
     }
     async fn execute_transaction_inner(
         &self,
+        _selection: &ExecutionSelection,
         _runtime: &mut Runtime,
         _height: u64,
         _tx_id: u64,
@@ -178,7 +205,11 @@ impl Executor for NoopExecutor {
     async fn replay_blocks_after(&mut self, _after_height: u64) -> Result<()> {
         Ok(())
     }
-    fn parse_transaction(&self, _tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
+    fn parse_transaction(
+        &self,
+        _selection: &ExecutionSelection,
+        _tx: &bitcoin::Transaction,
+    ) -> Option<indexer_types::Transaction> {
         None
     }
 }
@@ -297,16 +328,6 @@ impl Executor for RuntimeExecutor {
         })
     }
 
-    async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
-        // Fall back to Bitcoin RPC (via tx cache)
-        match self.bitcoin_client.get_raw_transaction(txid).await {
-            Ok(tx) => Some(tx),
-            Err(e) => {
-                warn!(%txid, %e, "Failed to resolve transaction via RPC");
-                None
-            }
-        }
-    }
     async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<bitcoin::Transaction>> {
         // One JSON-RPC batch (cache-checked) instead of a round trip per txid.
         match self.bitcoin_client.get_raw_transactions(txids).await {
@@ -329,12 +350,17 @@ impl Executor for RuntimeExecutor {
     }
     async fn execute_transaction_inner(
         &self,
+        selection: &ExecutionSelection,
         runtime: &mut Runtime,
         height: u64,
         tx_id: u64,
         tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
-        execution::execute_transaction(runtime, height, tx_id, tx).await
+        match selection.version() {
+            ExecutorVersion::LegacyP1 => {
+                execution::execute_transaction(runtime, height, tx_id, tx).await
+            }
+        }
     }
     async fn replay_blocks_after(&mut self, after_height: u64) -> Result<()> {
         if let Some(tx) = &self.replay_tx {
@@ -345,26 +371,41 @@ impl Executor for RuntimeExecutor {
         Ok(())
     }
 
-    fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
-        Self::recognize_transaction(tx)
+    fn parse_transaction(
+        &self,
+        selection: &ExecutionSelection,
+        tx: &bitcoin::Transaction,
+    ) -> Option<indexer_types::Transaction> {
+        match selection.version() {
+            ExecutorVersion::LegacyP1 => Self::recognize_transaction(tx),
+        }
     }
 
-    async fn parse_block(&self, block: BlockInput) -> Result<Block> {
+    async fn parse_block(
+        &self,
+        selection: &ExecutionSelection,
+        block: BlockInput,
+    ) -> Result<Block> {
         // Parsing can decompress witnesses. Keep that CPU work off the async
         // worker, with only owned raw input crossing the task boundary.
-        Ok(
-            tokio::task::spawn_blocking(move || block.recognize(Self::recognize_transaction))
-                .await?,
-        )
+        let version = selection.version();
+        Ok(tokio::task::spawn_blocking(move || match version {
+            ExecutorVersion::LegacyP1 => block.recognize(Self::recognize_transaction),
+        })
+        .await?)
     }
 
     fn parse_mempool(
         &self,
+        selection: &ExecutionSelection,
         transactions: Vec<BitcoinTransaction>,
     ) -> BoxFuture<'static, Result<Vec<RecognizedTransaction>>> {
+        let version = selection.version();
         Box::pin(async move {
-            Ok(tokio::task::spawn_blocking(move || {
-                recognize_mempool(transactions, Self::recognize_transaction)
+            Ok(tokio::task::spawn_blocking(move || match version {
+                ExecutorVersion::LegacyP1 => {
+                    recognize_mempool(transactions, Self::recognize_transaction)
+                }
             })
             .await?)
         })

@@ -1,3 +1,4 @@
+use crate::protocol::coordinator::selection::ApplicationPosition;
 use std::{slice, time::Duration};
 
 use anyhow::{Context, Result};
@@ -202,7 +203,18 @@ async fn run_case(batched: bool) -> Result<()> {
         }
         let before_confirmation = effects(&conn).await?;
         let block = confirmation_block(&raw, 2)?;
-        let (count, ops, failures) = reactor.execute_block(&block).await?;
+        let (count, ops, failures) = reactor
+            .execute_block(
+                &reactor
+                    .select_executor(ApplicationPosition::Block {
+                        height: block.height,
+                        hash: block.hash,
+                        consensus_height: 0,
+                    })
+                    .await?,
+                &block,
+            )
+            .await?;
         assert_eq!(count, usize::from(!batched));
         assert_eq!(ops, u64::from(!batched));
         assert!(failures.iter().flatten().flatten().all(Option::is_none));
@@ -244,7 +256,18 @@ async fn run_case(batched: bool) -> Result<()> {
             assert_eq!(effects(&conn).await?, applied);
             let replacement = confirmation_block(&raw, 4)?;
             assert_ne!(replacement.hash, block.hash);
-            let (count, ops, _) = reactor.execute_block(&replacement).await?;
+            let (count, ops, _) = reactor
+                .execute_block(
+                    &reactor
+                        .select_executor(ApplicationPosition::Block {
+                            height: replacement.height,
+                            hash: replacement.hash,
+                            consensus_height: 0,
+                        })
+                        .await?,
+                    &replacement,
+                )
+                .await?;
             assert_eq!((count, ops), (0, 0));
             assert_eq!(get_confirmation_position(&conn, &txid).await?, Some(4));
             let reconfirmed = get_transaction_by_txid(&conn, &txid).await?.unwrap();

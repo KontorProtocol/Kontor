@@ -32,10 +32,11 @@ pub mod types;
 mod workload_tests;
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use futures_util::future::{self, BoxFuture, pending};
+use futures_util::future::{self, pending};
 use indexer_types::{BlockRow, Event, Fees, OpWithResult};
 use tokio::{
     select,
@@ -57,6 +58,9 @@ use crate::bitcoin_client::Client;
 use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
+use crate::protocol::coordinator::selection::{
+    ApplicationPosition, ExecutionSelection, select_legacy_p1,
+};
 use crate::protocol::v1::committee::build_validator_set;
 #[cfg(test)]
 use crate::protocol::v1::committee::stake_to_voting_power;
@@ -76,7 +80,8 @@ use crate::{
     test_utils::new_mock_block_hash,
 };
 
-use executor::{Executor, RecognizedTransaction};
+use executor::Executor;
+use mempool::MempoolPreparation;
 
 /// High-water mark on `consensus_state::pending_blocks`: the reactor stops
 /// draining `block_rx` once this many blocks are buffered ahead of consensus,
@@ -168,7 +173,7 @@ pub(crate) struct Reactor<E: Executor> {
     /// its result is applied when this completes. `None` when idle — one at a
     /// time, so a slow projection never queues behind itself.
     fee_recompute: Option<tokio::task::JoinHandle<Fees>>,
-    mempool_preparation: Option<BoxFuture<'static, Result<Vec<RecognizedTransaction>>>>,
+    mempool_preparation: Option<MempoolPreparation>,
 }
 
 impl<E: Executor> Reactor<E> {
@@ -217,6 +222,24 @@ impl<E: Executor> Reactor<E> {
             fee_recompute: None,
             mempool_preparation: None,
         }
+    }
+
+    fn select_executor(
+        &self,
+        position: ApplicationPosition,
+    ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
+        let conn = self.db_conn();
+        let network = self.runtime.network;
+        async move { select_legacy_p1(&conn, network, position).await }
+    }
+
+    fn preparation_selection(
+        &self,
+    ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
+        self.select_executor(ApplicationPosition::Preparation {
+            anchor_height: self.last_height,
+            anchor_hash: self.last_hash,
+        })
     }
 
     /// Clone of the shared write connection from Runtime.storage.
@@ -517,7 +540,7 @@ impl<E: Executor> Reactor<E> {
             let can_read_mempool = self.mempool_preparation.is_none();
             let mempool_preparation = async {
                 match self.mempool_preparation.as_mut() {
-                    Some(preparation) => preparation.await,
+                    Some(preparation) => (&mut preparation.result).await,
                     None => pending().await,
                 }
             };
@@ -553,7 +576,10 @@ impl<E: Executor> Reactor<E> {
                     match event {
                         MempoolEvent::Sync { transactions, fees, mempool_min_fee_sat_per_vb } => {
                             self.consensus.mempool.stage_snapshot(&transactions);
-                            self.mempool_preparation = Some(self.executor.parse_mempool(transactions));
+                            let selection = self.preparation_selection().await?;
+                            self.mempool_preparation = Some(MempoolPreparation {
+                                result: self.executor.parse_mempool(&selection, transactions), selection,
+                            });
                             self.consensus.mempool_fee_index.replace(fees, mempool_min_fee_sat_per_vb);
                             self.consensus.mempool_fee_index.recompute();
                             info!("MempoolSync: recognition started");
@@ -563,7 +589,10 @@ impl<E: Executor> Reactor<E> {
                         },
                         MempoolEvent::TransactionAdded { txid, tx, fee } => {
                             self.consensus.mempool.stage(&tx);
-                            self.mempool_preparation = Some(self.executor.parse_mempool(vec![tx]));
+                            let selection = self.preparation_selection().await?;
+                            self.mempool_preparation = Some(MempoolPreparation {
+                                result: self.executor.parse_mempool(&selection, vec![tx]), selection,
+                            });
                             self.consensus.mempool_fee_index.insert(txid, fee);
                         },
                         MempoolEvent::MempoolFeeSample { txid, fee } => {
@@ -579,9 +608,18 @@ impl<E: Executor> Reactor<E> {
                     }
                 }
                 prepared = mempool_preparation => {
-                    self.mempool_preparation = None;
+                    let previous = self.mempool_preparation.take().expect("completed preparation");
+                    let prepared = prepared?;
+                    let selection = self.preparation_selection().await?;
+                    if !previous.selection.same_recognition_rules(&selection) {
+                        self.mempool_preparation = Some(MempoolPreparation {
+                            result: self.executor.parse_mempool(&selection, self.consensus.mempool.raw_inputs()),
+                            selection,
+                        });
+                        continue;
+                    }
                     let mut recognized = false;
-                    for transaction in prepared? {
+                    for transaction in prepared {
                         recognized |= self.consensus.mempool.finish(transaction);
                     }
                     if recognized && self.consensus.pending_proposal.is_some() {
@@ -999,7 +1037,9 @@ pub fn run(
                 // placeholder).
                 fee_index.recompute();
 
-                let initial_mempool = exec.parse_mempool(initial_raw_txs).await?;
+                let selection = select_legacy_p1(&runtime.get_storage_conn(), runtime.network,
+                    ApplicationPosition::Preparation { anchor_height: last_height, anchor_hash: last_hash }).await?;
+                let initial_mempool = exec.parse_mempool(&selection, initial_raw_txs).await?;
                 let mut startup_lease = owner_service.begin_canonical(&mut runtime, false).await?;
                 let consensus_result = start_consensus(
                     engine_config,
