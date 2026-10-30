@@ -30,6 +30,9 @@ BOUNDARY_REPLAYS = (
     "reactor::workload_tests::smoke::populated::workload_full_block_capacity_preserves_accounting",
     "reactor::workload_tests::smoke::populated::workload_full_block_gas_exhaustion_preserves_accounting",
 )
+BOUNDARY_DELIVERIES = dict(zip(BOUNDARY_REPLAYS,
+                               ("AggregateBoundary", "BlockCapacity", "MaxGasBlock"), strict=True))
+BLOCK_SERVICE_TARGET_NS = 60 * 1_000_000_000
 
 
 def view_restores(test):
@@ -112,6 +115,34 @@ def check_result(log, before, after):
     require(all(after.get(key, 0) == before.get(key, 0)
                 for key in ("oom", "oom_kill", "oom_group_kill")),
             "workload incurred an out-of-memory event")
+
+
+def boundary_service(log, test):
+    prefix = "workload_boundary_service="
+    samples = [json.loads(line.removeprefix(prefix)) for line in log.splitlines()
+               if line.startswith(prefix)]
+    require([sample.get("restore") for sample in samples] == ["first.db", "second.db"],
+            "boundary service requires exactly two ordered restores")
+    for sample in samples:
+        require(sample.get("delivery") == BOUNDARY_DELIVERIES[test],
+                "boundary service delivery differs from selected test")
+        require(type(sample.get("height")) is int and sample["height"] > 0
+                and type(sample.get("elapsed_ns")) is int and sample["elapsed_ns"] > 0,
+                "boundary service height or duration is invalid")
+        require(sample.get("scope") == (
+            "canonical block execution and lifecycle; fixture setup and semantic oracle excluded"),
+            "boundary service measurement scope differs")
+    require(samples[0]["height"] == samples[1]["height"],
+            "boundary restores measured different heights")
+    maximum = max(sample["elapsed_ns"] for sample in samples)
+    return {
+        "samples": samples,
+        "maximum_ns": maximum,
+        "target_ns": BLOCK_SERVICE_TARGET_NS,
+        "requires_explicit_disposition": maximum > BLOCK_SERVICE_TARGET_NS,
+        "performance_approval": "not_established",
+        "limitation": "two diagnostic restores; paired release trials and full qualification remain required",
+    }
 
 
 def trial_measurements(log, pid, directory, enforced, restores=("timed-one.db", "timed-two.db")):
@@ -248,6 +279,8 @@ def worker(spec_path):
                          observation["memory_events_after"])
             require(not external or "workload_external_bitcoin=true\n" in transcript,
                     "workload did not confirm use of the external Bitcoin service")
+            if spec["test"] in BOUNDARY_REPLAYS:
+                observation["boundary_service"] = boundary_service(transcript, spec["test"])
             if spec.get("trial_memory"):
                 restores = memory_restores(spec["test"])
                 observation["trials"] = trial_measurements(

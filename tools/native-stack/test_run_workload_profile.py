@@ -4,10 +4,46 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from run_workload_profile import check_ancestors, check_result, limits, trial_measurements
+from run_workload_profile import (
+    BLOCK_SERVICE_TARGET_NS, BOUNDARY_DELIVERIES, boundary_service, check_ancestors,
+    check_result, limits, trial_measurements,
+)
 
 
 class ProfileChecks(unittest.TestCase):
+    def test_boundary_service_preserves_missed_target_without_claiming_approval(self):
+        for test, delivery in BOUNDARY_DELIVERIES.items():
+            samples = [{"restore": restore, "delivery": delivery, "height": 101,
+                        "elapsed_ns": BLOCK_SERVICE_TARGET_NS,
+                        "scope": "canonical block execution and lifecycle; fixture setup and semantic oracle excluded"}
+                       for restore in ("first.db", "second.db")]
+
+            def check(records):
+                log = "\n".join("workload_boundary_service=" + json.dumps(item) for item in records)
+                return boundary_service(log, test)
+
+            with self.subTest(test=test):
+                report = check(samples)
+                self.assertFalse(report["requires_explicit_disposition"])
+                self.assertEqual(report["performance_approval"], "not_established")
+                slower = copy.deepcopy(samples)
+                slower[1]["elapsed_ns"] += 1
+                report = check(slower)
+                self.assertTrue(report["requires_explicit_disposition"])
+                self.assertEqual(report["maximum_ns"], BLOCK_SERVICE_TARGET_NS + 1)
+                self.assertEqual(report["samples"], slower)
+                for invalid in ([], samples[:1], samples[::-1], samples + samples):
+                    with self.assertRaises(ValueError):
+                        check(invalid)
+                for key, value in (("delivery", "other"), ("height", 102),
+                                   ("height", True), ("elapsed_ns", 0),
+                                   ("elapsed_ns", True), ("elapsed_ns", 1.5),
+                                   ("scope", "execution only")):
+                    invalid = copy.deepcopy(samples)
+                    invalid[1][key] = value
+                    with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                        check(invalid)
+
     def test_trial_records_reject_missing_reset_wrong_owner_and_memory_pressure(self):
         enforced = {"cpu.max": "200000 100000", "memory.max": 12 * 1024**3,
                     "memory.swap.max": 0}
