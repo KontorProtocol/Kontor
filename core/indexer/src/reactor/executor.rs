@@ -132,13 +132,15 @@ pub trait Executor: Sync {
         Ok(block.recognize(|raw| self.parse_transaction(raw)))
     }
 
-    async fn parse_mempool(
+    // Owned preparation never carries storage authority across a suspension.
+    // Production moves recognition to a blocking worker; the default is for
+    // lightweight executors whose recognizer has no expensive decoding.
+    fn parse_mempool(
         &self,
         transactions: Vec<BitcoinTransaction>,
-    ) -> Result<Vec<RecognizedTransaction>> {
-        Ok(recognize_mempool(transactions, |raw| {
-            self.parse_transaction(raw)
-        }))
+    ) -> BoxFuture<'static, Result<Vec<RecognizedTransaction>>> {
+        let prepared = recognize_mempool(transactions, |raw| self.parse_transaction(raw));
+        Box::pin(async move { Ok(prepared) })
     }
 }
 
@@ -356,13 +358,15 @@ impl Executor for RuntimeExecutor {
         )
     }
 
-    async fn parse_mempool(
+    fn parse_mempool(
         &self,
         transactions: Vec<BitcoinTransaction>,
-    ) -> Result<Vec<RecognizedTransaction>> {
-        Ok(tokio::task::spawn_blocking(move || {
-            recognize_mempool(transactions, Self::recognize_transaction)
+    ) -> BoxFuture<'static, Result<Vec<RecognizedTransaction>>> {
+        Box::pin(async move {
+            Ok(tokio::task::spawn_blocking(move || {
+                recognize_mempool(transactions, Self::recognize_transaction)
+            })
+            .await?)
         })
-        .await?)
     }
 }

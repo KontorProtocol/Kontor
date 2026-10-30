@@ -14,6 +14,8 @@ mod handoff_tests;
 pub(crate) mod lite_executor;
 mod mempool;
 pub mod mempool_fee_index;
+#[cfg(test)]
+mod mempool_tests;
 pub mod mock_bitcoin;
 #[cfg(test)]
 mod pruning_tests;
@@ -33,7 +35,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use futures_util::future::{self, pending};
+use futures_util::future::{self, BoxFuture, pending};
 use indexer_types::{BlockRow, Event, Fees, OpWithResult};
 use tokio::{
     select,
@@ -74,7 +76,7 @@ use crate::{
     test_utils::new_mock_block_hash,
 };
 
-use executor::Executor;
+use executor::{Executor, RecognizedTransaction};
 
 /// High-water mark on `consensus_state::pending_blocks`: the reactor stops
 /// draining `block_rx` once this many blocks are buffered ahead of consensus,
@@ -166,6 +168,7 @@ pub(crate) struct Reactor<E: Executor> {
     /// its result is applied when this completes. `None` when idle — one at a
     /// time, so a slow projection never queues behind itself.
     fee_recompute: Option<tokio::task::JoinHandle<Fees>>,
+    mempool_preparation: Option<BoxFuture<'static, Result<Vec<RecognizedTransaction>>>>,
 }
 
 impl<E: Executor> Reactor<E> {
@@ -212,6 +215,7 @@ impl<E: Executor> Reactor<E> {
             io_jobs: VecDeque::new(),
             validated_candidates: None,
             fee_recompute: None,
+            mempool_preparation: None,
         }
     }
 
@@ -510,6 +514,14 @@ impl<E: Executor> Reactor<E> {
                 }
             };
 
+            let can_read_mempool = self.mempool_preparation.is_none();
+            let mempool_preparation = async {
+                match self.mempool_preparation.as_mut() {
+                    Some(preparation) => preparation.await,
+                    None => pending().await,
+                }
+            };
+
             let debounce_sleep = async {
                 match debounce_deadline {
                     Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -535,26 +547,24 @@ impl<E: Executor> Reactor<E> {
                         .await
                         .context("process_block_event failed")?;
                 }
-                Some(event) = self.mempool_rx.recv() => {
+                // Preserve snapshot/delta order and channel backpressure while
+                // the owned parser runs, without parking consensus or blocks.
+                Some(event) = self.mempool_rx.recv(), if can_read_mempool => {
                     match event {
                         MempoolEvent::Sync { transactions, fees, mempool_min_fee_sat_per_vb } => {
-                            let prepared = self.executor.parse_mempool(transactions).await?;
-                            self.consensus.mempool.replace(prepared);
+                            self.consensus.mempool.stage_snapshot(&transactions);
+                            self.mempool_preparation = Some(self.executor.parse_mempool(transactions));
                             self.consensus.mempool_fee_index.replace(fees, mempool_min_fee_sat_per_vb);
                             self.consensus.mempool_fee_index.recompute();
-                            info!("MempoolSync: {} recognized txs", self.consensus.mempool.candidates.len());
+                            info!("MempoolSync: recognition started");
                             if self.consensus.pending_proposal.is_some() {
                                 debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
                             }
                         },
                         MempoolEvent::TransactionAdded { txid, tx, fee } => {
-                            let prepared = self.executor.parse_mempool(vec![tx]).await?
-                                .pop().context("mempool recognition omitted its input")?;
-                            let recognized = self.consensus.mempool.insert(prepared);
+                            self.consensus.mempool.stage(&tx);
+                            self.mempool_preparation = Some(self.executor.parse_mempool(vec![tx]));
                             self.consensus.mempool_fee_index.insert(txid, fee);
-                            if recognized && self.consensus.pending_proposal.is_some() {
-                                debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
-                            }
                         },
                         MempoolEvent::MempoolFeeSample { txid, fee } => {
                             self.consensus.mempool_fee_index.insert(txid, fee);
@@ -566,6 +576,16 @@ impl<E: Executor> Reactor<E> {
                             self.consensus.mempool_fee_index.remove(&txid);
                             debug!("MempoolRemove {}", txid);
                         },
+                    }
+                }
+                prepared = mempool_preparation => {
+                    self.mempool_preparation = None;
+                    let mut recognized = false;
+                    for transaction in prepared? {
+                        recognized |= self.consensus.mempool.finish(transaction);
+                    }
+                    if recognized && self.consensus.pending_proposal.is_some() {
+                        debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
                     }
                 }
                 _ = debounce_sleep => {

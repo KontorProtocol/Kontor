@@ -531,7 +531,7 @@ impl<E: Executor> Reactor<E> {
         // Remove already-processed txids from the pool
         for txid_str in &existing {
             if let Ok(txid) = txid_str.parse::<Txid>() {
-                self.consensus.mempool.candidates.remove(&txid);
+                self.consensus.mempool.suppress(&txid);
             }
         }
 
@@ -553,7 +553,7 @@ impl<E: Executor> Reactor<E> {
             }
         }
         for txid in &invalid_txids {
-            self.consensus.mempool.candidates.remove(txid);
+            self.consensus.mempool.suppress(txid);
         }
         if txs.is_empty() {
             return Ok(ProposalSnapshot::Nothing);
@@ -750,7 +750,7 @@ impl<E: Executor> Reactor<E> {
 
         // A candidate set already validated for THIS anchor — banked when the
         // deadline consumed the proposal it was meant for. Judged at use:
-        // anchor must still match, membership is re-checked against the pool,
+        // anchor and exact witness must still match the pool,
         // and `validate_batch` re-runs; anything stale falls through to a
         // fresh snapshot.
         if let Some(banked) = self.validated_candidates.take()
@@ -758,12 +758,7 @@ impl<E: Executor> Reactor<E> {
             && banked.anchor_hash == last_hash
         {
             let mut kept = banked.txs;
-            kept.retain(|tx| {
-                self.consensus
-                    .mempool
-                    .candidates
-                    .contains_key(&tx.compute_txid())
-            });
+            kept.retain(|tx| self.consensus.mempool.contains_candidate(tx));
             if !kept.is_empty() {
                 let order = dependency_sort(&kept);
                 let txs: Vec<bitcoin::Transaction> =
@@ -881,7 +876,7 @@ impl<E: Executor> Reactor<E> {
                         TxPolicy::Rejected(reason) => {
                             let txid = tx.compute_txid();
                             warn!(%txid, %reason, "Dropping candidate transaction");
-                            self.consensus.mempool.candidates.remove(&txid);
+                            self.consensus.mempool.reject(&tx);
                         }
                     }
                 }
@@ -889,13 +884,9 @@ impl<E: Executor> Reactor<E> {
                 // replacement or eviction arrived through the mempool arm —
                 // which now runs freely during validation — and a superseded tx
                 // draws nil votes (txn-mempool-conflict) or, decided, a batch
-                // that can never confirm. Membership at APPLY time is the truth.
-                kept.retain(|tx| {
-                    self.consensus
-                        .mempool
-                        .candidates
-                        .contains_key(&tx.compute_txid())
-                });
+                // that can never confirm. A txid omits witness data, so compare the
+                // complete raw input rather than just its membership key.
+                kept.retain(|tx| self.consensus.mempool.contains_candidate(tx));
                 if self.consensus.pending_proposal.is_none() {
                     // The deadline already answered with an empty batch, or the
                     // engine moved on. BANK the verdicts for the next GetValue
@@ -997,11 +988,7 @@ impl<E: Executor> Reactor<E> {
                     return Ok(());
                 }
                 for (tx, parsed) in transactions.iter().zip(parsed) {
-                    self.consensus
-                        .mempool
-                        .candidates
-                        .entry(tx.compute_txid())
-                        .or_insert_with(|| (tx.clone(), parsed));
+                    self.consensus.mempool.cache_proposal(tx, parsed);
                 }
                 let proposed = ProposedValue {
                     height,
@@ -1101,7 +1088,7 @@ impl<E: Executor> Reactor<E> {
         // make_value re-proposes the very txs whose missing confirmations caused
         // this rollback — repeating the same finality failure with no progress.
         for txid in &excluded {
-            self.consensus.mempool.candidates.remove(txid);
+            self.consensus.mempool.suppress(txid);
         }
 
         self.consensus
@@ -1653,7 +1640,7 @@ impl<E: Executor> Reactor<E> {
                         .await?;
 
                     for tx in &full_txs {
-                        self.consensus.mempool.candidates.remove(&tx.compute_txid());
+                        self.consensus.mempool.suppress(&tx.compute_txid());
                     }
 
                     let cert_bytes = encode_commit_certificate(&certificate)

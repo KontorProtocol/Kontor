@@ -884,3 +884,35 @@ proposal validation, and preserving candidate rejection policy when rebuilding a
 selection remain required. Reconnect-snapshot recognition currently awaits its
 blocking worker on the reactor loop; the selected preparation job must allow
 consensus progress while preserving snapshot/delta ordering.
+
+### Bounded mempool preparation and witness freshness
+
+Recognition now returns an owned future. The production executor performs witness
+parsing on a blocking worker, and the reactor polls that future alongside block,
+consensus, simulation and shutdown events. Only one mempool preparation runs at a
+time. Later listener events stay in the existing bounded channel, preserving
+snapshot/delta order and backpressure. Initial startup recognition remains before
+engine startup. Snapshot installation and fee projection still have synchronous
+work; this change does not establish a bound on total reactor latency.
+
+Raw inputs are staged before preparation, with candidates withheld until recognized.
+Block removals and local candidate suppression apply while parsing is pending.
+Completion requires the same complete raw transaction and an eligible entry, so a
+late result cannot restore an input removed by a block, rejected by validation, or
+excluded by finality. A new listener snapshot/delta resets local eligibility as it
+did before. Proposal cache insertion retains its raw input and cannot overwrite a
+different witness from the listener or bypass local suppression.
+
+Both freshly returned and banked Bitcoin validation results now require exact
+candidate bytes, rather than txid membership. Rejection also applies only to the
+raw input actually checked. Incoming proposals continue to validate their own
+bytes; local cache eligibility does not become an additional consensus vote rule.
+
+The focused mempool run passed 29 tests, including an actual reactor loop with
+pending recognition, continued block/request handling, channel backpressure and
+shutdown, plus production proposal-apply/banking checks with same-txid witness
+replacements. Initial test-only fixture errors (empty committee and a private
+helper import) were corrected before the successful run. Protocol selection stamps,
+reselection at activation/recovery, and retained implementation dispatch remain
+unfinished. These checks do not establish those later capabilities or final K2a
+acceptance.
