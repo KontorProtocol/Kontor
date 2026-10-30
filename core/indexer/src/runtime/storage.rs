@@ -9,6 +9,12 @@ use libsql::Connection;
 use regex::bytes::RegexBuilder;
 use std::collections::HashMap;
 use std::io::Read;
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(test)]
+use std::sync::{Condvar, Mutex as StdMutex};
 use wit_component::{ComponentEncoder, WitPrinter};
 
 #[cfg(test)]
@@ -53,6 +59,30 @@ pub enum ComponentDecodeError {
     Infrastructure(anyhow::Error),
 }
 
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct BlockingGate {
+    pub(crate) entered: AtomicBool,
+    released: StdMutex<bool>,
+    wake: Condvar,
+}
+
+#[cfg(test)]
+impl BlockingGate {
+    pub(super) fn block(&self) {
+        self.entered.store(true, Ordering::SeqCst);
+        let mut released = self.released.lock().expect("blocking gate poisoned");
+        while !*released {
+            released = self.wake.wait(released).expect("blocking gate poisoned");
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        *self.released.lock().expect("blocking gate poisoned") = true;
+        self.wake.notify_all();
+    }
+}
+
 /// Decode the WIT embedded in already-encoded component bytes, unmodified
 /// (`init`/core-context preserved) — for on-chain publish validation, where the
 /// validator must see the real surface. `component_wit` strips `init`/core-context
@@ -92,6 +122,12 @@ pub struct Storage {
     pub savepoint_counter: Counter,
     #[builder(default = Stack::builder().build())]
     pub savepoint_stack: Stack<u64>,
+    #[cfg(test)]
+    #[builder(skip)]
+    pub(super) fail_rollback_once: Arc<AtomicBool>,
+    #[cfg(test)]
+    #[builder(skip)]
+    pub(crate) decode_gate: Option<Arc<BlockingGate>>,
     #[builder(default = 1)]
     pub height: u64,
     pub tx_context: Option<TransactionContext>,
@@ -351,10 +387,16 @@ impl Storage {
             })?;
         // Split the join from the work: a JoinError is this node's task machinery
         // failing, everything inside is a property of the bytes.
+        #[cfg(test)]
+        let gate = self.decode_gate.clone();
         let encode = move || -> Result<Vec<u8>> {
             #[cfg(test)]
             let _trace =
                 resource_diagnostics::scope("blocking_decode_entry", "blocking_decode_exit");
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                gate.block();
+            }
             // Cap decompressed size: a tiny on-chain brotli blob can otherwise
             // inflate without bound in memory on every node that loads the
             // contract (decompression bomb). 64 MiB is far above any legitimate
@@ -583,6 +625,10 @@ impl Storage {
     }
 
     pub async fn rollback_transaction(&self) -> Result<()> {
+        #[cfg(test)]
+        if self.fail_rollback_once.swap(false, Ordering::SeqCst) {
+            return Err(anyhow!("injected rollback transaction failure"));
+        }
         self.savepoint_stack.clear().await;
         self.conn.execute("ROLLBACK", ()).await?;
         Ok(())

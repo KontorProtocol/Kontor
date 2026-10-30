@@ -56,6 +56,8 @@ pub use stdlib::{
     CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,
     wave_type,
 };
+#[cfg(test)]
+pub(crate) use storage::BlockingGate;
 use storage::{ComponentDecodeError, print_component_wit};
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
@@ -299,6 +301,8 @@ pub struct Runtime {
     conversion_probe: Option<conversion_probe::Probe>,
     #[cfg(test)]
     pub(crate) test_host_error_message: Option<Arc<str>>,
+    #[cfg(test)]
+    compile_gate: Option<Arc<BlockingGate>>,
     pub(crate) usage_kind: UsageKind,
     pub(crate) fuel_checkpoint: u64,
     /// Transient per-op accumulator of the storage-deposit GAS reserved this op
@@ -473,6 +477,8 @@ impl Runtime {
             conversion_probe: None,
             #[cfg(test)]
             test_host_error_message: None,
+            #[cfg(test)]
+            compile_gate: None,
             deposit: DepositMeter::new(),
             usage_kind: UsageKind::System,
             fuel_checkpoint: 0,
@@ -1188,9 +1194,15 @@ impl Runtime {
         bytes: Vec<u8>,
     ) -> std::result::Result<(Vec<u8>, Component), ComponentDecodeError> {
         let engine = self.engine.clone();
+        #[cfg(test)]
+        let gate = self.compile_gate.clone();
         let compile = move || {
             #[cfg(test)]
             resource_diagnostics::record("compiler_entry");
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                gate.block();
+            }
             let compiled = Component::from_binary(&engine, &bytes);
             #[cfg(test)]
             resource_diagnostics::record("compiler_exit");
