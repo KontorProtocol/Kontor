@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "20053da4a684341f459fbf135c24ade4e9012dfd1b873d257e5bacc45d6aa69b",
+  "parent_manifest_sha256": "10b5927bf0ebc4d652824e572a6880d7b739ff4227c54a03eac2e7bdaeb844f3",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1203,7 +1203,7 @@
   "sources": {
     "call": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "0992e2c6dd3f9d9f8adb9e04fce7a63ffe747bde216c34a49fc3580ce713b04b"
+      "sha256": "c4fcc11c87d902fcb8793507bedfb1f1178c13cc39fd92fe1bc5882bed9ce2b1"
     },
     "chain_fixture": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
@@ -1231,7 +1231,7 @@
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "b47a3f6a7f74acfed46cc3ee16f174584babf47e341101596007b529980974eb"
+      "sha256": "5f2a8c004564e02402395b8ef820afffed09739ed29ab53721b7540a78f9710f"
     },
     "token": {
       "path": "core/indexer/src/runtime/token.rs",

@@ -38,11 +38,11 @@
     },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
-      "sha256": "ce3bee84d5ba6c19f8e6976308eefb6ab5dd7639d33e488754394572719ac768"
+      "sha256": "7629547c0c2e0831cda9ef3860dc02cd7b1564d60790d615c6589d171df5ada3"
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "0992e2c6dd3f9d9f8adb9e04fce7a63ffe747bde216c34a49fc3580ce713b04b"
+      "sha256": "c4fcc11c87d902fcb8793507bedfb1f1178c13cc39fd92fe1bc5882bed9ce2b1"
     },
     "call_output": {
       "path": "core/indexer/src/runtime/call/result.rs",
@@ -366,7 +366,7 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "b47a3f6a7f74acfed46cc3ee16f174584babf47e341101596007b529980974eb"
+      "sha256": "5f2a8c004564e02402395b8ef820afffed09739ed29ab53721b7540a78f9710f"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
@@ -574,7 +574,7 @@
     },
     "test_runtime_setup": {
       "path": "core/indexer/src/test_utils.rs",
-      "sha256": "eaf0bda8e242ed339ad5b70181aadf728a5fb80306d16c1908116d815a958a0a"
+      "sha256": "c64a77b20e66150a51668c289726d5d72f0dc8cd65998076bec459a3b3ce72b9"
     },
     "testing_host_imports": {
       "path": "core/indexer/src/runtime/host_files.rs",
