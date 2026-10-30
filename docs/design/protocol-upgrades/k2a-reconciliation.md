@@ -835,3 +835,11 @@ encoding is still rejected before queueing. This prepares the simulation path fo
 selected execution; the current production executor remains P1. Protocol selection,
 raw block/mempool ingress, proposal revalidation and admitted executor dispatch are
 still required. No activation or historical bundle isolation is claimed here.
+
+Validation of `60fbec07`: the three simulation API tests, four context-restoration
+tests, reactor channel test and preserved-baseline comparison all passed. The
+comparison matched all eleven stages against `c7554ca8`, using the original seed
+and signed bytes. It also confirmed that unrecognized input leaves state unchanged
+before a subsequent valid simulation. The locked/offline indexer/testlib all-target
+check passed. The only subsequent source cleanup removes an unused test import;
+it does not change execution. The phase-level independent reviews remain pending.

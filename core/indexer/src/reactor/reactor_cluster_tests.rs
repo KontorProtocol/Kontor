@@ -35,7 +35,6 @@ use crate::reactor::{Reactor, Simulation};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::GenesisValidator;
 use crate::runtime::ownership::{AsyncGate, OwnerService};
-use bitcoin::hashes::Hash;
 use indexer_types::Event;
 use indexer_types::OpWithResult;
 use malachitebft_app_channel::app::config::{BootstrapProtocol, DiscoveryConfig, Selector};
