@@ -1,6 +1,7 @@
 pub(crate) mod committee;
 pub(crate) mod execution;
 pub(crate) mod lifecycle;
+pub(crate) mod pricing;
 mod storage_bounds;
 #[cfg(test)]
 mod storage_contract_tests;
