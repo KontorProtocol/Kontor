@@ -1159,7 +1159,7 @@ async fn assert_missing_tx_invalidation(submitted: usize) -> Result<()> {
     let all_txids: Vec<bitcoin::Txid> = mempool_events
         .iter()
         .filter_map(|e| match e {
-            MempoolEvent::KontorTxAdded { txid, .. } => Some(*txid),
+            MempoolEvent::TransactionAdded { txid, .. } => Some(*txid),
             _ => None,
         })
         .collect();
@@ -1361,7 +1361,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     let batch_txids: Vec<bitcoin::Txid> = mempool_events
         .iter()
         .filter_map(|e| match e {
-            MempoolEvent::KontorTxAdded { txid, .. } => Some(*txid),
+            MempoolEvent::TransactionAdded { txid, .. } => Some(*txid),
             _ => None,
         })
         .collect();
@@ -2009,7 +2009,7 @@ async fn banked_verdicts_survive_the_deadline_and_track_the_pool() -> Result<()>
     let txids: Vec<String> = events
         .iter()
         .filter_map(|e| match e {
-            MempoolEvent::KontorTxAdded { txid, .. } => Some(txid.to_string()),
+            MempoolEvent::TransactionAdded { txid, .. } => Some(txid.to_string()),
             _ => None,
         })
         .collect();

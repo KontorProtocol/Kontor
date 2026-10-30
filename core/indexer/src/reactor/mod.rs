@@ -12,6 +12,7 @@ mod handlers;
 mod handoff_tests;
 #[cfg(test)]
 pub(crate) mod lite_executor;
+mod mempool;
 pub mod mempool_fee_index;
 pub mod mock_bitcoin;
 #[cfg(test)]
@@ -300,7 +301,7 @@ impl<E: Executor> Reactor<E> {
                     // or finalized history whose retained bytes were pruned.
                     if let Some(tx) = Self::resolve_tx_from_db(&conn, txid, batch_height).await {
                         resolved.push(Some(tx));
-                    } else if let Some((raw, _)) = self.consensus.pending_transactions.get(txid) {
+                    } else if let Some((raw, _)) = self.consensus.mempool.candidates.get(txid) {
                         resolved.push(Some(raw.clone()));
                     } else {
                         rpc_slots.push(resolved.len());
@@ -333,7 +334,7 @@ impl<E: Executor> Reactor<E> {
             } => {
                 let txids = block.txids();
                 for txid in &txids {
-                    self.consensus.pending_transactions.remove(txid);
+                    self.consensus.mempool.remove(txid);
                 }
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
@@ -536,37 +537,22 @@ impl<E: Executor> Reactor<E> {
                 }
                 Some(event) = self.mempool_rx.recv() => {
                     match event {
-                        MempoolEvent::Sync { kontor_txs, fees, mempool_min_fee_sat_per_vb } => {
-                            let kontor_count = kontor_txs.len();
-                            let fee_count = fees.len();
-                            self.consensus.pending_transactions.clear();
-                            for (txid, tx) in kontor_txs {
-                                self.consensus.pending_transactions.insert(
-                                    txid,
-                                    (tx.raw, tx.parsed),
-                                );
-                            }
-                            self.consensus
-                                .mempool_fee_index
-                                .replace(fees, mempool_min_fee_sat_per_vb);
-                            // `replace` reset cached fees to the new
-                            // floor; recompute immediately so consensus
-                            // doesn't read a degraded threshold for the
-                            // 0-2s window before the next tick.
+                        MempoolEvent::Sync { transactions, fees, mempool_min_fee_sat_per_vb } => {
+                            let prepared = self.executor.parse_mempool(transactions).await?;
+                            self.consensus.mempool.replace(prepared);
+                            self.consensus.mempool_fee_index.replace(fees, mempool_min_fee_sat_per_vb);
                             self.consensus.mempool_fee_index.recompute();
-                            info!(
-                                "MempoolSync: {} Kontor txs, {} fee entries, min fee {} sat/vB",
-                                kontor_count, fee_count, mempool_min_fee_sat_per_vb
-                            );
+                            info!("MempoolSync: {} recognized txs", self.consensus.mempool.candidates.len());
                             if self.consensus.pending_proposal.is_some() {
                                 debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
                             }
                         },
-                        MempoolEvent::KontorTxAdded { txid, tx, fee } => {
-                            self.consensus.pending_transactions.insert(txid, (tx.raw, tx.parsed));
+                        MempoolEvent::TransactionAdded { txid, tx, fee } => {
+                            let prepared = self.executor.parse_mempool(vec![tx]).await?
+                                .pop().context("mempool recognition omitted its input")?;
+                            let recognized = self.consensus.mempool.insert(prepared);
                             self.consensus.mempool_fee_index.insert(txid, fee);
-                            debug!("MempoolInsert (Kontor) {}", txid);
-                            if self.consensus.pending_proposal.is_some() {
+                            if recognized && self.consensus.pending_proposal.is_some() {
                                 debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
                             }
                         },
@@ -576,7 +562,7 @@ impl<E: Executor> Reactor<E> {
                             // affect what we can propose.
                         },
                         MempoolEvent::Remove(txid) => {
-                            self.consensus.pending_transactions.remove(&txid);
+                            self.consensus.mempool.remove(&txid);
                             self.consensus.mempool_fee_index.remove(&txid);
                             debug!("MempoolRemove {}", txid);
                         },
@@ -951,21 +937,21 @@ pub fn run(
                 let mut log_ticker = tokio::time::interval(std::time::Duration::from_secs(30));
                 log_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 log_ticker.tick().await; // consume the immediate first tick
-                let initial_kontor_txs = loop {
+                let initial_raw_txs = loop {
                     select! {
                         event = mempool_rx.recv() => match event {
                             Some(MempoolEvent::Sync {
-                                kontor_txs,
+                                transactions,
                                 fees,
                                 mempool_min_fee_sat_per_vb,
                             }) => {
                                 fee_index.replace(fees, mempool_min_fee_sat_per_vb);
                                 info!(
-                                    "Initial mempool sync complete: {} Kontor txs, {} fee entries",
-                                    kontor_txs.len(),
+                                    "Initial mempool sync complete: {} raw txs, {} fee entries",
+                                    transactions.len(),
                                     fee_index.len()
                                 );
-                                break kontor_txs;
+                                break transactions;
                             }
                             Some(other) => {
                                 bail!("Mempool delta event before initial Sync: {other:?}");
@@ -1007,13 +993,7 @@ pub fn run(
                 startup_lease.complete(&mut runtime).await?;
                 let mut consensus = consensus_result.context("start_consensus failed")?;
 
-                // Seed pending_transactions with the Kontor txs captured
-                // from the initial Sync.
-                for (txid, tx) in initial_kontor_txs {
-                    consensus
-                        .pending_transactions
-                        .insert(txid, (tx.raw, tx.parsed));
-                }
+                consensus.mempool.replace(exec.parse_mempool(initial_raw_txs).await?);
 
                 let mut reactor = Reactor::new(
                     exec,

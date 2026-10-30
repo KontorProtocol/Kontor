@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
-use bitcoin::Txid;
-use indexer_types::Block;
+use bitcoin::{Transaction as BitcoinTransaction, Txid};
+use indexer_types::{Block, Transaction};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tracing::warn;
 
 use crate::bitcoin_client::error::Error as RpcError;
@@ -23,6 +24,24 @@ use futures_util::future::BoxFuture;
 pub enum TxPolicy {
     Accepted,
     Rejected(String),
+}
+
+pub struct RecognizedTransaction {
+    pub raw: BitcoinTransaction,
+    pub parsed: Option<Transaction>,
+}
+
+fn recognize_mempool(
+    transactions: Vec<BitcoinTransaction>,
+    recognize: impl Fn(&BitcoinTransaction) -> Option<Transaction> + Send + Sync,
+) -> Vec<RecognizedTransaction> {
+    transactions
+        .into_par_iter()
+        .map(|raw| RecognizedTransaction {
+            parsed: recognize(&raw),
+            raw,
+        })
+        .collect()
 }
 
 /// Abstraction over transaction execution and state rollback.
@@ -111,6 +130,15 @@ pub trait Executor: Sync {
 
     async fn parse_block(&self, block: BlockInput) -> Result<Block> {
         Ok(block.recognize(|raw| self.parse_transaction(raw)))
+    }
+
+    async fn parse_mempool(
+        &self,
+        transactions: Vec<BitcoinTransaction>,
+    ) -> Result<Vec<RecognizedTransaction>> {
+        Ok(recognize_mempool(transactions, |raw| {
+            self.parse_transaction(raw)
+        }))
     }
 }
 
@@ -326,5 +354,15 @@ impl Executor for RuntimeExecutor {
             tokio::task::spawn_blocking(move || block.recognize(Self::recognize_transaction))
                 .await?,
         )
+    }
+
+    async fn parse_mempool(
+        &self,
+        transactions: Vec<BitcoinTransaction>,
+    ) -> Result<Vec<RecognizedTransaction>> {
+        Ok(tokio::task::spawn_blocking(move || {
+            recognize_mempool(transactions, Self::recognize_transaction)
+        })
+        .await?)
     }
 }

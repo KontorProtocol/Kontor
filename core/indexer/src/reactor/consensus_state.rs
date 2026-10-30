@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use super::batches::batch_is_ordered;
+use super::mempool::Mempool;
 use super::mempool_fee_index::MempoolFeeIndex;
 
 use malachitebft_app_channel::Channels;
@@ -62,7 +63,7 @@ pub struct PendingProposal {
 pub struct ConsensusState {
     pub signing_provider: Ed25519Provider,
     pub address: Address,
-    pub pending_transactions: HashMap<Txid, (bitcoin::Transaction, indexer_types::Transaction)>,
+    pub mempool: Mempool,
     /// Mempool-based fee estimator. Owned by ConsensusState; the reactor's
     /// mempool event loop mutates it directly, and `validate_transaction`
     /// borrows it via `&MempoolFeeIndex` from the call site.
@@ -474,7 +475,7 @@ impl ConsensusState {
         Ok(Self {
             signing_provider,
             address,
-            pending_transactions: std::collections::HashMap::new(),
+            mempool: Mempool::default(),
             mempool_fee_index,
             current_height,
             current_round: Round::new(0),

@@ -8,7 +8,7 @@ use bitcoin::{BlockHash, Txid};
 
 use crate::bitcoin_client::types::{MempoolEntry, MempoolEntryFees};
 use crate::bitcoin_follower::block::BlockInput;
-use crate::bitcoin_follower::event::{BlockEvent, KontorTx, MempoolEvent};
+use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 #[cfg(test)]
 use crate::runtime::ownership::AsyncGate;
 use crate::test_utils::new_mock_block_hash;
@@ -82,12 +82,6 @@ impl MockBitcoin {
         for _ in 0..count {
             self.tx_counter += 1;
             let tx = make_tx(self.tx_counter);
-            let parsed = indexer_types::Transaction {
-                txid: tx.compute_txid(),
-                index: 0,
-                inputs: vec![],
-                op_return_raw: None,
-            };
             let txid = tx.compute_txid();
             let fee = MempoolEntry {
                 vsize: 1,
@@ -98,12 +92,9 @@ impl MockBitcoin {
                 },
                 depends: vec![],
             };
-            events.push(MempoolEvent::KontorTxAdded {
+            events.push(MempoolEvent::TransactionAdded {
                 txid,
-                tx: KontorTx {
-                    raw: tx.clone(),
-                    parsed,
-                },
+                tx: tx.clone(),
                 fee,
             });
             self.mempool.push(tx);

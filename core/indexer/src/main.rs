@@ -17,7 +17,7 @@ use indexer::info::{compute_info_core, run_info_publisher};
 use indexer::keygen::{self, KeygenArgs};
 use indexer::receipt_stream_rotation::{self, ReceiptStreamRotationArgs};
 use indexer::stopper::{self, Shutdown};
-use indexer::{api, block, built_info, reactor, reg_tester, runtime};
+use indexer::{api, built_info, reactor, reg_tester, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging};
 use indexer_types::{Inst, InstKind};
 use kontor_build::{BuildArgs, run as build};
@@ -304,7 +304,6 @@ async fn run_daemon(config: Config) -> Result<()> {
 
     let (block_rx, mempool_rx, replay_tx, follower_handle) = bitcoin_follower::run(
         bitcoin.clone(),
-        block::filter_map,
         shutdown.signal(),
         config.starting_block_height,
         known_hashes,
