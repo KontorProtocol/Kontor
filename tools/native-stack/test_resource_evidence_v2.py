@@ -101,6 +101,8 @@ def bundle_fixture(directory):
         "source_sha": head, "binary_path": binary_path,
         "binary_sha256": binary_hash,
         "manifest_sha256": sha256(ROOT / "tools/native-stack/resource-manifest-v1.json"),
+        "cargo_artifact": {"profile": {"test": True, "opt_level": "0",
+                                       "debug_assertions": True}},
         "cargo_artifacts": control_entries["cargo-artifacts.json"],
         "cargo_metadata": control_entries["cargo-metadata.json"],
         "build_attestation": control_entries["resource-build-attestation.json"],
@@ -298,6 +300,30 @@ def bundle_fixture(directory):
 
 
 class EvidenceV2Tests(unittest.TestCase):
+    def test_cell_target_rejects_mislabeled_host_or_profile(self):
+        dev = {"profile": {"test": True, "opt_level": "0",
+                            "debug_assertions": True}}
+        release = {"profile": {"test": True, "opt_level": "3",
+                                "debug_assertions": False}}
+        self.assertEqual(resource_evidence_v2.cell_target("Linux-X64/dev", dev),
+                         ("linux", "x86_64"))
+        self.assertEqual(resource_evidence_v2.cell_target("Linux-ARM64/release", release),
+                         ("linux", "aarch64"))
+        self.assertEqual(resource_evidence_v2.cell_target("macOS-ARM64/dev", dev),
+                         ("macos", "aarch64"))
+        with self.assertRaisesRegex(ValueError, "profile differs"):
+            resource_evidence_v2.cell_target("macOS-ARM64/release", dev)
+        with self.assertRaisesRegex(ValueError, "unknown v2 resource cell"):
+            resource_evidence_v2.cell_target("Linux-PPC/dev", dev)
+        with (patch.object(resource_evidence_v2.sys, "platform", "darwin"),
+              patch.object(resource_evidence_v2.platform, "machine",
+                           return_value="arm64")):
+            self.assertEqual(resource_evidence_v2.cell_target(
+                "macOS-ARM64/dev", dev, check_host=True), ("macos", "aarch64"))
+            with self.assertRaisesRegex(ValueError, "capture host"):
+                resource_evidence_v2.cell_target(
+                    "Linux-ARM64/dev", dev, check_host=True)
+
     def test_complete_bundle_closure_and_guard_revalidation(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)

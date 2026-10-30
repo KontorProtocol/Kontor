@@ -162,11 +162,11 @@
     },
     "finite_stack_control_copy": {
       "path": "tools/native-stack/capture_resource_chain_v2.py",
-      "sha256": "700684d244f21b39bfd68b50e507b5534635457ba4159e18ecfa6f6a78299f96"
+      "sha256": "7707313795afa9588acd806c20d5107f44f13ce4d55f50614bb3e8961bb65667"
     },
     "finite_stack_teardown_validator": {
       "path": "tools/native-stack/resource_evidence_v2.py",
-      "sha256": "eda1851aff84205e37b98abf07fbf3028e91cf4a55b4522f7b4c3339b73f4d0c"
+      "sha256": "481811ddfd5a5b9fef92f89309a0b545e0c83a958affa9100a446e6701ec06a7"
     },
     "finite_stack_tests": {
       "path": "tools/native-stack/test_resource_finite_evidence.py",
@@ -370,7 +370,7 @@
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
-      "sha256": "885a080a90a3e4c3a739321fdd0e319c70a96653d9bcf60ca575d932566ecd87"
+      "sha256": "5e7df10a116c5519209c74d8c88e1f463e77a1b0647118fdf4f5005b749d0c5a"
     },
     "resource_comparator_source": {
       "path": "tools/native-stack/compare_resource.py",
@@ -410,7 +410,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "e52582220394da99a9f1eb7acff514b89b722a8fd014fb3a9f4e9bfe5bfa3dce"
+      "sha256": "b6373e50ed616a6b2269ea3d110fb55effa5cd1d90c216fe600c176a6ed9acd4"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -511,6 +511,22 @@
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
       "sha256": "32378420a60b94c4fea214933e28f56a1d2fd91194a47577f8a3ab4c9fe3ab1f"
+    },
+    "suite_closure_builder": {
+      "path": "tools/native-stack/resource_suite_closure.py",
+      "sha256": "a5bec913b5308f414ac51d7e7bd5a53ebd1c13a1130a247e795ad0de32882fd3"
+    },
+    "suite_closure_tests": {
+      "path": "tools/native-stack/test_resource_suite_closure.py",
+      "sha256": "0a592ddc229051cf58d539b9ef4a33eca9b1f3aace29b5c40d85d988598cb2ab"
+    },
+    "suite_registry_builder": {
+      "path": "tools/native-stack/resource_suite_registry.py",
+      "sha256": "3e281e13f15a1ecfdcc230a669e02eefffcd21e9a1998092dcb1cf1d70d4f393"
+    },
+    "suite_registry_tests": {
+      "path": "tools/native-stack/test_resource_suite_registry.py",
+      "sha256": "2cfef04ee13d3bb3899aa8d959fe50ab4c85f427584983ede1da647fa4dbfa8c"
     },
     "test_runtime_setup": {
       "path": "core/indexer/src/test_utils.rs",

@@ -66,7 +66,7 @@ def harness_position(lines, label):
 
 def measured_trace(trace, runtime, mode, stores, process_id, chain_mode="paid",
                    trap_control=False, sample_keys=("target", "target", "target"),
-                   page_size=None):
+                   page_size=None, os_name="linux"):
     require(isinstance(runtime, dict) and set(runtime) == {
         "scope", "mode", "stores", "chain_mode", "trap_control", "pid",
         "flavor", "worker_count",
@@ -83,7 +83,7 @@ def measured_trace(trace, runtime, mode, stores, process_id, chain_mode="paid",
                                  "trap_control", "pid"}}
     by_category = thread_capacities(capacities, mode,
                                     page_size if page_size is not None else os.sysconf("SC_PAGE_SIZE"),
-                                    "linux", process_id)
+                                    os_name, process_id)
     workers = {item["thread_id"]: item["os_thread_id"]
                for item in by_category["tokio_worker"]}
     blocking = {item["thread_id"]: item["os_thread_id"]
@@ -338,7 +338,7 @@ def check_repeated_observations(observations, trap_control, label):
 
 
 def parse_worker(path, mode, stores, pid, manifest, schema, chain_mode="paid",
-                 trap_control=False, page_size=None):
+                 trap_control=False, page_size=None, os_name="linux"):
     case_id = f"chain_{stores}_{chain_mode}"
     label = f"{case_id}/{mode}" + (" trap control" if trap_control else "")
     lines = path.read_text().splitlines()
@@ -375,7 +375,7 @@ def parse_worker(path, mode, stores, pid, manifest, schema, chain_mode="paid",
             and [trial.get("outcome") for trial in trials] == list(outcomes),
             f"{label}: three ordered trials are missing")
     attempts = measured_trace(trace, runtime, mode, stores, pid, chain_mode,
-                              trap_control, sample_keys, page_size)
+                              trap_control, sample_keys, page_size, os_name)
     observations = [observation_from_trial(
         trial, case_id, outcome, schema, sample_key,
     ) for trial, outcome, sample_key in zip(trials, outcomes, sample_keys, strict=True)]

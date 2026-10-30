@@ -533,6 +533,29 @@ This is one local diagnostic cell with `qualification_status: missing`.
 The capture does not establish full signed-transaction admission,
 cross-node parity, or service timing.
 
+The S2 suite source registry maps all 41 required cases to 16 capture and
+validator groups. `resource_suite_registry.py` checks unique case coverage and
+pins each group's capture source, validator source, and parent manifest. Its
+`source_registry_only` status is a source inventory, not a measurement.
+`resource_suite_closure.py` accepts an archive rooted at
+`<cell with slash replaced by underscore>/<group>/<capture name>` for each
+of the six cells. It requires one source commit, the same binary and guard
+control within each cell, all 16 groups and all 41 cases, and final boundary
+captures. It emits `closure_only` because group semantics and cross-cell
+parity still require their own validators and comparator. Run it only from the
+clean checkout at the capture source commit, with `--root` set to the archive
+root and `--output` set to a new index path outside the checkout.
+
+The v2 chain capture and validator now accept every S2 host/profile cell and
+bind the trace parser to its host OS. Actual capture is still required on each
+host. The six-cell suite remains gated by reviewed boundary depths, a frozen
+v2 auxiliary Store count fixture, a measured macOS guard control, production
+memory profiles, and a common-source capture run. Each specialized validator
+currently checks local checkout and host identity, so an independent verifier
+cannot yet validate downloaded cross-host archives from one machine. A final
+qualification decision also needs semantic comparison of the six validated
+cells.
+
 The amendment is copied unchanged into
 `docs/design/protocol-upgrades/native-stack-s2-resource-amendment-v1.md`.
 Neither the manifest nor schema is a resource measurement or a change to the
