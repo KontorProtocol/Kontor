@@ -2,6 +2,7 @@ use std::mem;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
+use bitcoin::Transaction as BitcoinTransaction;
 use indexer_types::{Block, BlockRow, Event, OpWithResult};
 use metrics::{counter, gauge};
 use tracing::{debug, info, warn};
@@ -235,6 +236,18 @@ impl<E: Executor> Reactor<E> {
         }
 
         Ok((unbatched_count, executed_ops, failures))
+    }
+
+    pub(super) async fn simulate_raw(
+        &mut self,
+        raw: BitcoinTransaction,
+    ) -> Result<Option<Vec<OpWithResult>>> {
+        // Recognition belongs at admission, since the protocol may change while
+        // an RPC request waits in the bounded simulation queue.
+        let Some(tx) = self.executor.parse_transaction(&raw) else {
+            return Ok(None);
+        };
+        self.simulate(tx).await.map(Some)
     }
 
     /// Simulate a transaction: execute in a temporary block, inspect results,

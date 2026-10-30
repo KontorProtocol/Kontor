@@ -62,7 +62,7 @@ fn inscription_input(payload: Vec<u8>) -> Result<TxIn> {
 }
 
 #[tokio::test]
-async fn invalid_simulation_input_is_bad_request_without_queueing() -> Result<()> {
+async fn malformed_bitcoin_simulation_is_bad_request_without_queueing() -> Result<()> {
     let (mut env, _conn, _dir) = new_test_env().await?;
     let (sender, mut receiver) = mpsc::channel(1);
     env.simulate_tx = sender;
@@ -71,14 +71,7 @@ async fn invalid_simulation_input_is_bad_request_without_queueing() -> Result<()
             .route("/simulate", post(post_simulate))
             .with_state(env),
     );
-    for (hex, expected) in [
-        ("zz".to_owned(), None),
-        ("00".to_owned(), None),
-        (
-            serialize_hex(&transaction()),
-            Some("Bad request: Not a valid Kontor transaction"),
-        ),
-    ] {
+    for hex in ["zz".to_owned(), "00".to_owned()] {
         let response = timeout(Duration::from_secs(5), async {
             server.post("/simulate").json(&TransactionHex { hex }).await
         })
@@ -86,9 +79,6 @@ async fn invalid_simulation_input_is_bad_request_without_queueing() -> Result<()
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error: ErrorResponse = serde_json::from_slice(response.as_bytes())?;
         assert!(error.error.starts_with("Bad request: "));
-        if let Some(expected) = expected {
-            assert_eq!(error.error, expected);
-        }
         assert!(matches!(
             receiver.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
@@ -98,7 +88,7 @@ async fn invalid_simulation_input_is_bad_request_without_queueing() -> Result<()
 }
 
 #[tokio::test]
-async fn simulation_preserves_recognized_input_positions_and_reactor_error() -> Result<()> {
+async fn simulation_preserves_raw_witnesses_and_reactor_error() -> Result<()> {
     let (mut env, _conn, _dir) = new_test_env().await?;
     let (sender, mut receiver) = mpsc::channel(1);
     env.simulate_tx = sender;
@@ -121,19 +111,10 @@ async fn simulation_preserves_recognized_input_positions_and_reactor_error() -> 
     };
     let pending = server.post("/simulate").json(&request);
     let inspect_queue = async {
-        let (parsed, reply) = receiver.recv().await.expect("simulation queued");
-        assert_eq!(parsed.txid, raw.compute_txid());
-        assert_eq!(parsed.index, 0);
-        assert_eq!(parsed.inputs.len(), 1);
-        assert_eq!(parsed.inputs[0].input_index, 1);
+        let (queued, reply) = receiver.recv().await.expect("simulation queued");
         assert_eq!(
-            parsed.inputs[0].previous_output,
-            raw.input[1].previous_output
-        );
-        assert_eq!(parsed.inputs[0].insts, instructions);
-        assert_eq!(
-            parsed.op_return_raw.as_deref(),
-            Some(&raw.output[0].script_pubkey.as_bytes()[1..])
+            queued, raw,
+            "recognition must not discard any input at RPC arrival"
         );
         assert!(
             reply
@@ -148,5 +129,35 @@ async fn simulation_preserves_recognized_input_positions_and_reactor_error() -> 
     assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
     let error: ErrorResponse = serde_json::from_slice(response.as_bytes())?;
     assert_eq!(error.error, "Bad request: fixture simulation rejection");
+    Ok(())
+}
+
+#[tokio::test]
+async fn unrecognized_simulation_is_bad_request_after_admission() -> Result<()> {
+    let (mut env, _conn, _dir) = new_test_env().await?;
+    let (sender, mut receiver) = mpsc::channel(1);
+    env.simulate_tx = sender;
+    let server = TestServer::new(
+        Router::new()
+            .route("/simulate", post(post_simulate))
+            .with_state(env),
+    );
+    let raw = transaction();
+    let request = TransactionHex {
+        hex: serialize_hex(&raw),
+    };
+    let pending = server.post("/simulate").json(&request);
+    let reject_at_admission = async {
+        let (queued, reply) = receiver.recv().await.expect("raw simulation queued");
+        assert_eq!(queued, raw);
+        assert!(reply.send(Ok(None)).is_ok());
+    };
+    let (response, ()) = timeout(Duration::from_secs(5), async {
+        tokio::join!(async { pending.await }, reject_at_admission)
+    })
+    .await?;
+    assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+    let error: ErrorResponse = serde_json::from_slice(response.as_bytes())?;
+    assert_eq!(error.error, "Bad request: Not a valid Kontor transaction");
     Ok(())
 }

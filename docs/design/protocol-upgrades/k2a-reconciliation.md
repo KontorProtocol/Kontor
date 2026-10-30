@@ -808,3 +808,30 @@ The integration checks must cover the existing storage differential tests, owner
 commit/cancellation and rollback-failure tests, pruning predecessor boundaries, and
 real startup/finality shutdown tests. This preflight neither freezes P1 nor replaces
 final S2 parity, affected six-cell qualification, or the consolidated K2a review.
+
+### Selected-executor preparation, 30 October
+
+Merge `11dd942a` reconciles K2a `65677ded` with S2/OWNERSHIP `d9f85886` in an
+isolated preparation branch. The lead verified the exact-head all-target compile
+record and three focused rollback/commit-authorization/pruning passes. This does
+not qualify S2 or freeze P1; the final prerequisite merges remain required.
+
+The pre-dispatch comparison source is `c7554ca8`. Its ignored
+`reactor::confirmation_position_tests::parity::retained_executor_matches_baseline`
+test preserves a SQLite seed, signed raw transaction, checksums and full logical
+database rows (including SQLite sequence state). Record mode refuses to overwrite
+an existing archive. Compare mode reopens the same seed and compares all eleven
+recognition, simulation, execution, confirmation, rollback and reconfirmation
+stages. The baseline and a separate replay passed. Native artifacts and provenance
+remain byte-identical through the saved database, rather than being normalized out
+of the comparison. This is a bounded real-execution baseline, not coverage of all
+transaction shapes, lifecycle behavior, migration identities or future protocols.
+
+Simulation ingress now queues the complete Bitcoin transaction and recognizes it
+in the reactor when the request is admitted. An unrecognized transaction is an
+explicit `None` result, preserves the existing HTTP 400 response, and does not stop
+the reactor. Infrastructure errors retain their fatal treatment. Malformed Bitcoin
+encoding is still rejected before queueing. This prepares the simulation path for
+selected execution; the current production executor remains P1. Protocol selection,
+raw block/mempool ingress, proposal revalidation and admitted executor dispatch are
+still required. No activation or historical bundle isolation is claimed here.

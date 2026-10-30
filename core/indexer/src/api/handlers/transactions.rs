@@ -155,12 +155,11 @@ pub async fn post_simulate(
 ) -> Result<Vec<OpWithResult>> {
     let btx = encode::deserialize_hex::<bitcoin::Transaction>(&hex)
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
-    let tx = filter_map((0, btx))
-        .ok_or_else(|| HttpError::BadRequest("Not a valid Kontor transaction".to_string()))?;
     let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
-    env.simulate_tx.send((tx, ret_tx)).await?;
+    env.simulate_tx.send((btx, ret_tx)).await?;
     Ok(ret_rx
         .await?
         .map_err(|e| HttpError::BadRequest(e.to_string()))?
+        .ok_or_else(|| HttpError::BadRequest("Not a valid Kontor transaction".to_string()))?
         .into())
 }

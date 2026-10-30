@@ -12,6 +12,9 @@ use std::time::Duration;
 
 use crate::stopper::{Shutdown, ShutdownSignal};
 use anyhow::{Result, anyhow};
+use bitcoin::Transaction as BitcoinTransaction;
+use bitcoin::absolute::LockTime;
+use bitcoin::transaction::Version;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
@@ -992,11 +995,7 @@ impl ReactorCluster {
     }
 
     /// Send a transaction to a specific node for simulation and await the result.
-    async fn simulate(
-        &self,
-        node: usize,
-        tx: indexer_types::Transaction,
-    ) -> Result<Vec<OpWithResult>> {
+    async fn simulate(&self, node: usize, tx: BitcoinTransaction) -> Result<Vec<OpWithResult>> {
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
         self.simulate_txs[node]
             .send((tx, ret_tx))
@@ -1004,7 +1003,8 @@ impl ReactorCluster {
             .map_err(|_| anyhow::anyhow!("simulate channel closed"))?;
         ret_rx
             .await
-            .map_err(|_| anyhow::anyhow!("simulate response channel closed"))?
+            .map_err(|_| anyhow::anyhow!("simulate response channel closed"))??
+            .ok_or_else(|| anyhow!("unrecognized simulation transaction"))
     }
 
     /// Assert all nodes produced the same checkpoint for a block at a given height.
@@ -2154,11 +2154,11 @@ async fn prod_reactor_simulate_transaction() -> Result<()> {
     cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
     // Create a stub transaction for simulation
-    let tx = indexer_types::Transaction {
-        txid: bitcoin::Txid::from_slice(&[0xAA; 32]).unwrap(),
-        index: 0,
-        inputs: vec![],
-        op_return_raw: None,
+    let tx = BitcoinTransaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
     };
 
     // Simulate on node 0 — exercises savepoint → execute → inspect → rollback

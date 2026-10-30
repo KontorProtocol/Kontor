@@ -109,8 +109,8 @@ const MAX_PENDING_BLOCKS: usize = 128;
 const MAX_DEFERRED_DECISIONS: usize = 4096;
 
 pub type Simulation = (
-    indexer_types::Transaction,
-    oneshot::Sender<Result<Vec<OpWithResult>>>,
+    bitcoin::Transaction,
+    oneshot::Sender<Result<Option<Vec<OpWithResult>>>>,
 );
 
 /// State-pruning settings for the reactor (see `project_state_pruning`).
@@ -634,15 +634,16 @@ impl<E: Executor> Reactor<E> {
                 }
                 option_event = simulate_rx => {
                     if let Some((tx, ret_tx)) = option_event {
-                        let result = self.simulate(tx).await;
+                        let result = self.simulate_raw(tx).await;
                         let err_msg = result.as_ref().err().map(|e| format!("{e:#}"));
                         let _ = ret_tx.send(result);
                         if let Some(msg) = err_msg {
                             // Fatal on purpose, and NOT user-triggerable: an
-                            // `Err` out of `simulate` is infrastructure-only by
+                            // `Err` out of `simulate_raw` is infrastructure-only by
                             // construction (savepoint, DB, executor plumbing) —
                             // user-level op failures ride inside `Ok(results)`
-                            // as per-op error fields. I5: this node's own I/O
+                            // as per-op error fields; unrecognized input is None.
+                            // I5: this node's own I/O
                             // failing must stop this node.
                             bail!("simulation failed: {msg}");
                         }

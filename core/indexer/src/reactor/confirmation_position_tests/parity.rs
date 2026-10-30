@@ -133,7 +133,17 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
             format!("{label}/recognition"),
             serde_json::to_value(&recognized)?,
         );
-        let simulated = reactor.simulate(recognized).await?;
+        let mut unrelated = raw.clone();
+        unrelated.input[0].witness.clear();
+        ensure!(reactor.simulate_raw(unrelated).await?.is_none());
+        ensure!(
+            state(&conn).await? == initial,
+            "unrecognized input changed persisted state"
+        );
+        let simulated = reactor
+            .simulate_raw(raw.clone())
+            .await?
+            .context("recognized simulation")?;
         report.states.insert(
             format!("{label}/simulation"),
             serde_json::to_value(simulated)?,
