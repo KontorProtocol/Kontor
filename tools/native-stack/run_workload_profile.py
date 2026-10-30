@@ -10,6 +10,7 @@ import platform
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 
@@ -83,6 +84,30 @@ def check_result(log, before, after):
             "workload incurred an out-of-memory event")
 
 
+def host_resources():
+    environment = dict(os.environ, LC_ALL="C", LANG="C")
+
+    def query(command):
+        result = subprocess.run(command, env=environment, check=True,
+                                capture_output=True, text=True, timeout=15)
+        return json.loads(result.stdout)
+
+    paths = {"checkout": Path.cwd(), "temporary": Path(tempfile.gettempdir())}
+    return {
+        "cpu": query(["lscpu", "--json"]),
+        "memory_info": Path("/proc/meminfo").read_text(),
+        "page_size_bytes": os.sysconf("SC_PAGE_SIZE"),
+        "filesystems": {
+            name: {"path": str(path.resolve()),
+                   "mount": query(["findmnt", "--json", "--target", str(path),
+                                   "--output", "TARGET,SOURCE,FSTYPE,OPTIONS"])}
+            for name, path in paths.items()
+        },
+        "block_devices": query(["lsblk", "--json", "--bytes", "--output",
+                                 "NAME,TYPE,SIZE,ROTA,TRAN,MODEL"]),
+    }
+
+
 def worker(spec_path):
     spec = json.loads(spec_path.read_text())
     output = spec_path.parent
@@ -99,6 +124,7 @@ def worker(spec_path):
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith("KONTOR_WORKLOAD_")}
     environment.update(spec["environment"])
+    resources = host_resources()
     started = time.monotonic()
     before_cpu = counters(directory / "cpu.stat")
     before_events = counters(directory / "memory.events")
@@ -109,6 +135,7 @@ def worker(spec_path):
         "affinity": sorted(os.sched_getaffinity(0)),
         "ancestor_limits": ancestors,
         "host": platform.uname()._asdict(), "command": command,
+        "host_resources": resources,
         "claim": "local constrained measurement; not production hardware equivalence",
         "binary_sha256_before": digest(binary), "status": "running",
     }

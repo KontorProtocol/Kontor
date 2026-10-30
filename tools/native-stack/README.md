@@ -617,6 +617,10 @@ memory events, binary/log hashes and terminal status. The whole service,
 including test children, is stopped on timeout. Its measurements include
 fixture setup and validation, so use the workload's event records for service
 latency rather than treating total process duration as block application time.
+The record also captures CPU topology, physical memory, page size, checkout and
+temporary-directory mounts, and visible block devices. This requires the Linux
+`lscpu`, `findmnt` and `lsblk` utilities. Storage metadata describes what the host
+exposes; it does not establish equivalence to a cloud disk or its performance.
 
 Prepare an environment JSON containing the exact `KONTOR_WORKLOAD_*` settings
 for the saved input and consumer identity. Then run, for example:
