@@ -6,7 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from resource_brotli_raw_ceiling_evidence import (CASE_ID, RAW_CEILING, RAW_SHA256,
-                                                  validate_observation, validate_trace)
+                                                  expected_address, validate_observation,
+                                                  validate_trace)
 
 
 def teardown_events():
@@ -22,7 +23,7 @@ def attempt(sample):
         "sample_key": sample,
         "outcome": "ok" if accepted else "deterministic_error",
         "error_kind": None if accepted else "raw_ceiling_exceeded",
-        "result_value": "brotli-ceiling-0_1_0" if accepted else None,
+        "result_value": expected_address(sample) if accepted else None,
         "raw_bytes": RAW_CEILING + int(not accepted),
         "raw_sha256": RAW_SHA256[sample],
         "compressed_bytes": 2500,
@@ -35,6 +36,15 @@ def attempt(sample):
         "receipts_before": 4,
         "receipts_after": 5 if accepted else 4,
         "receipts_restored": 4,
+        "measured_receipts": ([{
+            "contract": "brotli-ceiling-0", "function": "init",
+            "status": "Ok", "gas": 7,
+            "size": len(expected_address(sample).encode()),
+            "value": expected_address(sample),
+            "signer_id": 1, "payer_signer_id": 1, "height": 1,
+            "tx_id": None, "input_index": None, "op_index": None,
+            "result_index": 0,
+        }] if accepted else []),
         "resources_before": 0,
         "resources_after": 0,
         "system_fuel": 100 if accepted else 0,
@@ -66,6 +76,11 @@ class BrotliCeilingEvidenceTests(unittest.TestCase):
                 ("at_ceiling", "raw_bytes", RAW_CEILING - 1),
                 ("one_byte_over_rejected", "raw_bytes", RAW_CEILING),
                 ("at_ceiling", "raw_sha256", "a" * 64),
+                ("at_ceiling", "result_value", "wrong"),
+                ("at_ceiling", "receipts_after", 105),
+                ("at_ceiling", "measured_receipts", []),
+                ("at_ceiling", "system_fuel", 0),
+                ("one_byte_over_rejected", "system_fuel", 1),
                 ("one_byte_over_rejected", "state_after_sha256", "d" * 64),
                 ("at_ceiling", "state_restored_sha256", "d" * 64),
                 ("one_byte_over_rejected", "teardown_events", teardown_events()),
@@ -92,7 +107,9 @@ class BrotliCeilingEvidenceTests(unittest.TestCase):
             names.extend(("finite_stack_attempt_start", "publication_entry",
                           "blocking_decode_entry", "blocking_decode_exit"))
             if sample == "at_ceiling":
-                names.extend(("compiler_entry", "compiler_exit"))
+                names.extend(("compiler_entry", "compiler_exit",
+                              "canonical_input_entry", "canonical_input_exit",
+                              "canonical_output_entry", "canonical_output_exit"))
             names.extend(("publication_exit", "finite_stack_attempt_end"))
         trace = {"scope": "paired_finite_stack_worker",
                  "configuration": "production", "case_id": CASE_ID,
@@ -113,6 +130,33 @@ class BrotliCeilingEvidenceTests(unittest.TestCase):
             decode.update(thread_id="w", os_thread_id=1, category="tokio_worker")
             with self.assertRaises(ValueError):
                 validate_trace(forged, runtime, attempts, "linux")
+            for mutation in ("omit", "duplicate", "relocate"):
+                with self.subTest(mutation=mutation):
+                    forged = copy.deepcopy(trace)
+                    events = forged["events"]
+                    index = next(i for i, item in enumerate(events)
+                                 if item["name"] == "canonical_output_exit")
+                    if mutation == "omit":
+                        events.pop(index)
+                    elif mutation == "duplicate":
+                        events.insert(index, copy.deepcopy(events[index]))
+                    else:
+                        events.append(events.pop(index))
+                    with self.assertRaises(ValueError):
+                        validate_trace(forged, runtime, attempts, "linux")
+
+    def test_rejects_wrong_init_receipt_content(self):
+        for key, invalid in (("contract", "other"), ("function", "view"),
+                             ("status", "Err"), ("gas", 0),
+                             ("value", "wrong"), ("size", 999),
+                             ("signer_id", 2), ("payer_signer_id", None),
+                             ("height", 2), ("result_index", 1)):
+            with self.subTest(key=key):
+                forged = copy.deepcopy(attempt("at_ceiling"))
+                forged["observation"]["measured_receipts"][0][key] = invalid
+                with self.assertRaises(ValueError):
+                    validate_observation(forged, "at_ceiling", 0,
+                                         "target_observed", "production", 123)
 
 
 if __name__ == "__main__":

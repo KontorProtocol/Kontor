@@ -29,11 +29,16 @@ OBSERVATION_KEYS = {
     "raw_sha256", "compressed_bytes", "compressed_sha256",
     "publication_path", "state_before_sha256", "state_after_sha256",
     "state_restored_sha256", "receipts_before", "receipts_after",
-    "receipts_restored", "resources_before", "resources_after",
+    "receipts_restored", "measured_receipts", "resources_before", "resources_after",
     "system_fuel", "user_fuel", "deposit_fuel", "stack_empty",
     "savepoint_empty", "live_invocations", "teardown_probe_on",
     "teardown_events", "engine_target", "max_wasm_stack",
     "async_stack_size",
+}
+RECEIPT_KEYS = {
+    "contract", "function", "status", "gas", "size", "value",
+    "signer_id", "payer_signer_id", "height", "tx_id", "input_index",
+    "op_index", "result_index",
 }
 TRACE_EVENTS = {
     "fixture_preparation_entry", "fixture_preparation_exit",
@@ -64,6 +69,12 @@ def digest(value):
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
 
 
+def expected_address(sample):
+    index = SAMPLES.index(sample)
+    return (f'{{name: "brotli-ceiling-{index}", height: 1, '
+            f'tx-index: {index}}}')
+
+
 def validate_observation(attempt, sample, repeat_index, role, configuration, pid):
     require(set(attempt) == {"case_id", "configuration", "process_role",
                              "sample_key", "repeat_index", "pid", "observation"}
@@ -79,9 +90,8 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
             and value["sample_key"] == sample
             and value["outcome"] == ("ok" if accepted else "deterministic_error")
             and value["error_kind"] == (None if accepted else "raw_ceiling_exceeded")
-            and ((isinstance(value["result_value"], str)
-                  and value["result_value"])
-                 if accepted else value["result_value"] is None)
+            and value["result_value"] ==
+                (expected_address(sample) if accepted else None)
             and type(value["raw_bytes"]) is int
             and value["raw_bytes"] == raw_bytes
             and value["raw_sha256"] == RAW_SHA256[sample]
@@ -99,9 +109,10 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
                     ("receipts_before", "receipts_after", "receipts_restored",
                      "resources_before", "resources_after", "system_fuel",
                      "user_fuel", "deposit_fuel", "live_invocations"))
-            and (value["receipts_after"] > value["receipts_before"]) is accepted
+            and value["receipts_after"] == value["receipts_before"] + int(accepted)
             and value["receipts_restored"] == value["receipts_before"]
             and value["resources_after"] == value["resources_before"]
+            and (value["system_fuel"] > 0) is accepted
             and value["user_fuel"] == value["deposit_fuel"] == 0
             and value["live_invocations"] == 0
             and value["stack_empty"] is True
@@ -112,6 +123,31 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
             and value["async_stack_size"] ==
                 (1_048_576 if configuration == "reduced" else 2_097_152),
             "Brotli ceiling size, result, or state changed")
+    measured = value["measured_receipts"]
+    require(isinstance(measured, list) and len(measured) == int(accepted),
+            "Brotli ceiling receipt count changed")
+    if accepted:
+        receipt = measured[0]
+        address = expected_address(sample)
+        require(isinstance(receipt, dict) and set(receipt) == RECEIPT_KEYS
+                and receipt["contract"] == "brotli-ceiling-0"
+                and receipt["function"] == "init"
+                and receipt["status"] == "Ok"
+                and type(receipt["gas"]) is int and receipt["gas"] > 0
+                and type(receipt["size"]) is int
+                and receipt["size"] == len(address.encode())
+                and receipt["value"] == address
+                and type(receipt["signer_id"]) is int
+                and receipt["signer_id"] == 1
+                and type(receipt["payer_signer_id"]) is int
+                and receipt["payer_signer_id"] == 1
+                and type(receipt["height"]) is int
+                and receipt["height"] == 1
+                and all(receipt[key] is None for key in
+                        ("tx_id", "input_index", "op_index"))
+                and type(receipt["result_index"]) is int
+                and receipt["result_index"] == 0,
+                "Brotli ceiling init receipt content or order changed")
     if role == "target_observed":
         if accepted:
             teardown = validate_teardown(value["teardown_events"], 1, 0)
@@ -128,6 +164,7 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
         "raw_sha256", "compressed_bytes", "compressed_sha256",
         "state_before_sha256", "state_after_sha256", "state_restored_sha256",
         "receipts_before", "receipts_after", "receipts_restored",
+        "measured_receipts",
         "resources_before", "resources_after", "system_fuel", "user_fuel",
         "deposit_fuel")}
 
@@ -176,16 +213,30 @@ def validate_trace(trace, runtime, attempts, os_name):
             and all(start < end and (index == 0 or ends[index - 1] < start)
                     for index, (start, end) in enumerate(zip(starts, ends, strict=True))),
             "Brotli setup or attempt intervals changed")
+    setup_start = names.index("fixture_preparation_entry")
+    setup_end = names.index("fixture_preparation_exit")
+    intervals = [(setup_start, setup_end)] + list(zip(starts, ends, strict=True))
+    boundaries = {"fixture_preparation_entry", "fixture_preparation_exit",
+                  "finite_stack_attempt_start", "finite_stack_attempt_end"}
+    require(all(name in boundaries or any(start < index < end
+                    for start, end in intervals)
+                for index, name in enumerate(names)),
+            "Brotli operational phase escaped setup or an attempt")
     for attempt, start, end in zip(attempts, starts, ends, strict=True):
         segment = trace["events"][start:end + 1]
         segment_names = [item["name"] for item in segment]
         accepted = attempt["sample_key"] == "at_ceiling"
+        canonical = [name for name in segment_names
+                     if name.startswith("canonical_")]
         require(segment_names.count("publication_entry") ==
                 segment_names.count("publication_exit") == 1
                 and segment_names.count("blocking_decode_entry") ==
                 segment_names.count("blocking_decode_exit") == 1
                 and segment_names.count("compiler_entry") ==
                 segment_names.count("compiler_exit") == int(accepted)
+                and canonical == (["canonical_input_entry", "canonical_input_exit",
+                                   "canonical_output_entry", "canonical_output_exit"]
+                                  if accepted else [])
                 and segment_names.index("publication_entry") <
                 segment_names.index("blocking_decode_entry") <
                 segment_names.index("blocking_decode_exit") <
@@ -193,12 +244,24 @@ def validate_trace(trace, runtime, attempts, os_name):
                 and (not accepted or segment_names.index("blocking_decode_exit") <
                      segment_names.index("compiler_entry") <
                      segment_names.index("compiler_exit") <
+                     segment_names.index("canonical_input_entry") <
+                     segment_names.index("canonical_input_exit") <
+                     segment_names.index("canonical_output_entry") <
+                     segment_names.index("canonical_output_exit") <
                      segment_names.index("publication_exit")),
                 "Brotli size check or compiler phases changed")
         decode = [item for item in segment if item["name"].startswith("blocking_decode_")]
         require(decode[0]["thread_id"] == decode[1]["thread_id"]
                 and decode[0]["os_thread_id"] == decode[1]["os_thread_id"],
                 "Brotli decode entry and exit used different blocking threads")
+        if accepted:
+            for entry, exit_name in (("compiler_entry", "compiler_exit"),
+                                     ("canonical_input_entry", "canonical_input_exit")):
+                first = segment[segment_names.index(entry)]
+                last = segment[segment_names.index(exit_name)]
+                require(first["thread_id"] == last["thread_id"]
+                        and first["os_thread_id"] == last["os_thread_id"],
+                        "Brotli synchronous compiler or input phase migrated workers")
 
 
 def validate_run(run, bundle, directory):

@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail, ensure};
 use brotli::CompressorReader;
-use libsql::Connection;
+use libsql::{Connection, params};
 use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
 use stdlib::to_wave_expr;
@@ -93,6 +93,54 @@ async fn receipt_count(conn: &Connection) -> Result<u64> {
         .get(0)?)
 }
 
+async fn latest_receipt_id(conn: &Connection) -> Result<u64> {
+    let mut rows = conn
+        .query("SELECT COALESCE(MAX(id), 0) FROM contract_results", ())
+        .await?;
+    Ok(rows
+        .next()
+        .await?
+        .context("missing latest receipt id")?
+        .get(0)?)
+}
+
+async fn new_receipts(conn: &Connection, previous_id: u64) -> Result<Vec<JsonValue>> {
+    let mut rows = conn
+        .query(
+            "SELECT c.name, r.func, r.status, r.gas, r.size, r.value, \
+             r.signer_id, r.payer_signer_id, r.height, r.tx_id, \
+             r.input_index, r.op_index, r.result_index \
+             FROM contract_results r JOIN contracts c ON c.id = r.contract_id \
+             WHERE r.id > ? ORDER BY r.id",
+            params![previous_id],
+        )
+        .await?;
+    let mut receipts = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let contract: String = row.get(0)?;
+        let function: String = row.get(1)?;
+        let status: String = row.get(2)?;
+        let gas: u64 = row.get(3)?;
+        let size: u64 = row.get(4)?;
+        let value: Option<String> = row.get(5)?;
+        let signer_id: u64 = row.get(6)?;
+        let payer_signer_id: Option<u64> = row.get(7)?;
+        let height: u64 = row.get(8)?;
+        let tx_id: Option<u64> = row.get(9)?;
+        let input_index: Option<u64> = row.get(10)?;
+        let op_index: Option<u64> = row.get(11)?;
+        let result_index: u64 = row.get(12)?;
+        receipts.push(json!({
+            "contract": contract, "function": function, "status": status,
+            "gas": gas, "size": size, "value": value,
+            "signer_id": signer_id, "payer_signer_id": payer_signer_id,
+            "height": height, "tx_id": tx_id, "input_index": input_index,
+            "op_index": op_index, "result_index": result_index,
+        }));
+    }
+    Ok(receipts)
+}
+
 pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonValue> {
     ensure!(
         matches!(configuration, "reduced" | "production")
@@ -135,6 +183,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 Some(ResourceProbePhase::Target(Arc::new(vec![address.clone()])));
             let state_before_sha256 = persistent_digest(&conn).await?;
             let receipts_before = receipt_count(&conn).await?;
+            let receipt_before_id = latest_receipt_id(&conn).await?;
             let resources_before = runtime.table.lock().await.iter_mut().count();
             ensure!(
                 state_before_sha256 == baseline_digest && receipts_before == baseline_receipts,
@@ -162,10 +211,11 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
             resource_diagnostics::record("publication_exit");
             let usage = runtime.finish_usage(previous)?;
             runtime.set_context(1, None, None, None).await;
+            let expected_address = to_wave_expr(address.clone());
             let (outcome, error_kind, result_value) = match result {
                 Ok(value) if expected == "ok" => {
                     ensure!(
-                        value == to_wave_expr(address.clone()),
+                        value == expected_address,
                         "Brotli ceiling publication returned a different address"
                     );
                     ("ok", None, Some(value))
@@ -180,15 +230,40 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 }
                 other => bail!("Brotli ceiling {sample} returned unexpected result: {other:?}"),
             };
+            ensure!(
+                (outcome == "ok" && usage.system_fuel > 0)
+                    || (outcome == "deterministic_error" && usage.system_fuel == 0),
+                "Brotli ceiling {sample} charged an unexpected system fuel amount"
+            );
             let state_after_sha256 = persistent_digest(&conn).await?;
             let receipts_after = receipt_count(&conn).await?;
+            let measured_receipts = new_receipts(&conn, receipt_before_id).await?;
             let row_present = runtime.storage.contract_id(&address).await?.is_some();
             ensure!(
                 row_present == (outcome == "ok")
                     && (state_after_sha256 != state_before_sha256) == row_present
-                    && (receipts_after > receipts_before) == row_present,
+                    && receipts_after == receipts_before + u64::from(row_present)
+                    && measured_receipts.len() == (if row_present { 1 } else { 0 }),
                 "Brotli ceiling {sample} publication or rollback state changed"
             );
+            if let Some(receipt) = measured_receipts.first() {
+                ensure!(
+                    receipt["contract"] == address.name
+                        && receipt["function"] == "init"
+                        && receipt["status"] == "Ok"
+                        && receipt["gas"].as_u64().is_some_and(|gas| gas > 0)
+                        && receipt["value"] == expected_address
+                        && receipt["size"] == expected_address.len() as u64
+                        && receipt["signer_id"] == 1
+                        && receipt["payer_signer_id"] == 1
+                        && receipt["height"] == 1
+                        && receipt["tx_id"].is_null()
+                        && receipt["input_index"].is_null()
+                        && receipt["op_index"].is_null()
+                        && receipt["result_index"] == 0,
+                    "Brotli ceiling init receipt identity or value changed"
+                );
+            }
             runtime.storage.rollback().await?;
             runtime.component_cache.clear();
             let state_restored_sha256 = persistent_digest(&conn).await?;
@@ -221,6 +296,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 "state_restored_sha256": state_restored_sha256,
                 "receipts_before": receipts_before,
                 "receipts_after": receipts_after,
+                "measured_receipts": measured_receipts,
                 "receipts_restored": receipts_restored,
                 "resources_before": resources_before,
                 "resources_after": resources_after,
