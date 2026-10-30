@@ -22,7 +22,7 @@
     },
     "brotli_ceiling_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/brotli_ceiling.rs",
-      "sha256": "eb020b7e25f9ad1b120af6ad7797f0b5c757a296eefaa45831cab82bfef1ae84"
+      "sha256": "1e9e8d167358056bef60275679df33a43110b1fafceb63de9b8c0ac1c156d25e"
     },
     "brotli_ceiling_capture": {
       "path": "tools/native-stack/capture_resource_brotli_raw_ceiling.py",
@@ -30,11 +30,11 @@
     },
     "brotli_ceiling_validator": {
       "path": "tools/native-stack/resource_brotli_raw_ceiling_evidence.py",
-      "sha256": "409f65e03d16902f4dc8cd1f69e63a1bc982bb72a3329062c0d138d735a5e67c"
+      "sha256": "988660977867d6a07185626be4a977107f439f2d2beeabf5424309bbc0ae3cee"
     },
     "brotli_ceiling_validator_tests": {
       "path": "tools/native-stack/test_resource_brotli_raw_ceiling_evidence.py",
-      "sha256": "540819a816e271940702a5238f7ec227d2f127490ee5436701e7fbb3e223c414"
+      "sha256": "4849c5bfe0625e5ae3e58b875cbd9681a5192b5357d1357cb59d69244e389e81"
     },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",

@@ -258,8 +258,8 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                         && receipt["payer_signer_id"] == 1
                         && receipt["height"] == 1
                         && receipt["tx_id"].is_null()
-                        && receipt["input_index"].is_null()
-                        && receipt["op_index"].is_null()
+                        && receipt["input_index"] == 0
+                        && receipt["op_index"] == 0
                         && receipt["result_index"] == 0,
                     "Brotli ceiling init receipt identity or value changed"
                 );

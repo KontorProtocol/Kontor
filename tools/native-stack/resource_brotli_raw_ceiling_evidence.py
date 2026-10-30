@@ -143,8 +143,11 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
                 and receipt["payer_signer_id"] == 1
                 and type(receipt["height"]) is int
                 and receipt["height"] == 1
-                and all(receipt[key] is None for key in
-                        ("tx_id", "input_index", "op_index"))
+                and receipt["tx_id"] is None
+                and type(receipt["input_index"]) is int
+                and receipt["input_index"] == 0
+                and type(receipt["op_index"]) is int
+                and receipt["op_index"] == 0
                 and type(receipt["result_index"]) is int
                 and receipt["result_index"] == 0,
                 "Brotli ceiling init receipt content or order changed")

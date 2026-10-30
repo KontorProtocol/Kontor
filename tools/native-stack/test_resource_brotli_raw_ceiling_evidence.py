@@ -42,7 +42,7 @@ def attempt(sample):
             "size": len(expected_address(sample).encode()),
             "value": expected_address(sample),
             "signer_id": 1, "payer_signer_id": 1, "height": 1,
-            "tx_id": None, "input_index": None, "op_index": None,
+            "tx_id": None, "input_index": 0, "op_index": 0,
             "result_index": 0,
         }] if accepted else []),
         "resources_before": 0,
@@ -155,7 +155,9 @@ class BrotliCeilingEvidenceTests(unittest.TestCase):
                              ("status", "Err"), ("gas", 0),
                              ("value", "wrong"), ("size", 999),
                              ("signer_id", 2), ("payer_signer_id", None),
-                             ("height", 2), ("result_index", 1)):
+                             ("height", 2), ("input_index", None),
+                             ("input_index", 1), ("op_index", None),
+                             ("op_index", 1), ("result_index", 1)):
             with self.subTest(key=key):
                 forged = copy.deepcopy(attempt("at_ceiling"))
                 forged["observation"]["measured_receipts"][0][key] = invalid
