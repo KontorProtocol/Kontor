@@ -11,20 +11,26 @@ use stdlib::to_wave_expr;
 use tokio::time::timeout;
 
 use super::aggregate_error_tests::{reactor, snapshot};
+use crate::consensus::signing::PrivateKey;
 use crate::runtime::token::{address as token_address, api as token};
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{Decimal, TransactionContext};
-use crate::test_utils::{new_mock_transaction, test_runtime};
+use crate::runtime::{Decimal, GenesisValidator, TransactionContext};
+use crate::test_utils::{new_mock_transaction, test_runtime_with_genesis};
 
 async fn restores_context(
     contract_error: bool,
     outer_error: bool,
     was_simulating: bool,
 ) -> Result<()> {
-    let (mut runtime, directory, _name) = test_runtime().await?;
     let key = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[38; 32])?);
     let public = key.x_only_public_key().0;
+    let (mut runtime, directory, _name) = test_runtime_with_genesis(&[GenesisValidator {
+        x_only_pubkey: public.to_string(),
+        ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }])
+    .await?;
     token::issue_to(
         &mut runtime,
         &Signer::Core(Box::new(Signer::Nobody)),
