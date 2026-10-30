@@ -641,6 +641,24 @@ only the recorded local resource constraints. It does not establish production
 hardware equivalence, freeze the workload envelope, compare S1 against S2, or
 satisfy the phase's performance acceptance criteria by itself.
 
+Use `--bitcoin-binary /absolute/path/to/bitcoind` to have the supervisor launch
+a fresh external regtest service. The supervisor verifies that this process
+owns the chosen RPC listener and records its executable hash, process start
+identity, version, cgroup and process memory fields in `bitcoin/service.json`.
+Before starting the workload, the measured worker checks that the daemon is
+still the same process and is outside its cgroup. Only the supervisor controls
+the external process lifetime, including cleanup on normal exit, workload
+failure or timeout. Unexpected supervisor death kills the disposable daemon.
+The test-only connection path rejects non-loopback endpoints and reused chains.
+Existing workloads without this option retain their own local daemon.
+
+This option excludes Bitcoin from the constrained service's accounting. The
+remaining measurement still includes the test process, its in-process workload
+driver, setup and oracle checks. It does not yet establish the separate
+node-only, per-trial peak-memory acceptance gate. Do not supply
+`KONTOR_WORKLOAD_BITCOIN_RPC_URL` in the environment JSON: the supervisor derives
+and verifies that setting from the service it owns.
+
 ## Historical replay with live API arrivals
 
 The ignored test

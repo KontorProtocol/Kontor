@@ -19,7 +19,6 @@ use malachitebft_engine::node::NodeRef;
 use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
-use tokio::process::Child;
 use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
 
@@ -43,7 +42,7 @@ use crate::reactor::engine::EngineConfig;
 use crate::reactor::executor::RuntimeExecutor;
 use crate::reactor::mempool_fee_index::MempoolFeeIndex;
 use crate::reactor::{PruneConfig, Reactor, create_runtime_executor, start_consensus};
-use crate::reg_tester::{derive_taproot_keypair_from_seed, workload_bitcoin};
+use crate::reg_tester::{WorkloadBitcoin, derive_taproot_keypair_from_seed, workload_bitcoin};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -70,7 +69,7 @@ const PRUNE_RETAIN: u64 = 6;
 const GAS_LIMIT: u64 = 100_000;
 const FUNDING_SEED: [u8; 64] = [41; 64];
 
-struct BitcoinProcess(Child);
+struct BitcoinProcess(WorkloadBitcoin);
 
 #[derive(Default)]
 struct EngineCleanup(Vec<NodeRef>);
@@ -92,13 +91,6 @@ async fn stop_engine(reactor: &mut Reactor<RuntimeExecutor>) -> Result<()> {
     .await
     .context("test consensus teardown timed out")??;
     Ok(())
-}
-
-impl Drop for BitcoinProcess {
-    fn drop(&mut self) {
-        // Failed assertions must not leave an isolated regtest daemon behind.
-        let _ = self.0.start_kill();
-    }
 }
 
 fn test_provenance() -> Result<BuildProvenance> {

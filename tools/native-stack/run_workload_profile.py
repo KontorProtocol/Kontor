@@ -14,6 +14,8 @@ import tempfile
 import time
 import uuid
 
+from workload_bitcoin import BitcoinService, verify_separation
+
 
 PROFILES = {"conservative": (2, 12 * 1024**3), "burst": (8, 16 * 1024**3)}
 
@@ -125,6 +127,9 @@ def worker(spec_path):
                    if not key.startswith("KONTOR_WORKLOAD_")}
     environment.update(spec["environment"])
     resources = host_resources()
+    external = spec.get("external_bitcoin")
+    external_identity = (verify_separation(external["identity"], directory)
+                         if external else None)
     started = time.monotonic()
     before_cpu = counters(directory / "cpu.stat")
     before_events = counters(directory / "memory.events")
@@ -138,6 +143,9 @@ def worker(spec_path):
         "host_resources": resources,
         "claim": "local constrained measurement; not production hardware equivalence",
         "binary_sha256_before": digest(binary), "status": "running",
+        "external_bitcoin": external_identity,
+        "measurement_scope": ("test process and in-process harness/oracles; external Bitcoin excluded"
+                              if external else "whole service including test children and setup"),
     }
     record = output / "measurement.json"
     with (output / "workload.log").open("xb") as log:
@@ -160,8 +168,11 @@ def worker(spec_path):
                 "binary changed during measurement")
         limits(directory, cpus, memory)
         if code == 0:
-            check_result((output / "workload.log").read_text(), before_events,
+            transcript = (output / "workload.log").read_text()
+            check_result(transcript, before_events,
                          observation["memory_events_after"])
+            require(not external or "workload_external_bitcoin=true\n" in transcript,
+                    "workload did not confirm use of the external Bitcoin service")
             observation["validation"] = "passed"
     except ValueError as error:
         observation["validation_error"] = str(error)
@@ -182,10 +193,26 @@ def run(args):
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
+    require("KONTOR_WORKLOAD_BITCOIN_RPC_URL" not in environment,
+            "external Bitcoin must be owned and verified by this supervisor")
+    bitcoin = None
+    try:
+        if args.bitcoin_binary:
+            bitcoin = BitcoinService(args.bitcoin_binary, output / "bitcoin").start()
+            environment["KONTOR_WORKLOAD_BITCOIN_RPC_URL"] = bitcoin.url
+        return run_service(args, environment, binary, output, bitcoin)
+    finally:
+        if bitcoin:
+            bitcoin.close()
+
+
+def run_service(args, environment, binary, output, bitcoin):
     cpus, memory = PROFILES[args.profile]
     spec = {"profile": args.profile, "binary": str(binary),
             "binary_sha256": digest(binary), "test": args.test,
             "environment": environment}
+    if bitcoin:
+        spec["external_bitcoin"] = {"identity": bitcoin.identity, "rpc_url": bitcoin.url}
     spec_path = output / "request.json"
     spec_path.write_text(json.dumps(spec, indent=2) + "\n")
     unit = f"kontor-workload-{uuid.uuid4().hex}"
@@ -228,6 +255,8 @@ def main():
     parser.add_argument("--environment", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=int, required=True)
+    parser.add_argument("--bitcoin-binary", type=Path,
+                        help="start fresh regtest outside the measured service, owned by this supervisor")
     return run(parser.parse_args())
 
 
