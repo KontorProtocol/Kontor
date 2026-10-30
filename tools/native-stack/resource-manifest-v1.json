@@ -382,7 +382,7 @@
     },
     "resource_control_capture": {
       "path": "tools/native-stack/capture_resource_control.py",
-      "sha256": "159699885be135bd5d21719fd788275d54668a7352ba46e035812d70243d3c7b"
+      "sha256": "d8485d6621ea40669b8d71b1c552259303a60a8bbbb78ad8cf7c5b5adada9c6a"
     },
     "resource_diagnostic_capture": {
       "path": "tools/native-stack/capture_resource_diagnostic.py",
@@ -418,7 +418,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "70f7c835c0936d902176696565547f08ff106c0e502dea584ccd12411405db80"
+      "sha256": "622c8abd9ed9263e6c40e492081d44c8d1bcf03cc63f65c2ffcead260b4b912f"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -430,11 +430,11 @@
     },
     "resource_test_builder": {
       "path": "tools/native-stack/build_resource_test.py",
-      "sha256": "220e65bebbfd2d8f97bebcbd67e407b7de90366a52ee4f6adb4918f1a4f317bc"
+      "sha256": "169920a3295314f6a0f28ce7d3fa9f3f89958c77b378ea6ecee735ddb708c306"
     },
     "resource_test_builder_tests": {
       "path": "tools/native-stack/test_resource_build_attestation.py",
-      "sha256": "f4c61f789a47d0ad31cba50dc32d6b25fbe80324895a7d2190392fa2df5bb198"
+      "sha256": "840ff0441eab95f8a300762a471dc85d8a1a589c9bf2e3be80c114b8e479ad66"
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
@@ -641,6 +641,7 @@
       "RUST_FASTNUM_FMT_EXPONENTIAL_UPPER_THRESHOLD": null,
       "RUST_FASTNUM_FMT_MAX_INTEGER_PADDING": null
     },
+    "dependency_feature_attestation": 1,
     "fastnum_build_script_sha256": "12dc45339dbf31bebb484721803e4ffd264f6e8cd66b97df851f4754d6297b97",
     "fastnum_generated": {
       "default_rounding_mode.rs": "const DEFAULT_ROUNDING_MODE: RoundingMode = RoundingMode::HalfUp;",

@@ -136,6 +136,72 @@ def fastnum_build_record(artifacts_path, metadata):
     return source, out_dir
 
 
+def feature_command(graph, target):
+    edges = {"production": "no-dev", "qualification": "all"}[graph]
+    return ["cargo", "tree", "--locked", "--offline", "-p", "indexer",
+            "-e", edges, "-i", "wasmtime", "-f", "{f}", "--depth", "0",
+            "--target", target]
+
+
+def validate_dependency_features(report, manifest, metadata, artifacts_path):
+    packages = {}
+    for name in ("indexer", "wasmtime", "wasmtime-internal-fiber"):
+        matches = [p for p in metadata.get("packages", []) if p.get("name") == name]
+        if len(matches) != 1:
+            raise ValueError(f"Cargo metadata lacks unique {name} package")
+        packages[name] = matches[0]
+    revision = manifest["wasmtime_revision"]
+    prefix = f"git+https://github.com/wilfreddenton/wasmtime?rev={revision}"
+    source = f"{prefix}#{revision}"
+    for name, suffix in (("wasmtime", "51.0.0-kontor.2"),
+                         ("wasmtime-internal-fiber", "wasmtime-internal-fiber@51.0.0-kontor.2")):
+        package = packages[name]
+        if (package.get("version") != "51.0.0-kontor.2"
+                or package.get("source") != source
+                or package.get("id") != f"{prefix}#{suffix}"):
+            raise ValueError(f"Cargo {name} package differs from pinned fork")
+    nodes = {}
+    for name, package in packages.items():
+        matches = [node for node in metadata.get("resolve", {}).get("nodes", [])
+                   if node.get("id") == package["id"]]
+        if len(matches) != 1:
+            raise ValueError(f"Cargo lacks unique resolved {name} node")
+        nodes[name] = matches[0]
+    for owner, dependency, alias in (("indexer", "wasmtime", "wasmtime"),
+                                      ("wasmtime", "wasmtime-internal-fiber", "wasmtime_fiber")):
+        if not any(dep.get("name") == alias and dep.get("pkg") == packages[dependency]["id"]
+                   for dep in nodes[owner].get("deps", [])):
+            raise ValueError(f"Cargo {owner} does not resolve pinned {dependency}")
+    expected = {"indexer": manifest["build_policy"]["resolved_indexer_test_features"],
+                "wasmtime": manifest["wasmtime_features"]["qualification"],
+                "wasmtime-internal-fiber": ["std"]}
+    records = [json.loads(line, object_pairs_hook=no_duplicate_keys,
+                          parse_constant=no_nonfinite_constants)
+               for line in artifacts_path.read_text().splitlines()]
+    for name, package in packages.items():
+        target = "wasmtime_internal_fiber" if name == "wasmtime-internal-fiber" else name
+        matches = [record for record in records
+                   if record.get("reason") == "compiler-artifact"
+                   and record.get("package_id") == package["id"]
+                   and record.get("target", {}).get("name") == target
+                   and record.get("target", {}).get("kind") == ["lib"]
+                   and (name != "indexer" or record.get("executable"))]
+        if (len(matches) != 1 or matches[0].get("features") != expected[name]
+                or nodes[name].get("features") != expected[name]):
+            raise ValueError(f"Cargo {name} compiled or resolved features differ from policy")
+    hosts = [line.removeprefix("host: ") for line in report["rustc_verbose"].splitlines()
+             if line.startswith("host: ")]
+    logs = report["wasmtime_feature_logs"]
+    if len(hosts) != 1 or not hosts[0] or set(logs) != {"production", "qualification"}:
+        raise ValueError("Wasmtime feature graph records are incomplete")
+    for graph, entry in logs.items():
+        if (set(entry) != {"stdout", "command"}
+                or entry["command"] != feature_command(graph, hosts[0])):
+            raise ValueError("Wasmtime feature graph command differs")
+        if entry["stdout"] != ",".join(manifest["wasmtime_features"][graph]) + "\n":
+            raise ValueError(f"Wasmtime {graph} feature graph differs from policy")
+
+
 def validate_native_environment(report, manifest, metadata, historical=False):
     environment = report["build_environment"]
     output_dir = Path(report["build_output_dir"])
@@ -197,6 +263,11 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
     }
     generated_policy = manifest["build_policy"].get("fastnum_generated")
     native_policy = manifest["build_policy"].get("native_environment_keys")
+    dependency_policy = manifest["build_policy"].get("dependency_feature_attestation")
+    if dependency_policy is not None:
+        if dependency_policy != 1:
+            raise ValueError("unknown dependency feature attestation policy")
+        expected_keys.add("wasmtime_feature_logs")
     if generated_policy is not None:
         expected_keys.update({"fastnum_source_path", "fastnum_out_dir",
                               "fastnum_build_script", "fastnum_generated"})
@@ -239,7 +310,8 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
           or any(not Path(candidate).is_absolute()
                  for candidate in report["cargo_config_candidates"])):
         raise ValueError("historical Cargo config search paths are incomplete")
-    expected_schema = (3 if native_policy is not None else
+    expected_schema = (4 if dependency_policy is not None else
+                       3 if native_policy is not None else
                        2 if generated_policy is not None else 1)
     if (report["schema_version"] != expected_schema
             or report["source_sha"] != source_sha
@@ -263,6 +335,11 @@ def validate_build_attestation(path, artifacts_path, metadata_path, source_sha,
             or not any(line.startswith("host: ") for line in rustc.splitlines())):
         raise ValueError("resource Rust compiler identity differs from policy")
     metadata = load_json_strict(metadata_path)
+    if dependency_policy is not None:
+        selected, selected_artifact = selected_binary(artifacts_path, metadata, False)
+        if selected != binary or selected_artifact != artifact:
+            raise ValueError("attested indexer differs from Cargo artifact stream")
+        validate_dependency_features(report, manifest, metadata, artifacts_path)
     if native_policy is not None:
         validate_native_environment(report, manifest, metadata,
                                     historical=core_root is not None)

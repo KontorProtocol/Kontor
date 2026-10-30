@@ -12,8 +12,9 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 
 from capture_resource_control import (ensure_no_cargo_config,
+                                      feature_command,
                                       fastnum_build_record, native_tool_records,
-                                      selected_binary)
+                                      selected_binary, validate_build_attestation)
 from resource_evidence import load_json_strict, sha256
 from resource_manifest import MANIFEST, ROOT, build_manifest
 
@@ -109,6 +110,16 @@ def build(profile, output_dir):
         raise ValueError("resource build Cargo workspace differs from source checkout")
     if metadata.get("target_directory") != environment["CARGO_TARGET_DIR"]:
         raise ValueError("resource build Cargo target directory differs from fresh target")
+    target = next(line.removeprefix("host: ") for line in rustc.splitlines()
+                  if line.startswith("host: "))
+    feature_logs = {}
+    for graph in ("production", "qualification"):
+        feature_args = feature_command(graph, target)
+        raw = subprocess.run(feature_args, cwd=core, env=environment, check=True,
+                             capture_output=True, text=True).stdout
+        if raw != ",".join(manifest["wasmtime_features"][graph]) + "\n":
+            raise ValueError(f"Wasmtime {graph} features differ from policy")
+        feature_logs[graph] = {"stdout": raw, "command": feature_args}
     command = ["cargo", "test", "-p", "indexer", "--lib", "--locked",
                "-j2", "--no-run", "--message-format=json"]
     if profile == "release":
@@ -140,7 +151,8 @@ def build(profile, output_dir):
     if source_revision() != head or load_json_strict(MANIFEST) != build_manifest():
         raise ValueError("resource source changed during build")
     report = {
-        "schema_version": 3,
+        "schema_version": 4,
+        "wasmtime_feature_logs": feature_logs,
         "source_sha": head,
         "manifest_sha256": sha256(MANIFEST),
         "lockfile_sha256": sha256(core / "Cargo.lock"),
@@ -171,6 +183,8 @@ def build(profile, output_dir):
     with report_path.open("x") as output:
         json.dump(report, output, sort_keys=True, indent=2)
         output.write("\n")
+    validate_build_attestation(report_path, artifacts_path, metadata_path, head,
+                               manifest, binary, artifact)
     return report_path
 
 

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from build_resource_test import pinned_environment
 from capture_resource_control import (ensure_no_cargo_config,
-                                      selected_binary, validate_build_attestation)
+                                      feature_command, selected_binary, validate_build_attestation)
 from resource_evidence import sha256
 from resource_manifest import MANIFEST, ROOT, build_manifest
 
@@ -85,7 +85,7 @@ class ResourceBuildAttestationTests(unittest.TestCase):
         self.artifact = {"features": ["testing"], "profile": {
             "opt_level": "0", "debug_assertions": True, "overflow_checks": True}}
         self.report = {
-            "schema_version": 3,
+            "schema_version": 4,
             "source_sha": self.source_sha,
             "manifest_sha256": sha256(MANIFEST),
             "lockfile_sha256": self.manifest["artifacts"]["core_lockfile"]["sha256"],
@@ -114,6 +114,43 @@ class ResourceBuildAttestationTests(unittest.TestCase):
                                      "sha256": sha256(source_archive)},
             "fastnum_generated": generated,
         }
+        prefix = ("git+https://github.com/wilfreddenton/wasmtime?rev="
+                  + self.manifest["wasmtime_revision"])
+        source = prefix + "#" + self.manifest["wasmtime_revision"]
+        self.ids = {"indexer": "indexer-package", "wasmtime": prefix + "#51.0.0-kontor.2",
+                    "wasmtime-internal-fiber": prefix + "#wasmtime-internal-fiber@51.0.0-kontor.2"}
+        features = {"indexer": ["testing"], "wasmtime": self.manifest["wasmtime_features"]["qualification"],
+                    "wasmtime-internal-fiber": ["std"]}
+        metadata["resolve"] = {"nodes": []}
+        for name, package_id in self.ids.items():
+            metadata["packages"].append({"name": name, "id": package_id,
+                                         "version": "51.0.0-kontor.2", "source": source})
+            deps = ({"indexer": [{"name": "wasmtime", "pkg": self.ids["wasmtime"]}],
+                     "wasmtime": [{"name": "wasmtime_fiber", "pkg": self.ids["wasmtime-internal-fiber"]}]}
+                    .get(name, []))
+            metadata["resolve"]["nodes"].append({"id": package_id, "features": features[name],
+                                                   "deps": deps})
+            record = {"reason": "compiler-artifact", "package_id": package_id,
+                      "target": {"name": name.replace("-", "_"), "kind": ["lib"]},
+                      "features": features[name]}
+            if name == "indexer":
+                record.update(self.artifact)
+                record["profile"]["test"] = True
+                record["executable"] = str(self.binary)
+                self.artifact = record
+            records.append(record)
+        records.append({"reason": "build-finished", "success": True})
+        self.write_cargo_records(records, metadata)
+        self.report["wasmtime_feature_logs"] = {
+            graph: {"command": feature_command(graph, "aarch64-unknown-linux-gnu"),
+                    "stdout": ",".join(expected) + "\n"}
+            for graph, expected in self.manifest["wasmtime_features"].items()}
+
+    def write_cargo_records(self, records, metadata):
+        self.artifacts.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+        self.metadata.write_text(json.dumps(metadata) + "\n")
+        self.report["cargo_artifacts_sha256"] = sha256(self.artifacts)
+        self.report["cargo_metadata_sha256"] = sha256(self.metadata)
 
     def validate(self):
         self.attestation.write_text(json.dumps(self.report, sort_keys=True) + "\n")
@@ -125,6 +162,54 @@ class ResourceBuildAttestationTests(unittest.TestCase):
         report, build_log = self.validate()
         self.assertEqual(report, self.report)
         self.assertEqual(build_log, self.build_log)
+
+    def test_rejects_rehashed_dependency_drift(self):
+        original_records = [json.loads(line) for line in self.artifacts.read_text().splitlines()]
+        original_metadata = json.loads(self.metadata.read_text())
+        for package in ("wasmtime", "wasmtime-internal-fiber"):
+            for mutation in ("missing", "duplicate", "features", "resolved_features", "revision", "edge"):
+                with self.subTest(package=package, mutation=mutation):
+                    records = json.loads(json.dumps(original_records))
+                    metadata = json.loads(json.dumps(original_metadata))
+                    artifact = next(row for row in records if row.get("package_id") == self.ids[package])
+                    node = next(row for row in metadata["resolve"]["nodes"] if row["id"] == self.ids[package])
+                    if mutation == "missing":
+                        records.remove(artifact)
+                    elif mutation == "duplicate":
+                        records.insert(0, artifact.copy())
+                    elif mutation == "features":
+                        artifact["features"] = ["cache", "parallel-compilation"]
+                    elif mutation == "resolved_features":
+                        node["features"] = []
+                    elif mutation == "revision":
+                        next(row for row in metadata["packages"] if row["id"] == self.ids[package])["source"] = "git+other"
+                    else:
+                        owner = "indexer" if package == "wasmtime" else "wasmtime"
+                        next(row for row in metadata["resolve"]["nodes"] if row["id"] == self.ids[owner])["deps"] = []
+                    self.write_cargo_records(records, metadata)
+                    with self.assertRaisesRegex(ValueError, "Cargo"):
+                        self.validate()
+
+    def test_rejects_feature_query_omission_and_drift(self):
+        original = json.loads(json.dumps(self.report["wasmtime_feature_logs"]))
+        for graph in ("production", "qualification"):
+            for mutation in ("missing", "command", "stdout"):
+                with self.subTest(graph=graph, mutation=mutation):
+                    self.report["wasmtime_feature_logs"] = json.loads(json.dumps(original))
+                    if mutation == "missing":
+                        del self.report["wasmtime_feature_logs"][graph]
+                    elif mutation == "command":
+                        self.report["wasmtime_feature_logs"][graph]["command"][-1] = "other-target"
+                    else:
+                        self.report["wasmtime_feature_logs"][graph]["stdout"] += "cache\n"
+                    with self.assertRaisesRegex(ValueError, "Wasmtime"):
+                        self.validate()
+
+    def test_preserves_historical_schema_without_claiming_new_policy(self):
+        del self.manifest["build_policy"]["dependency_feature_attestation"]
+        del self.report["wasmtime_feature_logs"]
+        self.report["schema_version"] = 3
+        self.validate()
 
     def test_rejects_formatter_and_feature_drift(self):
         baseline = json.loads(json.dumps(self.report))

@@ -493,6 +493,7 @@ def build_manifest():
         "wasmtime_features": {"production": sorted(PRODUCTION_FEATURES),
                               "qualification": sorted(QUALIFICATION_FEATURES)},
         "build_policy": {"rustc_release": "1.99.1", "cargo_features": [],
+                         "dependency_feature_attestation": 1,
                          "fastnum_build_script_sha256": FASTNUM_BUILD_SCRIPT_SHA256,
                          "fastnum_generated": FASTNUM_GENERATED,
                          "resolved_indexer_test_features": ["testing"],
