@@ -95,7 +95,7 @@ pub(super) fn current_stack_range() -> Result<MacStackRange> {
     let thread_status = unsafe { pthread_threadid_np(pthread, &mut os_thread_id) };
     ensure!(
         thread_status == 0 && os_thread_id > 0,
-        "pthread thread ID is unavailable: status={thread_status}, pthread={pthread:p}, high={high:#x}, size={stack_size:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}"
+        "pthread thread ID is unavailable: status={thread_status}, pthread={pthread:#x}, high={high:#x}, size={stack_size:#x}, page_size={page_size:#x}, sp={stack_pointer:#x}, os_thread_id={os_thread_id}"
     );
     let os_thread_id = i64::try_from(os_thread_id).context("pthread thread ID overflow")?;
     ensure!(
