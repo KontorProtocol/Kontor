@@ -707,3 +707,21 @@ and lockfile hashes, terminal results and raw-log hashes are retained under
 `.build-cache/k2a-reconcile/pricing-extraction/`. These checks do not qualify the
 complete executor extraction or replace the prerequisite integration and parity
 evidence described above.
+
+## Retained gas constant extraction
+
+Source `40ffdf553dd0e553e7014b1e92fa71278f2ef529` moves the existing gas constants
+to `protocol::v1::gas`, retaining the runtime imports and public re-exports.
+The whole-call allowance, nested fuel inheritance, portable lifting charges and
+numerical values are unchanged. This is preparation for protocol selection;
+selected-context wiring remains outstanding. No aggregate block budget or
+additional per-operation cap is introduced.
+
+On that exact clean source, the root fuel-limit regression passed (one test,
+7.70 seconds, 58.51 seconds including compilation), and the separate view-budget
+regression passed (one test, 0.03 seconds, 0.46 seconds total). Indexer Clippy with
+tests and warnings denied passed in 7.67 seconds. All three commands used Rust
+1.99.1, locked offline resolution and at most two jobs. Commands, source and
+lockfile hashes, terminal results and raw-log hashes are recorded in
+`.build-cache/k2a-reconcile/gas-extraction/`. These focused checks preserve the
+existing behavior; they do not establish complete historical executor isolation.
