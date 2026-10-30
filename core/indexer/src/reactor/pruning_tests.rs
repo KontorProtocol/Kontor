@@ -5,8 +5,11 @@ use malachitebft_engine::node::NodeRef;
 
 use super::PruneConfig;
 use super::aggregate_error_tests::reactor;
+use crate::consensus::signing::PrivateKey;
 use crate::database::queries::{PRUNE_WATERMARK_KEY, get_meta_u64, insert_block};
-use crate::test_utils::{new_mock_block_hash, test_runtime};
+use crate::reg_tester::random_x_only_pubkey;
+use crate::runtime::{Decimal, GenesisValidator};
+use crate::test_utils::{new_mock_block_hash, test_runtime_with_genesis};
 
 struct StopEngine(NodeRef);
 
@@ -18,7 +21,12 @@ impl Drop for StopEngine {
 
 #[tokio::test]
 async fn rollback_guard_preserves_deleted_history_boundary_after_reconfiguration() -> Result<()> {
-    let (runtime, directory, _name) = test_runtime().await?;
+    let (runtime, directory, _name) = test_runtime_with_genesis(&[GenesisValidator {
+        x_only_pubkey: random_x_only_pubkey(),
+        ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }])
+    .await?;
     let mut reactor = reactor(runtime, &directory).await?;
     let _cleanup = StopEngine(reactor.consensus.engine_handle.actor.clone());
     let conn = reactor.db_conn();
