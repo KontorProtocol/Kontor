@@ -117,6 +117,7 @@ INPUTS = {
     "suite_comparator": "tools/native-stack/compare_resource_suite.py",
     "suite_comparator_tests": "tools/native-stack/test_compare_resource_suite.py",
     "suite_runbook": "tools/native-stack/resource-suite-runbook.md",
+    "suite_dispatch_workflow": ".github/workflows/native-stack.yml",
     "suite_workflow": ".github/workflows/native-stack-s2.yml",
     "finite_stack_capture": "tools/native-stack/capture_resource_finite.py",
     "finite_stack_validator": "tools/native-stack/resource_finite_evidence.py",

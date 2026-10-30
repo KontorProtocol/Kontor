@@ -15,6 +15,17 @@ on:
       - "tools/native-stack/**"
       - ".github/workflows/native-stack.yml"
   workflow_dispatch:
+    inputs:
+      stage:
+        description: Qualification or S2 resource evidence stage
+        required: true
+        default: qualify
+        type: choice
+        options: [qualify, discovery, guard, final]
+      reviewed_discovery_run_id:
+        description: Reviewed S2 discovery run ID for the final stage
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -22,6 +33,7 @@ permissions:
 jobs:
   qualify:
     name: Native stack (${{ matrix.os }}, ${{ matrix.profile }})
+    if: github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
     strategy:
@@ -95,7 +107,7 @@ jobs:
   compare:
     name: Compare native stack outcomes
     needs: qualify
-    if: always()
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -113,3 +125,13 @@ jobs:
           name: native-stack-comparison
           path: target/native-stack-comparison.json
           if-no-files-found: error
+
+  s2:
+    if: github.event_name == 'workflow_dispatch' && (inputs.stage == 'discovery' || inputs.stage == 'guard' || inputs.stage == 'final')
+    uses: ./.github/workflows/native-stack-s2.yml
+    with:
+      stage: ${{ inputs.stage }}
+      reviewed_discovery_run_id: ${{ inputs.reviewed_discovery_run_id }}
+    permissions:
+      contents: read
+      actions: read

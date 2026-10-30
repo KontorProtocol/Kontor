@@ -1,24 +1,12 @@
 name: Native stack S2 resource evidence
 
 on:
-  push:
-    tags:
-      - 'native-stack-s2/discovery/*'
-      - 'native-stack-s2/guard/*'
-      - 'native-stack-s2/final/*'
-  workflow_dispatch:
+  workflow_call:
     inputs:
       stage:
-        description: Capture boundary discovery or run the six-cell final suite
         required: true
-        type: choice
-        options: [discovery, guard, final]
-      phase10_run_id:
-        description: Final stage run containing native-stack-phase10-historical
-        required: false
         type: string
       reviewed_discovery_run_id:
-        description: Final stage run containing the reviewed discovery candidate
         required: false
         type: string
 
@@ -29,7 +17,7 @@ permissions:
 jobs:
   discover:
     name: S2 boundary discovery (Linux ARM64 dev)
-    if: inputs.stage == 'discovery' || startsWith(github.ref, 'refs/tags/native-stack-s2/discovery/')
+    if: inputs.stage == 'discovery'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 240
     env:
@@ -84,7 +72,7 @@ jobs:
 
   guard:
     name: S2 macOS guard (${{ matrix.profile }})
-    if: inputs.stage == 'guard' || startsWith(github.ref, 'refs/tags/native-stack-s2/guard/')
+    if: inputs.stage == 'guard'
     runs-on: macos-15
     timeout-minutes: 240
     strategy:
@@ -134,7 +122,7 @@ jobs:
           retention-days: 90
 
   capture:
-    if: inputs.stage == 'final' || startsWith(github.ref, 'refs/tags/native-stack-s2/final/')
+    if: inputs.stage == 'final'
     name: S2 capture (${{ matrix.os }}, ${{ matrix.profile }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
@@ -157,7 +145,6 @@ jobs:
       CARGO_BUILD_JOBS: "2"
       PYTHONDONTWRITEBYTECODE: "1"
       GH_TOKEN: ${{ github.token }}
-      HISTORICAL_RUN_ID: ${{ inputs.phase10_run_id }}
       REVIEWED_RUN_ID: ${{ inputs.reviewed_discovery_run_id }}
       PROFILE: ${{ matrix.profile }}
     steps:
@@ -189,18 +176,13 @@ jobs:
         run: brew install boost libevent zeromq
       - name: Download pinned prior evidence
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/native-stack-s2/final/* ]]; then
-            ids="${GITHUB_REF#refs/tags/native-stack-s2/final/}"
-            [[ "$ids" =~ ^([0-9]+)-([0-9]+)$ ]] || exit 1
-            HISTORICAL_RUN_ID="${BASH_REMATCH[1]}"
-            REVIEWED_RUN_ID="${BASH_REMATCH[2]}"
-          fi
-          case "$HISTORICAL_RUN_ID:$REVIEWED_RUN_ID" in
-            *[!0-9:]*|:*|*:) exit 1 ;;
+          case "$REVIEWED_RUN_ID" in
+            ''|*[!0-9]*) exit 1 ;;
           esac
           prior="$RUNNER_TEMP/native-stack-s2/prior"
           mkdir -p "$prior/historical" "$prior/reviewed"
-          gh run download "$HISTORICAL_RUN_ID" --name native-stack-phase10-historical --dir "$prior/historical"
+          python3 tools/native-stack/materialize_phase10_fixture.py \
+            --output "$prior/historical/resource-chain-capture.json"
           gh run download "$REVIEWED_RUN_ID" --name native-stack-boundary-discovery-candidate --dir "$prior/reviewed"
           test -f "$prior/historical/resource-chain-capture.json"
           test -f "$prior/reviewed/resource-boundary-capture.json"
@@ -239,7 +221,7 @@ jobs:
 
   compare:
     name: Validate and compare six S2 cells
-    if: inputs.stage == 'final' || startsWith(github.ref, 'refs/tags/native-stack-s2/final/')
+    if: inputs.stage == 'final'
     needs: capture
     runs-on: ubuntu-24.04
     timeout-minutes: 180
