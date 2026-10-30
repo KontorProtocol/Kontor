@@ -91,7 +91,7 @@ async fn restores_context(
     let denials = Arc::new(AtomicUsize::new(0));
     if outer_error {
         let observed = denials.clone();
-        conn.authorizer(Some(move |context: AuthContext<'_>| {
+        conn.authorizer(Some(Arc::new(move |context: &AuthContext<'_>| {
             if matches!(
                 context.action,
                 AuthAction::Insert {
@@ -103,7 +103,7 @@ async fn restores_context(
             } else {
                 Authorization::Allow
             }
-        }))?;
+        })))?;
     }
     let outcome = trial.simulate(tx).await;
     conn.authorizer(None)?;
