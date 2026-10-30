@@ -667,6 +667,9 @@ adapter setup and view initialization and ends after replay checkpoint checks,
 while competing views remain active. The same open `memory.peak` descriptor
 is retained across reset and read, as required by Linux's per-descriptor reset
 semantics. A kernel without writable reset support fails the run.
+Excluding setup refers to the measurement interval: allocations and charged
+file cache retained from setup still contribute to baseline, peak and final
+memory. This does not establish a cold OS page cache.
 
 The wrapper requires exactly two ordered records from the measured PID and
 cgroup with unchanged limits. Swap, OOM and memory-limit pressure events fail
