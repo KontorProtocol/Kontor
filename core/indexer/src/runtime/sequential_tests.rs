@@ -17,6 +17,7 @@ use wasm_encoder::{
 use wasmparser::{BinaryReader, CodeSectionReader, Parser, Payload, TypeRef, Validator};
 use wasmtime::component::{Component, ResourceTable, ResourceType, Val};
 use wasmtime::{Engine, ExternType, Linker as WasmtimeLinker, Module, Store, Trap};
+use wit_component::ComponentEncoder;
 
 use super::component_policy;
 use super::invocation::{
@@ -1190,6 +1191,57 @@ async fn real_wit_host_importing_starts_are_rejected_before_instantiation() -> R
         };
         assert!(runtime.storage.contract_id(&address).await?.is_none());
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cold_component_preparation_preserves_bytes_and_classifies_content_errors() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    runtime
+        .set_context(1, Some(TransactionContext::builder().build()), None, None)
+        .await;
+
+    let module = wat::parse_str("(module)")?;
+    let mut compressed = Vec::new();
+    CompressorReader::new(module.as_slice(), 4096, 5, 22).read_to_end(&mut compressed)?;
+    let id = runtime
+        .storage
+        .insert_contract("cold-valid", &compressed)
+        .await?;
+    let encoded = runtime
+        .storage
+        .decode_component_bytes(id)
+        .await
+        .map_err(|e| match e {
+            ComponentDecodeError::Content(e) | ComponentDecodeError::Infrastructure(e) => e,
+        })?;
+    let expected = ComponentEncoder::default()
+        .module(&module)?
+        .validate(true)
+        .encode()?;
+    assert_eq!(encoded, expected);
+    let (returned, _) = runtime
+        .compile_component_bytes(encoded)
+        .await
+        .map_err(|e| match e {
+            ComponentDecodeError::Content(e) | ComponentDecodeError::Infrastructure(e) => e,
+        })?;
+    assert_eq!(returned, expected);
+
+    let mut invalid_compressed = Vec::new();
+    CompressorReader::new(&b"not wasm"[..], 4096, 5, 22).read_to_end(&mut invalid_compressed)?;
+    let invalid_id = runtime
+        .storage
+        .insert_contract("cold-invalid", &invalid_compressed)
+        .await?;
+    assert!(matches!(
+        runtime.storage.decode_component_bytes(invalid_id).await,
+        Err(ComponentDecodeError::Content(_))
+    ));
+    assert!(matches!(
+        runtime.compile_component_bytes(vec![0]).await,
+        Err(ComponentDecodeError::Content(_))
+    ));
     Ok(())
 }
 

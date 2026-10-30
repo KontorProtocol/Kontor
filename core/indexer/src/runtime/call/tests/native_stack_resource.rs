@@ -246,7 +246,7 @@ fn attest_resource_threads(events: &[ThreadEvent], workers: &[ThreadId], mode: &
         "thread trace contains an unclassified event"
     );
     for (entry, exit, on_worker) in [
-        ("compiler_entry", "compiler_exit", true),
+        ("compiler_entry", "compiler_exit", false),
         ("blocking_decode_entry", "blocking_decode_exit", false),
     ] {
         let entries = events
@@ -406,7 +406,7 @@ fn chain_worker_case() -> Result<()> {
             );
         } else {
             ensure!(
-                event.name.starts_with("blocking_decode_")
+                (event.name.starts_with("blocking_decode_") || event.name.starts_with("compiler_"))
                     && workers
                         .iter()
                         .all(|worker| worker.os_thread_id != event.os_thread_id),
@@ -560,7 +560,7 @@ fn pulley_boundary_worker_case() -> Result<()> {
             );
         } else {
             ensure!(
-                event.name.starts_with("blocking_decode_")
+                (event.name.starts_with("blocking_decode_") || event.name.starts_with("compiler_"))
                     && workers
                         .iter()
                         .all(|worker| worker.os_thread_id != event.os_thread_id),
@@ -824,7 +824,7 @@ fn finite_stack_worker_case() -> Result<()> {
             );
         } else {
             ensure!(
-                event.name.starts_with("blocking_decode_")
+                (event.name.starts_with("blocking_decode_") || event.name.starts_with("compiler_"))
                     && workers
                         .iter()
                         .all(|worker| worker.os_thread_id != event.os_thread_id),
@@ -852,7 +852,7 @@ fn finite_stack_worker_case() -> Result<()> {
             ensure!(
                 observation["thread_id"].as_str() == Some(thread_id.as_str())
                     && observation["os_thread_id"].as_i64() == Some(event.os_thread_id.into()),
-                "blocking stack measurement differs from decode trace: {event:?}"
+                "blocking stack measurement differs from preparation trace: {event:?}"
             );
             if !thread_observations
                 .iter()

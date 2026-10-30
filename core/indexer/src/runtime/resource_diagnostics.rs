@@ -96,7 +96,7 @@ fn push(name: &'static str, conversion_only: bool) {
         && (!conversion_only || state.conversion_enabled)
     {
         let thread_id = std::thread::current().id();
-        let stack_observation = if name == "blocking_decode_entry"
+        let stack_observation = if matches!(name, "blocking_decode_entry" | "compiler_entry")
             && state.stack_probe.is_some()
             && state.stack_probed_threads.insert(thread_id)
         {

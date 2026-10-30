@@ -854,16 +854,15 @@ impl Runtime {
         if !is_native_contract_id(contract_id) {
             component_policy::validate(&bytes)?;
         }
-        #[cfg(test)]
-        resource_diagnostics::record("compiler_entry");
-        let component = Component::from_binary(&self.engine, &bytes);
-        #[cfg(test)]
-        resource_diagnostics::record("compiler_exit");
-        let component = component.map_err(|e| {
-            ExecutionError::Deterministic(
-                anyhow!(e).context("contract is not a valid wasm component"),
-            )
-        })?;
+        let (bytes, component) =
+            self.compile_component_bytes(bytes)
+                .await
+                .map_err(|e| match e {
+                    ComponentDecodeError::Content(e) => ExecutionError::Deterministic(
+                        e.context("contract is not a valid wasm component"),
+                    ),
+                    ComponentDecodeError::Infrastructure(e) => ExecutionError::NonDeterministic(e),
+                })?;
         let linker = if is_native_contract_id(contract_id) {
             &self.linkers.native
         } else {
@@ -1080,6 +1079,29 @@ impl Runtime {
             .result
     }
 
+    /// Compile on a blocking thread: component translation has a deep native
+    /// call chain that can exhaust the async execution thread's finite stack.
+    async fn compile_component_bytes(
+        &self,
+        bytes: Vec<u8>,
+    ) -> std::result::Result<(Vec<u8>, Component), ComponentDecodeError> {
+        let engine = self.engine.clone();
+        let (bytes, compiled) = tokio::task::spawn_blocking(move || {
+            #[cfg(test)]
+            resource_diagnostics::record("compiler_entry");
+            let compiled = Component::from_binary(&engine, &bytes);
+            #[cfg(test)]
+            resource_diagnostics::record("compiler_exit");
+            (bytes, compiled)
+        })
+        .await
+        .map_err(|e| ComponentDecodeError::Infrastructure(e.into()))?;
+        Ok((
+            bytes,
+            compiled.map_err(|e| ComponentDecodeError::Content(e.into()))?,
+        ))
+    }
+
     /// Fetch + JIT-compile the component and cache the compiled artifact,
     /// returning the encoded `bytes` too so a caller that also needs the embedded
     /// WIT pays the decompress/encode/compile exactly once. The bytes are not
@@ -1087,12 +1109,12 @@ impl Runtime {
     async fn component_bytes_and_compiled(&self, contract_id: u64) -> Result<(Vec<u8>, Component)> {
         let bytes = self.storage.component_bytes(contract_id).await?;
         component_policy::validate_no_starts(&bytes)?;
-        #[cfg(test)]
-        resource_diagnostics::record("compiler_entry");
-        let component = Component::from_binary(&self.engine, &bytes);
-        #[cfg(test)]
-        resource_diagnostics::record("compiler_exit");
-        let component = component?;
+        let (bytes, component) =
+            self.compile_component_bytes(bytes)
+                .await
+                .map_err(|e| match e {
+                    ComponentDecodeError::Content(e) | ComponentDecodeError::Infrastructure(e) => e,
+                })?;
         // One of the cache's TWO write sites — `validate_publishable` guards the
         // other, and its guard is the one the publish path depends on.
         // See `Runtime::simulating`: caching a speculative contract's code under an
