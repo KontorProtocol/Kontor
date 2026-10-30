@@ -29,7 +29,7 @@ use crate::{
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
-    runtime::{ContractAddress, counter::Counter, stack::Stack},
+    runtime::{ContractAddress, counter::Counter, ownership::ChildContext, stack::Stack},
     test_utils::new_mock_transaction,
 };
 
@@ -86,6 +86,8 @@ pub struct TransactionContext {
 #[derive(Builder, Clone)]
 pub struct Storage {
     pub conn: Connection,
+    #[builder(skip)]
+    pub(super) ownership: Option<ChildContext>,
     #[builder(default = Counter::builder().build())]
     pub savepoint_counter: Counter,
     #[builder(default = Stack::builder().build())]
@@ -349,7 +351,7 @@ impl Storage {
             })?;
         // Split the join from the work: a JoinError is this node's task machinery
         // failing, everything inside is a property of the bytes.
-        let encoded = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+        let encode = move || -> Result<Vec<u8>> {
             #[cfg(test)]
             let _trace =
                 resource_diagnostics::scope("blocking_decode_entry", "blocking_decode_exit");
@@ -377,9 +379,14 @@ impl Storage {
                 .module(&module_bytes)?
                 .validate(true)
                 .encode()
-        })
-        .await
-        .map_err(|e| ComponentDecodeError::Infrastructure(e.into()))?
+        };
+        let encoded = match &self.ownership {
+            Some(owner) => owner.run_blocking(encode).await,
+            None => tokio::task::spawn_blocking(encode)
+                .await
+                .map_err(anyhow::Error::from),
+        }
+        .map_err(ComponentDecodeError::Infrastructure)?
         .map_err(ComponentDecodeError::Content)?;
 
         Ok(encoded)

@@ -38,6 +38,7 @@ mod host_storage;
 mod host_system;
 mod invocation;
 mod lowering;
+mod ownership;
 
 use bitcoin::XOnlyPublicKey;
 use call::CallOutcome;
@@ -48,6 +49,7 @@ use invocation::{InvocationBudget, InvocationLimitReached, InvocationStore, MAX_
 use invocation::{ResourceProbePhase, ResourceProbeRole};
 use libsql::Connection;
 use lowering::Linker;
+use ownership::ChildContext;
 use sha2::{Digest, Sha256};
 use staking::api::wave::{get_sigma_min_call_expr, get_sigma_min_parse_return_expr};
 pub use stdlib::{
@@ -61,7 +63,7 @@ use tokio::sync::Mutex;
 use workload_telemetry::WorkloadTelemetry;
 
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 
 /// Distinguishes deterministic failures from non-deterministic failures
 /// in the contract execution path.
@@ -284,7 +286,9 @@ pub struct Runtime {
     guest_memory_limits: Option<GuestMemoryLimits>,
     guest_memory_limiter: Option<GuestMemoryLimiter>,
     invocation_budget: Option<Arc<InvocationBudget>>,
+    store_table_owners: Option<Arc<StdMutex<Vec<Weak<Mutex<ResourceTable>>>>>>,
     invocation_depth: u32,
+    ownership: Option<ChildContext>,
     #[cfg(test)]
     pub(crate) workload_telemetry: Option<Arc<WorkloadTelemetry>>,
     #[cfg(test)]
@@ -456,7 +460,9 @@ impl Runtime {
             guest_memory_limits: Some(GuestMemoryLimits::default()),
             guest_memory_limiter: None,
             invocation_budget: None,
+            store_table_owners: None,
             invocation_depth: 0,
+            ownership: None,
             #[cfg(test)]
             workload_telemetry: None,
             #[cfg(test)]
@@ -1086,16 +1092,21 @@ impl Runtime {
         bytes: Vec<u8>,
     ) -> std::result::Result<(Vec<u8>, Component), ComponentDecodeError> {
         let engine = self.engine.clone();
-        let (bytes, compiled) = tokio::task::spawn_blocking(move || {
+        let compile = move || {
             #[cfg(test)]
             resource_diagnostics::record("compiler_entry");
             let compiled = Component::from_binary(&engine, &bytes);
             #[cfg(test)]
             resource_diagnostics::record("compiler_exit");
             (bytes, compiled)
-        })
-        .await
-        .map_err(|e| ComponentDecodeError::Infrastructure(e.into()))?;
+        };
+        let (bytes, compiled) = match &self.ownership {
+            Some(owner) => owner.run_blocking(compile).await,
+            None => tokio::task::spawn_blocking(compile)
+                .await
+                .map_err(anyhow::Error::from),
+        }
+        .map_err(ComponentDecodeError::Infrastructure)?;
         Ok((
             bytes,
             compiled.map_err(|e| ComponentDecodeError::Content(e.into()))?,
@@ -1201,7 +1212,13 @@ impl Runtime {
         let mut runtime = self.clone();
         runtime.invocation_budget = Some(budget);
         runtime.invocation_depth = depth;
-        runtime.table = Arc::new(Mutex::new(ResourceTable::new()));
+        let table = Arc::new(Mutex::new(ResourceTable::new()));
+        if let Some(owners) = &self.store_table_owners {
+            let mut owners = owners.lock().expect("store table tracker poisoned");
+            owners.retain(|owner| owner.strong_count() != 0);
+            owners.push(Arc::downgrade(&table));
+        }
+        runtime.table = table;
         runtime.guest_memory_limiter = match (&self.guest_memory_limiter, self.guest_memory_limits)
         {
             (Some(parent), _) => Some(parent.new_child()),
@@ -1213,6 +1230,16 @@ impl Runtime {
             s.limiter(|runtime| runtime.guest_memory_limiter.as_mut().unwrap());
         }
         if let Err(error) = s.set_fuel(fuel) {
+            #[cfg(test)]
+            s.record_initialization_failure();
+            return Err(error.into());
+        }
+        if let Some(interval) = self
+            .ownership
+            .as_ref()
+            .and_then(ChildContext::fuel_yield_interval)
+            && let Err(error) = s.fuel_async_yield_interval(Some(interval))
+        {
             #[cfg(test)]
             s.record_initialization_failure();
             return Err(error.into());
