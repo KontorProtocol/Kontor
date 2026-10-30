@@ -114,7 +114,10 @@ def measured_trace(trace, runtime, mode, stores, process_id, chain_mode="paid",
                     "chain trace worker differs from measured kernel identity")
         else:
             require(category == "blocking_pool" and blocking.get(thread) == tid
-                    and event["name"].startswith("blocking_decode_"),
+                    and event["name"] in {
+                        "blocking_decode_entry", "blocking_decode_exit",
+                        "compiler_entry", "compiler_exit",
+                    },
                     "chain blocking trace lacks measured thread capacity")
     starts = [index for index, event in enumerate(events)
               if event["name"] == "chain_attempt_start"]

@@ -171,6 +171,22 @@ class ChainObservationTests(unittest.TestCase):
         ], "blocking_pool": [{"thread_id": "blocking", "os_thread_id": 203}]}
         with patch("capture_resource_chain.thread_capacities", return_value=categories):
             self.assertEqual(len(measured_trace(trace, runtime, "reduced", 64, 100)), 3)
+            compiled = copy.deepcopy(trace)
+            compiled["events"][:0] = [
+                {"name": name, "thread_id": "blocking", "os_thread_id": 203,
+                 "category": "blocking_pool"}
+                for name in ("blocking_decode_entry", "blocking_decode_exit",
+                             "compiler_entry", "compiler_exit")
+            ]
+            self.assertEqual(len(measured_trace(compiled, runtime, "reduced", 64, 100)), 3)
+            for changes in ({"thread_id": "unmeasured"}, {"os_thread_id": 999},
+                            {"category": "block_on_caller"},
+                            {"name": "canonical_input_entry"}):
+                invalid = copy.deepcopy(compiled)
+                invalid["events"][2].update(changes)
+                with self.subTest(changes=changes):
+                    with self.assertRaisesRegex(ValueError, "blocking trace lacks measured"):
+                        measured_trace(invalid, runtime, "reduced", 64, 100)
             outside_only = copy.deepcopy(trace)
             outside_only["events"] = [event for index, event in
                                       enumerate(outside_only["events"])
