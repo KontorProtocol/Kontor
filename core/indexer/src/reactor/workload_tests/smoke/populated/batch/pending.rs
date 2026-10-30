@@ -6,7 +6,7 @@ use indexer_types::{Block, ResultRow};
 use serde::{Deserialize, Serialize};
 
 use super::{BatchProof, TransactionProof, receipts};
-use crate::consensus::FINALITY_WINDOW;
+use crate::consensus::finality_types::FINALITY_WINDOW;
 use crate::database::queries::get_transaction_by_txid;
 use crate::reactor::Reactor;
 use crate::reactor::executor::RuntimeExecutor;
