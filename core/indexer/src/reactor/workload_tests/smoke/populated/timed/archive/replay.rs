@@ -261,7 +261,17 @@ async fn run_mode(saved: Saved, paced_api: bool) -> Result<()> {
                 history.as_ref(),
             )
             .await?;
+            if !manifest.settings.mixed.warm_simulation_cache {
+                // Reactor and oracle setup can compile native components even
+                // with explicit prewarming disabled. Exclude that setup cache
+                // from a declared cold-component measurement window.
+                cache.clear();
+            }
             let cache_before = cache.workload_metrics().await;
+            ensure!(
+                manifest.settings.mixed.warm_simulation_cache || cache_before == (0, 0),
+                "cold replay retained setup components"
+            );
             let measurement = TrialMemory::start(telemetry.clone())?;
             if paced_api {
                 let report = historical::run(plan.schedule.clone(), &mut adapter).await?;

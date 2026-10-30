@@ -678,6 +678,9 @@ Peaks reset atomically at the trial boundary, including any views already in
 flight. Each restore must drain to zero live Stores and roots. Replay and view
 cache reports include entry counts and encoded-component byte weights after
 pending cache maintenance, not estimates of compiled-code memory.
+For a declared cold replay, the canonical runtime's cache is cleared after
+reactor/oracle setup and must report zero entries and zero weight at the window
+boundary. Competing views retain their separately reported warm pool cache.
 
 The wrapper requires exactly two ordered records from the measured PID and
 cgroup with unchanged limits. Swap, OOM and memory-limit pressure events fail

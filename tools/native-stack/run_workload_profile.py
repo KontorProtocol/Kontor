@@ -227,6 +227,13 @@ def worker(spec_path):
                                 and item["snapshot"]["live_stores"] == 0 for item in drained),
                         "workload Stores did not drain after both restores")
                 observation["drained_stores"] = drained
+                caches = [json.loads(line.split("=", 1)[1]) for line in transcript.splitlines()
+                          if line.startswith("workload_replay_cache=")]
+                require([item["restore"] for item in caches] == ["timed-one.db", "timed-two.db"]
+                        and all((item["warm_simulation_cache"] or item["before"] == [0, 0])
+                                and item["after"][0] > 0 and item["after"][1] > 0 for item in caches),
+                        "replay cache state differs from declared setup")
+                observation["replay_caches"] = caches
             if arrival_service:
                 markers = [json.loads(line.split("=", 1)[1]) for line in transcript.splitlines()
                            if line.startswith("workload_external_arrivals=")]
