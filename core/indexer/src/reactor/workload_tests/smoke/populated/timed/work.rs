@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::mem;
 use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
@@ -31,7 +32,7 @@ use crate::database::queries::{
 use crate::reactor::Reactor;
 use crate::reactor::batches::BatchOutcome;
 use crate::reactor::executor::RuntimeExecutor;
-use crate::runtime::TransactionContext;
+use crate::runtime::{ComponentCache, TransactionContext};
 
 mod historical;
 
@@ -174,6 +175,7 @@ fn settle_bodies(tracked: &mut [TrackedBatch], previous_tip: u64, tip: u64) {
 
 pub(super) struct TimedWork<'a> {
     pub(super) reactor: &'a mut Reactor<RuntimeExecutor>,
+    observer_cache: ComponentCache,
     plan: &'a InputPlan,
     model: Before,
     pending: Pending,
@@ -220,6 +222,7 @@ impl<'a> TimedWork<'a> {
         let tip = (height, reactor.last_hash);
         Ok(Self {
             reactor,
+            observer_cache: ComponentCache::new(),
             plan,
             model,
             pending: Pending::new(height),
@@ -474,6 +477,31 @@ impl Work for TimedWork<'_> {
     }
 
     async fn check(&mut self, event: &Event) -> Result<()> {
+        // Oracle views must not compile a contract into the measured execution
+        // cache before its first canonical call. Keep prior execution entries,
+        // and restore that cache even if an oracle returns an error.
+        let execution_cache = mem::replace(
+            &mut self.reactor.runtime.component_cache,
+            self.observer_cache.clone(),
+        );
+        let cache_before = execution_cache.workload_metrics().await;
+        let result = self.check_observed(event).await;
+        self.reactor.runtime.component_cache = execution_cache;
+        ensure!(
+            self.reactor
+                .runtime
+                .component_cache
+                .workload_metrics()
+                .await
+                == cache_before,
+            "oracle checks changed the execution component cache"
+        );
+        result
+    }
+}
+
+impl TimedWork<'_> {
+    async fn check_observed(&mut self, event: &Event) -> Result<()> {
         ensure!(event == self.plan.schedule.event(self.ordinal)? && self.executed);
         let after = Checkpoint::capture(
             self.directory,
