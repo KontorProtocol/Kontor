@@ -118,7 +118,42 @@ pub(super) async fn prepare_groups(
     funding: Funding,
     counts: &[usize],
 ) -> Result<Vec<Vec<Funding>>> {
+    prepare_to_groups(
+        client,
+        key,
+        address,
+        funding,
+        counts,
+        &vec![address.clone(); counts.len()],
+    )
+    .await
+}
+
+pub(super) async fn prepare_with_api(
+    client: &Client,
+    key: &Keypair,
+    address: &Address,
+    funding: Funding,
+    counts: &[usize],
+    api_address: &Address,
+) -> Result<Vec<Vec<Funding>>> {
+    let mut counts = counts.to_vec();
+    let mut destinations = vec![address.clone(); counts.len()];
+    counts.push(1);
+    destinations.push(api_address.clone());
+    prepare_to_groups(client, key, address, funding, &counts, &destinations).await
+}
+
+async fn prepare_to_groups(
+    client: &Client,
+    key: &Keypair,
+    address: &Address,
+    funding: Funding,
+    counts: &[usize],
+    destinations: &[Address],
+) -> Result<Vec<Vec<Funding>>> {
     ensure!(!counts.is_empty() && counts.iter().all(|count| *count > 0));
+    ensure!(counts.len() == destinations.len());
     let total = counts.iter().try_fold(0usize, |sum, count| {
         sum.checked_add(*count).context("funding count overflow")
     })?;
@@ -128,10 +163,11 @@ pub(super) async fn prepare_groups(
     );
     let chunks: Vec<_> = counts
         .iter()
-        .flat_map(|count| {
+        .zip(destinations)
+        .flat_map(|(count, destination)| {
             (0..*count)
                 .step_by(500)
-                .map(|start| (*count - start).min(500))
+                .map(move |start| ((*count - start).min(500), destination))
         })
         .collect();
     ensure!(client.get_blockchain_info().await?.blocks == ANCHOR_HEIGHT - 1);
@@ -145,8 +181,8 @@ pub(super) async fn prepare_groups(
     let mut ordered = vec![parent.clone()];
     let mut flat = Vec::with_capacity(total);
     let mut distinct = BTreeSet::new();
-    for (funding, count) in outputs(&parent)?.into_iter().zip(chunks) {
-        let child = split(key, address, funding, count)?;
+    for (funding, (count, destination)) in outputs(&parent)?.into_iter().zip(chunks) {
+        let child = split(key, destination, funding, count)?;
         // Retaining siblings would exceed Bitcoin's connected-cluster size limit.
         // Each child is admission-checked with only its parent in the mempool.
         ensure!(client.get_raw_mempool().await? == [parent.compute_txid()]);

@@ -28,17 +28,19 @@ use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{Decimal, Runtime, TransactionContext, from_wave_expr, to_wave_expr};
 use crate::test_utils::{new_mock_block_hash, new_mock_transaction, test_runtime};
 
+mod api;
 mod progress;
 
+pub(super) use api::ApiRecipe;
 pub(super) use progress::Progress;
 
 const BLOB_BYTES: usize = 128;
 
-struct ExecutionSlice {
-    operations: Range<usize>,
-    layout: MixedLayout,
-    height: u64,
-    confirmed: bool,
+pub(super) struct ExecutionSlice {
+    pub(super) operations: Range<usize>,
+    pub(super) layout: MixedLayout,
+    pub(super) height: u64,
+    pub(super) confirmed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -105,7 +107,9 @@ pub(super) struct MixedWorkload {
     rounds: usize,
     paginated: Option<(ContractAddress, usize)>,
     files: Option<FileWorkload>,
+    file_round_start: usize,
     step: u64,
+    previous_hash_index: Option<usize>,
     counter_before: u64,
     recipient_before: Decimal,
     stakes_before: BTreeMap<u64, Decimal>,
@@ -114,6 +118,19 @@ pub(super) struct MixedWorkload {
 impl MixedWorkload {
     pub(super) async fn prepare(runtime: &mut Runtime, payer: u64, rounds: usize) -> Result<Self> {
         ensure!(matches!(rounds, 5 | 50));
+        Self::prepare_recipe(runtime, payer, rounds).await
+    }
+
+    pub(super) async fn prepare_timed(
+        runtime: &mut Runtime,
+        payer: u64,
+        transactions: usize,
+    ) -> Result<Self> {
+        ensure!(matches!(transactions, 50 | 250 | 500 | 1300));
+        Self::prepare_recipe(runtime, payer, transactions / 10).await
+    }
+
+    async fn prepare_recipe(runtime: &mut Runtime, payer: u64, rounds: usize) -> Result<Self> {
         ensure!(
             staking::get_stake(runtime, &HolderRef::SignerId(payer).to_string())
                 .await?
@@ -193,7 +210,9 @@ impl MixedWorkload {
             rounds,
             paginated: None,
             files: None,
+            file_round_start: 0,
             step: 0,
+            previous_hash_index: None,
             counter_before: 0,
             recipient_before: Decimal::default(),
             stakes_before: BTreeMap::new(),
@@ -202,8 +221,34 @@ impl MixedWorkload {
 
     pub(super) fn next_step(&self, layout: MixedLayout) -> Result<Self> {
         ensure!(self.step < 6, "sequence exceeds seven blocks");
+        self.next_recipe(layout, self.rounds, self.file_round_start)
+    }
+
+    pub(super) fn next_timed(
+        &self,
+        layout: MixedLayout,
+        transactions: usize,
+        fresh_transactions: usize,
+    ) -> Result<Self> {
+        ensure!(matches!(transactions, 50 | 250 | 500 | 1300));
+        ensure!(matches!(fresh_transactions, 50 | 500));
+        ensure!(fresh_transactions <= transactions);
+        self.next_recipe(
+            layout,
+            transactions / 10,
+            (transactions - fresh_transactions) / 10,
+        )
+    }
+
+    fn next_recipe(
+        &self,
+        layout: MixedLayout,
+        rounds: usize,
+        file_round_start: usize,
+    ) -> Result<Self> {
         let mut next = self.clone();
-        next.step += 1;
+        next.step = self.step.checked_add(1).context("recipe index overflow")?;
+        next.previous_hash_index = Some(self.rounds * 20 - 1);
         next.counter_before = self
             .counter_before
             .checked_add(u64::try_from(self.rounds * 4)?)
@@ -228,8 +273,16 @@ impl MixedWorkload {
         next.files = self
             .files
             .as_ref()
-            .map(FileWorkload::next_step)
+            .map(FileWorkload::next_recipe)
             .transpose()?;
+        next.rounds = rounds;
+        next.file_round_start = file_round_start;
+        ensure!(next.file_round_start < next.rounds);
+        ensure!(
+            next.files
+                .as_ref()
+                .is_none_or(|files| { files.len() <= (next.rounds - next.file_round_start) * 2 })
+        );
         Ok(next)
     }
 
@@ -253,8 +306,51 @@ impl MixedWorkload {
         Ok(self)
     }
 
+    pub(super) async fn with_timed_files(
+        mut self,
+        runtime: &mut Runtime,
+        count: usize,
+        fresh_transactions: usize,
+    ) -> Result<Self> {
+        ensure!(matches!((fresh_transactions, count), (50, 5) | (500, 100)));
+        ensure!(fresh_transactions <= self.rounds * 10);
+        self.file_round_start = self.rounds - fresh_transactions / 10;
+        self.with_files(runtime, count).await
+    }
+
     fn file_index(&self, round: usize, slot: usize) -> Option<usize> {
-        file_index(self.rounds, self.files.as_ref()?.len(), round, slot)
+        file_index(
+            self.rounds - self.file_round_start,
+            self.files.as_ref()?.len(),
+            round.checked_sub(self.file_round_start)?,
+            slot,
+        )
+    }
+
+    pub(super) fn files(&self) -> Result<&FileWorkload> {
+        self.files.as_ref().context("timed recipe requires files")
+    }
+
+    pub(super) fn file_ids(&self) -> Vec<String> {
+        self.files.as_ref().map_or_else(Vec::new, FileWorkload::ids)
+    }
+
+    pub(super) fn files_through(&self, end: usize) -> Result<usize> {
+        ensure!(end <= self.rounds * 20);
+        Ok((0..end)
+            .filter(|index| self.file_index(index / 20, index % 20).is_some())
+            .count())
+    }
+
+    pub(super) fn counter_after(&self, end: usize) -> Result<u64> {
+        ensure!(end <= self.rounds * 20);
+        self.counter_before
+            .checked_add(u64::try_from(
+                (0..end)
+                    .filter(|index| matches!(index % 20, 8 | 13..=15))
+                    .count(),
+            )?)
+            .context("counter overflow")
     }
 
     pub(super) async fn check_file_lifecycle(
@@ -385,7 +481,11 @@ impl MixedWorkload {
         self.effects_range(layout, 0..self.rounds * 20)
     }
 
-    fn effects_range(&self, layout: MixedLayout, operations: Range<usize>) -> Result<PaidEffects> {
+    pub(super) fn effects_range(
+        &self,
+        layout: MixedLayout,
+        operations: Range<usize>,
+    ) -> Result<PaidEffects> {
         let (transferred, payer_staked) =
             self.signer_effects_range(layout, layout.payer(), operations.clone())?;
         let stakes = operations.filter(|index| self.is_stake(*index)).count();
@@ -421,7 +521,100 @@ impl MixedWorkload {
         .await
     }
 
-    async fn check_slice(
+    fn check_return(
+        &self,
+        root: &ResultRow,
+        index: usize,
+        signer: u64,
+        expected_stakes: &mut BTreeMap<u64, Decimal>,
+    ) -> Result<()> {
+        let slot = index % 20;
+        let round = index / 20;
+        let file_index = self.file_index(round, slot);
+        let value = root
+            .value
+            .as_deref()
+            .context("mixed root omitted return value")?;
+        match slot {
+            0..=7 => {
+                ensure!(root.contract == token_address().to_string() && root.func == "transfer");
+                let transfer = token::wave::transfer_parse_return_expr(value)?;
+                ensure!(
+                    transfer.src == HolderRef::SignerId(signer)
+                        && transfer.dst == HolderRef::SignerId(self.recipient)
+                        && transfer.amt == Decimal::from("0.001")
+                );
+            }
+            10 if self.paginated.is_some() => {
+                ensure!(
+                    root.contract
+                        == self
+                            .paginated
+                            .as_ref()
+                            .context("missing page contract")?
+                            .0
+                            .to_string()
+                        && root.func == "entries-page"
+                );
+                pagination::check(
+                    round,
+                    self.paginated.as_ref().context("missing page contract")?.1,
+                    self.rounds,
+                    value,
+                )?;
+            }
+            8..=10 => {
+                ensure!(root.contract == self.counter.to_string());
+                ensure!(root.func == ["increment", "fill-blob", "get-blob"][slot - 8]);
+                ensure!(
+                    value
+                        == if slot == 10 {
+                            to_wave_expr("a".repeat(BLOB_BYTES))
+                        } else {
+                            String::new()
+                        }
+                );
+            }
+            11..=12 => {
+                ensure!(
+                    root.contract == self.failed.to_string() && root.func == "set-blob-then-fail"
+                );
+                ensure!(value == "err(message(\"deliberate failure after write\"))");
+            }
+            13..=15 => ensure!(
+                root.contract == self.proxy.to_string()
+                    && root.func == "fallback"
+                    && value.is_empty()
+            ),
+            16..=17 if file_index.is_some() => {
+                ensure!(
+                    root.contract == storage_address().to_string()
+                        && root.func == "create-agreement"
+                );
+                self.files
+                    .as_ref()
+                    .context("missing file workload")?
+                    .check_receipt(file_index.context("missing file index")?, value)?;
+            }
+            16..=17 => {
+                ensure!(root.contract == staking_address().to_string() && root.func == "add-stake");
+                let expected_stake = expected_stakes.entry(signer).or_default();
+                *expected_stake = add_decimal(*expected_stake, Decimal::from("0.001"))?;
+                let stake = staking::wave::add_stake_parse_return_expr(value)?;
+                ensure!(stake.stake == *expected_stake && stake.withdrawal_height.is_none());
+            }
+            18..=19 => {
+                ensure!(root.contract == self.crypto.to_string() && root.func == "set-hash");
+                let expected =
+                    Sha256::digest(format!("round-{round}-slot-{slot}").as_bytes()).to_vec();
+                ensure!(from_wave_expr::<Vec<u8>>(value) == expected);
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    pub(super) async fn check_slice(
         &self,
         runtime: &mut Runtime,
         all: &[&ResultRow],
@@ -477,91 +670,7 @@ impl MixedWorkload {
                         OpStatus::Ok
                     }
             );
-            let value = root
-                .value
-                .as_deref()
-                .context("mixed root omitted return value")?;
-            match slot {
-                0..=7 => {
-                    ensure!(
-                        root.contract == token_address().to_string() && root.func == "transfer"
-                    );
-                    let transfer = token::wave::transfer_parse_return_expr(value)?;
-                    ensure!(
-                        transfer.src == HolderRef::SignerId(signer)
-                            && transfer.dst == HolderRef::SignerId(self.recipient)
-                            && transfer.amt == Decimal::from("0.001")
-                    );
-                }
-                10 if self.paginated.is_some() => {
-                    ensure!(
-                        root.contract
-                            == self
-                                .paginated
-                                .as_ref()
-                                .context("missing page contract")?
-                                .0
-                                .to_string()
-                            && root.func == "entries-page"
-                    );
-                    pagination::check(
-                        round,
-                        self.paginated.as_ref().context("missing page contract")?.1,
-                        self.rounds,
-                        value,
-                    )?;
-                }
-                8..=10 => {
-                    ensure!(root.contract == self.counter.to_string());
-                    ensure!(root.func == ["increment", "fill-blob", "get-blob"][slot - 8]);
-                    ensure!(
-                        value
-                            == if slot == 10 {
-                                to_wave_expr("a".repeat(BLOB_BYTES))
-                            } else {
-                                String::new()
-                            }
-                    );
-                }
-                11..=12 => {
-                    ensure!(
-                        root.contract == self.failed.to_string()
-                            && root.func == "set-blob-then-fail"
-                    );
-                    ensure!(value == "err(message(\"deliberate failure after write\"))");
-                }
-                13..=15 => ensure!(
-                    root.contract == self.proxy.to_string()
-                        && root.func == "fallback"
-                        && value.is_empty()
-                ),
-                16..=17 if file_index.is_some() => {
-                    ensure!(
-                        root.contract == storage_address().to_string()
-                            && root.func == "create-agreement"
-                    );
-                    self.files
-                        .as_ref()
-                        .context("missing file workload")?
-                        .check_receipt(file_index.context("missing file index")?, value)?;
-                }
-                16..=17 => {
-                    ensure!(
-                        root.contract == staking_address().to_string() && root.func == "add-stake"
-                    );
-                    let expected_stake = expected_stakes.entry(signer).or_default();
-                    *expected_stake = add_decimal(*expected_stake, Decimal::from("0.001"))?;
-                    let stake = staking::wave::add_stake_parse_return_expr(value)?;
-                    ensure!(stake.stake == *expected_stake && stake.withdrawal_height.is_none());
-                }
-                18..=19 => {
-                    ensure!(root.contract == self.crypto.to_string() && root.func == "set-hash");
-                    let expected =
-                        Sha256::digest(format!("round-{round}-slot-{slot}").as_bytes()).to_vec();
-                    ensure!(from_wave_expr::<Vec<u8>>(value) == expected);
-                }
-                _ => unreachable!(),
-            }
+            self.check_return(root, index, signer, &mut expected_stakes)?;
             if nested {
                 let children: Vec<_> = all
                     .iter()
@@ -648,7 +757,7 @@ impl MixedWorkload {
             ) == (0..slice.operations.end)
                 .rev()
                 .find(|index| matches!(index % 20, 18..=19))
-                .or_else(|| (self.step > 0).then_some(self.rounds * 20 - 1))
+                .or(self.previous_hash_index)
                 .map(|index| Sha256::digest(
                     format!("round-{}-slot-{}", index / 20, index % 20).as_bytes()
                 )

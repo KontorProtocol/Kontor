@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use super::super::ANCHOR_HEIGHT;
 
 mod dispatch;
+mod run;
 mod tests;
+mod work;
 
 const BLOCK_SECONDS: u64 = 600;
 

@@ -107,6 +107,26 @@ impl BatchProof {
             )
             .await?;
         ensure!(outcome == BatchOutcome::Executed, "batch was not executed");
+        Self::capture(
+            trial,
+            reveals,
+            first_confirmation_index,
+            anchor_height,
+            height,
+            checkpoint_directory,
+        )
+        .await
+    }
+
+    pub(super) async fn capture(
+        trial: &Reactor<RuntimeExecutor>,
+        reveals: &[Transaction],
+        first_confirmation_index: usize,
+        anchor_height: u64,
+        height: u64,
+        checkpoint_directory: &Path,
+    ) -> Result<Self> {
+        ensure!(!reveals.is_empty() && trial.last_height == anchor_height);
         let conn = trial.db_conn();
         let all_paid = receipts(&conn, anchor_height).await?;
         let mut transactions = Vec::new();

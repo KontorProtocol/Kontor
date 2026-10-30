@@ -2,7 +2,7 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Error, Result, anyhow, ensure};
@@ -23,6 +23,11 @@ use crate::runtime::{Runtime, from_wave_expr};
 
 const CLIENTS: usize = 8;
 const PAGE_SAMPLES: usize = 5;
+
+pub(super) struct CounterProgress {
+    pub(super) maximum: u64,
+    pub(super) completed: Arc<AtomicU64>,
+}
 
 async fn check_connection(runtime: &Runtime) -> Result<()> {
     let mut rows = runtime.storage.conn.query("PRAGMA query_only", ()).await?;
@@ -62,6 +67,30 @@ pub(super) async fn run_steps<T>(
     work: impl Future<Output = Result<T>>,
 ) -> Result<T> {
     ensure!(matches!(steps, 1 | 2 | 6 | 7));
+    let maximum = config.map_or(0, |config| config.transactions / 10 * 4 * steps);
+    let maximum = u64::try_from(maximum)?;
+    run_progress(
+        directory,
+        filename,
+        config,
+        before,
+        CounterProgress {
+            maximum,
+            completed: Arc::new(AtomicU64::new(maximum)),
+        },
+        work,
+    )
+    .await
+}
+
+pub(super) async fn run_progress<T>(
+    directory: &Path,
+    filename: &str,
+    config: Option<MixedConfig>,
+    before: &Value,
+    progress: CounterProgress,
+    work: impl Future<Output = Result<T>>,
+) -> Result<T> {
     let Some(config) = config.filter(|config| config.view_concurrency > 0) else {
         return work.await;
     };
@@ -88,7 +117,7 @@ pub(super) async fn run_steps<T>(
         height: ANCHOR_HEIGHT,
         tx_index: 7,
     };
-    let expected_counter = u64::try_from(config.transactions / 10 * 4 * steps)?;
+    let expected_counter = progress.maximum;
     let mut connections = Vec::with_capacity(CLIENTS);
     // All fallible setup precedes the barrier, so a failed checkout cannot strand workers.
     for _ in 0..CLIENTS {
@@ -117,6 +146,7 @@ pub(super) async fn run_steps<T>(
     let peak = Arc::new(AtomicUsize::new(0));
     let mut workers = Vec::with_capacity(CLIENTS);
     for (client, first) in connections.into_iter().enumerate() {
+        let completed_counter = progress.completed.clone();
         let (pool, pages, counter) = (pool.clone(), pages.clone(), counter.clone());
         let (barrier, stopped, writer_succeeded, active, peak, writer_started) = (
             barrier.clone(),
@@ -166,7 +196,7 @@ pub(super) async fn run_steps<T>(
             if writer_succeeded.load(Ordering::SeqCst) {
                 let mut runtime = pool.get().await?;
                 check_connection(&runtime).await?;
-                ensure!(counter_value(&mut runtime, &counter).await? == expected_counter, "view retained stale committed counter");
+                ensure!(counter_value(&mut runtime, &counter).await? == completed_counter.load(Ordering::SeqCst), "view retained stale committed counter");
             }
             Ok::<_, Error>(json!({"client":client,"completed":completed,"completed_during_writer":during_writer,"last_counter_during_work":last_counter}))
         }));

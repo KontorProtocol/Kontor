@@ -36,9 +36,51 @@ pub(super) struct FileWorkload {
     growth: Decimal,
     step_start: usize,
     step: u64,
+    api_namespace: bool,
+}
+
+#[derive(Clone)]
+pub(super) struct FileProgress {
+    created: usize,
+    folded: usize,
+    roots: Vec<Vec<u8>>,
+}
+
+impl FileProgress {
+    pub(super) fn advance(
+        &self,
+        recipe: &FileWorkload,
+        created_in_recipe: usize,
+        fold: bool,
+    ) -> Result<Self> {
+        ensure!(created_in_recipe <= recipe.len());
+        let created = recipe.step_start + created_in_recipe;
+        ensure!(created >= self.created, "file progress moved backwards");
+        let mut next = self.clone();
+        next.created = created;
+        if fold && next.created > next.folded {
+            next.roots.push(recipe.aggregate_prefix(next.created)?);
+            next.folded = next.created;
+        }
+        Ok(next)
+    }
+
+    pub(super) async fn check(&self, runtime: &mut Runtime, recipe: &FileWorkload) -> Result<()> {
+        recipe
+            .check_prefix(runtime, self.created, self.folded, &self.roots)
+            .await
+    }
 }
 
 impl FileWorkload {
+    pub(super) fn initial_progress(&self) -> Result<FileProgress> {
+        ensure!(self.step_start == 0);
+        Ok(FileProgress {
+            created: 0,
+            folded: 0,
+            roots: vec![self.aggregate_prefix(0)?],
+        })
+    }
     pub(super) async fn prepare(runtime: &mut Runtime, count: usize) -> Result<Self> {
         let baseline_count = api::agreement_count(runtime).await?;
         let mut existing = api::get_all_active_agreements(runtime).await?;
@@ -78,6 +120,7 @@ impl FileWorkload {
             growth,
             step_start: 0,
             step: 0,
+            api_namespace: false,
         };
         workload.roots.push(workload.aggregate_root()?);
         workload.append(count)?;
@@ -86,14 +129,38 @@ impl FileWorkload {
 
     pub(super) fn next_step(&self) -> Result<Self> {
         ensure!(self.step < 6, "sequence exceeds seven blocks");
+        self.next_recipe()
+    }
+
+    pub(super) fn next_recipe(&self) -> Result<Self> {
         let mut next = self.clone();
-        next.step += 1;
+        next.step = self
+            .step
+            .checked_add(1)
+            .context("file recipe index overflow")?;
         next.step_start = next.agreements.len();
         next.append(self.len())?;
         Ok(next)
     }
 
+    pub(super) fn api_descriptors(&self, count: usize) -> Result<Self> {
+        let mut next = self.clone();
+        next.agreements.clear();
+        next.roots.clear();
+        next.step_start = 0;
+        next.step = 0;
+        next.api_namespace = true;
+        next.roots.push(next.aggregate_root()?);
+        next.append(count)?;
+        Ok(next)
+    }
+
     fn aggregate_root(&self) -> Result<Vec<u8>> {
+        self.aggregate_prefix(self.agreements.len())
+    }
+
+    fn aggregate_prefix(&self, created: usize) -> Result<Vec<u8>> {
+        ensure!(created <= self.agreements.len());
         let roots = self
             .initial_files
             .iter()
@@ -101,6 +168,7 @@ impl FileWorkload {
             .chain(
                 self.agreements
                     .iter()
+                    .take(created)
                     .map(|file| (&file.descriptor.root, file.descriptor.padded_len)),
             )
             .enumerate()
@@ -113,7 +181,7 @@ impl FileWorkload {
     }
 
     fn append(&mut self, count: usize) -> Result<()> {
-        ensure!(count > 0 && count <= 100);
+        ensure!(count > 0 && count <= if self.api_namespace { 20_000 } else { 100 });
         let mut ids = self.active_ids.clone();
         ids.extend(
             self.agreements
@@ -122,7 +190,9 @@ impl FileWorkload {
         );
         for index in 0..count {
             let mut digest = Sha256::new();
-            if self.step == 0 {
+            if self.api_namespace {
+                digest.update(b"kontor-timed-api-file-v1");
+            } else if self.step == 0 {
                 digest.update(b"kontor-signed-workload-file-v1");
             } else {
                 digest.update(b"kontor-signed-workload-file-sequence-v1");
@@ -130,7 +200,9 @@ impl FileWorkload {
             }
             digest.update(u64::try_from(index)?.to_be_bytes());
             let nonce: [u8; 32] = digest.finalize().into();
-            let suffix = if self.step == 0 {
+            let suffix = if self.api_namespace {
+                format!("api-{index}")
+            } else if self.step == 0 {
                 index.to_string()
             } else {
                 format!("{}-{index}", self.step)
@@ -180,6 +252,13 @@ impl FileWorkload {
 
     pub(super) fn len(&self) -> usize {
         self.agreements.len() - self.step_start
+    }
+
+    pub(super) fn ids(&self) -> Vec<String> {
+        self.agreements[self.step_start..]
+            .iter()
+            .map(|file| file.descriptor.file_id.clone())
+            .collect()
     }
 
     pub(super) fn call(&self, round: usize) -> String {
