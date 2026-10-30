@@ -218,7 +218,7 @@
     },
     "guest_lockfile": {
       "path": "test-contracts/Cargo.lock",
-      "sha256": "22e0cfec8b95a0cfb170f8737ca585f3151507303d02cc151013ab641c16d392"
+      "sha256": "62b789c6f6160e3b264b35799c571631111e2323a6b031089c031f80a5f9f883"
     },
     "indexer_build_script": {
       "path": "core/indexer/build.rs",
