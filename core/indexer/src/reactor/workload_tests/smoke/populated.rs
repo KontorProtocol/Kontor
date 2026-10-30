@@ -57,7 +57,7 @@ mod simulation_requests;
 mod timed;
 mod views;
 
-use aggregate_boundary::CounterBoundary;
+use aggregate_boundary::{BoundaryOperation, BoundaryWorkload};
 use batch::BatchProof;
 use batch::pending::Pending;
 use checkpoint::Checkpoint;
@@ -85,6 +85,7 @@ enum Delivery {
     AggregateBoundary,
     BlockCapacity,
     MaxGasBlock,
+    PublicationBlock,
     MixedPagination,
     MixedFiles,
     Configured(MixedConfig),
@@ -92,7 +93,10 @@ enum Delivery {
 
 impl Delivery {
     fn full_block(self) -> bool {
-        matches!(self, Self::BlockCapacity | Self::MaxGasBlock)
+        matches!(
+            self,
+            Self::BlockCapacity | Self::MaxGasBlock | Self::PublicationBlock
+        )
     }
 
     fn mixed_rounds(self) -> Option<usize> {
@@ -395,6 +399,21 @@ async fn workload_full_block_gas_exhaustion_preserves_accounting() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; full publication block diagnostic, not performance acceptance"]
+async fn workload_full_publication_block_preserves_accounting() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::PublicationBlock,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires local bitcoind; bounded storage cursor replay, not full W_op qualification"]
 async fn workload_pagination_preserves_order_and_boundaries() -> Result<()> {
     replay(
@@ -687,9 +706,13 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
     }
     let counter_boundary = if delivery == Delivery::AggregateBoundary || delivery.full_block() {
         Some(
-            CounterBoundary::prepare(
+            BoundaryWorkload::prepare(
                 &mut history.runtime,
-                (delivery == Delivery::MaxGasBlock).then(|| addresses[0].clone()),
+                match delivery {
+                    Delivery::MaxGasBlock => BoundaryOperation::ExhaustFuel(addresses[0].clone()),
+                    Delivery::PublicationBlock => BoundaryOperation::Publish,
+                    _ => BoundaryOperation::Increment,
+                },
             )
             .await?,
         )

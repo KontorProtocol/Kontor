@@ -29,9 +29,10 @@ BOUNDARY_REPLAYS = (
     "reactor::workload_tests::smoke::populated::workload_aggregate_operation_limit_preserves_accounting",
     "reactor::workload_tests::smoke::populated::workload_full_block_capacity_preserves_accounting",
     "reactor::workload_tests::smoke::populated::workload_full_block_gas_exhaustion_preserves_accounting",
+    "reactor::workload_tests::smoke::populated::workload_full_publication_block_preserves_accounting",
 )
 BOUNDARY_DELIVERIES = dict(zip(BOUNDARY_REPLAYS,
-                               ("AggregateBoundary", "BlockCapacity", "MaxGasBlock"), strict=True))
+                               ("AggregateBoundary", "BlockCapacity", "MaxGasBlock", "PublicationBlock"), strict=True))
 BLOCK_SERVICE_TARGET_NS = 60 * 1_000_000_000
 
 

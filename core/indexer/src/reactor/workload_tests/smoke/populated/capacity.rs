@@ -140,7 +140,7 @@ pub(super) async fn block(
             "coinbase_weight": coinbase_weight, "next_pair_weight": next_pair_weight,
             "weight_with_next_pair": next_block_weight,
             "raw_block_sha256": hex::encode(Sha256::digest(bytes)),
-            "claim": "maximum prefix of admitted one-call commit/reveal pairs; not all possible Bitcoin encodings"
+            "claim": "maximum prefix of admitted one-operation commit/reveal pairs; not all possible Bitcoin encodings"
         })
     );
     Ok((block, reveals))
