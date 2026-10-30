@@ -410,6 +410,29 @@ This is one local diagnostic cell with `qualification_status: missing`. The
 1 MiB write is Core fixture setup after a paid rejection. The other five cells
 and cross-node semantic comparisons remain required for S2 qualification.
 
+At source `b696727cbf0e189370399a1d3f29b0fbd7227da8`, the Linux ARM64
+development native staking reward capture completed four isolated children and
+32 attempts at populations 0, 4, 32, and 128, each repeated twice. The
+standalone validator accepted all four runs. The two observed children recorded
+28 created and 28 destroyed Stores, with no live invocation after any attempt.
+Valid seeded x-only keys resolved to canonical signer IDs in the guest; the
+validator checked that binding and holder-string ordering, including the final
+holder's rounding residue. It also checked the independently calculated
+emission, unchanged storage emission budget, validator status and withdrawal
+metadata, full measured receipts, and state restoration across roles, repeats,
+and worker stack settings. The exact-source build attestation SHA-256 is
+`da76d2b90f2fd1dd2f0aa9e29646e376745b1afa92de240215f9a761ee96d359`;
+the test binary SHA-256 is
+`cc7a4162c528df1f10ebe7344fe4adafec511ec89293ecf6fe2f7b99090facf9`.
+The guard control SHA-256 is
+`dbe86e1ff4947ac3f5304947385423b3ff53a4e0e1b91097fe269c4e424cedd0`,
+and the capture SHA-256 is
+`bc889579a15ef6929073d2c67395293fdf92032553ff1be1e33c22c6f556e2f4`.
+This is one local diagnostic cell with `qualification_status: missing`. The
+other five cells and cross-node comparisons remain required for S2
+qualification. It does not establish performance, production recovery, or
+capacity policy.
+
 At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
 development canonical capture completed 12 child processes, 56 attempts, and
 268 closed Store lifecycles. The standalone validator accepted all 12 runs.
