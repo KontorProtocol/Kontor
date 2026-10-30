@@ -20,6 +20,7 @@ from resource_manifest import MANIFEST, build_manifest
 
 CASE_ID = "native_staking_rewards"
 POPULATIONS = (0, 4, 32, 128)
+FIRST_GENESIS_SIGNER_ID = 7
 SAMPLES = tuple(f"population_{count}" for count in POPULATIONS)
 KEY_FINGERPRINTS = {
     0: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -84,6 +85,9 @@ def validate_receipts(receipts, population):
             "input_index", "op_index", "result_index"}
     for index, (receipt, (contract, function)) in enumerate(zip(
             receipts, expected, strict=True)):
+        payer = receipt.get("payer_signer_id") if isinstance(receipt, dict) else None
+        payer_ok = ((type(payer) is int and payer == 1)
+                    if contract == "staking" else payer is None)
         require(isinstance(receipt, dict) and set(receipt) == keys
                 and receipt["contract"] == contract
                 and receipt["function"] == function
@@ -94,7 +98,7 @@ def validate_receipts(receipts, population):
                 and receipt["size"] == len(receipt["value"].encode())
                 and type(receipt["signer_id"]) is int
                 and receipt["signer_id"] == 1
-                and receipt["payer_signer_id"] is None
+                and payer_ok
                 and type(receipt["height"]) is int
                 and receipt["height"] == 1
                 and all(receipt[field] is None for field in
@@ -199,15 +203,25 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
     prior_holder = None
     for index, entry in enumerate(accounts):
         require(isinstance(entry, dict) and set(entry) == {
-            "holder", "ed25519_pubkey", "stake_before", "stake_after"},
+            "holder", "source_x_only_pubkey", "ed25519_pubkey",
+            "stake_before", "stake_after"},
             "staking reward account fields changed")
-        holder, edkey = entry["holder"], entry["ed25519_pubkey"]
-        require(isinstance(holder, str) and re.fullmatch(r"[0-9a-f]{64}", holder)
+        holder, source_key, edkey = (entry[key] for key in
+                                     ("holder", "source_x_only_pubkey",
+                                      "ed25519_pubkey"))
+        require(isinstance(holder, str) and re.fullmatch(r"[1-9][0-9]*", holder)
+                and isinstance(source_key, str)
+                and re.fullmatch(r"[0-9a-f]{64}", source_key)
                 and isinstance(edkey, str) and re.fullmatch(r"[0-9a-f]{64}", edkey)
                 and (prior_holder is None or prior_holder < holder),
                 "staking reward holder ordering or metadata changed")
+        key_index = int(edkey[:2], 16)
+        require(1 <= key_index <= population
+                and edkey == bytes([key_index] * 32).hex()
+                and holder == str(FIRST_GENESIS_SIGNER_ID + key_index - 1),
+                "staking reward source key and canonical signer binding changed")
         prior_holder = holder
-        fingerprint_parts.append(holder + ":" + edkey)
+        fingerprint_parts.append(source_key + ":" + edkey)
         stake_before = amount(entry["stake_before"], "stake_before")
         stake_after = amount(entry["stake_after"], "stake_after")
         remaining = expected - credited
@@ -237,7 +251,7 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
                 and metadata["withdrawal_height"] is None,
                 "staking reward validator status or transition metadata changed")
         credited += share
-    fingerprint = hashlib.sha256("\n".join(fingerprint_parts).encode()).hexdigest()
+    fingerprint = hashlib.sha256("\n".join(sorted(fingerprint_parts)).encode()).hexdigest()
     require(fingerprint == KEY_FINGERPRINTS[population] and credited == expected,
             "staking reward fixed holder metadata or credited total changed")
     if role == "target_observed":

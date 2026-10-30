@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::process;
 use std::sync::Arc;
 use std::time::Instant;
@@ -8,13 +9,15 @@ use libsql::{Connection, params};
 use serde_json::{Value as JsonValue, json};
 
 use super::sweep::persistent_digest;
-use crate::database::queries::{get_contract_id_from_address, get_contract_signer_id};
+use crate::database::queries::{
+    get_contract_id_from_address, get_contract_signer_id, get_identity,
+};
 use crate::database::types::CORE_SIGNER_ID;
 use crate::runtime::invocation::{InvocationBudget, ResourceProbePhase, ResourceTeardownRecorder};
 use crate::runtime::numerics::{add_decimal, div_decimal, mul_decimal, sub_decimal};
 use crate::runtime::resource_diagnostics;
 use crate::runtime::staking::address as staking_address;
-use crate::runtime::staking::api::{self as staking_api, ActiveValidatorInfo};
+use crate::runtime::staking::api::{self as staking_api, ActiveValidatorInfo, ValidatorStatus};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -24,6 +27,8 @@ use crate::test_utils::test_runtime_with_engine;
 const CASE_ID: &str = "native_staking_rewards";
 const POPULATIONS: [usize; 4] = [0, 4, 32, 128];
 const INITIAL_STAKE: &str = "1000";
+// The test genesis creates one Core signer and five native contract signers first.
+const FIRST_GENESIS_SIGNER_ID: u64 = 7;
 
 async fn receipt_count(conn: &Connection) -> Result<u64> {
     let mut rows = conn
@@ -85,13 +90,29 @@ async fn new_receipts(
                     .as_ref()
                     .is_some_and(|value| !value.is_empty() && value.len() as u64 == size)
                 && signer_id == CORE_SIGNER_ID
-                && payer_signer_id.is_none()
+                && payer_signer_id
+                    == if contract == "staking" {
+                        Some(CORE_SIGNER_ID)
+                    } else {
+                        None
+                    }
                 && height == 1
                 && tx_id.is_none()
                 && input_index.is_none()
                 && op_index.is_none()
                 && result_index == result.len() as u64,
-            "staking reward receipt fields or order changed"
+            "staking reward receipt fields or order changed: identity={:?} details={:?} expected={:?}",
+            (
+                contract.as_str(),
+                function.as_str(),
+                status.as_str(),
+                signer_id,
+                payer_signer_id,
+                height,
+                result_index
+            ),
+            (gas, size, value.as_deref(), tx_id, input_index, op_index),
+            expected.get(result.len())
         );
         result.push(json!({
             "contract": contract, "function": function, "status": status,
@@ -119,24 +140,23 @@ async fn validator_metadata(
     let stake = staking_api::get_stake(runtime, &expected.x_only_pubkey)
         .await?
         .ok_or_else(|| anyhow::anyhow!("staking reward stake metadata missing"))?;
-    let status = format!("{:?}", info.status);
     ensure!(
         info.x_only_pubkey == expected.x_only_pubkey
             && info.ed25519_pubkey == expected.ed25519_pubkey
             && info.stake == expected.stake
             && stake.stake == expected.stake
-            && status == "Active"
+            && info.status == ValidatorStatus::Active
             && info.activation_height == 0
             && info.deactivation_height == 0
             && stake.withdrawal_height.is_none(),
-        "staking reward validator status or metadata changed"
+        "staking reward validator status or metadata changed: info={info:?} stake={stake:?} expected={expected:?}"
     );
     Ok(json!({
         "holder": info.x_only_pubkey,
         "ed25519_pubkey": hex::encode(&info.ed25519_pubkey),
         "validator_stake": info.stake.to_string(),
         "bonded_stake": stake.stake.to_string(),
-        "status": status,
+        "status": "Active",
         "activation_height": info.activation_height,
         "deactivation_height": info.deactivation_height,
         "withdrawal_height": stake.withdrawal_height,
@@ -228,6 +248,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
         runtime.set_context(1, None, None, None).await;
         let seeded = validators(population)?;
         staking_api::set_genesis_set(&mut runtime, &core, seeded.clone()).await?;
+        let conn = runtime.get_storage_conn();
         let active_before = staking_api::get_active_set(&mut runtime).await?;
         ensure!(
             active_before.len() == population
@@ -236,7 +257,30 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                     .all(|validator| validator.stake == Decimal::from(INITIAL_STAKE)),
             "staking reward genesis set changed"
         );
-        let mut expected_order = seeded.clone();
+        let mut expected_order = Vec::with_capacity(population);
+        let mut source_keys = BTreeMap::new();
+        for (index, validator) in seeded.iter().enumerate() {
+            let identity = get_identity(&conn, &validator.x_only_pubkey)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("staking reward genesis signer missing"))?;
+            let holder_id = identity.signer_id();
+            ensure!(
+                holder_id == index as u64 + FIRST_GENESIS_SIGNER_ID,
+                "staking reward genesis signer allocation changed"
+            );
+            let holder = holder_id.to_string();
+            ensure!(
+                source_keys
+                    .insert(holder.clone(), validator.x_only_pubkey.clone())
+                    .is_none(),
+                "staking reward genesis signer duplicated"
+            );
+            expected_order.push(ActiveValidatorInfo {
+                x_only_pubkey: holder,
+                ed25519_pubkey: validator.ed25519_pubkey.clone(),
+                stake: validator.stake,
+            });
+        }
         expected_order.sort_by(|a, b| a.x_only_pubkey.cmp(&b.x_only_pubkey));
         ensure!(
             active_before
@@ -245,7 +289,7 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 .all(|(a, b)| a.x_only_pubkey == b.x_only_pubkey
                     && a.ed25519_pubkey == b.ed25519_pubkey
                     && a.stake == b.stake),
-            "staking reward active holders changed order or metadata"
+            "staking reward active holders changed order or metadata: actual={active_before:?} expected={expected_order:?}"
         );
         let mut metadata_before = Vec::with_capacity(population);
         for validator in &active_before {
@@ -266,7 +310,6 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
             "reward storage emission budget differs from scheduled amount"
         );
         runtime.set_context(1, None, None, None).await;
-        let conn = runtime.get_storage_conn();
         let baseline_digest = persistent_digest(&conn).await?;
         let baseline_receipts = receipt_count(&conn).await?;
         let supply_before = token::total_supply(&mut runtime).await?;
@@ -340,8 +383,12 @@ pub(super) async fn run(configuration: &str, process_role: &str) -> Result<JsonV
                 );
                 metadata_after.push(validator_metadata(&mut runtime, after).await?);
                 credited = add_decimal(credited, sub_decimal(after.stake, before.stake)?)?;
+                let source_key = source_keys
+                    .get(&after.x_only_pubkey)
+                    .ok_or_else(|| anyhow::anyhow!("staking reward source key missing"))?;
                 accounts.push(json!({
                     "holder": after.x_only_pubkey,
+                    "source_x_only_pubkey": source_key,
                     "ed25519_pubkey": hex::encode(&after.ed25519_pubkey),
                     "stake_before": before.stake.to_string(),
                     "stake_after": after.stake.to_string(),

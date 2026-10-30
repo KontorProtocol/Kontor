@@ -33,11 +33,14 @@ def attempt(population):
     accounts = []
     metadata_before = []
     metadata_after = []
-    for index, (holder, key_index) in enumerate(KEYS[:population]):
+    ordered_keys = sorted(KEYS[:population], key=lambda item: str(6 + item[1]))
+    for index, (source_key, key_index) in enumerate(ordered_keys):
+        holder = str(6 + key_index)
         remaining = emission - credited
         share = remaining if index + 1 == population else min(
             q(emission / population), remaining)
         accounts.append({"holder": holder,
+                         "source_x_only_pubkey": source_key,
                          "ed25519_pubkey": bytes([key_index] * 32).hex(),
                          "stake_before": "1000",
                          "stake_after": str(Decimal(1000) + share)})
@@ -60,7 +63,8 @@ def attempt(population):
         receipts.append({"contract": contract, "function": function,
                          "status": "Ok", "gas": 100 + index,
                          "size": 2, "value": "ok", "signer_id": 1,
-                         "payer_signer_id": None, "height": 1,
+                         "payer_signer_id": 1 if contract == "staking" else None,
+                         "height": 1,
                          "tx_id": None, "input_index": None,
                          "op_index": None, "result_index": index})
     storage_budget = str(expected_storage_budget(Decimal(population * 1000)))
@@ -129,7 +133,8 @@ class NativeStakingRewardsEvidenceTests(unittest.TestCase):
 
     def test_rejects_holder_order_metadata_and_rounding(self):
         baseline = attempt(4)
-        for change in ("order", "metadata", "share", "last_share"):
+        for change in ("order", "metadata", "source_key", "holder_id",
+                       "share", "last_share"):
             with self.subTest(change=change):
                 item = copy.deepcopy(baseline)
                 accounts = item["observation"]["accounts"]
@@ -137,6 +142,10 @@ class NativeStakingRewardsEvidenceTests(unittest.TestCase):
                     accounts[0], accounts[1] = accounts[1], accounts[0]
                 elif change == "metadata":
                     accounts[0]["ed25519_pubkey"] = "ff" * 32
+                elif change == "source_key":
+                    accounts[0]["source_x_only_pubkey"] = "ff" * 32
+                elif change == "holder_id":
+                    accounts[0]["holder"] = "999"
                 elif change == "share":
                     accounts[0]["stake_after"] = "1000"
                 else:
@@ -191,6 +200,15 @@ class NativeStakingRewardsEvidenceTests(unittest.TestCase):
         item["observation"]["measured_receipts"].pop()
         with self.assertRaises(ValueError):
             self.validate(item)
+        for payer in (None, True, 1.0, 2):
+            zero = attempt(0)
+            zero["observation"]["measured_receipts"][0]["payer_signer_id"] = payer
+            with self.subTest(payer=payer), self.assertRaises(ValueError):
+                self.validate(zero)
+        zero = attempt(0)
+        del zero["observation"]["measured_receipts"][0]["payer_signer_id"]
+        with self.assertRaises(ValueError):
+            self.validate(zero)
 
     def test_zero_branch_and_store_lifecycle_are_distinct(self):
         item = attempt(0)
