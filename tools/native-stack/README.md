@@ -459,6 +459,31 @@ The other five cells and cross-node comparisons remain required for S2
 qualification. Larger-replica staged cleanup, injected recovery failures,
 complete reward accounting, and isolated service timing remain untested.
 
+At source `f678cf541e1aef3c8c1813fe8a87638f4b070cf7`, the Linux ARM64
+development Brotli raw-ceiling capture completed four isolated children and
+16 attempts. Each child twice published a valid component whose decompressed
+module was exactly 67,108,864 bytes, then twice submitted a module with one
+more padding byte in its trailing custom section. The accepted publication
+reached `init`, used 40,523 system fuel, and wrote one `Ok` receipt with gas 41
+and the expected contract address. The over-ceiling publication returned a
+deterministic content error before compilation, a Store, metered fuel use, or
+a receipt. The standalone validator accepted all four runs. It checked the
+exact raw-byte hashes, blocking-thread decode traces and stack capacities,
+the init receipt, full persistent-state restoration, and equal outcomes across
+repeats, roles, and worker stack settings. The exact-source build attestation
+SHA-256 is
+`8f703b94d01c59af3d8489bb15d0d7855a19c32b26e339e70dea70ab0b8fe11f`;
+the test binary SHA-256 is
+`7d5e186a08c66542151b8728b1be3efd8cb376a26e1d15940bb8023a795f2d81`.
+The guard control SHA-256 is
+`7695d9c969ba78168823ce8e8d80df142924f21494ccac357698da69e243f8eb`,
+and the capture SHA-256 is
+`fcc44584bc1201646d412781552c7c1f8099f956030bfb57fb00c536d3105fd8`.
+This is one local diagnostic cell with `qualification_status: missing`.
+The other five cells, cross-node parity, and operational qualification remain
+open. The capture does not establish that all valid components fit within
+the ceiling or that near-boundary publication meets service targets.
+
 At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
 development canonical capture completed 12 child processes, 56 attempts, and
 268 closed Store lifecycles. The standalone validator accepted all 12 runs.
