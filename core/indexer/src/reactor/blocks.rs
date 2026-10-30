@@ -42,6 +42,13 @@ impl<E: Executor> Reactor<E> {
     /// the finality path can now too, because tracking is rehydrated from disk and a
     /// node that missed a verdict may carry a batch anchored far below its tip.
     pub(super) fn check_rollback_depth(&self, to_height: u64) -> Result<()> {
+        if to_height < self.prune_watermark {
+            bail!(
+                "rollback to height {to_height} is below persisted prune watermark {}; \
+                 pruned state cannot be rolled back locally, re-sync required",
+                self.prune_watermark
+            );
+        }
         if !self.prune.enabled {
             return Ok(());
         }

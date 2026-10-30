@@ -57,7 +57,8 @@ use crate::{
     database::{
         self,
         queries::{
-            insert_block, select_block_at_height, select_block_latest, select_unconfirmed_batch_tx,
+            PRUNE_WATERMARK_KEY, get_meta_u64, insert_block, select_block_at_height,
+            select_block_latest, select_unconfirmed_batch_tx,
         },
     },
     runtime::{ComponentCache, GenesisParameters, Runtime, Storage},
@@ -1029,17 +1030,11 @@ pub fn run(
                     consensus_listen_addr,
                 );
 
-                // Resume incremental pruning from where we left off (persisted in
-                // node_meta), so a restart doesn't re-scan all finalized history.
-                if prune.enabled {
-                    reactor.prune_watermark = database::queries::get_meta_u64(
-                        &reactor.db_conn(),
-                        database::queries::PRUNE_WATERMARK_KEY,
-                        0,
-                    )
-                    .await
-                    .context("loading prune watermark failed")?;
-                }
+                // Changing the pruning configuration cannot restore deleted history.
+                reactor.prune_watermark =
+                    get_meta_u64(&reactor.db_conn(), PRUNE_WATERMARK_KEY, 0)
+                        .await
+                        .context("loading prune watermark failed")?;
 
                 reactor.run().await
             }

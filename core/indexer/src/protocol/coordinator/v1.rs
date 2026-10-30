@@ -11,6 +11,9 @@ pub(crate) use replay::build_replay_queue;
 
 pub const FINALITY_WINDOW: u64 = 6;
 
+// Invalidating an anchor at its deadline restores the anchor's predecessor.
+pub const FINALITY_ROLLBACK_DEPTH: u64 = FINALITY_WINDOW + 1;
+
 /// Bitcoin height by which a batch anchored at `anchor_height` must have its
 /// transactions confirmed, or the batch is void and its anchor rolls back.
 pub const fn deadline_for(anchor_height: u64) -> u64 {
