@@ -15,6 +15,8 @@ pub(crate) mod lite_executor;
 pub mod mempool_fee_index;
 pub mod mock_bitcoin;
 #[cfg(test)]
+mod pruning_tests;
+#[cfg(test)]
 mod reactor_cluster_tests;
 #[cfg(test)]
 mod startup_tests;
