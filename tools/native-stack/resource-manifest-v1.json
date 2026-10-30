@@ -246,11 +246,11 @@
     },
     "native_filestorage_lifecycle_validator": {
       "path": "tools/native-stack/resource_native_filestorage_lifecycle_evidence.py",
-      "sha256": "1c14ba778211e6f4779f206f2f4fac9478d70c8b3baaa5c9c9dff58caa347baf"
+      "sha256": "ba27265a97d0d854fbd85be339945ee9611cb69ef3352c958c8a79db495fd7b8"
     },
     "native_filestorage_lifecycle_validator_tests": {
       "path": "tools/native-stack/test_resource_native_filestorage_lifecycle_evidence.py",
-      "sha256": "8b74f81e6feeec08f31d0dbab5932c46b9307861ea43987c6a5185cae3c03081"
+      "sha256": "9a1701c92694f9082bdc51ceb8009e00d426cb22ed3b0116e019f83f2b628760"
     },
     "native_filestorage_rewards": {
       "path": "native-contracts/filestorage/src/rewards.rs",

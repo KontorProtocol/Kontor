@@ -7,6 +7,14 @@ from resource_native_filestorage_lifecycle_evidence import (
     validate_observation, validate_operation_phases)
 
 
+def wit_decimal(value):
+    raw = value * 10**18
+    limbs = [(raw >> (64 * index)) & (2**64 - 1) for index in range(4)]
+    return ("{r0: " + str(limbs[0]) + ", r1: " + str(limbs[1]) +
+            ", r2: " + str(limbs[2]) + ", r3: " + str(limbs[3]) +
+            ", sign: plus}")
+
+
 def teardown(roles):
     return [{"id": index, "role": role, "kind": kind,
              "table_alive": False if kind == "table_destroyed" else None}
@@ -28,8 +36,12 @@ def attempt(sample):
     pairs.append(("filestorage", function))
     receipts = []
     for index, (contract, receipt_function) in enumerate(pairs):
-        value = ("ok({src: signer-id(4), amt: 1})" if contract == "token" else
-                 "ok({burned: 1})" if contract == "staking" else
+        penalty_number = index // 2 + 1
+        value = ("ok({src: signer-id(4), amt: " + wit_decimal(30) + "})"
+                 if contract == "token" else
+                 "ok({burned: " + wit_decimal(30) +
+                 ", remaining: " + wit_decimal(9000 - 30 * penalty_number) +
+                 "})" if contract == "staking" else
                  "32" if sample == "expiry" else
                  "ok(32)" if sample == "penalty" else "ok(9)")
         receipts.append({
@@ -158,7 +170,8 @@ class FilestorageLifecycleEvidenceTests(unittest.TestCase):
         baseline = attempt("penalty")
         self.validate(baseline)
         for change in ("missing_burn", "reversed_pair", "wrong_signer",
-                       "wrong_payer", "wrong_root_value"):
+                       "wrong_payer", "wrong_root_value",
+                       "wrong_burn_amount", "wrong_remaining"):
             with self.subTest(change=change):
                 item = copy.deepcopy(baseline)
                 receipts = item["observation"]["measured_receipts"]
@@ -172,7 +185,18 @@ class FilestorageLifecycleEvidenceTests(unittest.TestCase):
                 elif change == "wrong_payer":
                     receipts[1]["payer_signer_id"] = 1
                 else:
-                    receipts[-1]["value"] = "ok(31)"
+                    if change == "wrong_root_value":
+                        receipts[-1]["value"] = "ok(31)"
+                    elif change == "wrong_burn_amount":
+                        receipts[0]["value"] = (
+                            "ok({src: signer-id(4), amt: " +
+                            wit_decimal(31) + "})")
+                        receipts[0]["size"] = len(receipts[0]["value"])
+                    else:
+                        receipts[1]["value"] = (
+                            "ok({burned: " + wit_decimal(30) +
+                            ", remaining: " + wit_decimal(9000) + "})")
+                        receipts[1]["size"] = len(receipts[1]["value"])
                 with self.assertRaises(ValueError):
                     self.validate(item)
 

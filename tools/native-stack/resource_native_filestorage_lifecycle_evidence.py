@@ -42,6 +42,9 @@ RECEIPT_KEYS = {
     "signer_id", "payer_signer_id", "height", "tx_id", "input_index",
     "op_index", "result_index",
 }
+DECIMAL_RECORD = (
+    r"\{r0: ([0-9]+), r1: ([0-9]+), r2: ([0-9]+), "
+    r"r3: ([0-9]+), sign: plus\}")
 
 
 def decimal(value, label):
@@ -107,6 +110,36 @@ def validate_receipts(receipts, sample):
                 and type(receipt["result_index"]) is int
                 and receipt["result_index"] == index,
                 "filestorage receipt content or order changed")
+
+
+def record_decimal(parts):
+    limbs = [int(part) for part in parts]
+    require(len(limbs) == 4 and all(0 <= limb < 2**64 for limb in limbs),
+            "filestorage receipt decimal limb changed")
+    return Decimal(sum(limb << (64 * index)
+                       for index, limb in enumerate(limbs))) / Decimal(10**18)
+
+
+def validate_penalty_receipt_values(receipts, challenge_ids, requirements):
+    ordered = sorted(zip(challenge_ids, requirements, strict=True))
+    remaining = Decimal(9000)
+    for index, (_, required) in enumerate(ordered):
+        burn, slash = receipts[2 * index:2 * index + 2]
+        token = re.fullmatch(
+            r"ok\(\{src: signer-id\(4\), amt: " + DECIMAL_RECORD + r"\}\)",
+            burn["value"])
+        staking = re.fullmatch(
+            r"ok\(\{burned: " + DECIMAL_RECORD +
+            r", remaining: " + DECIMAL_RECORD + r"\}\)",
+            slash["value"])
+        require(token is not None and staking is not None,
+                "filestorage nested penalty result shape changed")
+        amount = required * 30
+        remaining -= amount
+        require(record_decimal(token.groups()) == amount
+                and record_decimal(staking.groups()[:4]) == amount
+                and record_decimal(staking.groups()[4:]) == remaining,
+                "filestorage penalty receipt amount or challenge order changed")
 
 
 def validate_observation(attempt, sample, repeat_index, role, configuration, pid):
@@ -211,6 +244,9 @@ def validate_observation(attempt, sample, repeat_index, role, configuration, pid
             and value["obligations_after"] is (not cleanup),
             "filestorage collateral, supply, reservation, or obligation changed")
     validate_receipts(value["measured_receipts"], sample)
+    if sample == "penalty":
+        validate_penalty_receipt_values(
+            value["measured_receipts"], ids, required)
     if role == "target_observed":
         nested = sum(receipt["contract"] != "token"
                      for receipt in value["measured_receipts"])
