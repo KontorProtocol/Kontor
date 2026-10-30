@@ -192,17 +192,26 @@ pub(super) fn measured_tokio_runtime(
     if let Some(size) = worker_stack_size {
         builder.thread_stack_size(size);
     }
+    // The start hook also observes blocking-pool threads before they claim a
+    // role. Parking proves this thread is running a scheduler worker.
     let runtime = builder
-        .on_thread_start(move || {
+        .on_thread_park(move || {
             let _ = sender.send(current_stack_range());
         })
         .build()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
     let first = receiver
-        .recv_timeout(Duration::from_secs(5))
-        .context("first macOS Tokio worker did not start")??;
-    let second = receiver
-        .recv_timeout(Duration::from_secs(5))
-        .context("second macOS Tokio worker did not start")??;
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .context("first macOS Tokio worker did not park")??;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let second = loop {
+        let candidate = receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .context("second distinct macOS Tokio worker did not park")??;
+        if candidate.thread_id != first.thread_id {
+            break candidate;
+        }
+    };
     ensure!(
         first.thread_id != second.thread_id && first.os_thread_id != second.os_thread_id,
         "macOS Tokio workers have duplicate identities"

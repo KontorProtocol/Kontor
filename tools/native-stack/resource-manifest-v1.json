@@ -254,7 +254,7 @@
     },
     "macos_worker_capacity_guard": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
-      "sha256": "515631f56b276ea7de506fc816d9e03c5d006b190cdea378d0c48679763f3757"
+      "sha256": "1e8747560d1e9903293d06fa21c445ca5a27ddc192b7c3791587da5f4aeaafcd"
     },
     "native_build_metadata": {
       "path": "native-contracts/binaries/build.json",
@@ -446,7 +446,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "196026e2dc51a5c23e5a9da033a1f556592af5002b3988089f47d350f800bbfc"
+      "sha256": "c71a5c6b5180dd77b16df6385e39588c694557698aa7d98abfb746b3843106fc"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -2162,7 +2162,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "196026e2dc51a5c23e5a9da033a1f556592af5002b3988089f47d350f800bbfc",
+    "source_sha256": "c71a5c6b5180dd77b16df6385e39588c694557698aa7d98abfb746b3843106fc",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -2314,7 +2314,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "196026e2dc51a5c23e5a9da033a1f556592af5002b3988089f47d350f800bbfc",
+    "sha256": "c71a5c6b5180dd77b16df6385e39588c694557698aa7d98abfb746b3843106fc",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

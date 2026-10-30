@@ -1528,19 +1528,28 @@ fn measured_tokio_runtime(
     if let Some(size) = worker_stack_size {
         builder.thread_stack_size(size);
     }
+    // Tokio's start hook also runs on blocking-pool threads before they claim a
+    // queued role. The park hook identifies an actual scheduler worker.
     let runtime = builder
-        .on_thread_start(move || {
+        .on_thread_park(move || {
             let _ = sender.send(current_linux_stack_range());
         })
         .build()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
     let first = receiver
-        .recv_timeout(Duration::from_secs(5))
-        .context("first Tokio worker did not start")?
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .context("first Tokio worker did not park")?
         .context("first Tokio worker stack capacity")?;
-    let second = receiver
-        .recv_timeout(Duration::from_secs(5))
-        .context("second Tokio worker did not start")?
-        .context("second Tokio worker stack capacity")?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let second = loop {
+        let candidate = receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .context("second distinct Tokio worker did not park")?
+            .context("second Tokio worker stack capacity")?;
+        if candidate.thread_id != first.thread_id {
+            break candidate;
+        }
+    };
     ensure!(
         first.thread_id != second.thread_id && first.os_thread_id != second.os_thread_id,
         "Tokio did not start distinct workers"
