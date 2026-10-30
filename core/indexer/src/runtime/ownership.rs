@@ -1417,6 +1417,13 @@ async fn supervise<T, F>(
             }
         }
     }
+    if RootState::load(&keeper.state) == RootState::Quarantined
+        && keeper.quiescent.load(Ordering::SeqCst)
+    {
+        // RootKeeper::Drop detaches a poisoned pool Object only after all task,
+        // Store, callback and SQL ownership has been proven quiescent.
+        registry.roots.lock().await.remove(&keeper.id);
+    }
 }
 
 async fn restore_with_deadline<T>(
@@ -1448,6 +1455,7 @@ async fn restore_with_deadline<T>(
 
 async fn restore<T>(keeper: &RootKeeper, result: Result<RootOutcome<T>>) -> Result<Result<T>> {
     let mut authority = keeper.authority.lock().await;
+    let stateful = matches!(authority.as_ref(), Some(RootAuthority::Stateful(_)));
     let runtime: &mut Runtime = authority.as_mut().expect("root authority retained");
     let wants_commit = result.as_ref().is_ok_and(|outcome| outcome.commit);
     let commit_authorized = wants_commit
@@ -1472,6 +1480,17 @@ async fn restore<T>(keeper: &RootKeeper, result: Result<RootOutcome<T>>) -> Resu
             .rollback_transaction()
             .await
             .context("root rollback failed")?;
+        if stateful
+            && (result.is_err()
+                || matches!(
+                    RootState::load(&keeper.state),
+                    RootState::Closing | RootState::Quarantined
+                ))
+        {
+            // A cancelled publication can have populated the cache under an id
+            // that the full rollback makes available to a different contract.
+            runtime.component_cache.clear();
+        }
     }
     if !commit_authorized {
         runtime.stack.clear().await;
@@ -1515,13 +1534,82 @@ async fn restore<T>(keeper: &RootKeeper, result: Result<RootOutcome<T>>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{token, wit::kontor::built_in::context::HolderRef};
+    use crate::reg_tester::random_x_only_pubkey;
+    use crate::runtime::wit::{Signer, kontor::built_in::context::HolderRef};
+    use crate::runtime::{ContractAddress, Decimal, native_provenance, token};
     use crate::test_utils::test_runtime;
     use bitcoin::Network;
     use deadpool::managed::Pool;
+    use indexer_types::Payment;
+    use std::future::poll_fn;
+    use std::sync::atomic::AtomicUsize;
+    use std::task::Poll;
     use tempfile::TempDir;
-    use tokio::sync::Notify;
+    use tokio::sync::{Barrier, Notify};
     use tokio::time::timeout;
+    use wasmtime::component::{Component, Linker};
+
+    const PURE_LOOP_COMPONENT: &str = r#"
+        (component
+          (core module $code
+            (func (export "run") (param $count i32) (result i32)
+              (local $total i32)
+              (block $done
+                (loop $again
+                  local.get $count i32.eqz br_if $done
+                  local.get $total i32.const 1 i32.add local.set $total
+                  local.get $count i32.const 1 i32.sub local.set $count
+                  br $again))
+              local.get $total))
+          (core instance $code (instantiate $code))
+          (func (export "run") (param "count" u32) (result u32)
+            (canon lift (core func $code "run"))))
+    "#;
+
+    fn rooted_store(runtime: &Runtime, kind: RootKind, fuel: u64) -> Result<InvocationStore> {
+        let mut runtime = runtime.clone();
+        let (sender, _receiver) = mpsc::channel(1);
+        runtime.ownership = Some(ChildContext::root(
+            RootId(99),
+            kind,
+            sender,
+            Arc::new(AtomicU8::new(RootState::Running as u8)),
+            Arc::new(BlockingRegistry::default()),
+        ));
+        runtime.make_store(fuel)
+    }
+
+    async fn run_pure_loop(
+        runtime: &Runtime,
+        component: &Component,
+        kind: RootKind,
+        count: u32,
+        fuel: u64,
+    ) -> Result<(Val, u64, bool)> {
+        let mut store = rooted_store(runtime, kind, fuel)?;
+        let linker = Linker::<Runtime>::new(&runtime.engine);
+        let instance = linker.instantiate_async(&mut store, component).await?;
+        let run = instance
+            .get_func(&mut store, "run")
+            .context("pure loop export missing")?;
+        let mut results = [Val::U32(0)];
+        let args = [Val::U32(count)];
+        let yielded = {
+            let invocation = run.call_async(&mut store, &args, &mut results);
+            tokio::pin!(invocation);
+            match poll_fn(|cx| Poll::Ready(invocation.as_mut().poll(cx))).await {
+                Poll::Ready(result) => {
+                    result?;
+                    false
+                }
+                Poll::Pending => {
+                    timeout(Duration::from_secs(10), invocation.as_mut()).await??;
+                    true
+                }
+            }
+        };
+        Ok((results[0].clone(), store.get_fuel()?, yielded))
+    }
 
     async fn one_object_pool(dir: &TempDir) -> Result<Pool<Manager>> {
         Ok(Pool::builder(Manager::new(
@@ -1574,7 +1662,9 @@ mod tests {
     #[tokio::test]
     async fn owned_native_view_matches_direct_guest_result() -> Result<()> {
         let (mut seed, dir, name) = test_runtime().await?;
+        let before = seed.start_usage();
         let baseline = token::api::balance(&mut seed, HolderRef::Burner).await?;
+        let baseline_usage = seed.finish_usage(before)?;
         drop(seed);
         let pool = Pool::builder(Manager::new(
             dir.path().to_path_buf(),
@@ -1589,15 +1679,17 @@ mod tests {
         let mut handle = service
             .start_pooled(object, |runtime| {
                 Box::pin(async move {
+                    let before = runtime.start_usage();
                     let value = token::api::balance(runtime, HolderRef::Burner).await?;
+                    let usage = runtime.finish_usage(before)?;
                     Ok(RootOutcome {
-                        value,
+                        value: (value, usage),
                         commit: false,
                     })
                 })
             })
             .await?;
-        assert_eq!(handle.result().await?, baseline);
+        assert_eq!(handle.result().await?, (baseline, baseline_usage));
         assert_eq!(service.active_roots().await, 0);
         Ok(())
     }
@@ -1612,6 +1704,413 @@ mod tests {
         lease.complete(&mut runtime).await?;
         assert_eq!(service.active_roots().await, 0);
         assert!(runtime.ownership.is_none());
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn api_fuel_yield_preserves_pure_pulley_result_fuel_and_gas() -> Result<()> {
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let component = Component::new(&runtime.engine, PURE_LOOP_COMPONENT)?;
+        let fuel = 20_000_000;
+        let api = run_pure_loop(&runtime, &component, RootKind::Api, 200_000, fuel).await?;
+        let canonical =
+            run_pure_loop(&runtime, &component, RootKind::Canonical, 200_000, fuel).await?;
+        let simulation =
+            run_pure_loop(&runtime, &component, RootKind::Simulation, 200_000, fuel).await?;
+        assert!(api.2, "API pure guest did not yield before completion");
+        assert!(!canonical.2, "canonical pure guest yielded");
+        assert!(!simulation.2, "simulation pure guest yielded");
+        assert_eq!(api.0, Val::U32(200_000));
+        assert_eq!((&api.0, api.1), (&canonical.0, canonical.1));
+        assert_eq!((&canonical.0, canonical.1), (&simulation.0, simulation.1));
+        assert_eq!(
+            runtime.gas_consumed(fuel, api.1),
+            runtime.gas_consumed(fuel, canonical.1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelling_fuel_yielding_guest_joins_before_pool_reuse() -> Result<()> {
+        let (seed, dir, name) = test_runtime().await?;
+        drop(seed);
+        let pool = Pool::builder(Manager::new(
+            dir.path().to_path_buf(),
+            name,
+            Network::Regtest,
+            100_000,
+        )?)
+        .max_size(1)
+        .build()?;
+        let object: Object<Manager> = pool.get().await?;
+        let cached = Component::new(&object.engine, PURE_LOOP_COMPONENT)?;
+        object
+            .component_cache
+            .put_admitted(u64::MAX, cached, PURE_LOOP_COMPONENT.len())
+            .await;
+        let service = OwnerService::new();
+        let entered = Arc::new(AtomicBool::new(false));
+        let guest_entered = entered.clone();
+        let handle = service
+            .start_pooled(object, move |runtime| {
+                Box::pin(async move {
+                    let component = Component::new(&runtime.engine, PURE_LOOP_COMPONENT)?;
+                    let mut store = runtime.make_store(500_000_000)?;
+                    let linker = Linker::<Runtime>::new(&runtime.engine);
+                    let instance = linker.instantiate_async(&mut store, &component).await?;
+                    let run = instance
+                        .get_func(&mut store, "run")
+                        .context("pure loop export missing")?;
+                    let mut results = [Val::U32(0)];
+                    guest_entered.store(true, Ordering::SeqCst);
+                    run.call_async(&mut store, &[Val::U32(20_000_000)], &mut results)
+                        .await?;
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: false,
+                    })
+                })
+            })
+            .await?;
+        timeout(Duration::from_secs(10), async {
+            while !entered.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(pool.status().available, 0);
+        drop(handle);
+        let object = timeout(Duration::from_secs(2), pool.get()).await??;
+        assert!(object.storage.conn.is_autocommit());
+        assert!(object.component_cache.get(&u64::MAX).await.is_some());
+        assert_eq!(service.active_roots().await, 0);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn eight_view_roots_measure_normal_and_cancelled_drain() -> Result<()> {
+        let (mut seed, dir, name) = test_runtime().await?;
+        let baseline = token::api::balance(&mut seed, HolderRef::Burner).await?;
+        drop(seed);
+        let pool = Pool::builder(Manager::new(
+            dir.path().to_path_buf(),
+            name,
+            Network::Regtest,
+            100_000,
+        )?)
+        .max_size(8)
+        .build()?;
+        let mut prewarmed = Vec::new();
+        for _ in 0..8 {
+            prewarmed.push(pool.get().await?);
+        }
+        drop(prewarmed);
+        let service = OwnerService::new();
+        let normal_started = Instant::now();
+        let mut normal = Vec::new();
+        for _ in 0..8 {
+            let object = pool.get().await?;
+            normal.push(
+                service
+                    .start_pooled(object, |runtime| {
+                        Box::pin(async move {
+                            Ok(RootOutcome {
+                                value: token::api::balance(runtime, HolderRef::Burner).await?,
+                                commit: false,
+                            })
+                        })
+                    })
+                    .await?,
+            );
+        }
+        for mut handle in normal {
+            assert_eq!(handle.result().await?, baseline);
+        }
+        let normal_elapsed = normal_started.elapsed();
+
+        let started = Arc::new(AtomicUsize::new(0));
+        let mut cancelled = Vec::new();
+        for _ in 0..8 {
+            let object = pool.get().await?;
+            let guest_started = started.clone();
+            cancelled.push(
+                service
+                    .start_pooled(object, move |runtime| {
+                        Box::pin(async move {
+                            let component = Component::new(&runtime.engine, PURE_LOOP_COMPONENT)?;
+                            let mut store = runtime.make_store(2_000_000_000)?;
+                            let linker = Linker::<Runtime>::new(&runtime.engine);
+                            let instance = linker.instantiate_async(&mut store, &component).await?;
+                            let run = instance
+                                .get_func(&mut store, "run")
+                                .context("pure loop export missing")?;
+                            let mut results = [Val::U32(0)];
+                            guest_started.fetch_add(1, Ordering::SeqCst);
+                            run.call_async(&mut store, &[Val::U32(100_000_000)], &mut results)
+                                .await?;
+                            Ok(RootOutcome {
+                                value: (),
+                                commit: false,
+                            })
+                        })
+                    })
+                    .await?,
+            );
+        }
+        timeout(Duration::from_secs(10), async {
+            while started.load(Ordering::SeqCst) != 8 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(pool.status().available, 0);
+        let cancelled_started = Instant::now();
+        drop(cancelled);
+        timeout(Duration::from_secs(5), async {
+            while service.active_roots().await != 0 || pool.status().available != 8 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        let cancelled_elapsed = cancelled_started.elapsed();
+        println!(
+            "eight owned view roots: normal_ms={}, cancel_drain_ms={}",
+            normal_elapsed.as_millis(),
+            cancelled_elapsed.as_millis()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_publication_rolls_back_outer_root_transaction() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let signer = Signer::Id(
+            runtime
+                .get_or_create_identity(&random_x_only_pubkey())
+                .await?,
+        );
+        token::api::issue_to(
+            &mut runtime,
+            &Signer::Core(Box::new(Signer::Nobody)),
+            HolderRef::from(&signer),
+            Decimal::from("1000000000000"),
+        )
+        .await??;
+        let payer_before = token::api::balance(&mut runtime, HolderRef::from(&signer)).await?;
+        let burner_before = token::api::balance(&mut runtime, HolderRef::Burner).await?;
+        let payment = Payment {
+            signer_id: signer.signer_id().context("test payer identity missing")?,
+            gas_limit: runtime.gas_limit_for_non_procs,
+        };
+        let service = OwnerService::new();
+        let owned = OwnedRuntimeSession::with_service(runtime, service.clone());
+        let published = Arc::new(Notify::new());
+        let published_id = Arc::new(AtomicU64::new(0));
+        let observed = published.notified();
+        tokio::pin!(observed);
+        observed.as_mut().enable();
+        let after_publish = published.clone();
+        let recorded_id = published_id.clone();
+        let published_signer = signer.clone();
+        let handle = service
+            .start_stateful(&owned.session, move |runtime| {
+                Box::pin(async move {
+                    runtime
+                        .publish(
+                            &published_signer,
+                            payment,
+                            "ownership-publish-cancel",
+                            include_bytes!(
+                                "../../../../test-contracts/binaries/error_test.wasm.br"
+                            ),
+                            &native_provenance()?,
+                        )
+                        .await
+                        .map_err(anyhow::Error::from)?;
+                    let address = ContractAddress {
+                        name: "ownership-publish-cancel".to_string(),
+                        height: 0,
+                        tx_index: 0,
+                    };
+                    let contract_id = runtime
+                        .storage
+                        .contract_id(&address)
+                        .await?
+                        .context("published contract row missing before cancellation")?;
+                    assert!(runtime.component_cache.get(&contract_id).await.is_some());
+                    recorded_id.store(contract_id, Ordering::SeqCst);
+                    after_publish.notify_one();
+                    pending::<()>().await;
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: true,
+                    })
+                })
+            })
+            .await?;
+        timeout(Duration::from_secs(10), observed).await?;
+        drop(handle);
+        let mut checkout = timeout(Duration::from_secs(2), owned.session.checkout()).await??;
+        let recovered = checkout
+            .runtime
+            .as_mut()
+            .context("restored runtime missing")?;
+        let address = ContractAddress {
+            name: "ownership-publish-cancel".to_string(),
+            height: 0,
+            tx_index: 0,
+        };
+        assert!(recovered.storage.contract_id(&address).await?.is_none());
+        let mut receipts = recovered
+            .storage
+            .conn
+            .query(
+                "SELECT COUNT(*) FROM contract_results WHERE contract_id = ?",
+                [published_id.load(Ordering::SeqCst)],
+            )
+            .await?;
+        assert_eq!(
+            receipts
+                .next()
+                .await?
+                .context("publication receipt count missing")?
+                .get::<i64>(0)?,
+            0
+        );
+        assert!(
+            recovered
+                .component_cache
+                .get(&published_id.load(Ordering::SeqCst))
+                .await
+                .is_none()
+        );
+        assert!(recovered.storage.conn.is_autocommit());
+        assert_eq!(
+            token::api::balance(recovered, HolderRef::from(&signer)).await?,
+            payer_before
+        );
+        assert_eq!(
+            token::api::balance(recovered, HolderRef::Burner).await?,
+            burner_before
+        );
+        assert_eq!(service.active_roots().await, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancellation_and_commit_authorization_have_one_durable_outcome() -> Result<()> {
+        let (runtime, _dir, _name) = test_runtime().await?;
+        runtime
+            .storage
+            .conn
+            .execute(
+                "CREATE TABLE ownership_commit_race (id INTEGER PRIMARY KEY)",
+                (),
+            )
+            .await?;
+        let mut runtime = runtime;
+
+        for id in 1..=10i64 {
+            let keeper = Arc::new(RootKeeper::new_stateful(RootId(id as u64), runtime));
+            {
+                let mut authority = keeper.authority.lock().await;
+                let runtime = authority.as_mut().expect("root authority retained");
+                runtime.storage.savepoint().await?;
+                runtime
+                    .storage
+                    .conn
+                    .execute("INSERT INTO ownership_commit_race (id) VALUES (?)", [id])
+                    .await?;
+            }
+            let committed = if id == 1 {
+                keeper.close();
+                restore(
+                    &keeper,
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: true,
+                    }),
+                )
+                .await?
+                .is_ok()
+            } else if id == 2 {
+                let committed = restore(
+                    &keeper,
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: true,
+                    }),
+                )
+                .await?
+                .is_ok();
+                keeper.close();
+                committed
+            } else {
+                let barrier = Arc::new(Barrier::new(3));
+                let cancellation_keeper = keeper.clone();
+                let cancellation_barrier = barrier.clone();
+                let cancellation = tokio::spawn(async move {
+                    cancellation_barrier.wait().await;
+                    cancellation_keeper.close();
+                });
+                let commit_keeper = keeper.clone();
+                let commit_barrier = barrier.clone();
+                let commit = tokio::spawn(async move {
+                    commit_barrier.wait().await;
+                    restore(
+                        &commit_keeper,
+                        Ok(RootOutcome {
+                            value: (),
+                            commit: true,
+                        }),
+                    )
+                    .await
+                });
+                barrier.wait().await;
+                cancellation.await?;
+                commit.await??.is_ok()
+            };
+            if id == 1 {
+                assert!(!committed, "cancellation won before authorization");
+            } else if id == 2 {
+                assert!(committed, "commit was authorized before cancellation");
+            }
+            let count = {
+                let authority = keeper.authority.lock().await;
+                let runtime = authority.as_ref().expect("root authority retained");
+                let mut rows = runtime
+                    .storage
+                    .conn
+                    .query(
+                        "SELECT COUNT(*) FROM ownership_commit_race WHERE id = ?",
+                        [id],
+                    )
+                    .await?;
+                rows.next()
+                    .await?
+                    .context("commit count missing")?
+                    .get::<i64>(0)?
+            };
+            assert_eq!(count, i64::from(committed));
+            assert_eq!(
+                RootState::load(&keeper.state),
+                if committed {
+                    RootState::Committing
+                } else {
+                    RootState::Closing
+                }
+            );
+            runtime = match keeper
+                .authority
+                .lock()
+                .await
+                .take()
+                .context("root authority missing after race")?
+            {
+                RootAuthority::Stateful(runtime) => runtime,
+                RootAuthority::Pooled(_) => unreachable!("race uses a stateful writer"),
+            };
+        }
         Ok(())
     }
 
@@ -1797,7 +2296,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn panic_quarantines_and_retains_pool_capacity() -> Result<()> {
+    async fn panic_discards_pool_object_after_quiescence() -> Result<()> {
         let dir = TempDir::new()?;
         let pool = one_object_pool(&dir).await?;
         let object = pool.get().await?;
@@ -1816,13 +2315,12 @@ mod tests {
             })
             .await?;
         assert!(handle.result().await.is_err());
-        assert_eq!(service.active_roots().await, 1);
-        assert!(
-            timeout(Duration::from_millis(30), pool.get())
-                .await
-                .is_err()
-        );
-        drop(service);
+        timeout(Duration::from_secs(2), async {
+            while service.active_roots().await != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
         let fresh = timeout(Duration::from_secs(2), pool.get()).await??;
         assert_ne!(Object::id(&fresh), poisoned_id);
         Ok(())
@@ -1845,10 +2343,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drain_timeout_keeps_the_pool_object_quarantined() -> Result<()> {
+    async fn drain_timeout_retains_capacity_until_blocking_work_finishes() -> Result<()> {
         let dir = TempDir::new()?;
         let pool = one_object_pool(&dir).await?;
         let object = pool.get().await?;
+        let poisoned_id = Object::id(&object);
         let service = OwnerService::new();
         let started = Arc::new(Notify::new());
         let work_started = started.clone();
@@ -1888,7 +2387,17 @@ mod tests {
         .await?;
         assert_eq!(pool.status().available, 0);
         assert_eq!(service.active_roots().await, 1);
+        assert_eq!(service.quarantined_roots().await, 1);
         release.send(())?;
+        timeout(Duration::from_secs(2), async {
+            while service.active_roots().await != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(service.quarantined_roots().await, 0);
+        let fresh = timeout(Duration::from_secs(2), pool.get()).await??;
+        assert_ne!(Object::id(&fresh), poisoned_id);
         Ok(())
     }
 
