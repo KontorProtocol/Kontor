@@ -114,7 +114,7 @@
     "own_adjacent_boundary": true,
     "repeats": 2
   },
-  "parent_manifest_sha256": "d61895af213c4706094adf36bc9ec40b20edddbf3913f7bf87c0ec3901273772",
+  "parent_manifest_sha256": "5a38065d38487985d11c60c2a0f018690882c68028a4490509fa5889fec5899b",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -212,7 +212,7 @@
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "26556a4d1ba10edf26b11a0c3af30b9c4eb757b9bf39c4d97b1e525ba94f9fc0"
+      "sha256": "1078f2ea15618db8eeac3588ec44c7aa99e80111622253d51c58fc3f916ab56d"
     }
   }
 }
