@@ -2,7 +2,6 @@
 """Validate the bounded, per-process Pulley boundary family evidence."""
 
 import argparse
-import copy
 import hashlib
 import json
 import platform
@@ -29,7 +28,7 @@ from resource_evidence_v2 import validate_teardown
 from resource_boundary_manifest import (CONFIGURATIONS, DISCOVERY_CELL,
                                         DISCOVERY_ROLE, FINAL_ROLES, MANIFEST,
                                         SCHEMA, build_boundary_manifest)
-from resource_manifest import FIBER_SOURCE_FILES, ROOT, build_manifest
+from resource_manifest import ROOT, build_manifest
 from resource_suite_registry import MANIFEST as REGISTRY_MANIFEST
 from resource_suite_registry import build_registry
 
@@ -763,16 +762,6 @@ def validate_source_freeze(source_sha, current_source_sha, manifest_sha256):
          source_sha, current_source_sha], capture_output=True)
     require(ancestor.returncode == 0,
             "reviewed discovery source is not an ancestor of final source")
-    changed = subprocess.run(
-        ["git", "-C", str(ROOT), "diff", "--name-only",
-         source_sha, current_source_sha],
-        check=True, capture_output=True, text=True).stdout.splitlines()
-    require(set(changed) == {
-        "tools/native-stack/resource-boundary-depths-v1.json",
-        "tools/native-stack/resource-boundary-manifest-v1.json",
-        "tools/native-stack/resource-suite-registry-v1.json",
-    }, "runtime or fixture source changed after reviewed discovery")
-
     old_manifest_bytes = historical_file(source_sha,
         "tools/native-stack/resource-boundary-manifest-v1.json")
     require(hashlib.sha256(old_manifest_bytes).hexdigest() ==
@@ -782,6 +771,29 @@ def validate_source_freeze(source_sha, current_source_sha, manifest_sha256):
                               object_pairs_hook=no_duplicate_keys,
                               parse_constant=no_nonfinite_constants)
     final_manifest = load_json_strict(MANIFEST)
+    require(final_manifest == build_boundary_manifest(),
+            "final boundary manifest differs from deterministic source regeneration")
+    # Discovery supplies candidate inputs, not qualification of the final runtime.
+    # Final replay must independently prove both endpoints on every target cell.
+    for name in ("fixture_source", "fixture_wit", "fixture_binary"):
+        require(old_manifest["sources"][name] == final_manifest["sources"][name],
+                f"candidate depth fixture changed: {name}")
+    for name in ("final_roles", "configurations",
+                 "auxiliary_expected_counts_by_mode"):
+        require(old_manifest[name] == final_manifest[name],
+                f"candidate depth case requirements changed: {name}")
+    for name in ("boundary_cases", "leaf_case"):
+        old_cases = old_manifest[name]
+        final_cases = final_manifest[name]
+        if name == "leaf_case":
+            old_cases, final_cases = [old_cases], [final_cases]
+        definitions = lambda cases: [
+            {key: value for key, value in case.items()
+             if key not in ("last_success", "first_failure")}
+            for case in cases
+        ]
+        require(definitions(old_cases) == definitions(final_cases),
+                f"candidate depth case definitions changed: {name}")
     old_registry = json.loads(historical_file(
         source_sha, "tools/native-stack/resource-suite-registry-v1.json"),
         object_pairs_hook=no_duplicate_keys, parse_constant=no_nonfinite_constants)
@@ -803,13 +815,6 @@ def validate_source_freeze(source_sha, current_source_sha, manifest_sha256):
             and final_registry["remaining_gates"]["boundary_discovery"]
                 == final_manifest["claim_status"],
             "suite registry boundary digest or status differs from source freeze")
-    permitted = copy.deepcopy(old_registry)
-    permitted["parent_manifests"]["boundary"] = final_boundary_sha
-    permitted["groups"]["pulley_boundary"]["manifest_sha256"] = final_boundary_sha
-    permitted["remaining_gates"]["boundary_discovery"] = (
-        final_manifest["claim_status"])
-    require(permitted == final_registry,
-            "suite registry changed beyond derived boundary metadata")
     return old_manifest
 
 
@@ -922,11 +927,12 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
                   *fastnum_entries,
                   *archived_control["wasmtime_source_files"].values()):
         file_evidence(control_dir, entry)
+    historical_fiber_sources = old_v1["fiber_source_proof"]["source_files"]
     require(set(archived_control["wasmtime_source_files"]) ==
-            set(FIBER_SOURCE_FILES),
+            set(historical_fiber_sources),
             "reviewed discovery control lacks pinned fiber sources")
     for relative, entry in archived_control["wasmtime_source_files"].items():
-        require(entry["sha256"] == FIBER_SOURCE_FILES[relative],
+        require(entry["sha256"] == historical_fiber_sources[relative],
                 f"reviewed discovery fiber source differs: {relative}")
     metadata = load_json_strict(control_dir /
                                 archived_control["cargo_metadata"]["path"])

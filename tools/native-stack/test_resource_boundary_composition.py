@@ -396,6 +396,10 @@ class BoundaryCompositionTests(unittest.TestCase):
             old_v1["build_policy"].pop("fastnum_build_script_sha256")
             old_v1["build_policy"].pop("native_environment_keys")
             old_v1["build_policy"].pop("dependency_feature_attestation")
+            old_v1["fiber_source_proof"]["source_files"] = {
+                "crates/fiber/src/lib.rs": hashlib.sha256(
+                    b"pinned fiber source\n").hexdigest(),
+            }
             old_v1_path.write_text(json.dumps(old_v1, indent=2,
                                               sort_keys=True) + "\n")
             depths_path = source_dir / "resource-boundary-depths-v1.json"
@@ -501,7 +505,6 @@ class BoundaryCompositionTests(unittest.TestCase):
             guard = guard_control(control_dir, build_manifest(),
                                   original_binary, binary_sha, discovery_sha)
             fiber = control_file("fiber.txt", "pinned fiber source\n")
-            fiber_sources = {"crates/fiber/src/lib.rs": fiber["sha256"]}
             control = {
                 "manifest_sha256": sha256(old_v1_path),
                 "source_sha": discovery_sha,
@@ -556,8 +559,8 @@ class BoundaryCompositionTests(unittest.TestCase):
                                                 sort_keys=True) + "\n")
             final_sha = commit("freeze reviewed depths")
             with patch("resource_boundary_evidence.ROOT", root), patch(
-                    "resource_boundary_evidence.FIBER_SOURCE_FILES",
-                    fiber_sources), patch(
+                    "resource_boundary_evidence.build_boundary_manifest",
+                    return_value=final_manifest), patch(
                     "resource_boundary_evidence.MANIFEST", manifest_path), patch(
                     "resource_boundary_evidence.REGISTRY_MANIFEST",
                     registry_path), patch(

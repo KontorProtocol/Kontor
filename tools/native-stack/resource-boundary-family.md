@@ -68,8 +68,12 @@ floating-point arithmetic. Existing v1 and v2 accounting rules are unchanged.
 The resource boundary manifest intentionally begins with null depths and
 `pending_discovery`. The final capture driver fails closed until all nine
 depths and the reviewed discovery hash are pinned. Existing source and guard
-capture rules remain mandatory. A fixture or runtime frame-path edit after
-discovery requires new reviewed discovery and a fresh final binary.
+capture rules remain mandatory. Discovery supplies candidate depths, not evidence
+that a later runtime has the same boundary. Unchanged fixture and case definitions
+permit reuse of those inputs; every final binary must independently pass both
+endpoints in every required cell. A changed fixture or case definition requires
+new discovery. A failed final endpoint requires investigation and, when necessary,
+new common candidate depths, never separate accepted depths per cell.
 The v1 case contract records `adjacent_leaf_boundary: true` instead of
 borrowing `pulley_plain_paid` depth. At the reviewed `5bdf08fe` source baseline,
 this amended the generated v1 manifest hash to
@@ -84,11 +88,16 @@ SHA-256. It replays validation of each raw discovery transcript against the
 source commit's manifest, checks the archived selected binary bytes against
 the historical control and Cargo artifact, and checks each adjacent pair
 against the frozen values,
-and verifies the discovery commit precedes the final commit. Between those
-commits only the depth record and generated boundary manifest may change.
+and verifies the discovery commit precedes the final commit. Fixture source, WIT
+and binary identities, case IDs, shapes, modes, repetitions and leaf requirements
+must remain unchanged. Historical dependency evidence is checked against its
+historical manifest. Current manifests and the suite registry must regenerate
+exactly, but need not have the historical runtime or harness hashes.
 The final control still requires the exact clean final source commit and its
-own Cargo binary. All nine frame paths and fixture bytes are thereby held
-fixed across discovery and final capture.
+own Cargo binary. Fresh captures in all six cells must satisfy all current outcome,
+fuel, state, receipt, cleanup and leaf-failure-phase assertions. Reusing candidate
+depths does not reuse historical execution as final qualification or waive source
+review of implementation changes.
 
 ## Bounded pilot after source review
 

@@ -114,7 +114,7 @@
     "own_adjacent_boundary": true,
     "repeats": 2
   },
-  "parent_manifest_sha256": "a9588bfdc164bfa19d42255b59ea5c718193f846576184a9d90525aab9cfe76c",
+  "parent_manifest_sha256": "71689dfbcefc0030ee80565675351865518675e364304ef4d6e92fb71b9616ae",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -164,7 +164,7 @@
     },
     "composition_tests": {
       "path": "tools/native-stack/test_resource_boundary_composition.py",
-      "sha256": "7701a5c774f0b783e9cf7ef17c54e29811a72461fdbbe8c472c75a02505a797a"
+      "sha256": "335e3019dadd31ccca4418ce37862b3f6b173a937b90ddee480b48a909eaa5f4"
     },
     "depths": {
       "path": "tools/native-stack/resource-boundary-depths-v1.json",
@@ -188,7 +188,7 @@
     },
     "plan": {
       "path": "tools/native-stack/resource-boundary-family.md",
-      "sha256": "10484b93b8fc434a0faba45a666ee4493dd68ac587149611c895a99751dbaa94"
+      "sha256": "ef347c6e368ea3da70e25e9f6403630eafbb691512477fb033113da453edea38"
     },
     "schema": {
       "path": "tools/native-stack/resource-boundary-evidence-schema-v1.json",
@@ -204,11 +204,11 @@
     },
     "tests": {
       "path": "tools/native-stack/test_resource_boundary_evidence.py",
-      "sha256": "bab624d1eb424ffc469c893e5c1eb04076094c5f14e9e38ed88526a8166ab2e3"
+      "sha256": "065f5821e23d4b3f7ac79a28314c68197666ee8770dc78bc87e4d537c20f5193"
     },
     "validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "adcbd999065858e561305c04fce7e689cf7d884e7ea0742f398beffca75e87af"
+      "sha256": "4ab4bc0e28c3c4e844781352fa9e736ebdbeb65ea5b04027c12f855f6db643a7"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
