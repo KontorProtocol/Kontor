@@ -11,7 +11,7 @@ use std::{net::SocketAddr, time::Duration};
 
 use anyhow::{Context, Result};
 use axum_server::Handle;
-pub use env::Env;
+pub use env::{DaemonEnv, Env};
 use metrics_exporter_prometheus::PrometheusHandle;
 use tokio::task::JoinHandle;
 use tracing::info;

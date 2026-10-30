@@ -122,7 +122,7 @@ impl<E: Executor> Reactor<E> {
         }
 
         // Refresh cached validator set — rolled-back state may have different active set
-        self.refresh_validator_set().await?;
+        self.refresh_validator_set_owned().await?;
 
         if let Some(tx) = &self.event_tx
             && tx.send(Event::Rolledback { height }).await.is_err()
@@ -259,8 +259,8 @@ impl<E: Executor> Reactor<E> {
     /// The database savepoint does not cover contract-facing metadata or the
     /// shared operation counters. Isolate the counters so runtime clones cannot
     /// mutate the originals, and restore context even on a returned error.
-    /// Outer errors remain fatal; this does not recover their database savepoint
-    /// or cover cancellation while the inner future is pending.
+    /// Outer errors remain fatal; the SQL transaction is rolled back before the
+    /// reactor reports them. The reactor task must not be cancelled mid-flight.
     pub(super) async fn simulate(
         &mut self,
         tx: indexer_types::Transaction,
@@ -270,10 +270,28 @@ impl<E: Executor> Reactor<E> {
         let restore_output = self.runtime.previous_output;
         let restore_data = self.runtime.op_return_data.clone();
         let restore_simulating = self.runtime.simulating;
+        let mut lease = self
+            .owner_service
+            .begin_canonical(&mut self.runtime, true)
+            .await?;
         let restore_ids = mem::take(&mut self.runtime.id_generation_counter);
         let restore_results = mem::take(&mut self.runtime.result_id_counter);
         self.runtime.simulating = true;
+        self.runtime
+            .storage
+            .savepoint()
+            .await
+            .context("Failed to begin simulation savepoint")?;
         let result = self.simulate_inner(tx).await;
+        lease.drain(&self.runtime).await?;
+        let rollback = self
+            .runtime
+            .storage
+            .rollback()
+            .await
+            .context("Failed to rollback simulation");
+        rollback?;
+        lease.complete(&mut self.runtime).await?;
         self.runtime.simulating = restore_simulating;
         self.runtime.storage.height = restore_height;
         self.runtime.storage.tx_context = restore_context;
@@ -296,11 +314,6 @@ impl<E: Executor> Reactor<E> {
         // then inserts `signers(height = <discarded height>)` and trips the
         // `signers.height -> blocks.height` foreign key, which is classified
         // non-deterministic and kills the reactor.
-        self.runtime
-            .storage
-            .savepoint()
-            .await
-            .context("Failed to begin simulation savepoint")?;
         let block_row = select_block_latest(&self.db_conn())
             .await
             .context("Failed to query latest block for simulation")?;
@@ -340,11 +353,6 @@ impl<E: Executor> Reactor<E> {
             }
         }
 
-        self.runtime
-            .storage
-            .rollback()
-            .await
-            .context("Failed to rollback simulation")?;
         Ok(results)
     }
 
@@ -464,6 +472,10 @@ impl<E: Executor> Reactor<E> {
             );
         }
 
+        let mut lease = self
+            .owner_service
+            .begin_canonical(&mut self.runtime, false)
+            .await?;
         self.runtime
             .storage
             .savepoint()
@@ -475,12 +487,16 @@ impl<E: Executor> Reactor<E> {
         // `last_height`/`last_hash` advance only after the commit, so a failed
         // block leaves no trace in memory either.
         let txn = self.block_txn(&block, decision).await;
+        lease.drain(&self.runtime).await?;
         let (unbatched_count, executed_ops) = match txn {
             Ok(counts) => counts,
             Err(e) => {
-                if let Err(rollback_err) = self.runtime.storage.rollback().await {
-                    warn!(error = %rollback_err, height, "Failed to roll back block transaction");
-                }
+                self.runtime
+                    .storage
+                    .rollback()
+                    .await
+                    .context("Failed to roll back block transaction")?;
+                lease.complete(&mut self.runtime).await?;
                 return Err(e);
             }
         };
@@ -490,6 +506,7 @@ impl<E: Executor> Reactor<E> {
             .commit()
             .await
             .context("Failed to commit block transaction")?;
+        lease.complete(&mut self.runtime).await?;
 
         self.last_height = height;
         self.last_hash = Some(hash);
@@ -508,7 +525,7 @@ impl<E: Executor> Reactor<E> {
 
         // Update cached validator set after block execution
         // (process_pending_validators may have activated/deactivated validators)
-        self.refresh_validator_set().await?;
+        self.refresh_validator_set_owned().await?;
 
         let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;
         self.consensus.emit_state_event(StateEvent::BlockProcessed {

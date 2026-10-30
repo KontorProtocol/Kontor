@@ -1,10 +1,14 @@
 use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::Arc;
 
 use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::transaction::Version;
 use bitcoin::{BlockHash, Txid};
 
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
+#[cfg(test)]
+use crate::runtime::ownership::AsyncGate;
 use crate::test_utils::new_mock_block_hash;
 use indexer_types::Block;
 
@@ -43,6 +47,8 @@ pub struct MockBitcoin {
     /// chain. Without this, a re-mined block at the same height is bit-identical
     /// and no test can produce the stale-decision paths a real reorg produces.
     fork: u32,
+    #[cfg(test)]
+    pub(crate) replay_gate: Option<Arc<AsyncGate>>,
 }
 
 /// Distinct hashes per (height, fork). The stride keeps the two inputs from
@@ -62,6 +68,8 @@ impl MockBitcoin {
             block_txids: HashMap::new(),
             mined_blocks: Vec::new(),
             fork: 0,
+            #[cfg(test)]
+            replay_gate: None,
         }
     }
 

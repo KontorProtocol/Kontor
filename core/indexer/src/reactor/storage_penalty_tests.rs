@@ -20,6 +20,7 @@ use crate::runtime::filestorage::address as filestorage_address;
 use crate::runtime::filestorage::api::{self as filestorage, ChallengeStatus};
 use crate::runtime::filestorage::settlement_tests::{StorageFixture, at_height};
 use crate::runtime::numerics::{add_decimal, mul_decimal, sub_decimal};
+use crate::runtime::ownership::OwnerService;
 use crate::runtime::staking::{address, api as staking};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -52,6 +53,7 @@ async fn reactor(runtime: Runtime, dir: &TempDir) -> Result<Reactor<NoopExecutor
     Ok(Reactor::new(
         NoopExecutor,
         runtime,
+        OwnerService::new(),
         block_rx,
         mempool_rx,
         shutdown.signal(),

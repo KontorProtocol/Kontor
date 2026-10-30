@@ -19,7 +19,8 @@ pub struct Env {
     pub reader: database::Reader,
     pub event_subscriber: EventSubscriber,
     pub bitcoin: Client,
-    pub runtime_pool: Pool<runtime::pool::Manager>,
+    pub(crate) runtime_pool: Pool<runtime::pool::Manager>,
+    pub owner_service: runtime::ownership::OwnerService,
     pub simulate_tx: Sender<Simulation>,
     /// Set true once the reactor signals ready (consensus up + initial
     /// mempool sync complete). Half of the `require_available` middleware
@@ -51,7 +52,48 @@ pub struct Env {
     pub info_rx: watch::Receiver<InfoCore>,
 }
 
+pub struct DaemonEnv {
+    pub config: Config,
+    pub shutdown: ShutdownSignal,
+    pub reader: database::Reader,
+    pub event_subscriber: EventSubscriber,
+    pub bitcoin: Client,
+    pub owner_service: runtime::ownership::OwnerService,
+    pub simulate_tx: Sender<Simulation>,
+    pub reactor_ready: Arc<AtomicBool>,
+    pub failed: Arc<AtomicBool>,
+    pub consensus_listen_addr: watch::Receiver<Option<String>>,
+    pub fees_rx: watch::Receiver<Fees>,
+    pub info_rx: watch::Receiver<InfoCore>,
+    pub database_name: String,
+}
+
 impl Env {
+    pub async fn new_daemon(parts: DaemonEnv) -> Result<Self> {
+        let runtime_pool = runtime::pool::new(
+            parts.config.data_dir.clone(),
+            parts.database_name,
+            parts.config.network,
+            parts.config.view_gas_limit,
+        )
+        .await?;
+        Ok(Self {
+            config: parts.config,
+            shutdown: parts.shutdown,
+            reader: parts.reader,
+            event_subscriber: parts.event_subscriber,
+            bitcoin: parts.bitcoin,
+            runtime_pool,
+            owner_service: parts.owner_service,
+            simulate_tx: parts.simulate_tx,
+            reactor_ready: parts.reactor_ready,
+            failed: parts.failed,
+            consensus_listen_addr: parts.consensus_listen_addr,
+            fees_rx: parts.fees_rx,
+            info_rx: parts.info_rx,
+        })
+    }
+
     pub async fn new_test(
         reader: database::Reader,
         db_path: &Path,
@@ -76,6 +118,7 @@ impl Env {
                 crate::config::DEFAULT_VIEW_GAS_LIMIT,
             )
             .await?,
+            owner_service: runtime::ownership::OwnerService::new(),
             reader,
             simulate_tx,
             fees_rx,

@@ -34,7 +34,7 @@ pub struct Manager {
 }
 
 impl Manager {
-    pub fn new(
+    pub(crate) fn new(
         data_dir: PathBuf,
         filename: String,
         network: bitcoin::Network,
@@ -118,7 +118,7 @@ impl managed::Manager for Manager {
     }
 }
 
-pub async fn new(
+pub(crate) async fn new(
     data_dir: PathBuf,
     filename: String,
     network: bitcoin::Network,

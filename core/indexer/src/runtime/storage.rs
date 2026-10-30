@@ -9,6 +9,12 @@ use libsql::Connection;
 use regex::bytes::RegexBuilder;
 use std::collections::HashMap;
 use std::io::Read;
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(test)]
+use std::sync::{Condvar, Mutex as StdMutex};
 use wit_component::{ComponentEncoder, WitPrinter};
 
 #[cfg(test)]
@@ -29,7 +35,7 @@ use crate::{
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
-    runtime::{ContractAddress, counter::Counter, stack::Stack},
+    runtime::{ContractAddress, counter::Counter, ownership::ChildContext, stack::Stack},
     test_utils::new_mock_transaction,
 };
 
@@ -51,6 +57,30 @@ pub const BLOCK_ENTROPY_WINDOW: u64 = 144;
 pub enum ComponentDecodeError {
     Content(anyhow::Error),
     Infrastructure(anyhow::Error),
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct BlockingGate {
+    pub(crate) entered: AtomicBool,
+    released: StdMutex<bool>,
+    wake: Condvar,
+}
+
+#[cfg(test)]
+impl BlockingGate {
+    pub(super) fn block(&self) {
+        self.entered.store(true, Ordering::SeqCst);
+        let mut released = self.released.lock().expect("blocking gate poisoned");
+        while !*released {
+            released = self.wake.wait(released).expect("blocking gate poisoned");
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        *self.released.lock().expect("blocking gate poisoned") = true;
+        self.wake.notify_all();
+    }
 }
 
 /// Decode the WIT embedded in already-encoded component bytes, unmodified
@@ -86,10 +116,18 @@ pub struct TransactionContext {
 #[derive(Builder, Clone)]
 pub struct Storage {
     pub conn: Connection,
+    #[builder(skip)]
+    pub(super) ownership: Option<ChildContext>,
     #[builder(default = Counter::builder().build())]
     pub savepoint_counter: Counter,
     #[builder(default = Stack::builder().build())]
     pub savepoint_stack: Stack<u64>,
+    #[cfg(test)]
+    #[builder(skip)]
+    pub(super) fail_rollback_once: Arc<AtomicBool>,
+    #[cfg(test)]
+    #[builder(skip)]
+    pub(crate) decode_gate: Option<Arc<BlockingGate>>,
     #[builder(default = 1)]
     pub height: u64,
     pub tx_context: Option<TransactionContext>,
@@ -349,10 +387,16 @@ impl Storage {
             })?;
         // Split the join from the work: a JoinError is this node's task machinery
         // failing, everything inside is a property of the bytes.
-        let encoded = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+        #[cfg(test)]
+        let gate = self.decode_gate.clone();
+        let encode = move || -> Result<Vec<u8>> {
             #[cfg(test)]
             let _trace =
                 resource_diagnostics::scope("blocking_decode_entry", "blocking_decode_exit");
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                gate.block();
+            }
             // Cap decompressed size: a tiny on-chain brotli blob can otherwise
             // inflate without bound in memory on every node that loads the
             // contract (decompression bomb). 64 MiB is far above any legitimate
@@ -377,9 +421,14 @@ impl Storage {
                 .module(&module_bytes)?
                 .validate(true)
                 .encode()
-        })
-        .await
-        .map_err(|e| ComponentDecodeError::Infrastructure(e.into()))?
+        };
+        let encoded = match &self.ownership {
+            Some(owner) => owner.run_blocking(encode).await,
+            None => tokio::task::spawn_blocking(encode)
+                .await
+                .map_err(anyhow::Error::from),
+        }
+        .map_err(ComponentDecodeError::Infrastructure)?
         .map_err(ComponentDecodeError::Content)?;
 
         Ok(encoded)
@@ -564,6 +613,9 @@ impl Storage {
     }
 
     pub async fn commit(&self) -> Result<()> {
+        if let Some(owner) = &self.ownership {
+            owner.ensure_commit_authorized()?;
+        }
         match self.savepoint_stack.pop().await {
             Some(0) => self.conn.execute("COMMIT", ()).await?,
             Some(i) => self.conn.execute(&format!("RELEASE S{}", i), ()).await?,
@@ -573,6 +625,10 @@ impl Storage {
     }
 
     pub async fn rollback_transaction(&self) -> Result<()> {
+        #[cfg(test)]
+        if self.fail_rollback_once.swap(false, Ordering::SeqCst) {
+            return Err(anyhow!("injected rollback transaction failure"));
+        }
         self.savepoint_stack.clear().await;
         self.conn.execute("ROLLBACK", ()).await?;
         Ok(())
