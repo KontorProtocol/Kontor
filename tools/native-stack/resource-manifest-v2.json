@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "e0aa76911fdbbdeccfab676eb4ff7fcf8657abbd6eb66a962f592cfc1c074851",
+  "parent_manifest_sha256": "8e97d2493382f8bf50e8d80948681e6ad6215bc499ba8abd9fcb6a2e14f53864",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1213,6 +1213,18 @@
       "path": "core/indexer/src/runtime/fees.rs",
       "sha256": "f744a02e4049b55876b5be4edf79f1ca94afd62c88f24bea63a06f4ce8c7540f"
     },
+    "historical_phase10_gzip": {
+      "path": "tools/native-stack/fixtures/phase10-resource-chain-capture.json.gz",
+      "sha256": "06abb6c6a3094e71085e474817372b8f99bab07d11b5e9cdcaea08961107a7a1"
+    },
+    "historical_phase10_materializer": {
+      "path": "tools/native-stack/materialize_phase10_fixture.py",
+      "sha256": "2f3e5f741bfb3bf901df2cf0aec27ea6679904ed46978ad5804cba46320067f5"
+    },
+    "historical_phase10_materializer_tests": {
+      "path": "tools/native-stack/test_materialize_phase10_fixture.py",
+      "sha256": "cfb5d6d0bb39366ca488b2a1d233bdda8bc5482ac250ddb54704de367013a12b"
+    },
     "invocation": {
       "path": "core/indexer/src/runtime/invocation.rs",
       "sha256": "4b92bc61d40beba9e537381f3eba4cf514e2807b1930cfcc3a1569daa6c5f524"
@@ -1239,7 +1251,7 @@
     },
     "v2_manifest_builder": {
       "path": "tools/native-stack/resource_manifest_v2.py",
-      "sha256": "4c4e75a90a91b5ae1cd3ccc0a2838c7df723b3bd958ca5b22c3e55c0e485910d"
+      "sha256": "7ae09b345605260d7df5fa2ea6ae9787a41768445fc7d949fc10a0daf624cc56"
     },
     "v2_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v2.json",
