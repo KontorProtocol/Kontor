@@ -19,6 +19,7 @@ use super::super::super::checkpoint::Checkpoint;
 use super::super::super::replay_identity::ReplayIdentity;
 use super::format::Saved;
 use crate::bitcoin_client::client::RegtestRpc;
+use crate::bitcoin_follower::event::BlockEvent;
 use crate::consensus::finality_types::{FINALITY_WINDOW, FinalityEvent, StateEvent};
 use crate::database::Writer;
 use crate::database::queries::{
@@ -26,6 +27,7 @@ use crate::database::queries::{
     select_latest_consensus_height,
 };
 use crate::reactor::consensus_state::ObservationChannels;
+use crate::reactor::executor::RuntimeExecutor;
 use crate::reg_tester::workload_bitcoin;
 use crate::runtime::{ComponentCache, Runtime, Storage};
 
@@ -127,6 +129,8 @@ async fn workload_saved_timed_missing_confirmation_rolls_back_at_deadline() -> R
         &mut cleanup,
     )
     .await?;
+    let (replay_tx, mut replay_rx) = mpsc::channel(1);
+    trial.executor = RuntimeExecutor::new(client.clone()).with_replay_tx(replay_tx);
     let (decided_tx, _decided_rx) = mpsc::channel(64);
     let (finality_tx, mut finality_rx) = mpsc::channel(64);
     let (state_tx, mut state_rx) = mpsc::channel(64);
@@ -188,6 +192,20 @@ async fn workload_saved_timed_missing_confirmation_rolls_back_at_deadline() -> R
             trial.advance().await?;
         }
     }
+    // Finality requests asynchronous block redelivery. Drive the poller's input
+    // path with the same blocks, preserving the original queued decisions.
+    ensure!(replay_rx.try_recv()? == anchor_height - 1);
+    ensure!(trial.last_height == anchor_height - 1);
+    ensure!(!trial.consensus.deferred_decisions.is_empty());
+    for block in &blocks {
+        trial
+            .process_block_event(BlockEvent::BlockInsert {
+                target_height: deadline,
+                block: block.clone(),
+            })
+            .await?;
+    }
+    ensure!(replay_rx.try_recv().is_err());
     let events: Vec<_> = std::iter::from_fn(|| finality_rx.try_recv().ok()).collect();
     let [
         FinalityEvent::Rollback {
