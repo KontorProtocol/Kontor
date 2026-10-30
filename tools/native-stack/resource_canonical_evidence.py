@@ -8,7 +8,7 @@ import re
 from decimal import Decimal
 from pathlib import Path
 
-from capture_resource_diagnostic import validate_control
+from capture_resource_diagnostic import bundle_page_size, validate_control
 from resource_boundary_evidence import (normalized_boundary_amount,
                                         validate_balance_transitions,
                                         validate_cell_identity, validate_trace)
@@ -338,6 +338,7 @@ def validate_bundle(bundle, directory, archive_binary=None):
     control, binary = validate_control(
         directory / bundle["control_capture"]["path"],
         bundle["control_capture"]["sha256"], manifest,
+        page_size=bundle_page_size(bundle) if archive_binary is not None else None,
         archive_binary=archive_binary, expected_cell=bundle["cell"])
     validate_cell_identity(bundle["cell"], control["cargo_artifact"],
                            check_host=archive_binary is None)

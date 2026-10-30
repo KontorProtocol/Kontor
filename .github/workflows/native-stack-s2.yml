@@ -1,6 +1,11 @@
 name: Native stack S2 resource evidence
 
 on:
+  push:
+    tags:
+      - 'native-stack-s2/discovery/*'
+      - 'native-stack-s2/guard/*'
+      - 'native-stack-s2/final/*'
   workflow_dispatch:
     inputs:
       stage:
@@ -24,7 +29,7 @@ permissions:
 jobs:
   discover:
     name: S2 boundary discovery (Linux ARM64 dev)
-    if: inputs.stage == 'discovery'
+    if: inputs.stage == 'discovery' || startsWith(github.ref, 'refs/tags/native-stack-s2/discovery/')
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 240
     env:
@@ -79,7 +84,7 @@ jobs:
 
   guard:
     name: S2 macOS guard (${{ matrix.profile }})
-    if: inputs.stage == 'guard'
+    if: inputs.stage == 'guard' || startsWith(github.ref, 'refs/tags/native-stack-s2/guard/')
     runs-on: macos-15
     timeout-minutes: 240
     strategy:
@@ -129,7 +134,7 @@ jobs:
           retention-days: 90
 
   capture:
-    if: inputs.stage == 'final'
+    if: inputs.stage == 'final' || startsWith(github.ref, 'refs/tags/native-stack-s2/final/')
     name: S2 capture (${{ matrix.os }}, ${{ matrix.profile }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
@@ -184,6 +189,12 @@ jobs:
         run: brew install boost libevent zeromq
       - name: Download pinned prior evidence
         run: |
+          if [[ "$GITHUB_REF" == refs/tags/native-stack-s2/final/* ]]; then
+            ids="${GITHUB_REF#refs/tags/native-stack-s2/final/}"
+            [[ "$ids" =~ ^([0-9]+)-([0-9]+)$ ]] || exit 1
+            HISTORICAL_RUN_ID="${BASH_REMATCH[1]}"
+            REVIEWED_RUN_ID="${BASH_REMATCH[2]}"
+          fi
           case "$HISTORICAL_RUN_ID:$REVIEWED_RUN_ID" in
             *[!0-9:]*|:*|*:) exit 1 ;;
           esac
@@ -228,7 +239,7 @@ jobs:
 
   compare:
     name: Validate and compare six S2 cells
-    if: inputs.stage == 'final'
+    if: inputs.stage == 'final' || startsWith(github.ref, 'refs/tags/native-stack-s2/final/')
     needs: capture
     runs-on: ubuntu-24.04
     timeout-minutes: 180

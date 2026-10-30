@@ -30,7 +30,7 @@
     },
     "brotli_ceiling_validator": {
       "path": "tools/native-stack/resource_brotli_raw_ceiling_evidence.py",
-      "sha256": "024f877e4594495f7ad2abff4f7c39ef50bfed07e433ce75765e6697b837d3f7"
+      "sha256": "be4f67204fee9f75b68f3c836ee9913e25887f7cde2989dac852bdf2d586f67e"
     },
     "brotli_ceiling_validator_tests": {
       "path": "tools/native-stack/test_resource_brotli_raw_ceiling_evidence.py",
@@ -74,7 +74,7 @@
     },
     "canonical_validator": {
       "path": "tools/native-stack/resource_canonical_evidence.py",
-      "sha256": "1eafa10d6261880e37fabcb5b71d56b47348e3fdd1263dd7c75e4ebaae9ee092"
+      "sha256": "0121c164b067bdca1497f2b98861bc5bbeb393d55acd6321b42476a62f646aa4"
     },
     "canonical_validator_tests": {
       "path": "tools/native-stack/test_resource_canonical_evidence.py",
@@ -94,7 +94,7 @@
     },
     "cold_publication_validator": {
       "path": "tools/native-stack/resource_cold_publication_evidence.py",
-      "sha256": "e56c637a668156b80c85cf208c56449860fb93633422909fe0758b4be058ea79"
+      "sha256": "77fe58805dbde865564df5cff99a1f795c7004e067f57f4cd42bd6b894461d18"
     },
     "cold_publication_validator_tests": {
       "path": "tools/native-stack/test_resource_cold_publication_evidence.py",
@@ -154,7 +154,7 @@
     },
     "finite_stack_boundary_validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "0195114f6267060b832323723b846ac30295afecd8869a976c8c11039af0b8f6"
+      "sha256": "4bf448dd83eb4b79ed2464786e10728a34175cde1016bd8b16af1f55d68fc783"
     },
     "finite_stack_capture": {
       "path": "tools/native-stack/capture_resource_finite.py",
@@ -174,7 +174,7 @@
     },
     "finite_stack_validator": {
       "path": "tools/native-stack/resource_finite_evidence.py",
-      "sha256": "42f356a178afe443ecd56e4c337e7c2021e90d83f78485a8d1d18384b78ffe07"
+      "sha256": "b5771c046b0cebb678628dd96b589bc63355386c0db7256eef5d1c7d12aace89"
     },
     "foreign_wave_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/foreign_wave.rs",
@@ -202,7 +202,7 @@
     },
     "foreign_wave_validator": {
       "path": "tools/native-stack/resource_foreign_wave_evidence.py",
-      "sha256": "334fa7aeee17888736346407f868eb6482a6856915f9ad8de24b660f1a4d6d94"
+      "sha256": "d0904ddc24da4088ace027fa05ade57860944f57532eeb62591c4141a4ab2f66"
     },
     "foreign_wave_validator_tests": {
       "path": "tools/native-stack/test_resource_foreign_wave_evidence.py",
@@ -238,7 +238,7 @@
     },
     "initialization_validator": {
       "path": "tools/native-stack/resource_initialization_evidence.py",
-      "sha256": "f8c41ce08c91fe4d16e9dc9e814f1af11bc7dadf1a5bd30989f2f7f222a1e5ba"
+      "sha256": "4248f4dac2edb1acede5425d1476be2a3b7131b67b3dd6872afd2c1ccdc9ee56"
     },
     "initialization_validator_tests": {
       "path": "tools/native-stack/test_resource_initialization_evidence.py",
@@ -278,7 +278,7 @@
     },
     "native_filestorage_lifecycle_validator": {
       "path": "tools/native-stack/resource_native_filestorage_lifecycle_evidence.py",
-      "sha256": "2f8a69e8be1a6eb78d9eac7e65306336725c7c328c17d187d8a7cd362c241081"
+      "sha256": "2b8ba25756e7f8de676750a7282824a4d2097223fbd3e19a92577efb89217eec"
     },
     "native_filestorage_lifecycle_validator_tests": {
       "path": "tools/native-stack/test_resource_native_filestorage_lifecycle_evidence.py",
@@ -310,7 +310,7 @@
     },
     "native_staking_rewards_validator": {
       "path": "tools/native-stack/resource_native_staking_rewards_evidence.py",
-      "sha256": "563bb3dd886bb49507f381e9d8de0f40eccd0e312b3c00b11e036f2e087ac2f3"
+      "sha256": "58fc80021b1c98305a4752de6d3744eebbb7e05db4fa8dd9876a69c08e9033de"
     },
     "native_staking_rewards_validator_tests": {
       "path": "tools/native-stack/test_resource_native_staking_rewards_evidence.py",
@@ -346,7 +346,7 @@
     },
     "pending_host_validator": {
       "path": "tools/native-stack/resource_pending_evidence.py",
-      "sha256": "60f95cc68429753313e4f035e1df7b9f9f160f991f90fdcf257695999dab2600"
+      "sha256": "e7c355b161e7706bcf8479622424897aba00fd906dc93e14ab3c8030caac6806"
     },
     "pricing_source": {
       "path": "core/indexer/src/runtime/pricing.rs",
@@ -382,11 +382,11 @@
     },
     "resource_diagnostic_capture": {
       "path": "tools/native-stack/capture_resource_diagnostic.py",
-      "sha256": "408af755e90a3e4a088791dedbb0789e1ff253950fa76c5ebf39a23ee1c17cb7"
+      "sha256": "660bfd557b09c6ea5d5ab76ab46e0c93fdfc318141740a0f6170aee5444fb57e"
     },
     "resource_diagnostic_capture_tests": {
       "path": "tools/native-stack/test_capture_resource_diagnostic.py",
-      "sha256": "2ba3ecfe73b4899d3d54bab4ed31d378a33a65e8142734274ca482d70bccb777"
+      "sha256": "db5801ae84ba96164f23f6b8ec21d8fb0691b16cf8e19cd71239f0530ed6f5d5"
     },
     "resource_lifecycle_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/lifecycle.rs",
@@ -398,7 +398,7 @@
     },
     "resource_lifecycle_validator": {
       "path": "tools/native-stack/resource_lifecycle_evidence.py",
-      "sha256": "0728ce4ebb5fc5dfa84532ebc8a003da5a3782bb369a87f50769cec74221637d"
+      "sha256": "184266d6cd8068d75e5488ba88e959599ac61f53704b3533463667b7133fb948"
     },
     "resource_lifecycle_validator_tests": {
       "path": "tools/native-stack/test_resource_lifecycle_evidence.py",
@@ -458,7 +458,7 @@
     },
     "sqlite_large_values_validator": {
       "path": "tools/native-stack/resource_sqlite_large_values_evidence.py",
-      "sha256": "fc17739292e0aa3c908f189addbc8c19a2049c88395aff01f5c66f86e3a08eca"
+      "sha256": "7fc466b9469d134fe319f78c44e0f0d744ddcfb0f9f04b4fdde4eaeb25ace5f6"
     },
     "sqlite_large_values_validator_tests": {
       "path": "tools/native-stack/test_resource_sqlite_large_values_evidence.py",
@@ -474,7 +474,7 @@
     },
     "sqlite_pagination_validator": {
       "path": "tools/native-stack/resource_sqlite_pagination_evidence.py",
-      "sha256": "6e091a9387c03a8bf46c1412e4c16700d7e8604c0ed1fea64632e8af4d800ac5"
+      "sha256": "7bc05505e2a4f4036e7d5c2c59533d86317ca26b8a407813df301b0ee376cf86"
     },
     "sqlite_pagination_validator_tests": {
       "path": "tools/native-stack/test_resource_sqlite_pagination_evidence.py",
@@ -490,7 +490,7 @@
     },
     "sqlite_ranges_validator": {
       "path": "tools/native-stack/resource_sqlite_ranges_evidence.py",
-      "sha256": "cf75dd5e1e590e06ac394b1c75c17d5369635ab042a0761d7dfa3b6629073b9d"
+      "sha256": "f2616420c101bd1861d57a2937e332d49ee81223872888edfa4ce63563956964"
     },
     "sqlite_ranges_validator_tests": {
       "path": "tools/native-stack/test_resource_sqlite_ranges_evidence.py",
@@ -550,11 +550,11 @@
     },
     "suite_runbook": {
       "path": "tools/native-stack/resource-suite-runbook.md",
-      "sha256": "17d4e51cd22155a78bc2b38a345ddcdc2921224acd372e0c9db53a2673c6e465"
+      "sha256": "58b11565c8b4d09b6af7920799539b94a8f1a7933a6d42ed3dffabe4954ad0ce"
     },
     "suite_workflow": {
       "path": ".github/workflows/native-stack-s2.yml",
-      "sha256": "e1037147da48de542e9787ad17b391f83f7003a80f5d45c9d359c037cacb84bb"
+      "sha256": "f369fb62e6dd148dca1b0277e4faefef60da560f63e81a34fdb4a9dea8e15394"
     },
     "test_runtime_setup": {
       "path": "core/indexer/src/test_utils.rs",
@@ -582,7 +582,7 @@
     },
     "type_value_validator": {
       "path": "tools/native-stack/resource_type_value_evidence.py",
-      "sha256": "d4a59a785a5fcc228120c6e249a1904baf5114e9d6ff241ed7e861a95da82458"
+      "sha256": "601d5cca284c16948b24ba129d91a778c22e03404c2860024076401eb6f3ff30"
     },
     "type_value_validator_tests": {
       "path": "tools/native-stack/test_resource_type_value_evidence.py",

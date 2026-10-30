@@ -8,12 +8,30 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from capture_resource_diagnostic import PHASE_NAMES, parse_worker_log, validate_control
+from capture_resource_diagnostic import (
+    PHASE_NAMES, bundle_page_size, parse_worker_log, validate_control,
+)
 from resource_evidence import sha256
 from resource_manifest import MANIFEST, build_manifest
 
 
 class ResourceDiagnosticTraceTests(unittest.TestCase):
+    def test_archived_runs_require_one_measured_page_size(self):
+        bundle = {"runs": {
+            "first": {"runtime": {"thread_observations": [
+                {"page_size_bytes": 16384}]}},
+            "second": {"runtime": {"thread_observations": [
+                {"page_size_bytes": 16384}]}},
+        }}
+        self.assertEqual(bundle_page_size(bundle), 16384)
+        bundle["runs"]["second"]["runtime"]["thread_observations"][0][
+            "page_size_bytes"] = 4096
+        with self.assertRaisesRegex(ValueError, "disagree on host page size"):
+            bundle_page_size(bundle)
+        bundle["runs"]["second"]["runtime"]["thread_observations"] = []
+        with self.assertRaisesRegex(ValueError, "lacks measured thread pages"):
+            bundle_page_size(bundle)
+
     def test_archive_control_uses_captured_host_and_binary_bytes(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

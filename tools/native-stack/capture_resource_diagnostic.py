@@ -118,6 +118,27 @@ def parse_worker_log(raw_path, mode, pid, os_name="linux"):
     return runtime, trace, uncovered
 
 
+def bundle_page_size(bundle):
+    require(isinstance(bundle.get("runs"), dict) and bundle["runs"],
+            "resource bundle has no measured runs")
+    pages = set()
+    for run in bundle["runs"].values():
+        runtime = run.get("runtime") if isinstance(run, dict) else None
+        observations = (runtime.get("thread_observations")
+                        if isinstance(runtime, dict) else None)
+        require(isinstance(observations, list) and observations,
+                "resource run lacks measured thread pages")
+        for thread in observations:
+            require(isinstance(thread, dict)
+                    and type(thread.get("page_size_bytes")) is int
+                    and thread["page_size_bytes"] > 0,
+                    "resource thread page size is invalid")
+            pages.add(thread["page_size_bytes"])
+    require(len(pages) == 1,
+            "resource runs disagree on host page size")
+    return pages.pop()
+
+
 def validate_control(path, expected_sha256, manifest, page_size=None,
                      archive_binary=None, expected_cell=None):
     require(sys.platform in ("linux", "darwin"), "unsupported resource diagnostic host")

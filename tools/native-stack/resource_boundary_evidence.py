@@ -19,7 +19,7 @@ sys.dont_write_bytecode = True
 
 from capture_resource_chain import harness_position
 from capture_resource_control import validate_build_attestation
-from capture_resource_diagnostic import validate_control
+from capture_resource_diagnostic import bundle_page_size, validate_control
 from resource_evidence import (canonical_decimal_amount,
                                check_guard_control, file_evidence,
                                load_json_strict, no_duplicate_keys,
@@ -1021,6 +1021,7 @@ def validate_bundle(bundle, directory, archive_binary=None):
     control, binary = validate_control(
         control_path, bundle["control_capture"]["sha256"],
         build_manifest(),
+        page_size=bundle_page_size(bundle) if archive_binary is not None else None,
         archive_binary=archive_binary, expected_cell=bundle["cell"])
     validate_cell_identity(bundle["cell"], control["cargo_artifact"],
                            check_host=archive_binary is None)

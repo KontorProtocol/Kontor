@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from capture_resource_diagnostic import validate_control
+from capture_resource_diagnostic import bundle_page_size, validate_control
 from resource_boundary_evidence import validate_cell_identity
 from resource_evidence import (file_evidence, load_json_strict, require, sha256,
                                thread_capacities)
@@ -285,6 +285,7 @@ def validate_bundle(bundle, directory, archive_binary=None):
     control_path = directory / bundle["control_capture"]["path"]
     control, binary = validate_control(
         control_path, bundle["control_capture"]["sha256"], manifest,
+        page_size=bundle_page_size(bundle) if archive_binary is not None else None,
         archive_binary=archive_binary, expected_cell=bundle["cell"])
     validate_cell_identity(bundle["cell"], control["cargo_artifact"],
                            check_host=archive_binary is None)
