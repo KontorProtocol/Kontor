@@ -75,7 +75,7 @@ impl MixedLayout {
         }
     }
 
-    fn position(self, index: usize) -> Result<(u32, u32, u32)> {
+    pub(super) fn position(self, index: usize) -> Result<(u32, u32, u32)> {
         let (tx, input, op) = match self {
             Self::Single {
                 operations_per_transaction,

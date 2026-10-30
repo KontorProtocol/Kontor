@@ -45,16 +45,17 @@ impl CounterBoundary {
     pub(super) fn instructions(&self) -> Vec<Inst> {
         // Compact calls reach the operation cap without exceeding compose's
         // independent script-data cap. The mixed recipe tests different work.
-        vec![
-            Inst {
-                gas_limit: GAS_LIMIT,
-                kind: InstKind::Call {
-                    contract: self.contract.clone(),
-                    expr: "increment()".into(),
-                },
-            };
-            MAX_BLS_BULK_OPS
-        ]
+        vec![self.instruction(); MAX_BLS_BULK_OPS]
+    }
+
+    pub(super) fn instruction(&self) -> Inst {
+        Inst {
+            gas_limit: GAS_LIMIT,
+            kind: InstKind::Call {
+                contract: self.contract.clone(),
+                expr: "increment()".into(),
+            },
+        }
     }
 
     pub(super) async fn check(
@@ -63,14 +64,16 @@ impl CounterBoundary {
         roots: &[&ResultRow],
         layout: MixedLayout,
         height: u64,
+        operations: usize,
     ) -> Result<()> {
-        ensure!(roots.len() == MAX_BLS_BULK_OPS);
+        ensure!(operations > 0 && roots.len() == operations);
         for (index, row) in roots.iter().enumerate() {
+            let (tx, input, op) = layout.position(index)?;
             ensure!(
                 row.height == height
-                    && row.tx_index == Some(0)
-                    && row.input_index == Some(0)
-                    && row.op_index == Some(u32::try_from(index)?)
+                    && row.tx_index == Some(tx)
+                    && row.input_index == Some(input)
+                    && row.op_index == Some(op)
                     && row.result_index == 0
                     && row.contract == self.contract.to_string()
                     && row.func == "increment"
@@ -85,7 +88,7 @@ impl CounterBoundary {
         }
         ensure!(
             from_wave_expr::<u64>(&runtime.execute_system_view(&self.contract, "get()").await?)
-                == u64::try_from(MAX_BLS_BULK_OPS)?
+                == u64::try_from(operations)?
         );
         Ok(())
     }
