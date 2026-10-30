@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result, ensure};
 use bitcoin::consensus::encode::VarInt;
-use bitcoin::consensus::serialize;
+use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::key::Keypair;
 use bitcoin::{Address, Block, BlockHash, OutPoint, Transaction, TxOut};
 use indexer_types::Inst;
@@ -27,7 +27,12 @@ fn weight(coinbase_weight: u64, transaction_weight: u64, transactions: usize) ->
         .context("block weight overflow")
 }
 
-async fn mine(client: &Client, address: &Address, ordered: &[Transaction]) -> Result<Block> {
+async fn mine(
+    client: &Client,
+    address: &Address,
+    ordered: &[Transaction],
+    submit: bool,
+) -> Result<Block> {
     let raw: Vec<_> = ordered
         .iter()
         .map(|tx| hex::encode(serialize(tx)))
@@ -35,7 +40,7 @@ async fn mine(client: &Client, address: &Address, ordered: &[Transaction]) -> Re
     let result: Value = client
         .call(
             "generateblock",
-            vec![json!(address.to_string()), json!(raw)],
+            vec![json!(address.to_string()), json!(raw), json!(submit)],
         )
         .await?;
     let hash = BlockHash::from_str(
@@ -43,7 +48,16 @@ async fn mine(client: &Client, address: &Address, ordered: &[Transaction]) -> Re
             .as_str()
             .context("missing capacity block hash")?,
     )?;
-    let block = client.get_block(&hash).await?;
+    let block: Block = if submit {
+        client.get_block(&hash).await?
+    } else {
+        deserialize(&hex::decode(
+            result["hex"]
+                .as_str()
+                .context("missing unsubmitted capacity block bytes")?,
+        )?)?
+    };
+    ensure!(block.block_hash() == hash);
     ensure!(
         block.txdata[1..] == *ordered,
         "capacity block changed input order"
@@ -72,17 +86,13 @@ pub(super) async fn block(
     .await?;
     let mut ordered = vec![commit, reveal.clone()];
     let mut reveals = vec![reveal];
-    // Measure a real coinbase at the target height, including the witness
-    // commitment. Invalidate only this disposable fixture block before packing.
-    let probe = mine(client, address, &ordered).await?;
-    let _: Value = client
-        .call(
-            "invalidateblock",
-            vec![json!(probe.block_hash().to_string())],
-        )
-        .await?;
+    // Have Bitcoin validate and construct the witness coinbase at the target
+    // height without submitting the probe or changing the funding anchor.
+    let probe = mine(client, address, &ordered, false).await?;
+    ensure!(probe.header.prev_blockhash == anchor);
     ensure!(client.get_blockchain_info().await?.blocks == ANCHOR_HEIGHT);
     ensure!(client.get_block_hash(ANCHOR_HEIGHT).await? == anchor);
+    ensure!(client.get_raw_mempool().await?.is_empty());
     let coinbase_weight = probe.txdata[0].weight().to_wu();
     let mut transaction_weight: u64 = ordered.iter().map(|tx| tx.weight().to_wu()).sum();
     let expected_pair_weight = transaction_weight;
@@ -111,7 +121,7 @@ pub(super) async fn block(
     let (next_pair_weight, next_block_weight) =
         next_pair.context("capacity funding exhausted before the block was full")?;
     let expected_weight = weight(coinbase_weight, transaction_weight, ordered.len())?;
-    let block = mine(client, address, &ordered).await?;
+    let block = mine(client, address, &ordered, true).await?;
     ensure!(block.header.prev_blockhash == anchor);
     ensure!(
         block.txdata[0].weight().to_wu() == coinbase_weight,
