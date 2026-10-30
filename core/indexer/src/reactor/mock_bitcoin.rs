@@ -23,15 +23,6 @@ pub fn make_tx(nonce: u32) -> bitcoin::Transaction {
     }
 }
 
-fn to_indexer_tx(index: usize, tx: &bitcoin::Transaction) -> indexer_types::Transaction {
-    indexer_types::Transaction {
-        txid: tx.compute_txid(),
-        index: index as u32,
-        inputs: vec![],
-        op_return_raw: None,
-    }
-}
-
 pub struct MockBitcoin {
     tip_height: u64,
     prev_hash: BlockHash,

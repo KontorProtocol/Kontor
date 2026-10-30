@@ -169,8 +169,10 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
                 .states
                 .insert(format!("{label}/executed"), state(&conn).await?);
         }
-        let block =
-            raw_confirmation_block(&raw, 2)?.recognize(|tx| reactor.executor.parse_transaction(tx));
+        let block = reactor
+            .executor
+            .parse_block(raw_confirmation_block(&raw, 2)?)
+            .await?;
         let (count, ops, errors) = reactor.execute_block(&block).await?;
         ensure!(count == usize::from(!batched) && ops == u64::from(!batched));
         ensure!(errors.iter().flatten().flatten().all(Option::is_none));
@@ -183,8 +185,10 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
             report
                 .states
                 .insert(format!("{label}/rollback"), state(&conn).await?);
-            let replacement = raw_confirmation_block(&raw, 4)?
-                .recognize(|tx| reactor.executor.parse_transaction(tx));
+            let replacement = reactor
+                .executor
+                .parse_block(raw_confirmation_block(&raw, 4)?)
+                .await?;
             let (count, ops, _) = reactor.execute_block(&replacement).await?;
             ensure!(
                 (count, ops) == (0, 0),

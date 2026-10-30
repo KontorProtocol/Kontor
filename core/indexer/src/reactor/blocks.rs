@@ -421,7 +421,13 @@ impl<E: Executor> Reactor<E> {
             .owner_service
             .begin_canonical(&mut self.runtime, false)
             .await?;
-        let block = block.recognize(|raw| self.executor.parse_transaction(raw));
+        let block = match self.executor.parse_block(block).await {
+            Ok(block) => block,
+            Err(error) => {
+                lease.complete(&mut self.runtime).await?;
+                return Err(error);
+            }
+        };
         self.runtime
             .storage
             .savepoint()

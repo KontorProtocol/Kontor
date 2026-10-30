@@ -6,6 +6,7 @@ use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::hashes::Hash;
 use bitcoin::{Network, Witness};
 use indexer_types::{Block, Transaction};
+use std::sync::Mutex;
 
 fn hash(n: u8) -> BlockHash {
     BlockHash::from_byte_array([n; 32])
@@ -301,9 +302,9 @@ fn delivery_preserves_unknown_transactions_and_witnesses_until_recognition() {
         raw.iter().map(|tx| tx.compute_txid()).collect::<Vec<_>>()
     );
     assert!(block.clone().recognize(|_| None).transactions.is_empty());
-    let mut seen = Vec::new();
+    let seen = Mutex::new(Vec::new());
     let parsed = block.recognize(|tx| {
-        seen.push(tx.clone());
+        seen.lock().unwrap().push(tx.clone());
         (tx.input[0].witness == raw[1].input[0].witness).then(|| Transaction {
             txid: tx.compute_txid(),
             index: 0,
@@ -311,7 +312,9 @@ fn delivery_preserves_unknown_transactions_and_witnesses_until_recognition() {
             op_return_raw: None,
         })
     });
-    assert_eq!(seen, raw);
+    let seen = seen.into_inner().unwrap();
+    assert_eq!(seen.len(), raw.len());
+    assert!(raw.iter().all(|tx| seen.contains(tx)));
     assert_eq!(parsed.transactions.len(), 1);
     assert_eq!(parsed.transactions[0].index, 1);
     assert_eq!(

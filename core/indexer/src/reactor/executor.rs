@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use bitcoin::Txid;
+use indexer_types::Block;
 use tracing::warn;
 
 use crate::bitcoin_client::error::Error as RpcError;
 use crate::bitcoin_client::types::Acceptance;
 use crate::bitcoin_client::{Client, check_mempool_acceptance};
+use crate::bitcoin_follower::block::BlockInput;
 use crate::block::filter_map;
 use crate::database::queries::insert_transaction_execution_usage;
 use crate::protocol::v1::execution;
@@ -28,7 +30,7 @@ pub enum TxPolicy {
 /// The consensus orchestration logic (`ConsensusState.process_decided_batch` and
 /// `run_finality_checks`) calls these methods instead of directly manipulating state.
 #[allow(async_fn_in_trait)]
-pub trait Executor {
+pub trait Executor: Sync {
     /// Start the I/O phase of validating `txs` against bitcoind: mempool
     /// policy acceptance plus the fee-threshold check, verdicts in input
     /// order.
@@ -106,6 +108,10 @@ pub trait Executor {
 
     /// Parse a bitcoin::Transaction into an indexer_types::Transaction.
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction>;
+
+    async fn parse_block(&self, block: BlockInput) -> Result<Block> {
+        Ok(block.recognize(|raw| self.parse_transaction(raw)))
+    }
 }
 
 /// Placeholder executor that does nothing.
@@ -155,6 +161,10 @@ pub struct RuntimeExecutor {
 }
 
 impl RuntimeExecutor {
+    fn recognize_transaction(tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
+        filter_map((0, tx.clone()))
+    }
+
     pub fn new(bitcoin_client: Client) -> Self {
         Self {
             bitcoin_client,
@@ -306,6 +316,15 @@ impl Executor for RuntimeExecutor {
     }
 
     fn parse_transaction(&self, tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
-        filter_map((0, tx.clone()))
+        Self::recognize_transaction(tx)
+    }
+
+    async fn parse_block(&self, block: BlockInput) -> Result<Block> {
+        // Parsing can decompress witnesses. Keep that CPU work off the async
+        // worker, with only owned raw input crossing the task boundary.
+        Ok(
+            tokio::task::spawn_blocking(move || block.recognize(Self::recognize_transaction))
+                .await?,
+        )
     }
 }

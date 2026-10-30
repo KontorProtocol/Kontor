@@ -1,5 +1,6 @@
 use bitcoin::{BlockHash, Transaction as BitcoinTransaction, Txid};
 use indexer_types::{Block, Transaction};
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlockInput {
@@ -46,11 +47,11 @@ impl BlockInput {
 
     pub(crate) fn recognize(
         self,
-        mut recognize: impl FnMut(&BitcoinTransaction) -> Option<Transaction>,
+        recognize: impl Fn(&BitcoinTransaction) -> Option<Transaction> + Sync + Send,
     ) -> Block {
         let transactions = match self.transactions {
             Transactions::Raw(transactions) => transactions
-                .iter()
+                .par_iter()
                 .enumerate()
                 .filter_map(|(index, raw)| {
                     recognize(raw).map(|mut transaction| {
