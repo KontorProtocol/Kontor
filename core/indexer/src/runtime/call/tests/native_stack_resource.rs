@@ -376,7 +376,13 @@ fn chain_worker_case() -> Result<()> {
                 && worker.os_thread_id != caller.os_thread_id
         }) && blocking.thread_id != caller.thread_id
             && blocking.os_thread_id != caller.os_thread_id,
-        "chain worker, blocking, and caller thread categories overlap"
+        "chain worker, blocking, and caller thread categories overlap: workers={:?}, blocking={:?}, caller={:?}",
+        workers
+            .iter()
+            .map(|worker| (worker.thread_id, worker.os_thread_id))
+            .collect::<Vec<_>>(),
+        (blocking.thread_id, blocking.os_thread_id),
+        (caller.thread_id, caller.os_thread_id),
     );
     #[cfg(target_os = "linux")]
     resource_diagnostics::start_chain_with_stack_probe(linux_blocking_thread_observation);
