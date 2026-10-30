@@ -105,6 +105,15 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Expose pinned Rust tools to controlled builds
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p "$CARGO_HOME/bin"
+          for rust_tool in cargo rustc; do
+            if [[ ! -e "$CARGO_HOME/bin/$rust_tool" ]]; then
+              ln -s "$(rustup which --toolchain "$RUSTUP_TOOLCHAIN" "$rust_tool")" "$CARGO_HOME/bin/$rust_tool"
+            fi
+          done
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
@@ -178,6 +187,15 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Expose pinned Rust tools to controlled builds
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p "$CARGO_HOME/bin"
+          for rust_tool in cargo rustc; do
+            if [[ ! -e "$CARGO_HOME/bin/$rust_tool" ]]; then
+              ln -s "$(rustup which --toolchain "$RUSTUP_TOOLCHAIN" "$rust_tool")" "$CARGO_HOME/bin/$rust_tool"
+            fi
+          done
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"

@@ -66,7 +66,7 @@
         "blocking_decode"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_brotli_raw_ceiling_evidence.py",
         "sha256": "be4f67204fee9f75b68f3c836ee9913e25887f7cde2989dac852bdf2d586f67e"
@@ -87,7 +87,7 @@
         "canonical_abi"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_canonical_evidence.py",
         "sha256": "0121c164b067bdca1497f2b98861bc5bbeb393d55acd6321b42476a62f646aa4"
@@ -106,7 +106,7 @@
         "canonical_abi"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_type_value_evidence.py",
         "sha256": "601d5cca284c16948b24ba129d91a778c22e03404c2860024076401eb6f3ff30"
@@ -136,7 +136,7 @@
         "distinct_contract_chain"
       ],
       "manifest": "v2",
-      "manifest_sha256": "1df090a4102e74ccb49837e6188e18db0b4d822b84b8631865e84f60349211a7",
+      "manifest_sha256": "00421f0082062668377a15197bffba5bbd19916a7e5153d74b5b6e0a9ef0e50f",
       "validator": {
         "path": "tools/native-stack/resource_evidence_v2.py",
         "sha256": "d7b22eb8a4e90485a60c96aa74f40ae774485ffc77d58bd20720a9147260b814"
@@ -157,7 +157,7 @@
         "cold_compile"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_cold_publication_evidence.py",
         "sha256": "77fe58805dbde865564df5cff99a1f795c7004e067f57f4cd42bd6b894461d18"
@@ -178,7 +178,7 @@
         "paid_limit"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_finite_evidence.py",
         "sha256": "b5771c046b0cebb678628dd96b589bc63355386c0db7256eef5d1c7d12aace89"
@@ -197,7 +197,7 @@
         "foreign_call"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_foreign_wave_evidence.py",
         "sha256": "d0904ddc24da4088ace027fa05ade57860944f57532eeb62591c4141a4ab2f66"
@@ -216,7 +216,7 @@
         "initialization"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_initialization_evidence.py",
         "sha256": "4248f4dac2edb1acede5425d1476be2a3b7131b67b3dd6872afd2c1ccdc9ee56"
@@ -235,7 +235,7 @@
         "native_core"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_native_filestorage_lifecycle_evidence.py",
         "sha256": "2b8ba25756e7f8de676750a7282824a4d2097223fbd3e19a92577efb89217eec"
@@ -254,7 +254,7 @@
         "native_core"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_native_staking_rewards_evidence.py",
         "sha256": "58fc80021b1c98305a4752de6d3744eebbb7e05db4fa8dd9876a69c08e9033de"
@@ -273,7 +273,7 @@
         "suspension"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_pending_evidence.py",
         "sha256": "869b86058904910bc9e3641adb12f271561bf7fe141d42ba0dfd239187bf9f65"
@@ -301,7 +301,7 @@
         "pulley_host_callback"
       ],
       "manifest": "boundary",
-      "manifest_sha256": "f1ede3ac96a5a49286f4acf26a7697c0a2f0dbeaa4d167fa004e67a7c7f7f1c2",
+      "manifest_sha256": "2edcaa41223bd795cda6d3ee589246a61f4ffd9f1d31d04d03b7d57459d4d477",
       "validator": {
         "path": "tools/native-stack/resource_boundary_evidence.py",
         "sha256": "adcbd999065858e561305c04fce7e689cf7d884e7ea0742f398beffca75e87af"
@@ -321,7 +321,7 @@
         "resource_lifecycle"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_lifecycle_evidence.py",
         "sha256": "184266d6cd8068d75e5488ba88e959599ac61f53704b3533463667b7133fb948"
@@ -340,7 +340,7 @@
         "sqlite"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_sqlite_large_values_evidence.py",
         "sha256": "7fc466b9469d134fe319f78c44e0f0d744ddcfb0f9f04b4fdde4eaeb25ace5f6"
@@ -359,7 +359,7 @@
         "sqlite"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_sqlite_pagination_evidence.py",
         "sha256": "7bc05505e2a4f4036e7d5c2c59533d86317ca26b8a407813df301b0ee376cf86"
@@ -378,7 +378,7 @@
         "sqlite"
       ],
       "manifest": "v1",
-      "manifest_sha256": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
+      "manifest_sha256": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
       "validator": {
         "path": "tools/native-stack/resource_sqlite_ranges_evidence.py",
         "sha256": "f2616420c101bd1861d57a2937e332d49ee81223872888edfa4ce63563956964"
@@ -386,12 +386,12 @@
     }
   },
   "parent_manifests": {
-    "boundary": "f1ede3ac96a5a49286f4acf26a7697c0a2f0dbeaa4d167fa004e67a7c7f7f1c2",
-    "v1": "2f3485d4384818541d55770746829011d73928627220f305b4ac1e8e9fd0d0c5",
-    "v2": "1df090a4102e74ccb49837e6188e18db0b4d822b84b8631865e84f60349211a7"
+    "boundary": "2edcaa41223bd795cda6d3ee589246a61f4ffd9f1d31d04d03b7d57459d4d477",
+    "v1": "0d5b5c060cf1a774d6f7bf30219069901347cdfd799e44622a2de031131338b5",
+    "v2": "00421f0082062668377a15197bffba5bbd19916a7e5153d74b5b6e0a9ef0e50f"
   },
   "remaining_gates": {
-    "boundary_discovery": "candidate_only",
+    "boundary_discovery": "pending_discovery",
     "common_head_six_cell_capture": "missing",
     "cross_cell_semantic_comparison": "source_ready_unmeasured",
     "macos_guard_capture": "missing",

@@ -562,7 +562,7 @@
     },
     "suite_workflow": {
       "path": ".github/workflows/native-stack-s2.yml",
-      "sha256": "2c53b3cc468ca62b919da307d154bb13ef0051dffc1a6b20725fe70918443b15"
+      "sha256": "97f060451969730f830e66b4736067cd0cecbcdd0507c855b2ca867c195c268d"
     },
     "suspended_64_plan": {
       "path": "tools/native-stack/resource-suspended-64-plan-v1.json",
