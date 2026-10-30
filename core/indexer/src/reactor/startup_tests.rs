@@ -11,9 +11,10 @@ use tokio::time::{interval, sleep, timeout};
 use super::engine::EngineConfig;
 use super::executor::NoopExecutor;
 use super::mempool_fee_index::MempoolFeeIndex;
-use super::{PruneConfig, Reactor, run, start_consensus};
+use super::{PruneConfig, Reactor, create_runtime_executor, run, start_consensus};
 use crate::bitcoin_client::Client;
 use crate::consensus::signing::PrivateKey;
+use crate::database::Writer;
 use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::logging;
 use crate::reg_tester::random_x_only_pubkey;
@@ -25,8 +26,8 @@ use crate::test_utils::{
 };
 
 #[tokio::test]
-async fn shutdown_during_owned_genesis_keeps_writer_until_publication_finishes() -> Result<()> {
-    let (_reader, writer, (dir, _name)) = new_test_db().await?;
+async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() -> Result<()> {
+    let (reader, writer, (dir, name)) = new_test_db().await?;
     let conn = writer.connection();
     let gate = Arc::new(BlockingGate::default());
     let owner = OwnerService::new();
@@ -75,6 +76,7 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_finishes()
     .await;
     let live_roots = owner.active_roots().await;
     shutdown.cancel();
+    owner.shutdown();
     let retained = timeout(Duration::from_millis(100), &mut reactor)
         .await
         .is_err();
@@ -85,16 +87,82 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_finishes()
         retained,
         "reactor released its writer while genesis work was live"
     );
-    timeout(Duration::from_secs(60), reactor).await???;
+    let outcome = timeout(Duration::from_secs(60), reactor).await??;
+    if let Err(error) = &outcome {
+        assert!(
+            format!("{error:#}").contains("operation-owner node admission closed"),
+            "unexpected startup failure: {error:#}"
+        );
+    }
     assert!(conn.is_autocommit());
-    let mut rows = conn.query("SELECT COUNT(*) FROM contracts", ()).await?;
+    {
+        let reader_conn = reader.connection().await?;
+        let mut rows = reader_conn
+            .query("SELECT id, name FROM contracts ORDER BY id", ())
+            .await?;
+        let mut published = 0;
+        while let Some(row) = rows.next().await? {
+            let (name, _) = NATIVE_CONTRACTS
+                .get(published)
+                .expect("shutdown published beyond the native set");
+            assert_eq!(row.get::<i64>(0)?, published as i64 + 1);
+            assert_eq!(row.get::<String>(1)?, *name);
+            published += 1;
+        }
+        assert!(published > 0, "active native publication was lost");
+        if outcome.is_ok() {
+            assert_eq!(published, NATIVE_CONTRACTS.len());
+        } else {
+            assert!(published < NATIVE_CONTRACTS.len());
+        }
+        let mut rows = reader_conn
+            .query(
+                "SELECT (SELECT COUNT(*) FROM contract_provenance WHERE contract_id > ?1)
+                  + (SELECT COUNT(*) FROM contract_state WHERE contract_id > ?1)
+                  + (SELECT COUNT(*) FROM contract_results WHERE contract_id > ?1)",
+                [published as i64],
+            )
+            .await?;
+        assert_eq!(
+            rows.next().await?.expect("orphan count").get::<i64>(0)?,
+            0,
+            "unfinished native publication left durable rows"
+        );
+    }
+    assert_eq!(owner.active_roots().await, 0);
+    assert_eq!(owner.quarantined_roots().await, 0);
+    assert!(!owner.is_fatal());
+    timeout(Duration::from_secs(2), &mut driver).await???;
+
+    // Shutdown closes new admissions after the active publication drains. A
+    // fresh owner must complete the native suffix from the committed prefix.
+    let resumed_writer = Writer::new(dir.path(), &name).await?;
+    let resumed_owner = OwnerService::new();
+    let mut resumed_driver = resumed_owner
+        .take_driver()
+        .expect("resumed owner has a driver");
+    let (_, resumed_runtime, _, _) = create_runtime_executor(
+        1,
+        &resumed_writer,
+        &resumed_owner,
+        Client::new("".to_string(), "".to_string(), "".to_string())?,
+        None,
+        &test_genesis(&[]),
+        bitcoin::Network::Regtest,
+    )
+    .await?;
+    assert!(resumed_runtime.storage.conn.is_autocommit());
+    let reader_conn = reader.connection().await?;
+    let mut rows = reader_conn
+        .query("SELECT COUNT(*) FROM contracts", ())
+        .await?;
     assert_eq!(
         rows.next().await?.expect("contract count").get::<i64>(0)?,
         NATIVE_CONTRACTS.len() as i64
     );
-    assert_eq!(owner.active_roots().await, 0);
-    owner.shutdown();
-    timeout(Duration::from_secs(2), &mut driver).await???;
+    assert_eq!(resumed_owner.active_roots().await, 0);
+    resumed_owner.shutdown();
+    timeout(Duration::from_secs(2), &mut resumed_driver).await???;
     Ok(())
 }
 
