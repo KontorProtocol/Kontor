@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
 mod confirmation;
+mod simulation;
 
 /// Envelope used by every JSON success response from the indexer API
 /// (`{ "result": ... }`). Tests deserialize into `ApiResult<T>` and read the
