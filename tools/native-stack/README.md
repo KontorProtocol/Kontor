@@ -433,6 +433,32 @@ other five cells and cross-node comparisons remain required for S2
 qualification. It does not establish performance, production recovery, or
 capacity policy.
 
+At source `9a80bf5ff32f9df4b6cc40842099b9d995236c5e`, the Linux ARM64
+development native filestorage lifecycle capture completed four isolated
+children and 24 attempts. Each child repeated expiry of 32 due challenges,
+settlement of 32 expired penalties, and a nine-step cleanup call within the
+separate 32-step cleanup budget. Deterministic regtest setup created the
+backlog; the measured operations used the real native Core calls. The
+standalone validator accepted all four runs and checked the exact one,
+65, and one receipt graph, each penalty's decimal burn and remaining stake
+in challenge-ID order, collateral reservations, obligations, and full
+persistent-state restoration across repeats, roles, and worker stack settings.
+The two observed children recorded 268 created and 268 destroyed Stores.
+Each child measured all three blocking decode threads actually used by the
+default pool, including their stack guards. The exact-source build attestation
+SHA-256 is
+`a56c1ed903e5ad9095e147dba77e71bc76d338ad9be4dadb6767a2aa5a06195c`;
+the test binary SHA-256 is
+`cf5f285dfc19c472fbdefee6db14c6e8cb40a740dbff3a73e9d79a52da3f9add`.
+The guard control SHA-256 is
+`99e3d298df5904f22f9c92ac321ba59f5510329fd04fe883ff203867c200f7ec`,
+and the capture SHA-256 is
+`29a101e571de0f22d1214cc2ec9b274c0494453d2372419acebccfaaffa0c166`.
+This is one local diagnostic cell with `qualification_status: missing`.
+The other five cells and cross-node comparisons remain required for S2
+qualification. Larger-replica staged cleanup, injected recovery failures,
+complete reward accounting, and isolated service timing remain untested.
+
 At source `8c5fe25a11b286cbbf37ec53958c8409c18626aa`, the Linux ARM64
 development canonical capture completed 12 child processes, 56 attempts, and
 268 closed Store lifecycles. The standalone validator accepted all 12 runs.
