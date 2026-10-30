@@ -127,8 +127,11 @@ class PendingHostEvidenceTests(unittest.TestCase):
                              "source": "/proc/self/status:VmRSS"},
                 "private": {"bytes": private,
                             "source": "/proc/self/smaps_rollup:Private_Clean+Private_Dirty"},
-                "node_accounted": {"bytes": charged,
-                                   "source": "/sys/fs/cgroup/memory.current"},
+                "accounted_scope": {
+                    "bytes": charged,
+                    "source": "/sys/fs/cgroup/memory.current",
+                    "scope": "cgroup_total_including_other_processes_and_cache",
+                },
             }
 
         run = {
@@ -143,7 +146,7 @@ class PendingHostEvidenceTests(unittest.TestCase):
                 "pending_host_calls": 1, "reactor_roots": 1,
                 "view_roots": 0, "live_stores": 64, "reservations": 64,
                 "other_task_progressed": True,
-                "guest_memory_occupancy_bytes": 0,
+                "deliberate_guest_memory_pressure_bytes": 0,
                 "cache_state": "warm_compiled_cache",
                 "configuration": "production", "profile_id": "suspended_64",
             },

@@ -82,7 +82,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "af5d595972ae7c4ea90a2583a322526ca86e6bf8e43504e803ebaca805238e9d"
+      "sha256": "1ab2b8869e4a9e147ce1f2ff2230a1d1803ffd7fb5c57a3dd90f9e01c290ac4b"
     },
     "cold_publication_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/cold_publication.rs",
@@ -342,11 +342,11 @@
     },
     "pending_host_tests": {
       "path": "tools/native-stack/test_resource_pending_evidence.py",
-      "sha256": "761437b204d41291f1f1f378e67b4f50aef0a37b707a39dcde8ea789cb9ac983"
+      "sha256": "ff1b11ccad630b34f33fa609036ed6fbfa6a9830d8f6bacb25be685f423f192a"
     },
     "pending_host_validator": {
       "path": "tools/native-stack/resource_pending_evidence.py",
-      "sha256": "f719f3bfae09165a7ae4d70d0e2721411def63b34603bf6f68e86606d66d2fae"
+      "sha256": "869b86058904910bc9e3641adb12f271561bf7fe141d42ba0dfd239187bf9f65"
     },
     "pricing_source": {
       "path": "core/indexer/src/runtime/pricing.rs",
@@ -510,7 +510,7 @@
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "f2ee57e0af13470adbd025c43ee91a1df231ba1cd64ef164d31718cbf05b8096"
+      "sha256": "a9798a3da68a4b5695c90823bc59dbc9e6eeff4771b589d0773731b6b2eb275f"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -554,7 +554,7 @@
     },
     "suite_runbook": {
       "path": "tools/native-stack/resource-suite-runbook.md",
-      "sha256": "0310971897b848bd3a51a769872cf61626c678bdaf454787bdd183f1c0103d6d"
+      "sha256": "9a05471ab3928bcfc755e672b191ca7ddc22b7a9303b0cb6a8d9358d9d266b5a"
     },
     "suite_workflow": {
       "path": ".github/workflows/native-stack-s2.yml",
@@ -562,11 +562,11 @@
     },
     "suspended_64_plan": {
       "path": "tools/native-stack/resource-suspended-64-plan-v1.json",
-      "sha256": "6979261a6bf749dbbf9ad5aaa6e1877578828398fc33a4773ecd08bc7a9300c9"
+      "sha256": "84ad83b050c51a6d48db3b5d23101fcc73d0452bd9ded4f6afde6913424d15a5"
     },
     "suspended_memory_source": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/memory.rs",
-      "sha256": "3b74c368423167fd43190135a421c188d5fb40c6a7c85fc97028a7402f867535"
+      "sha256": "3a4ba218b8b790f22dcd569a2c322adfca919d88835ac310a998dbb81f75bff3"
     },
     "test_runtime_setup": {
       "path": "core/indexer/src/test_utils.rs",

@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::env;
+use std::future::{Future, poll_fn};
 use std::process;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};

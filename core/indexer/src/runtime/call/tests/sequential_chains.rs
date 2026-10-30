@@ -463,7 +463,7 @@ async fn run_chain_probe(
                         "live_stores": budget.live(),
                         "reservations": budget.peak(),
                         "other_task_progressed": true,
-                        "guest_memory_occupancy_bytes": 0,
+                        "deliberate_guest_memory_pressure_bytes": 0,
                         "cache_state": "warm_compiled_cache",
                         "configuration": "production",
                         "profile_id": "suspended_64",

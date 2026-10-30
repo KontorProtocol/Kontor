@@ -136,7 +136,8 @@ pub(crate) fn snapshot() -> Result<JsonValue> {
                      "source": "/proc/self/status:VmRSS"},
         "private": {"bytes": private,
                     "source": "/proc/self/smaps_rollup:Private_Clean+Private_Dirty"},
-        "node_accounted": {"bytes": charged, "source": charge_source},
+        "accounted_scope": {"bytes": charged, "source": charge_source,
+                            "scope": "cgroup_total_including_other_processes_and_cache"},
     }))
 }
 
@@ -192,7 +193,8 @@ pub(crate) fn snapshot() -> Result<JsonValue> {
         "resident": {"bytes": resident,
                      "source": "task_vm_info.resident_size"},
         "private": {"bytes": private, "source": "task_vm_info.internal"},
-        "node_accounted": {"bytes": footprint,
-                           "source": "task_vm_info.phys_footprint"},
+        "accounted_scope": {"bytes": footprint,
+                            "source": "task_vm_info.phys_footprint",
+                            "scope": "process_task_phys_footprint"},
     }))
 }

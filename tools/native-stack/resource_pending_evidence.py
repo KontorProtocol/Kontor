@@ -343,7 +343,7 @@ def validate_suspended_64(run, manifest, cell):
             and plan["nested_invocation_depth"] == 64
             and plan["configuration"] == "production"
             and plan["process_role"] == "target_observed"
-            and plan["guest_memory_occupancy_bytes"] == 0
+            and plan["deliberate_guest_memory_pressure_bytes"] == 0
             and plan["cache_state"] == "warm_compiled_cache"
             and plan["required_service"] == {
                 "host_calls_pending_at_peak": 1,
@@ -367,15 +367,15 @@ def validate_suspended_64(run, manifest, cell):
             and set(peak_record) == {"memory", "pending_host_calls", "reactor_roots",
                                  "view_roots", "live_stores",
                                  "reservations", "other_task_progressed",
-                                 "guest_memory_occupancy_bytes", "cache_state",
+                                 "deliberate_guest_memory_pressure_bytes", "cache_state",
                                  "configuration", "profile_id"}
             and peak_record["pending_host_calls"] == 1
             and peak_record["reactor_roots"] == 1
             and peak_record["view_roots"] == 0
             and peak_record["live_stores"] == peak_record["reservations"] == 64
             and peak_record["other_task_progressed"] is True
-            and peak_record["guest_memory_occupancy_bytes"] ==
-                plan["guest_memory_occupancy_bytes"]
+            and peak_record["deliberate_guest_memory_pressure_bytes"] ==
+                plan["deliberate_guest_memory_pressure_bytes"]
             and peak_record["cache_state"] == plan["cache_state"]
             and peak_record["configuration"] == "production"
             and peak_record["profile_id"] == "suspended_64"
@@ -395,7 +395,7 @@ def validate_suspended_64(run, manifest, cell):
         "mapped_reservation": "task_vm_info.virtual_size",
         "resident": "task_vm_info.resident_size",
         "private": "task_vm_info.internal",
-        "node_accounted": "task_vm_info.phys_footprint",
+        "accounted_scope": "task_vm_info.phys_footprint",
     })
     snapshots = (baseline, peak_record["memory"], completion["memory"])
     for snapshot in snapshots:
@@ -403,7 +403,7 @@ def validate_suspended_64(run, manifest, cell):
                 and set(snapshot) == {"os", "pid", "cpu_count",
                                       "physical_memory_bytes", "enforcement",
                                       "mapped_reservation", "resident",
-                                      "private", "node_accounted"}
+                                      "private", "accounted_scope"}
                 and snapshot["os"] == os_name
                 and snapshot["pid"] == run["process"]["pid"]
                 and type(snapshot["cpu_count"]) is int
@@ -415,10 +415,12 @@ def validate_suspended_64(run, manifest, cell):
                     {"memory_field", "memory_source"},
                 "suspended-64 host or process memory identity differs")
         for metric in ("mapped_reservation", "resident", "private",
-                       "node_accounted"):
+                       "accounted_scope"):
             value = snapshot[metric]
             require(isinstance(value, dict)
-                    and set(value) == {"bytes", "source"}
+                    and set(value) == ({"bytes", "source", "scope"}
+                                       if metric == "accounted_scope"
+                                       else {"bytes", "source"})
                     and type(value["bytes"]) is int and value["bytes"] >= 0
                     and isinstance(value["source"], str) and value["source"],
                     f"suspended-64 {metric} measurement is invalid")
@@ -426,7 +428,7 @@ def validate_suspended_64(run, manifest, cell):
                 require(value["source"] == sources[metric],
                         f"suspended-64 {metric} OS source differs")
         if os_name == "linux":
-            charge_source = snapshot["node_accounted"]["source"]
+            charge_source = snapshot["accounted_scope"]["source"]
             limit_source = snapshot["enforcement"]["memory_source"]
             require(charge_source.startswith("/sys/fs/cgroup/")
                     and ".." not in Path(charge_source).parts
@@ -435,12 +437,16 @@ def validate_suspended_64(run, manifest, cell):
                          or (charge_source.endswith("/memory.usage_in_bytes")
                              and limit_source == charge_source.removesuffix(
                                  "usage_in_bytes") + "limit_in_bytes"))
+                and snapshot["accounted_scope"]["scope"] ==
+                    "cgroup_total_including_other_processes_and_cache"
                 and re.fullmatch(r"max|[0-9]+",
                                  snapshot["enforcement"]["memory_field"]),
                 "suspended-64 Linux cgroup memory accounting is invalid")
         else:
             require(snapshot["enforcement"] ==
-                    {"memory_field": "none", "memory_source": "none"},
+                    {"memory_field": "none", "memory_source": "none"}
+                    and snapshot["accounted_scope"]["scope"] ==
+                    "process_task_phys_footprint",
                     "suspended-64 macOS enforcement label differs")
     require(all(snapshot["cpu_count"] == baseline["cpu_count"]
                 and snapshot["physical_memory_bytes"] ==
@@ -455,8 +461,8 @@ def validate_suspended_64(run, manifest, cell):
             and peak["mapped_reservation"]["bytes"] <=
                 plan["mapped_reservation_allowance_bytes"]
             and peak["resident"]["bytes"] <= plan["resident_allowance_bytes"]
-            and peak["node_accounted"]["bytes"] <=
-                plan["node_accounted_allowance_bytes"],
+            and peak["accounted_scope"]["bytes"] <=
+                plan["accounted_scope_allowance_bytes"],
             "suspended-64 private, mapped, resident, or charged allowance exceeded")
     workers = [item for item in run["runtime"]["thread_observations"]
                if item["thread_category"] == "tokio_worker"]
