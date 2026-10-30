@@ -45,6 +45,11 @@ RECEIPT_KEYS = {
 DECIMAL_RECORD = (
     r"\{r0: ([0-9]+), r1: ([0-9]+), r2: ([0-9]+), "
     r"r3: ([0-9]+), sign: plus\}")
+TOKEN_RESULT = re.compile(
+    r"ok\(\{src: signer-id\(4\), amt: " + DECIMAL_RECORD + r"\}\)")
+STAKING_RESULT = re.compile(
+    r"ok\(\{burned: " + DECIMAL_RECORD +
+    r", remaining: " + DECIMAL_RECORD + r"\}\)")
 
 
 def decimal(value, label):
@@ -96,14 +101,17 @@ def validate_receipts(receipts, sample):
                 and isinstance(receipt["value"], str) and receipt["value"]
                 and (receipt["value"] == root_value
                      if contract == "filestorage" else
-                     receipt["value"].startswith(
-                         "ok({src: signer-id(4), amt: " if contract == "token"
-                         else "ok({burned: "))
+                     (TOKEN_RESULT if contract == "token" else STAKING_RESULT)
+                     .fullmatch(receipt["value"]) is not None)
                 and type(receipt["size"]) is int
                 and receipt["size"] == len(receipt["value"].encode())
                 and type(receipt["signer_id"]) is int
                 and receipt["signer_id"] == expected_signer
-                and receipt["payer_signer_id"] == expected_payer
+                and ((type(receipt["payer_signer_id"]) is int
+                      and receipt["payer_signer_id"] == expected_payer)
+                     if contract == "filestorage" else
+                     receipt["payer_signer_id"] is None)
+                and type(receipt["height"]) is int
                 and receipt["height"] == 2016
                 and all(receipt[key] is None for key in
                         ("tx_id", "input_index", "op_index"))
@@ -125,13 +133,8 @@ def validate_penalty_receipt_values(receipts, challenge_ids, requirements):
     remaining = Decimal(9000)
     for index, (_, required) in enumerate(ordered):
         burn, slash = receipts[2 * index:2 * index + 2]
-        token = re.fullmatch(
-            r"ok\(\{src: signer-id\(4\), amt: " + DECIMAL_RECORD + r"\}\)",
-            burn["value"])
-        staking = re.fullmatch(
-            r"ok\(\{burned: " + DECIMAL_RECORD +
-            r", remaining: " + DECIMAL_RECORD + r"\}\)",
-            slash["value"])
+        token = TOKEN_RESULT.fullmatch(burn["value"])
+        staking = STAKING_RESULT.fullmatch(slash["value"])
         require(token is not None and staking is not None,
                 "filestorage nested penalty result shape changed")
         amount = required * 30

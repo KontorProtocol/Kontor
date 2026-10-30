@@ -199,6 +199,12 @@ class FilestorageLifecycleEvidenceTests(unittest.TestCase):
                         receipts[1]["size"] = len(receipts[1]["value"])
                 with self.assertRaises(ValueError):
                     self.validate(item)
+        for payer in (True, 1.0, "1"):
+            with self.subTest(root_payer=payer):
+                item = copy.deepcopy(baseline)
+                item["observation"]["measured_receipts"][-1]["payer_signer_id"] = payer
+                with self.assertRaises(ValueError):
+                    self.validate(item)
 
     def test_rejects_missing_or_reordered_canonical_phases(self):
         def event(name):
