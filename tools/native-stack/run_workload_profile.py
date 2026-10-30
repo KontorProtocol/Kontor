@@ -20,6 +20,31 @@ from workload_views import ViewService
 
 
 PROFILES = {"conservative": (2, 12 * 1024**3), "burst": (8, 16 * 1024**3)}
+HISTORICAL_REPLAY = "reactor::workload_tests::smoke::populated::timed::archive::workload_saved_timed_historical_replay"
+TIMED_REPLAYS = (
+    HISTORICAL_REPLAY,
+    "reactor::workload_tests::smoke::populated::timed::archive::workload_saved_timed_events_replay",
+)
+BOUNDARY_REPLAYS = (
+    "reactor::workload_tests::smoke::populated::workload_aggregate_operation_limit_preserves_accounting",
+    "reactor::workload_tests::smoke::populated::workload_full_block_capacity_preserves_accounting",
+)
+
+
+def view_restores(test):
+    if test == HISTORICAL_REPLAY:
+        return ["timed-one.db", "timed-two.db"]
+    if test in BOUNDARY_REPLAYS:
+        return ["first.db", "second.db"]
+    raise ValueError("external views require a supported two-restore workload")
+
+
+def memory_restores(test):
+    if test in TIMED_REPLAYS:
+        return ["timed-one.db", "timed-two.db"]
+    if test in BOUNDARY_REPLAYS:
+        return ["first.db", "second.db"]
+    raise ValueError("trial memory requires a supported two-restore workload")
 
 
 def require(condition, message):
@@ -88,11 +113,11 @@ def check_result(log, before, after):
             "workload incurred an out-of-memory event")
 
 
-def trial_measurements(log, pid, directory, enforced):
+def trial_measurements(log, pid, directory, enforced, restores=("timed-one.db", "timed-two.db")):
     prefix = "workload_trial_memory="
     trials = [json.loads(line.removeprefix(prefix)) for line in log.splitlines()
               if line.startswith(prefix)]
-    require([trial["restore"] for trial in trials] == ["timed-one.db", "timed-two.db"],
+    require([trial["restore"] for trial in trials] == list(restores),
             "expected exactly two ordered trial memory records")
     for trial in trials:
         require(trial["schema_version"] == 1 and trial["pid"] == pid
@@ -223,18 +248,19 @@ def worker(spec_path):
             require(not external or "workload_external_bitcoin=true\n" in transcript,
                     "workload did not confirm use of the external Bitcoin service")
             if spec.get("trial_memory"):
+                restores = memory_restores(spec["test"])
                 observation["trials"] = trial_measurements(
-                    transcript, child.pid, directory, enforced)
+                    transcript, child.pid, directory, enforced, restores)
                 drained = [json.loads(line.split("=", 1)[1]) for line in transcript.splitlines()
                            if line.startswith("workload_drained_stores=")]
-                require([item["restore"] for item in drained] == ["timed-one.db", "timed-two.db"]
+                require([item["restore"] for item in drained] == restores
                         and all(item["snapshot"]["live_roots"] == 0
                                 and item["snapshot"]["live_stores"] == 0 for item in drained),
                         "workload Stores did not drain after both restores")
                 observation["drained_stores"] = drained
                 caches = [json.loads(line.split("=", 1)[1]) for line in transcript.splitlines()
                           if line.startswith("workload_replay_cache=")]
-                require([item["restore"] for item in caches] == ["timed-one.db", "timed-two.db"]
+                require([item["restore"] for item in caches] == restores
                         and all((item["warm_simulation_cache"] or item["before"] == [0, 0])
                                 and item["after"][0] > 0 and item["after"][1] > 0 for item in caches),
                         "replay cache state differs from declared setup")
@@ -283,15 +309,16 @@ def run(args):
     require("KONTOR_WORKLOAD_VIEW_SOCKET" not in environment,
             "use --external-views to supervise the external HTTP clients")
     if args.trial_memory:
-        prefix = "reactor::workload_tests::smoke::populated::timed::archive::"
-        require(args.bitcoin_binary and args.test in (
-            prefix + "workload_saved_timed_events_replay",
-            prefix + "workload_saved_timed_historical_replay"),
-            "trial memory requires a saved timed replay and external Bitcoin")
+        memory_restores(args.test)
+        require(args.bitcoin_binary,
+                "trial memory requires external Bitcoin")
         environment["KONTOR_WORKLOAD_TRIAL_MEMORY"] = "1"
-    if args.external_arrivals or args.external_views:
-        require(args.test == "reactor::workload_tests::smoke::populated::timed::archive::workload_saved_timed_historical_replay",
+    if args.external_arrivals:
+        require(args.test == HISTORICAL_REPLAY,
                 "external arrivals currently require the frozen historical replay")
+    if args.external_views:
+        view_restores(args.test)
+        require(args.bitcoin_binary, "external views require supervisor-owned Bitcoin")
     bitcoin = None
     arrivals = None
     views = None
@@ -335,7 +362,7 @@ def run(args):
         measurement = json.loads((output / "measurement.json").read_text())
         require([item["report"] for item in measurement["view_sessions"]] == views.trials,
                 "measured view reports differ from external client observations")
-        require([trial["restore"] for trial in views.trials] == ["timed-one.db", "timed-two.db"],
+        require([trial["restore"] for trial in views.trials] == view_restores(args.test),
                 "external view sessions differ from replay restores")
     return code
 

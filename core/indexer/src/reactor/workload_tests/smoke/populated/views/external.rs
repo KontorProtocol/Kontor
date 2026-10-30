@@ -20,7 +20,7 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 use super::super::clock::monotonic_ns;
-use super::{CLIENTS, CounterProgress, MixedConfig, PAGE_SAMPLES, pagination};
+use super::{CLIENTS, CounterProgress, PAGE_SAMPLES, ViewConfig, pagination};
 use crate::api::Env;
 use crate::api::handlers::post_contract;
 use crate::api::result::Result as ApiResult;
@@ -84,7 +84,7 @@ async fn receive(stream: &mut BufReader<UnixStream>) -> Result<Value> {
 pub(super) async fn run<T>(
     directory: &Path,
     filename: &str,
-    config: MixedConfig,
+    config: ViewConfig,
     pool: Pool<Manager>,
     pages: ContractAddress,
     counter: ContractAddress,

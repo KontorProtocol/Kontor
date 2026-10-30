@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
@@ -26,6 +27,7 @@ use crate::reg_tester::{derive_taproot_keypair_from_seed, workload_bitcoin};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
+use crate::runtime::workload_telemetry::WorkloadTelemetry;
 use crate::runtime::{ComponentCache, Decimal, Runtime, Storage, TransactionContext};
 
 mod aggregate_boundary;
@@ -39,6 +41,7 @@ mod configuration;
 mod files;
 mod history;
 mod many;
+mod measurement;
 mod mixed;
 mod oracle;
 mod pagination;
@@ -60,6 +63,7 @@ use batch::pending::Pending;
 use checkpoint::Checkpoint;
 use configuration::MixedConfig;
 use history::HistoryPopulation;
+use measurement::TrialMemory;
 use mixed::{MixedLayout, MixedWorkload, Progress};
 use oracle::{PaidEffects, root_receipts};
 use pruning::PruningProof;
@@ -868,6 +872,11 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
             .conn(writer.connection())
             .build();
         let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+        let telemetry = (counter_boundary.is_some()
+            && std::env::var_os("KONTOR_WORKLOAD_TRIAL_MEMORY").is_some())
+        .then(|| Arc::new(WorkloadTelemetry::default()));
+        runtime.workload_telemetry = telemetry.clone();
+        let cache = runtime.component_cache.clone();
         runtime.network = Network::Regtest;
         let engine_dir = TempDir::new_in(directory.path())?;
         let mut trial = reactor(
@@ -891,6 +900,13 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
         let mut model = before.clone();
         let mut pending = Pending::new(ANCHOR_HEIGHT);
         let work = async {
+            let boundary_measurement = if counter_boundary.is_some() {
+                cache.clear();
+                ensure!(cache.workload_metrics().await == (0, 0));
+                TrialMemory::start(telemetry.clone())?
+            } else {
+                None
+            };
             let mut projections = Vec::new();
             for (ordinal, input) in inputs.iter().enumerate() {
                 let mixed = &workloads[ordinal];
@@ -1188,17 +1204,48 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                     serde_json::json!({"trial":name,"ordinal":ordinal,"height":height,"hash":block.hash,"transactions":txids.len()})
                 );
             }
+            if counter_boundary.is_some() {
+                eprintln!(
+                    "workload_replay_cache={}",
+                    serde_json::json!({
+                        "restore": name, "before": [0, 0], "after": cache.workload_metrics().await,
+                        "metric": "entry count and encoded-byte weight; not compiled code bytes",
+                        "warm_simulation_cache": false
+                    })
+                );
+            }
+            if let Some(measurement) = boundary_measurement {
+                measurement.finish(name, false)?;
+            }
             Ok(projections)
         };
-        let projections = views::run_steps(
-            directory.path(),
-            name,
-            view_config,
-            &projection_before,
-            steps,
-            work,
-        )
-        .await?;
+        let projections = if let Some(boundary) = &counter_boundary {
+            let operations = if delivery == Delivery::BlockCapacity {
+                inputs[0].reveals.len()
+            } else {
+                10_000
+            };
+            boundary
+                .run_with_views(
+                    directory.path(),
+                    name,
+                    &projection_before,
+                    operations,
+                    telemetry.clone(),
+                    work,
+                )
+                .await?
+        } else {
+            views::run_steps(
+                directory.path(),
+                name,
+                view_config,
+                &projection_before,
+                steps,
+                work,
+            )
+            .await?
+        };
         if let Some(expected) = &expected_projection {
             ensure!(
                 projections.len() == expected.len(),
@@ -1206,6 +1253,17 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
             );
         }
         expected_projection = Some(projections);
+        if let Some(telemetry) = telemetry {
+            let drained = telemetry.snapshot();
+            ensure!(
+                drained.live_roots == 0 && drained.live_stores == 0,
+                "boundary workload left invocation Stores alive after draining views"
+            );
+            eprintln!(
+                "workload_drained_stores={}",
+                serde_json::json!({"restore":name,"snapshot":drained})
+            );
+        }
         stop_engine(&mut trial).await?;
     }
     ensure!(database_projection(&history.db_conn()).await? == projection_before);

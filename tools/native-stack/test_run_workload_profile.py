@@ -23,11 +23,20 @@ class ProfileChecks(unittest.TestCase):
                    "before": copy.deepcopy(sample), "after": copy.deepcopy(sample)}
                   for name in ("timed-one.db", "timed-two.db")]
 
-        def check(records):
+        def check(records, restores=("timed-one.db", "timed-two.db")):
             log = "\n".join("workload_trial_memory=" + json.dumps(item) for item in records)
-            return trial_measurements(log, 100, Path("/test"), enforced)
+            return trial_measurements(log, 100, Path("/test"), enforced, restores)
 
         self.assertEqual(check(trials), trials)
+        boundary = copy.deepcopy(trials)
+        for trial, name in zip(boundary, ("first.db", "second.db"), strict=True):
+            trial["restore"] = name
+        self.assertEqual(check(boundary, ("first.db", "second.db")), boundary)
+        for records in (trials, boundary[::-1], boundary[:1], boundary + boundary):
+            with self.subTest(boundary_records=len(records)), self.assertRaises(ValueError):
+                check(records, ("first.db", "second.db"))
+        with self.assertRaises(ValueError):
+            check(boundary)
         for records in ([], trials[:1], trials[::-1], trials + trials):
             with self.subTest(records=len(records)), self.assertRaises(ValueError):
                 check(records)

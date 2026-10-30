@@ -15,6 +15,7 @@ use super::super::super::super::{
 };
 use super::super::super::checkpoint::Checkpoint;
 use super::super::super::history::HistoryPopulation;
+use super::super::super::measurement::TrialMemory;
 use super::super::super::mixed::{ApiRecipe, MixedLayout, MixedWorkload};
 use super::super::super::oracle::Before;
 use super::super::super::replay_identity::ReplayIdentity;
@@ -25,7 +26,6 @@ use super::super::dispatch::historical;
 use super::super::run::warm;
 use super::super::work::{InputPlan, TimedWork};
 use super::format::{Inputs, Saved};
-use super::measurement::TrialMemory;
 use crate::database::Writer;
 use crate::database::queries::{get_identity, select_latest_consensus_height};
 use crate::reg_tester::workload_bitcoin;

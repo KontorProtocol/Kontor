@@ -25,6 +25,12 @@ use crate::runtime::{Runtime, from_wave_expr};
 const CLIENTS: usize = 8;
 const PAGE_SAMPLES: usize = 5;
 
+#[derive(Clone, Copy)]
+pub(super) struct ViewConfig {
+    pub(super) live_keys: usize,
+    pub(super) historical_rows: usize,
+}
+
 #[cfg(target_os = "linux")]
 mod external;
 
@@ -101,6 +107,34 @@ pub(super) async fn run_progress<T>(
         return work.await;
     };
     ensure!(config.view_concurrency == CLIENTS);
+    run_target(
+        directory,
+        filename,
+        ViewConfig {
+            live_keys: config.live_keys,
+            historical_rows: config.historical_rows,
+        },
+        before,
+        ContractAddress {
+            name: "mixedcounter".into(),
+            height: ANCHOR_HEIGHT,
+            tx_index: 7,
+        },
+        progress,
+        work,
+    )
+    .await
+}
+
+pub(super) async fn run_target<T>(
+    directory: &Path,
+    filename: &str,
+    config: ViewConfig,
+    before: &Value,
+    counter: ContractAddress,
+    progress: CounterProgress,
+    work: impl Future<Output = Result<T>>,
+) -> Result<T> {
     let pool: Pool<Manager> = Pool::builder(Manager::new(
         directory.to_path_buf(),
         filename.into(),
@@ -116,11 +150,6 @@ pub(super) async fn run_progress<T>(
         } else {
             ANCHOR_HEIGHT
         },
-        tx_index: 7,
-    };
-    let counter = ContractAddress {
-        name: "mixedcounter".into(),
-        height: ANCHOR_HEIGHT,
         tx_index: 7,
     };
     let expected_counter = progress.maximum;

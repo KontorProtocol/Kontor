@@ -1,11 +1,22 @@
+use std::future::Future;
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+
 use anyhow::{Result, ensure};
 use indexer_types::{ContractAddress, Inst, InstKind, OpStatus, ResultRow};
+use serde_json::Value;
 
 use super::mixed::MixedLayout;
+use super::pagination;
+use super::views::{self, CounterProgress, ViewConfig};
 use super::{ANCHOR_HEIGHT, GAS_LIMIT, test_provenance};
 use crate::bls::MAX_BLS_BULK_OPS;
 use crate::runtime::wit::Signer;
+use crate::runtime::workload_telemetry::WorkloadTelemetry;
 use crate::runtime::{Runtime, TransactionContext, from_wave_expr};
+
+const VIEW_KEYS: usize = 257;
 
 pub(super) struct CounterBoundary {
     contract: ContractAddress,
@@ -39,6 +50,7 @@ impl CounterBoundary {
         ensure!(
             from_wave_expr::<u64>(&runtime.execute_system_view(&contract, "get()").await?) == 0
         );
+        pagination::prepare(runtime, VIEW_KEYS).await?;
         Ok(Self { contract })
     }
 
@@ -56,6 +68,36 @@ impl CounterBoundary {
                 expr: "increment()".into(),
             },
         }
+    }
+
+    pub(super) async fn run_with_views<T>(
+        &self,
+        directory: &Path,
+        restore: &str,
+        before: &Value,
+        operations: usize,
+        telemetry: Option<Arc<WorkloadTelemetry>>,
+        work: impl Future<Output = Result<T>>,
+    ) -> Result<T> {
+        ensure!(operations > 0);
+        let maximum = u64::try_from(operations)?;
+        views::run_target(
+            directory,
+            restore,
+            ViewConfig {
+                live_keys: VIEW_KEYS,
+                historical_rows: 0,
+            },
+            before,
+            self.contract.clone(),
+            CounterProgress {
+                maximum,
+                completed: Arc::new(AtomicU64::new(maximum)),
+                telemetry,
+            },
+            work,
+        )
+        .await
     }
 
     pub(super) async fn check(
