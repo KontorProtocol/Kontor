@@ -914,6 +914,13 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                 }
                 let projection = database_projection(&trial.db_conn()).await?;
                 if intervening.is_some() {
+                    let mut unknown = Pending::new(block.height - 1);
+                    let error = unknown
+                        .check_block(&trial, block)
+                        .await
+                        .err()
+                        .context("untracked batch confirmation was accepted")?;
+                    ensure!(error.to_string() == "untracked batch confirmation");
                     let mut omitted = block.clone();
                     omitted.transactions.clear();
                     let mut duplicate = block.clone();

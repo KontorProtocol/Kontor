@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{BatchProof, TransactionProof, receipts};
 use crate::consensus::FINALITY_WINDOW;
+use crate::database::queries::get_transaction_by_txid;
 use crate::reactor::Reactor;
 use crate::reactor::executor::RuntimeExecutor;
 
@@ -143,6 +144,7 @@ impl Pending {
             trial.last_height == block.height && trial.last_hash == Some(block.hash),
             "pending block differs from canonical tip"
         );
+        let conn = trial.db_conn();
         let mut positions = BTreeMap::new();
         let mut raw_positions = BTreeSet::new();
         for (index, transaction) in block.transactions.iter().enumerate() {
@@ -161,8 +163,16 @@ impl Pending {
                 !self.seen.contains(&txid) || self.entries.contains_key(&txid),
                 "batch transaction confirmed twice"
             );
+            if !self.seen.contains(&txid) {
+                let transaction = get_transaction_by_txid(&conn, &txid)
+                    .await?
+                    .context("block transaction disappeared")?;
+                ensure!(
+                    transaction.batch_height.is_none(),
+                    "untracked batch confirmation"
+                );
+            }
         }
-        let conn = trial.db_conn();
         let mut anchors = BTreeMap::new();
         let mut confirmed = Vec::new();
         let mut checked = Vec::new();
