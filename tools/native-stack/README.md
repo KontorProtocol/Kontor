@@ -671,11 +671,19 @@ Excluding setup refers to the measurement interval: allocations and charged
 file cache retained from setup still contribute to baseline, peak and final
 memory. This does not establish a cold OS page cache.
 
+Opt-in Store counters are attached to the replay runtime and all eight view
+pool runtimes. They count actual `InvocationStore` lifetimes through Store
+teardown, distinguishing roots at invocation depth one from nested Stores.
+Peaks reset atomically at the trial boundary, including any views already in
+flight. Each restore must drain to zero live Stores and roots. Replay and view
+cache reports include entry counts and encoded-component byte weights after
+pending cache maintenance, not estimates of compiled-code memory.
+
 The wrapper requires exactly two ordered records from the measured PID and
 cgroup with unchanged limits. Swap, OOM and memory-limit pressure events fail
 validation. Raw records remain in `workload.log` on failure. These windows still
 include in-process scheduling and semantic verification; they do not establish
-external load-generator separation, cache/root telemetry, or the full phase
+complete external load-generator separation or the full phase
 memory acceptance gate. The whole-service peak remains separately reported.
 
 ## Historical replay with live API arrivals

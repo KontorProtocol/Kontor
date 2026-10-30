@@ -19,6 +19,7 @@ use super::configuration::MixedConfig;
 use super::pagination;
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
 use crate::runtime::pool::Manager;
+use crate::runtime::workload_telemetry::WorkloadTelemetry;
 use crate::runtime::{Runtime, from_wave_expr};
 
 const CLIENTS: usize = 8;
@@ -27,6 +28,7 @@ const PAGE_SAMPLES: usize = 5;
 pub(super) struct CounterProgress {
     pub(super) maximum: u64,
     pub(super) completed: Arc<AtomicU64>,
+    pub(super) telemetry: Option<Arc<WorkloadTelemetry>>,
 }
 
 async fn check_connection(runtime: &Runtime) -> Result<()> {
@@ -77,6 +79,7 @@ pub(super) async fn run_steps<T>(
         CounterProgress {
             maximum,
             completed: Arc::new(AtomicU64::new(maximum)),
+            telemetry: None,
         },
         work,
     )
@@ -121,7 +124,8 @@ pub(super) async fn run_progress<T>(
     let mut connections = Vec::with_capacity(CLIENTS);
     // All fallible setup precedes the barrier, so a failed checkout cannot strand workers.
     for _ in 0..CLIENTS {
-        let runtime = pool.get().await?;
+        let mut runtime = pool.get().await?;
+        runtime.workload_telemetry = progress.telemetry.clone();
         check_connection(&runtime).await?;
         connections.push(runtime);
     }
@@ -138,6 +142,8 @@ pub(super) async fn run_progress<T>(
     ensure!(counter_value(&mut connections[0], &counter).await? == 0);
     ensure!(database_projection(&connections[0].storage.conn).await? == *before);
 
+    let cache = connections[0].component_cache.clone();
+    let cache_before = cache.workload_metrics().await;
     let barrier = Arc::new(Barrier::new(CLIENTS + 1));
     let writer_started = Arc::new(AtomicBool::new(false));
     let stopped = Arc::new(AtomicBool::new(false));
@@ -239,6 +245,8 @@ pub(super) async fn run_progress<T>(
             "peak_inflight_page_calls": peak.load(Ordering::SeqCst), "writer_interval_ns": writer_ns,
             "writer_interval_scope": "canonical work and caller-provided checks; excludes setup and final view drain",
             "timing_claim": "diagnostic_only", "workers": observations,
+            "cache_before": cache_before, "cache_after": cache.workload_metrics().await,
+            "cache_metric": "entry count and encoded-byte weight; not compiled code bytes",
         })
     );
     Ok(result)

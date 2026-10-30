@@ -30,6 +30,7 @@ use crate::database::Writer;
 use crate::database::queries::{get_identity, select_latest_consensus_height};
 use crate::reg_tester::workload_bitcoin;
 use crate::runtime::staking::api as staking;
+use crate::runtime::workload_telemetry::WorkloadTelemetry;
 use crate::runtime::{ComponentCache, Runtime, Storage};
 
 pub(super) async fn run(saved: Saved) -> Result<()> {
@@ -224,13 +225,17 @@ async fn run_mode(saved: Saved, paced_api: bool) -> Result<()> {
         // Model reconstruction performs contract views. Its cache and transient
         // execution state must not leak into the declared replay setup.
         drop(runtime);
+        let telemetry = std::env::var_os("KONTOR_WORKLOAD_TRIAL_MEMORY")
+            .map(|_| Arc::new(WorkloadTelemetry::default()));
         let storage = Storage::builder()
             .height(ANCHOR_HEIGHT)
             .conn(writer.connection())
             .build();
         let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+        runtime.workload_telemetry = telemetry.clone();
         runtime.network = Network::Regtest;
         warm(&mut runtime, manifest.settings.mixed.warm_simulation_cache).await?;
+        let cache = runtime.component_cache.clone();
         let mut trial = reactor(
             runtime,
             client.clone(),
@@ -256,7 +261,8 @@ async fn run_mode(saved: Saved, paced_api: bool) -> Result<()> {
                 history.as_ref(),
             )
             .await?;
-            let measurement = TrialMemory::start()?;
+            let cache_before = cache.workload_metrics().await;
+            let measurement = TrialMemory::start(telemetry.clone())?;
             if paced_api {
                 let report = historical::run(plan.schedule.clone(), &mut adapter).await?;
                 ensure!(adapter.api_results.is_empty());
@@ -281,6 +287,14 @@ async fn run_mode(saved: Saved, paced_api: bool) -> Result<()> {
                 ensure!(adapter.api_results.len() == expected_api.len());
             }
             ensure!(adapter.checkpoints.len() == expected.len());
+            eprintln!(
+                "workload_replay_cache={}",
+                serde_json::json!({
+                    "restore":name, "before":cache_before, "after":cache.workload_metrics().await,
+                    "metric":"entry count and encoded-byte weight; not compiled code bytes",
+                    "warm_simulation_cache":manifest.settings.mixed.warm_simulation_cache
+                })
+            );
             if let Some(measurement) = measurement {
                 measurement.finish(name, paced_api)?;
             }
@@ -294,10 +308,22 @@ async fn run_mode(saved: Saved, paced_api: bool) -> Result<()> {
             CounterProgress {
                 maximum,
                 completed: counter,
+                telemetry: telemetry.clone(),
             },
             work,
         )
         .await?;
+        if let Some(telemetry) = telemetry {
+            let drained = telemetry.snapshot();
+            ensure!(
+                drained.live_roots == 0 && drained.live_stores == 0,
+                "workload left invocation Stores alive after draining views"
+            );
+            eprintln!(
+                "workload_drained_stores={}",
+                serde_json::json!({"restore":name,"snapshot":drained})
+            );
+        }
         stop_engine(&mut trial).await?;
     }
     saved.verify()?;

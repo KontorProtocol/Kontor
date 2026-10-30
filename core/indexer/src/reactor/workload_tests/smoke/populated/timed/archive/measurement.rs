@@ -2,11 +2,14 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use serde_json::json;
+
+use crate::runtime::workload_telemetry::{Snapshot, WorkloadTelemetry};
 
 #[derive(Serialize)]
 struct Sample {
@@ -92,10 +95,12 @@ pub(super) struct TrialMemory {
     before: Sample,
     limits: BTreeMap<String, String>,
     started: Instant,
+    telemetry: Arc<WorkloadTelemetry>,
+    roots_before: Snapshot,
 }
 
 impl TrialMemory {
-    pub(super) fn start() -> Result<Option<Self>> {
+    pub(super) fn start(telemetry: Option<Arc<WorkloadTelemetry>>) -> Result<Option<Self>> {
         let Some(enabled) = std::env::var_os("KONTOR_WORKLOAD_TRIAL_MEMORY") else {
             return Ok(None);
         };
@@ -115,12 +120,16 @@ impl TrialMemory {
         let mut reset = String::new();
         peak.read_to_string(&mut reset)?;
         let _: u64 = reset.trim().parse().context("invalid reset peak")?;
+        let telemetry = telemetry.context("missing workload Store telemetry")?;
+        let roots_before = telemetry.begin_window();
         Ok(Some(Self {
             directory,
             peak,
             before,
             limits,
             started: Instant::now(),
+            telemetry,
+            roots_before,
         }))
     }
 
@@ -142,6 +151,8 @@ impl TrialMemory {
                 "pid": std::process::id(), "cgroup": self.directory,
                 "limits": self.limits, "elapsed_ns": self.started.elapsed().as_nanos(),
                 "before": self.before, "after": after, "peak_bytes": peak,
+                "stores_before": self.roots_before, "stores_after": self.telemetry.snapshot(),
+                "store_metric": "live InvocationStores through completed Store teardown; roots have invocation depth 1",
                 "scope": "replay with competing views, in-process scheduling and semantic oracles; setup and external Bitcoin excluded",
                 "peak_reset": "same_open_file_description"
             })

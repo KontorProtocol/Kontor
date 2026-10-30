@@ -20,6 +20,8 @@ use serde_json::{Value as JsonValue, json};
 
 use super::Runtime;
 #[cfg(test)]
+use super::workload_telemetry::StoreGuard;
+#[cfg(test)]
 use super::{ContractAddress, token};
 
 pub(super) const MAX_LIVE_INVOCATIONS: u32 = 64;
@@ -319,6 +321,8 @@ impl std::error::Error for InvocationCapacityExhausted {}
 pub(crate) struct InvocationStore {
     store: Store<Runtime>,
     #[cfg(test)]
+    _workload_store: Option<StoreGuard>,
+    #[cfg(test)]
     _lifecycle_probe: Option<LifecycleProbe>,
     // Store must finish deallocating before its lease releases capacity.
     #[cfg(test)]
@@ -348,6 +352,12 @@ impl Drop for TeardownProbe {
 impl InvocationStore {
     pub(super) fn new(store: Store<Runtime>, lease: InvocationLease) -> Self {
         #[cfg(test)]
+        let workload_store = store
+            .data()
+            .workload_telemetry
+            .as_ref()
+            .map(|telemetry| telemetry.store(store.data().invocation_depth == 1));
+        #[cfg(test)]
         let lifecycle_probe = lease.teardown_token.as_ref().map(|token| {
             token.recorder.store_created(token, &store.data().table);
             LifecycleProbe {
@@ -357,6 +367,8 @@ impl InvocationStore {
         });
         Self {
             store,
+            #[cfg(test)]
+            _workload_store: workload_store,
             #[cfg(test)]
             _lifecycle_probe: lifecycle_probe,
             #[cfg(test)]

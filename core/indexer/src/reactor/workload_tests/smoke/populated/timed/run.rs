@@ -422,6 +422,7 @@ async fn workload_timed_mixed_event_replay() -> Result<()> {
             CounterProgress {
                 maximum,
                 completed: counter,
+                telemetry: None,
             },
             work,
         )

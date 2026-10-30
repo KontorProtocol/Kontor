@@ -25,6 +25,8 @@ pub mod system;
 pub mod token;
 mod types;
 pub mod wit;
+#[cfg(test)]
+pub(crate) mod workload_telemetry;
 
 mod call;
 mod fees;
@@ -55,6 +57,8 @@ pub use stdlib::{
 use storage::{ComponentDecodeError, print_component_wit};
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
+#[cfg(test)]
+use workload_telemetry::WorkloadTelemetry;
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
@@ -282,6 +286,8 @@ pub struct Runtime {
     invocation_budget: Option<Arc<InvocationBudget>>,
     invocation_depth: u32,
     #[cfg(test)]
+    pub(crate) workload_telemetry: Option<Arc<WorkloadTelemetry>>,
+    #[cfg(test)]
     resource_probe_phase: Option<ResourceProbePhase>,
     #[cfg(test)]
     conversion_probe: Option<conversion_probe::Probe>,
@@ -451,6 +457,8 @@ impl Runtime {
             guest_memory_limiter: None,
             invocation_budget: None,
             invocation_depth: 0,
+            #[cfg(test)]
+            workload_telemetry: None,
             #[cfg(test)]
             resource_probe_phase: None,
             #[cfg(test)]

@@ -104,6 +104,13 @@ def trial_measurements(log, pid, directory, enforced):
                 and type(trial["peak_bytes"]) is int and trial["peak_bytes"] > 0,
                 "trial has no measured duration or peak")
         before, after = trial["before"], trial["after"]
+        roots = trial["stores_after"]
+        require(0 <= roots["live_roots"] <= roots["live_stores"]
+                and roots["live_roots"] <= roots["peak_roots"]
+                and roots["live_stores"] <= roots["peak_stores"]
+                and 0 < roots["peak_roots"] <= roots["peak_stores"]
+                and 0 < roots["created_roots"] <= roots["created_stores"],
+                "trial Store telemetry is missing or inconsistent")
         for sample in (before, after):
             require(sample["swap_current_bytes"] == 0,
                     "trial used swap")
@@ -213,6 +220,13 @@ def worker(spec_path):
             if spec.get("trial_memory"):
                 observation["trials"] = trial_measurements(
                     transcript, child.pid, directory, enforced)
+                drained = [json.loads(line.split("=", 1)[1]) for line in transcript.splitlines()
+                           if line.startswith("workload_drained_stores=")]
+                require([item["restore"] for item in drained] == ["timed-one.db", "timed-two.db"]
+                        and all(item["snapshot"]["live_roots"] == 0
+                                and item["snapshot"]["live_stores"] == 0 for item in drained),
+                        "workload Stores did not drain after both restores")
+                observation["drained_stores"] = drained
             if arrival_service:
                 markers = [json.loads(line.split("=", 1)[1]) for line in transcript.splitlines()
                            if line.startswith("workload_external_arrivals=")]

@@ -100,6 +100,10 @@
       "path": "tools/native-stack/test_resource_cold_publication_evidence.py",
       "sha256": "20bf6f53f6043e06e8aa924c4c0988f0e1515b22b4621a4200ce0f393013d713"
     },
+    "component_cache": {
+      "path": "core/indexer/src/runtime/component_cache.rs",
+      "sha256": "8c1756b671c11d2215f9bbaeaaec93dc4f3928922b48ce162d52a20bf5236bea"
+    },
     "core_lockfile": {
       "path": "core/Cargo.lock",
       "sha256": "6e7ea3f1f76c383f267f9b00125a86dc01de45f7f3a2e5082da89598265b525f"
@@ -246,7 +250,7 @@
     },
     "invocation_budget": {
       "path": "core/indexer/src/runtime/invocation.rs",
-      "sha256": "4b92bc61d40beba9e537381f3eba4cf514e2807b1930cfcc3a1569daa6c5f524"
+      "sha256": "6bfac3ffa8530f58c6fb607b0e6740665a21e46b80e4db8b3aa4de18f1c10856"
     },
     "macos_worker_capacity_guard": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
@@ -362,7 +366,7 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "a733da4444ca07f1fa884c4249df6d624b0a3389bbfff3c324a0663f3fb65dde"
+      "sha256": "7468205bb5f06513625a6f1b6fb170907f52e36ed39d02fc78c4af409fd7dd75"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
@@ -414,7 +418,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "a4bfb96c0edf067c35e327b99f2094fdc20ec51d0dcb22880327f51d8f82f83e"
+      "sha256": "70f7c835c0936d902176696565547f08ff106c0e502dea584ccd12411405db80"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -607,6 +611,10 @@
     "type_value_wit": {
       "path": "test-contracts/type-value/fixture.wit",
       "sha256": "b2b92e8bebcec76d4226d51a86cf348a7e971ecb008e6c99a1fedeb500b175b3"
+    },
+    "workload_store_telemetry": {
+      "path": "core/indexer/src/runtime/workload_telemetry.rs",
+      "sha256": "4ab157a78f9a7da64a26ccb8e4cd639adba9f8b7a529985e114a305317644597"
     }
   },
   "attestation_status": {

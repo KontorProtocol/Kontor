@@ -18,6 +18,8 @@ class ProfileChecks(unittest.TestCase):
                    "cgroup": "/test", "peak_reset": "same_open_file_description",
                    "limits": {key: str(value) for key, value in enforced.items()},
                    "elapsed_ns": 1, "peak_bytes": 2048,
+                   "stores_after": {"live_roots": 0, "live_stores": 0, "peak_roots": 2,
+                                    "peak_stores": 3, "created_roots": 4, "created_stores": 8},
                    "before": copy.deepcopy(sample), "after": copy.deepcopy(sample)}
                   for name in ("timed-one.db", "timed-two.db")]
 
@@ -42,6 +44,10 @@ class ProfileChecks(unittest.TestCase):
                 check(changed)
         changed = copy.deepcopy(trials)
         changed[1]["before"]["swap_current_bytes"] = 1
+        with self.assertRaises(ValueError):
+            check(changed)
+        changed = copy.deepcopy(trials)
+        changed[1]["stores_after"]["live_roots"] = 2
         with self.assertRaises(ValueError):
             check(changed)
 

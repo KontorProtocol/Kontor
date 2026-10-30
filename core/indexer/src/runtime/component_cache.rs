@@ -15,6 +15,12 @@ pub struct ComponentCache {
 }
 
 impl ComponentCache {
+    #[cfg(test)]
+    pub(crate) async fn workload_metrics(&self) -> (u64, u64) {
+        self.inner.run_pending_tasks().await;
+        (self.inner.entry_count(), self.inner.weighted_size())
+    }
+
     pub fn new() -> Self {
         Self {
             inner: Cache::builder()
