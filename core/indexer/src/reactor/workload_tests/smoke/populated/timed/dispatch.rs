@@ -9,6 +9,7 @@ use tokio::time::{Instant, sleep_until};
 
 use super::{Action, Event, Schedule};
 
+pub(super) mod historical;
 mod tests;
 
 pub(super) trait Work {
@@ -26,7 +27,7 @@ pub(super) struct ReplayObservation {
 }
 
 impl ReplayObservation {
-    fn new(
+    pub(super) fn new(
         event: &Event,
         before: Instant,
         dispatch: Instant,
@@ -74,6 +75,10 @@ struct Arrivals {
 
 impl Arrivals {
     fn new(schedule: Schedule) -> Result<Self> {
+        Self::filtered(schedule, false)
+    }
+
+    fn filtered(schedule: Schedule, api_only: bool) -> Result<Self> {
         schedule.validate()?;
         let schedule = Arc::new(schedule);
         let source = schedule.clone();
@@ -81,6 +86,9 @@ impl Arrivals {
         let start = Instant::now();
         let producer = tokio::spawn(async move {
             for event in &source.events {
+                if api_only && event.action.canonical() {
+                    continue;
+                }
                 let due = start
                     .checked_add(Duration::from_secs(event.at_seconds))
                     .context("arrival deadline overflow")?;

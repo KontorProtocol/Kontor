@@ -21,6 +21,7 @@ use super::super::super::replay_identity::ReplayIdentity;
 use super::super::super::views::{self, CounterProgress};
 use super::super::Action;
 use super::super::dispatch;
+use super::super::dispatch::historical;
 use super::super::run::warm;
 use super::super::work::{InputPlan, TimedWork};
 use super::format::{Inputs, Saved};
@@ -31,6 +32,18 @@ use crate::runtime::staking::api as staking;
 use crate::runtime::{ComponentCache, Runtime, Storage};
 
 pub(super) async fn run(saved: Saved) -> Result<()> {
+    run_mode(saved, false).await
+}
+
+pub(super) async fn run_historical(saved: Saved) -> Result<()> {
+    ensure!(
+        saved.manifest.schedule.spec.fresh_backlog == 0,
+        "historical replay requires complete mixed intervals"
+    );
+    run_mode(saved, true).await
+}
+
+async fn run_mode(saved: Saved, paced_api: bool) -> Result<()> {
     let manifest = &saved.manifest;
     let digest = saved
         .digest
@@ -242,23 +255,30 @@ pub(super) async fn run(saved: Saved) -> Result<()> {
                 history.as_ref(),
             )
             .await?;
-            for event in &plan.schedule.events {
-                let timing = dispatch::replay_event(event, &mut adapter).await?;
-                if let Action::Simulation { request, .. } = event.action {
-                    ensure!(
-                        adapter.api_results.get(request) == expected_api.get(request),
-                        "saved timed API result differs at request {request}"
+            if paced_api {
+                let report = historical::run(plan.schedule.clone(), &mut adapter).await?;
+                ensure!(adapter.api_results.is_empty());
+                eprintln!(
+                    "workload_historical_replay={}",
+                    serde_json::json!({"restore":name,"report":report})
+                );
+            } else {
+                for event in &plan.schedule.events {
+                    let timing = dispatch::replay_event(event, &mut adapter).await?;
+                    if let Action::Simulation { request, .. } = event.action {
+                        ensure!(
+                            adapter.api_results.get(request) == expected_api.get(request),
+                            "saved timed API result differs at request {request}"
+                        );
+                    }
+                    eprintln!(
+                        "workload_replay_service={}",
+                        serde_json::json!({"restore":name,"timing":timing})
                     );
                 }
-                eprintln!(
-                    "workload_replay_service={}",
-                    serde_json::json!({"restore":name,"timing":timing})
-                );
+                ensure!(adapter.api_results.len() == expected_api.len());
             }
-            ensure!(
-                adapter.checkpoints.len() == expected.len()
-                    && adapter.api_results.len() == expected_api.len()
-            );
+            ensure!(adapter.checkpoints.len() == expected.len());
             Ok(())
         };
         views::run_progress(
@@ -278,9 +298,16 @@ pub(super) async fn run(saved: Saved) -> Result<()> {
     saved.verify()?;
     identity.finish()?;
     bitcoin.0.kill().await?;
-    eprintln!(
-        "workload_saved_timed_replay_passed={}",
-        serde_json::json!({"events": manifest.events.len(), "api_requests": expected_api.len(), "restores":2,"manifest_sha256":digest})
-    );
+    if paced_api {
+        eprintln!(
+            "workload_saved_timed_historical_replay_passed={}",
+            serde_json::json!({"events":manifest.events.len(),"archived_api_inputs":expected_api.len(),"restores":2,"manifest_sha256":digest})
+        );
+    } else {
+        eprintln!(
+            "workload_saved_timed_replay_passed={}",
+            serde_json::json!({"events": manifest.events.len(), "api_requests": expected_api.len(), "restores":2,"manifest_sha256":digest})
+        );
+    }
     Ok(())
 }

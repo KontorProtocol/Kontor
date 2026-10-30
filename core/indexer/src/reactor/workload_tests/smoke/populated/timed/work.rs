@@ -33,6 +33,8 @@ use crate::reactor::batches::BatchOutcome;
 use crate::reactor::executor::RuntimeExecutor;
 use crate::runtime::TransactionContext;
 
+mod historical;
+
 #[derive(Clone)]
 pub(super) struct ApiInput {
     pub(super) commit: Transaction,
@@ -196,6 +198,7 @@ pub(super) struct TimedWork<'a> {
     expected: Option<&'a [Checkpoint]>,
     pub(super) checkpoints: Vec<Checkpoint>,
     pub(super) api_results: Vec<Vec<OpWithResult>>,
+    external_requests: usize,
 }
 
 impl<'a> TimedWork<'a> {
@@ -241,6 +244,7 @@ impl<'a> TimedWork<'a> {
             expected,
             checkpoints: Vec::new(),
             api_results: Vec::new(),
+            external_requests: 0,
         })
     }
 
