@@ -9,6 +9,7 @@ use bitcoin::{Block as BitcoinBlock, Network, Transaction, Witness};
 use indexer_types::Block;
 use libsql::{Connection, Value, params};
 use malachitebft_engine::node::NodeRef;
+use tempfile::TempDir;
 use testlib::sample_provenance;
 use tokio::time::timeout;
 
