@@ -54,7 +54,7 @@ use batch::pending::Pending;
 use checkpoint::Checkpoint;
 use configuration::MixedConfig;
 use history::HistoryPopulation;
-use mixed::{MixedLayout, MixedWorkload};
+use mixed::{MixedLayout, MixedWorkload, Progress};
 use oracle::{PaidEffects, root_receipts};
 use pruning::PruningProof;
 use sequence_inputs::BlockInput;
@@ -836,11 +836,17 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                 };
                 let batches = match delivery {
                     Delivery::Configured(config) if config.batch_operations > 0 => {
-                        BatchProof::execute_chunks(
+                        Progress::new(
+                            mixed.as_ref().context("missing mixed batch recipe")?,
+                            layout,
+                            &txids,
+                        )?
+                        .execute_chunks(
                             &mut trial,
                             reveals,
                             config.batch_operations,
                             checkpoint_directory.path(),
+                            &mut model,
                         )
                         .await?
                     }
@@ -868,7 +874,10 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                     pending.record(batch, plan)?;
                 }
                 pending.check_unconfirmed(&trial).await?;
-                if delivery.batched() {
+                if delivery.batched()
+                    && !matches!(delivery,
+                    Delivery::Configured(config) if config.batch_operations > 0)
+                {
                     let effects = mixed
                         .as_ref()
                         .map(|mixed| mixed.effects(layout))

@@ -204,9 +204,41 @@ impl FileWorkload {
     }
 
     async fn check_state(&self, runtime: &mut Runtime) -> Result<()> {
-        let total = u64::try_from(self.initial_files.len())?
-            .checked_add(u64::try_from(self.agreements.len())?)
+        self.check_prefix(
+            runtime,
+            self.agreements.len(),
+            self.agreements.len(),
+            &self.roots,
+        )
+        .await
+    }
+
+    pub(super) async fn check_pending(&self, runtime: &mut Runtime, created: usize) -> Result<()> {
+        ensure!(created <= self.len(), "file prefix exceeds frozen recipe");
+        self.check_prefix(
+            runtime,
+            self.step_start + created,
+            self.step_start,
+            &self.roots[..self.roots.len() - 1],
+        )
+        .await
+    }
+
+    async fn check_prefix(
+        &self,
+        runtime: &mut Runtime,
+        created: usize,
+        folded: usize,
+        roots: &[Vec<u8>],
+    ) -> Result<()> {
+        ensure!(folded <= created && created <= self.agreements.len());
+        let initial = u64::try_from(self.initial_files.len())?;
+        let total = initial
+            .checked_add(u64::try_from(created)?)
             .context("file count overflow")?;
+        let settled = initial
+            .checked_add(u64::try_from(folded)?)
+            .context("file frontier overflow")?;
         ensure!(api::agreement_count(runtime).await? == total);
         let active = api::get_all_active_agreements(runtime).await?;
         ensure!(active.len() == self.active_ids.len());
@@ -217,7 +249,7 @@ impl FileWorkload {
                 .collect::<BTreeSet<_>>()
                 == self.active_ids
         );
-        for expected in &self.agreements {
+        for expected in &self.agreements[..created] {
             let descriptor = &expected.descriptor;
             let actual = api::get_agreement(runtime, &descriptor.file_id)
                 .await?
@@ -257,19 +289,37 @@ impl FileWorkload {
         );
         ensure!(
             cursor(runtime, contract, 21, 0).await? == 0
-                && cursor(runtime, contract, 21, 1).await? == u64::try_from(self.roots.len())?
+                && cursor(runtime, contract, 21, 1).await? == u64::try_from(roots.len())?
         );
         ensure!(
-            cursor(runtime, contract, 22, 0).await? == total
+            cursor(runtime, contract, 22, 0).await? == settled
                 && cursor(runtime, contract, 22, 1).await? == total
         );
-        for field in [23, 25] {
+        for (field, count) in [(23, settled), (25, total)] {
             ensure!(
                 stored::<u64>(runtime, contract, &KeyPath::new().push_interned(field)).await?
-                    == Some(total)
+                    == Some(count)
             );
         }
-        for (index, expected) in self.roots.iter().enumerate() {
+        for expected in &self.agreements[folded..created] {
+            let path = KeyPath::new()
+                .push_interned(22)
+                .push_interned(2)
+                .push_element(&expected.ledger_index);
+            ensure!(
+                stored::<Vec<u8>>(runtime, contract, &path.push_interned(0)).await?
+                    == Some(expected.descriptor.root.clone())
+            );
+            ensure!(
+                stored::<u64>(runtime, contract, &path.push_interned(1)).await?
+                    == Some(expected.descriptor.padded_len)
+            );
+            ensure!(
+                stored::<u64>(runtime, contract, &path.push_interned(2)).await?
+                    == Some(expected.ledger_index)
+            );
+        }
+        for (index, expected) in roots.iter().enumerate() {
             let index = u64::try_from(index)?;
             let path = KeyPath::new()
                 .push_interned(21)
@@ -288,11 +338,8 @@ impl FileWorkload {
             .map(|bytes| bytes_to_field_element(bytes).context("invalid registry peak"))
             .collect::<Result<Vec<_>>>()?;
         ensure!(
-            LedgerFrontier::from_parts(total, peaks)?.root().to_vec()
-                == *self
-                    .roots
-                    .last()
-                    .context("missing expected registry root")?
+            LedgerFrontier::from_parts(settled, peaks)?.root().to_vec()
+                == *roots.last().context("missing expected registry root")?
         );
         Ok(())
     }
@@ -312,11 +359,19 @@ async fn workload_sequence_files_preserve_inactive_ledger() -> Result<()> {
             workload.check_state(&mut runtime).await.is_err(),
             "omitted registrations accepted"
         );
+        workload.check_pending(&mut runtime, 0).await?;
+        ensure!(
+            workload.check_pending(&mut runtime, 1).await.is_err(),
+            "unexecuted file registration accepted"
+        );
         for index in workload.step_start..workload.agreements.len() {
             let expected = &workload.agreements[index];
             let result =
                 api::create_agreement(&mut runtime, &core, expected.descriptor.clone()).await??;
             ensure!(result.agreement_id == expected.descriptor.file_id);
+            workload
+                .check_pending(&mut runtime, index + 1 - workload.step_start)
+                .await?;
         }
         ensure!(
             workload.check_state(&mut runtime).await.is_err(),
@@ -324,6 +379,13 @@ async fn workload_sequence_files_preserve_inactive_ledger() -> Result<()> {
         );
         api::record_block_root(&mut runtime, &core).await??;
         workload.check_state(&mut runtime).await?;
+        ensure!(
+            workload
+                .check_pending(&mut runtime, workload.len())
+                .await
+                .is_err(),
+            "folded file root accepted as pending"
+        );
         // An idle lifecycle must not append a duplicate root or lose old inactive files.
         api::record_block_root(&mut runtime, &core).await??;
         workload.check_state(&mut runtime).await?;

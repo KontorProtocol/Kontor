@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 use anyhow::{Context, Result, ensure};
 use bitcoin::Network;
@@ -27,7 +28,18 @@ use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{Decimal, Runtime, TransactionContext, from_wave_expr, to_wave_expr};
 use crate::test_utils::{new_mock_block_hash, new_mock_transaction, test_runtime};
 
+mod progress;
+
+pub(super) use progress::Progress;
+
 const BLOB_BYTES: usize = 128;
+
+struct ExecutionSlice {
+    operations: Range<usize>,
+    layout: MixedLayout,
+    height: u64,
+    confirmed: bool,
+}
 
 #[derive(Clone, Copy)]
 pub(super) enum MixedLayout {
@@ -327,18 +339,32 @@ impl MixedWorkload {
         result
     }
 
+    fn validate_range(&self, operations: &Range<usize>) -> Result<()> {
+        ensure!(
+            operations.start < operations.end && operations.end <= self.rounds * 20,
+            "mixed operation range is empty, reversed or out of bounds"
+        );
+        Ok(())
+    }
+
     pub(super) fn signer_effects(
         &self,
         layout: MixedLayout,
         signer: u64,
     ) -> Result<(Decimal, Decimal)> {
-        let indices = (0..self.rounds * 20).filter(|index| layout.signer(*index) == signer);
+        self.signer_effects_range(layout, signer, 0..self.rounds * 20)
+    }
+
+    fn signer_effects_range(
+        &self,
+        layout: MixedLayout,
+        signer: u64,
+        operations: Range<usize>,
+    ) -> Result<(Decimal, Decimal)> {
+        self.validate_range(&operations)?;
+        let indices = operations.filter(|index| layout.signer(*index) == signer);
         let transfers = indices.clone().filter(|index| index % 20 <= 7).count();
-        let stakes = indices
-            .filter(|index| {
-                matches!(index % 20, 16..=17) && self.file_index(index / 20, index % 20).is_none()
-            })
-            .count();
+        let stakes = indices.filter(|index| self.is_stake(*index)).count();
         Ok((
             mul_decimal(
                 Decimal::from("0.001"),
@@ -351,16 +377,24 @@ impl MixedWorkload {
         ))
     }
 
+    fn is_stake(&self, index: usize) -> bool {
+        matches!(index % 20, 16..=17) && self.file_index(index / 20, index % 20).is_none()
+    }
+
     pub(super) fn effects(&self, layout: MixedLayout) -> Result<PaidEffects> {
-        let (transferred, payer_staked) = self.signer_effects(layout, layout.payer())?;
+        self.effects_range(layout, 0..self.rounds * 20)
+    }
+
+    fn effects_range(&self, layout: MixedLayout, operations: Range<usize>) -> Result<PaidEffects> {
+        let (transferred, payer_staked) =
+            self.signer_effects_range(layout, layout.payer(), operations.clone())?;
+        let stakes = operations.filter(|index| self.is_stake(*index)).count();
         Ok(PaidEffects {
             transferred,
             payer_staked,
             staked: mul_decimal(
                 Decimal::from("0.001"),
-                Decimal::try_from(
-                    (self.rounds * 2 - self.files.as_ref().map_or(0, FileWorkload::len)) as u64,
-                )?,
+                Decimal::try_from(u64::try_from(stakes)?)?,
             )?,
         })
     }
@@ -373,11 +407,36 @@ impl MixedWorkload {
         layout: MixedLayout,
         execution_height: u64,
     ) -> Result<()> {
+        self.check_slice(
+            runtime,
+            all,
+            roots,
+            &ExecutionSlice {
+                operations: 0..self.rounds * 20,
+                layout,
+                height: execution_height,
+                confirmed: true,
+            },
+        )
+        .await
+    }
+
+    async fn check_slice(
+        &self,
+        runtime: &mut Runtime,
+        all: &[&ResultRow],
+        roots: &[&ResultRow],
+        slice: &ExecutionSlice,
+    ) -> Result<()> {
+        self.validate_range(&slice.operations)?;
+        let layout = slice.layout;
         let payer = layout.payer();
-        ensure!(
-            roots.len() == self.rounds * 20
-                && all.len() == self.rounds * 25 - self.files.as_ref().map_or(0, FileWorkload::len)
-        );
+        let nested_count = slice
+            .operations
+            .clone()
+            .filter(|index| matches!(index % 20, 13..=15) || self.is_stake(*index))
+            .count();
+        ensure!(roots.len() == slice.operations.len() && all.len() == roots.len() + nested_count);
         let conn = runtime.get_storage_conn();
         let staking_id = get_contract_id_from_address(&conn, &staking_address())
             .await?
@@ -386,7 +445,11 @@ impl MixedWorkload {
             .await?
             .context("missing staking signer")?;
         let mut expected_stakes = self.stakes_before.clone();
-        for (index, root) in roots.iter().enumerate() {
+        for index in (0..slice.operations.start).filter(|index| self.is_stake(*index)) {
+            let value = expected_stakes.entry(layout.signer(index)).or_default();
+            *value = add_decimal(*value, Decimal::from("0.001"))?;
+        }
+        for (index, root) in slice.operations.clone().zip(roots) {
             let signer = layout.signer(index);
             let (tx_index, input_index, op_index) = layout.position(index)?;
             let slot = index % 20;
@@ -395,15 +458,16 @@ impl MixedWorkload {
             let nested =
                 matches!(slot, 13..=15) || (matches!(slot, 16..=17) && file_index.is_none());
             ensure!(
-                root.height == execution_height
-                    && root.tx_index == Some(tx_index)
+                root.height == slice.height
+                    && root.tx_index == slice.confirmed.then_some(tx_index)
                     && root.input_index == Some(input_index)
                     && root.op_index == Some(op_index)
                     && root.result_index == u32::from(nested)
                     && root.signer_id == signer
                     && root.payer_signer_id == Some(payer)
                     && root.gas > 0
-                    && root.gas <= GAS_LIMIT
+                    && root.gas <= GAS_LIMIT,
+                "mixed receipt execution position changed"
             );
             ensure!(
                 root.status
@@ -549,7 +613,11 @@ impl MixedWorkload {
             from_wave_expr::<u64>(&runtime.execute_system_view(&self.counter, "get()").await?)
                 == self
                     .counter_before
-                    .checked_add(u64::try_from(self.rounds * 4)?)
+                    .checked_add(u64::try_from(
+                        (0..slice.operations.end)
+                            .filter(|index| matches!(index % 20, 8 | 13..=15))
+                            .count()
+                    )?)
                     .context("counter overflow")?
         );
         ensure!(
@@ -557,7 +625,11 @@ impl MixedWorkload {
                 &runtime
                     .execute_system_view(&self.counter, "get-blob()")
                     .await?
-            ) == "a".repeat(BLOB_BYTES)
+            ) == if self.step > 0 || (0..slice.operations.end).any(|index| index % 20 == 9) {
+                "a".repeat(BLOB_BYTES)
+            } else {
+                String::new()
+            }
         );
         ensure!(
             from_wave_expr::<String>(
@@ -573,9 +645,14 @@ impl MixedWorkload {
                 &runtime
                     .execute_system_view(&self.crypto, "get-hash()")
                     .await?
-            ) == Some(
-                Sha256::digest(format!("round-{}-slot-19", self.rounds - 1).as_bytes()).to_vec()
-            )
+            ) == (0..slice.operations.end)
+                .rev()
+                .find(|index| matches!(index % 20, 18..=19))
+                .or_else(|| (self.step > 0).then_some(self.rounds * 20 - 1))
+                .map(|index| Sha256::digest(
+                    format!("round-{}-slot-{}", index / 20, index % 20).as_bytes()
+                )
+                .to_vec())
         );
         ensure!(
             token::balance(runtime, HolderRef::SignerId(self.recipient)).await?
@@ -583,13 +660,16 @@ impl MixedWorkload {
                     self.recipient_before,
                     mul_decimal(
                         Decimal::from("0.001"),
-                        Decimal::try_from((self.rounds * 8) as u64)?
+                        Decimal::try_from(u64::try_from(
+                            (0..slice.operations.end)
+                                .filter(|index| index % 20 <= 7)
+                                .count()
+                        )?)?
                     )?
                 )?)
         );
-        for signer in roots
-            .iter()
-            .map(|row| row.signer_id)
+        for signer in (0..slice.operations.end)
+            .map(|index| layout.signer(index))
             .collect::<BTreeSet<_>>()
         {
             let stake =
