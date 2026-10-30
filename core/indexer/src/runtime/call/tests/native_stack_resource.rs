@@ -587,7 +587,7 @@ fn pulley_boundary_worker_case() -> Result<()> {
         macos::thread_observation(&blocking, "blocking_pool", None),
         macos::thread_observation(&caller, "block_on_caller", None),
     ];
-    collect_boundary_blocking_observations(&events, &worker_ids, &mut thread_observations)?;
+    collect_blocking_observations(&events, &worker_ids, &mut thread_observations)?;
     println!(
         "BOUNDARY_WORKER_RUNTIME={}",
         json!({
@@ -641,7 +641,7 @@ fn pulley_boundary_worker_case() -> Result<()> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn collect_boundary_blocking_observations(
+fn collect_blocking_observations(
     events: &[ThreadEvent],
     worker_ids: &[ThreadId],
     thread_observations: &mut Vec<JsonValue>,
@@ -651,8 +651,10 @@ fn collect_boundary_blocking_observations(
             let thread_id = format!("{:?}", event.thread_id);
             ensure!(
                 observation["thread_id"].as_str() == Some(thread_id.as_str())
-                    && observation["os_thread_id"].as_i64() == Some(event.os_thread_id.into()),
-                "boundary blocking stack measurement differs from preparation trace: {event:?}"
+                    && observation["os_thread_id"].as_i64() == Some(event.os_thread_id.into())
+                    && observation["thread_category"].as_str() == Some("blocking_pool")
+                    && !worker_ids.contains(&event.thread_id),
+                "blocking stack measurement differs from event identity: {event:?}"
             );
             if !thread_observations
                 .iter()
@@ -673,7 +675,7 @@ fn collect_boundary_blocking_observations(
                     && observation["os_thread_id"].as_i64() == Some(event.os_thread_id.into())
                     && observation["thread_category"].as_str() == Some("blocking_pool")
             }),
-            "boundary blocking event has no measured stack: {event:?}"
+            "blocking event has no measured stack: {event:?}"
         );
     }
     Ok(())
@@ -719,7 +721,7 @@ fn boundary_stack_probe_records_two_actual_blocking_threads() -> Result<()> {
         "blocking compiler entries did not use distinct threads"
     );
     let mut observations = Vec::new();
-    collect_boundary_blocking_observations(&events, &[], &mut observations)?;
+    collect_blocking_observations(&events, &[], &mut observations)?;
     ensure!(
         observations.len() == 2,
         "both blocking stacks were not measured"
@@ -802,21 +804,10 @@ fn finite_stack_worker_case() -> Result<()> {
             && blocking.os_thread_id != caller.os_thread_id,
         "finite stack worker, blocking, and caller thread categories overlap"
     );
-    if matches!(
-        case_id.as_str(),
-        "native_filestorage_lifecycle"
-            | "brotli_raw_ceiling"
-            | "cold_publish_large_function"
-            | "cold_publish_control_nesting"
-            | "cold_publish_br_table"
-    ) {
-        #[cfg(target_os = "linux")]
-        resource_diagnostics::start_chain_with_stack_probe(linux_blocking_thread_observation);
-        #[cfg(target_os = "macos")]
-        resource_diagnostics::start_chain_with_stack_probe(macos::blocking_thread_observation);
-    } else {
-        resource_diagnostics::start_chain();
-    }
+    #[cfg(target_os = "linux")]
+    resource_diagnostics::start_chain_with_stack_probe(linux_blocking_thread_observation);
+    #[cfg(target_os = "macos")]
+    resource_diagnostics::start_chain_with_stack_probe(macos::blocking_thread_observation);
     let task_case_id = case_id.clone();
     let task_configuration = configuration.clone();
     let task_role = process_role.clone();
@@ -939,22 +930,7 @@ fn finite_stack_worker_case() -> Result<()> {
         macos::thread_observation(&blocking, "blocking_pool", None),
         macos::thread_observation(&caller, "block_on_caller", None),
     ];
-    for event in &events {
-        if let Some(observation) = &event.stack_observation {
-            let thread_id = format!("{:?}", event.thread_id);
-            ensure!(
-                observation["thread_id"].as_str() == Some(thread_id.as_str())
-                    && observation["os_thread_id"].as_i64() == Some(event.os_thread_id.into()),
-                "blocking stack measurement differs from preparation trace: {event:?}"
-            );
-            if !thread_observations
-                .iter()
-                .any(|item| item["thread_id"] == observation["thread_id"])
-            {
-                thread_observations.push(observation.clone());
-            }
-        }
-    }
+    collect_blocking_observations(&events, &worker_ids, &mut thread_observations)?;
     println!(
         "FINITE_STACK_RUNTIME={}",
         json!({
