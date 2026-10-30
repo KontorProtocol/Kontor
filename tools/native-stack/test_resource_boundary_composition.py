@@ -18,6 +18,7 @@ from resource_boundary_manifest import (CONFIGURATIONS, DISCOVERY_ROLE,
                                         build_boundary_manifest)
 from resource_evidence import sha256
 from resource_manifest import ROOT, build_manifest
+from resource_suite_registry import build_registry
 from test_resource_report import guard_control
 
 
@@ -392,6 +393,19 @@ class BoundaryCompositionTests(unittest.TestCase):
                                               sort_keys=True) + "\n")
             depths_path = source_dir / "resource-boundary-depths-v1.json"
             depths_path.write_text('{"cases":"pending"}\n')
+            old_registry = build_registry()
+            registry_path = source_dir / "resource-suite-registry-v1.json"
+            registry_path.write_text(json.dumps(old_registry, indent=2,
+                                                sort_keys=True) + "\n")
+
+            def frozen_registry(boundary_path):
+                result = copy.deepcopy(old_registry)
+                boundary_sha = sha256(boundary_path)
+                result["parent_manifests"]["boundary"] = boundary_sha
+                result["groups"]["pulley_boundary"][
+                    "manifest_sha256"] = boundary_sha
+                result["remaining_gates"]["boundary_discovery"] = "candidate_only"
+                return result
             fixture = root / "test-contracts/binaries/stack_probe.wasm.br"
             fixture.parent.mkdir(parents=True)
             fixture.write_bytes((ROOT / "test-contracts/binaries/stack_probe.wasm.br")
@@ -527,10 +541,18 @@ class BoundaryCompositionTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(final_manifest, indent=2,
                                                 sort_keys=True) + "\n")
             depths_path.write_text('{"cases":"frozen"}\n')
+            final_registry = frozen_registry(manifest_path)
+            registry_path.write_text(json.dumps(final_registry, indent=2,
+                                                sort_keys=True) + "\n")
             final_sha = commit("freeze reviewed depths")
             with patch("resource_boundary_evidence.ROOT", root), patch(
                     "resource_boundary_evidence.FIBER_SOURCE_FILES",
-                    fiber_sources):
+                    fiber_sources), patch(
+                    "resource_boundary_evidence.MANIFEST", manifest_path), patch(
+                    "resource_boundary_evidence.REGISTRY_MANIFEST",
+                    registry_path), patch(
+                    "resource_boundary_evidence.build_registry",
+                    return_value=final_registry):
                 validate_reviewed_discovery(archive_path, sha256(archive_path),
                                             final_manifest, final_sha)
                 final_dir = base / "final"
@@ -613,12 +635,20 @@ class BoundaryCompositionTests(unittest.TestCase):
                         last_success=2, first_failure=3)
                     wrong_pair_path = base / "wrong-final-manifest.json"
                     wrong_pair_path.write_text(json.dumps(wrong_pair_manifest) + "\n")
+                    wrong_pair_registry = frozen_registry(wrong_pair_path)
+                    wrong_pair_registry_path = base / "wrong-final-registry.json"
+                    wrong_pair_registry_path.write_text(
+                        json.dumps(wrong_pair_registry) + "\n")
                     wrong_pair_bundle = copy.deepcopy(final_bundle)
                     wrong_pair_bundle["manifest_sha256"] = sha256(wrong_pair_path)
                     with patch("resource_boundary_evidence.MANIFEST",
                                wrong_pair_path), patch(
                                    "resource_boundary_evidence.build_boundary_manifest",
-                                   return_value=wrong_pair_manifest):
+                                   return_value=wrong_pair_manifest), patch(
+                                   "resource_boundary_evidence.REGISTRY_MANIFEST",
+                                   wrong_pair_registry_path), patch(
+                                   "resource_boundary_evidence.build_registry",
+                                   return_value=wrong_pair_registry):
                         with self.assertRaisesRegex(ValueError,
                                                     "frozen depths differ"):
                             validate_bundle(wrong_pair_bundle, final_dir)
@@ -645,6 +675,10 @@ class BoundaryCompositionTests(unittest.TestCase):
                     relocated_manifest_path = base / "relocated-final-manifest.json"
                     relocated_manifest_path.write_text(
                         json.dumps(relocated_manifest) + "\n")
+                    relocated_registry = frozen_registry(relocated_manifest_path)
+                    relocated_registry_path = base / "relocated-final-registry.json"
+                    relocated_registry_path.write_text(
+                        json.dumps(relocated_registry) + "\n")
                     relocated_bundle = copy.deepcopy(final_bundle)
                     relocated_bundle["manifest_sha256"] = \
                         sha256(relocated_manifest_path)
@@ -653,7 +687,11 @@ class BoundaryCompositionTests(unittest.TestCase):
                     with patch("resource_boundary_evidence.MANIFEST",
                                relocated_manifest_path), patch(
                                    "resource_boundary_evidence.build_boundary_manifest",
-                                   return_value=relocated_manifest):
+                                   return_value=relocated_manifest), patch(
+                                   "resource_boundary_evidence.REGISTRY_MANIFEST",
+                                   relocated_registry_path), patch(
+                                   "resource_boundary_evidence.build_registry",
+                                   return_value=relocated_registry):
                         with self.assertRaisesRegex(ValueError,
                                                     "Cargo workspace or artifact paths disagree"):
                             validate_bundle(relocated_bundle, final_dir)
