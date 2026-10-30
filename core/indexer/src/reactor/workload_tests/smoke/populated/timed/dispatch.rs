@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+use super::super::clock::monotonic_ns;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -89,7 +91,7 @@ impl Clock {
             Self::Local(start) => Ok(start.elapsed()),
             #[cfg(target_os = "linux")]
             Self::External(epoch) => Ok(Duration::from_nanos(
-                external::monotonic_ns()?
+                monotonic_ns()?
                     .checked_sub(*epoch)
                     .context("arrival clock regressed")?,
             )),
