@@ -2,8 +2,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use bitcoin::Transaction;
-use indexer_types::{ResultRow, TransactionRow};
-use libsql::params;
+use indexer_types::{Block, ResultRow, TransactionRow};
+use libsql::{Connection, params};
 
 use super::super::{database_projection, receipts};
 use super::checkpoint::Checkpoint;
@@ -19,6 +19,11 @@ use crate::reactor::batches::BatchOutcome;
 use crate::reactor::executor::RuntimeExecutor;
 use crate::runtime::fuel::ExecutionUsage;
 
+pub(super) mod pending;
+
+use pending::Confirmation;
+
+#[derive(Clone)]
 struct TransactionProof {
     transaction: TransactionRow,
     paid: Vec<ResultRow>,
@@ -157,6 +162,26 @@ impl BatchProof {
         })
     }
 
+    pub(super) fn confirmation_plan(&self, block: &Block) -> Result<Vec<Confirmation>> {
+        self.transactions
+            .iter()
+            .map(|proof| {
+                let (index, transaction) = block
+                    .transactions
+                    .iter()
+                    .enumerate()
+                    .find(|(_, transaction)| transaction.txid.to_string() == proof.transaction.txid)
+                    .context("batch transaction absent from frozen confirmation block")?;
+                Ok(Confirmation {
+                    txid: proof.transaction.txid.clone(),
+                    height: block.height,
+                    filtered_index: u32::try_from(index)?,
+                    bitcoin_index: transaction.index,
+                })
+            })
+            .collect()
+    }
+
     pub(super) fn checkpoint(&self) -> &Checkpoint {
         &self.checkpoint
     }
@@ -171,60 +196,80 @@ impl BatchProof {
         let all_paid = receipts(&conn, anchor_height).await?;
         let mut checked = Vec::new();
         for proof in self.transactions {
-            let txid = &proof.transaction.txid;
-            let confirmed = get_transaction_by_txid(&conn, txid)
-                .await?
-                .context("confirmation lost the batch transaction")?;
             let raw_position = proof
                 .confirmation_index
                 .checked_mul(2)
                 .and_then(|index| index.checked_add(2))
                 .context("raw position overflow")?;
-            ensure!(
-                confirmed.id == proof.transaction.id
-                    && confirmed.height == proof.transaction.height
-                    && confirmed.batch_height == proof.transaction.batch_height
-                    && confirmed.confirmed_height == Some(confirmed_height)
-                    && confirmed.tx_index == Some(proof.confirmation_index)
-                    && get_confirmation_position(&conn, txid).await? == Some(raw_position),
-                "confirmation changed execution identity or recorded the wrong Bitcoin position"
+            checked.extend(
+                proof
+                    .check(
+                        &conn,
+                        &all_paid,
+                        Some((confirmed_height, proof.confirmation_index, raw_position)),
+                    )
+                    .await?,
             );
-            ensure!(
-                get_transaction_execution_usage(&conn, confirmed.id).await? == Some(proof.usage),
-                "confirmation changed transaction execution usage"
-            );
-            let paid: Vec<_> = all_paid
-                .iter()
-                .filter(|row| row.txid.as_deref() == Some(txid))
-                .cloned()
-                .collect();
-            let mut expected = proof.paid;
-            for row in &mut expected {
-                // Receipt queries join this confirmation ordinal from transactions.
-                // All persisted execution fields must remain unchanged.
-                row.tx_index = Some(proof.confirmation_index);
-            }
-            ensure!(
-                paid == expected,
-                "confirmation changed paid execution receipts"
-            );
-            let mut counts = conn
-                .query(
-                    "SELECT count(*) FROM contract_results WHERE tx_id = ?",
-                    params![confirmed.id],
-                )
-                .await?;
-            let count: u64 = counts
-                .next()
-                .await?
-                .context("missing receipt count")?
-                .get(0)?;
-            ensure!(
-                count == u64::try_from(expected.len())?,
-                "confirmation appended or hid paid receipts"
-            );
-            checked.extend(paid);
         }
         Ok(checked)
+    }
+}
+
+impl TransactionProof {
+    async fn check(
+        &self,
+        conn: &Connection,
+        all_paid: &[ResultRow],
+        confirmation: Option<(u64, u32, u32)>,
+    ) -> Result<Vec<ResultRow>> {
+        let txid = &self.transaction.txid;
+        let actual = get_transaction_by_txid(conn, txid)
+            .await?
+            .context("pending or confirmed batch transaction disappeared")?;
+        ensure!(
+            actual.id == self.transaction.id
+                && actual.txid == *txid
+                && actual.height == self.transaction.height
+                && actual.batch_height == self.transaction.batch_height
+                && actual.confirmed_height == confirmation.map(|position| position.0)
+                && actual.tx_index == confirmation.map(|position| position.1)
+                && get_confirmation_position(conn, txid).await?
+                    == confirmation.map(|position| position.2),
+            "confirmation changed execution identity or recorded the wrong Bitcoin position"
+        );
+        ensure!(
+            get_transaction_execution_usage(conn, actual.id).await? == Some(self.usage),
+            "confirmation changed transaction execution usage"
+        );
+        let paid: Vec<_> = all_paid
+            .iter()
+            .filter(|row| row.txid.as_deref() == Some(txid))
+            .cloned()
+            .collect();
+        let mut expected = self.paid.clone();
+        for row in &mut expected {
+            // Receipt queries join confirmation ordinals; persisted execution fields stay fixed.
+            row.tx_index = confirmation.map(|position| position.1);
+        }
+        ensure!(
+            paid == expected,
+            "confirmation changed paid execution receipts"
+        );
+        let mut counts = conn
+            .query(
+                "SELECT count(*) FROM contract_results WHERE tx_id = ?",
+                params![actual.id],
+            )
+            .await?;
+        let count: u64 = counts
+            .next()
+            .await?
+            .context("missing receipt count")?
+            .get(0)?;
+        ensure!(
+            count == u64::try_from(expected.len())?,
+            "confirmation appended or hid paid receipts"
+        );
+        Ok(paid)
     }
 }

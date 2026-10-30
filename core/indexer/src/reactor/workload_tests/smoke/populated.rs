@@ -50,6 +50,7 @@ mod timed;
 mod views;
 
 use batch::BatchProof;
+use batch::pending::Pending;
 use checkpoint::Checkpoint;
 use configuration::MixedConfig;
 use history::HistoryPopulation;
@@ -65,6 +66,7 @@ use simulation_requests::SimulationRequests;
 enum Delivery {
     FreshBlock,
     BatchThenConfirmation,
+    BatchAfterInterveningBlock,
     SimulationsThenBatch,
     MixedBlock,
     MixedTransactions(usize),
@@ -100,7 +102,9 @@ impl Delivery {
     fn batched(self) -> bool {
         matches!(
             self,
-            Self::BatchThenConfirmation | Self::SimulationsThenBatch
+            Self::BatchThenConfirmation
+                | Self::BatchAfterInterveningBlock
+                | Self::SimulationsThenBatch
         ) || matches!(self, Self::Configured(config) if config.batch_operations > 0)
     }
 }
@@ -209,6 +213,21 @@ async fn workload_batch_confirmation_preserves_execution_and_charges() -> Result
             members_per_agreement: 3,
         },
         Delivery::BatchThenConfirmation,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; real pending confirmation across an intervening block"]
+async fn workload_pending_confirmation_survives_intervening_block() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::BatchAfterInterveningBlock,
     )
     .await
 }
@@ -640,6 +659,16 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
             },
         );
     }
+    let intervening = if delivery == Delivery::BatchAfterInterveningBlock {
+        let hash =
+            BlockHash::from_str(&client.generate_to_address(1, &address.to_string()).await?[0])?;
+        let raw = client.get_block(&hash).await?;
+        let block = decode_block(&serialize(&raw), SMOKE_HEIGHT, hash, anchor)?;
+        ensure!(block.transactions.is_empty());
+        Some(block)
+    } else {
+        None
+    };
     let inputs = if let Some(fundings) = &sequence_fundings {
         let instructions = workloads
             .iter()
@@ -690,7 +719,12 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
             (raw, vec![reveal])
         };
         let hash = raw.block_hash();
-        let block = decode_block(&serialize(&raw), SMOKE_HEIGHT, hash, anchor)?;
+        let (height, parent) = intervening
+            .as_ref()
+            .map_or((SMOKE_HEIGHT, anchor), |block| {
+                (block.height + 1, block.hash)
+            });
+        let block = decode_block(&serialize(&raw), height, hash, parent)?;
         ensure!(block.transactions.len() == reveals.len());
         let raw_position = |index: usize| -> Result<u32> {
             Ok(u32::try_from(if delivery == Delivery::MixedMultiInput {
@@ -765,6 +799,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
             _ => None,
         };
         let mut model = before.clone();
+        let mut pending = Pending::new(ANCHOR_HEIGHT);
         let work = async {
             let mut projections = Vec::new();
             for (ordinal, input) in inputs.iter().enumerate() {
@@ -772,7 +807,9 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                 let reveals = &input.reveals;
                 let block = &input.block;
                 let height = block.height;
-                let execution_height = if delivery.batched() {
+                let execution_height = if delivery == Delivery::BatchAfterInterveningBlock {
+                    ANCHOR_HEIGHT
+                } else if delivery.batched() {
                     height - 1
                 } else {
                     height
@@ -826,6 +863,11 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                         expected_projection.as_deref(),
                     )?;
                 }
+                for batch in batches {
+                    let plan = batch.confirmation_plan(block)?;
+                    pending.record(batch, plan)?;
+                }
+                pending.check_unconfirmed(&trial).await?;
                 if delivery.batched() {
                     let effects = mixed
                         .as_ref()
@@ -845,8 +887,59 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                     ensure!(duplicate.to_string() == "paid execution payer balance mismatch");
                     ensure!(database_projection(&trial.db_conn()).await? == before_checks);
                 }
+                if let Some(intervening) = &intervening {
+                    let outstanding = pending.len();
+                    ensure!(outstanding == txids.len());
+                    apply(&mut trial, intervening.clone()).await?;
+                    trial.advance().await?;
+                    let gap_projection = database_projection(&trial.db_conn()).await?;
+                    ensure!(pending.check_block(&trial, intervening).await?.is_empty());
+                    ensure!(pending.len() == outstanding);
+                    let gap_rows = receipts(&trial.db_conn(), intervening.height).await?;
+                    model = model.check_lifecycle(&mut trial, &gap_rows).await?;
+                    ensure!(database_projection(&trial.db_conn()).await? == gap_projection);
+                    Checkpoint::record(
+                        &mut projections,
+                        Checkpoint::capture(checkpoint_directory.path(), &gap_projection)?,
+                        expected_projection.as_deref(),
+                    )?;
+                    eprintln!(
+                        "workload_pending_intervening_block={}",
+                        serde_json::json!({"trial":name,"height":intervening.height,"pending":pending.len()})
+                    );
+                }
                 apply(&mut trial, block.clone()).await?;
+                if intervening.is_some() {
+                    trial.advance().await?;
+                }
                 let projection = database_projection(&trial.db_conn()).await?;
+                if intervening.is_some() {
+                    let mut omitted = block.clone();
+                    omitted.transactions.clear();
+                    let mut duplicate = block.clone();
+                    duplicate.transactions.push(block.transactions[0].clone());
+                    let mut wrong_position = block.clone();
+                    wrong_position.transactions[0].index += 1;
+                    for (changed, expected_error) in [
+                        (omitted, "pending confirmation missing or at wrong position"),
+                        (duplicate, "duplicate confirmation in block"),
+                        (
+                            wrong_position,
+                            "pending confirmation missing or at wrong position",
+                        ),
+                    ] {
+                        let mut control = pending.clone();
+                        let error = control
+                            .check_block(&trial, &changed)
+                            .await
+                            .err()
+                            .context("invalid pending confirmation was accepted")?;
+                        ensure!(error.to_string() == expected_error);
+                        ensure!(control.len() == pending.len());
+                    }
+                }
+                let confirmed_rows = pending.check_block(&trial, block).await?;
+                ensure!(pending.len() == 0);
                 for (index, txid) in txids.iter().enumerate() {
                     let transaction = get_transaction_by_txid(&trial.db_conn(), txid)
                         .await?
@@ -870,11 +963,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                         .await?;
                 }
                 let mut rows = receipts(&trial.db_conn(), height).await?;
-                for batch in batches {
-                    // Execution remains at the batch anchor. Only confirmation metadata
-                    // moves to the new block, whose lifecycle still runs exactly once.
-                    rows.extend(batch.check(&trial).await?);
-                }
+                rows.extend(confirmed_rows);
                 rows.sort_by_key(|row| row.id);
                 let all_paid: Vec<_> = rows
                     .iter()
