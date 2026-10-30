@@ -571,6 +571,9 @@ impl Storage {
     }
 
     pub async fn commit(&self) -> Result<()> {
+        if let Some(owner) = &self.ownership {
+            owner.ensure_commit_authorized()?;
+        }
         match self.savepoint_stack.pop().await {
             Some(0) => self.conn.execute("COMMIT", ()).await?,
             Some(i) => self.conn.execute(&format!("RELEASE S{}", i), ()).await?,

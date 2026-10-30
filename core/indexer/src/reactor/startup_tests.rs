@@ -13,6 +13,7 @@ use super::{PruneConfig, Reactor, start_consensus};
 use crate::consensus::signing::PrivateKey;
 use crate::logging;
 use crate::reg_tester::random_x_only_pubkey;
+use crate::runtime::ownership::OwnerService;
 use crate::runtime::{Decimal, GenesisValidator};
 use crate::stopper::Shutdown;
 use crate::test_utils::{new_mock_block_hash, test_runtime_with_genesis};
@@ -51,6 +52,7 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
     let mut reactor = Reactor::new(
         NoopExecutor,
         runtime,
+        OwnerService::new(),
         block_rx,
         mempool_rx,
         shutdown.signal(),

@@ -16,7 +16,7 @@ use bitcoin::taproot::{ControlBlock, LeafVersion, TaprootSpendInfo};
 use bitcoin::{
     BlockHash, Psbt, ScriptBuf, TapLeafHash, TapSighashType, TxOut, Txid, Witness, XOnlyPublicKey,
 };
-use indexer_types::{Block, BlockRow, Transaction};
+use indexer_types::{Block, BlockRow, Payment, Transaction, TransactionRow};
 use libsql::Connection;
 use rand::prelude::*;
 use sha2::{Digest, Sha256};
@@ -27,12 +27,15 @@ use wasmtime::Engine;
 
 use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::database::queries::insert_block;
-use crate::database::types::FileMeta;
+use crate::database::types::{ContractRow, FileMeta};
 use crate::database::{Reader, Writer, queries};
-use crate::runtime::wit::prover_challenge_key;
+use crate::reg_tester::random_x_only_pubkey;
+use crate::runtime::token::api as token_api;
+use crate::runtime::wit::{Signer, prover_challenge_key};
 use crate::runtime::{
-    ComponentCache, Decimal, GenesisParameters, GenesisValidator, RawFileDescriptor, Runtime,
-    Storage,
+    ComponentCache, ContractAddress, Decimal, GenesisParameters, GenesisValidator,
+    RawFileDescriptor, Runtime, Storage, TransactionContext,
+    ownership::{OwnedRuntimeSession, OwnerService},
 };
 use kontor_crypto::{
     FileLedger, PorSystem,
@@ -404,8 +407,231 @@ async fn shared_test_engine() -> (wasmtime::Engine, Vec<PrewarmedComponent>) {
     .clone()
 }
 
-pub async fn test_runtime() -> Result<(Runtime, TempDir, String)> {
+#[cfg(test)]
+pub(crate) async fn test_runtime() -> Result<(Runtime, TempDir, String)> {
     test_runtime_with_genesis(&[]).await
+}
+
+pub struct OwnedTestRuntime {
+    session: OwnedRuntimeSession,
+}
+
+impl OwnedTestRuntime {
+    pub async fn new(gas_limit: u64) -> Result<(Self, TempDir, String)> {
+        Self::new_with_network(gas_limit, bitcoin::Network::Regtest).await
+    }
+
+    pub async fn new_with_network(
+        gas_limit: u64,
+        network: bitcoin::Network,
+    ) -> Result<(Self, TempDir, String)> {
+        let service = OwnerService::new();
+        let (runtime, directory, name) = test_runtime_with_network_owned(network, &service).await?;
+        let session = OwnedRuntimeSession::with_service(runtime, service);
+        session
+            .run(true, move |runtime| {
+                Box::pin(async move {
+                    runtime.gas_limit_for_non_procs = gas_limit;
+                    let height = 1u64;
+                    let tx_index = 1u32;
+                    let txid = new_mock_transaction(0).txid;
+                    let tx_id = queries::insert_transaction(
+                        &runtime.storage.conn,
+                        TransactionRow::builder()
+                            .height(height)
+                            .txid(txid.to_string())
+                            .tx_index(tx_index)
+                            .confirmed_height(height)
+                            .build(),
+                    )
+                    .await?;
+                    runtime
+                        .set_context(
+                            height,
+                            Some(
+                                TransactionContext::builder()
+                                    .tx_id(tx_id)
+                                    .tx_index(tx_index)
+                                    .txid(txid)
+                                    .build(),
+                            ),
+                            None,
+                            None,
+                        )
+                        .await;
+                    Ok(())
+                })
+            })
+            .await?;
+        Ok((Self { session }, directory, name))
+    }
+
+    pub async fn dev_mint_enabled(&self) -> Result<bool> {
+        self.session
+            .run(false, |runtime| {
+                Box::pin(async move { token_api::dev_mint_enabled(runtime).await })
+            })
+            .await
+    }
+
+    pub async fn identity(&self) -> Result<Signer> {
+        let x_only_pubkey = random_x_only_pubkey();
+        self.session
+            .run(true, move |runtime| {
+                Box::pin(async move {
+                    let identity = queries::ensure_identity(
+                        &runtime.storage.conn,
+                        &x_only_pubkey,
+                        runtime.storage.height,
+                    )
+                    .await?;
+                    let signer = Signer::Id(identity);
+                    runtime
+                        .issuance(&signer)
+                        .await
+                        .map_err(anyhow::Error::from)?;
+                    Ok(signer)
+                })
+            })
+            .await
+    }
+
+    pub async fn load_contracts(&self, signer: &Signer, contracts: &[(&str, &[u8])]) -> Result<()> {
+        let signer = signer.clone();
+        let contracts: Vec<(String, Vec<u8>)> = contracts
+            .iter()
+            .map(|(name, bytes)| ((*name).to_string(), (*bytes).to_vec()))
+            .collect();
+        self.session
+            .run(true, move |runtime| {
+                Box::pin(async move {
+                    let conn = runtime.get_storage_conn();
+                    let tx = new_mock_transaction(1);
+                    if queries::get_transaction_by_txid(&conn, &tx.txid.to_string())
+                        .await?
+                        .is_none()
+                    {
+                        queries::insert_transaction(
+                            &conn,
+                            TransactionRow::builder()
+                                .height(1)
+                                .tx_index(0)
+                                .txid(tx.txid.to_string())
+                                .build(),
+                        )
+                        .await?;
+                    }
+                    for (name, bytes) in contracts {
+                        let signer_id = queries::create_contract_signer(&conn, 1).await?;
+                        let contract_id = queries::insert_contract(
+                            &conn,
+                            ContractRow::builder()
+                                .height(1)
+                                .tx_index(0)
+                                .name(name.clone())
+                                .bytes(bytes)
+                                .signer_id(signer_id)
+                                .build(),
+                        )
+                        .await?;
+                        if !queries::contract_has_state(&conn, contract_id).await? {
+                            let payment = Payment {
+                                signer_id: signer.signer_id().expect("test signer must have id"),
+                                gas_limit: runtime.gas_limit_for_non_procs,
+                            };
+                            runtime
+                                .execute(
+                                    Some(&signer),
+                                    Some(payment),
+                                    &ContractAddress {
+                                        name,
+                                        height: 1,
+                                        tx_index: 0,
+                                    },
+                                    "init()",
+                                )
+                                .await
+                                .map_err(anyhow::Error::from)?;
+                        }
+                    }
+                    Ok(())
+                })
+            })
+            .await
+    }
+
+    pub async fn wit(&self, address: &ContractAddress) -> Result<String> {
+        let address = address.clone();
+        self.session
+            .run(false, move |runtime| {
+                Box::pin(async move {
+                    let contract_id = runtime
+                        .storage
+                        .contract_id(&address)
+                        .await?
+                        .ok_or_else(|| anyhow!("Contract not found"))?;
+                    runtime.storage.component_wit(contract_id).await
+                })
+            })
+            .await
+    }
+
+    pub async fn execute(
+        &self,
+        signer: Option<&Signer>,
+        address: &ContractAddress,
+        expr: &str,
+        api: bool,
+    ) -> Result<String> {
+        let commit = signer.is_some();
+        let signer = signer.cloned();
+        let address = address.clone();
+        let expr = expr.to_string();
+        self.session
+            .run(commit, move |runtime| {
+                Box::pin(async move {
+                    let result = if api {
+                        runtime.execute_api(signer.as_ref(), &address, &expr).await
+                    } else {
+                        let payment = signer.as_ref().and_then(|signer| signer.signer_id()).map(
+                            |signer_id| Payment {
+                                signer_id,
+                                gas_limit: runtime.gas_limit_for_non_procs,
+                            },
+                        );
+                        runtime
+                            .execute(signer.as_ref(), payment, &address, &expr)
+                            .await
+                    };
+                    if let Some(context) = runtime.tx_context_mut() {
+                        context.op_index += 1;
+                    }
+                    result.map_err(Into::into)
+                })
+            })
+            .await
+    }
+
+    pub async fn issuance(&self, signer: &Signer) -> Result<()> {
+        let signer = signer.clone();
+        self.session
+            .run(true, move |runtime| {
+                Box::pin(async move { runtime.issuance(&signer).await.map_err(Into::into) })
+            })
+            .await
+    }
+
+    pub async fn checkpoint(&self) -> Result<Option<String>> {
+        self.session
+            .run(false, |runtime| {
+                Box::pin(async move {
+                    Ok(queries::get_checkpoint_latest(&runtime.storage.conn)
+                        .await?
+                        .map(|row| row.hash))
+                })
+            })
+            .await
+    }
 }
 
 pub fn test_genesis(validators: &[GenesisValidator]) -> GenesisParameters {
@@ -415,7 +641,8 @@ pub fn test_genesis(validators: &[GenesisValidator]) -> GenesisParameters {
     }
 }
 
-pub async fn test_runtime_with_genesis(
+#[cfg(test)]
+pub(crate) async fn test_runtime_with_genesis(
     genesis_validators: &[GenesisValidator],
 ) -> Result<(Runtime, TempDir, String)> {
     test_runtime_with_genesis_config(&test_genesis(genesis_validators), bitcoin::Network::Regtest)
@@ -425,17 +652,27 @@ pub async fn test_runtime_with_genesis(
 /// Like [`test_runtime`] but runs contract `init` under a specific network, so
 /// tests can exercise network-conditioned defaults (e.g. the token contract's
 /// `dev_mint_enabled` is off at mainnet genesis).
-pub async fn test_runtime_with_network(
+#[cfg(test)]
+pub(crate) async fn test_runtime_with_network(
     network: bitcoin::Network,
 ) -> Result<(Runtime, TempDir, String)> {
     test_runtime_with_genesis_config(&test_genesis(&[]), network).await
 }
 
-pub async fn test_runtime_with_genesis_config(
+async fn test_runtime_with_network_owned(
+    network: bitcoin::Network,
+    service: &OwnerService,
+) -> Result<(Runtime, TempDir, String)> {
+    test_runtime_with_genesis_config_and_engine(&test_genesis(&[]), network, None, Some(service))
+        .await
+}
+
+#[cfg(test)]
+pub(crate) async fn test_runtime_with_genesis_config(
     genesis: &GenesisParameters,
     network: bitcoin::Network,
 ) -> Result<(Runtime, TempDir, String)> {
-    test_runtime_with_genesis_config_and_engine(genesis, network, None).await
+    test_runtime_with_genesis_config_and_engine(genesis, network, None, None).await
 }
 
 #[cfg(test)]
@@ -444,6 +681,7 @@ pub async fn test_runtime_with_engine(engine: Engine) -> Result<(Runtime, TempDi
         &test_genesis(&[]),
         bitcoin::Network::Regtest,
         Some(engine),
+        None,
     )
     .await
 }
@@ -452,6 +690,7 @@ async fn test_runtime_with_genesis_config_and_engine(
     genesis: &GenesisParameters,
     network: bitcoin::Network,
     alternate_engine: Option<Engine>,
+    owner_service: Option<&OwnerService>,
 ) -> Result<(Runtime, TempDir, String)> {
     let (_reader, writer, (db_dir, db_name)) = new_test_db().await?;
     let conn = writer.connection();
@@ -492,7 +731,13 @@ async fn test_runtime_with_genesis_config_and_engine(
     let mut runtime = Runtime::new_with(engine, linkers, cache, storage).await?;
     // Set before publish so contract `init` sees it (the `network()` built-in).
     runtime.network = network;
-    runtime.publish_native_contracts(genesis).await?;
+    if let Some(service) = owner_service {
+        runtime
+            .publish_native_contracts_owned(genesis, service)
+            .await?;
+    } else {
+        runtime.publish_native_contracts(genesis).await?;
+    }
 
     Ok((runtime, db_dir, db_name))
 }

@@ -24,6 +24,7 @@ use crate::database::confirmation::get_confirmation_position;
 use crate::database::queries::{get_identity, get_transaction_by_txid};
 use crate::reactor::create_runtime_executor;
 use crate::reg_tester::{derive_taproot_keypair_from_seed, workload_bitcoin};
+use crate::runtime::ownership::OwnerService;
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -525,9 +526,11 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
         ValidatorPopulation::new(config.active_validators, config.replacements, [73; 32])?;
     let directory = TempDir::new()?;
     let writer = Writer::new(directory.path(), "source.db").await?;
+    let owner_service = OwnerService::new();
     let (_, mut runtime, last_height, last_hash) = create_runtime_executor(
         89,
         &writer,
+        &owner_service,
         client.clone(),
         None,
         &validators.genesis,

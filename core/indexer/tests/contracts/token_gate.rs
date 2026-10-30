@@ -3,15 +3,14 @@
 //! `token.wasm.br` (the indexer deploys the committed binary, not source).
 
 use anyhow::Result;
-use indexer::runtime::token::api as token;
-use indexer::test_utils::{test_runtime, test_runtime_with_network};
+use indexer::test_utils::OwnedTestRuntime;
 
 #[tokio::test]
 async fn dev_mint_on_for_test_networks() -> Result<()> {
     // Default test runtime is regtest → faucet on.
-    let (mut rt, _dir, _name) = test_runtime().await?;
+    let (rt, _dir, _name) = OwnedTestRuntime::new(100_000).await?;
     assert!(
-        token::dev_mint_enabled(&mut rt).await?,
+        rt.dev_mint_enabled().await?,
         "public dev mint is on for signet/testnet/regtest"
     );
     Ok(())
@@ -21,9 +20,10 @@ async fn dev_mint_on_for_test_networks() -> Result<()> {
 async fn dev_mint_disabled_on_mainnet() -> Result<()> {
     // `init` runs under mainnet, so the public dev mint self-disables via the
     // `network()` built-in — no genesis wiring needed.
-    let (mut rt, _dir, _name) = test_runtime_with_network(bitcoin::Network::Bitcoin).await?;
+    let (rt, _dir, _name) =
+        OwnedTestRuntime::new_with_network(100_000, bitcoin::Network::Bitcoin).await?;
     assert!(
-        !token::dev_mint_enabled(&mut rt).await?,
+        !rt.dev_mint_enabled().await?,
         "public mint is off at mainnet genesis"
     );
     Ok(())

@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::thread::available_parallelism;
 use std::time::Duration;
 
-use crate::api::Env;
+use crate::api::{DaemonEnv, Env};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures_util::{FutureExt, future};
@@ -273,7 +273,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         .take_driver()
         .expect("new operation owner has one driver");
     let api_handle = api::run(
-        Env {
+        Env::new_daemon(DaemonEnv {
             config: config.clone(),
             shutdown: shutdown.signal(),
             reactor_ready: reactor_ready.clone(),
@@ -282,18 +282,13 @@ async fn run_daemon(config: Config) -> Result<()> {
             reader: reader.clone(),
             event_subscriber: event_subscriber.clone(),
             bitcoin: bitcoin.clone(),
-            runtime_pool: runtime::pool::new(
-                config.data_dir.clone(),
-                filename.to_string(),
-                config.network,
-                config.view_gas_limit,
-            )
-            .await?,
             owner_service: owner_service.clone(),
             simulate_tx,
             fees_rx,
             info_rx,
-        },
+            database_name: filename.to_string(),
+        })
+        .await?,
         prom_handle.clone(),
     )
     .await?;
@@ -345,6 +340,7 @@ async fn run_daemon(config: Config) -> Result<()> {
     let reactor_handle = reactor::run(
         config.starting_block_height,
         shutdown.signal(),
+        owner_service.clone(),
         writer,
         block_rx,
         mempool_rx,

@@ -51,6 +51,7 @@ use malachitebft_core_types::{LinearTimeouts, Round};
 use metrics::gauge;
 use tracing::{debug, info, warn};
 
+use crate::bitcoin_client::Client;
 use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
@@ -68,6 +69,7 @@ use crate::{
     runtime::{
         ComponentCache, Decimal, GenesisParameters, Runtime, Storage,
         numerics::decimal_to_string,
+        ownership::OwnerService,
         staking::{
             address as staking_address,
             api::wave::{get_active_set_call_expr, get_active_set_parse_return_expr},
@@ -126,9 +128,10 @@ pub struct PruneConfig {
     pub retain_blocks: u64,
 }
 
-pub struct Reactor<E: Executor> {
+pub(crate) struct Reactor<E: Executor> {
     executor: E,
     runtime: Runtime,
+    owner_service: OwnerService,
     shutdown: ShutdownSignal,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
@@ -170,9 +173,10 @@ pub struct Reactor<E: Executor> {
 
 impl<E: Executor> Reactor<E> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         executor: E,
         runtime: Runtime,
+        owner_service: OwnerService,
         block_rx: Receiver<BlockEvent>,
         mempool_rx: Receiver<MempoolEvent>,
         shutdown: ShutdownSignal,
@@ -193,6 +197,7 @@ impl<E: Executor> Reactor<E> {
         Self {
             executor,
             runtime,
+            owner_service,
             shutdown,
             block_rx,
             mempool_rx,
@@ -245,6 +250,19 @@ impl<E: Executor> Reactor<E> {
             .position(|v| v.address == self.consensus.address);
         self.consensus.current_validator_set = vs;
         Ok(())
+    }
+
+    async fn refresh_validator_set_owned(&mut self) -> Result<()> {
+        let mut lease = self
+            .owner_service
+            .begin_canonical(&mut self.runtime, false)
+            .await?;
+        self.runtime.storage.savepoint().await?;
+        let result = self.refresh_validator_set().await;
+        lease.drain(&self.runtime).await?;
+        self.runtime.storage.rollback().await?;
+        lease.complete(&mut self.runtime).await?;
+        result
     }
 
     async fn send_proposal_parts(
@@ -677,7 +695,7 @@ impl<E: Executor> Reactor<E> {
     }
 
     #[tracing::instrument(skip_all, fields(node = %self.runtime.node_label))]
-    pub async fn run(&mut self) -> Result<()> {
+    pub(crate) async fn run(&mut self) -> Result<()> {
         // A startup mutation is part of the reactor's owned durable unit. It
         // must finish before shutdown can release the writer or runtime.
         self.runtime.storage.footprint().reconstruct().await?;
@@ -765,10 +783,11 @@ async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
     Ok(Genesis { validator_set })
 }
 
-pub async fn create_runtime_executor(
+pub(crate) async fn create_runtime_executor(
     starting_block_height: u64,
     writer: &database::Writer,
-    bitcoin_client: crate::bitcoin_client::Client,
+    owner_service: &OwnerService,
+    bitcoin_client: Client,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis: &GenesisParameters,
     network: bitcoin::Network,
@@ -846,7 +865,7 @@ pub async fn create_runtime_executor(
     // (e.g. token's dev mint is off at mainnet genesis).
     runtime.network = network;
     runtime
-        .publish_native_contracts(genesis)
+        .publish_native_contracts_owned(genesis, owner_service)
         .await
         .context("Failed to publish native contracts")?;
 
@@ -858,7 +877,7 @@ pub async fn create_runtime_executor(
     Ok((exec, runtime, last_height, last_hash))
 }
 
-pub async fn start_consensus(
+pub(crate) async fn start_consensus(
     engine_config: engine::EngineConfig,
     runtime: &mut Runtime,
     observation_channels: Option<consensus_state::ObservationChannels>,
@@ -906,6 +925,7 @@ pub async fn start_consensus(
 pub fn run(
     starting_block_height: u64,
     shutdown: ShutdownSignal,
+    owner_service: OwnerService,
     writer: database::Writer,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
@@ -913,7 +933,7 @@ pub fn run(
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
     engine_config: engine::EngineConfig,
-    bitcoin_client: crate::bitcoin_client::Client,
+    bitcoin_client: Client,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis: GenesisParameters,
     observation_channels: Option<consensus_state::ObservationChannels>,
@@ -931,6 +951,7 @@ pub fn run(
                 let (exec, mut runtime, last_height, last_hash) = create_runtime_executor(
                     starting_block_height,
                     &writer,
+                    &owner_service,
                     bitcoin_client,
                     replay_tx,
                     &genesis,
@@ -1017,7 +1038,8 @@ pub fn run(
                 // placeholder).
                 fee_index.recompute();
 
-                let mut consensus = start_consensus(
+                let mut startup_lease = owner_service.begin_canonical(&mut runtime, false).await?;
+                let consensus_result = start_consensus(
                     engine_config,
                     &mut runtime,
                     observation_channels,
@@ -1025,8 +1047,10 @@ pub fn run(
                     last_height,
                     fee_index,
                 )
-                .await
-                .context("start_consensus failed")?;
+                .await;
+                startup_lease.drain(&runtime).await?;
+                startup_lease.complete(&mut runtime).await?;
+                let mut consensus = consensus_result.context("start_consensus failed")?;
 
                 // Seed pending_transactions with the Kontor txs captured
                 // from the initial Sync.
@@ -1039,6 +1063,7 @@ pub fn run(
                 let mut reactor = Reactor::new(
                     exec,
                     runtime,
+                    owner_service,
                     block_rx,
                     mempool_rx,
                     shutdown.clone(),

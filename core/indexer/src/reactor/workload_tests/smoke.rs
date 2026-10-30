@@ -43,6 +43,7 @@ use crate::reactor::executor::RuntimeExecutor;
 use crate::reactor::mempool_fee_index::MempoolFeeIndex;
 use crate::reactor::{PruneConfig, Reactor, create_runtime_executor, start_consensus};
 use crate::reg_tester::{WorkloadBitcoin, derive_taproot_keypair_from_seed, workload_bitcoin};
+use crate::runtime::ownership::OwnerService;
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -183,6 +184,7 @@ async fn reactor(
     let mut reactor = Reactor::new(
         RuntimeExecutor::new(client),
         runtime,
+        OwnerService::new(),
         blocks,
         mempool,
         Shutdown::new().signal(),
@@ -454,9 +456,11 @@ async fn workload_real_block_smoke() -> Result<()> {
             stake: Decimal::from("100"),
         }],
     };
+    let owner_service = OwnerService::new();
     let (_, mut runtime, last_height, last_hash) = create_runtime_executor(
         START_HEIGHT,
         &writer,
+        &owner_service,
         client.clone(),
         None,
         &genesis,

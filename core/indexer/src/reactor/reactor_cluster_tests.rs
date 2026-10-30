@@ -29,6 +29,7 @@ use crate::reactor::mock_bitcoin::MockBitcoin;
 use crate::reactor::{Reactor, Simulation};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::GenesisValidator;
+use crate::runtime::ownership::OwnerService;
 use bitcoin::hashes::Hash;
 use indexer_types::Event;
 use indexer_types::OpWithResult;
@@ -578,6 +579,7 @@ impl ReactorCluster {
             let mut reactor = Reactor::new(
                 executor,
                 runtime,
+                OwnerService::new(),
                 node_block_rx,
                 node_mempool_rx,
                 cancel.clone(),

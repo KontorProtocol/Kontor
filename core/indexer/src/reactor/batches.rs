@@ -670,16 +670,10 @@ impl<E: Executor> Reactor<E> {
             parsed
         };
 
-        // Track for finality — must happen once per batch execution
-        let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
-        self.consensus.unfinalized_batches.push(UnfinalizedBatch {
-            consensus_height,
-            anchor_height,
-            anchor_hash,
-            txids,
-            deadline: deadline_for(anchor_height),
-        });
-
+        let mut lease = self
+            .owner_service
+            .begin_canonical(&mut self.runtime, false)
+            .await?;
         self.runtime
             .storage
             .savepoint()
@@ -723,11 +717,22 @@ impl<E: Executor> Reactor<E> {
                 .context("execute_transaction failed")?;
         }
 
+        lease.drain(&self.runtime).await?;
         self.runtime
             .storage
             .commit()
             .await
             .context("Failed to commit batch transaction")?;
+        lease.complete(&mut self.runtime).await?;
+        // The in-memory finality obligation must match a persisted batch.
+        let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
+        self.consensus.unfinalized_batches.push(UnfinalizedBatch {
+            consensus_height,
+            anchor_height,
+            anchor_hash,
+            txids,
+            deadline: deadline_for(anchor_height),
+        });
         gauge!(CONSENSUS_HEIGHT).set(consensus_height.as_u64() as f64);
         // Counter increments only after commit so we count ops persisted,
         // not ops attempted (mirrors the block path; simulation can't reach

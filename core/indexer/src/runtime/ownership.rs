@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 use std::future::{Future, pending};
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use deadpool::managed::Object;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use metrics::gauge;
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio::task::{AbortHandle, Id, JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
@@ -23,6 +24,13 @@ use super::pool::Manager;
 const API_DRAIN_LIMIT: Duration = Duration::from_secs(5);
 const NODE_ADMISSION_CAPACITY: usize = 64;
 const API_FUEL_YIELD_INTERVAL: u64 = 100_000;
+
+// These private tokens only wake the owner supervisor. Process shutdown remains
+// controlled by stopper::Shutdown.
+#[allow(clippy::disallowed_methods)]
+fn wake_owner(token: &CancellationToken) {
+    token.cancel();
+}
 
 #[derive(Clone, Copy)]
 enum RootKind {
@@ -218,7 +226,7 @@ impl ChildContext {
             .is_err()
         {
             if RootState::load(&self.state) != RootState::Running {
-                pending().await
+                return self.closed_or_infrastructure().await;
             }
             return Err(anyhow!("parent already has an outstanding guest child"));
         }
@@ -287,16 +295,162 @@ impl ChildContext {
 
     async fn closed_or_infrastructure(&self) -> Result<GuestCompletion> {
         if RootState::load(&self.state) != RootState::Running {
+            if matches!(self.kind, RootKind::Canonical | RootKind::Simulation) {
+                return Err(anyhow!("canonical guest child closed; root quarantined"));
+            }
             // A closing parent must not resume payment or savepoint settlement.
             pending().await
         }
         Err(anyhow!("guest admission closed without root cancellation"))
     }
+
+    pub(super) fn ensure_commit_authorized(&self) -> Result<()> {
+        ensure!(
+            matches!(
+                RootState::load(&self.state),
+                RootState::Running | RootState::Committing
+            ),
+            "operation root cannot commit after cancellation or quarantine"
+        );
+        Ok(())
+    }
+}
+
+enum RootAuthority {
+    Pooled(Object<Manager>),
+    Stateful(Runtime),
+}
+
+impl Deref for RootAuthority {
+    type Target = Runtime;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Pooled(object) => object,
+            Self::Stateful(runtime) => runtime,
+        }
+    }
+}
+
+impl DerefMut for RootAuthority {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Pooled(object) => object,
+            Self::Stateful(runtime) => runtime,
+        }
+    }
+}
+
+struct StatefulSessionInner {
+    runtime: std::sync::Mutex<Option<Runtime>>,
+    available: Notify,
+    failed: AtomicBool,
+}
+
+#[derive(Clone)]
+pub(crate) struct StatefulSession(Arc<StatefulSessionInner>);
+
+#[derive(Clone)]
+pub(crate) struct OwnedRuntimeSession {
+    service: OwnerService,
+    session: StatefulSession,
+}
+
+impl OwnedRuntimeSession {
+    #[cfg(test)]
+    pub(crate) fn new(runtime: Runtime) -> Self {
+        Self::with_service(runtime, OwnerService::new())
+    }
+
+    pub(crate) fn with_service(runtime: Runtime, service: OwnerService) -> Self {
+        let session = service.stateful_session(runtime);
+        Self { service, session }
+    }
+
+    pub(crate) async fn run<T, F>(&self, commit: bool, operation: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: for<'a> FnOnce(&'a mut Runtime) -> BoxFuture<'a, Result<T>> + Send + 'static,
+    {
+        let mut handle = self
+            .service
+            .start_stateful(&self.session, move |runtime| {
+                Box::pin(async move {
+                    let value = operation(runtime).await?;
+                    Ok(RootOutcome { value, commit })
+                })
+            })
+            .await?;
+        handle.result().await
+    }
+}
+
+struct SessionCheckout {
+    session: StatefulSession,
+    runtime: Option<Runtime>,
+}
+
+impl Drop for SessionCheckout {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            self.session.return_runtime(runtime);
+        }
+    }
+}
+
+impl StatefulSession {
+    fn new(runtime: Runtime) -> Self {
+        Self(Arc::new(StatefulSessionInner {
+            runtime: std::sync::Mutex::new(Some(runtime)),
+            available: Notify::new(),
+            failed: AtomicBool::new(false),
+        }))
+    }
+
+    async fn checkout(&self) -> Result<SessionCheckout> {
+        loop {
+            let available = self.0.available.notified();
+            tokio::pin!(available);
+            available.as_mut().enable();
+            if self.0.failed.load(Ordering::SeqCst) {
+                return Err(anyhow!("stateful runtime session is quarantined"));
+            }
+            if let Some(runtime) = self
+                .0
+                .runtime
+                .lock()
+                .expect("stateful runtime lock poisoned")
+                .take()
+            {
+                return Ok(SessionCheckout {
+                    session: self.clone(),
+                    runtime: Some(runtime),
+                });
+            }
+            available.await;
+        }
+    }
+
+    fn return_runtime(&self, runtime: Runtime) {
+        let previous = self
+            .0
+            .runtime
+            .lock()
+            .expect("stateful runtime lock poisoned")
+            .replace(runtime);
+        assert!(previous.is_none(), "stateful runtime returned twice");
+        self.0.available.notify_one();
+    }
+
+    fn quarantine(&self) {
+        self.0.failed.store(true, Ordering::SeqCst);
+        self.0.available.notify_waiters();
+    }
 }
 
 struct RootKeeper {
     id: RootId,
-    authority: Mutex<Option<Object<Manager>>>,
+    authority: Mutex<Option<RootAuthority>>,
     state: Arc<AtomicU8>,
     closing_at: Arc<std::sync::Mutex<Option<Instant>>>,
     cancellation: CancellationToken,
@@ -307,6 +461,14 @@ struct RootKeeper {
 
 impl RootKeeper {
     fn new(id: RootId, authority: Object<Manager>) -> Self {
+        Self::with_authority(id, RootAuthority::Pooled(authority))
+    }
+
+    fn new_stateful(id: RootId, authority: Runtime) -> Self {
+        Self::with_authority(id, RootAuthority::Stateful(authority))
+    }
+
+    fn with_authority(id: RootId, authority: RootAuthority) -> Self {
         Self {
             id,
             authority: Mutex::new(Some(authority)),
@@ -332,7 +494,7 @@ impl RootKeeper {
             .is_ok()
         {
             *closing_at = Some(Instant::now());
-            self.cancellation.cancel();
+            wake_owner(&self.cancellation);
         }
     }
 
@@ -343,7 +505,7 @@ impl RootKeeper {
         }
         self.state
             .store(RootState::Quarantined as u8, Ordering::SeqCst);
-        self.cancellation.cancel();
+        wake_owner(&self.cancellation);
     }
 
     fn quarantine_before_commit(&self) -> bool {
@@ -365,7 +527,7 @@ impl RootKeeper {
                         if closing_at.is_none() {
                             *closing_at = Some(Instant::now());
                         }
-                        self.cancellation.cancel();
+                        wake_owner(&self.cancellation);
                         return true;
                     }
                 }
@@ -387,7 +549,10 @@ impl Drop for RootKeeper {
             .take()
             .expect("quarantined root authority retained");
         if self.quiescent.load(Ordering::SeqCst) {
-            drop(Object::take(object));
+            match object {
+                RootAuthority::Pooled(object) => drop(Object::take(object)),
+                RootAuthority::Stateful(runtime) => drop(runtime),
+            }
         } else {
             // The last keeper may disappear after a supervisor failure while
             // detached guest work still has a cloned connection.
@@ -427,6 +592,71 @@ pub(crate) struct OwnedRootHandle<T> {
     result: oneshot::Receiver<Result<T>>,
 }
 
+pub(crate) struct CanonicalRootLease {
+    keeper: Arc<RootKeeper>,
+    registry: Arc<OwnerRegistry>,
+    finish: Option<oneshot::Sender<()>>,
+    drained: oneshot::Receiver<Result<()>>,
+    complete: bool,
+}
+
+impl CanonicalRootLease {
+    pub(crate) async fn drain(&mut self, runtime: &Runtime) -> Result<()> {
+        self.finish
+            .take()
+            .context("canonical root already drained")?
+            .send(())
+            .map_err(|_| anyhow!("canonical root supervisor disappeared"))?;
+        (&mut self.drained)
+            .await
+            .context("canonical root supervisor disappeared before drain")??;
+        if !runtime.stack.is_empty().await
+            || runtime
+                .invocation_budget
+                .as_ref()
+                .is_some_and(|budget| budget.live() != 0)
+            || runtime.store_table_owners.as_ref().is_some_and(|owners| {
+                owners
+                    .lock()
+                    .expect("store table tracker poisoned")
+                    .iter()
+                    .any(|owner| owner.strong_count() != 0)
+            })
+            || Arc::strong_count(&runtime.table) != 2
+        {
+            return Err(anyhow!("canonical root retains a guest Store or stack"));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn complete(mut self, runtime: &mut Runtime) -> Result<()> {
+        if RootState::load(&self.keeper.state) != RootState::Committing {
+            return Err(anyhow!("canonical root was not drained"));
+        }
+        runtime.ownership = None;
+        runtime.storage.ownership = None;
+        runtime.invocation_budget = None;
+        runtime.store_table_owners = None;
+        *runtime.table.lock().await = ResourceTable::new();
+        self.keeper.quiescent.store(true, Ordering::SeqCst);
+        self.keeper
+            .state
+            .store(RootState::Complete as u8, Ordering::SeqCst);
+        self.registry.roots.lock().await.remove(&self.keeper.id);
+        self.complete = true;
+        Ok(())
+    }
+}
+
+impl Drop for CanonicalRootLease {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.keeper.quarantine();
+            self.registry.fatal.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
 impl<T> OwnedRootHandle<T> {
     pub(crate) async fn result(&mut self) -> Result<T> {
         (&mut self.result)
@@ -449,7 +679,7 @@ impl<T> Drop for OwnedRootHandle<T> {
             .is_ok()
         {
             *closing_at = Some(Instant::now());
-            self.cancellation.cancel();
+            wake_owner(&self.cancellation);
         }
     }
 }
@@ -500,7 +730,7 @@ impl OwnerService {
     }
 
     pub fn shutdown(&self) {
-        self.shutdown.cancel();
+        wake_owner(&self.shutdown);
     }
 
     pub async fn active_roots(&self) -> usize {
@@ -519,6 +749,89 @@ impl OwnerService {
 
     pub fn is_fatal(&self) -> bool {
         self.registry.fatal.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn fail_driver_for_test(&self) -> Result<()> {
+        self.admission
+            .send(Box::new(|| {
+                Box::pin(async {
+                    panic!("forced operation-owner driver failure");
+                })
+            }))
+            .await
+            .map_err(|_| anyhow!("operation-owner test admission closed"))
+    }
+
+    pub(crate) fn stateful_session(&self, runtime: Runtime) -> StatefulSession {
+        StatefulSession::new(runtime)
+    }
+
+    pub(crate) async fn begin_canonical(
+        &self,
+        runtime: &mut Runtime,
+        simulation: bool,
+    ) -> Result<CanonicalRootLease> {
+        ensure!(
+            runtime.ownership.is_none()
+                && runtime.storage.ownership.is_none()
+                && runtime.invocation_budget.is_none()
+                && runtime.store_table_owners.is_none()
+                && Arc::strong_count(&runtime.table) == 1,
+            "canonical runtime is still owned by a prior root"
+        );
+        ensure!(
+            runtime.storage.conn.is_autocommit()
+                && runtime.storage.savepoint_stack.is_empty().await,
+            "canonical root cannot start inside an existing transaction"
+        );
+        let permit = self
+            .admission
+            .reserve()
+            .await
+            .context("operation-owner node admission closed")?;
+        if self.is_fatal() {
+            return Err(anyhow!("operation-owner service is unavailable"));
+        }
+        let id = RootId(self.registry.next_root.fetch_add(1, Ordering::SeqCst));
+        let mut roots = self.registry.roots.lock().await;
+        let budget = Arc::new(InvocationBudget::default());
+        let store_table_owners = Arc::new(std::sync::Mutex::new(Vec::new()));
+        runtime.invocation_budget = Some(budget);
+        runtime.store_table_owners = Some(store_table_owners);
+        let keeper = Arc::new(RootKeeper::new_stateful(id, runtime.clone()));
+        let (sender, receiver) = mpsc::channel(1);
+        let kind = if simulation {
+            RootKind::Simulation
+        } else {
+            RootKind::Canonical
+        };
+        let context = ChildContext::root(
+            id,
+            kind,
+            sender,
+            keeper.state.clone(),
+            keeper.blocking.clone(),
+        );
+        runtime.ownership = Some(context.clone());
+        runtime.storage.ownership = Some(context);
+        roots.insert(id, keeper.clone());
+        drop(roots);
+        let (finish, finished) = oneshot::channel();
+        let (drained_sender, drained) = oneshot::channel();
+        let node_keeper = keeper.clone();
+        permit.send(Box::new(move || {
+            Box::pin(async move {
+                supervise_canonical(node_keeper, receiver, finished, drained_sender).await;
+            })
+        }));
+        Ok(CanonicalRootLease {
+            keeper,
+            registry: self.registry.clone(),
+            finish: Some(finish),
+            drained,
+            complete: false,
+        })
     }
 
     pub(crate) async fn start_pooled<T, F>(
@@ -568,6 +881,7 @@ impl OwnerService {
                     context,
                     operation,
                     result_sender,
+                    None,
                 );
                 if std::panic::AssertUnwindSafe(supervisor)
                     .catch_unwind()
@@ -575,6 +889,80 @@ impl OwnerService {
                     .is_err()
                 {
                     keeper.quarantine();
+                    registry.fatal.store(true, Ordering::SeqCst);
+                    panic!("operation root supervisor panicked");
+                }
+            })
+        }));
+        Ok(handle)
+    }
+
+    pub(crate) async fn start_stateful<T, F>(
+        &self,
+        session: &StatefulSession,
+        operation: F,
+    ) -> Result<OwnedRootHandle<T>>
+    where
+        T: Send + 'static,
+        F: for<'a> FnOnce(&'a mut Runtime) -> BoxFuture<'a, Result<RootOutcome<T>>>
+            + Send
+            + 'static,
+    {
+        let mut checkout = session.checkout().await?;
+        let permit = self
+            .admission
+            .reserve()
+            .await
+            .context("operation-owner node admission closed")?;
+        if self.is_fatal() {
+            return Err(anyhow!("operation-owner service is unavailable"));
+        }
+        let id = RootId(self.registry.next_root.fetch_add(1, Ordering::SeqCst));
+        let keeper = {
+            let mut roots = self.registry.roots.lock().await;
+            let runtime = checkout
+                .runtime
+                .take()
+                .expect("checked-out runtime retained");
+            let keeper = Arc::new(RootKeeper::new_stateful(id, runtime));
+            roots.insert(id, keeper.clone());
+            keeper
+        };
+        let (sender, receiver) = mpsc::channel(1);
+        let context = ChildContext::root(
+            id,
+            RootKind::Api,
+            sender,
+            keeper.state.clone(),
+            keeper.blocking.clone(),
+        );
+        let (result_sender, result) = oneshot::channel();
+        let handle = OwnedRootHandle {
+            state: keeper.state.clone(),
+            closing_at: keeper.closing_at.clone(),
+            cancellation: keeper.cancellation.clone(),
+            result,
+        };
+        let registry = self.registry.clone();
+        let return_to = session.clone();
+        permit.send(Box::new(move || {
+            Box::pin(async move {
+                let supervisor = supervise(
+                    registry.clone(),
+                    keeper.clone(),
+                    receiver,
+                    context,
+                    operation,
+                    result_sender,
+                    Some(return_to.clone()),
+                );
+                if std::panic::AssertUnwindSafe(supervisor)
+                    .catch_unwind()
+                    .await
+                    .is_err()
+                {
+                    keeper.quarantine();
+                    return_to.quarantine();
                     registry.fatal.store(true, Ordering::SeqCst);
                     panic!("operation root supervisor panicked");
                 }
@@ -633,6 +1021,144 @@ async fn run_node(
     }
 }
 
+async fn supervise_canonical(
+    keeper: Arc<RootKeeper>,
+    mut receiver: mpsc::Receiver<Admission>,
+    mut finish: oneshot::Receiver<()>,
+    drained: oneshot::Sender<Result<()>>,
+) {
+    let mut children = JoinSet::<(TaskId, GuestCompletion)>::new();
+    let mut active = HashMap::<TaskId, RunningChild>::new();
+    let mut by_tokio = HashMap::<Id, TaskId>::new();
+    let mut parked_senders = Vec::<oneshot::Sender<GuestDelivery>>::new();
+    let mut finished = false;
+    let mut receiver_drained = false;
+    let mut aborting = None;
+
+    loop {
+        let closing = RootState::load(&keeper.state) != RootState::Running;
+        if finished || closing {
+            receiver.close();
+        }
+        if closing
+            && aborting.is_none()
+            && let Some((&id, child)) = active.iter().max_by_key(|(_, child)| child.depth)
+        {
+            child.abort.abort();
+            aborting = Some(id);
+        }
+        if (finished || closing) && active.is_empty() && receiver_drained {
+            break;
+        }
+
+        tokio::select! {
+            _ = keeper.cancellation.cancelled(), if !closing => {}
+            result = &mut finish, if !finished => {
+                finished = true;
+                if result.is_err() || !active.is_empty() {
+                    keeper.quarantine();
+                }
+            }
+            request = receiver.recv(), if !receiver_drained => {
+                match request {
+                    Some(request)
+                        if RootState::load(&keeper.state) == RootState::Running && !finished =>
+                    {
+                        let valid_parent = request.parent.root == keeper.id
+                            && request.id.root == keeper.id
+                            && request.id != request.parent
+                            && (request.parent.local == 0
+                                || active.get(&request.parent).is_some_and(|parent| {
+                                    parent.depth + 1 == request.depth
+                                }));
+                        if !valid_parent {
+                            keeper.quarantine();
+                            drop(request);
+                            continue;
+                        }
+                        let Admission { id, parent, depth, future, completion, slot } = request;
+                        let abort = children.spawn(async move { (id, future.await) });
+                        by_tokio.insert(abort.id(), id);
+                        active.insert(id, RunningChild {
+                            parent,
+                            depth,
+                            abort,
+                            completion,
+                            slot,
+                        });
+                    }
+                    Some(request) => {
+                        if !closing {
+                            keeper.quarantine();
+                        }
+                        drop(request);
+                    }
+                    None => receiver_drained = true,
+                }
+            }
+            joined = children.join_next_with_id(), if !children.is_empty() => {
+                if let Some(joined) = joined {
+                    let (tokio_id, completion) = match joined {
+                        Ok((tokio_id, (id, completion))) => {
+                            debug_assert_eq!(by_tokio.get(&tokio_id), Some(&id));
+                            (tokio_id, Some(completion))
+                        }
+                        Err(error) => {
+                            if !closing || error.is_panic() {
+                                keeper.quarantine();
+                            }
+                            (error.id(), None)
+                        }
+                    };
+                    let id = by_tokio.remove(&tokio_id).expect("registered child task id");
+                    let child = active.remove(&id).expect("registered child completion");
+                    if aborting == Some(id) {
+                        aborting = None;
+                    }
+                    if let Some(completion) = completion {
+                        if completion.host_panicked {
+                            keeper.caught_host_panic.store(true, Ordering::SeqCst);
+                            keeper.quarantine();
+                        }
+                        if RootState::load(&keeper.state) == RootState::Running
+                            || completion.host_panicked
+                        {
+                            if let Err(delivery) = child.completion.send(GuestDelivery {
+                                completion,
+                                slot: child.slot,
+                            }) {
+                                drop(delivery);
+                                keeper.quarantine();
+                            }
+                        } else {
+                            drop(completion);
+                            drop(child.slot);
+                            parked_senders.push(child.completion);
+                        }
+                    } else {
+                        drop(child.slot);
+                        parked_senders.push(child.completion);
+                    }
+                }
+            }
+        }
+    }
+
+    keeper.blocking.wait_all().await;
+    drop(parked_senders);
+    if RootState::load(&keeper.state) == RootState::Running
+        && !keeper.caught_host_panic.load(Ordering::SeqCst)
+    {
+        keeper
+            .state
+            .store(RootState::Committing as u8, Ordering::SeqCst);
+        let _ = drained.send(Ok(()));
+    } else {
+        keeper.quarantine();
+        let _ = drained.send(Err(anyhow!("canonical root quarantined")));
+    }
+}
+
 async fn supervise<T, F>(
     registry: Arc<OwnerRegistry>,
     keeper: Arc<RootKeeper>,
@@ -640,6 +1166,7 @@ async fn supervise<T, F>(
     context: ChildContext,
     operation: F,
     response: oneshot::Sender<Result<T>>,
+    return_to: Option<StatefulSession>,
 ) where
     T: Send + 'static,
     F: for<'a> FnOnce(&'a mut Runtime) -> BoxFuture<'a, Result<RootOutcome<T>>> + Send + 'static,
@@ -785,10 +1312,10 @@ async fn supervise<T, F>(
                 }
             }
             finished = &mut root, if root_result.is_none() => {
-                if let Err(error) = &finished {
-                    if error.is_panic() {
-                        keeper.quarantine();
-                    }
+                if let Err(error) = &finished
+                    && error.is_panic()
+                {
+                    keeper.quarantine();
                 }
                 root_result = Some(finished);
                 if !active.is_empty() {
@@ -805,19 +1332,18 @@ async fn supervise<T, F>(
         }
     }
 
-    if let Some(deadline) = deadline {
-        if !timed_out
-            && tokio::time::timeout_at(deadline, keeper.blocking.wait_all())
-                .await
-                .is_err()
-        {
-            timed_out = true;
-            keeper.quarantine();
-            if let Some(response) = response.take() {
-                let _ = response.send(Err(anyhow!(
-                    "operation drain exceeded five seconds; root quarantined"
-                )));
-            }
+    if let Some(deadline) = deadline
+        && !timed_out
+        && tokio::time::timeout_at(deadline, keeper.blocking.wait_all())
+            .await
+            .is_err()
+    {
+        timed_out = true;
+        keeper.quarantine();
+        if let Some(response) = response.take() {
+            let _ = response.send(Err(anyhow!(
+                "operation drain exceeded five seconds; root quarantined"
+            )));
         }
     }
     keeper.blocking.wait_all().await;
@@ -845,7 +1371,26 @@ async fn supervise<T, F>(
             keeper
                 .state
                 .store(RootState::Complete as u8, Ordering::SeqCst);
+            let returned = if return_to.is_some() {
+                Some(
+                    keeper
+                        .authority
+                        .lock()
+                        .await
+                        .take()
+                        .expect("stateful root authority retained"),
+                )
+            } else {
+                None
+            };
             registry.roots.lock().await.remove(&keeper.id);
+            match (return_to.as_ref(), returned) {
+                (Some(session), Some(RootAuthority::Stateful(runtime))) => {
+                    session.return_runtime(runtime);
+                }
+                (None, None) => {}
+                _ => unreachable!("root authority does not match its return session"),
+            }
             if let Some(response) = response.take() {
                 let _ = response.send(value);
             }
@@ -855,12 +1400,18 @@ async fn supervise<T, F>(
                 && keeper.caught_host_panic.load(Ordering::SeqCst) =>
         {
             keeper.quarantine();
+            if let Some(session) = &return_to {
+                session.quarantine();
+            }
             if let Some(response) = response.take() {
                 let _ = response.send(value);
             }
         }
         Ok(_) | Err(_) => {
             keeper.quarantine();
+            if let Some(session) = &return_to {
+                session.quarantine();
+            }
             if let Some(response) = response.take() {
                 let _ = response.send(Err(anyhow!("operation root quarantined")));
             }
@@ -1048,6 +1599,141 @@ mod tests {
             .await?;
         assert_eq!(handle.result().await?, baseline);
         assert_eq!(service.active_roots().await, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn canonical_lease_drains_native_guest_before_releasing_runtime() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let service = OwnerService::new();
+        let mut lease = service.begin_canonical(&mut runtime, false).await?;
+        let _balance = token::api::balance(&mut runtime, HolderRef::Burner).await?;
+        lease.drain(&runtime).await?;
+        lease.complete(&mut runtime).await?;
+        assert_eq!(service.active_roots().await, 0);
+        assert!(runtime.ownership.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn canonical_child_panic_cannot_commit_or_leave_reactor_waiting() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let service = OwnerService::new();
+        let mut lease = service.begin_canonical(&mut runtime, false).await?;
+        runtime.storage.savepoint().await?;
+        let owner = runtime
+            .ownership
+            .clone()
+            .expect("canonical context installed");
+        let result = timeout(
+            Duration::from_secs(2),
+            owner.run_guest(|_| async { panic!("forced canonical child failure") }),
+        )
+        .await?;
+        assert!(result.is_err());
+        assert!(runtime.storage.commit().await.is_err());
+        assert!(lease.drain(&runtime).await.is_err());
+        drop(lease);
+        assert!(service.is_fatal());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn abandoned_canonical_guest_cannot_commit() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let service = OwnerService::new();
+        let mut lease = service.begin_canonical(&mut runtime, false).await?;
+        runtime.storage.savepoint().await?;
+        let mut store = runtime.make_store(1_000_000)?;
+        let owner = runtime
+            .ownership
+            .clone()
+            .expect("canonical context installed");
+        let started = Arc::new(Notify::new());
+        let observed = started.notified();
+        tokio::pin!(observed);
+        observed.as_mut().enable();
+        let child_started = started.clone();
+        let request = tokio::spawn(async move {
+            owner
+                .run_guest(|child| async move {
+                    store.data_mut().ownership = Some(child);
+                    child_started.notify_one();
+                    pending().await
+                })
+                .await
+        });
+        timeout(Duration::from_secs(2), observed).await?;
+        request.abort();
+        let _ = request.await;
+        assert!(
+            timeout(Duration::from_secs(2), lease.drain(&runtime))
+                .await?
+                .is_err()
+        );
+        assert!(runtime.storage.commit().await.is_err());
+        drop(lease);
+        assert!(service.is_fatal());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stateful_session_retains_runtime_across_owned_calls() -> Result<()> {
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let session = OwnedRuntimeSession::new(runtime);
+        session
+            .run(false, |runtime| {
+                Box::pin(async move {
+                    runtime.node_label = "owned-session".to_string();
+                    Ok(())
+                })
+            })
+            .await?;
+        let label = session
+            .run(false, |runtime| {
+                Box::pin(async move { Ok(runtime.node_label.clone()) })
+            })
+            .await?;
+        assert_eq!(label, "owned-session");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dropped_stateful_call_releases_runtime_only_after_child_join() -> Result<()> {
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let session = OwnedRuntimeSession::new(runtime);
+        let started = Arc::new(Notify::new());
+        let child_started = started.clone();
+        let interrupted = session.clone();
+        let request = tokio::spawn(async move {
+            interrupted
+                .run(false, move |runtime| {
+                    Box::pin(async move {
+                        let owner = runtime.ownership.clone().expect("owned runtime context");
+                        let store = runtime.make_store(1_000_000)?;
+                        owner
+                            .run_guest(|child| async move {
+                                let mut store = store;
+                                store.data_mut().ownership = Some(child);
+                                child_started.notify_one();
+                                pending().await
+                            })
+                            .await?;
+                        Ok(())
+                    })
+                })
+                .await
+        });
+        timeout(Duration::from_secs(2), started.notified()).await?;
+        request.abort();
+        let _ = request.await;
+        let _label = timeout(
+            Duration::from_secs(2),
+            session.run(false, |runtime| {
+                Box::pin(async move { Ok(runtime.node_label.clone()) })
+            }),
+        )
+        .await??;
         Ok(())
     }
 
