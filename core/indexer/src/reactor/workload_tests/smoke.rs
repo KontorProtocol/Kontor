@@ -409,7 +409,7 @@ async fn retained_version(conn: &Connection, contract: u64, path: &[u8]) -> Resu
     let mut rows = conn
         .query(
             "SELECT height, value, deleted, depositor, deposited_gas FROM contract_state
-         WHERE contract_id = ? AND path = ? AND height <= 96 ORDER BY height DESC LIMIT 1",
+         WHERE contract_id = ? AND path = ? AND height <= 95 ORDER BY height DESC LIMIT 1",
             params![contract, path],
         )
         .await?;
@@ -539,9 +539,9 @@ async fn workload_real_block_smoke() -> Result<()> {
     let before = database_projection(&conn).await?;
     let (old_id, old_path, old_height) = {
         let mut rows = conn.query(
-            "SELECT s.contract_id, s.path, s.height FROM contract_state s WHERE s.height BETWEEN 93 AND 95
+            "SELECT s.contract_id, s.path, s.height FROM contract_state s WHERE s.height BETWEEN 93 AND 94
              AND EXISTS (SELECT 1 FROM contract_state n WHERE n.contract_id = s.contract_id AND n.path = s.path
-             AND n.height > s.height AND n.height <= 96) ORDER BY s.contract_id, s.path, s.height LIMIT 1", ()
+             AND n.height > s.height AND n.height <= 95) ORDER BY s.contract_id, s.path, s.height LIMIT 1", ()
         ).await?;
         let old = rows
             .next()
@@ -749,7 +749,7 @@ async fn workload_real_block_smoke() -> Result<()> {
             database_projection(&trial.db_conn()).await? == projection,
             "observation mutated persistent state"
         );
-        ensure!(get_meta_u64(&trial.db_conn(), PRUNE_WATERMARK_KEY, 0).await? == 96);
+        ensure!(get_meta_u64(&trial.db_conn(), PRUNE_WATERMARK_KEY, 0).await? == 95);
         ensure!(trial.db_conn().query("SELECT 1 FROM contract_state WHERE contract_id = ? AND path = ? AND height = ?",
             params![old_id, old_path.clone(), old_height]).await?.next().await?.is_none(), "obsolete version survived pruning");
         ensure!(
@@ -801,6 +801,7 @@ async fn workload_real_block_smoke() -> Result<()> {
         "next_consensus_height":next_consensus_height,
         "funding_seed_hex":hex::encode(FUNDING_SEED),
         "starting_block_height":START_HEIGHT,"anchor_height":ANCHOR_HEIGHT,"anchor_hash":anchor,
+        "effective_retain_blocks":7,
         "block_height":SMOKE_HEIGHT,"block_hash":smoke_hash,"raw_block_sha256":hex::encode(Sha256::digest(&raw)),
         "raw_txids":raw_block.txdata.iter().map(|tx|tx.compute_txid().to_string()).collect::<Vec<_>>(),
         "maturity_chain_hashes":mined,"snapshot_sha256":snapshot.sha256,

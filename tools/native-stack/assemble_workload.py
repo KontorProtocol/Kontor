@@ -25,6 +25,8 @@ def assemble(directory):
         return {"path": name, "sha256": hashlib.sha256((root / name).read_bytes()).hexdigest()}
 
     candidate, source = read("candidate.json"), read("source.json")
+    retention = candidate.get("effective_retain_blocks", 6)
+    require(type(retention) is int and retention in (6, 7), "unsupported candidate retention")
     before, after = read("before-report.json"), read("trial-one.db-report.json")
     require(after == read("trial-two.db-report.json"), "candidate replay reports differ")
     require(read("trial-one.db-projection.json") == read("trial-two.db-projection.json"),
@@ -51,7 +53,8 @@ def assemble(directory):
         for index, expression in enumerate(("write-result-payload(1)", "scan-compound(false)", "write-result-payload(2)"))
     ]
     manifest = {
-        "schema_version": 1, "kind": "smoke", "case_id": "paid-success-failure-success-v1",
+        "schema_version": 2 if retention == 7 else 1,
+        "kind": "smoke", "case_id": "paid-success-failure-success-v1",
         "funding_seed_hex": candidate["funding_seed_hex"],
         "source": {
             "kontor_commit": candidate["source_commit"],
@@ -79,7 +82,8 @@ def assemble(directory):
         },
         "execution": {
             "executor": "RuntimeExecutor", "component_cache": "cold", "network": "regtest",
-            "prune_enabled": True, "retain_blocks": 6, "starting_block_height": candidate["starting_block_height"],
+            "prune_enabled": True, "retain_blocks": 6,
+            "starting_block_height": candidate["starting_block_height"],
             "gas_to_fuel_multiplier": 1000, "execution_price": "0.000000001", "storage_gas_per_byte": 1,
             "lifecycle_parameters": reference("lifecycle-parameters.json"), "independent_resets": 2, "timing_claim": "none",
         },
@@ -89,6 +93,8 @@ def assemble(directory):
             "block_height": candidate["block_height"], "block_hash": candidate["block_hash"], "certified_txs": None,
         },
     }
+    if retention == 7:
+        manifest["execution"]["effective_retain_blocks"] = retention
     output = root / "candidate-manifest.json"
     # Never replace a reviewed manifest when new observations differ.
     with output.open("xb") as destination:

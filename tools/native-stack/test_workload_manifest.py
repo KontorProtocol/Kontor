@@ -133,6 +133,23 @@ class WorkloadDocumentTests(unittest.TestCase):
     def test_consistent_synthetic_documents(self):
         self.check(documents())
 
+    def test_predecessor_retention_has_explicit_versioned_metadata(self):
+        data = documents()
+        data[0]["schema_version"] = 2
+        data[0]["execution"]["effective_retain_blocks"] = 7
+        data[2]["prune_watermark"] = 3
+        self.check(data)
+        for version, retention, watermark in [(1, 7, 3), (2, 6, 4), (2, 7, 4), (2, True, 3)]:
+            altered = deepcopy(data)
+            altered[0]["schema_version"] = version
+            altered[0]["execution"]["effective_retain_blocks"] = retention
+            altered[2]["prune_watermark"] = watermark
+            with self.subTest(version=version, retention=retention, watermark=watermark):
+                with self.assertRaises(FixtureError):
+                    self.check(altered)
+        # Legacy archives keep their original watermark, without relabeling it.
+        self.check(documents())
+
     def test_identity_and_scope_mutations_are_rejected(self):
         changes = [
             (0, ("schema_version",), 2), (0, ("schema_version",), True),

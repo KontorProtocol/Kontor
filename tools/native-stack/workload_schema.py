@@ -1,4 +1,4 @@
-"""Closed data shapes for the version-one, regtest-only correctness smoke."""
+"""Closed data shapes for the regtest-only correctness smoke."""
 
 from fractions import Fraction
 import re
@@ -120,7 +120,7 @@ INPUT = record(
         accepted_block_hash=digest, record=FILE,
     ),
 )
-EXECUTION = record(
+EXECUTION_FIELDS = dict(
     executor=literal("RuntimeExecutor"), component_cache=literal("cold"),
     network=literal("regtest"), prune_enabled=literal(True), retain_blocks=literal(6),
     starting_block_height=u64,
@@ -128,17 +128,21 @@ EXECUTION = record(
     storage_gas_per_byte=literal(1), lifecycle_parameters=FILE,
     independent_resets=literal(2), timing_claim=literal("none"),
 )
+EXECUTION = record(**EXECUTION_FIELDS)
+EXECUTION_V2 = record(**EXECUTION_FIELDS, effective_retain_blocks=literal(7))
 DECISION = record(
     consensus_height=u64, certificate_hex=literal(""), value_kind=literal("block"),
     block_height=u64, block_hash=digest, certified_txs=literal(None),
 )
-MANIFEST = record(
-    schema_version=literal(1), kind=literal("smoke"),
+MANIFEST_FIELDS = dict(
+    kind=literal("smoke"),
     case_id=literal("paid-success-failure-success-v1"),
     funding_seed_hex=lambda value, where: hex_string(value, 64, where),
     source=SOURCE, artifacts=array(ARTIFACT), snapshot=SNAPSHOT, input=INPUT,
-    execution=EXECUTION, expected_report=FILE, numeric_check=FILE, decision=DECISION,
+    expected_report=FILE, numeric_check=FILE, decision=DECISION,
 )
+MANIFEST = record(**MANIFEST_FIELDS, schema_version=literal(1), execution=EXECUTION)
+MANIFEST_V2 = record(**MANIFEST_FIELDS, schema_version=literal(2), execution=EXECUTION_V2)
 STATUS = choice("Ok", "ContractErr", "OutOfFuel", "Trap", "Other")
 RECEIPT = record(
     id=u64, height=u64, tx_index=nullable(u32), input_index=nullable(u32),
@@ -184,8 +188,15 @@ def sorted_unique(values, where):
     require(values == sorted(set(values)), f"{where}: expected sorted unique entries")
 
 
+def effective_retention(manifest):
+    execution = manifest["execution"]
+    return (execution["effective_retain_blocks"] if manifest["schema_version"] == 2
+            else execution["retain_blocks"])
+
+
 def validate_manifest(manifest):
-    MANIFEST(manifest, "manifest")
+    check = MANIFEST_V2 if isinstance(manifest, dict) and manifest.get("schema_version") == 2 else MANIFEST
+    check(manifest, "manifest")
     source, snapshot, block = manifest["source"], manifest["snapshot"], manifest["input"]
     sorted_unique(source["features"], "source.features")
     sorted_unique([item["id"] for item in manifest["artifacts"]], "artifacts")
@@ -202,7 +213,7 @@ def validate_manifest(manifest):
     require(0 < manifest["execution"]["starting_block_height"] <= snapshot["anchor_height"], "invalid indexed history start")
     require(block["previous_hash"] == snapshot["anchor_hash"], "block parent differs from snapshot")
     require(block["bitcoin_validation"]["accepted_block_hash"] == block["block_hash"], "validated block differs")
-    require(snapshot["prune_watermark"] < block["height"] - 6, "no new pruning band")
+    require(snapshot["prune_watermark"] < block["height"] - effective_retention(manifest), "no new pruning band")
     decision = manifest["decision"]
     require(decision["consensus_height"] > 0, "consensus height must be positive")
     require(decision["block_height"] == block["height"] and decision["block_hash"] == block["block_hash"], "decision block differs")

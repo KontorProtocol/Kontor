@@ -174,7 +174,7 @@ The manifest has exactly these fields:
 
 | Field | Type and meaning |
 | --- | --- |
-| `schema_version` | Integer constant `1` |
+| `schema_version` | Integer `1` (historical six-block retention) or `2` (explicit predecessor retention) |
 | `kind` | String constant `smoke` |
 | `case_id` | String constant `paid-success-failure-success-v1` |
 | `funding_seed_hex` | 64 bytes, encoded as 128 hex characters; fixture-only key material |
@@ -219,6 +219,14 @@ symlink escape, duplicate artifact IDs or unreferenced replacement files.
   `gas_to_fuel_multiplier` (1000), `execution_price` (`0.000000001`),
   `storage_gas_per_byte` (1), `lifecycle_parameters` (FileRef),
   `independent_resets` (2), `timing_claim` (`none`).
+
+Version 2 adds the required `execution.effective_retain_blocks` value `7`.
+The configured `retain_blocks` remains `6`, exercising the node's minimum
+retention floor. Finality at anchor plus six rolls back to the anchor's
+predecessor, so it needs seven retained blocks. Version 1 readers preserve
+the historical six-block watermark and do not relabel those archives as
+evidence for the corrected runtime. Regenerate current-source captures and
+compare both runtime candidates under the same retention policy.
 
 `reset_report` and `expected_report` use the same versioned report shape:
 `schema_version`, `height`, `block_hash`, `checkpoint`, `prune_watermark`,

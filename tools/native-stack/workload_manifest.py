@@ -10,7 +10,8 @@ import json
 import sys
 
 from workload_fixture import FixtureReader
-from workload_schema import NUMERIC_CHECK, require, validate_manifest, validate_report
+from workload_schema import (NUMERIC_CHECK, effective_retention, require,
+                             validate_manifest, validate_report)
 
 
 IDENTITY_FIELDS = ("txid", "input_index", "op_index", "contract")
@@ -87,7 +88,7 @@ def check_reports(manifest, before, after, numeric):
     require((before["height"], before["block_hash"], before["checkpoint"], before["prune_watermark"])
             == (snapshot["anchor_height"], snapshot["anchor_hash"], snapshot["checkpoint"], snapshot["prune_watermark"]), "reset report differs from snapshot anchor")
     require(after["height"] == block["height"] and after["block_hash"] == block["block_hash"], "result report describes a different block")
-    require(after["prune_watermark"] == block["height"] - manifest["execution"]["retain_blocks"], "pruning did not reach expected watermark")
+    require(after["prune_watermark"] == block["height"] - effective_retention(manifest), "pruning did not reach expected watermark")
     require([item["table"] for item in before["table_counts"]] == [item["table"] for item in after["table_counts"]], "persistent schema table set changed")
     for name, index in (("A", 0), ("B", 1)):
         address = block["operations"][index]["contract"]
