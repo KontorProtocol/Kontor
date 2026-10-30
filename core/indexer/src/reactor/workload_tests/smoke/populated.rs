@@ -84,12 +84,17 @@ enum Delivery {
     MixedAggregate,
     AggregateBoundary,
     BlockCapacity,
+    MaxGasBlock,
     MixedPagination,
     MixedFiles,
     Configured(MixedConfig),
 }
 
 impl Delivery {
+    fn full_block(self) -> bool {
+        matches!(self, Self::BlockCapacity | Self::MaxGasBlock)
+    }
+
     fn mixed_rounds(self) -> Option<usize> {
         match self {
             Self::MixedBlock
@@ -375,6 +380,21 @@ async fn workload_full_block_capacity_preserves_accounting() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local bitcoind; all-max-gas full block diagnostic, not performance acceptance"]
+async fn workload_full_block_gas_exhaustion_preserves_accounting() -> Result<()> {
+    replay(
+        PopulationConfig {
+            active_validators: 4,
+            replacements: 2,
+            agreements: 2,
+            members_per_agreement: 3,
+        },
+        Delivery::MaxGasBlock,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires local bitcoind; bounded storage cursor replay, not full W_op qualification"]
 async fn workload_pagination_preserves_order_and_boundaries() -> Result<()> {
     replay(
@@ -442,10 +462,8 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
             ANCHOR_HEIGHT
                 - u64::from(
                     delivery.transaction_count().is_some()
-                        || matches!(
-                            delivery,
-                            Delivery::MixedMultiInput | Delivery::BlockCapacity
-                        ),
+                        || delivery == Delivery::MixedMultiInput
+                        || delivery.full_block(),
                 ),
             &address.to_string(),
         )
@@ -477,7 +495,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
     };
     let fundings = if let Some(fundings) = &sequence_fundings {
         fundings[0].clone()
-    } else if delivery == Delivery::BlockCapacity {
+    } else if delivery.full_block() {
         sequence_funding::prepare_groups(
             &client,
             &key,
@@ -624,7 +642,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
     let layout = shape_signers.as_ref().map_or(
         MixedLayout::Single {
             payer,
-            operations_per_transaction: if delivery == Delivery::BlockCapacity {
+            operations_per_transaction: if delivery.full_block() {
                 1
             } else if delivery.transaction_count().is_some() {
                 2
@@ -667,11 +685,14 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
     if let Some(mixed) = &mixed {
         eprintln!("workload_operation_mix={}", mixed.operation_counts());
     }
-    let counter_boundary = if matches!(
-        delivery,
-        Delivery::AggregateBoundary | Delivery::BlockCapacity
-    ) {
-        Some(CounterBoundary::prepare(&mut history.runtime).await?)
+    let counter_boundary = if delivery == Delivery::AggregateBoundary || delivery.full_block() {
+        Some(
+            CounterBoundary::prepare(
+                &mut history.runtime,
+                (delivery == Delivery::MaxGasBlock).then(|| addresses[0].clone()),
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -765,7 +786,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                 |boundary| Ok(boundary.instructions()),
             )
         };
-        let (raw, reveals) = if delivery == Delivery::BlockCapacity {
+        let (raw, reveals) = if delivery.full_block() {
             capacity::block(
                 &client,
                 &key,
@@ -826,7 +847,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
             if delivery.transaction_count().is_some() {
                 ensure!(decoded.inputs.len() == 1 && decoded.inputs[0].insts.ops.len() == 2);
             }
-            if delivery == Delivery::BlockCapacity {
+            if delivery.full_block() {
                 ensure!(decoded.inputs.len() == 1);
                 ensure!(decoded.inputs[0].insts.aggregate.is_none());
                 ensure!(decoded.inputs[0].x_only_pubkey == public_key);
@@ -1118,7 +1139,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                             &paid,
                             layout,
                             execution_height,
-                            if delivery == Delivery::BlockCapacity {
+                            if delivery.full_block() {
                                 txids.len()
                             } else {
                                 10_000
@@ -1220,7 +1241,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
             Ok(projections)
         };
         let projections = if let Some(boundary) = &counter_boundary {
-            let operations = if delivery == Delivery::BlockCapacity {
+            let operations = if delivery.full_block() {
                 inputs[0].reveals.len()
             } else {
                 10_000

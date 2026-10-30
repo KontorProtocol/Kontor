@@ -28,6 +28,7 @@ TIMED_REPLAYS = (
 BOUNDARY_REPLAYS = (
     "reactor::workload_tests::smoke::populated::workload_aggregate_operation_limit_preserves_accounting",
     "reactor::workload_tests::smoke::populated::workload_full_block_capacity_preserves_accounting",
+    "reactor::workload_tests::smoke::populated::workload_full_block_gas_exhaustion_preserves_accounting",
 )
 
 

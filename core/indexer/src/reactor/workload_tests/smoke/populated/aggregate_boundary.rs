@@ -10,21 +10,29 @@ use serde_json::Value;
 use super::mixed::MixedLayout;
 use super::pagination;
 use super::views::{self, CounterProgress, ViewConfig};
-use super::{ANCHOR_HEIGHT, GAS_LIMIT, test_provenance};
+use super::{ANCHOR_HEIGHT, GAS_LIMIT, state, test_provenance};
 use crate::bls::MAX_BLS_BULK_OPS;
 use crate::runtime::wit::Signer;
 use crate::runtime::workload_telemetry::WorkloadTelemetry;
-use crate::runtime::{Runtime, TransactionContext, from_wave_expr};
+use crate::runtime::{MAX_UNTRUSTED_GAS_LIMIT, Runtime, TransactionContext, from_wave_expr};
 
 const VIEW_KEYS: usize = 257;
 
 pub(super) struct CounterBoundary {
     contract: ContractAddress,
+    fuel_target: Option<ContractAddress>,
 }
 
 impl CounterBoundary {
-    pub(super) async fn prepare(runtime: &mut Runtime) -> Result<Self> {
+    pub(super) async fn prepare(
+        runtime: &mut Runtime,
+        fuel_target: Option<ContractAddress>,
+    ) -> Result<Self> {
         ensure!(MAX_BLS_BULK_OPS == 10_000);
+        ensure!(GAS_LIMIT == MAX_UNTRUSTED_GAS_LIMIT);
+        if let Some(target) = &fuel_target {
+            ensure!(state(runtime, target).await? == [0, 0, 0, 0]);
+        }
         let contract = ContractAddress {
             name: "c".into(),
             height: ANCHOR_HEIGHT,
@@ -51,7 +59,10 @@ impl CounterBoundary {
             from_wave_expr::<u64>(&runtime.execute_system_view(&contract, "get()").await?) == 0
         );
         pagination::prepare(runtime, VIEW_KEYS).await?;
-        Ok(Self { contract })
+        Ok(Self {
+            contract,
+            fuel_target,
+        })
     }
 
     pub(super) fn instructions(&self) -> Vec<Inst> {
@@ -64,8 +75,13 @@ impl CounterBoundary {
         Inst {
             gas_limit: GAS_LIMIT,
             kind: InstKind::Call {
-                contract: self.contract.clone(),
-                expr: "increment()".into(),
+                contract: self.fuel_target.as_ref().unwrap_or(&self.contract).clone(),
+                expr: if self.fuel_target.is_some() {
+                    "trap-out-of-fuel()"
+                } else {
+                    "increment()"
+                }
+                .into(),
             },
         }
     }
@@ -80,7 +96,11 @@ impl CounterBoundary {
         work: impl Future<Output = Result<T>>,
     ) -> Result<T> {
         ensure!(operations > 0);
-        let maximum = u64::try_from(operations)?;
+        let maximum = if self.fuel_target.is_some() {
+            0
+        } else {
+            u64::try_from(operations)?
+        };
         views::run_target(
             directory,
             restore,
@@ -109,6 +129,16 @@ impl CounterBoundary {
         operations: usize,
     ) -> Result<()> {
         ensure!(operations > 0 && roots.len() == operations);
+        let target = self
+            .fuel_target
+            .as_ref()
+            .unwrap_or(&self.contract)
+            .to_string();
+        let function = if self.fuel_target.is_some() {
+            "trap-out-of-fuel"
+        } else {
+            "increment"
+        };
         for (index, row) in roots.iter().enumerate() {
             let (tx, input, op) = layout.position(index)?;
             ensure!(
@@ -117,21 +147,34 @@ impl CounterBoundary {
                     && row.input_index == Some(input)
                     && row.op_index == Some(op)
                     && row.result_index == 0
-                    && row.contract == self.contract.to_string()
-                    && row.func == "increment"
+                    && row.contract == target
+                    && row.func == function
                     && row.signer_id == layout.signer(index)
                     && row.payer_signer_id == Some(layout.payer())
-                    && row.status == OpStatus::Ok
-                    && row.value.as_deref() == Some("")
-                    && row.gas > 0
-                    && row.gas <= GAS_LIMIT,
-                "aggregate boundary receipt {index} differs"
+                    && if self.fuel_target.is_some() {
+                        row.status == OpStatus::OutOfFuel
+                            && row.value.is_none()
+                            && row.gas == GAS_LIMIT
+                    } else {
+                        row.status == OpStatus::Ok
+                            && row.value.as_deref() == Some("")
+                            && row.gas > 0
+                            && row.gas <= GAS_LIMIT
+                    },
+                "boundary receipt {index} differs"
             );
         }
         ensure!(
             from_wave_expr::<u64>(&runtime.execute_system_view(&self.contract, "get()").await?)
-                == u64::try_from(operations)?
+                == if self.fuel_target.is_some() {
+                    0
+                } else {
+                    u64::try_from(operations)?
+                }
         );
+        if let Some(target) = &self.fuel_target {
+            ensure!(state(runtime, target).await? == [0, 0, 0, 0]);
+        }
         Ok(())
     }
 }

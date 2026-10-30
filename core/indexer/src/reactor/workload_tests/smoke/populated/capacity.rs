@@ -124,6 +124,7 @@ pub(super) async fn block(
         "workload_block_capacity={}",
         json!({
             "reveals": reveals.len(), "operations": reveals.len(), "operations_per_reveal": 1,
+            "instruction": instruction,
             "bitcoin_transactions": block.txdata.len(), "block_bytes": bytes.len(),
             "block_weight": expected_weight, "max_block_weight": MAX_BLOCK_WEIGHT,
             "coinbase_weight": coinbase_weight, "next_pair_weight": next_pair_weight,
