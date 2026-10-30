@@ -803,10 +803,7 @@ def check_guard_control(report, manifest, directory):
         child_tids.add(tid)
         stdout = child["child_stdout"]
         stderr = child["child_stderr"]
-        # Darwin SIGBUS is 10; the verifier may be Linux, where SIGBUS is 7.
-        expected_signals = ({signal.SIGABRT} if os_name == "linux"
-                            else {10, 11})
-        require(type(child["signal"]) is int and child["signal"] in expected_signals
+        require(type(child["signal"]) is int and child["signal"] == signal.SIGABRT
                 and child["child_binary"] == report["binary_path"]
                 and isinstance(stdout, str) and isinstance(stderr, str),
                 "guard child signal or binary differs from compiled control")
@@ -818,9 +815,8 @@ def check_guard_control(report, manifest, directory):
             parse_constant=no_nonfinite_constants) == target
                 and stdout.count("running 1 test") == 1
                 and "test result:" not in stdout
-                and (os_name == "macos" or
-                     (f"({tid}) has overflowed its stack" in stderr and
-                      "fatal runtime error: stack overflow" in stderr)),
+                and f"({tid}) has overflowed its stack" in stderr
+                and "fatal runtime error: stack overflow, aborting" in stderr,
                 "guard child raw output does not corroborate its fault")
     require(list(seen) == ["reduced", "production"],
             "guard control lacks one distinct child per configuration")

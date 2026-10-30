@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use libc::{
-    _SC_PAGESIZE, RLIMIT_CORE, SIGBUS, SIGSEGV, pthread_get_stackaddr_np, pthread_get_stacksize_np,
+    _SC_PAGESIZE, RLIMIT_CORE, SIGABRT, pthread_get_stackaddr_np, pthread_get_stacksize_np,
     pthread_self, pthread_threadid_np, rlimit, setrlimit, sysconf,
 };
 use mach2::kern_return::KERN_SUCCESS;
@@ -248,8 +248,8 @@ pub(super) fn guard_fault_control() -> Result<()> {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         ensure!(
-            matches!(signal, Some(SIGSEGV) | Some(SIGBUS)),
-            "{mode} macOS guard child did not fault: status={:?}, signal={signal:?}, stdout={stdout}, stderr={stderr}",
+            signal == Some(SIGABRT),
+            "{mode} macOS guard child did not abort after the guard fault: status={:?}, signal={signal:?}, stdout={stdout}, stderr={stderr}",
             output.status
         );
         let stdout = String::from_utf8(output.stdout)?;
@@ -285,6 +285,14 @@ pub(super) fn guard_fault_control() -> Result<()> {
                 && start <= address
                 && address < end,
             "{mode} macOS guard target is invalid: {target}"
+        );
+        let os_thread_id = target["os_thread_id"]
+            .as_i64()
+            .context("missing OS thread ID")?;
+        ensure!(
+            stderr.contains(&format!("({os_thread_id}) has overflowed its stack"))
+                && stderr.contains("fatal runtime error: stack overflow, aborting"),
+            "{mode} macOS guard child lacks Rust overflow diagnostics for worker {os_thread_id}: stderr={stderr}"
         );
         println!(
             "KONTOR_RESOURCE_GUARD_CONTROL={}",

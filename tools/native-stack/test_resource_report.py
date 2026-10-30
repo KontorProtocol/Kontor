@@ -409,30 +409,43 @@ class ResourceReportControls(unittest.TestCase):
             lines = path.read_text().splitlines()
             for index in (1, 2):
                 child = json.loads(lines[index].split("=", 1)[1])
-                child["signal"] = 11
                 child["target"]["guard_verification"] = "macos_mach_vm_region_prot_none"
                 child["child_stdout"] = (
                     "running 1 test\nKONTOR_RESOURCE_GUARD_TARGET=" +
                     json.dumps(child["target"]) + "\n")
-                child["child_stderr"] = ""
                 lines[index] = "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child)
             lines[4] = lines[4].replace("linux_worker_guard_fault_control",
                                         "macos_worker_guard_fault_control")
             path.write_text("\n".join(lines) + "\n")
             control["raw_log"]["sha256"] = resource_evidence.sha256(path)
             resource_evidence.check_guard_control(report, manifest, directory)
-            child = json.loads(lines[1].split("=", 1)[1])
-            child["signal"] = 10
-            lines[1] = "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child)
-            path.write_text("\n".join(lines) + "\n")
-            control["raw_log"]["sha256"] = resource_evidence.sha256(path)
-            resource_evidence.check_guard_control(report, manifest, directory)
-            child["signal"] = 7
-            lines[1] = "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child)
-            path.write_text("\n".join(lines) + "\n")
-            control["raw_log"]["sha256"] = resource_evidence.sha256(path)
-            with self.assertRaisesRegex(ValueError, "guard child signal"):
-                resource_evidence.check_guard_control(report, manifest, directory)
+            for mutation, expected in (
+                    ("sigbus", "guard child signal"),
+                    ("sigsegv", "guard child signal"),
+                    ("unrelated_abort", "raw output does not corroborate"),
+                    ("missing_fatal_diagnostic", "raw output does not corroborate"),
+                    ("wrong_worker_identity", "raw output does not corroborate")):
+                with self.subTest(mutation=mutation):
+                    changed = lines.copy()
+                    child = json.loads(changed[1].split("=", 1)[1])
+                    if mutation == "sigbus":
+                        child["signal"] = 10
+                    elif mutation == "sigsegv":
+                        child["signal"] = 11
+                    elif mutation == "unrelated_abort":
+                        child["child_stderr"] = "fatal runtime error: unrelated abort\n"
+                    elif mutation == "missing_fatal_diagnostic":
+                        child["child_stderr"] = child["child_stderr"].splitlines()[0] + "\n"
+                    else:
+                        child["target"]["os_thread_id"] += 1
+                        child["child_stdout"] = (
+                            "running 1 test\nKONTOR_RESOURCE_GUARD_TARGET=" +
+                            json.dumps(child["target"]) + "\n")
+                    changed[1] = "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child)
+                    path.write_text("\n".join(changed) + "\n")
+                    control["raw_log"]["sha256"] = resource_evidence.sha256(path)
+                    with self.assertRaisesRegex(ValueError, expected):
+                        resource_evidence.check_guard_control(report, manifest, directory)
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
