@@ -25,6 +25,9 @@ use crate::runtime::{Runtime, from_wave_expr};
 const CLIENTS: usize = 8;
 const PAGE_SAMPLES: usize = 5;
 
+#[cfg(target_os = "linux")]
+mod external;
+
 pub(super) struct CounterProgress {
     pub(super) maximum: u64,
     pub(super) completed: Arc<AtomicU64>,
@@ -144,6 +147,25 @@ pub(super) async fn run_progress<T>(
 
     let cache = connections[0].component_cache.clone();
     let cache_before = cache.workload_metrics().await;
+    if let Some(socket) = std::env::var_os("KONTOR_WORKLOAD_VIEW_SOCKET") {
+        drop(connections);
+        #[cfg(target_os = "linux")]
+        return external::run(
+            directory,
+            filename,
+            config,
+            pool,
+            pages,
+            counter,
+            progress,
+            cache_before,
+            socket,
+            work,
+        )
+        .await;
+        #[cfg(not(target_os = "linux"))]
+        anyhow::bail!("external view clients require Linux: {socket:?}");
+    }
     let barrier = Arc::new(Barrier::new(CLIENTS + 1));
     let writer_started = Arc::new(AtomicBool::new(false));
     let stopped = Arc::new(AtomicBool::new(false));

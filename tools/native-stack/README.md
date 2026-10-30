@@ -702,9 +702,25 @@ inside the node process.
 `arrivals.json` records the scheduler process identity, each schedule hash and
 actual emission timestamps. The runner verifies cgroup separation and matches
 both restore reports to the supervisor's emissions. Disconnect and supervisor
-shutdown stop the scheduler. This option currently covers frozen historical
-replay API arrivals; competing view calls and semantic verification still use
-the in-process harness.
+shutdown stop the scheduler. This option covers frozen historical replay API
+arrivals. Add `--external-views` to move the eight competing view clients and
+their response oracles into the supervisor as well. A loopback HTTP listener in
+the measured process uses the production contract-view handler and the same
+eight-runtime pool, including production pool recycling. The runtime and all
+contract execution remain inside the node.
+
+Each external view session checks initial readiness, all five pagination
+samples against fixture-derived expected values, monotonic counters, overlap
+with writer work, and a fresh final committed counter after the writer ends.
+The runner verifies the client process is outside the measured cgroup and
+matches both node reports to `views.json`. Client errors or a control disconnect
+fail the session and stop its workers. HTTP calls and control reads have bounded
+timeouts; the node shuts down its listener and drains requests before reporting
+success. The reported page peak counts in-flight production handlers, including
+pool checkout; Store telemetry separately counts actual invocation Stores.
+This route exercises the production handler, not the full public router or its
+middleware. Canonical replay and simulation verification still use in-process
+harness code, so this is not a claim that all harness overhead has been removed.
 
 The ignored test
 `reactor::workload_tests::smoke::populated::timed::archive::workload_saved_timed_historical_replay`

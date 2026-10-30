@@ -118,16 +118,24 @@ fn entries(indices: impl Iterator<Item = usize>) -> Vec<Entry> {
         .collect()
 }
 
-pub(super) fn check(round: usize, count: usize, rounds: usize, value: &str) -> Result<()> {
+fn expected_entries(round: usize, count: usize, rounds: usize) -> Vec<Entry> {
     let (page, descending) = page(round, count, rounds);
     let offset = page * PAGE_SIZE;
-    let expected = if descending {
+    if descending {
         let end = count - offset;
         entries((end.saturating_sub(PAGE_SIZE)..end).rev())
     } else {
         entries(offset..count.min(offset + PAGE_SIZE))
-    };
-    ensure!(from_wave_expr::<Vec<Entry>>(value) == expected);
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn expected_wave(round: usize, count: usize, rounds: usize) -> String {
+    to_wave_expr(expected_entries(round, count, rounds))
+}
+
+pub(super) fn check(round: usize, count: usize, rounds: usize, value: &str) -> Result<()> {
+    ensure!(from_wave_expr::<Vec<Entry>>(value) == expected_entries(round, count, rounds));
     Ok(())
 }
 
