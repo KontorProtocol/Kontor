@@ -1,8 +1,11 @@
 use anyhow::{Error, Result, bail, ensure};
 use tokio::task::yield_now;
-use tokio::time::{sleep, timeout};
+use tokio::time::{Instant, sleep, timeout};
 
-use super::{Arrivals, Duration, Event, Schedule, Work, drain, drain_deadline};
+use super::{
+    Arrivals, Duration, Event, ReplayObservation, Schedule, Work, drain, drain_deadline,
+    replay_event,
+};
 use crate::reactor::workload_tests::smoke::populated::timed::{Profile, Spec};
 
 fn schedule(profile: Profile) -> Result<Schedule> {
@@ -95,6 +98,61 @@ async fn workload_timed_dispatch_preserves_order_and_measures_checks() -> Result
     ensure!(service == report.active_service_ns);
     ensure!(report.completion_ns >= report.events.last().unwrap().checked_ns);
     ensure!(report.scheduled_unconfirmed_transactions > 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn workload_replay_timing_separates_execution_from_oracle_checks() -> Result<()> {
+    let schedule = schedule(Profile::Representative)?;
+    let mut work = RecordingWork::default();
+    for event in &schedule.events[..6] {
+        let report = replay_event(event, &mut work).await?;
+        ensure!(&report.event == event);
+        ensure!(report.precheck_ns >= 2_000_000 && report.verification_ns >= 2_000_000);
+        ensure!(work.prepared == work.executed && work.executed == work.checked);
+    }
+    ensure!(work.checked == (0..6).collect::<Vec<_>>());
+    Ok(())
+}
+
+#[test]
+fn workload_replay_timing_excludes_checks_from_service_duration() -> Result<()> {
+    let schedule = schedule(Profile::Representative)?;
+    let start = Instant::now();
+    let report = ReplayObservation::new(
+        &schedule.events[0],
+        start,
+        start + Duration::from_secs(2),
+        start + Duration::from_secs(5),
+        start + Duration::from_secs(12),
+    )?;
+    ensure!(report.precheck_ns == 2_000_000_000);
+    ensure!(report.service_ns == 3_000_000_000);
+    ensure!(report.verification_ns == 7_000_000_000);
+    Ok(())
+}
+
+#[tokio::test]
+async fn workload_replay_timing_stops_at_a_failed_stage() -> Result<()> {
+    let schedule = schedule(Profile::Representative)?;
+    for stage in ["precheck", "execute", "check"] {
+        let mut work = RecordingWork {
+            fail_prepare: stage == "precheck",
+            fail_execute: stage == "execute",
+            fail_check: stage == "check",
+            ..Default::default()
+        };
+        for event in &schedule.events[..6] {
+            replay_event(event, &mut work).await?;
+        }
+        let error = replay_event(&schedule.events[6], &mut work)
+            .await
+            .unwrap_err();
+        ensure!(format!("{error:#}").contains(&format!("{stage} event 6")));
+        let executed = if stage == "precheck" { 6 } else { 7 };
+        ensure!(work.executed == (0..executed).collect::<Vec<_>>());
+        ensure!(work.checked == (0..6).collect::<Vec<_>>());
+    }
     Ok(())
 }
 

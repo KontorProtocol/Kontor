@@ -25,7 +25,7 @@ use super::super::oracle::Before;
 use super::super::views::{self, CounterProgress};
 use super::super::{sequence_funding, sequence_inputs};
 use super::archive::Output;
-use super::dispatch::{self, Work};
+use super::dispatch;
 use super::work::{ApiInput, InputPlan, TimedWork};
 use super::{Action, Schedule, Spec};
 use crate::bitcoin_client::client::RegtestRpc;
@@ -404,9 +404,11 @@ async fn workload_timed_mixed_event_replay() -> Result<()> {
                 eprintln!("workload_timed_drain={}", serde_json::to_string(&report)?);
             } else {
                 for event in &plan.schedule.events {
-                    adapter.check_before(event).await?;
-                    adapter.execute(event).await?;
-                    adapter.check(event).await?;
+                    let timing = dispatch::replay_event(event, &mut adapter).await?;
+                    eprintln!(
+                        "workload_replay_service={}",
+                        serde_json::json!({"restore":name,"timing":timing})
+                    );
                 }
                 ensure!(adapter.checkpoints.len() == plan.schedule.events.len());
             }

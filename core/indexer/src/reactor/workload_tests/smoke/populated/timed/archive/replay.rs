@@ -20,7 +20,7 @@ use super::super::super::oracle::Before;
 use super::super::super::replay_identity::ReplayIdentity;
 use super::super::super::views::{self, CounterProgress};
 use super::super::Action;
-use super::super::dispatch::Work;
+use super::super::dispatch;
 use super::super::run::warm;
 use super::super::work::{InputPlan, TimedWork};
 use super::format::{Inputs, Saved};
@@ -243,15 +243,17 @@ pub(super) async fn run(saved: Saved) -> Result<()> {
             )
             .await?;
             for event in &plan.schedule.events {
-                adapter.check_before(event).await?;
-                adapter.execute(event).await?;
-                adapter.check(event).await?;
+                let timing = dispatch::replay_event(event, &mut adapter).await?;
                 if let Action::Simulation { request, .. } = event.action {
                     ensure!(
                         adapter.api_results.get(request) == expected_api.get(request),
                         "saved timed API result differs at request {request}"
                     );
                 }
+                eprintln!(
+                    "workload_replay_service={}",
+                    serde_json::json!({"restore":name,"timing":timing})
+                );
             }
             ensure!(
                 adapter.checkpoints.len() == expected.len()

@@ -17,6 +17,48 @@ pub(super) trait Work {
     async fn check(&mut self, event: &Event) -> Result<()>;
 }
 
+#[derive(Debug, Serialize)]
+pub(super) struct ReplayObservation {
+    event: Event,
+    precheck_ns: u64,
+    service_ns: u64,
+    verification_ns: u64,
+}
+
+impl ReplayObservation {
+    fn new(
+        event: &Event,
+        before: Instant,
+        dispatch: Instant,
+        service_done: Instant,
+        checked: Instant,
+    ) -> Result<Self> {
+        Ok(Self {
+            event: event.clone(),
+            precheck_ns: nanos(dispatch.duration_since(before))?,
+            service_ns: nanos(service_done.duration_since(dispatch))?,
+            verification_ns: nanos(checked.duration_since(service_done))?,
+        })
+    }
+}
+
+pub(super) async fn replay_event(event: &Event, work: &mut impl Work) -> Result<ReplayObservation> {
+    let before = Instant::now();
+    work.check_before(event)
+        .await
+        .with_context(|| format!("precheck event {}", event.ordinal))?;
+    let dispatch = Instant::now();
+    work.execute(event)
+        .await
+        .with_context(|| format!("execute event {}", event.ordinal))?;
+    let service_done = Instant::now();
+    work.check(event)
+        .await
+        .with_context(|| format!("check event {}", event.ordinal))?;
+    let checked = Instant::now();
+    ReplayObservation::new(event, before, dispatch, service_done, checked)
+}
+
 #[derive(Debug)]
 struct Arrival {
     ordinal: usize,
