@@ -26,6 +26,36 @@ pub(super) struct HistoryPopulation {
 }
 
 impl HistoryPopulation {
+    pub(super) async fn restore(
+        runtime: &mut Runtime,
+        config: MixedConfig,
+    ) -> Result<Option<Self>> {
+        config.validate()?;
+        if config.historical_rows == 0 {
+            return Ok(None);
+        }
+        let contract = ContractAddress {
+            name: "mixedpages".into(),
+            height: 0,
+            tx_index: 7,
+        };
+        let contract_id = runtime
+            .storage
+            .contract_id(&contract)
+            .await?
+            .context("saved history contract missing")?;
+        let population = Self {
+            contract,
+            contract_id,
+            live_keys: config.live_keys,
+            historical_rows: config.historical_rows,
+        };
+        population
+            .check_at(&runtime.get_storage_conn(), None)
+            .await?;
+        Ok(Some(population))
+    }
+
     pub(super) async fn prepare(
         runtime: &mut Runtime,
         config: MixedConfig,

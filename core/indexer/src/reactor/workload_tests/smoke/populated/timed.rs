@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::ANCHOR_HEIGHT;
 
+mod archive;
 mod dispatch;
 mod run;
 mod tests;

@@ -11,12 +11,14 @@ use sha2::{Digest, Sha256};
 
 use super::super::super::storage::Population as StoragePopulation;
 use super::super::{ANCHOR_HEIGHT, GAS_LIMIT, receipts, test_provenance};
+use super::configuration::MixedConfig;
 use super::files::FileWorkload;
 use super::oracle::{PaidEffects, root_receipts};
 use super::pagination;
 use crate::bls::taproot_derivation_path;
 use crate::database::queries::{
-    get_contract_id_from_address, get_contract_signer_id, insert_block, insert_transaction,
+    get_contract_id_from_address, get_contract_signer_id, get_identity, insert_block,
+    insert_transaction,
 };
 use crate::reg_tester::derive_taproot_keypair_from_seed;
 use crate::runtime::filestorage::{address as storage_address, api as storage_api};
@@ -116,6 +118,79 @@ pub(super) struct MixedWorkload {
 }
 
 impl MixedWorkload {
+    pub(super) async fn restore_timed(
+        runtime: &mut Runtime,
+        payer: u64,
+        transactions: usize,
+        config: MixedConfig,
+    ) -> Result<Self> {
+        config.validate()?;
+        ensure!(matches!(transactions, 50 | 250 | 500 | 1300));
+        ensure!(
+            staking::get_stake(runtime, &payer.to_string())
+                .await?
+                .is_none()
+        );
+        let [counter, failed, proxy, crypto] =
+            ["mixedcounter", "mixedfailed", "mixedproxy", "mixedcrypto"].map(|name| {
+                ContractAddress {
+                    name: name.into(),
+                    height: ANCHOR_HEIGHT,
+                    tx_index: 7,
+                }
+            });
+        let pages = ContractAddress {
+            name: "mixedpages".into(),
+            height: if config.historical_rows > 0 {
+                0
+            } else {
+                ANCHOR_HEIGHT
+            },
+            tx_index: 7,
+        };
+        for address in [&counter, &failed, &proxy, &crypto, &pages] {
+            ensure!(
+                runtime.storage.contract_id(address).await?.is_some(),
+                "saved mixed contract missing"
+            );
+        }
+        let recipient_key = derive_taproot_keypair_from_seed(
+            &[97; 64],
+            &taproot_derivation_path(Network::Regtest),
+        )?
+        .x_only_public_key()
+        .0
+        .to_string();
+        let recipient = get_identity(&runtime.get_storage_conn(), &recipient_key)
+            .await?
+            .context("saved recipient missing")?
+            .signer_id();
+        ensure!(
+            token::balance(runtime, HolderRef::SignerId(recipient))
+                .await?
+                .unwrap_or_default()
+                == Decimal::default()
+        );
+        Self {
+            counter,
+            failed,
+            proxy,
+            crypto,
+            recipient,
+            rounds: transactions / 10,
+            paginated: Some((pages, config.live_keys)),
+            files: None,
+            file_round_start: 0,
+            step: 0,
+            previous_hash_index: None,
+            counter_before: 0,
+            recipient_before: Decimal::default(),
+            stakes_before: BTreeMap::new(),
+        }
+        .with_timed_files(runtime, config.new_files, config.transactions)
+        .await
+    }
+
     pub(super) async fn prepare(runtime: &mut Runtime, payer: u64, rounds: usize) -> Result<Self> {
         ensure!(matches!(rounds, 5 | 50));
         Self::prepare_recipe(runtime, payer, rounds).await

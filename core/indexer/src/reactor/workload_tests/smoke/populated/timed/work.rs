@@ -33,6 +33,7 @@ use crate::reactor::batches::BatchOutcome;
 use crate::reactor::executor::RuntimeExecutor;
 use crate::runtime::TransactionContext;
 
+#[derive(Clone)]
 pub(super) struct ApiInput {
     pub(super) commit: Transaction,
     pub(super) reveal: Transaction,

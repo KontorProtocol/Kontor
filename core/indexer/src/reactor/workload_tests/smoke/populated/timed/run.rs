@@ -7,7 +7,7 @@ use bitcoin::consensus::serialize;
 use bitcoin::key::Secp256k1;
 use bitcoin::{Address, BlockHash, Network, OutPoint};
 use indexer_types::OpWithResult;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
 use super::super::super::super::storage::Population as StoragePopulation;
@@ -24,13 +24,14 @@ use super::super::mixed::{ApiRecipe, MixedLayout, MixedWorkload};
 use super::super::oracle::Before;
 use super::super::views::{self, CounterProgress};
 use super::super::{sequence_funding, sequence_inputs};
+use super::archive::Output;
 use super::dispatch::{self, Work};
 use super::work::{ApiInput, InputPlan, TimedWork};
 use super::{Action, Schedule, Spec};
 use crate::bitcoin_client::client::RegtestRpc;
 use crate::bls::taproot_derivation_path;
 use crate::database::Writer;
-use crate::database::queries::get_identity;
+use crate::database::queries::{get_identity, select_latest_consensus_height};
 use crate::reactor::create_runtime_executor;
 use crate::reg_tester::{derive_taproot_keypair_from_seed, workload_bitcoin};
 use crate::runtime::staking::api as staking;
@@ -39,18 +40,18 @@ use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{ComponentCache, Decimal, Runtime, Storage};
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Settings {
-    population: PopulationConfig,
-    mixed: MixedConfig,
-    schedule: Spec,
+pub(super) struct Settings {
+    pub(super) population: PopulationConfig,
+    pub(super) mixed: MixedConfig,
+    pub(super) schedule: Spec,
     #[serde(default)]
-    real_clock_drain: bool,
+    pub(super) real_clock_drain: bool,
 }
 
 impl Settings {
-    fn validate(&self) -> Result<Schedule> {
+    pub(super) fn validate(&self) -> Result<Schedule> {
         self.population.validate()?;
         self.mixed.validate()?;
         let profile = self.schedule.profile;
@@ -98,7 +99,7 @@ fn workload_timed_settings_reserve_api_funding() -> Result<()> {
     Ok(())
 }
 
-async fn warm(runtime: &mut Runtime, enabled: bool) -> Result<()> {
+pub(super) async fn warm(runtime: &mut Runtime, enabled: bool) -> Result<()> {
     if !enabled {
         return Ok(());
     }
@@ -127,6 +128,7 @@ async fn workload_timed_mixed_event_replay() -> Result<()> {
         .context("timed replay requires KONTOR_WORKLOAD_TIMED_CONFIG")?;
     let settings: Settings = serde_json::from_str(&input)?;
     let schedule = settings.validate()?;
+    let output = Output::from_env(&settings)?;
     let bitcoin_directory = TempDir::new()?;
     let (child, client) = workload_bitcoin(bitcoin_directory.path()).await?;
     let mut bitcoin = BitcoinProcess(child);
@@ -302,6 +304,9 @@ async fn workload_timed_mixed_event_replay() -> Result<()> {
     .await?;
     ensure!(database_projection(&history.db_conn()).await? == projection);
     let snapshot = Snapshot::export(&history.db_conn(), &directory.path().join("timed.db")).await?;
+    let initial_consensus = select_latest_consensus_height(&history.db_conn())
+        .await?
+        .context("missing initial consensus height")?;
     stop_engine(&mut history).await?;
     let mut api_inputs = Vec::with_capacity(requests);
     for request in 0..requests {
@@ -436,6 +441,22 @@ async fn workload_timed_mixed_event_replay() -> Result<()> {
         stop_engine(&mut trial).await?;
     }
     ensure!(database_projection(&history.db_conn()).await? == projection);
+    if let Some(output) = output {
+        output
+            .write(
+                &snapshot,
+                &client,
+                &plan,
+                (&projection, initial_consensus),
+                expected
+                    .as_deref()
+                    .context("missing complete checkpoints")?,
+                expected_api
+                    .as_deref()
+                    .context("missing complete API results")?,
+            )
+            .await?;
+    }
     bitcoin.0.kill().await?;
     eprintln!(
         "workload_timed_replay_passed={}",

@@ -16,6 +16,15 @@ pub(super) struct Checkpoint {
 }
 
 impl Checkpoint {
+    pub(super) fn import(directory: &Path, source: &Path) -> Result<Self> {
+        let mut input = File::open(source)?;
+        let mut file = NamedTempFile::new_in(directory)?;
+        io::copy(&mut input, file.as_file_mut())?;
+        Ok(Self {
+            path: Arc::new(file.into_temp_path()),
+        })
+    }
+
     pub(super) fn directory() -> Result<TempDir> {
         // /tmp is tmpfs on the development host. Keep the full checkpoint set
         // in the workspace, whose backing filesystem is recorded with evidence.
