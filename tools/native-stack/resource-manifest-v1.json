@@ -250,7 +250,7 @@
     },
     "native_filestorage_lifecycle_validator_tests": {
       "path": "tools/native-stack/test_resource_native_filestorage_lifecycle_evidence.py",
-      "sha256": "9813a0a395c68f5d489981f016e0ba716fb61de52dc79ef42baf122bfe7316a3"
+      "sha256": "c4673624490b38aa82738fa9b98860ab2b6320985f6bc5a30468705c5a4c2885"
     },
     "native_filestorage_rewards": {
       "path": "native-contracts/filestorage/src/rewards.rs",

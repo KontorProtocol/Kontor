@@ -102,6 +102,25 @@ class FilestorageLifecycleEvidenceTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.validate(item)
 
+    def test_collateral_uses_each_active_agreement_requirement(self):
+        for sample in ("expiry", "cleanup"):
+            with self.subTest(sample=sample):
+                item = attempt(sample)
+                item["observation"]["requirements"] = [
+                    str(index + 1) for index in range(item["observation"]["file_count"])]
+                active = set(item["observation"]["active_agreements_before"])
+                item["observation"]["reservation_before"] = str(sum(
+                    index + 1 for index, agreement in
+                    enumerate(item["observation"]["agreements"])
+                    if agreement in active))
+                if sample == "expiry":
+                    item["observation"]["reservation_after"] = (
+                        item["observation"]["reservation_before"])
+                self.validate(item)
+                item["observation"]["reservation_before"] = "8"
+                with self.assertRaises(ValueError):
+                    self.validate(item)
+
     def test_rejects_receipt_rollback_and_store_drift(self):
         baseline = attempt("expiry")
         for key, value in (
