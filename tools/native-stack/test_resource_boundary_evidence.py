@@ -342,34 +342,91 @@ class BoundaryEvidenceTests(unittest.TestCase):
             native.mkdir(parents=True)
             manifest = native / "resource-boundary-manifest-v1.json"
             depths = native / "resource-boundary-depths-v1.json"
+            registry = native / "resource-suite-registry-v1.json"
             runtime = root / "core/indexer/src/runtime/mod.rs"
             runtime.parent.mkdir(parents=True)
             manifest.write_text('{"claim_status":"pending_discovery"}\n')
             depths.write_text('{"cases":null}\n')
             runtime.write_text("stable runtime frame\n")
+            manifest_sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
+            old_registry = {
+                "parent_manifests": {"boundary": manifest_sha, "v1": "same"},
+                "groups": {
+                    "pulley_boundary": {"manifest_sha256": manifest_sha},
+                    "finite_paid": {"manifest_sha256": "same"},
+                },
+                "remaining_gates": {
+                    "boundary_discovery": "pending_discovery",
+                    "macos_guard_capture": "missing",
+                },
+            }
+            registry.write_text(json.dumps(old_registry) + "\n")
             git("add", ".")
             git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                 "commit", "-qm", "discovery source")
             discovery_sha = git("rev-parse", "HEAD")
-            manifest_sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
             manifest.write_text('{"claim_status":"candidate_only"}\n')
             depths.write_text('{"cases":"frozen"}\n')
+            final_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
+            final_registry = copy.deepcopy(old_registry)
+            final_registry["parent_manifests"]["boundary"] = final_sha256
+            final_registry["groups"]["pulley_boundary"]["manifest_sha256"] = final_sha256
+            final_registry["remaining_gates"]["boundary_discovery"] = "candidate_only"
+            registry.write_text(json.dumps(final_registry) + "\n")
             git("add", ".")
             git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                 "commit", "-qm", "freeze depths")
             final_sha = git("rev-parse", "HEAD")
-            with patch("resource_boundary_evidence.ROOT", root):
+            with (patch("resource_boundary_evidence.ROOT", root),
+                  patch("resource_boundary_evidence.MANIFEST", manifest),
+                  patch("resource_boundary_evidence.REGISTRY_MANIFEST", registry),
+                  patch("resource_boundary_evidence.build_registry",
+                        return_value=final_registry)):
                 self.assertEqual(validate_source_freeze(
                     discovery_sha, final_sha, manifest_sha),
                     {"claim_status": "pending_discovery"})
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(ValueError, "manifest differs"):
                     validate_source_freeze(discovery_sha, final_sha,
                                            "0" * 64)
+                unrelated = copy.deepcopy(final_registry)
+                unrelated["remaining_gates"]["macos_guard_capture"] = "changed"
+                git("checkout", "-q", "--detach", final_sha)
+                registry.write_text(json.dumps(unrelated) + "\n")
+                git("add", ".")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "edit unrelated registry field")
+                with patch("resource_boundary_evidence.build_registry",
+                           return_value=unrelated):
+                    with self.assertRaisesRegex(ValueError, "beyond derived"):
+                        validate_source_freeze(
+                            discovery_sha, git("rev-parse", "HEAD"), manifest_sha)
+                wrong_digest = copy.deepcopy(final_registry)
+                wrong_digest["parent_manifests"]["boundary"] = "0" * 64
+                git("checkout", "-q", "--detach", final_sha)
+                registry.write_text(json.dumps(wrong_digest) + "\n")
+                git("add", ".")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "wrong boundary digest")
+                with patch("resource_boundary_evidence.build_registry",
+                           return_value=wrong_digest):
+                    with self.assertRaisesRegex(ValueError, "digest or status"):
+                        validate_source_freeze(
+                            discovery_sha, git("rev-parse", "HEAD"), manifest_sha)
+                git("checkout", "-q", "--detach", final_sha)
                 runtime.write_text("changed runtime frame\n")
                 git("add", ".")
                 git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                     "commit", "-qm", "change runtime frame")
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(ValueError, "runtime or fixture"):
+                    validate_source_freeze(discovery_sha, git("rev-parse", "HEAD"),
+                                           manifest_sha)
+                git("checkout", "-q", "--detach", discovery_sha)
+                manifest.write_text('{"claim_status":"candidate_only"}\n')
+                depths.write_text('{"cases":"frozen"}\n')
+                git("add", ".")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "unregenerated registry")
+                with self.assertRaisesRegex(ValueError, "runtime or fixture"):
                     validate_source_freeze(discovery_sha, git("rev-parse", "HEAD"),
                                            manifest_sha)
 

@@ -147,8 +147,8 @@ def build_registry():
             "macos_guard_capture": "missing",
             "production_memory_profiles": "missing",
             "common_head_six_cell_capture": "missing",
-            "offline_archive_validation": "requires_archived_binary_and_path_independent_control",
-            "cross_cell_semantic_comparison": "missing",
+            "offline_archive_validation": "source_ready_unmeasured",
+            "cross_cell_semantic_comparison": "source_ready_unmeasured",
         },
     }
 

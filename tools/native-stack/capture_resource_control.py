@@ -77,7 +77,7 @@ def validate_native_tool_records(records, search_path):
             raise ValueError("native tool record differs from search path")
 
 
-def selected_binary(artifacts_path, metadata):
+def selected_binary(artifacts_path, metadata, require_local_binary=True):
     lines = artifacts_path.read_text().splitlines()
     if not lines or any(not line.strip() for line in lines):
         raise ValueError("Cargo artifact stream is incomplete")
@@ -104,9 +104,10 @@ def selected_binary(artifacts_path, metadata):
             or records[-1] != finished[0]):
         raise ValueError("Cargo output lacks one successful indexer test artifact")
     binary = Path(selected[0]["executable"])
-    if not binary.is_absolute() or not binary.is_file() or not binary.name.startswith("indexer-"):
+    if (not binary.is_absolute() or not binary.name.startswith("indexer-")
+            or (require_local_binary and not binary.is_file())):
         raise ValueError("selected Cargo test artifact is missing")
-    return binary.resolve(), selected[0]
+    return binary.resolve() if require_local_binary else binary, selected[0]
 
 
 def fastnum_build_record(artifacts_path, metadata):

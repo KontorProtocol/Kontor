@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "c6b14c7a02ddabc1a2fc7623b6aa7e6d3b537be79e1477b616a4829af0138cbf",
+  "parent_manifest_sha256": "3695f65e5258b8fe8bf792d4475fe56f7c28ee45dd787f8ba3ed4177d9831de1",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1231,7 +1231,7 @@
     },
     "v1_validator": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "459ab0c0ba34fcdab45c0b2c99a382fbea92af63d39dba42d7acf1aa9806c453"
+      "sha256": "258df4d56e54f839e80ff92c6a2e057c2833e4a454045b091e1958c1e5bc1c4c"
     },
     "v2_capture": {
       "path": "tools/native-stack/capture_resource_chain_v2.py",
@@ -1251,7 +1251,7 @@
     },
     "v2_validator": {
       "path": "tools/native-stack/resource_evidence_v2.py",
-      "sha256": "481811ddfd5a5b9fef92f89309a0b545e0c83a958affa9100a446e6701ec06a7"
+      "sha256": "d7b22eb8a4e90485a60c96aa74f40ae774485ffc77d58bd20720a9147260b814"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",

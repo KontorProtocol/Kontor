@@ -9,12 +9,32 @@ from unittest.mock import patch
 
 from build_resource_test import pinned_environment
 from capture_resource_control import (ensure_no_cargo_config,
-                                      validate_build_attestation)
+                                      selected_binary, validate_build_attestation)
 from resource_evidence import sha256
 from resource_manifest import MANIFEST, ROOT, build_manifest
 
 
 class ResourceBuildAttestationTests(unittest.TestCase):
+    def test_archived_artifact_selects_original_path_without_live_binary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            origin = Path("/origin/target/debug/deps/indexer-test")
+            records = [
+                {"reason": "compiler-artifact", "package_id": "indexer-package",
+                 "target": {"name": "indexer", "kind": ["lib"]},
+                 "profile": {"test": True}, "executable": str(origin)},
+                {"reason": "build-finished", "success": True},
+            ]
+            stream = root / "cargo-artifacts.jsonl"
+            stream.write_text("\n".join(json.dumps(item) for item in records) + "\n")
+            metadata = {"packages": [{"name": "indexer", "id": "indexer-package"}]}
+            selected, artifact = selected_binary(
+                stream, metadata, require_local_binary=False)
+            self.assertEqual(selected, origin)
+            self.assertEqual(artifact, records[0])
+            with self.assertRaisesRegex(ValueError, "is missing"):
+                selected_binary(stream, metadata)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)

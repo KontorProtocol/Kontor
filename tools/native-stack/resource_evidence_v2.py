@@ -324,7 +324,7 @@ def historical_semantics(observations):
     return normalized
 
 
-def validate_bundle(bundle, directory, allow_pilot=False):
+def validate_bundle(bundle, directory, allow_pilot=False, archive_binary=None):
     require(bundle.get("schema_version") == 2, "v2 validator rejects v1 evidence")
     schema = load_json_strict(SCHEMA)
     Draft202012Validator.check_schema(schema)
@@ -364,8 +364,10 @@ def validate_bundle(bundle, directory, allow_pilot=False):
     control, binary = validate_control(
         directory / bundle["control_capture"]["path"],
         bundle["control_capture"]["sha256"], v1_manifest,
-        page_size=next(iter(archive_pages)))
-    cell_target(bundle["cell"], control["cargo_artifact"], check_host=True)
+        page_size=next(iter(archive_pages)),
+        archive_binary=archive_binary, expected_cell=bundle["cell"])
+    cell_target(bundle["cell"], control["cargo_artifact"],
+                check_host=archive_binary is None)
     require(control["source_sha"] == bundle["source_sha"]
             and control["binary_path"] == bundle["binary_path"]
             and control["binary_sha256"] == bundle["binary_sha256"]

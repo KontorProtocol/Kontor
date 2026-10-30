@@ -2,6 +2,7 @@
 """Reject incomplete or mixed-source six-cell archive indexes."""
 
 import copy
+import hashlib
 import json
 import tempfile
 import unittest
@@ -13,13 +14,17 @@ from resource_suite_registry import build_registry
 
 
 SOURCE = "a" * 40
-BINARY = "b" * 64
+BINARY_BYTES = b"archived-test-binary"
+BINARY = hashlib.sha256(BINARY_BYTES).hexdigest()
 CONTROL = "c" * 64
 
 
 def fixture(root):
     registry = build_registry()
     for cell in CELLS:
+        binary_dir = root / cell.replace("/", "_")
+        binary_dir.mkdir(parents=True)
+        (binary_dir / "indexer-test").write_bytes(BINARY_BYTES)
         for group_id, group in registry["groups"].items():
             directory = root / cell.replace("/", "_") / group_id
             directory.mkdir(parents=True)
@@ -60,6 +65,10 @@ class SuiteClosureTests(unittest.TestCase):
                 "../outside.json"
             with self.assertRaisesRegex(ValueError, "path or digest"):
                 validate_index(forged, root, check_checkout=False)
+            (root / CELLS[0].replace("/", "_") / "indexer-test").write_bytes(
+                b"changed-binary")
+            with self.assertRaisesRegex(ValueError, "missing or changed"):
+                validate_index(index, root, check_checkout=False)
 
     def test_mixed_source_or_missing_case_cannot_close(self):
         with tempfile.TemporaryDirectory() as temp:

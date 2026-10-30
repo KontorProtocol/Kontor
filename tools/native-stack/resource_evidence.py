@@ -803,8 +803,9 @@ def check_guard_control(report, manifest, directory):
         child_tids.add(tid)
         stdout = child["child_stdout"]
         stderr = child["child_stderr"]
+        # Darwin SIGBUS is 10; the verifier may be Linux, where SIGBUS is 7.
         expected_signals = ({signal.SIGABRT} if os_name == "linux"
-                            else {signal.SIGSEGV, signal.SIGBUS})
+                            else {10, 11})
         require(type(child["signal"]) is int and child["signal"] in expected_signals
                 and child["child_binary"] == report["binary_path"]
                 and isinstance(stdout, str) and isinstance(stderr, str),

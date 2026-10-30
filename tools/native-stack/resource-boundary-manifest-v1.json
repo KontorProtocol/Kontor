@@ -114,7 +114,7 @@
     "own_adjacent_boundary": true,
     "repeats": 2
   },
-  "parent_manifest_sha256": "c6b14c7a02ddabc1a2fc7623b6aa7e6d3b537be79e1477b616a4829af0138cbf",
+  "parent_manifest_sha256": "3695f65e5258b8fe8bf792d4475fe56f7c28ee45dd787f8ba3ed4177d9831de1",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -200,15 +200,15 @@
     },
     "synthetic_guard_tests": {
       "path": "tools/native-stack/test_resource_report.py",
-      "sha256": "1a605ce345ad8ecaeec2845f03bb52030fbaff52ebf268eba22a8da949a46c5d"
+      "sha256": "d11cdaa61a409e0bd00c892302c36e0001198daa023e8e862d4ef5615309ea1a"
     },
     "tests": {
       "path": "tools/native-stack/test_resource_boundary_evidence.py",
-      "sha256": "15b07118f584f90389084db75a182d27f1ced5936ff9dc1d73b1f00f92552a2a"
+      "sha256": "056eb5c5d11635e6b2e89a848d6fce0742d11aee4453832ded257adb582c50a4"
     },
     "validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
-      "sha256": "4049988e160db49d67082ad76ccf30aa3eb41d6eeb4f9d49b6d60779123432df"
+      "sha256": "0195114f6267060b832323723b846ac30295afecd8869a976c8c11039af0b8f6"
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",

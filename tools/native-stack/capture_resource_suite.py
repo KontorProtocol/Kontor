@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -59,7 +60,7 @@ def preflight(cell, control_path, control_sha256, historical_path,
     require(sha256(reviewed_path) == reviewed_sha256
             and reviewed_sha256 == boundary["reviewed_discovery_sha256"],
             "suite reviewed boundary discovery archive differs")
-    control, _ = validate_control(control_path, control_sha256, build_manifest())
+    control, binary = validate_control(control_path, control_sha256, build_manifest())
     cell_target(cell, control["cargo_artifact"], check_host=True)
     require(control["source_sha"] == source_sha,
             "suite guard control differs from source checkout")
@@ -68,7 +69,7 @@ def preflight(cell, control_path, control_sha256, historical_path,
     commands = capture_commands(registry, cell, control_path, control_sha256,
                                 historical_path, reviewed_path,
                                 reviewed_sha256, root)
-    return registry, control, source_sha, commands
+    return registry, control, binary, source_sha, commands
 
 
 def capture_cell(cell, control_path, control_sha256, historical_path,
@@ -77,10 +78,16 @@ def capture_cell(cell, control_path, control_sha256, historical_path,
     control_path = control_path.resolve()
     historical_path = historical_path.resolve()
     reviewed_path = reviewed_path.resolve()
-    registry, control, source_sha, commands = preflight(
+    registry, control, binary, source_sha, commands = preflight(
         cell, control_path, control_sha256, historical_path,
         reviewed_path, reviewed_sha256, root)
-    (root / cell.replace("/", "_")).mkdir(parents=True)
+    cell_dir = root / cell.replace("/", "_")
+    cell_dir.mkdir(parents=True)
+    archived_binary = cell_dir / binary.name
+    with binary.open("rb") as source, archived_binary.open("xb") as destination:
+        shutil.copyfileobj(source, destination)
+    require(sha256(archived_binary) == control["binary_sha256"],
+            "suite archived binary differs from guard control")
     environment = dict(os.environ)
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     captures = {}
@@ -99,7 +106,10 @@ def capture_cell(cell, control_path, control_sha256, historical_path,
                 f"{group_id}: capture differs from common source or control")
         captures[group_id] = {"path": str(path), "sha256": sha256(path)}
     return {"status": "captured_not_qualified", "cell": cell,
-            "source_sha": source_sha, "captures": captures}
+            "source_sha": source_sha,
+            "binary_archive": {"path": str(archived_binary),
+                               "sha256": sha256(archived_binary)},
+            "captures": captures}
 
 
 def main():

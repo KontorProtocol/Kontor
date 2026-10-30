@@ -362,7 +362,7 @@ def validate_run(run, bundle, directory):
                                                  strict=True)]
 
 
-def validate_bundle(bundle, directory):
+def validate_bundle(bundle, directory, archive_binary=None):
     manifest = build_manifest()
     require(set(bundle) == {"schema_version", "qualification_status", "cell",
                             "manifest_sha256", "source_sha", "binary_path",
@@ -375,8 +375,10 @@ def validate_bundle(bundle, directory):
     file_evidence(directory, bundle["control_capture"])
     control, binary = validate_control(
         directory / bundle["control_capture"]["path"],
-        bundle["control_capture"]["sha256"], manifest)
-    validate_cell_identity(bundle["cell"], control["cargo_artifact"])
+        bundle["control_capture"]["sha256"], manifest,
+        archive_binary=archive_binary, expected_cell=bundle["cell"])
+    validate_cell_identity(bundle["cell"], control["cargo_artifact"],
+                           check_host=archive_binary is None)
     require(control["source_sha"] == bundle["source_sha"]
             and control["binary_sha256"] == bundle["binary_sha256"]
             and str(binary) == bundle["binary_path"],

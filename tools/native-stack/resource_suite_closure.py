@@ -60,8 +60,10 @@ def validate_index(index, root, check_checkout=True):
     paths = set()
     for cell in CELLS:
         record = index["cells"][cell]
-        require(isinstance(record, dict) and set(record) == {"groups"}
+        require(isinstance(record, dict) and set(record) == {"groups", "binary"}
                 and isinstance(record["groups"], dict)
+                and isinstance(record["binary"], dict)
+                and set(record["binary"]) == {"path", "sha256"}
                 and set(record["groups"]) == set(registry["groups"]),
                 f"{cell}: suite group registry is incomplete")
         binaries = set()
@@ -108,6 +110,12 @@ def validate_index(index, root, check_checkout=True):
             controls.add(bundle["control_capture"]["sha256"])
         require(len(binaries) == len(controls) == 1,
                 f"{cell}: groups used different binaries or guard controls")
+        binary_path, binary_sha256 = next(iter(binaries))
+        capture_path(root, record["binary"])
+        require(Path(record["binary"]["path"]) ==
+                Path(cell.replace("/", "_")) / Path(binary_path).name
+                and record["binary"]["sha256"] == binary_sha256,
+                f"{cell}: archived binary path or hash differs from child evidence")
     return {"status": "closure_only", "cells": len(CELLS),
             "groups_per_cell": len(registry["groups"]),
             "case_count": registry["case_count"]}
@@ -124,12 +132,24 @@ def collect(root, source_sha):
     }
     for cell in CELLS:
         groups = {}
+        binary_origin = None
         for group_id, group in registry["groups"].items():
             relative = Path(cell.replace("/", "_")) / group_id / group["capture_name"]
             path = root / relative
             require(path.is_file(), f"missing suite capture: {relative}")
             groups[group_id] = {"path": str(relative), "sha256": sha256(path)}
-        index["cells"][cell] = {"groups": groups}
+            if binary_origin is None:
+                binary_origin = load_json_strict(path)["binary_path"]
+        binary_relative = (Path(cell.replace("/", "_")) /
+                           Path(binary_origin).name)
+        binary_archive = root / binary_relative
+        require(binary_archive.is_file(),
+                f"{cell}: suite archived test binary is missing")
+        index["cells"][cell] = {
+            "groups": groups,
+            "binary": {"path": str(binary_relative),
+                       "sha256": sha256(binary_archive)},
+        }
     validate_index(index, root, check_checkout=False)
     return index
 

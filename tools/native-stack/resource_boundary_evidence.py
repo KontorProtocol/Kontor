@@ -2,6 +2,7 @@
 """Validate the bounded, per-process Pulley boundary family evidence."""
 
 import argparse
+import copy
 import hashlib
 import json
 import platform
@@ -29,6 +30,8 @@ from resource_boundary_manifest import (CONFIGURATIONS, DISCOVERY_CELL,
                                         DISCOVERY_ROLE, FINAL_ROLES, MANIFEST,
                                         SCHEMA, build_boundary_manifest)
 from resource_manifest import FIBER_SOURCE_FILES, ROOT, build_manifest
+from resource_suite_registry import MANIFEST as REGISTRY_MANIFEST
+from resource_suite_registry import build_registry
 
 
 TEST_NAME = "runtime::call::tests::native_stack_resource::pulley_boundary_worker_case"
@@ -764,6 +767,7 @@ def validate_source_freeze(source_sha, current_source_sha, manifest_sha256):
     require(set(changed) == {
         "tools/native-stack/resource-boundary-depths-v1.json",
         "tools/native-stack/resource-boundary-manifest-v1.json",
+        "tools/native-stack/resource-suite-registry-v1.json",
     }, "runtime or fixture source changed after reviewed discovery")
 
     old_manifest_bytes = historical_file(source_sha,
@@ -771,9 +775,39 @@ def validate_source_freeze(source_sha, current_source_sha, manifest_sha256):
     require(hashlib.sha256(old_manifest_bytes).hexdigest() ==
             manifest_sha256,
             "reviewed discovery manifest differs from source commit")
-    return json.loads(old_manifest_bytes,
-                      object_pairs_hook=no_duplicate_keys,
-                      parse_constant=no_nonfinite_constants)
+    old_manifest = json.loads(old_manifest_bytes,
+                              object_pairs_hook=no_duplicate_keys,
+                              parse_constant=no_nonfinite_constants)
+    final_manifest = load_json_strict(MANIFEST)
+    old_registry = json.loads(historical_file(
+        source_sha, "tools/native-stack/resource-suite-registry-v1.json"),
+        object_pairs_hook=no_duplicate_keys, parse_constant=no_nonfinite_constants)
+    final_registry = load_json_strict(REGISTRY_MANIFEST)
+    require(final_registry == build_registry(),
+            "final suite registry differs from deterministic source regeneration")
+    old_boundary_sha = hashlib.sha256(old_manifest_bytes).hexdigest()
+    final_boundary_sha = sha256(MANIFEST)
+    require(old_manifest["claim_status"] == "pending_discovery"
+            and final_manifest["claim_status"] == "candidate_only"
+            and old_registry["parent_manifests"]["boundary"] == old_boundary_sha
+            and old_registry["groups"]["pulley_boundary"]["manifest_sha256"]
+                == old_boundary_sha
+            and old_registry["remaining_gates"]["boundary_discovery"]
+                == old_manifest["claim_status"]
+            and final_registry["parent_manifests"]["boundary"] == final_boundary_sha
+            and final_registry["groups"]["pulley_boundary"]["manifest_sha256"]
+                == final_boundary_sha
+            and final_registry["remaining_gates"]["boundary_discovery"]
+                == final_manifest["claim_status"],
+            "suite registry boundary digest or status differs from source freeze")
+    permitted = copy.deepcopy(old_registry)
+    permitted["parent_manifests"]["boundary"] = final_boundary_sha
+    permitted["groups"]["pulley_boundary"]["manifest_sha256"] = final_boundary_sha
+    permitted["remaining_gates"]["boundary_discovery"] = (
+        final_manifest["claim_status"])
+    require(permitted == final_registry,
+            "suite registry changed beyond derived boundary metadata")
+    return old_manifest
 
 
 def historical_file(source_sha, relative):
@@ -973,7 +1007,7 @@ def validate_reviewed_discovery(path, expected_sha256, manifest, current_source_
     validate_frozen_discovery_pairs(archive, manifest)
 
 
-def validate_bundle(bundle, directory):
+def validate_bundle(bundle, directory, archive_binary=None):
     schema = load_json_strict(SCHEMA)
     error = next(Draft202012Validator(schema).iter_errors(bundle), None)
     require(error is None, f"boundary evidence schema failed: {error}")
@@ -986,8 +1020,10 @@ def validate_bundle(bundle, directory):
     file_evidence(directory, bundle["control_capture"])
     control, binary = validate_control(
         control_path, bundle["control_capture"]["sha256"],
-        build_manifest())
-    validate_cell_identity(bundle["cell"], control["cargo_artifact"])
+        build_manifest(),
+        archive_binary=archive_binary, expected_cell=bundle["cell"])
+    validate_cell_identity(bundle["cell"], control["cargo_artifact"],
+                           check_host=archive_binary is None)
     require(control["source_sha"] == bundle["source_sha"]
             and control["binary_sha256"] == bundle["binary_sha256"]
             and str(binary) == bundle["binary_path"],

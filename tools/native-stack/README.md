@@ -551,17 +551,24 @@ bind the trace parser to its host OS. Actual capture is still required on each
 host. `capture_resource_suite.py` runs all 16 capture groups for one cell in
 registry order after checking the clean source commit, exact control, reviewed
 boundary discovery, and frozen v2 auxiliary Store counts. It writes each group
-under the archive layout used by the closure index. Run it separately on every
+under the archive layout used by the closure index and copies the exact Cargo
+test executable once per cell. Run it separately on every
 required host and profile with one common source commit. Its output is a
 capture inventory, not a qualification decision.
 
 The six-cell suite remains gated by reviewed boundary depths, a measured
 macOS guard control, production memory profiles, and a common-source capture
-run. Each specialized validator
-currently checks local checkout and host identity, so an independent verifier
-cannot yet validate downloaded cross-host archives from one machine. A final
-qualification decision also needs semantic comparison of the six validated
-cells.
+run. `compare_resource_suite.py` checks the clean checkout at the archived
+source commit, revalidates each copied binary, recorded Cargo artifact,
+guard transcript, and child raw log, then compares the validators' semantic
+signatures across all six cells. Archive validation uses the captured host OS
+and page size instead of the verifier host. The original executable path
+remains bound to the Cargo record and each child command; its bytes come from
+the archived copy. The current source package has no measured macOS capture
+or six-cell archive yet, so the comparator has only synthetic tests. The
+`native-stack-s2.yml` workflow and `resource-suite-runbook.md` describe the
+discovery, review, final capture, and comparison commands. Production memory
+profiles and phase review remain separate acceptance gates.
 
 The amendment is copied unchanged into
 `docs/design/protocol-upgrades/native-stack-s2-resource-amendment-v1.md`.

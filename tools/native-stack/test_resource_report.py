@@ -422,7 +422,12 @@ class ResourceReportControls(unittest.TestCase):
             control["raw_log"]["sha256"] = resource_evidence.sha256(path)
             resource_evidence.check_guard_control(report, manifest, directory)
             child = json.loads(lines[1].split("=", 1)[1])
-            child["signal"] = 6
+            child["signal"] = 10
+            lines[1] = "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child)
+            path.write_text("\n".join(lines) + "\n")
+            control["raw_log"]["sha256"] = resource_evidence.sha256(path)
+            resource_evidence.check_guard_control(report, manifest, directory)
+            child["signal"] = 7
             lines[1] = "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child)
             path.write_text("\n".join(lines) + "\n")
             control["raw_log"]["sha256"] = resource_evidence.sha256(path)

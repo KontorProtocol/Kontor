@@ -1,0 +1,266 @@
+name: Native stack S2 resource evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Capture boundary discovery or run the six-cell final suite
+        required: true
+        type: choice
+        options: [discovery, guard, final]
+      phase10_run_id:
+        description: Final stage run containing native-stack-phase10-historical
+        required: false
+        type: string
+      reviewed_discovery_run_id:
+        description: Final stage run containing the reviewed discovery candidate
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  discover:
+    name: S2 boundary discovery (Linux ARM64 dev)
+    if: inputs.stage == 'discovery'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.1"
+      RUSTC_WRAPPER: ""
+      CCACHE_DISABLE: "1"
+      CARGO_BUILD_JOBS: "2"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Check pending discovery source
+        run: |
+          test "$RUNNER_ARCH" = ARM64
+          python3 tools/native-stack/resource_manifest.py
+          python3 tools/native-stack/resource_boundary_manifest.py
+          jq -e '.claim_status == "pending_discovery"' tools/native-stack/resource-boundary-manifest-v1.json
+      - name: Install evidence and native dependencies
+        run: |
+          python3 -m pip install -r tools/native-stack/requirements-resource.txt
+          sudo apt-get update
+          sudo apt-get install -y libzmq3-dev libboost-all-dev libevent-dev
+      - name: Build and measure discovery boundary
+        run: |
+          base="$RUNNER_TEMP/native-stack-s2-discovery"
+          python3 tools/native-stack/build_resource_test.py --profile dev --output-dir "$base/build"
+          python3 tools/native-stack/capture_resource_control.py \
+            --cargo-artifacts "$base/build/cargo-artifacts.jsonl" \
+            --metadata "$base/build/cargo-metadata.json" \
+            --build-attestation "$base/build/resource-build-attestation.json" \
+            --source-sha "$GITHUB_SHA" \
+            --evidence-dir "$base/control" > "$base/control-result.json"
+          control_sha=$(jq -er '.sha256' "$base/control-result.json")
+          python3 tools/native-stack/capture_resource_boundary.py \
+            --phase discovery --cell Linux-ARM64/dev \
+            --control-capture "$base/control/resource-control-capture.json" \
+            --control-sha256 "$control_sha" \
+            --evidence-dir "$base/archive" > "$base/discovery-result.json"
+      - name: Preserve discovery candidate for review
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-boundary-discovery-candidate
+          path: ${{ runner.temp }}/native-stack-s2-discovery/archive
+          if-no-files-found: warn
+          retention-days: 90
+
+  guard:
+    name: S2 macOS guard (${{ matrix.profile }})
+    if: inputs.stage == 'guard'
+    runs-on: macos-15
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [dev, release]
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.1"
+      RUSTC_WRAPPER: ""
+      CCACHE_DISABLE: "1"
+      CARGO_BUILD_JOBS: "2"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PROFILE: ${{ matrix.profile }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install evidence and native dependencies
+        run: |
+          python3 -m pip install -r tools/native-stack/requirements-resource.txt
+          brew install boost libevent zeromq
+      - name: Build and capture macOS guard fault control
+        run: |
+          test "$RUNNER_OS-$RUNNER_ARCH" = macOS-ARM64
+          base="$RUNNER_TEMP/native-stack-s2-guard"
+          python3 tools/native-stack/resource_manifest.py
+          python3 tools/native-stack/build_resource_test.py --profile "$PROFILE" --output-dir "$base/build"
+          python3 tools/native-stack/capture_resource_control.py \
+            --cargo-artifacts "$base/build/cargo-artifacts.jsonl" \
+            --metadata "$base/build/cargo-metadata.json" \
+            --build-attestation "$base/build/resource-build-attestation.json" \
+            --source-sha "$GITHUB_SHA" \
+            --evidence-dir "$base/archive/control" > "$base/guard-result.json"
+          binary=$(jq -er '.binary_path' "$base/build/resource-build-attestation.json")
+          cp "$binary" "$base/archive/$(basename "$binary")"
+      - name: Preserve macOS guard evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-s2-macos-guard-${{ matrix.profile }}
+          path: ${{ runner.temp }}/native-stack-s2-guard/archive
+          if-no-files-found: warn
+          retention-days: 90
+
+  capture:
+    if: inputs.stage == 'final'
+    name: S2 capture (${{ matrix.os }}, ${{ matrix.profile }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+        profile: [dev, release]
+        include:
+          - os: ubuntu-24.04
+            arch: X64
+          - os: ubuntu-24.04-arm
+            arch: ARM64
+          - os: macos-15
+            arch: ARM64
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.1"
+      RUSTC_WRAPPER: ""
+      CCACHE_DISABLE: "1"
+      CARGO_BUILD_JOBS: "2"
+      PYTHONDONTWRITEBYTECODE: "1"
+      GH_TOKEN: ${{ github.token }}
+      HISTORICAL_RUN_ID: ${{ inputs.phase10_run_id }}
+      REVIEWED_RUN_ID: ${{ inputs.reviewed_discovery_run_id }}
+      PROFILE: ${{ matrix.profile }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Check runner and frozen source
+        run: |
+          test "$RUNNER_ARCH" = "${{ matrix.arch }}"
+          python3 tools/native-stack/resource_manifest.py
+          python3 tools/native-stack/resource_manifest_v2.py
+          python3 tools/native-stack/resource_boundary_manifest.py
+          python3 tools/native-stack/resource_suite_registry.py
+          jq -e '.claim_status == "candidate_only"' tools/native-stack/resource-boundary-manifest-v1.json
+          jq -e '.auxiliary_count_status == "frozen"' tools/native-stack/resource-manifest-v2.json
+      - name: Install Python evidence validator
+        run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
+      - name: Install native dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libzmq3-dev libboost-all-dev libevent-dev
+      - name: Install native dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install boost libevent zeromq
+      - name: Download pinned prior evidence
+        run: |
+          case "$HISTORICAL_RUN_ID:$REVIEWED_RUN_ID" in
+            *[!0-9:]*|:*|*:) exit 1 ;;
+          esac
+          prior="$RUNNER_TEMP/native-stack-s2/prior"
+          mkdir -p "$prior/historical" "$prior/reviewed"
+          gh run download "$HISTORICAL_RUN_ID" --name native-stack-phase10-historical --dir "$prior/historical"
+          gh run download "$REVIEWED_RUN_ID" --name native-stack-boundary-discovery-candidate --dir "$prior/reviewed"
+          test -f "$prior/historical/resource-chain-capture.json"
+          test -f "$prior/reviewed/resource-boundary-capture.json"
+      - name: Build exact-source test executable
+        run: |
+          base="$RUNNER_TEMP/native-stack-s2"
+          python3 tools/native-stack/build_resource_test.py --profile "$PROFILE" --output-dir "$base/build"
+      - name: Capture host guard control and all case groups
+        run: |
+          base="$RUNNER_TEMP/native-stack-s2"
+          prior="$base/prior"
+          python3 tools/native-stack/capture_resource_control.py \
+            --cargo-artifacts "$base/build/cargo-artifacts.jsonl" \
+            --metadata "$base/build/cargo-metadata.json" \
+            --build-attestation "$base/build/resource-build-attestation.json" \
+            --source-sha "$GITHUB_SHA" \
+            --evidence-dir "$base/control" > "$base/control-result.json"
+          control_sha=$(jq -er '.sha256' "$base/control-result.json")
+          reviewed_sha=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$prior/reviewed/resource-boundary-capture.json")
+          python3 tools/native-stack/capture_resource_suite.py \
+            --cell "$RUNNER_OS-$RUNNER_ARCH/$PROFILE" \
+            --control-capture "$base/control/resource-control-capture.json" \
+            --control-sha256 "$control_sha" \
+            --historical-bundle "$prior/historical/resource-chain-capture.json" \
+            --reviewed-discovery-capture "$prior/reviewed/resource-boundary-capture.json" \
+            --reviewed-discovery-sha256 "$reviewed_sha" \
+            --archive-root "$base/archive" > "$base/cell-result.json"
+      - name: Preserve cell archive
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-s2-cell-${{ matrix.os }}-${{ matrix.profile }}
+          path: ${{ runner.temp }}/native-stack-s2/archive
+          if-no-files-found: warn
+          retention-days: 90
+
+  compare:
+    name: Validate and compare six S2 cells
+    if: inputs.stage == 'final'
+    needs: capture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install Python evidence validator
+        run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-stack-s2-cell-*
+          path: ${{ runner.temp }}/native-stack-s2-compare/archive
+          merge-multiple: true
+      - name: Check common source and archived case semantics
+        run: |
+          base="$RUNNER_TEMP/native-stack-s2-compare"
+          python3 tools/native-stack/resource_suite_closure.py \
+            --root "$base/archive" --output "$base/index.json"
+          python3 tools/native-stack/compare_resource_suite.py \
+            --root "$base/archive" --index "$base/index.json" \
+            --output "$base/comparison.json"
+      - name: Preserve comparison
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-s2-comparison
+          path: ${{ runner.temp }}/native-stack-s2-compare/*.json
+          if-no-files-found: warn
+          retention-days: 90
