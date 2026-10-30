@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::env;
+#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::{Arc, Barrier};
@@ -1530,9 +1532,13 @@ fn measured_tokio_runtime(
     }
     // Tokio's start hook also runs on blocking-pool threads before they claim a
     // queued role. The park hook identifies an actual scheduler worker.
+    let done = Arc::new(AtomicBool::new(false));
+    let park_done = Arc::clone(&done);
     let runtime = builder
         .on_thread_park(move || {
-            let _ = sender.send(current_linux_stack_range());
+            if !park_done.load(Ordering::Relaxed) {
+                let _ = sender.send(current_linux_stack_range());
+            }
         })
         .build()?;
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -1550,6 +1556,7 @@ fn measured_tokio_runtime(
             break candidate;
         }
     };
+    done.store(true, Ordering::Relaxed);
     ensure!(
         first.thread_id != second.thread_id && first.os_thread_id != second.os_thread_id,
         "Tokio did not start distinct workers"

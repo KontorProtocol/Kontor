@@ -3,6 +3,8 @@ use std::env;
 use std::io::Write;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{self, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
@@ -194,9 +196,13 @@ pub(super) fn measured_tokio_runtime(
     }
     // The start hook also observes blocking-pool threads before they claim a
     // role. Parking proves this thread is running a scheduler worker.
+    let done = Arc::new(AtomicBool::new(false));
+    let park_done = Arc::clone(&done);
     let runtime = builder
         .on_thread_park(move || {
-            let _ = sender.send(current_stack_range());
+            if !park_done.load(Ordering::Relaxed) {
+                let _ = sender.send(current_stack_range());
+            }
         })
         .build()?;
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -212,6 +218,7 @@ pub(super) fn measured_tokio_runtime(
             break candidate;
         }
     };
+    done.store(true, Ordering::Relaxed);
     ensure!(
         first.thread_id != second.thread_id && first.os_thread_id != second.os_thread_id,
         "macOS Tokio workers have duplicate identities"
