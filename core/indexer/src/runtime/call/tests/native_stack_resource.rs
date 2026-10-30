@@ -319,7 +319,7 @@ fn attest_resource_threads(events: &[ThreadEvent], workers: &[ThreadId], mode: &
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 #[ignore = "run through the bounded resource child driver"]
 fn chain_worker_case() -> Result<()> {
@@ -348,11 +348,22 @@ fn chain_worker_case() -> Result<()> {
         "trap control requires 64 Stores"
     );
     let reduced = mode == "reduced";
+    #[cfg(target_os = "linux")]
     let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    #[cfg(target_os = "macos")]
+    let (runtime, workers) = macos::measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    #[cfg(target_os = "linux")]
     let blocking = runtime
         .block_on(async { tokio::task::spawn_blocking(current_linux_stack_range).await })?
         .context("blocking pool stack capacity")?;
+    #[cfg(target_os = "macos")]
+    let blocking = runtime
+        .block_on(async { tokio::task::spawn_blocking(macos::current_stack_range).await })?
+        .context("blocking pool stack capacity")?;
+    #[cfg(target_os = "linux")]
     let caller = current_linux_stack_range().context("block_on caller stack capacity")?;
+    #[cfg(target_os = "macos")]
+    let caller = macos::current_stack_range().context("block_on caller stack capacity")?;
     let worker_ids = workers
         .iter()
         .map(|worker| worker.thread_id)
@@ -367,7 +378,10 @@ fn chain_worker_case() -> Result<()> {
             && blocking.os_thread_id != caller.os_thread_id,
         "chain worker, blocking, and caller thread categories overlap"
     );
-    resource_diagnostics::start_chain();
+    #[cfg(target_os = "linux")]
+    resource_diagnostics::start_chain_with_stack_probe(linux_blocking_thread_observation);
+    #[cfg(target_os = "macos")]
+    resource_diagnostics::start_chain_with_stack_probe(macos::blocking_thread_observation);
     let task_chain_mode = chain_mode.clone();
     let result = runtime.block_on(async {
         tokio::spawn(async move {
@@ -426,6 +440,21 @@ fn chain_worker_case() -> Result<()> {
                     .any(|event| event.name == "canonical_output_entry")),
         "chain case did not observe required input or result conversion"
     );
+    #[cfg(target_os = "linux")]
+    let mut thread_observations = vec![
+        linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
+        linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+        linux_thread_observation(&blocking, "blocking_pool", None),
+        linux_thread_observation(&caller, "block_on_caller", None),
+    ];
+    #[cfg(target_os = "macos")]
+    let mut thread_observations = vec![
+        macos::thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
+        macos::thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+        macos::thread_observation(&blocking, "blocking_pool", None),
+        macos::thread_observation(&caller, "block_on_caller", None),
+    ];
+    collect_blocking_observations(&events, &worker_ids, &mut thread_observations)?;
     println!(
         "KONTOR_CHAIN_WORKER_RUNTIME={}",
         json!({
@@ -438,12 +467,7 @@ fn chain_worker_case() -> Result<()> {
             "flavor": "multi_thread",
             "worker_count": workers.len(),
             "worker_requested_bytes": reduced.then_some(1024 * 1024),
-            "thread_observations": [
-                linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
-                linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
-                linux_thread_observation(&blocking, "blocking_pool", None),
-                linux_thread_observation(&caller, "block_on_caller", None),
-            ],
+            "thread_observations": thread_observations,
             "blocking_pool_observed": true,
             "block_on_caller_observed": true,
         })

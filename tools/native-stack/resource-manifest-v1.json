@@ -446,7 +446,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "fe7efa310fac6bd919bc1e87d2b30e5d9222ae713cad719739084e2dc2ed8684"
+      "sha256": "1dc9fbd9cc4ac00a07a410459c4dac9c9b0ab44d5c346910f3bd361ec9c1102f"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -2162,7 +2162,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "fe7efa310fac6bd919bc1e87d2b30e5d9222ae713cad719739084e2dc2ed8684",
+    "source_sha256": "1dc9fbd9cc4ac00a07a410459c4dac9c9b0ab44d5c346910f3bd361ec9c1102f",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -2314,7 +2314,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "fe7efa310fac6bd919bc1e87d2b30e5d9222ae713cad719739084e2dc2ed8684",
+    "sha256": "1dc9fbd9cc4ac00a07a410459c4dac9c9b0ab44d5c346910f3bd361ec9c1102f",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },
