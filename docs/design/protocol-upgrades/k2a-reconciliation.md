@@ -866,3 +866,21 @@ must drain the admitted root before completing it; that ordering is corrected.
 The normal-path checks above precede this error-path correction. Full selected
 dispatch, raw mempool handling, final prerequisite reconciliation and consolidated
 phase reviews remain outstanding.
+
+Raw mempool snapshots and deltas now cross the Bitcoin listener without a
+protocol filter. The reactor recognizes them with its executor, retains unknown
+raw inputs separately from current proposal candidates, and keeps fee samples and
+snapshot replacement behavior. A replacement witness invalidates the previous
+candidate even when the txid is unchanged. Unrecognized deltas do not reset
+proposal debounce. Confirmation and removal clear both retained bytes and the
+candidate; candidate-only policy filtering does not destroy the raw input.
+
+At `5272200b`, 24 listener tests, three retention/witness/snapshot tests and the
+three-node batch-confirmation test passed. The indexer/testlib all-target check
+passed. Lead review then moved initial recognition before consensus startup to
+preserve the startup barrier and removed an unused import. No phase acceptance is
+claimed: protocol reselection and cache identity, witness freshness across async
+proposal validation, and preserving candidate rejection policy when rebuilding a
+selection remain required. Reconnect-snapshot recognition currently awaits its
+blocking worker on the reactor loop; the selected preparation job must allow
+consensus progress while preserving snapshot/delta ordering.

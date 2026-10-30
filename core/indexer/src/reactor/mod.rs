@@ -979,6 +979,7 @@ pub fn run(
                 // placeholder).
                 fee_index.recompute();
 
+                let initial_mempool = exec.parse_mempool(initial_raw_txs).await?;
                 let mut startup_lease = owner_service.begin_canonical(&mut runtime, false).await?;
                 let consensus_result = start_consensus(
                     engine_config,
@@ -993,7 +994,7 @@ pub fn run(
                 startup_lease.complete(&mut runtime).await?;
                 let mut consensus = consensus_result.context("start_consensus failed")?;
 
-                consensus.mempool.replace(exec.parse_mempool(initial_raw_txs).await?);
+                consensus.mempool.replace(initial_mempool);
 
                 let mut reactor = Reactor::new(
                     exec,

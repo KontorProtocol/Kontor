@@ -1,10 +1,10 @@
 use super::*;
 use crate::bitcoin_client::mock::MockBitcoinRpc;
 use crate::bitcoin_client::types::{MempoolEntry, MempoolEntryFees};
-use bitcoin::{Amount, TxIn, Witness};
 use bitcoin::hashes::Hash;
 use bitcoin::locktime::absolute::LockTime;
 use bitcoin::transaction::Version;
+use bitcoin::{Amount, TxIn, Witness};
 use indexer_types::Block;
 
 /// Minimal mempool entry for listener tests — values don't matter except
