@@ -157,7 +157,7 @@ fn workload_timed_archive_requires_complete_immutable_inventory() -> Result<()> 
     Ok(())
 }
 
-fn copied_fixture() -> Result<(TempDir, Manifest)> {
+pub(super) fn copied_fixture() -> Result<(TempDir, Manifest)> {
     let path =
         std::env::var_os("KONTOR_WORKLOAD_TIMED_MANIFEST").context("timed manifest missing")?;
     let digest = std::env::var("KONTOR_WORKLOAD_TIMED_MANIFEST_SHA256")?;
@@ -171,7 +171,7 @@ fn copied_fixture() -> Result<(TempDir, Manifest)> {
     Ok((directory, saved.manifest))
 }
 
-fn reseal(directory: &Path, manifest: Manifest) -> Result<Saved> {
+pub(super) fn reseal(directory: &Path, manifest: Manifest) -> Result<Saved> {
     let path = directory.join("manifest.json");
     fs::write(&path, serde_json::to_vec(&manifest)?)?;
     let saved = Saved::load(&path, &hash_file(&path)?)?;

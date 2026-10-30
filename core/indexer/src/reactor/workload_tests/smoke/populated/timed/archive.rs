@@ -15,6 +15,7 @@ use super::run::Settings;
 use super::work::InputPlan;
 use crate::bitcoin_client::Client;
 
+mod controls;
 mod format;
 mod replay;
 mod tests;

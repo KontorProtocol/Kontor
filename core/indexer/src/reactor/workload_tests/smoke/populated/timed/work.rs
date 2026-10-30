@@ -128,8 +128,12 @@ impl InputPlan {
             let decoded = filter_map((0, input.reveal.clone())).context("API input missing")?;
             ensure!(decoded.inputs.len() == 1 && decoded.inputs[0].insts.aggregate.is_none());
             ensure!(
-                decoded.inputs[0].x_only_pubkey.to_string() == self.api_signer
-                    && decoded.inputs[0].insts.ops == self.api.instructions(request)?
+                decoded.inputs[0].x_only_pubkey.to_string() == self.api_signer,
+                "saved timed API signer differs at request {request}"
+            );
+            ensure!(
+                decoded.inputs[0].insts.ops == self.api.instructions(request)?,
+                "saved timed API instruction association differs at request {request}"
             );
         }
         Ok(())

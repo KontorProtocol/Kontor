@@ -82,6 +82,7 @@ pub(super) async fn run(saved: Saved) -> Result<()> {
         ensure!(client.get_block_hash(block.block.height).await? == block.block.hash);
         ensure!(serialize(&client.get_block(&block.block.hash).await?) == block.raw);
     }
+    eprintln!("workload_saved_timed_bitcoin_admitted=true");
     let directory = TempDir::new()?;
     let checkpoints = Checkpoint::directory()?;
     let expected = manifest
@@ -229,6 +230,7 @@ pub(super) async fn run(saved: Saved) -> Result<()> {
         ensure!(database_projection(&trial.db_conn()).await? == projection);
         let counter = Arc::new(AtomicU64::new(0));
         let work_counter = counter.clone();
+        eprintln!("workload_saved_timed_execution_started={name}");
         let work = async {
             let mut adapter = TimedWork::new(
                 &mut trial,
