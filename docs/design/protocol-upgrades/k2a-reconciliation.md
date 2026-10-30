@@ -959,3 +959,17 @@ Public views, matching runtime policy and nested-entry binding, committee
 selection, cache isolation and final K2a/K2b acceptance remain outstanding. No
 activation, historical artifact freeze, resource qualification or performance
 waiver is established by this preparatory wiring.
+
+Validation on `2643bd388036036b10c1fa2887b91e669b11b158` passed 44 tests:
+four selection/snapshot tests, 31 mempool tests, four simulation restoration tests,
+two confirmation/reorg tests, both real-cluster proposal/blocked-validation
+regressions, and the explicitly opted-in P1 parity comparison. The indexer/testlib
+all-target compile check also passed. The comparison matched all 11 saved logical
+state stages against baseline `c7554ca8b7a104d28f41eb1e9a0c48200c34d5f1`, including
+receipts and provenance, with candidate report SHA-256
+`ad625235e36900c65deb5369ade36484ef318d1e6d4d96bf3ad992a4cfdf1668`.
+Logs, commands, exit status, hashes and the lead's scope/limitations record are in
+`.build-cache/selected-executor-baseline/2643bd38-selection/`. The parity fixture is
+ignored in the ordinary confirmation suite; only its separate `--exact --ignored`
+run is counted here. These are preparatory integration checks, not the final
+phase's independent reviews or full protocol-upgrade qualification.
