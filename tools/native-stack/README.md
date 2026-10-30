@@ -496,11 +496,20 @@ The archive is local diagnostic evidence. Its `qualification_status` is
 been captured. The canonical fixture performs no persistent guest write, so
 its reset digest proves cleanup of this fixture, not rollback of a guest write.
 
-Cold publish function size, branch-table size and control nesting remain
-unverified accepted fixtures. The wasmparser source limits alone do not prove
-that a component with that shape passes WIT, serialized transaction and
-publication admission. The validator keeps those gates open until near-boundary
-accepted fixtures and reject controls are frozen and source reviewed.
+The cold publication source now generates three variants of the pinned stack
+probe module and submits them through `Runtime::publish`. It checks the
+postcard-serialized instruction size against the compose limit, then observes
+componentization, compilation, initialization receipts, rollback, and Store
+teardown. The function-body candidate is 7,654,321 bytes with a one-byte-over
+control. The `br_table` fixture has 7,654,308 zero-depth entries in a
+7,654,321-byte body; adding one entry crosses the function-body size gate.
+Although wasmparser names a 7,654,321-entry `br_table` cap, this encoding
+cannot reach it inside an admitted body. The 256-block control-nesting
+fixture is a candidate, not a claimed engine maximum. All three cases still
+have `fixture_admission_status: unverified` until the bounded children pass
+and the captured evidence is validated. Postcard size checks establish a
+serialized instruction proxy, not a complete signed transaction admission
+result. Cross-node parity and the other qualification cells remain open.
 
 The amendment is copied unchanged into
 `docs/design/protocol-upgrades/native-stack-s2-resource-amendment-v1.md`.

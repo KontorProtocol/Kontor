@@ -664,6 +664,9 @@ fn finite_stack_worker_case() -> Result<()> {
                 | "native_staking_rewards"
                 | "native_filestorage_lifecycle"
                 | "brotli_raw_ceiling"
+                | "cold_publish_large_function"
+                | "cold_publish_control_nesting"
+                | "cold_publish_br_table"
         ),
         "unknown finite stack case"
     );
@@ -708,7 +711,11 @@ fn finite_stack_worker_case() -> Result<()> {
     );
     if matches!(
         case_id.as_str(),
-        "native_filestorage_lifecycle" | "brotli_raw_ceiling"
+        "native_filestorage_lifecycle"
+            | "brotli_raw_ceiling"
+            | "cold_publish_large_function"
+            | "cold_publish_control_nesting"
+            | "cold_publish_br_table"
     ) {
         #[cfg(target_os = "linux")]
         resource_diagnostics::start_chain_with_stack_probe(linux_blocking_thread_observation);
@@ -769,6 +776,18 @@ fn finite_stack_worker_case() -> Result<()> {
             } else if task_case_id == "brotli_raw_ceiling" {
                 super::native_stack::resource_brotli_raw_ceiling(&task_configuration, &task_role)
                     .await?
+            } else if matches!(
+                task_case_id.as_str(),
+                "cold_publish_large_function"
+                    | "cold_publish_control_nesting"
+                    | "cold_publish_br_table"
+            ) {
+                super::native_stack::resource_cold_publication(
+                    &task_case_id,
+                    &task_configuration,
+                    &task_role,
+                )
+                .await?
             } else if task_case_id.starts_with("canonical_") {
                 super::native_stack::resource_canonical(
                     &task_case_id,

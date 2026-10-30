@@ -84,6 +84,22 @@
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
       "sha256": "84bbd07d8b2a139410eabe0d00cc93f903a8858556be689d60f448b63b9a69fd"
     },
+    "cold_publication_adapter": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/cold_publication.rs",
+      "sha256": "aa534a263d7ecfbfb8c19d898ede2da559d8f7be9c3e70ea7fe34d7e30eb831e"
+    },
+    "cold_publication_capture": {
+      "path": "tools/native-stack/capture_resource_cold_publication.py",
+      "sha256": "2b969ba25d87d7c23c5ad8ddda03dd539fc33c1f63e3ee48520f8b5347792f19"
+    },
+    "cold_publication_validator": {
+      "path": "tools/native-stack/resource_cold_publication_evidence.py",
+      "sha256": "f45ec6ea3dac414928efd1ced72ec0b1ca07437edd1938ffdcc954aa4ef9b729"
+    },
+    "cold_publication_validator_tests": {
+      "path": "tools/native-stack/test_resource_cold_publication_evidence.py",
+      "sha256": "20bf6f53f6043e06e8aa924c4c0988f0e1515b22b4621a4200ce0f393013d713"
+    },
     "core_lockfile": {
       "path": "core/Cargo.lock",
       "sha256": "6e7ea3f1f76c383f267f9b00125a86dc01de45f7f3a2e5082da89598265b525f"
@@ -394,7 +410,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "62146bc8f1d3bd499506b20d2ec4f5476a8bbfa363f68f29a18e273f1ada47f8"
+      "sha256": "e52582220394da99a9f1eb7acff514b89b722a8fd014fb3a9f4e9bfe5bfa3dce"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -422,7 +438,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "45e23d79e65c2a843f9905b6055e7062e56193db8675377f5929354b36e7fcf8"
+      "sha256": "943dd5b4f7f1ee68cb3467efdcffabe094521de39c284293b4c020376529371c"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -486,7 +502,7 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "4228b468d00c1b3682edf071c266f72d497882a8a5d8900ffea4ce8271faaa65"
+      "sha256": "afadf09e0232ee13b7f907299ac7d6cbefb6600932aa9bf0e128990b2a82ff82"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
@@ -1129,14 +1145,21 @@
       },
       "family": "cold_compile",
       "fixtures": [
-        "publish_path"
+        "publish_path",
+        "cold_publication_adapter",
+        "cold_publication_capture",
+        "cold_publication_validator",
+        "cold_publication_validator_tests"
       ],
       "id": "cold_publish_br_table",
       "paired_worker_status": "missing",
       "parameters": {
         "cold_cache": true,
         "fixture_admission_status": "unverified",
-        "fixture_br_table_entries": null,
+        "fixture_br_table_entries": 7654308,
+        "fixture_function_body_limit_bytes": 7654321,
+        "fixture_over_limit_br_table_entries": 7654309,
+        "fixture_rejecting_gate": "function_body_size",
         "repeats": 2,
         "source_br_table_limit_entries": 7654321
       },
@@ -1155,14 +1178,18 @@
       },
       "family": "cold_compile",
       "fixtures": [
-        "publish_path"
+        "publish_path",
+        "cold_publication_adapter",
+        "cold_publication_capture",
+        "cold_publication_validator",
+        "cold_publication_validator_tests"
       ],
       "id": "cold_publish_control_nesting",
       "paired_worker_status": "missing",
       "parameters": {
         "cold_cache": true,
         "fixture_admission_status": "unverified",
-        "fixture_control_depth": null,
+        "fixture_control_depth": 256,
         "repeats": 2,
         "source_effective_depth_limit": "unresolved"
       },
@@ -1182,14 +1209,19 @@
       },
       "family": "cold_compile",
       "fixtures": [
-        "publish_path"
+        "publish_path",
+        "cold_publication_adapter",
+        "cold_publication_capture",
+        "cold_publication_validator",
+        "cold_publication_validator_tests"
       ],
       "id": "cold_publish_large_function",
       "paired_worker_status": "missing",
       "parameters": {
         "cold_cache": true,
         "fixture_admission_status": "unverified",
-        "fixture_function_size_bytes": null,
+        "fixture_function_size_bytes": 7654321,
+        "fixture_over_limit_function_size_bytes": 7654322,
         "repeats": 2,
         "source_function_size_limit_bytes": 7654321
       },
@@ -2059,7 +2091,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "45e23d79e65c2a843f9905b6055e7062e56193db8675377f5929354b36e7fcf8",
+    "source_sha256": "943dd5b4f7f1ee68cb3467efdcffabe094521de39c284293b4c020376529371c",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -2211,7 +2243,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "45e23d79e65c2a843f9905b6055e7062e56193db8675377f5929354b36e7fcf8",
+    "sha256": "943dd5b4f7f1ee68cb3467efdcffabe094521de39c284293b4c020376529371c",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

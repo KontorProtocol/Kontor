@@ -25,6 +25,7 @@ const CRYPTO_COMPONENT: &[u8] =
 
 mod brotli_ceiling;
 mod canonical;
+mod cold_publication;
 mod foreign_wave;
 mod initialization;
 mod lifecycle;
@@ -143,6 +144,14 @@ pub(super) async fn resource_brotli_raw_ceiling(
     process_role: &str,
 ) -> Result<JsonValue> {
     brotli_ceiling::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_cold_publication(
+    case_id: &str,
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    cold_publication::run(case_id, configuration, process_role).await
 }
 
 #[tokio::test]
