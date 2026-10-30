@@ -362,7 +362,7 @@ async fn poll<C: BitcoinRpc>(
         }
 
         // 3. Collect results into a buffer
-        let mut pending: HashMap<u64, Block> = HashMap::new();
+        let mut pending: HashMap<u64, BlockInput> = HashMap::new();
         while let Some(result) = join_set.join_next().await {
             match result {
                 Ok((height, Ok(block))) => {
