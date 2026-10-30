@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "171585219115ecb0a2acd5bc7ec80108ad343f427872c7f8305c69c160b75fe3",
+  "parent_manifest_sha256": "b7bba33ab0a521de11128b25fed79be51cdab3309525177de58eb2cf43eee8dc",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1231,7 +1231,7 @@
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "7468205bb5f06513625a6f1b6fb170907f52e36ed39d02fc78c4af409fd7dd75"
+      "sha256": "b47a3f6a7f74acfed46cc3ee16f174584babf47e341101596007b529980974eb"
     },
     "token": {
       "path": "core/indexer/src/runtime/token.rs",
@@ -1267,7 +1267,7 @@
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "943dd5b4f7f1ee68cb3467efdcffabe094521de39c284293b4c020376529371c"
+      "sha256": "26556a4d1ba10edf26b11a0c3af30b9c4eb757b9bf39c4d97b1e525ba94f9fc0"
     }
   }
 }
