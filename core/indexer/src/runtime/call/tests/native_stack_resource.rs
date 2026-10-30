@@ -663,6 +663,7 @@ fn finite_stack_worker_case() -> Result<()> {
                 | "sqlite_large_values"
                 | "native_staking_rewards"
                 | "native_filestorage_lifecycle"
+                | "brotli_raw_ceiling"
         ),
         "unknown finite stack case"
     );
@@ -705,7 +706,10 @@ fn finite_stack_worker_case() -> Result<()> {
             && blocking.os_thread_id != caller.os_thread_id,
         "finite stack worker, blocking, and caller thread categories overlap"
     );
-    if case_id == "native_filestorage_lifecycle" {
+    if matches!(
+        case_id.as_str(),
+        "native_filestorage_lifecycle" | "brotli_raw_ceiling"
+    ) {
         #[cfg(target_os = "linux")]
         resource_diagnostics::start_chain_with_stack_probe(linux_blocking_thread_observation);
         #[cfg(target_os = "macos")]
@@ -762,6 +766,9 @@ fn finite_stack_worker_case() -> Result<()> {
                     &task_role,
                 )
                 .await?
+            } else if task_case_id == "brotli_raw_ceiling" {
+                super::native_stack::resource_brotli_raw_ceiling(&task_configuration, &task_role)
+                    .await?
             } else if task_case_id.starts_with("canonical_") {
                 super::native_stack::resource_canonical(
                     &task_case_id,

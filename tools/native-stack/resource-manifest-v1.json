@@ -20,6 +20,22 @@
       "path": "test-contracts/arith/wit/contract.wit",
       "sha256": "43c285adf72c4ca0ac2a9ca29c6d9af45c2ad36f6f6fcdfae459cb86f4b96437"
     },
+    "brotli_ceiling_adapter": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/brotli_ceiling.rs",
+      "sha256": "d778c54dd6efb7e06c9d3bb6e6e040620a9b047092732782a56b860eec4cf1e6"
+    },
+    "brotli_ceiling_capture": {
+      "path": "tools/native-stack/capture_resource_brotli_raw_ceiling.py",
+      "sha256": "69589e5cef7af9ebadb35bc732d8f6b3b21ae72a2cd27414b5388f426bfac391"
+    },
+    "brotli_ceiling_validator": {
+      "path": "tools/native-stack/resource_brotli_raw_ceiling_evidence.py",
+      "sha256": "f4f0328a053a9d649b133c57bb54452336065f2285bbdef3811ded218209f017"
+    },
+    "brotli_ceiling_validator_tests": {
+      "path": "tools/native-stack/test_resource_brotli_raw_ceiling_evidence.py",
+      "sha256": "f8d74e9f613966d42026e1825d4bb2e5c8d00d3abc419bb2662d382723d635d5"
+    },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
       "sha256": "9742dd2ac536de31cce92efb3573b65c687e56617c1c03d098b251710dcee228"
@@ -378,7 +394,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "637370a2e4ae74e14edcaa7e2c8908645ed662d7e656c29fdf4ee9233a950690"
+      "sha256": "62146bc8f1d3bd499506b20d2ec4f5476a8bbfa363f68f29a18e273f1ada47f8"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -406,7 +422,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "6552dcddd3a1f2fa62ee04b54dd4e5830e230d21108f43dac0a94551d38fff0e"
+      "sha256": "45e23d79e65c2a843f9905b6055e7062e56193db8675377f5929354b36e7fcf8"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -470,7 +486,7 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "a33a99eac8e3009e6e3aca83e09523241fc529f41fb02f5ee1f367cd778066c7"
+      "sha256": "4228b468d00c1b3682edf071c266f72d497882a8a5d8900ffea4ce8271faaa65"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
@@ -2043,7 +2059,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "6552dcddd3a1f2fa62ee04b54dd4e5830e230d21108f43dac0a94551d38fff0e",
+    "source_sha256": "45e23d79e65c2a843f9905b6055e7062e56193db8675377f5929354b36e7fcf8",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -2195,7 +2211,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "6552dcddd3a1f2fa62ee04b54dd4e5830e230d21108f43dac0a94551d38fff0e",
+    "sha256": "45e23d79e65c2a843f9905b6055e7062e56193db8675377f5929354b36e7fcf8",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

@@ -23,6 +23,7 @@ const COMPONENT: &[u8] =
 const CRYPTO_COMPONENT: &[u8] =
     include_bytes!("../../../../../../test-contracts/binaries/crypto.wasm.br");
 
+mod brotli_ceiling;
 mod canonical;
 mod foreign_wave;
 mod initialization;
@@ -135,6 +136,13 @@ pub(super) async fn resource_native_filestorage_lifecycle(
     process_role: &str,
 ) -> Result<JsonValue> {
     native_filestorage_lifecycle::run(configuration, process_role).await
+}
+
+pub(super) async fn resource_brotli_raw_ceiling(
+    configuration: &str,
+    process_role: &str,
+) -> Result<JsonValue> {
+    brotli_ceiling::run(configuration, process_role).await
 }
 
 #[tokio::test]
