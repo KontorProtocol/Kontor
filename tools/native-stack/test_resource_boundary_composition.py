@@ -380,6 +380,12 @@ class BoundaryCompositionTests(unittest.TestCase):
             source_dir = root / "tools/native-stack"
             source_dir.mkdir(parents=True)
             old_manifest = build_boundary_manifest()
+            # The historical fixture precedes freezing even when this checkout
+            # already contains the final candidate depths.
+            old_manifest["claim_status"] = "pending_discovery"
+            old_manifest["reviewed_discovery_sha256"] = None
+            for case in [*old_manifest["boundary_cases"], old_manifest["leaf_case"]]:
+                case.update(last_success=None, first_failure=None)
             manifest_path = source_dir / "resource-boundary-manifest-v1.json"
             manifest_path.write_text(json.dumps(old_manifest, indent=2,
                                                 sort_keys=True) + "\n")
@@ -395,6 +401,9 @@ class BoundaryCompositionTests(unittest.TestCase):
             depths_path = source_dir / "resource-boundary-depths-v1.json"
             depths_path.write_text('{"cases":"pending"}\n')
             old_registry = build_registry()
+            old_registry["parent_manifests"]["boundary"] = old_manifest_sha
+            old_registry["groups"]["pulley_boundary"]["manifest_sha256"] = old_manifest_sha
+            old_registry["remaining_gates"]["boundary_discovery"] = "pending_discovery"
             registry_path = source_dir / "resource-suite-registry-v1.json"
             registry_path.write_text(json.dumps(old_registry, indent=2,
                                                 sort_keys=True) + "\n")

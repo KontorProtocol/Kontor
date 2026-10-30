@@ -526,7 +526,7 @@
     },
     "suite_capture_tests": {
       "path": "tools/native-stack/test_capture_resource_suite.py",
-      "sha256": "229f34914bd5f9e55f51250c5897ff8384067c8893fe8bbcc9245af24ec35ab4"
+      "sha256": "43f7098172aab80df3c20a4e6b1d022418b7e350a52a3b9f873998494cbdc763"
     },
     "suite_closure_builder": {
       "path": "tools/native-stack/resource_suite_closure.py",

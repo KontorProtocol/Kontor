@@ -49,6 +49,8 @@ class SuiteCaptureTests(unittest.TestCase):
             missing = root / "missing.json"
             with (patch("capture_resource_suite.checkout_source",
                         return_value="a" * 40),
+                  patch("capture_resource_suite.build_boundary_manifest",
+                        return_value={"claim_status": "pending_discovery"}),
                   patch("capture_resource_suite.validate_control") as control):
                 with self.assertRaisesRegex(ValueError, "not frozen"):
                     preflight(CELLS[0], missing, "b" * 64, missing,
