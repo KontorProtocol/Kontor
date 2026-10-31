@@ -38,7 +38,7 @@
     },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
-      "sha256": "7629547c0c2e0831cda9ef3860dc02cd7b1564d60790d615c6589d171df5ada3"
+      "sha256": "73a52babbd673041d76cd488d03c69a14511fcbc3a6429fc97c04aec236da70f"
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
@@ -342,7 +342,7 @@
     },
     "operation_ownership": {
       "path": "core/indexer/src/runtime/ownership.rs",
-      "sha256": "950c16d03f07d48dfe51181abd537e089afaf5d9a1abb3e0220c044f18b2669e"
+      "sha256": "8d240fd508e1756b9abbcfb74a2e5eaf2cb5f65207486263a5a08be9c97d21e3"
     },
     "pending_host_capture": {
       "path": "tools/native-stack/capture_resource_pending.py",
