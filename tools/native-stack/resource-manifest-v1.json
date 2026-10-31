@@ -82,7 +82,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "81ec690d76ce8fdd2b912a8d35829e6fcc787a3f07e55b90086c624d8bf9a87c"
+      "sha256": "184d4574294fdb917d6c2d04d3892fe7c91233d2ffe06e58566f5a8633b6a2ec"
     },
     "cold_publication_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/cold_publication.rs",
@@ -358,7 +358,7 @@
     },
     "production_qualification": {
       "path": "tools/native-stack/compare.py",
-      "sha256": "ef5fd32508cd35c07a77bacdf6871c5f342f0d9cd33cbe0e6175d067bde2e387"
+      "sha256": "0f914c447d0ff047c1db42726ced284e4c63008279aa9abb322c0d02c12062eb"
     },
     "proxy": {
       "path": "test-contracts/binaries/proxy.wasm.br",

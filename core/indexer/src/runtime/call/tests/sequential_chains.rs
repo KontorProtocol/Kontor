@@ -359,11 +359,8 @@ async fn run_chain_probe(
         }
         None => test_runtime().await?,
     };
-    let actor = if diagnostic_reduced.is_some() {
-        funded_with_pubkey(&mut runtime, RESOURCE_CHAIN_SIGNER_X_ONLY_PUBKEY).await?
-    } else {
-        funded(&mut runtime).await?
-    };
+    // Cross-platform state digests require the same identity in every fixture.
+    let actor = funded_with_pubkey(&mut runtime, RESOURCE_CHAIN_SIGNER_X_ONLY_PUBKEY).await?;
     let chain = publish_chain(&mut runtime, &actor, depth).await?;
     assert!(runtime.conversion_probe.is_none());
     let entered = Arc::new(Notify::new());
