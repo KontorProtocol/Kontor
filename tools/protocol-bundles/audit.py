@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import sys
 
-from symbol_tool import archive_member_bytes, inspect, object_records, section_bytes
+from symbol_tool import inspect, object_records, section_bytes
 
 GDB_SCRIPT = "__rustc_debug_gdb_scripts_section__"
 GDB_PAYLOAD = b"\x01gdb_load_rust_pretty_printers.py\x00"
@@ -21,9 +21,6 @@ FINAL_RUNTIME = INPUT_RUNTIME | {
 RUST = re.compile(r"(?:_ZN.+17h[0-9a-f]{16}E|_R[A-Z].+)(?:\.llvm\.\d+)?$")
 ANONYMOUS = re.compile(r"anon\.[0-9a-f]+\.\d+(?:\.llvm\.\d+)?$")
 ALLOCATOR = re.compile(r"__(?:rg|rust)_(?:alloc|dealloc|realloc|alloc_zeroed|alloc_error_handler)(?:$|[^a-z_])")
-PSM_ABI = {"rust_psm_on_stack", "rust_psm_replace_stack",
-           "rust_psm_stack_direction", "rust_psm_stack_pointer"}
-WIT_ABI = {"cabi_realloc_wit_bindgen_0_63_0"}
 
 
 def compiler_debug_metadata(path, linked=False):
@@ -53,46 +50,6 @@ def compiler_debug_metadata(path, linked=False):
     if not found:
         raise RuntimeError(f"compiler GDB metadata definition missing: {path}")
     return found
-
-
-def package_artifact(graph, path, package, version, native=False):
-    if not any(item["name"] == package and item["version"] == version for item in graph["packages"]):
-        return False
-    field = "native_artifacts" if native else "artifacts"
-    item = next((item for item in graph[field] if item["path"] == str(path)), None)
-    if item is None or "source_path" not in item:
-        return False
-    source = Path(item["source_path"])
-    if native:
-        return (path.name == "libpsm_s.a" and path.parent.parent.name == "native"
-                and source.name == "libpsm_s.a" and source.parent.name == "out"
-                and re.fullmatch(r"psm-[0-9a-f]{16}", source.parent.parent.name) is not None)
-    crate = package.replace("-", "_")
-    return (re.fullmatch(rf"lib{crate}-[0-9a-f]{{16}}\.rlib", path.name) is not None
-            and source.name == path.name and source.parent.name == "deps")
-
-
-def graph_abi_function(path, name, section_name):
-    found = 0
-    digest = None
-    for record in object_records(path):
-        sections = {item["Section"]["Index"]: item["Section"] for item in record.get("Sections", [])}
-        for item in record.get("Symbols", []):
-            symbol = item["Symbol"]
-            if symbol["Name"]["Name"] != name or symbol["Section"]["Name"] == "Undefined":
-                continue
-            found += 1
-            section = sections.get(symbol["Section"]["Value"])
-            if (symbol["Binding"]["Name"] != "Global" or symbol["Type"]["Name"] != "Function"
-                    or symbol["Size"] <= 0 or section is None
-                    or section["Name"]["Name"] != section_name
-                    or section["Flags"]["Value"] != 0x6):
-                raise RuntimeError(f"invalid graph ABI definition: {name} in {record['FileSummary']['File']}")
-            digest = hashlib.sha256(archive_member_bytes(path, record)).hexdigest()
-    if found != 1:
-        raise RuntimeError(f"expected one graph ABI definition for {name} in {path}, found {found}")
-    return digest
-
 
 
 def definitions(path, globals_only=True):
@@ -137,14 +94,6 @@ def owner(name, graph, version, path=None, value=None):
         return graph["graph"]
     if name.startswith(graph["namespace"] + "_"):
         return graph["graph"]
-    if path is not None and value is not None and value["kind"] == "T":
-        if (name in PSM_ABI and package_artifact(graph, path, "psm", "0.1.32",
-                                                native=path.suffix == ".a")):
-            graph_abi_function(path, name, ".text")
-            return graph["graph"]
-        if (name in WIT_ABI and package_artifact(graph, path, "wit-bindgen", "0.63.0")):
-            graph_abi_function(path, name, ".text." + name)
-            return graph["graph"]
     raise RuntimeError(f"unowned native input definition in {graph['graph']}: {name}")
 
 
@@ -159,20 +108,13 @@ def audit_inputs(graphs, output):
         paths.update(Path(item["path"]) for item in graph["native_artifacts"])
         all_names = set()
         inventory = []
-        psm_copies = {}
         for path in sorted(paths):
             symbols = definitions(path)
             for name, value in symbols.items():
                 owner(name, graph, version, path, value)
-            if PSM_ABI & symbols.keys():
-                if not PSM_ABI <= symbols.keys():
-                    raise RuntimeError(f"incomplete psm native ABI in {path}")
-                psm_copies[str(path)] = graph_abi_function(path, "rust_psm_on_stack", ".text")
             all_names.update(symbols)
             inventory.append({"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                               "definitions": symbols})
-        if len(set(psm_copies.values())) > 1:
-            raise RuntimeError(f"psm native archive copies differ in {graph['graph']}: {psm_copies}")
         sets.append(all_names)
         inventories.append({"graph": graph["graph"], "inputs": inventory})
     for index, names in enumerate(sets):

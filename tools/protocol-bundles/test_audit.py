@@ -171,72 +171,26 @@ class Ownership(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "references compiler debug metadata as code"):
                 graph_references(self.graphs[0], 0, sets)
 
-    @unittest.skipUnless(sys.platform == "linux", "exact graph ABI shape is ELF-specific")
-    def test_known_graph_abi_requires_package_and_artifact_provenance(self):
+    def test_unprefixed_native_helpers_are_rejected_even_from_known_packages(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for package, version, name, source in (
-                ("psm", "0.1.32", "rust_psm_on_stack", "int rust_psm_on_stack(void) { return 1; }"),
-                ("wit-bindgen", "0.63.0", "cabi_realloc_wit_bindgen_0_63_0",
-                 'int cabi_realloc_wit_bindgen_0_63_0(void) __attribute__((section(".text.cabi_realloc_wit_bindgen_0_63_0"))); int cabi_realloc_wit_bindgen_0_63_0(void) { return 1; }'),
-            ):
-                with self.subTest(package=package):
+            for name in ("rust_psm_on_stack", "rust_psm_replace_stack",
+                         "rust_psm_stack_direction", "rust_psm_stack_pointer",
+                         "cabi_realloc_wit_bindgen_0_63_0"):
+                with self.subTest(name=name):
+                    package = "psm" if name.startswith("rust_psm_") else "wit-bindgen"
+                    version = "0.1.32" if package == "psm" else "0.63.0"
                     crate = package.replace("-", "_")
                     artifact = root / f"lib{crate}-1234567890abcdef.rlib"
-                    obj = self.object(root, crate, source)
+                    obj = self.object(root, name, f"int {name}(void) {{ return 1; }}")
+                    artifact.unlink(missing_ok=True)
                     subprocess.run(["ar", "crs", str(artifact), str(obj)], check=True)
-                    graph = self.graphs[0]
-                    graph["packages"].append({"name": package, "version": version})
-                    graph["artifacts"] = [{"path": str(artifact),
-                                           "source_path": str(root / "target/debug/deps" / artifact.name)}]
-                    value = definitions(artifact)[name]
-                    self.assertEqual(owner(name, graph, "51.0.0-dev", artifact, value), "first")
-                    with self.assertRaisesRegex(RuntimeError, "unowned native"):
-                        owner(name, graph, "51.0.0-dev")
-                    graph["packages"].pop()
-                    with self.assertRaisesRegex(RuntimeError, "unowned native"):
-                        owner(name, graph, "51.0.0-dev", artifact, value)
-
-    @unittest.skipUnless(sys.platform == "linux", "graph ABI collision fixture is ELF-specific")
-    def test_known_graph_abi_still_rejects_cross_graph_collision(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for graph in self.graphs:
-                artifact = root / graph["graph"] / "libpsm-1234567890abcdef.rlib"
-                artifact.parent.mkdir()
-                obj = self.object(artifact.parent, "psm",
-                                  "int rust_psm_on_stack(void) { return 1; }"
-                                  "int rust_psm_replace_stack(void) { return 2; }"
-                                  "int rust_psm_stack_direction(void) { return 3; }"
-                                  "int rust_psm_stack_pointer(void) { return 4; }")
-                subprocess.run(["ar", "crs", str(artifact), str(obj)], check=True)
-                graph["packages"].append({"name": "psm", "version": "0.1.32"})
-                graph["artifacts"] = [{"path": str(artifact),
-                                       "source_path": str(root / "target/debug/deps" / artifact.name)}]
-            with self.assertRaisesRegex(RuntimeError, "cross-graph definitions would coalesce"):
-                audit_inputs(self.graphs, root)
-
-    @unittest.skipUnless(sys.platform == "linux", "psm object comparison is ELF-specific")
-    def test_duplicate_psm_native_copy_must_match_embedded_object(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            graph = self.graphs[0]
-            graph["packages"].append({"name": "psm", "version": "0.1.32"})
-            names = ("rust_psm_on_stack", "rust_psm_replace_stack",
-                     "rust_psm_stack_direction", "rust_psm_stack_pointer")
-            first = self.object(root, "first", "".join(f"int {name}(void) {{ return 1; }}" for name in names))
-            second = self.object(root, "second", "".join(f"int {name}(void) {{ return 2; }}" for name in names))
-            rlib = root / "libpsm-1234567890abcdef.rlib"
-            native = root / "native/21/libpsm_s.a"
-            native.parent.mkdir(parents=True)
-            subprocess.run(["ar", "crs", str(rlib), str(first)], check=True)
-            subprocess.run(["ar", "crs", str(native), str(second)], check=True)
-            graph["artifacts"] = [{"path": str(rlib),
-                                   "source_path": str(root / "target/debug/deps" / rlib.name)}]
-            graph["native_artifacts"] = [{"path": str(native),
-                                          "source_path": str(root / "target/debug/build/psm-1234567890abcdef/out" / native.name)}]
-            with self.assertRaisesRegex(RuntimeError, "psm native archive copies differ"):
-                audit_inputs(self.graphs, root)
+                    self.graphs[0]["packages"].append({"name": package, "version": version})
+                    self.graphs[0]["artifacts"] = [{"path": str(artifact),
+                                                    "source_path": str(root / "target/debug/deps" / artifact.name)}]
+                    with self.assertRaisesRegex(RuntimeError, "unowned native input definition"):
+                        audit_inputs(self.graphs, root)
+                    self.graphs[0]["packages"].pop()
 
     def object(self, root, name, source):
         path = root / (name + ".c")
