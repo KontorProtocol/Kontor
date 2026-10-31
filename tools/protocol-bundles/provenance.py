@@ -40,8 +40,11 @@ def source_inputs(root, data):
         identity = package["id"].replace(str(root), "<repository>")
         packages.append({"package": identity, "files": files})
     sources = {}
-    engine_source = root / "core/indexer/src/runtime/mod.rs"
-    sources[str(engine_source.relative_to(root))] = sha(engine_source)
+    for relative in ("core/indexer/src/runtime/mod.rs",
+                     "core/indexer/src/protocol/v1/engine.rs",
+                     "core/indexer/src/protocol/v1/resources.rs",
+                     "core/indexer/src/protocol/v1/gas.rs"):
+        sources[relative] = sha(root / relative)
     for directory in (root / "protocol-bundles/proof", root / "tools/protocol-bundles",
                       root / "tools/native-crypto/fixtures"):
         for path in sorted(directory.rglob("*")):

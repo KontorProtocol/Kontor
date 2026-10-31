@@ -1123,3 +1123,40 @@ the public decoder entry point, with no dependency change. The lead reviewed
 queue consumers, rejection-versus-infrastructure propagation, error precedence,
 trailing-byte rejection and complete-input preservation. Consolidated phase review
 still covers this work before any PR or merge.
+
+## Retained engine and resource policy
+
+The P1 engine constructor and memory/invocation policy now live under
+`protocol/v1`. The engine function is byte-identical after removing its old impl
+indentation; the memory policy definition is byte-identical. Existing stack,
+memory, table, object-count, portable lifting and guest-capability settings are
+unchanged. The runtime constructor delegates to this retained implementation.
+
+Selected roots capture immutable P1 memory limits alongside gas and pricing.
+Nested Stores still share the existing root limiter and release their reservations
+when dropped. Mutable native/test fixture settings cannot disable or replace the
+selected root's policy. Unselected fixture paths retain their existing overrides.
+A real Wasmtime-memory test exercises selected-root mutation, nested allocation
+and shared reservation release. Ownership and cancellation mechanisms are unchanged.
+
+The bundle capability check follows the retained engine source and verifies the
+runtime delegates to it. Source provenance now fingerprints the runtime facade,
+retained engine, resource definitions and gas definitions. Qualification manifests
+also bind retained pricing and selected-context source. All four manifests were
+regenerated for this preparation branch; only source identities/parent hashes
+changed, with the same 41 cases, 16 groups and candidate depths. These files remain
+preflight/candidate records, not evidence of a qualified freeze. The standalone
+S2 campaign still runs its separate, unchanged source `52a0cf89`.
+
+Validation against base `2b8015fd`: twelve selected-context, memory, engine-feature
+and invocation-lifetime tests passed, followed by the explicitly enabled P1 parity
+test and indexer/testlib all-target check. All eleven baseline states match;
+candidate SHA-256 is
+`2c2310d6a9ad6cd509a18d4878ad6f25149cceb088229e0808728541b96a7a19`.
+Eight capability/recipe controls, twenty-one source/native-ownership controls and
+eight resource-manifest controls passed. The first native-ownership control run
+failed because ccache could not write outside the sandbox; rerunning with the
+repository's existing `CCACHE_DISABLE=1` setting passed without source changes.
+Evidence and the lead review are under `.build-cache/selected-resource-policy/`.
+This is still K2a preparation, with prerequisite reconciliation, final acceptance,
+consolidated independent reviews and K2b production graph isolation outstanding.

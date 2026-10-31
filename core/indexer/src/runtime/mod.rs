@@ -136,7 +136,7 @@ pub use wit::kontor::built_in::numbers_types::{
 use anyhow::{Result, anyhow};
 use std::str::FromStr;
 use wasmtime::{
-    Config, Engine, InstanceAllocationStrategy, LiftingPrices, Store,
+    Engine, Store,
     component::{Component, HasData, ResourceTable},
 };
 
@@ -147,11 +147,9 @@ use crate::bls::RegistrationProof;
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
 use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id};
 use crate::database::types::{CORE_SIGNER_ID, Identity};
+use crate::protocol::v1::engine;
 pub(crate) use crate::protocol::v1::gas::MAX_UNTRUSTED_GAS_LIMIT;
-use crate::protocol::v1::gas::{
-    DEFAULT_NON_PROC_GAS_LIMIT, GAS_TO_FUEL_MULTIPLIER, LIFT_METADATA_BYTE_FUEL,
-    LIFT_STRING_BYTE_FUEL, LIFT_VALUE_FUEL,
-};
+use crate::protocol::v1::gas::{DEFAULT_NON_PROC_GAS_LIMIT, GAS_TO_FUEL_MULTIPLIER};
 use crate::runtime::{
     counter::Counter,
     deposit::DepositMeter,
@@ -355,60 +353,12 @@ impl Runtime {
     }
 
     pub fn new_engine() -> Result<Engine> {
-        Self::engine_with_async_stack_size(2 * 1024 * 1024)
+        engine::new_engine()
     }
 
     #[cfg(test)]
     pub(crate) fn new_resource_diagnostic_engine() -> Result<Engine> {
-        Self::engine_with_async_stack_size(1024 * 1024)
-    }
-
-    fn engine_with_async_stack_size(async_stack_size: usize) -> Result<Engine> {
-        let mut config = Config::new();
-        config.target("pulley64-unknown-unknown-elf")?;
-        config.max_wasm_stack(512 * 1024);
-        config.async_stack_size(async_stack_size);
-        config.wasm_component_model_async(false);
-        config.wasm_component_model_more_async_builtins(false);
-        config.wasm_component_model_async_stackful(false);
-        config.wasm_component_model_threading(false);
-        config.wasm_component_model_error_context(false);
-        config.wasm_shared_everything_threads(false);
-        config.wasm_stack_switching(false);
-        config.wasm_threads(false);
-        config.concurrency_support(false);
-        config.consume_fuel(true);
-        config.consume_lifting_fuel(Some(LiftingPrices {
-            lift_value: LIFT_VALUE_FUEL,
-            string_byte: LIFT_STRING_BYTE_FUEL,
-            metadata_byte: LIFT_METADATA_BYTE_FUEL,
-        }));
-        // Wasmtime 48's Mach receiver aborts on an interrupted receive. Kontor
-        // has no Mach-based crash handler, so use POSIX traps on macOS instead.
-        config.macos_use_mach_ports(false);
-        // CoW can skip metered initialization depending on OS/image availability.
-        // Every node must copy the same data segments and charge the same fuel.
-        config.memory_init_cow(false);
-        config.wasm_custom_page_sizes(false);
-        config.allocation_strategy(InstanceAllocationStrategy::OnDemand);
-        config.memory_may_move(true);
-        config.wasm_relaxed_simd(false);
-        config.cranelift_nan_canonicalization(true);
-        let engine = Engine::new(&config)?;
-        anyhow::ensure!(engine.is_pulley(), "production engine must use Pulley");
-        anyhow::ensure!(
-            engine.get_target().as_deref() == Some("pulley64-unknown-unknown-elf"),
-            "unexpected Pulley target"
-        );
-        anyhow::ensure!(
-            engine.get_max_wasm_stack() == 512 * 1024,
-            "unexpected Pulley logical stack size"
-        );
-        anyhow::ensure!(
-            engine.get_async_stack_size() == async_stack_size,
-            "unexpected async fiber stack size"
-        );
-        Ok(engine)
+        engine::new_resource_diagnostic_engine()
     }
 
     /// Built-ins every contract gets (the user-land surface, plus the
@@ -1417,12 +1367,12 @@ impl Runtime {
             owners.push(Arc::downgrade(&table));
         }
         runtime.table = table;
-        runtime.guest_memory_limiter = match (&self.guest_memory_limiter, self.guest_memory_limits)
-        {
-            (Some(parent), _) => Some(parent.new_child()),
-            (None, Some(limits)) => Some(GuestMemoryLimiter::new_root(limits)),
-            (None, None) => None,
-        };
+        runtime.guest_memory_limiter =
+            match (&self.guest_memory_limiter, self.selected_memory_limits()) {
+                (Some(parent), _) => Some(parent.new_child()),
+                (None, Some(limits)) => Some(GuestMemoryLimiter::new_root(limits)),
+                (None, None) => None,
+            };
         let mut s = InvocationStore::new(Store::new(&self.engine, runtime), lease);
         if s.data().guest_memory_limiter.is_some() {
             s.limiter(|runtime| runtime.guest_memory_limiter.as_mut().unwrap());

@@ -235,6 +235,10 @@ class Ownership(unittest.TestCase):
             engine = root / "core/indexer/src/runtime/mod.rs"
             engine.parent.mkdir(parents=True)
             engine.write_text("node engine configuration")
+            retained = root / "core/indexer/src/protocol/v1"
+            retained.mkdir(parents=True)
+            for name in ("engine", "resources", "gas"):
+                (retained / f"{name}.rs").write_text(f"retained {name} policy")
             manifest = root / "Cargo.toml"
             source = root / "lib.rs"
             manifest.write_text('[package]\nname="example"\n')
@@ -251,6 +255,10 @@ class Ownership(unittest.TestCase):
             engine = root / "core/indexer/src/runtime/mod.rs"
             engine.parent.mkdir(parents=True)
             engine.write_text("node engine configuration")
+            retained = root / "core/indexer/src/protocol/v1"
+            retained.mkdir(parents=True)
+            for name in ("engine", "resources", "gas"):
+                (retained / f"{name}.rs").write_text(f"retained {name} policy")
             (root / ".git").mkdir()
             manifest = root / "Cargo.toml"
             manifest.write_text('[workspace.dependencies]\nitoa="=1.0.14"\n')
@@ -265,6 +273,10 @@ class Ownership(unittest.TestCase):
             before = fingerprint(source_inputs(root, data))
             engine.write_text("changed node engine configuration")
             self.assertNotEqual(before, fingerprint(source_inputs(root, data)))
+            for name in ("engine", "resources", "gas"):
+                before = fingerprint(source_inputs(root, data))
+                (retained / f"{name}.rs").write_text(f"changed retained {name} policy")
+                self.assertNotEqual(before, fingerprint(source_inputs(root, data)))
 
 
 if __name__ == "__main__":

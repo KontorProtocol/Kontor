@@ -9,6 +9,7 @@ use crate::protocol::v1::gas::{
     DEFAULT_NON_PROC_GAS_LIMIT, GAS_TO_FUEL_MULTIPLIER, MAX_UNTRUSTED_GAS_LIMIT,
     SYSTEM_FUEL_CEILING,
 };
+use crate::protocol::v1::resources::GuestMemoryLimits;
 
 #[derive(Clone, Copy)]
 pub(super) struct SelectedGasPolicy {
@@ -37,6 +38,7 @@ pub(super) struct SelectedContext {
     selection: ExecutionSelection,
     gas: SelectedGasPolicy,
     pricing: Pricing,
+    memory: GuestMemoryLimits,
 }
 
 // This guard restores only semantic context. Storage authority, child joining
@@ -87,6 +89,9 @@ impl Runtime {
                     selection.version(),
                     selection.is_public_view().then_some(self.view_gas_limit),
                 ),
+                memory: match selection.version() {
+                    ExecutorVersion::LegacyP1 => GuestMemoryLimits::default(),
+                },
                 pricing: match selection.version() {
                     ExecutorVersion::LegacyP1 => Pricing::default(),
                 },
@@ -121,6 +126,13 @@ impl Runtime {
             })
     }
 
+    pub(super) fn selected_memory_limits(&self) -> Option<GuestMemoryLimits> {
+        self.selected_context
+            .as_ref()
+            .map(|context| context.memory)
+            .or(self.guest_memory_limits)
+    }
+
     pub(super) fn selected_pricing(&self) -> Pricing {
         self.selected_context
             .as_ref()
@@ -135,6 +147,7 @@ mod tests {
     use bitcoin::Network;
     use futures_util::FutureExt;
     use indexer_types::Payment;
+    use wasmtime::{Memory, MemoryType};
 
     use super::*;
     use crate::database::types::Identity;
@@ -194,6 +207,43 @@ mod tests {
         );
         child.data_mut().network = Network::Bitcoin;
         ensure!(child.data().make_store(7).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn selected_memory_policy_survives_mutation_and_shares_nested_usage() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        runtime.guest_memory_limits = Some(GuestMemoryLimits {
+            per_root: 0,
+            ..GuestMemoryLimits::default()
+        });
+        let selection = select_legacy_p1(
+            &runtime.get_storage_conn(),
+            runtime.network,
+            ApplicationPosition::View,
+        )
+        .await?;
+        let mut root = {
+            let mut selected = runtime.bind_selection(&selection)?;
+            selected.guest_memory_limits = None;
+            selected.make_store(100)?
+        };
+        let _memory = Memory::new(&mut root, MemoryType::new(1, Some(1))?)?;
+        root.data_mut().guest_memory_limits = None;
+        let mut child = root.data().make_store(100)?;
+        let _child_memory = Memory::new(&mut child, MemoryType::new(1, Some(1))?)?;
+        let limiter = root.data().guest_memory_limiter.as_ref().unwrap();
+        ensure!(limiter.admitted() == 2 * 65_536);
+        ensure!(child.data().selected_memory_limits().unwrap().per_root == 512 * 1024 * 1024);
+        drop(child);
+        ensure!(
+            root.data()
+                .guest_memory_limiter
+                .as_ref()
+                .unwrap()
+                .admitted()
+                == 65_536
+        );
         Ok(())
     }
 

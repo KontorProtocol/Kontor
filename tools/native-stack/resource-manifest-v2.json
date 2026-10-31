@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "84d85e629240fbe652a670c9b5fdc5eecd42de16824f551e952b80316093af53",
+  "parent_manifest_sha256": "22e39a95e83c3b14c6a3916e7b9e40537f4f37fa1191343e05c4c3bafd811b60",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1203,7 +1203,7 @@
   "sources": {
     "call": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "a69d71d54ce04e0a37bdf7426b706180899083f93a401e41a011611a62257cdc"
+      "sha256": "f1a9a9d39249f23874451fbee34feb7fc0573dae256bb34e7da20a5c1935e0ba"
     },
     "chain_fixture": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
@@ -1211,7 +1211,7 @@
     },
     "fees": {
       "path": "core/indexer/src/runtime/fees.rs",
-      "sha256": "f744a02e4049b55876b5be4edf79f1ca94afd62c88f24bea63a06f4ce8c7540f"
+      "sha256": "933ddb57cec320845dd91960ebe164c60ba8dccf54b70b7d608360cc747fa24f"
     },
     "historical_phase10_gzip": {
       "path": "tools/native-stack/fixtures/phase10-resource-chain-capture.json.gz",
@@ -1227,11 +1227,31 @@
     },
     "invocation": {
       "path": "core/indexer/src/runtime/invocation.rs",
-      "sha256": "6bfac3ffa8530f58c6fb607b0e6740665a21e46b80e4db8b3aa4de18f1c10856"
+      "sha256": "31edb93d9b688625c3cd8640e7773b92fe276e32888a2d3e3ecfe15418215af3"
+    },
+    "retained_engine": {
+      "path": "core/indexer/src/protocol/v1/engine.rs",
+      "sha256": "b789ce721e51ab2bcdfe48b38cf7679834614449f848156a6803adf0dce4b19d"
+    },
+    "retained_gas_policy": {
+      "path": "core/indexer/src/protocol/v1/gas.rs",
+      "sha256": "3799a58b0f915614607ee0b8bcf5f72f02cafc62aa184e20ed1af6074d31ed07"
+    },
+    "retained_pricing_policy": {
+      "path": "core/indexer/src/protocol/v1/pricing.rs",
+      "sha256": "1eccafbea0945dd7b35b4cdc2b39914b2edb7c918a6d9172495f60d184466975"
+    },
+    "retained_resource_policy": {
+      "path": "core/indexer/src/protocol/v1/resources.rs",
+      "sha256": "29797c8b5c7a3b298578562372aa22eaeed7e26c2b1fd3c751f20fb4d7ccd13c"
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "ecdc1c969c844c931333c4288b07d8729cea3a17d88d6049a889c5e871bf50c2"
+      "sha256": "f2afa332644e05945a76bc56cd35b7cfdfbd648be16cdd2ebdfdfaa92a9d525f"
+    },
+    "selected_policy_binding": {
+      "path": "core/indexer/src/runtime/selected.rs",
+      "sha256": "d535bc8b3def66241f041eee5523315c753cf293c00ba88d75547a2b6da90484"
     },
     "token": {
       "path": "core/indexer/src/runtime/token.rs",
@@ -1251,7 +1271,7 @@
     },
     "v2_manifest_builder": {
       "path": "tools/native-stack/resource_manifest_v2.py",
-      "sha256": "7ae09b345605260d7df5fa2ea6ae9787a41768445fc7d949fc10a0daf624cc56"
+      "sha256": "0835e2058eb4e7db4c2ea1622e1d24c10393d32d695e741e0f1dc508164d851e"
     },
     "v2_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v2.json",

@@ -38,11 +38,11 @@
     },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
-      "sha256": "008c3ae806ed19f1faa94f46647b8d29ef3d156bc45f06ae91616c1d4c36687d"
+      "sha256": "f4fdab62c566766af3f757669464d695da281567abffd6a7e27fa3bdc2f4878b"
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "a69d71d54ce04e0a37bdf7426b706180899083f93a401e41a011611a62257cdc"
+      "sha256": "f1a9a9d39249f23874451fbee34feb7fc0573dae256bb34e7da20a5c1935e0ba"
     },
     "call_output": {
       "path": "core/indexer/src/runtime/call/result.rs",
@@ -50,7 +50,7 @@
     },
     "callback_tests": {
       "path": "core/indexer/src/runtime/sequential_tests.rs",
-      "sha256": "37fe5d7ec7b0b6718d2c8ca6e8f8ac4e7ce62d9da17f6677fbbb89ccd40f0b52"
+      "sha256": "f2f5613cbe05260ad018438bb7bb85ffbf8036972eae3c21962fddb11aef8828"
     },
     "canonical_capture": {
       "path": "tools/native-stack/capture_resource_canonical.py",
@@ -102,7 +102,7 @@
     },
     "component_cache": {
       "path": "core/indexer/src/runtime/component_cache.rs",
-      "sha256": "8c1756b671c11d2215f9bbaeaaec93dc4f3928922b48ce162d52a20bf5236bea"
+      "sha256": "02ecaab3142f30f86ea1d54ecb9fa28738325a3ac35465bc813f9937e1d14a9f"
     },
     "core_lockfile": {
       "path": "core/Cargo.lock",
@@ -142,7 +142,7 @@
     },
     "fee_settlement": {
       "path": "core/indexer/src/runtime/fees.rs",
-      "sha256": "f744a02e4049b55876b5be4edf79f1ca94afd62c88f24bea63a06f4ce8c7540f"
+      "sha256": "933ddb57cec320845dd91960ebe164c60ba8dccf54b70b7d608360cc747fa24f"
     },
     "fiber_source_capture": {
       "path": "tools/native-stack/capture_fiber_source.py",
@@ -250,7 +250,7 @@
     },
     "invocation_budget": {
       "path": "core/indexer/src/runtime/invocation.rs",
-      "sha256": "6bfac3ffa8530f58c6fb607b0e6740665a21e46b80e4db8b3aa4de18f1c10856"
+      "sha256": "31edb93d9b688625c3cd8640e7773b92fe276e32888a2d3e3ecfe15418215af3"
     },
     "macos_worker_capacity_guard": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
@@ -366,7 +366,7 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "ecdc1c969c844c931333c4288b07d8729cea3a17d88d6049a889c5e871bf50c2"
+      "sha256": "f2afa332644e05945a76bc56cd35b7cfdfbd648be16cdd2ebdfdfaa92a9d525f"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
@@ -418,7 +418,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "622c8abd9ed9263e6c40e492081d44c8d1bcf03cc63f65c2ffcead260b4b912f"
+      "sha256": "fefb049fee3dea9a6b9371170ff3f9256fd3e165d350e501134932c5bd82c2cc"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -448,9 +448,29 @@
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
       "sha256": "1dc9fbd9cc4ac00a07a410459c4dac9c9b0ab44d5c346910f3bd361ec9c1102f"
     },
+    "retained_engine": {
+      "path": "core/indexer/src/protocol/v1/engine.rs",
+      "sha256": "b789ce721e51ab2bcdfe48b38cf7679834614449f848156a6803adf0dce4b19d"
+    },
+    "retained_gas_policy": {
+      "path": "core/indexer/src/protocol/v1/gas.rs",
+      "sha256": "3799a58b0f915614607ee0b8bcf5f72f02cafc62aa184e20ed1af6074d31ed07"
+    },
+    "retained_pricing_policy": {
+      "path": "core/indexer/src/protocol/v1/pricing.rs",
+      "sha256": "1eccafbea0945dd7b35b4cdc2b39914b2edb7c918a6d9172495f60d184466975"
+    },
+    "retained_resource_policy": {
+      "path": "core/indexer/src/protocol/v1/resources.rs",
+      "sha256": "29797c8b5c7a3b298578562372aa22eaeed7e26c2b1fd3c751f20fb4d7ccd13c"
+    },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
-      "sha256": "2474de4da0ed09d5327ed8fdfb22626787a11d62b7639b10a7a805b74a55f7da"
+      "sha256": "d5fdff24fa8b1594e611318789c79232f3d02a9fdbe8c11894259369a9ac75a8"
+    },
+    "selected_policy_binding": {
+      "path": "core/indexer/src/runtime/selected.rs",
+      "sha256": "d535bc8b3def66241f041eee5523315c753cf293c00ba88d75547a2b6da90484"
     },
     "sqlite_large_values_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_large_values.rs",
@@ -574,7 +594,7 @@
     },
     "test_runtime_setup": {
       "path": "core/indexer/src/test_utils.rs",
-      "sha256": "c64a77b20e66150a51668c289726d5d72f0dc8cd65998076bec459a3b3ce72b9"
+      "sha256": "6a2434bee17a039f84cb96e3651f79622a102049dc545827563bb346d8e5668b"
     },
     "testing_host_imports": {
       "path": "core/indexer/src/runtime/host_files.rs",
