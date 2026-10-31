@@ -77,6 +77,7 @@ impl RootKind {
 struct BlockingRegistry {
     next_id: AtomicU64,
     active: Arc<std::sync::Mutex<HashMap<u64, Arc<BlockingState>>>>,
+    panicked: Arc<AtomicBool>,
 }
 
 struct BlockingState {
@@ -85,6 +86,10 @@ struct BlockingState {
 }
 
 impl BlockingRegistry {
+    fn panicked(&self) -> bool {
+        self.panicked.load(Ordering::SeqCst)
+    }
+
     async fn wait_all(&self) {
         loop {
             let entries = self
@@ -125,8 +130,14 @@ impl BlockingRegistry {
         let (sender, receiver) = oneshot::channel();
         let task = tokio::task::spawn_blocking(work);
         let active = self.active.clone();
+        let panicked = self.panicked.clone();
         tokio::spawn(async move {
-            let _ = sender.send(task.await);
+            let result = task.await;
+            // A dropped receiver must not erase the root's panic evidence.
+            if result.as_ref().is_err_and(tokio::task::JoinError::is_panic) {
+                panicked.store(true, Ordering::SeqCst);
+            }
+            let _ = sender.send(result);
             active
                 .lock()
                 .expect("blocking registry poisoned")
@@ -334,7 +345,7 @@ impl ChildContext {
             matches!(
                 RootState::load(&self.state),
                 RootState::Running | RootState::Committing
-            ),
+            ) && !self.blocking.panicked(),
             "operation root cannot commit after cancellation or quarantine"
         );
         Ok(())
@@ -1194,6 +1205,9 @@ async fn supervise_canonical(
 
     keeper.blocking.wait_all().await;
     drop(parked_senders);
+    if keeper.blocking.panicked() {
+        keeper.quarantine();
+    }
     if RootState::load(&keeper.state) == RootState::Running
         && !keeper.caught_host_panic.load(Ordering::SeqCst)
     {
@@ -1408,6 +1422,9 @@ async fn supervise<T, F>(
         }
     }
     keeper.blocking.wait_all().await;
+    if keeper.blocking.panicked() {
+        keeper.quarantine();
+    }
 
     // A closed child receiver remains alive until its parent has joined. Its
     // cancellation must never look like an ordinary guest error to that parent.
@@ -3962,6 +3979,115 @@ mod tests {
         );
         release.send(())?;
         timeout(Duration::from_secs(2), registry.wait_all()).await?;
+        Ok(())
+    }
+
+    async fn blocking_worker_panic_fences_pooled_authority(abandon_receiver: bool) -> Result<()> {
+        let dir = TempDir::new()?;
+        let pool = one_object_pool(&dir).await?;
+        let object = pool.get().await?;
+        let poisoned_id = Object::id(&object);
+        let service = OwnerService::new();
+        let mut handle = service
+            .start_pooled(object, move |runtime| {
+                Box::pin(async move {
+                    let owner = runtime.ownership.clone().context("root owner missing")?;
+                    if abandon_receiver {
+                        drop(
+                            owner
+                                .blocking
+                                .spawn(|| -> () { panic!("injected abandoned blocking panic") }),
+                        );
+                    } else {
+                        let result: Result<()> = owner
+                            .run_blocking(|| -> () { panic!("injected attached blocking panic") })
+                            .await;
+                        ensure!(result.is_err(), "blocking panic returned success");
+                        ensure!(
+                            runtime.storage.commit().await.is_err(),
+                            "blocking panic allowed a root commit"
+                        );
+                    }
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: true,
+                    })
+                })
+            })
+            .await?;
+        ensure!(
+            timeout(Duration::from_secs(5), handle.result())
+                .await?
+                .is_err(),
+            "blocking panic returned an owned success"
+        );
+        timeout(Duration::from_secs(5), async {
+            while service.active_roots().await != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        let fresh = timeout(Duration::from_secs(5), pool.get()).await??;
+        assert_ne!(Object::id(&fresh), poisoned_id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn attached_blocking_panic_discards_pooled_authority() -> Result<()> {
+        blocking_worker_panic_fences_pooled_authority(false).await
+    }
+
+    #[tokio::test]
+    async fn abandoned_blocking_panic_discards_pooled_authority() -> Result<()> {
+        blocking_worker_panic_fences_pooled_authority(true).await
+    }
+
+    #[tokio::test]
+    async fn ordinary_blocking_error_keeps_pooled_authority_reusable() -> Result<()> {
+        let dir = TempDir::new()?;
+        let pool = one_object_pool(&dir).await?;
+        let object = pool.get().await?;
+        let original_id = Object::id(&object);
+        let service = OwnerService::new();
+        let mut handle = service
+            .start_pooled(object, move |runtime| {
+                Box::pin(async move {
+                    let owner = runtime.ownership.clone().context("root owner missing")?;
+                    let content = owner
+                        .run_blocking(|| Err::<(), _>(anyhow!("ordinary content error")))
+                        .await?;
+                    ensure!(content.is_err(), "ordinary blocking error was lost");
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: false,
+                    })
+                })
+            })
+            .await?;
+        handle.result().await?;
+        assert_eq!(service.active_roots().await, 0);
+        let reused = timeout(Duration::from_secs(5), pool.get()).await??;
+        assert_eq!(Object::id(&reused), original_id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn canonical_blocking_panic_prevents_drain_and_commit() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let service = OwnerService::new();
+        let mut lease = service.begin_canonical(&mut runtime, false).await?;
+        let owner = runtime
+            .ownership
+            .clone()
+            .context("canonical owner missing")?;
+        let result: Result<()> = owner
+            .run_blocking(|| -> () { panic!("injected canonical blocking panic") })
+            .await;
+        assert!(result.is_err());
+        assert!(lease.drain(&runtime).await.is_err());
+        assert!(runtime.storage.commit().await.is_err());
+        drop(lease);
+        assert!(service.is_fatal());
         Ok(())
     }
 
