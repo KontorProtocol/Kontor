@@ -1,4 +1,6 @@
 #[cfg(test)]
+mod genesis_parity;
+#[cfg(test)]
 mod conversion_probe;
 #[cfg(test)]
 mod costs;
@@ -470,6 +472,10 @@ impl Runtime {
     ) -> Result<()> {
         self.set_context(0, Some(TransactionContext::builder().build()), None, None)
             .await;
+        let bootstrap = self.storage.native_bootstrap_progress().await?;
+        self.result_id_counter
+            .restore(bootstrap.next_result_index)
+            .await;
 
         // Reserve the Core signer row before publishing any contracts. The
         // returned id is asserted equal to CORE_SIGNER_ID inside the query —
@@ -481,9 +487,7 @@ impl Runtime {
         // = appending to the slice; no manual count to maintain.
         let core_signer = Signer::Core(Box::new(Signer::Nobody));
         let payment = self.core_payment();
-        // Native contracts ARE reproducibly built — record their provenance from
-        // the committed build.json (platform + pinned image) plus the source repo
-        // at the node's build commit (CI gates that it reproduces these bytes).
+        // Genesis provenance is part of the retained protocol, never the node build.
         let provenance = native_provenance()?;
         for (name, bytes) in NATIVE_CONTRACTS {
             let mut lease = if let Some(service) = owner_service {
@@ -569,7 +573,7 @@ impl Runtime {
             }
             set_result??;
         }
-        if !genesis.validators.is_empty() {
+        if !genesis.validators.is_empty() && !bootstrap.validators_initialized {
             let validators = genesis.validators.iter().cloned().map(Into::into).collect();
             let mut lease = if let Some(service) = owner_service {
                 Some(service.begin_canonical(self, false).await?)
@@ -608,7 +612,7 @@ impl Runtime {
         name: &str,
         bytes: &[u8],
         // Required for every publish — user ops carry it on the wire; native
-        // (core-signed) contracts derive it from the committed build.json.
+        // (core-signed) contracts use the retained genesis provenance.
         provenance: &BuildProvenance,
     ) -> Result<String, ExecutionError> {
         // Already enforced at decode (block::filter_map); re-checked here before

@@ -1,21 +1,21 @@
-use anyhow::Result;
-use indexer_types::{BuildProvenance, CommitId, Forge, Platform, Source};
+use std::collections::BTreeMap;
 
-use crate::built_info::GIT_COMMIT_HASH;
+use anyhow::{Result, anyhow, ensure};
+use indexer_types::BuildProvenance;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
-pub const TOKEN: &[u8] = include_bytes!("../../../../../native-contracts/binaries/token.wasm.br");
-pub const FILESTORAGE: &[u8] =
-    include_bytes!("../../../../../native-contracts/binaries/filestorage.wasm.br");
-pub const STAKING: &[u8] =
-    include_bytes!("../../../../../native-contracts/binaries/staking.wasm.br");
-pub const SYSTEM: &[u8] = include_bytes!("../../../../../native-contracts/binaries/system.wasm.br");
-pub const NFT: &[u8] = include_bytes!("../../../../../native-contracts/binaries/nft.wasm.br");
+use super::storage_identity::CORE_SIGNER_ID;
+
+pub const TOKEN: &[u8] = include_bytes!("native/token.wasm.br");
+pub const FILESTORAGE: &[u8] = include_bytes!("native/filestorage.wasm.br");
+pub const STAKING: &[u8] = include_bytes!("native/staking.wasm.br");
+pub const SYSTEM: &[u8] = include_bytes!("native/system.wasm.br");
+pub const NFT: &[u8] = include_bytes!("native/nft.wasm.br");
 
 /// Ordered list of native contracts published at genesis. Publish order
-/// determines contract IDs (1-indexed, assigned in iteration order), so
-/// treat additions as a protocol-level decision. The test runtime uses
-/// `NATIVE_CONTRACTS.len()` to know how many IDs to expect; adding to
-/// this list is the only change needed.
+/// determines contract IDs (1-indexed, assigned in iteration order). This
+/// retained list and its identity must not change when adding a new protocol.
 pub const NATIVE_CONTRACTS: &[(&str, &[u8])] = &[
     ("token", TOKEN),
     ("filestorage", FILESTORAGE),
@@ -64,6 +64,7 @@ const fn native_contract_id(name: &[u8]) -> u64 {
 /// forces the exemption). Bounded instead by gas. DERIVED from `NATIVE_CONTRACTS`
 /// (not hardcoded `1`) so reordering the slice can't silently un-exempt the token.
 pub const TOKEN_CONTRACT_ID: u64 = native_contract_id(b"token");
+pub(crate) const STAKING_CONTRACT_ID: u64 = native_contract_id(b"staking");
 
 /// Whether writes to this contract are exempt from storage deposits. Only the
 /// native token (the deposit-denominating ledger) — every other contract, native
@@ -78,46 +79,154 @@ pub(crate) fn records_result(contract_id: u64, function: &str) -> bool {
     !(contract_id == TOKEN_CONTRACT_ID && matches!(function, "hold" | "release"))
 }
 
-/// Provenance for the native/genesis contracts. `platform` + the pinned `image`
-/// come from the committed native-contracts `build.json`; the source is the
-/// Kontor repo at the node's build commit — which reproduces the committed
-/// binaries (the reproducible-build gate proves that at every commit). A missing
-/// git commit (e.g. a tarball build) → an all-zero "unknown" commit.
-pub(crate) fn native_provenance() -> Result<BuildProvenance> {
-    const BUILD_JSON: &str = include_str!("../../../../../native-contracts/binaries/build.json");
+// This identity covers only the initial native set, not the Bitcoin network,
+// validator committee or sigma-min configuration.
+pub(crate) const NATIVE_GENESIS_ID: &str =
+    "1770b1018bc787d97f1f93fbe058e516c0d9bb291d12c98840e9bd9f29af3e6f";
+pub(crate) const NATIVE_PROVENANCE: &[u8] = include_bytes!("native/provenance.bin");
+const MANIFEST: &[u8] = include_bytes!("native/manifest.json");
+const METADATA: &[(&str, &[u8])] = &[
+    ("build.json", include_bytes!("native/build.json")),
+    ("toolchain.json", include_bytes!("native/toolchain.json")),
+    ("provenance.json", include_bytes!("native/provenance.json")),
+    ("provenance.bin", NATIVE_PROVENANCE),
+];
 
-    #[derive(serde::Deserialize)]
-    struct BuildMeta {
-        platform: String,
-        image: String,
+#[derive(Deserialize)]
+struct NativeManifest {
+    core_signer_id: u64,
+    contracts: Vec<NativeContractManifest>,
+    files: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct NativeContractManifest {
+    id: u64,
+    signer_id: u64,
+    name: String,
+    sha256: String,
+    privileged: bool,
+    deposit_exempt: bool,
+    unrecorded_results: Vec<String>,
+}
+
+fn verify_digest(bytes: &[u8], expected: &str) -> Result<()> {
+    ensure!(
+        hex::encode(Sha256::digest(bytes)) == expected,
+        "retained native input digest mismatch"
+    );
+    Ok(())
+}
+
+fn validate_inputs(
+    manifest: &[u8],
+    contracts: &[(&str, &[u8])],
+    metadata: &[(&str, &[u8])],
+) -> Result<()> {
+    verify_digest(manifest, NATIVE_GENESIS_ID)?;
+    let manifest: NativeManifest = serde_json::from_slice(manifest)?;
+    ensure!(
+        manifest.core_signer_id == CORE_SIGNER_ID,
+        "retained core signer mismatch"
+    );
+    ensure!(
+        manifest.contracts.len() == contracts.len(),
+        "retained native contract count mismatch"
+    );
+    for (index, (entry, (name, bytes))) in manifest.contracts.iter().zip(contracts).enumerate() {
+        let id = index as u64 + 1;
+        ensure!(entry.signer_id == id + 1, "retained native signer mismatch");
+        ensure!(
+            entry.id == id && entry.name == *name,
+            "retained native publication order mismatch"
+        );
+        ensure!(
+            entry.privileged == is_native_contract_id(id),
+            "retained native privilege mismatch"
+        );
+        ensure!(
+            entry.deposit_exempt == is_deposit_exempt(id),
+            "retained native deposit exemption mismatch"
+        );
+        let suppressed: Vec<&str> = if id == TOKEN_CONTRACT_ID {
+            vec!["hold", "release"]
+        } else {
+            vec![]
+        };
+        ensure!(
+            entry.unrecorded_results == suppressed,
+            "retained native result policy mismatch"
+        );
+        for function in &entry.unrecorded_results {
+            ensure!(
+                !records_result(id, function),
+                "retained native result recording mismatch"
+            );
+        }
+        verify_digest(bytes, &entry.sha256)?;
     }
-    let meta: BuildMeta = serde_json::from_str(BUILD_JSON)?;
+    ensure!(
+        manifest.files.len() == metadata.len(),
+        "retained native metadata count mismatch"
+    );
+    for (name, bytes) in metadata {
+        let digest = manifest
+            .files
+            .get(*name)
+            .ok_or_else(|| anyhow!("missing retained native metadata: {name}"))?;
+        verify_digest(bytes, digest)?;
+    }
+    Ok(())
+}
 
-    let commit = GIT_COMMIT_HASH
-        .and_then(|h| {
-            let mut bytes = [0u8; 20];
-            hex::decode_to_slice(h, &mut bytes).ok().map(|_| bytes)
-        })
-        .map(CommitId::Sha1)
-        .unwrap_or(CommitId::Sha1([0u8; 20]));
-
-    let provenance = BuildProvenance {
-        source: Source {
-            forge: Forge::GitHub,
-            owner: "KontorProtocol".to_string(),
-            repo: "Kontor".to_string(),
-            commit,
-        },
-        image: meta.image,
-        platform: Platform::parse(&meta.platform)?,
-    };
+pub(crate) fn native_provenance() -> Result<BuildProvenance> {
+    validate_inputs(MANIFEST, NATIVE_CONTRACTS, METADATA)?;
+    let provenance: BuildProvenance = postcard::from_bytes(NATIVE_PROVENANCE)?;
     provenance.validate()?;
+    // Publication uses the ordinary retained codec. Require its exact bytes,
+    // including enum discriminants, rather than accepting semantic equality.
+    ensure!(
+        postcard::to_allocvec(&provenance)? == NATIVE_PROVENANCE,
+        "retained native provenance codec mismatch"
+    );
+    let documented: BuildProvenance =
+        serde_json::from_slice(include_bytes!("native/provenance.json"))?;
+    ensure!(
+        provenance == documented,
+        "retained native provenance metadata mismatch"
+    );
     Ok(provenance)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_provenance_and_artifacts_match_the_definition() -> Result<()> {
+        native_provenance()?;
+        Ok(())
+    }
+
+    #[test]
+    fn tampered_retained_inputs_are_rejected() {
+        let mut artifact = TOKEN.to_vec();
+        artifact[0] ^= 1;
+        let mut contracts = NATIVE_CONTRACTS.to_vec();
+        contracts[0].1 = &artifact;
+        assert!(validate_inputs(MANIFEST, &contracts, METADATA).is_err());
+        let mut provenance = NATIVE_PROVENANCE.to_vec();
+        provenance[1] ^= 1;
+        let mut metadata = METADATA.to_vec();
+        metadata[3].1 = &provenance;
+        assert!(validate_inputs(MANIFEST, NATIVE_CONTRACTS, &metadata).is_err());
+        let mut reordered = NATIVE_CONTRACTS.to_vec();
+        reordered.swap(0, 1);
+        assert!(validate_inputs(MANIFEST, &reordered, METADATA).is_err());
+        let mut manifest = MANIFEST.to_vec();
+        manifest.push(b' ');
+        assert!(validate_inputs(&manifest, NATIVE_CONTRACTS, METADATA).is_err());
+    }
 
     // The deposit exemption is consensus-relevant (exempt rows carry no depositor and
     // never owe a deposit). Pin it: ONLY the token is exempt, its id is derived from

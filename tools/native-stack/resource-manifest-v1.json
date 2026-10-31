@@ -38,7 +38,7 @@
     },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
-      "sha256": "237ffdbbe3eeeede0335e9223994570d29a63c4f63fc8f6acdc5365024393a00"
+      "sha256": "360bb078bb26f76652473066fb4c7a27eb124962b72b2cdfc437f687b6ae8e57"
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
@@ -232,6 +232,10 @@
       "path": "core/indexer/Cargo.toml",
       "sha256": "b8f3848a7408da12f46b25bb91a4c8b6a290f4c8aae94ce561857e4f5a74b9b0"
     },
+    "initial_protocol_definition": {
+      "path": "core/indexer/src/protocol/coordinator/genesis.rs",
+      "sha256": "1a8ddc1d469e5de017b664097b5087c0387eeb6d1772b589bc0a53e168d83a5d"
+    },
     "initialization_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/initialization.rs",
       "sha256": "f0e19cf06543dd63dca0f56c5baf54af6df91c0af5e2113105c39fa267816a9f"
@@ -255,6 +259,14 @@
     "macos_worker_capacity_guard": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
       "sha256": "55264866e785b6e5679fed896cbe4068c67686396831df57f359e7d75e9c87d0"
+    },
+    "native_bootstrap_abi": {
+      "path": "core/indexer/src/protocol/native_bootstrap.rs",
+      "sha256": "ffb35a1c1cd2cf6d1858d4ffe660a0c26e2abbb140ff6c9e5dce532a97408bbb"
+    },
+    "native_bootstrap_adapter": {
+      "path": "core/indexer/src/database/native_bootstrap.rs",
+      "sha256": "0b036872414aa6a9453d8d6e7c510927b68a470df569b93014b35bffc97a5fb8"
     },
     "native_build_metadata": {
       "path": "native-contracts/binaries/build.json",
@@ -295,6 +307,10 @@
     "native_filestorage_wit": {
       "path": "native-contracts/filestorage/wit/contract.wit",
       "sha256": "240f1d3dd928f0a8005d05bfb0aa823bd48a7974f6f53fa7ea28e1c16c086d0b"
+    },
+    "native_genesis_preflight": {
+      "path": "core/indexer/src/database/genesis.rs",
+      "sha256": "456dee7d090d3f3e8186b894e810f81c5713da90b62459d4e7eaa3cebfa01f3c"
     },
     "native_staking": {
       "path": "native-contracts/staking/src/lib.rs",
@@ -370,7 +386,7 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "6add342dd8d55738decefbd0f0e215d91029e94bc4a4bca5854709a224fa7d61"
+      "sha256": "aa3418f1399b9bc6da0a3b78d00dd058dbdd3dd5b613879d5ddd9dccac94cf25"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
@@ -422,7 +438,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "9be4de6fcf61dfca106a1687e28fc966d4231b47bc70e738bea6d3abd2dbb8f4"
+      "sha256": "20ce5d193c8791ceec3bf4bc963ce0e4c80665ef8b9bac159731008c07978d30"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -472,9 +488,53 @@
       "path": "core/indexer/src/protocol/v1/gas.rs",
       "sha256": "3799a58b0f915614607ee0b8bcf5f72f02cafc62aa184e20ed1af6074d31ed07"
     },
+    "retained_native_bootstrap": {
+      "path": "core/indexer/src/protocol/v1/native_bootstrap.rs",
+      "sha256": "3aace4c49b1d986e7548edad0953bff7c8650c484394ae0dc4dcc0ac3fc0501a"
+    },
+    "retained_native_build.json": {
+      "path": "core/indexer/src/protocol/v1/native/build.json",
+      "sha256": "9d927b68696a24aa94bf1d873bbbda7fa77158c6de277f555a58b08150bc0997"
+    },
+    "retained_native_filestorage.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/filestorage.wasm.br",
+      "sha256": "99d32c4b4951531952fa3d4d02473fd3ae4d5b295130a7669bb103e21f60eecd"
+    },
+    "retained_native_manifest.json": {
+      "path": "core/indexer/src/protocol/v1/native/manifest.json",
+      "sha256": "1770b1018bc787d97f1f93fbe058e516c0d9bb291d12c98840e9bd9f29af3e6f"
+    },
+    "retained_native_nft.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/nft.wasm.br",
+      "sha256": "902c8f0674281b9cc88bb631cea895165aeea8747668f25d9eb225c6861547f3"
+    },
     "retained_native_policy": {
       "path": "core/indexer/src/protocol/v1/native.rs",
-      "sha256": "fb034f7f1fa7576f0796cbb3f1786d9d6e4b7adacb3d1b708e2940af1dcc5efb"
+      "sha256": "5cc61269ddebfac6b711bbf6439564a83b7031da1bb96bbce6244c7ad7448cbe"
+    },
+    "retained_native_provenance.bin": {
+      "path": "core/indexer/src/protocol/v1/native/provenance.bin",
+      "sha256": "466b7ef1f1b0922a48d1d4b385ce9a16e677e7dff1074ddd834e85073f6fd120"
+    },
+    "retained_native_provenance.json": {
+      "path": "core/indexer/src/protocol/v1/native/provenance.json",
+      "sha256": "e63c00f17f4d235c4e79f539288277cac5cef52ba16aa6c1f5c1db35d7ce927d"
+    },
+    "retained_native_staking.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/staking.wasm.br",
+      "sha256": "11bba975a24cdfe022610c6ff219c1cc699864608180081d7634766cef55e278"
+    },
+    "retained_native_system.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/system.wasm.br",
+      "sha256": "2a5a19d5ae14f6c9c56ea552869c1a335f6b0ab68be47fb8764c4af304a170fb"
+    },
+    "retained_native_token.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/token.wasm.br",
+      "sha256": "4b5a443f5b26740e61c0ac8fe6bab0b1132b7d6a0f4ae21036166beacb01e500"
+    },
+    "retained_native_toolchain.json": {
+      "path": "core/indexer/src/protocol/v1/native/toolchain.json",
+      "sha256": "3db02c6cec87ef86895528f2d2e966427e2281875e350d787942da919926cb9c"
     },
     "retained_pricing_policy": {
       "path": "core/indexer/src/protocol/v1/pricing.rs",

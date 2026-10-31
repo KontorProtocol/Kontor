@@ -242,8 +242,8 @@ async fn run_daemon(config: Config) -> Result<()> {
         let _ = panic_tx.send(format!("panic at {location}: {message}"));
     }));
     let filename = "state.db";
-    let reader = database::Reader::new(&config.data_dir, filename).await?;
-    let writer = database::Writer::new(&config.data_dir, filename).await?;
+    let (reader, writer) =
+        database::open_node_database(&config.data_dir, filename, config.network).await?;
     let reactor_ready = Arc::new(AtomicBool::new(false));
     // Whether we are stopping because something died — see `Env::failed`.
     let failed = Arc::new(AtomicBool::new(false));

@@ -6,12 +6,13 @@ import json
 from pathlib import Path
 
 from resource_manifest import MANIFEST as V1_MANIFEST
-from resource_manifest import ROOT, build_manifest, sha256
+from resource_manifest import ROOT, RETAINED_NATIVE_INPUTS, build_manifest, sha256
 
 
 MANIFEST = Path(__file__).with_name("resource-manifest-v2.json")
 SCHEMA = Path(__file__).with_name("resource-evidence-schema-v2.json")
 SOURCES = {
+    **RETAINED_NATIVE_INPUTS,
     "v2_manifest_builder": "tools/native-stack/resource_manifest_v2.py",
     "v2_validator": "tools/native-stack/resource_evidence_v2.py",
     "v2_capture": "tools/native-stack/capture_resource_chain_v2.py",

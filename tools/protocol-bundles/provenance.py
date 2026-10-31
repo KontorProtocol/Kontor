@@ -50,7 +50,8 @@ def source_inputs(root, data):
                      "core/indexer/src/protocol/v1/fees.rs",
                      "core/indexer/src/protocol/v1/deposit.rs"):
         sources[relative] = sha(root / relative)
-    for directory in (root / "protocol-bundles/proof", root / "tools/protocol-bundles",
+    for directory in (root / "core/indexer/src/protocol/v1/native",
+                      root / "protocol-bundles/proof", root / "tools/protocol-bundles",
                       root / "tools/native-crypto/fixtures"):
         for path in sorted(directory.rglob("*")):
             if path.is_file() and "__pycache__" not in path.parts:

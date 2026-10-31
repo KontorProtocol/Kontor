@@ -18,10 +18,12 @@ use wit_component::{ComponentEncoder, WitPrinter};
 
 #[cfg(test)]
 use super::resource_diagnostics;
+use crate::database::native_bootstrap::bootstrap_reader;
 use crate::database::queries::{core_callbacks, identity_callbacks, nonce_callbacks};
 use crate::database::storage_contracts_v1::contract_callbacks;
 use crate::database::storage_session_v1::session_callbacks;
 use crate::protocol::storage_identity::SignerRecord;
+use crate::protocol::v1::native_bootstrap::{self, BootstrapProgress};
 use crate::protocol::v1::storage_contracts;
 use crate::protocol::v1::storage_error::ReadError;
 use crate::protocol::v1::storage_footprint::FootprintCache;
@@ -144,6 +146,10 @@ pub struct Storage {
 }
 
 impl Storage {
+    pub(crate) async fn native_bootstrap_progress(&self) -> Result<BootstrapProgress> {
+        native_bootstrap::read_progress(bootstrap_reader(&self.conn)).await
+    }
+
     pub(crate) async fn lookup_identity(&self, pubkey: &str) -> Result<Option<u64>> {
         identity_callbacks(&self.conn).0(pubkey.to_owned())
             .await

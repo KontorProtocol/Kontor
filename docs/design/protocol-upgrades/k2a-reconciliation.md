@@ -1234,3 +1234,95 @@ the fixtures were updated before the successful run. Commands, source/log hashes
 the comparison and lead review are in `.build-cache/selected-accounting-policy/`.
 Prerequisite integration, independent phase reviews and production bundle isolation
 remain outstanding.
+
+## Qualified prerequisite integration and native retention (31 October)
+
+Selected-executor merge `6b03d09cc3051dcd35cecf570df1f38c8a36da46` incorporates
+verified OWNERSHIP-1 merge `dfacbefdac22b898c5bad5b2cae5e2513e147afd`.
+The all-target indexer/testlib check and 15 focused selection, ownership,
+settlement and constructor tests passed. The retained-executor comparison matched
+all 11 complete logical states against the preserved prerequisite baseline.
+Evidence is in `.build-cache/qualified-prerequisite-integration/validation.json`.
+This establishes integration with those prerequisites, not final K2a acceptance.
+
+The planning reviewer agreed the following initial-native identity policy before
+implementation:
+
+- Retain the five qualified synchronous native binaries, their build metadata and
+  toolchain inputs from `dfacbefdac22b898c5bad5b2cae5e2513e147afd`. The provenance
+  source commit is that actual merged revision. Retain the exact Postcard bytes,
+  with a decoded JSON representation for inspection and a codec round-trip check.
+- Bind the ordered artifacts, reserved IDs, privilege/deposit/result policies and
+  provenance to the initial `LegacyP1` definition. The native-set digest is not a
+  complete network identity. Bitcoin network, validators and sigma-min remain
+  separate inputs; K3 must persist their complete identity.
+- Inspect an existing database read-only before normal schema initialization or
+  migration. Accept an empty database or the exact ordered native-publication
+  prefix, which can resume the existing bootstrap. Reject holes, mixed artifacts,
+  conflicting positions, missing original provenance or later state behind an
+  incomplete prefix. Compare the first provenance entry, not an appended update.
+- A different legacy genesis requires a separately named retained definition with
+  inspected inputs. Do not silently rewrite provenance, reset state, or whitelist
+  arbitrary node-build commits. No deployed database has been identified as
+  requiring a particular additional definition. The inspected test seed uses a
+  different build-derived commit and is not evidence of deployed compatibility.
+
+Implementation is in progress. Final acceptance still requires actual interrupted
+bootstrap recovery, two-revision fresh-genesis comparison, final source checks and
+the consolidated phase reviews. The preserved-seed comparison above intentionally
+uses its original inputs and does not prove fresh-genesis equality.
+
+### Interrupted bootstrap correction agreed before P1 freeze
+
+The real owned-publication recovery comparison exposed a pre-existing difference:
+a restart after two native publications resets the in-memory result index, while
+skipping those already published contracts. The remaining genesis receipts then
+use different indexes from uninterrupted bootstrap. The failing comparison is in
+`.build-cache/native-retention/tests-recovery.log`; its only differing logical
+table is `contract_results`. Source inspection also found that nonempty validator
+initialization records a second outer receipt on each restart even when the guest
+returns early without changing its validator state.
+
+The integration/planning reviewer explicitly agreed a bounded correction:
+validate the original successful genesis receipt sequence before further writes,
+restore its next result index after `set_context`, and recognize the successful
+outer staking `set-genesis-set` receipt as the already committed validator-stage
+marker. Its effects and receipt already share one canonical lease commit. No new
+journal or ownership mechanism is needed. Validate consistency with the native
+publication prefix and initialization state; reject gaps, duplicates, wrong
+context/attribution, inconsistent markers or malformed indexes without rewriting.
+Use checked conversion to the persisted index width. Keep ordinary transaction
+counter semantics unchanged.
+
+Before acceptance, compare interrupted and uninterrupted execution after native
+publication, admission-floor initialization, and nonempty validator initialization.
+Reopen completed genesis twice and require no extra state or receipts. Inspect and
+assert that the generated-ID counter stays zero through these exact retained
+initialization paths, including nested calls. This is a deliberate correction to
+restart behavior, separate from byte-preserving extraction. Previously inconsistent
+legacy receipt histories remain unsupported. Implementation of this correction
+and its extended recovery tests is the next step.
+
+The receipt-derived recovery correction is now implemented through an owned-data
+callback in `protocol/native_bootstrap.rs`, a node-side SQL reader, and retained
+P1 validation. It requires the exact successful genesis receipt grammar, native
+publication order, context and attribution. It restores only the bootstrap result
+counter, checks admission-floor and validator-initialization state against receipts,
+and skips validator initialization when its committed outer receipt already exists.
+The read-only startup preflight runs the same validation before schema writes.
+
+Nine focused tests passed, including complete logical-state equality after
+interruption at two publications, all five publications, admission-floor setup,
+and nonempty validator setup. Each resumed state was reopened twice with no new
+receipts or other differences; the generated-ID counter remained zero throughout.
+The full run took 120.33 seconds after compilation. Two additional focused controls
+passed after tightening persisted-field decoding to reject trailing bytes (0.51
+seconds). These timings describe test execution, not a throughput qualification.
+The logs are `.build-cache/native-retention/recovery-fixed-2.log` and
+`.build-cache/native-retention/strict-codec.log`.
+
+The fresh-genesis comparison uses a common ignored report harness and explicit
+identical configuration, receipt-stream epoch, native bytes and provenance. Its
+qualified-prerequisite baseline is `dfacbefd` plus the test-only fixed-provenance
+fixture at `d066d72f5bddf9f29eddda5205ea5c890675374d`. Baseline and candidate build/run
+and comparison remain pending; no fresh-genesis parity claim is made yet.

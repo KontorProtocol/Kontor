@@ -8,6 +8,7 @@ pub(crate) mod fuel;
 pub(crate) mod gas;
 pub(crate) mod lifecycle;
 pub(crate) mod native;
+pub(crate) mod native_bootstrap;
 pub(crate) mod pricing;
 pub(crate) mod resources;
 mod storage_bounds;

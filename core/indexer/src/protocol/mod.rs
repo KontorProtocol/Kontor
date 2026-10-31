@@ -1,4 +1,5 @@
 pub(crate) mod coordinator;
+pub(crate) mod native_bootstrap;
 pub(crate) mod storage_contracts;
 pub(crate) mod storage_footprint;
 pub(crate) mod storage_identity;

@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "74c21502ec476bdee9b31d64ef1d41b2d05d88fcfda316041a2780b20a52e974",
+  "parent_manifest_sha256": "149d2dc19c2f5aa396ab43e030716c063988ac93bbce55b255657680cad6cb69",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1225,9 +1225,25 @@
       "path": "tools/native-stack/test_materialize_phase10_fixture.py",
       "sha256": "cfb5d6d0bb39366ca488b2a1d233bdda8bc5482ac250ddb54704de367013a12b"
     },
+    "initial_protocol_definition": {
+      "path": "core/indexer/src/protocol/coordinator/genesis.rs",
+      "sha256": "1a8ddc1d469e5de017b664097b5087c0387eeb6d1772b589bc0a53e168d83a5d"
+    },
     "invocation": {
       "path": "core/indexer/src/runtime/invocation.rs",
       "sha256": "31edb93d9b688625c3cd8640e7773b92fe276e32888a2d3e3ecfe15418215af3"
+    },
+    "native_bootstrap_abi": {
+      "path": "core/indexer/src/protocol/native_bootstrap.rs",
+      "sha256": "ffb35a1c1cd2cf6d1858d4ffe660a0c26e2abbb140ff6c9e5dce532a97408bbb"
+    },
+    "native_bootstrap_adapter": {
+      "path": "core/indexer/src/database/native_bootstrap.rs",
+      "sha256": "0b036872414aa6a9453d8d6e7c510927b68a470df569b93014b35bffc97a5fb8"
+    },
+    "native_genesis_preflight": {
+      "path": "core/indexer/src/database/genesis.rs",
+      "sha256": "456dee7d090d3f3e8186b894e810f81c5713da90b62459d4e7eaa3cebfa01f3c"
     },
     "retained_deposit_policy": {
       "path": "core/indexer/src/protocol/v1/deposit.rs",
@@ -1249,9 +1265,53 @@
       "path": "core/indexer/src/protocol/v1/gas.rs",
       "sha256": "3799a58b0f915614607ee0b8bcf5f72f02cafc62aa184e20ed1af6074d31ed07"
     },
+    "retained_native_bootstrap": {
+      "path": "core/indexer/src/protocol/v1/native_bootstrap.rs",
+      "sha256": "3aace4c49b1d986e7548edad0953bff7c8650c484394ae0dc4dcc0ac3fc0501a"
+    },
+    "retained_native_build.json": {
+      "path": "core/indexer/src/protocol/v1/native/build.json",
+      "sha256": "9d927b68696a24aa94bf1d873bbbda7fa77158c6de277f555a58b08150bc0997"
+    },
+    "retained_native_filestorage.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/filestorage.wasm.br",
+      "sha256": "99d32c4b4951531952fa3d4d02473fd3ae4d5b295130a7669bb103e21f60eecd"
+    },
+    "retained_native_manifest.json": {
+      "path": "core/indexer/src/protocol/v1/native/manifest.json",
+      "sha256": "1770b1018bc787d97f1f93fbe058e516c0d9bb291d12c98840e9bd9f29af3e6f"
+    },
+    "retained_native_nft.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/nft.wasm.br",
+      "sha256": "902c8f0674281b9cc88bb631cea895165aeea8747668f25d9eb225c6861547f3"
+    },
     "retained_native_policy": {
       "path": "core/indexer/src/protocol/v1/native.rs",
-      "sha256": "fb034f7f1fa7576f0796cbb3f1786d9d6e4b7adacb3d1b708e2940af1dcc5efb"
+      "sha256": "5cc61269ddebfac6b711bbf6439564a83b7031da1bb96bbce6244c7ad7448cbe"
+    },
+    "retained_native_provenance.bin": {
+      "path": "core/indexer/src/protocol/v1/native/provenance.bin",
+      "sha256": "466b7ef1f1b0922a48d1d4b385ce9a16e677e7dff1074ddd834e85073f6fd120"
+    },
+    "retained_native_provenance.json": {
+      "path": "core/indexer/src/protocol/v1/native/provenance.json",
+      "sha256": "e63c00f17f4d235c4e79f539288277cac5cef52ba16aa6c1f5c1db35d7ce927d"
+    },
+    "retained_native_staking.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/staking.wasm.br",
+      "sha256": "11bba975a24cdfe022610c6ff219c1cc699864608180081d7634766cef55e278"
+    },
+    "retained_native_system.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/system.wasm.br",
+      "sha256": "2a5a19d5ae14f6c9c56ea552869c1a335f6b0ab68be47fb8764c4af304a170fb"
+    },
+    "retained_native_token.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/token.wasm.br",
+      "sha256": "4b5a443f5b26740e61c0ac8fe6bab0b1132b7d6a0f4ae21036166beacb01e500"
+    },
+    "retained_native_toolchain.json": {
+      "path": "core/indexer/src/protocol/v1/native/toolchain.json",
+      "sha256": "3db02c6cec87ef86895528f2d2e966427e2281875e350d787942da919926cb9c"
     },
     "retained_pricing_policy": {
       "path": "core/indexer/src/protocol/v1/pricing.rs",
@@ -1263,7 +1323,7 @@
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "6add342dd8d55738decefbd0f0e215d91029e94bc4a4bca5854709a224fa7d61"
+      "sha256": "aa3418f1399b9bc6da0a3b78d00dd058dbdd3dd5b613879d5ddd9dccac94cf25"
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",
@@ -1287,7 +1347,7 @@
     },
     "v2_manifest_builder": {
       "path": "tools/native-stack/resource_manifest_v2.py",
-      "sha256": "7e5f579516a76d42a3fe280b107b2094aceeaf9b74a14dcc5efdc4ad8eacfeb2"
+      "sha256": "9c1b98e9208ba8b4837e621578bbaaa701679137087ef6f17752131d272deae3"
     },
     "v2_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v2.json",
