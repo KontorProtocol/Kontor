@@ -1,5 +1,6 @@
 pub(crate) mod committee;
 pub(crate) mod engine;
+pub(crate) mod errors;
 pub(crate) mod execution;
 pub(crate) mod gas;
 pub(crate) mod lifecycle;

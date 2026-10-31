@@ -26,6 +26,7 @@ SOURCES = {
     "chain_fixture": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
     "invocation": "core/indexer/src/runtime/invocation.rs",
     "runtime": "core/indexer/src/runtime/mod.rs",
+    "retained_error_policy": "core/indexer/src/protocol/v1/errors.rs",
     "retained_native_policy": "core/indexer/src/protocol/v1/native.rs",
     "retained_engine": "core/indexer/src/protocol/v1/engine.rs",
     "retained_resource_policy": "core/indexer/src/protocol/v1/resources.rs",

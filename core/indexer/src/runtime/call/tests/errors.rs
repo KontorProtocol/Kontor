@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use wasmtime::{Error, OutOfMemory, Trap};
 
-use super::super::error::is_deterministic;
+use crate::protocol::v1::errors::is_deterministic;
 use crate::runtime::{ExecutionError, Runtime};
 use crate::test_utils::test_runtime;
 

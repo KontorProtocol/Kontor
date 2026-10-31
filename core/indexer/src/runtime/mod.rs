@@ -46,6 +46,7 @@ use bitcoin::XOnlyPublicKey;
 use call::CallOutcome;
 pub use component_cache::ComponentCache;
 pub(crate) use component_cache::ComponentSource;
+pub(crate) use guest_memory::GuestMemoryLimitExceeded;
 use guest_memory::{GuestMemoryLimiter, GuestMemoryLimits};
 use invocation::{InvocationBudget, InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS};
 #[cfg(test)]
@@ -69,58 +70,7 @@ use tokio::sync::Mutex;
 #[cfg(test)]
 use workload_telemetry::WorkloadTelemetry;
 
-use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
-
-/// Distinguishes deterministic failures from non-deterministic failures
-/// in the contract execution path.
-#[derive(Debug)]
-pub enum ExecutionError {
-    /// Deterministic failure — all nodes see the same result for the same inputs.
-    /// WASM traps, contract not found, bad arguments, etc.
-    /// Caller should rollback and continue processing.
-    Deterministic(anyhow::Error),
-    /// Non-deterministic failure — DB/IO error, host panic, tokio task failure.
-    /// Different nodes may see different results.
-    /// Caller should propagate to reactor and shut down.
-    NonDeterministic(anyhow::Error),
-}
-
-impl Display for ExecutionError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let (kind, error) = match self {
-            ExecutionError::Deterministic(error) => ("deterministic error", error),
-            ExecutionError::NonDeterministic(error) => ("non-deterministic error", error),
-        };
-        write!(f, "{kind}: ")?;
-        // Expand causes only when the outer caller requests it. Chain formatters
-        // use ordinary Display for each source, avoiding recursive expansion.
-        Display::fmt(error, f)
-    }
-}
-
-impl std::error::Error for ExecutionError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            ExecutionError::Deterministic(e) | ExecutionError::NonDeterministic(e) => {
-                Some(e.as_ref())
-            }
-        }
-    }
-}
-
-/// Convert an anyhow::Error to ExecutionError, preserving the classification
-/// if the error already contains an ExecutionError (e.g. from a cross-contract
-/// call through the WIT foreign::call boundary). Falls back to NonDeterministic
-/// for errors without an ExecutionError inside.
-impl From<anyhow::Error> for ExecutionError {
-    fn from(e: anyhow::Error) -> Self {
-        match e.downcast::<ExecutionError>() {
-            Ok(ee) => ee,
-            Err(e) => ExecutionError::NonDeterministic(e),
-        }
-    }
-}
 
 pub use wit::kontor;
 pub use wit::kontor::built_in::context_types::ContractAddress;
@@ -147,6 +97,7 @@ use crate::bls::RegistrationProof;
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
 use crate::database::types::{CORE_SIGNER_ID, Identity};
 use crate::protocol::v1::engine;
+pub use crate::protocol::v1::errors::ExecutionError;
 pub(crate) use crate::protocol::v1::gas::MAX_UNTRUSTED_GAS_LIMIT;
 use crate::protocol::v1::gas::{DEFAULT_NON_PROC_GAS_LIMIT, GAS_TO_FUEL_MULTIPLIER};
 use crate::protocol::v1::native::{NATIVE_CONTRACTS, is_native_contract_id, native_provenance};

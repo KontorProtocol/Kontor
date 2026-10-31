@@ -237,7 +237,7 @@ class Ownership(unittest.TestCase):
             engine.write_text("node engine configuration")
             retained = root / "core/indexer/src/protocol/v1"
             retained.mkdir(parents=True)
-            for name in ("engine", "resources", "gas", "native"):
+            for name in ("engine", "resources", "gas", "native", "errors"):
                 (retained / f"{name}.rs").write_text(f"retained {name} policy")
             manifest = root / "Cargo.toml"
             source = root / "lib.rs"
@@ -257,7 +257,7 @@ class Ownership(unittest.TestCase):
             engine.write_text("node engine configuration")
             retained = root / "core/indexer/src/protocol/v1"
             retained.mkdir(parents=True)
-            for name in ("engine", "resources", "gas", "native"):
+            for name in ("engine", "resources", "gas", "native", "errors"):
                 (retained / f"{name}.rs").write_text(f"retained {name} policy")
             (root / ".git").mkdir()
             manifest = root / "Cargo.toml"
@@ -273,7 +273,7 @@ class Ownership(unittest.TestCase):
             before = fingerprint(source_inputs(root, data))
             engine.write_text("changed node engine configuration")
             self.assertNotEqual(before, fingerprint(source_inputs(root, data)))
-            for name in ("engine", "resources", "gas", "native"):
+            for name in ("engine", "resources", "gas", "native", "errors"):
                 before = fingerprint(source_inputs(root, data))
                 (retained / f"{name}.rs").write_text(f"changed retained {name} policy")
                 self.assertNotEqual(before, fingerprint(source_inputs(root, data)))

@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "591a4c7bb680985ac5c22b161ffb236b98949fe4364a31b9a79640563dd7dc8f",
+  "parent_manifest_sha256": "e9da8ed96833a459b778bedb751ed7c0362da474a6b61c65e39e967addcad0ba",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1203,7 +1203,7 @@
   "sources": {
     "call": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "5d31a82b6e4b124d00e9e5e2346cf8d9c491ef972e98bd975cd487a6013cbb61"
+      "sha256": "e8fc353009d8b621cf9b1b18c4f99802955c3ec50c3dff8dfce49c990386da0a"
     },
     "chain_fixture": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
@@ -1233,6 +1233,10 @@
       "path": "core/indexer/src/protocol/v1/engine.rs",
       "sha256": "b789ce721e51ab2bcdfe48b38cf7679834614449f848156a6803adf0dce4b19d"
     },
+    "retained_error_policy": {
+      "path": "core/indexer/src/protocol/v1/errors.rs",
+      "sha256": "ae47180264465ad334cc5437d9423a220f319116c3e25cb68044476ae0758528"
+    },
     "retained_gas_policy": {
       "path": "core/indexer/src/protocol/v1/gas.rs",
       "sha256": "3799a58b0f915614607ee0b8bcf5f72f02cafc62aa184e20ed1af6074d31ed07"
@@ -1251,7 +1255,7 @@
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "5fbf6199ad5864ed2b05541087c47f140c84de7541114af9feedfe0dc1ae46f5"
+      "sha256": "b104168a99ca41e0444336a76a1930dc1259ea22605bef322ab1200c7efa0b83"
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",
@@ -1275,7 +1279,7 @@
     },
     "v2_manifest_builder": {
       "path": "tools/native-stack/resource_manifest_v2.py",
-      "sha256": "641944b2b4168d6d16182699fcc86de5735f39e8afa1d73a25de19048f014475"
+      "sha256": "edf90cd4abbcca970a98a9822b73d6df33b9e0af5ce59afd4732d22d53541d22"
     },
     "v2_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v2.json",

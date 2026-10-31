@@ -42,7 +42,7 @@
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "5d31a82b6e4b124d00e9e5e2346cf8d9c491ef972e98bd975cd487a6013cbb61"
+      "sha256": "e8fc353009d8b621cf9b1b18c4f99802955c3ec50c3dff8dfce49c990386da0a"
     },
     "call_output": {
       "path": "core/indexer/src/runtime/call/result.rs",
@@ -366,7 +366,7 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "5fbf6199ad5864ed2b05541087c47f140c84de7541114af9feedfe0dc1ae46f5"
+      "sha256": "b104168a99ca41e0444336a76a1930dc1259ea22605bef322ab1200c7efa0b83"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
@@ -418,7 +418,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "91f0d32d4c23c2eee9dafe6fb414ac22562cad4d130bc731dfbb92d4281a79ac"
+      "sha256": "2e5306b248aae2ed25d6ec9f0e85dd01d7ab8de506b3b1e65b36e5b50d74dcb7"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -451,6 +451,10 @@
     "retained_engine": {
       "path": "core/indexer/src/protocol/v1/engine.rs",
       "sha256": "b789ce721e51ab2bcdfe48b38cf7679834614449f848156a6803adf0dce4b19d"
+    },
+    "retained_error_policy": {
+      "path": "core/indexer/src/protocol/v1/errors.rs",
+      "sha256": "ae47180264465ad334cc5437d9423a220f319116c3e25cb68044476ae0758528"
     },
     "retained_gas_policy": {
       "path": "core/indexer/src/protocol/v1/gas.rs",

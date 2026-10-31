@@ -6,7 +6,7 @@ use super::resource_diagnostics;
 use futures_util::FutureExt;
 use futures_util::future::OptionFuture;
 use wasmtime::{
-    AsContext, AsContextMut, GcHeapOutOfMemory, Store, Trap,
+    AsContext, AsContextMut, GcHeapOutOfMemory, Store,
     component::{
         Access, Func, Resource, Type, Val,
         wasm_wave::{
@@ -17,6 +17,7 @@ use wasmtime::{
 
 use indexer_types::{OpStatus, Payment};
 
+use crate::protocol::v1::errors::{classify_result, is_deterministic};
 #[cfg(test)]
 use crate::protocol::v1::gas::SYSTEM_FUEL_CEILING;
 use crate::protocol::v1::native::{is_native_contract_id, records_result};
@@ -32,7 +33,6 @@ use super::{
     wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
 
-mod error;
 mod input;
 mod result;
 
@@ -397,7 +397,7 @@ impl Runtime {
             .instantiate_async(&mut store)
             .await
             .map_err(|e| {
-                if error::is_deterministic(&e) {
+                if is_deterministic(&e) {
                     ExecutionError::Deterministic(e.into())
                 } else {
                     ExecutionError::NonDeterministic(e.into())
@@ -674,7 +674,7 @@ impl Runtime {
         // distinguishing generated host errors from native conversion errors.
         let is_deterministic = match &result {
             Ok(Ok(())) => true,
-            Ok(Err(e)) => error::is_deterministic(e),
+            Ok(Err(e)) => is_deterministic(e),
             Err(_) => false,
         };
 
@@ -783,39 +783,6 @@ impl Runtime {
             accessor.get().fuel_checkpoint = outcome.remaining_fuel;
         }
         outcome.result.map_err(Into::into)
-    }
-}
-
-/// Categorize the result of a wasm call into a persisted `OpStatus`.
-///
-/// - `Ok(s)` where `s` starts with `"err("` means the contract function
-///   returned a `result<_, error>::Err` value. The call ran cleanly but
-///   the semantic outcome was a failure; storage was rolled back. Treated
-///   as `OpStatus::ContractErr`.
-/// - `Ok(_)` otherwise is a successful call returning either a value or
-///   nothing. `OpStatus::Ok`.
-/// - `Err(ExecutionError::Deterministic(e))` is mapped by looking at the
-///   underlying error for a `wasmtime::Trap` variant. `Trap::OutOfFuel`
-///   becomes `OpStatus::OutOfFuel`; other trap variants become
-///   `OpStatus::Trap`. Non-trap errors become `OpStatus::Other`.
-/// - `Err(NonDeterministic)` shouldn't normally produce a row — those
-///   propagate as fatal infrastructure errors and the block won't
-///   commit. Mapped to `Other` for completeness.
-fn classify_result(result: &Result<String, ExecutionError>) -> OpStatus {
-    match result {
-        Ok(v) if v.starts_with("err(") => OpStatus::ContractErr,
-        Ok(_) => OpStatus::Ok,
-        Err(ExecutionError::Deterministic(e)) => {
-            if let Some(trap) = e.downcast_ref::<Trap>() {
-                match trap {
-                    Trap::OutOfFuel => OpStatus::OutOfFuel,
-                    _ => OpStatus::Trap,
-                }
-            } else {
-                OpStatus::Other
-            }
-        }
-        Err(ExecutionError::NonDeterministic(_)) => OpStatus::Other,
     }
 }
 

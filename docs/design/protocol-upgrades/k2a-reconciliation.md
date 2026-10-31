@@ -1184,3 +1184,26 @@ All eleven baseline states match, with comparison report SHA-256
 Twenty-nine Python source-binding and manifest controls and formatting checks
 passed. Commands, source/log hashes and the lead review are recorded under
 `.build-cache/selected-native-policy/`. Phase review and acceptance remain open.
+
+
+## Retained error classification
+
+P1 now owns `ExecutionError`, its formatting and conversion behavior, the Wasmtime
+error classifier, and persisted `OpStatus` classification. Runtime callers import
+these retained rules; the public error type remains available through its existing
+runtime re-export. The moved bodies are token-identical after visibility/import
+adjustments, including classification precedence and exact canonical-error strings.
+The host-origin guard still precedes string matching. Unknown engine errors and
+host failures still abort processing; deterministic outcomes retain their existing
+rollback and receipt treatment. No error acceptance or formatting fix is folded
+into this relocation.
+
+Against base `7f8c0e58`, 21 existing ABI, nested error, published resource, holder
+fault and guest-memory regressions passed. The explicit historical comparison
+matched all eleven baseline states, with report SHA-256
+`8820b5cd279ee5cda4de217595ad71334309175c4738af9b76876a623b318a20`.
+Indexer/testlib all-target compilation, 29 Python source-binding/manifest controls,
+formatting and diff checks passed. The initial compile found one stale test import;
+it was corrected before the successful run. Evidence and the lead review are in
+`.build-cache/selected-error-policy-final/`. Independently locked dependencies,
+final prerequisite integration, phase review and acceptance remain outstanding.
