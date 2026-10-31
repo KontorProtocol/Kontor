@@ -5,6 +5,7 @@ use bon::Builder;
 use futures_util::Stream;
 #[cfg(test)]
 use futures_util::TryStreamExt;
+#[cfg(not(kontor_retained))]
 use libsql::Connection;
 use regex::bytes::RegexBuilder;
 use std::io::Read;
@@ -17,9 +18,12 @@ use std::sync::{Condvar, Mutex as StdMutex};
 use wit_component::{ComponentEncoder, WitPrinter};
 
 use super::bundle_ownership::{BundleOwner, HostFailure};
+#[cfg(not(kontor_retained))]
+use super::ownership::ChildContext;
 #[cfg(test)]
 use super::resource_diagnostics;
 use super::storage_host::StorageHost;
+#[cfg(not(kontor_retained))]
 use crate::database::storage_callbacks_v1::storage_callbacks;
 use crate::protocol::storage_identity::SignerRecord;
 use crate::protocol::v1::native_bootstrap::{self, BootstrapProgress};
@@ -34,7 +38,7 @@ use crate::protocol::v1::storage_session;
 use crate::protocol::v1::storage_state::{
     LiveRow, exists, live_subtree, tombstone_rows, write_value,
 };
-use crate::runtime::{ContractAddress, counter::Counter, ownership::ChildContext, stack::Stack};
+use crate::runtime::{ContractAddress, counter::Counter, stack::Stack};
 
 #[cfg(test)]
 mod variant_tests;
@@ -112,9 +116,12 @@ pub struct TransactionContext {
 
 #[derive(Builder, Clone)]
 pub struct Storage {
+    #[cfg(not(kontor_retained))]
     pub conn: Connection,
-    #[builder(default = StorageHost::from(storage_callbacks(&conn)), setters(vis = "pub(crate)"))]
+    #[cfg_attr(not(kontor_retained), builder(default = StorageHost::from(storage_callbacks(&conn))))]
+    #[builder(setters(vis = "pub(crate)"))]
     pub(crate) host: StorageHost,
+    #[cfg(not(kontor_retained))]
     #[builder(skip)]
     pub(super) ownership: Option<ChildContext>,
     #[builder(skip)]
@@ -417,7 +424,20 @@ impl Storage {
                 .validate(true)
                 .encode()
         };
-        let encoded = match (&self.ownership, &self.bundle_owner) {
+        #[cfg(kontor_retained)]
+        let encoding = self
+            .bundle_owner
+            .as_ref()
+            .ok_or_else(|| {
+                ComponentDecodeError::Infrastructure(anyhow!(
+                    "executor decoding requires an admitted root"
+                ))
+            })?
+            .run_blocking(encode)
+            .await
+            .map_err(|error| anyhow!(HostFailure::from(error)));
+        #[cfg(not(kontor_retained))]
+        let encoding = match (&self.ownership, &self.bundle_owner) {
             (Some(_), Some(_)) => Err(anyhow!("storage has conflicting ownership contexts")),
             (None, Some(owner)) => owner
                 .run_blocking(encode)
@@ -427,9 +447,10 @@ impl Storage {
             (None, None) => tokio::task::spawn_blocking(encode)
                 .await
                 .map_err(anyhow::Error::from),
-        }
-        .map_err(ComponentDecodeError::Infrastructure)?
-        .map_err(ComponentDecodeError::Content)?;
+        };
+        let encoded = encoding
+            .map_err(ComponentDecodeError::Infrastructure)?
+            .map_err(ComponentDecodeError::Content)?;
 
         Ok(encoded)
     }
@@ -579,6 +600,7 @@ impl Storage {
 
     pub async fn commit(&self) -> Result<()> {
         if let Some(owner) = &self.bundle_owner {
+            #[cfg(not(kontor_retained))]
             anyhow::ensure!(
                 self.ownership.is_none(),
                 "storage has conflicting ownership contexts"
@@ -587,6 +609,12 @@ impl Storage {
                 .ensure_commit_authorized()
                 .map_err(|error| anyhow!(HostFailure::from(error)))?;
         }
+        #[cfg(kontor_retained)]
+        anyhow::ensure!(
+            self.bundle_owner.is_some(),
+            "executor commit requires an admitted root"
+        );
+        #[cfg(not(kontor_retained))]
         if let Some(owner) = &self.ownership {
             owner.ensure_commit_authorized()?;
         }

@@ -644,6 +644,7 @@ impl Runtime {
             mut store,
             host_panicked: _,
         } = if let Some(parent) = self.bundle_owner.as_ref() {
+            #[cfg(not(kontor_retained))]
             anyhow::ensure!(
                 self.ownership.is_none(),
                 "runtime has conflicting ownership contexts"
@@ -666,18 +667,23 @@ impl Runtime {
                 return Err(anyhow!("guest completion panic status mismatch"));
             }
             completion
-        } else if let Some(parent) = self.ownership.as_ref() {
-            parent
-                .run_guest(|child| {
-                    store.data_mut().storage.ownership = Some(child.clone());
-                    store.data_mut().ownership = Some(child);
-                    execute(store)
-                })
-                .await?
         } else {
-            tokio::spawn(execute(store))
-                .await
-                .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?
+            #[cfg(kontor_retained)]
+            return Err(anyhow!("executor guest call requires an admitted root"));
+            #[cfg(not(kontor_retained))]
+            if let Some(parent) = self.ownership.as_ref() {
+                parent
+                    .run_guest(|child| {
+                        store.data_mut().storage.ownership = Some(child.clone());
+                        store.data_mut().ownership = Some(child);
+                        execute(store)
+                    })
+                    .await?
+            } else {
+                tokio::spawn(execute(store))
+                    .await
+                    .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?
+            }
         };
 
         let result = Self::decode_result(is_fallback, result, results, &mut store).await;

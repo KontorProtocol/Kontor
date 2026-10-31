@@ -286,10 +286,13 @@ impl Runtime {
     }
 
     async fn ensure_bundle_idle(&self) -> Result<()> {
+        #[cfg(not(kontor_retained))]
         ensure!(
-            self.ownership.is_none()
-                && self.storage.ownership.is_none()
-                && self.bundle_owner.is_none()
+            self.ownership.is_none() && self.storage.ownership.is_none(),
+            "executor session is still owned by a legacy root"
+        );
+        ensure!(
+            self.bundle_owner.is_none()
                 && self.storage.bundle_owner.is_none()
                 && self.invocation_budget.is_none()
                 && self.store_table_owners.is_none()

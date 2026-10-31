@@ -1,4 +1,5 @@
 pub(crate) mod committee;
+#[cfg(not(kontor_retained))]
 pub(crate) mod coordinator;
 pub(crate) mod execution;
 pub(crate) mod native_bootstrap;

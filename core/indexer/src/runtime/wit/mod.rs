@@ -7,8 +7,8 @@ pub use resources::{
     prover_challenge_key,
 };
 
-wasmtime::component::bindgen!({
-    path: "src/runtime/wit",
+macro_rules! bindings { ($path:literal) => { wasmtime::component::bindgen!({
+    path: $path,
     anyhow: true,
     wasmtime_crate: crate::runtime::lowering::bindings,
     with: {
@@ -54,4 +54,8 @@ wasmtime::component::bindgen!({
         "kontor:built-in/context.[drop]transaction": async | trappable,
         "kontor:built-in/file-registry.[drop]proof": async | trappable,
     }
-});
+}); }; }
+#[cfg(not(kontor_retained))]
+bindings!("src/runtime/wit");
+#[cfg(kontor_retained)]
+bindings!("../../core/indexer/src/runtime/wit");
