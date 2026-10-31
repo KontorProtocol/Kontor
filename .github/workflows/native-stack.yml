@@ -12,6 +12,12 @@ on:
         default: qualify
         type: choice
         options: [qualify, discovery, guard, chain, vmmap, final]
+      profiles:
+        description: Release qualification with dev smoke, or full dev/release comparison
+        required: true
+        default: release
+        type: choice
+        options: [release, full]
       reviewed_discovery_run_id:
         description: Reviewed S2 discovery run ID for the final stage
         required: false
@@ -28,6 +34,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       required: ${{ steps.select.outputs.required }}
+      profile_policy: ${{ steps.select.outputs.profile_policy }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -60,7 +67,7 @@ jobs:
         run: python3 -m unittest discover -s tools/native-stack -p 'test_*.py' -v
 
   qualify:
-    name: Native stack (${{ matrix.os }}, ${{ matrix.profile }})
+    name: Native stack (${{ matrix.os }}, ${{ matrix.profile }}${{ matrix.profile == 'dev' && needs.scope.outputs.profile_policy == 'release' && ' smoke' || '' }})
     needs: [scope, controls]
     if: needs.scope.outputs.required == 'true'
     runs-on: ${{ matrix.os }}
@@ -113,12 +120,14 @@ jobs:
           jq -ser '[.[] | select(.reason == "compiler-artifact" and .target.name == "indexer" and (.target.kind | index("lib")) != null and .profile.test == true and .executable != null)] | if length == 1 then .[0].executable else error("expected exactly one indexer lib test executable") end' "$evidence/cargo.json" > target/native-stack-evidence/binary-path
           test -s target/native-stack-evidence/binary-path
       - name: Exercise paid, view, and Core chain boundaries
+        if: matrix.profile == 'release' || needs.scope.outputs.profile_policy == 'full'
         run: |
           set -o pipefail
           binary=$(cat target/native-stack-evidence/binary-path)
           mkdir -p "target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ matrix.profile }}"
           "$binary" --exact runtime::call::tests::sequential_chains::deep_sequential_chains_survive_in_separate_processes --nocapture 2>&1 | tee "target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ matrix.profile }}/chain-matrix.log"
       - name: Exercise owned paid, view, and Core chain boundaries
+        if: matrix.profile == 'release' || needs.scope.outputs.profile_policy == 'full'
         run: |
           set -o pipefail
           binary=$(cat target/native-stack-evidence/binary-path)
@@ -130,6 +139,7 @@ jobs:
             done
           done
       - name: Exercise ownership cancellation, yielding, and drain controls
+        if: matrix.profile == 'release' || needs.scope.outputs.profile_policy == 'full'
         run: |
           set -o pipefail
           binary=$(cat target/native-stack-evidence/binary-path)
@@ -139,17 +149,24 @@ jobs:
             "$binary" --exact "runtime::ownership::tests::$test" --nocapture 2>&1 | tee -a "$evidence/ownership-controls.log"
           done
       - name: Measure stack boundaries
+        if: matrix.profile == 'release' || needs.scope.outputs.profile_policy == 'full'
         env:
           PROFILE: ${{ matrix.profile }}
         run: |
           binary=$(cat target/native-stack-evidence/binary-path)
           evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$PROFILE"
           python3 tools/native-stack/qualify.py --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/$PROFILE" --output "$evidence" --chain-log "$evidence/chain-matrix.log" --owned-chain-log "$evidence/owned-chain-matrix.log" --ownership-log "$evidence/ownership-controls.log"
+      - name: Run bounded dev smoke
+        if: matrix.profile == 'dev' && needs.scope.outputs.profile_policy == 'release'
+        run: |
+          binary=$(cat target/native-stack-evidence/binary-path)
+          evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/dev"
+          python3 tools/native-stack/dev_smoke.py --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/dev" --output "$evidence"
       - name: Preserve qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: native-stack-${{ matrix.os }}-${{ matrix.profile }}
+          name: ${{ matrix.profile == 'dev' && needs.scope.outputs.profile_policy == 'release' && format('native-smoke-{0}', matrix.os) || format('native-stack-{0}-{1}', matrix.os, matrix.profile) }}
           path: target/native-stack-evidence/${{ runner.os }}-${{ runner.arch }}/${{ matrix.profile }}/
           if-no-files-found: error
           retention-days: 30
@@ -165,9 +182,14 @@ jobs:
         with:
           pattern: native-stack-*
           path: target/native-stack-compare
-      - name: Compare six variants
+      - uses: actions/download-artifact@v8
+        if: needs.scope.outputs.profile_policy == 'release'
+        with:
+          pattern: native-smoke-*
+          path: target/native-smoke-compare
+      - name: Compare required variants
         run: |
-          python3 tools/native-stack/compare.py --directory target/native-stack-compare --output target/native-stack-comparison.json --upstream-status "${{ needs.qualify.result }}"
+          python3 tools/native-stack/compare.py --directory target/native-stack-compare --output target/native-stack-comparison.json --upstream-status "${{ needs.qualify.result }}" --profiles "${{ needs.scope.outputs.profile_policy }}" --smoke-directory target/native-smoke-compare
       - name: Preserve comparison
         if: always()
         uses: actions/upload-artifact@v7

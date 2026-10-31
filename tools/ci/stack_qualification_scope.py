@@ -87,9 +87,18 @@ def select(event_name, event, root):
 def main():
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
     result = select(os.environ["GITHUB_EVENT_NAME"], event, Path.cwd())
+    result["profile_policy"] = profile_policy(os.environ["GITHUB_EVENT_NAME"], event)
     print(json.dumps(result, indent=2))
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
         output.write(f"required={str(result['required']).lower()}\n")
+        output.write(f"profile_policy={result['profile_policy']}\n")
+
+
+def profile_policy(event_name, event):
+    policy = event.get("inputs", {}).get("profiles", "release") if event_name == "workflow_dispatch" else "release"
+    if policy not in {"release", "full"}:
+        raise ValueError("unknown qualification profile policy")
+    return policy
 
 
 if __name__ == "__main__":
