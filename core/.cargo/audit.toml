@@ -1,11 +1,10 @@
 # cargo-audit configuration for the `core` workspace.
 #
-# The advisories ignored below are in TRANSITIVE dependencies that cannot
-# currently be patched at the lockfile level — each is pinned by a major
-# dependency whose fixed release would require a breaking upgrade out of scope
-# for a routine audit pass. Each entry documents its dependency constraint,
-# relevant exposure, and the upstream bump that would clear it. Re-audit and
-# prune this list whenever those upstreams move.
+# These explicit exceptions cover transitive dependencies. Most are pinned by
+# dependencies whose fixes require a breaking upgrade; temporary exceptions
+# preserving a qualified dependency graph are documented individually below.
+# Each entry records its dependency path, exposure and removal condition.
+# Re-audit and prune this list whenever those dependencies move.
 #
 # Run `cargo audit` after any dependency change to confirm no NEW advisory is
 # silently swept under these ignores — the list is intentionally explicit (no
@@ -21,6 +20,16 @@
 
 [advisories]
 ignore = [
+    # libz-sys 1.1.30 via indexer's built -> git2 -> libgit2-sys build dependency.
+    # On Unix, its probe can log the build environment when compiled with
+    # cc >=1.6.0. Cargo retains that output under target/, so shared build
+    # directories, caches or verbose logs can expose build-time secrets.
+    # Accepted prelaunch exception while retaining the S2-qualified lockfile,
+    # not a fix or a claim that build outputs contain no secrets. Remove after
+    # updating libz-sys to >=1.1.31 and validating the changed dependency graph.
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0418
+    "RUSTSEC-2026-0418",
+
     # ── hickory-proto 0.25.2 ─────────────────────────────────────────────────
     # Pulled in only by libp2p 0.56 (mDNS / DNS peer discovery), itself pinned
     # by Malachite 0.8.2. Both advisories

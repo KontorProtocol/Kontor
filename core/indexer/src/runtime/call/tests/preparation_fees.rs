@@ -1,6 +1,5 @@
 use anyhow::Result;
 use indexer_types::Payment;
-use wasmtime::component::Component;
 
 use super::{balance, call_chain, funded};
 use crate::reg_tester::random_x_only_pubkey;
@@ -33,23 +32,6 @@ async fn preparation_failures_burn_consumed_work_and_refund_the_payer() -> Resul
             None,
         )
         .await;
-    let id = runtime
-        .storage
-        .insert_contract(
-            "start-trap",
-            include_bytes!("../../../../../../test-contracts/binaries/error_test.wasm.br"),
-        )
-        .await?;
-    let component = Component::new(
-        &runtime.engine,
-        "(component (core module (func $start unreachable) (start $start)) (core instance (instantiate 0)))",
-    )?;
-    runtime.component_cache.put(id, component, 0).await;
-    let start_trap = ContractAddress {
-        name: "start-trap".into(),
-        height: 1,
-        tx_index: 3,
-    };
     let payment = Payment {
         signer_id: payer.signer_id().unwrap(),
         gas_limit: 100_000,
@@ -59,7 +41,6 @@ async fn preparation_failures_burn_consumed_work_and_refund_the_payer() -> Resul
         (&chain[0], "(", 100_000),
         (&chain[0], "missing-function()", 100_000),
         (&chain[0], "primitive-entries(1)", 100_000),
-        (&start_trap, "init()", 100_000),
         (&chain[0], "primitive-entries()", 1),
     ] {
         let mut expected = None;

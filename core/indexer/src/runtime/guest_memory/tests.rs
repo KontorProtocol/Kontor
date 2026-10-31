@@ -1,6 +1,6 @@
 use anyhow::Result;
 use wasmtime::{
-    Engine, GcHeapOutOfMemory, Instance, Memory, MemoryType, Module, Store, WasmFeatures,
+    Engine, GcHeapOutOfMemory, Instance, Memory, MemoryType, Module, Store, Trap, WasmFeatures,
 };
 
 use super::{GuestMemoryLimitExceeded, GuestMemoryLimiter, GuestMemoryLimits};
@@ -33,6 +33,9 @@ fn store(engine: &Engine, limiter: GuestMemoryLimiter) -> Store<TestState> {
 #[test]
 fn runtime_engine_pins_growth_assumptions() -> Result<()> {
     let engine = Runtime::new_engine()?;
+    let reservation = u64::try_from(GuestMemoryLimits::default().per_root)?;
+    assert_eq!(engine.get_memory_reservation(), reservation);
+    assert_eq!(engine.get_gc_heap_reservation(), reservation);
     let features = engine.get_wasm_features();
     assert!(!features.contains(WasmFeatures::CUSTOM_PAGE_SIZES));
     assert!(!features.contains(WasmFeatures::THREADS));
@@ -44,6 +47,125 @@ fn runtime_engine_pins_growth_assumptions() -> Result<()> {
     assert!(features.contains(WasmFeatures::MEMORY64));
     assert!(engine.get_memory_may_move());
     assert!(engine.get_gc_heap_may_move());
+    Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+struct ReservationSemantics {
+    fuel_spent: [u64; 4],
+}
+
+fn reservation_semantics(
+    engine: &Engine,
+    module: &Module,
+    memory64: bool,
+) -> Result<ReservationSemantics> {
+    let root = GuestMemoryLimiter::new_root(limits(2 * PAGE));
+    let mut primary = store(engine, root.new_child());
+    primary.set_fuel(1_000_000)?;
+    let instance = Instance::new(&mut primary, module, &[])?;
+    assert_eq!(root.admitted(), PAGE);
+
+    let mut fuel_spent = [0; 4];
+    let roundtrip = instance.get_typed_func::<i32, i32>(&mut primary, "roundtrip")?;
+    let before = primary.get_fuel()?;
+    assert_eq!(roundtrip.call(&mut primary, 0x12345678)?, 0x12345678);
+    fuel_spent[0] = before - primary.get_fuel()?;
+
+    let oob = instance.get_typed_func::<(), i32>(&mut primary, "oob")?;
+    let before = primary.get_fuel()?;
+    let error = oob.call(&mut primary, ()).unwrap_err();
+    assert!(
+        matches!(error.downcast_ref::<Trap>(), Some(Trap::MemoryOutOfBounds)),
+        "{error:#}"
+    );
+    fuel_spent[1] = before - primary.get_fuel()?;
+
+    let before = primary.get_fuel()?;
+    if memory64 {
+        let grow = instance.get_typed_func::<i64, i64>(&mut primary, "grow")?;
+        assert_eq!(grow.call(&mut primary, 1)?, 1);
+    } else {
+        let grow = instance.get_typed_func::<i32, i32>(&mut primary, "grow")?;
+        assert_eq!(grow.call(&mut primary, 1)?, 1);
+    }
+    fuel_spent[2] = before - primary.get_fuel()?;
+    assert_eq!(root.admitted(), 2 * PAGE);
+
+    let before = primary.get_fuel()?;
+    let error = if memory64 {
+        instance
+            .get_typed_func::<i64, i64>(&mut primary, "grow")?
+            .call(&mut primary, 1)
+            .unwrap_err()
+    } else {
+        instance
+            .get_typed_func::<i32, i32>(&mut primary, "grow")?
+            .call(&mut primary, 1)
+            .unwrap_err()
+    };
+    assert!(error.is::<GuestMemoryLimitExceeded>(), "{error:#}");
+    fuel_spent[3] = before - primary.get_fuel()?;
+    assert_eq!(root.admitted(), 2 * PAGE);
+    assert!(!root.backing_failed());
+
+    let mut blocked = store(engine, root.new_child());
+    let error = Memory::new(&mut blocked, MemoryType::new(1, None)?).unwrap_err();
+    assert!(error.is::<GuestMemoryLimitExceeded>(), "{error:#}");
+    drop(blocked);
+    drop(primary);
+    assert_eq!(root.admitted(), 0);
+
+    let mut recovered = store(engine, root.new_child());
+    Memory::new(&mut recovered, MemoryType::new(1, None)?)?;
+    assert_eq!(root.admitted(), PAGE);
+    drop(recovered);
+    assert_eq!(root.admitted(), 0);
+    assert!(!root.backing_failed());
+    Ok(ReservationSemantics { fuel_spent })
+}
+
+#[test]
+fn smaller_reservation_preserves_memory_and_fuel_semantics() -> Result<()> {
+    let previous = Runtime::new_previous_memory_reservation_engine()?;
+    let current = Runtime::new_engine()?;
+    assert_eq!(previous.get_memory_reservation(), 4 * 1024 * 1024 * 1024);
+    assert_eq!(current.get_memory_reservation(), 512 * 1024 * 1024);
+
+    for (memory64, wat) in [
+        (
+            false,
+            r#"(module
+            (memory 1 65536)
+            (func (export "roundtrip") (param i32) (result i32)
+                i32.const 0 local.get 0 i32.store
+                i32.const 0 i32.load)
+            (func (export "oob") (result i32)
+                i32.const -1 i32.load)
+            (func (export "grow") (param i32) (result i32)
+                local.get 0 memory.grow))"#,
+        ),
+        (
+            true,
+            r#"(module
+            (memory i64 1 65536)
+            (func (export "roundtrip") (param i32) (result i32)
+                i64.const 0 local.get 0 i32.store
+                i64.const 0 i32.load)
+            (func (export "oob") (result i32)
+                i64.const 9223372036854775807 i32.load)
+            (func (export "grow") (param i64) (result i64)
+                local.get 0 memory.grow))"#,
+        ),
+    ] {
+        let old_module = Module::new(&previous, wat)?;
+        let new_module = Module::new(&current, wat)?;
+        assert_eq!(
+            reservation_semantics(&previous, &old_module, memory64)?,
+            reservation_semantics(&current, &new_module, memory64)?,
+            "memory64={memory64}"
+        );
+    }
     Ok(())
 }
 

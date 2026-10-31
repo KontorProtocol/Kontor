@@ -1,0 +1,19 @@
+package root:component;
+
+world root {
+  include kontor:built-in/built-in;
+  use kontor:built-in/context.{core-context, proc-context, view-context, contract};
+  use kontor:built-in/foreign.{contract-address};
+
+  export init: func(ctx: borrow<proc-context>) -> contract;
+  export recurse: func(ctx: borrow<proc-context>, depth: u32) -> u32;
+  export leaf-host-recurse: func(ctx: borrow<proc-context>, depth: u32) -> u32;
+  export wide-recurse: func(ctx: borrow<proc-context>, depth: u32, data: list<u64>) -> u64;
+  export huge-frame: func(ctx: borrow<proc-context>, data: list<u64>) -> u64;
+  export view-recurse: func(ctx: borrow<view-context>, depth: u32) -> u32;
+  export view-wide-recurse: func(ctx: borrow<view-context>, depth: u32, data: list<u64>) -> u64;
+  export core-recurse: func(ctx: borrow<core-context>, depth: u32) -> u32;
+  export core-wide-recurse: func(ctx: borrow<core-context>, depth: u32, data: list<u64>) -> u64;
+  export last-depth: func(ctx: borrow<view-context>) -> u32;
+  export reenter: func(ctx: borrow<proc-context>, next: contract-address, depth: u32) -> u32;
+}

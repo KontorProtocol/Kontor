@@ -1,0 +1,218 @@
+{
+  "auxiliary_expected_counts_by_mode": {
+    "core": {
+      "post_observation": 5,
+      "pre_observation": 0,
+      "rollback_observation": 4,
+      "target_native_auxiliary": 0
+    },
+    "paid": {
+      "post_observation": 5,
+      "pre_observation": 0,
+      "rollback_observation": 4,
+      "target_native_auxiliary": 2
+    },
+    "system": {
+      "post_observation": 5,
+      "pre_observation": 0,
+      "rollback_observation": 4,
+      "target_native_auxiliary": 0
+    },
+    "view": {
+      "post_observation": 5,
+      "pre_observation": 0,
+      "rollback_observation": 4,
+      "target_native_auxiliary": 0
+    }
+  },
+  "boundary_cases": [
+    {
+      "case_id": "pulley_plain_core",
+      "first_failure": 8188,
+      "last_success": 8187,
+      "mode": "core",
+      "repeats": 3,
+      "shape": "plain"
+    },
+    {
+      "case_id": "pulley_plain_paid",
+      "first_failure": 8187,
+      "last_success": 8186,
+      "mode": "paid",
+      "repeats": 3,
+      "shape": "plain"
+    },
+    {
+      "case_id": "pulley_plain_system",
+      "first_failure": 8188,
+      "last_success": 8187,
+      "mode": "system",
+      "repeats": 3,
+      "shape": "plain"
+    },
+    {
+      "case_id": "pulley_plain_view",
+      "first_failure": 8188,
+      "last_success": 8187,
+      "mode": "view",
+      "repeats": 3,
+      "shape": "plain"
+    },
+    {
+      "case_id": "pulley_wide_core",
+      "first_failure": 1723,
+      "last_success": 1722,
+      "mode": "core",
+      "repeats": 3,
+      "shape": "wide"
+    },
+    {
+      "case_id": "pulley_wide_paid",
+      "first_failure": 1723,
+      "last_success": 1722,
+      "mode": "paid",
+      "repeats": 3,
+      "shape": "wide"
+    },
+    {
+      "case_id": "pulley_wide_system",
+      "first_failure": 1723,
+      "last_success": 1722,
+      "mode": "system",
+      "repeats": 3,
+      "shape": "wide"
+    },
+    {
+      "case_id": "pulley_wide_view",
+      "first_failure": 1723,
+      "last_success": 1722,
+      "mode": "view",
+      "repeats": 3,
+      "shape": "wide"
+    }
+  ],
+  "claim_status": "candidate_only",
+  "configurations": [
+    "reduced",
+    "production"
+  ],
+  "discovery": {
+    "cell": "Linux-ARM64/dev",
+    "configuration": "production",
+    "initial_depth": 1024,
+    "max_depth": 32768,
+    "process_role": "discovery_production_observed"
+  },
+  "final_roles": [
+    "target_observed",
+    "probe_off_control"
+  ],
+  "leaf_case": {
+    "case_id": "deepest_frame_host_call",
+    "first_failure": 8181,
+    "last_success": 8180,
+    "own_adjacent_boundary": true,
+    "repeats": 2
+  },
+  "parent_manifest_sha256": "4d69e416a89b3a00caea02a7e34963b00ca890b138c6b4793ea6f98217e598bf",
+  "remaining_case_ids": [
+    "brotli_raw_ceiling",
+    "canonical_lift_lower",
+    "canonical_post_return",
+    "canonical_realloc",
+    "canonical_type_value_recursion",
+    "cold_publish_br_table",
+    "cold_publish_control_nesting",
+    "cold_publish_large_function",
+    "deepest_frame_host_call",
+    "explicit_resource_drop",
+    "failed_instantiation_cleanup",
+    "foreign_wave_parse_print",
+    "generated_initialization",
+    "large_frame_paid",
+    "max_gas_paid",
+    "native_filestorage_lifecycle",
+    "native_staking_rewards",
+    "pending_host_io",
+    "pulley_plain_core",
+    "pulley_plain_paid",
+    "pulley_plain_system",
+    "pulley_plain_view",
+    "pulley_wide_core",
+    "pulley_wide_paid",
+    "pulley_wide_system",
+    "pulley_wide_view",
+    "sqlite_large_values",
+    "sqlite_pagination",
+    "sqlite_ranges"
+  ],
+  "remaining_requirements": {
+    "case_bindings": "missing_29",
+    "macos_guard": "missing",
+    "production_memory_profiles": "missing",
+    "six_cell_qualification": "missing",
+    "workload_plan": "awaiting_frozen_workload_plan"
+  },
+  "reviewed_discovery_sha256": "4cf03721ac9cd81a8f8e75171050532ed5949e80f3cfb50c712653cc6d806702",
+  "schema_sha256": "36023c14bd0faa5e35df8525dda3a4293ccdaa46a4829781239a0f310c8cf96f",
+  "schema_version": 1,
+  "source_baseline_commit": "67a52fed58a893ce2c1c05483f86f4fffa02a675",
+  "sources": {
+    "capture": {
+      "path": "tools/native-stack/capture_resource_boundary.py",
+      "sha256": "e5b963813fbb946e654208ad5367b786210c18aeb527fd68d78642d996104187"
+    },
+    "composition_tests": {
+      "path": "tools/native-stack/test_resource_boundary_composition.py",
+      "sha256": "f945b1769c0741619f31ff25fe4b174fbc28a71bb286993429a0faa6f6eb7f41"
+    },
+    "depths": {
+      "path": "tools/native-stack/resource-boundary-depths-v1.json",
+      "sha256": "96d076871dc546a75a27c895715ed8d3da315b091cf39ff01e2fbceb2d299baa"
+    },
+    "fixture_binary": {
+      "path": "test-contracts/binaries/stack_probe.wasm.br",
+      "sha256": "32652cdffc656f2f9d13d1cd5e4083245ef148a5f6bfef85ec4166a10ada26b9"
+    },
+    "fixture_source": {
+      "path": "test-contracts/stack-probe/src/lib.rs",
+      "sha256": "4dd3afe68bdcd3167f0b8bbd34961dcc9f8a9b9cf2a555891cd7a7ce95208fa2"
+    },
+    "fixture_wit": {
+      "path": "test-contracts/stack-probe/wit/contract.wit",
+      "sha256": "eb20c582c371e45b85fb3224945176ea9c521f7c4c862aa912b999c291a6573f"
+    },
+    "manifest_builder": {
+      "path": "tools/native-stack/resource_boundary_manifest.py",
+      "sha256": "d5474c5e396ff4926b896f81c35a57af08431a522625f7d4b35f52c79fe62e91"
+    },
+    "plan": {
+      "path": "tools/native-stack/resource-boundary-family.md",
+      "sha256": "ef347c6e368ea3da70e25e9f6403630eafbb691512477fb033113da453edea38"
+    },
+    "schema": {
+      "path": "tools/native-stack/resource-boundary-evidence-schema-v1.json",
+      "sha256": "36023c14bd0faa5e35df8525dda3a4293ccdaa46a4829781239a0f310c8cf96f"
+    },
+    "sweep": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
+      "sha256": "23ee679951326e1c3dea012361779945b9b5161ee2319cb1e5d02dc1cd86cd7d"
+    },
+    "synthetic_guard_tests": {
+      "path": "tools/native-stack/test_resource_report.py",
+      "sha256": "6534cecf055d4f7a491b33cb88b7c45a928b976962893e2be84ac43dda5f126a"
+    },
+    "tests": {
+      "path": "tools/native-stack/test_resource_boundary_evidence.py",
+      "sha256": "065f5821e23d4b3f7ac79a28314c68197666ee8770dc78bc87e4d537c20f5193"
+    },
+    "validator": {
+      "path": "tools/native-stack/resource_boundary_evidence.py",
+      "sha256": "4ab4bc0e28c3c4e844781352fa9e736ebdbeb65ea5b04027c12f855f6db643a7"
+    },
+    "worker": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
+      "sha256": "1f61c34150b1048d12c1754534c4a7a42d86fe993abb3792c9d63682340ce2e8"
+    }
+  }
+}

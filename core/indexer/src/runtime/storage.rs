@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::io::Read;
 use wit_component::{ComponentEncoder, WitPrinter};
 
+#[cfg(test)]
+use super::resource_diagnostics;
 use crate::{
     database::{
         queries::{
@@ -347,7 +349,10 @@ impl Storage {
             })?;
         // Split the join from the work: a JoinError is this node's task machinery
         // failing, everything inside is a property of the bytes.
-        let decompressed = tokio::task::spawn_blocking(move || {
+        let encoded = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+            #[cfg(test)]
+            let _trace =
+                resource_diagnostics::scope("blocking_decode_entry", "blocking_decode_exit");
             // Cap decompressed size: a tiny on-chain brotli blob can otherwise
             // inflate without bound in memory on every node that loads the
             // contract (decompression bomb). 64 MiB is far above any legitimate
@@ -362,18 +367,22 @@ impl Storage {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "decompressed contract component exceeds maximum size",
-                ));
+                )
+                .into());
             }
-            Ok::<_, std::io::Error>(module_bytes)
+            // Component encoding has a deep native call chain. Keep it on the
+            // blocking thread to avoid adding it to the async worker's existing
+            // stack depth during an otherwise valid paid operation.
+            ComponentEncoder::default()
+                .module(&module_bytes)?
+                .validate(true)
+                .encode()
         })
         .await
         .map_err(|e| ComponentDecodeError::Infrastructure(e.into()))?
-        .map_err(|e| ComponentDecodeError::Content(e.into()))?;
+        .map_err(ComponentDecodeError::Content)?;
 
-        ComponentEncoder::default()
-            .module(&decompressed)
-            .and_then(|m| m.validate(true).encode())
-            .map_err(ComponentDecodeError::Content)
+        Ok(encoded)
     }
 
     pub async fn component_wit(&self, contract_id: u64) -> Result<String> {

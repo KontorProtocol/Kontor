@@ -1,6 +1,8 @@
 use anyhow::{Result, anyhow};
 
 use super::ExecutionError;
+#[cfg(test)]
+use super::resource_diagnostics;
 use futures_util::FutureExt;
 use futures_util::future::OptionFuture;
 use wasmtime::{
@@ -20,6 +22,9 @@ use crate::database::native_contracts::{TOKEN_CONTRACT_ID, is_native_contract_id
 use super::{
     ContractAddress, MAX_UNTRUSTED_GAS_LIMIT, Runtime,
     fuel::{Fuel, UsageKind, record_fuel},
+    invocation::{
+        InvocationCapacityExhausted, InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS,
+    },
     stack::CallFrame,
     wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
@@ -58,6 +63,13 @@ struct PreparedCall {
 pub(super) struct CallOutcome {
     pub result: Result<String, ExecutionError>,
     pub remaining_fuel: u64,
+}
+
+fn invocation_limit_outcome(fuel_limit: u64) -> CallOutcome {
+    CallOutcome {
+        result: Err(ExecutionError::Deterministic(InvocationLimitReached.into())),
+        remaining_fuel: fuel_limit,
+    }
 }
 
 impl Runtime {
@@ -199,7 +211,33 @@ impl Runtime {
         fuel_limit: u64,
         nested: bool,
     ) -> Result<CallOutcome, ExecutionError> {
-        let mut store = self.make_store(fuel_limit)?;
+        if self.invocation_depth >= MAX_LIVE_INVOCATIONS {
+            #[cfg(test)]
+            self.record_resource_rejection(contract_address, "depth_gate_rejected");
+            return Ok(invocation_limit_outcome(fuel_limit));
+        }
+        if self
+            .invocation_budget
+            .as_ref()
+            .is_some_and(|budget| budget.live() >= MAX_LIVE_INVOCATIONS)
+        {
+            #[cfg(test)]
+            self.record_resource_rejection(contract_address, "physical_capacity_rejected");
+            return Err(ExecutionError::NonDeterministic(
+                InvocationCapacityExhausted.into(),
+            ));
+        }
+        #[cfg(test)]
+        let store_result = self.make_store_for_call(fuel_limit, contract_address);
+        #[cfg(not(test))]
+        let store_result = self.make_store(fuel_limit);
+        let mut store = match store_result {
+            Ok(store) => store,
+            Err(error) if error.is::<InvocationLimitReached>() => {
+                return Ok(invocation_limit_outcome(fuel_limit));
+            }
+            Err(error) => return Err(error.into()),
+        };
         if !nested {
             store.data_mut().usage_kind = match signer {
                 Some(signer) if !signer.is_core() => UsageKind::User,
@@ -207,9 +245,14 @@ impl Runtime {
             };
         }
         let mut runtime = store.data().clone();
+        // The invocation driver never accesses this table; guest callbacks use
+        // Store.data(). Keeping its table here would outlive Store on Err paths
+        // and release the lease while the resource table is still alive.
+        runtime.table = self.table.clone();
         let (result, mut store) = runtime
             .invoke_in_store(store, contract_address, signer, payment, expr, nested)
             .await?;
+        drop(runtime);
         record_fuel(&mut store)?;
         Ok(CallOutcome {
             result,
@@ -219,13 +262,13 @@ impl Runtime {
 
     async fn invoke_in_store(
         &mut self,
-        mut store: Store<Runtime>,
+        mut store: InvocationStore,
         contract_address: &ContractAddress,
         signer: Option<&Signer>,
         payment: Option<&Payment>,
         expr: &str,
         nested: bool,
-    ) -> Result<(Result<String, ExecutionError>, Store<Runtime>), ExecutionError> {
+    ) -> Result<(Result<String, ExecutionError>, InvocationStore), ExecutionError> {
         let starting_fuel = store.get_fuel().map_err(anyhow::Error::from)?;
         let prepared = self
             .prepare_in_store(&mut store, contract_address, signer, payment, expr, nested)
@@ -390,8 +433,14 @@ impl Runtime {
         let func_ctx_param_type = func_param_types.next().ok_or_else(|| {
             ExecutionError::Deterministic(anyhow!("Context/signer parameter not found"))
         })?;
-        let mut params =
-            input::params(&call, func_param_types, store).map_err(ExecutionError::Deterministic)?;
+        let mut params = {
+            #[cfg(test)]
+            let _conversion = resource_diagnostics::conversion_scope(
+                "canonical_input_entry",
+                "canonical_input_exit",
+            );
+            input::params(&call, func_param_types, store).map_err(ExecutionError::Deterministic)?
+        };
         let resource_type = match func_ctx_param_type {
             Type::Borrow(t) => Ok(t),
             _ => Err(ExecutionError::Deterministic(anyhow!(
@@ -541,12 +590,12 @@ impl Runtime {
     /// Returns (call_result, store) — the store is always returned for gas accounting.
     async fn call_guest(
         &self,
-        mut store: Store<Runtime>,
+        mut store: InvocationStore,
         func: Func,
         params: Vec<Val>,
         mut results: Vec<Val>,
         is_fallback: bool,
-    ) -> Result<(Result<String, ExecutionError>, Store<Runtime>)> {
+    ) -> Result<(Result<String, ExecutionError>, InvocationStore)> {
         let (result, results, mut store) = tokio::spawn(async move {
             match std::panic::AssertUnwindSafe(func.call_async(&mut store, &params, &mut results))
                 .catch_unwind()
@@ -604,6 +653,11 @@ impl Runtime {
         let result = if let Err(e) = result {
             Err(e)
         } else {
+            #[cfg(test)]
+            let _conversion = resource_diagnostics::conversion_scope(
+                "canonical_output_entry",
+                "canonical_output_exit",
+            );
             result::encode(results, is_fallback, store).await
         };
 

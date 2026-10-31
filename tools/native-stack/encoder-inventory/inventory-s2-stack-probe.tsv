@@ -1,0 +1,2 @@
+source_path	compressed_sha256	decompressed_sha256	encoded_component_bytes	embedded_modules	core_starts	component_starts
+test-contracts/binaries/stack_probe.wasm.br	e396317b4eb14c9a29d47acbe8a9f7b0e29770d47e7df53e4bed12d5c5bfce50	ee7419a2796f95284b873cc506af6b60f22b6b32a70e8843967783a93a9b0936	224183	3	0	0

@@ -1,0 +1,161 @@
+name: Native Wasm stack qualification
+
+on:
+  pull_request:
+    paths:
+      - "core/**"
+      - "test-contracts/**"
+      - "tools/native-stack/**"
+      - ".github/workflows/native-stack.yml"
+      - ".github/workflows/native-stack-s2.yml"
+  push:
+    branches: [main]
+    paths:
+      - "core/**"
+      - "test-contracts/**"
+      - "tools/native-stack/**"
+      - ".github/workflows/native-stack.yml"
+      - ".github/workflows/native-stack-s2.yml"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Qualification or S2 resource evidence stage
+        required: true
+        default: qualify
+        type: choice
+        options: [qualify, discovery, guard, chain, vmmap, final]
+      reviewed_discovery_run_id:
+        description: Reviewed S2 discovery run ID for the final stage
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  controls:
+    name: Native stack evidence controls
+    if: github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install Python evidence validator
+        run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
+      # Process-identity controls exercise Linux /proc and cgroups.
+      - name: Test qualification controls
+        run: python3 -m unittest discover -s tools/native-stack -p 'test_*.py' -v
+
+  qualify:
+    name: Native stack (${{ matrix.os }}, ${{ matrix.profile }})
+    needs: controls
+    if: github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+        profile: [dev, release]
+        include:
+          - os: ubuntu-24.04
+            arch: X64
+          - os: ubuntu-24.04-arm
+            arch: ARM64
+          - os: macos-15
+            arch: ARM64
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.1"
+      RUSTC_WRAPPER: ""
+      CCACHE_DISABLE: "1"
+      CARGO_BUILD_JOBS: "2"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install Python evidence validator
+        run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
+      - name: Check runner architecture
+        run: test "$RUNNER_ARCH" = "${{ matrix.arch }}"
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libzmq3-dev libboost-all-dev libevent-dev
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install boost libevent zeromq
+      - name: Compile qualification test
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$PROFILE"
+          mkdir -p "$evidence"
+          flags=()
+          if [[ "$PROFILE" == release ]]; then flags+=(--release); fi
+          cargo test --locked --manifest-path core/Cargo.toml -p indexer --lib --no-run --message-format=json -j2 "${flags[@]}" > "$evidence/cargo.json"
+          jq -ser '[.[] | select(.reason == "compiler-artifact" and .target.name == "indexer" and (.target.kind | index("lib")) != null and .profile.test == true and .executable != null)] | if length == 1 then .[0].executable else error("expected exactly one indexer lib test executable") end' "$evidence/cargo.json" > target/native-stack-evidence/binary-path
+          test -s target/native-stack-evidence/binary-path
+      - name: Exercise paid, view, and Core chain boundaries
+        run: |
+          set -o pipefail
+          binary=$(cat target/native-stack-evidence/binary-path)
+          mkdir -p "target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ matrix.profile }}"
+          "$binary" --exact runtime::call::tests::sequential_chains::deep_sequential_chains_survive_in_separate_processes --nocapture 2>&1 | tee "target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ matrix.profile }}/chain-matrix.log"
+      - name: Measure stack boundaries
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          binary=$(cat target/native-stack-evidence/binary-path)
+          evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$PROFILE"
+          python3 tools/native-stack/qualify.py --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/$PROFILE" --output "$evidence" --chain-log "$evidence/chain-matrix.log"
+      - name: Preserve qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-${{ matrix.os }}-${{ matrix.profile }}
+          path: target/native-stack-evidence/${{ runner.os }}-${{ runner.arch }}/${{ matrix.profile }}/
+          if-no-files-found: error
+          retention-days: 30
+
+  compare:
+    name: Compare native stack outcomes
+    needs: qualify
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-stack-*
+          path: target/native-stack-compare
+      - name: Compare six variants
+        run: |
+          python3 tools/native-stack/compare.py --directory target/native-stack-compare --output target/native-stack-comparison.json --upstream-status "${{ needs.qualify.result }}"
+      - name: Preserve comparison
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-comparison
+          path: target/native-stack-comparison.json
+          if-no-files-found: error
+
+  s2:
+    if: github.event_name == 'workflow_dispatch' && (inputs.stage == 'discovery' || inputs.stage == 'guard' || inputs.stage == 'chain' || inputs.stage == 'vmmap' || inputs.stage == 'final')
+    uses: ./.github/workflows/native-stack-s2.yml
+    with:
+      stage: ${{ inputs.stage }}
+      reviewed_discovery_run_id: ${{ inputs.reviewed_discovery_run_id }}
+    permissions:
+      contents: read
+      actions: read

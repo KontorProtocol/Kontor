@@ -15,12 +15,18 @@ pub(crate) mod lite_executor;
 pub mod mempool_fee_index;
 pub mod mock_bitcoin;
 #[cfg(test)]
+mod pruning_tests;
+#[cfg(test)]
 mod reactor_cluster_tests;
+#[cfg(test)]
+mod simulation_context_tests;
 #[cfg(test)]
 mod startup_tests;
 #[cfg(test)]
 mod storage_penalty_tests;
 pub mod types;
+#[cfg(test)]
+mod workload_tests;
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -55,7 +61,8 @@ use crate::{
     database::{
         self,
         queries::{
-            insert_block, select_block_at_height, select_block_latest, select_unconfirmed_batch_tx,
+            PRUNE_WATERMARK_KEY, get_meta_u64, insert_block, select_block_at_height,
+            select_block_latest, select_unconfirmed_batch_tx,
         },
     },
     runtime::{
@@ -115,7 +122,7 @@ pub struct PruneConfig {
     /// `false` = archive node: full version history retained, no GC.
     pub enabled: bool,
     /// Blocks below the tip to retain before a version is prunable. Floored at
-    /// `FINALITY_WINDOW` at use so it can never reach into the reorg window.
+    /// `FINALITY_ROLLBACK_DEPTH` at use, preserving the invalidated anchor's predecessor.
     pub retain_blocks: u64,
 }
 
@@ -1077,17 +1084,12 @@ pub fn run(
                     consensus_listen_addr,
                 );
 
-                // Resume incremental pruning from where we left off (persisted in
-                // node_meta), so a restart doesn't re-scan all finalized history.
-                if prune.enabled {
-                    reactor.prune_watermark = database::queries::get_meta_u64(
-                        &reactor.db_conn(),
-                        database::queries::PRUNE_WATERMARK_KEY,
-                        0,
-                    )
-                    .await
-                    .context("loading prune watermark failed")?;
-                }
+                // Disabling pruning or increasing retention does not restore
+                // deleted history. Rollback must still respect this boundary.
+                reactor.prune_watermark =
+                    get_meta_u64(&reactor.db_conn(), PRUNE_WATERMARK_KEY, 0)
+                        .await
+                        .context("loading prune watermark failed")?;
 
                 reactor.run().await
             }

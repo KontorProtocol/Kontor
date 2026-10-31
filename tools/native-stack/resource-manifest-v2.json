@@ -1,0 +1,1273 @@
+{
+  "auxiliary_callsite_citations": {
+    "post_observation": [
+      "core/indexer/src/runtime/call/tests/sequential_chains.rs:479-481,541-549: storage-state, actor balance, burner balance, supply, and floor each create one Store after the target"
+    ],
+    "pre_observation": [
+      "core/indexer/src/runtime/call/tests/sequential_chains.rs:378-381: actor balance, burner balance, floor, and supply each create one native Store before the target"
+    ],
+    "rollback_observation": [
+      "core/indexer/src/runtime/call/tests/sequential_chains.rs:575-586: actor balance, floor, burner balance, supply, and storage-state each execute after rollback; asserted rollback_clean proves no short-circuit skipped a call"
+    ],
+    "target_native_auxiliary": [
+      "core/indexer/src/runtime/fees.rs:25,50: with_payment calls token::api::hold and token::api::release around paid deterministic outcomes, including traps and depth rejection",
+      "core/indexer/src/runtime/invocation.rs:73-77: target-phase token calls are classified separately from chain Stores"
+    ]
+  },
+  "auxiliary_count_status": "frozen",
+  "auxiliary_expected_counts": {
+    "chain_33_core/target_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_33_core/target_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_33_core/target_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_33_core/target_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_33_core/target_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_33_core/target_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_33_paid/target_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_33_paid/target_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_33_paid/target_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_33_paid/target_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_33_paid/target_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_33_paid/target_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_33_view/target_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_33_view/target_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_33_view/target_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_33_view/target_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_33_view/target_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_33_view/target_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_63_core/target_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_63_core/target_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_63_core/target_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_63_core/target_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_63_core/target_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_63_core/target_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_63_paid/target_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_63_paid/target_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_63_paid/target_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_63_paid/target_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_63_paid/target_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_63_paid/target_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_63_view/target_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_63_view/target_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_63_view/target_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_63_view/target_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_63_view/target_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_63_view/target_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_core/target_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_core/target_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_core/target_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_core/target_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_core/target_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_core/target_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_core/trap_control_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_core/trap_control_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_core/trap_control_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_core/trap_control_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_core/trap_control_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_core/trap_control_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_paid/target_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_64_paid/target_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_64_paid/target_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_64_paid/target_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_64_paid/target_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_64_paid/target_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_64_paid/trap_control_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_64_paid/trap_control_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_64_paid/trap_control_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_64_paid/trap_control_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_64_paid/trap_control_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_64_paid/trap_control_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_64_view/target_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_view/target_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_view/target_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_view/target_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_view/target_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_view/target_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_view/trap_control_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_view/trap_control_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_view/trap_control_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_view/trap_control_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_view/trap_control_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_64_view/trap_control_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_65_core/target_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_65_core/target_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_65_core/target_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_65_core/target_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_65_core/target_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_65_core/target_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_65_paid/target_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_65_paid/target_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_65_paid/target_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_65_paid/target_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_65_paid/target_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_65_paid/target_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 2
+    },
+    "chain_65_view/target_observed/production/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_65_view/target_observed/production/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_65_view/target_observed/production/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_65_view/target_observed/reduced/0": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_65_view/target_observed/reduced/1": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    },
+    "chain_65_view/target_observed/reduced/2": {
+      "post_observation": 5,
+      "pre_observation": 4,
+      "rollback_observation": 5,
+      "target_native_auxiliary": 0
+    }
+  },
+  "case_roles": [
+    {
+      "case_id": "chain_33_core",
+      "nested_chain_created": 33,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_33_core",
+      "nested_chain_created": 33,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_33_paid",
+      "nested_chain_created": 33,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_33_paid",
+      "nested_chain_created": 33,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_33_view",
+      "nested_chain_created": 33,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_33_view",
+      "nested_chain_created": 33,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_63_core",
+      "nested_chain_created": 63,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_63_core",
+      "nested_chain_created": 63,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_63_paid",
+      "nested_chain_created": 63,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_63_paid",
+      "nested_chain_created": 63,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_63_view",
+      "nested_chain_created": 63,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_63_view",
+      "nested_chain_created": 63,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_core",
+      "nested_chain_created": 64,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_core",
+      "nested_chain_created": 64,
+      "process_role": "trap_control_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "trap_control"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_core",
+      "nested_chain_created": 64,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_core",
+      "nested_chain_created": 64,
+      "process_role": "trap_control_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "trap_control"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_paid",
+      "nested_chain_created": 64,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_paid",
+      "nested_chain_created": 64,
+      "process_role": "trap_control_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "trap_control"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_paid",
+      "nested_chain_created": 64,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_paid",
+      "nested_chain_created": 64,
+      "process_role": "trap_control_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "trap_control"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_view",
+      "nested_chain_created": 64,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_view",
+      "nested_chain_created": 64,
+      "process_role": "trap_control_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "trap_control"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_view",
+      "nested_chain_created": 64,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_64_view",
+      "nested_chain_created": 64,
+      "process_role": "trap_control_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "trap_control"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_65_core",
+      "nested_chain_created": 64,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_65_core",
+      "nested_chain_created": 64,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_65_paid",
+      "nested_chain_created": 64,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_65_paid",
+      "nested_chain_created": 64,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_65_view",
+      "nested_chain_created": 64,
+      "process_role": "target_observed",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    },
+    {
+      "case_id": "chain_65_view",
+      "nested_chain_created": 64,
+      "process_role": "target_probe_off_control",
+      "trials": [
+        {
+          "repeat_index": 0,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 1,
+          "sample_key": "target"
+        },
+        {
+          "repeat_index": 2,
+          "sample_key": "target"
+        }
+      ]
+    }
+  ],
+  "claim_status": "candidate_only",
+  "parent_manifest_sha256": "4d69e416a89b3a00caea02a7e34963b00ca890b138c6b4793ea6f98217e598bf",
+  "persistent_digest_rules": {
+    "format": "row_multiset_and_logical_schema_v2",
+    "historical_full_digest_comparison": "excluded_source_provenance_and_format",
+    "physical_rootpage": "omitted",
+    "row_value_projection": {
+      "receipt_stream_state.epoch": "fixed_local_epoch_placeholder"
+    },
+    "schema_exclusions": [
+      "sqlite_sequence",
+      "sqlite_stat*"
+    ],
+    "schema_fields": [
+      "type",
+      "name",
+      "tbl_name",
+      "sql"
+    ],
+    "schema_order": [
+      "type",
+      "name"
+    ]
+  },
+  "remaining_case_ids": [
+    "brotli_raw_ceiling",
+    "canonical_lift_lower",
+    "canonical_post_return",
+    "canonical_realloc",
+    "canonical_type_value_recursion",
+    "cold_publish_br_table",
+    "cold_publish_control_nesting",
+    "cold_publish_large_function",
+    "deepest_frame_host_call",
+    "explicit_resource_drop",
+    "failed_instantiation_cleanup",
+    "foreign_wave_parse_print",
+    "generated_initialization",
+    "large_frame_paid",
+    "max_gas_paid",
+    "native_filestorage_lifecycle",
+    "native_staking_rewards",
+    "pending_host_io",
+    "pulley_plain_core",
+    "pulley_plain_paid",
+    "pulley_plain_system",
+    "pulley_plain_view",
+    "pulley_wide_core",
+    "pulley_wide_paid",
+    "pulley_wide_system",
+    "pulley_wide_view",
+    "sqlite_large_values",
+    "sqlite_pagination",
+    "sqlite_ranges"
+  ],
+  "remaining_requirements": {
+    "attestation": {
+      "cargo_binary_capture": "unimplemented",
+      "macos_thread_guard_capacity": "capture_pending",
+      "per_cell_guard_fault_control": "missing",
+      "source_revision_capture": "unimplemented",
+      "wasmtime_fiber_effective_capacity": "missing"
+    },
+    "case_bindings": "missing_29",
+    "macos_guard": "missing",
+    "production_memory_profiles": "missing",
+    "workload_plan": "awaiting_frozen_workload_plan"
+  },
+  "schema_sha256": "28011a094db6c6d7bd5a92012b1a0a13ab70159a57860bc7f0e9cc38f4d06c2e",
+  "schema_version": 2,
+  "source_baseline_commit": "67a52fed58a893ce2c1c05483f86f4fffa02a675",
+  "sources": {
+    "call": {
+      "path": "core/indexer/src/runtime/call.rs",
+      "sha256": "0992e2c6dd3f9d9f8adb9e04fce7a63ffe747bde216c34a49fc3580ce713b04b"
+    },
+    "chain_fixture": {
+      "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
+      "sha256": "184d4574294fdb917d6c2d04d3892fe7c91233d2ffe06e58566f5a8633b6a2ec"
+    },
+    "fees": {
+      "path": "core/indexer/src/runtime/fees.rs",
+      "sha256": "f744a02e4049b55876b5be4edf79f1ca94afd62c88f24bea63a06f4ce8c7540f"
+    },
+    "historical_phase10_gzip": {
+      "path": "tools/native-stack/fixtures/phase10-resource-chain-capture.json.gz",
+      "sha256": "06abb6c6a3094e71085e474817372b8f99bab07d11b5e9cdcaea08961107a7a1"
+    },
+    "historical_phase10_materializer": {
+      "path": "tools/native-stack/materialize_phase10_fixture.py",
+      "sha256": "2f3e5f741bfb3bf901df2cf0aec27ea6679904ed46978ad5804cba46320067f5"
+    },
+    "historical_phase10_materializer_tests": {
+      "path": "tools/native-stack/test_materialize_phase10_fixture.py",
+      "sha256": "cfb5d6d0bb39366ca488b2a1d233bdda8bc5482ac250ddb54704de367013a12b"
+    },
+    "invocation": {
+      "path": "core/indexer/src/runtime/invocation.rs",
+      "sha256": "6bfac3ffa8530f58c6fb607b0e6740665a21e46b80e4db8b3aa4de18f1c10856"
+    },
+    "runtime": {
+      "path": "core/indexer/src/runtime/mod.rs",
+      "sha256": "ffd5dda39749fc1febcd449f6e879278307921c79af3130e1e5b123c0c1d08a3"
+    },
+    "token": {
+      "path": "core/indexer/src/runtime/token.rs",
+      "sha256": "d4ffa4866ff51a6c6d78aaa19560cd05037455a0f5c29efed612319636dbac1f"
+    },
+    "v1_chain_capture": {
+      "path": "tools/native-stack/capture_resource_chain.py",
+      "sha256": "4399e3b3e27f2bb2fb2ebafb05aad756b7dd450d2c2272e3ccbee5d9ebe20f52"
+    },
+    "v1_validator": {
+      "path": "tools/native-stack/resource_evidence.py",
+      "sha256": "f3fc8308bd8270a9c3fb5f979ec4e9b3162b1f7f87477535a8ac72c8143cc6dc"
+    },
+    "v2_capture": {
+      "path": "tools/native-stack/capture_resource_chain_v2.py",
+      "sha256": "7707313795afa9588acd806c20d5107f44f13ce4d55f50614bb3e8961bb65667"
+    },
+    "v2_manifest_builder": {
+      "path": "tools/native-stack/resource_manifest_v2.py",
+      "sha256": "7ae09b345605260d7df5fa2ea6ae9787a41768445fc7d949fc10a0daf624cc56"
+    },
+    "v2_schema": {
+      "path": "tools/native-stack/resource-evidence-schema-v2.json",
+      "sha256": "28011a094db6c6d7bd5a92012b1a0a13ab70159a57860bc7f0e9cc38f4d06c2e"
+    },
+    "v2_tests": {
+      "path": "tools/native-stack/test_resource_evidence_v2.py",
+      "sha256": "141efea0126637c57d2a480cd34e44200e39ed9f06177110207c7441f2adb4ba"
+    },
+    "v2_validator": {
+      "path": "tools/native-stack/resource_evidence_v2.py",
+      "sha256": "d7b22eb8a4e90485a60c96aa74f40ae774485ffc77d58bd20720a9147260b814"
+    },
+    "worker": {
+      "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
+      "sha256": "1f61c34150b1048d12c1754534c4a7a42d86fe993abb3792c9d63682340ce2e8"
+    }
+  }
+}

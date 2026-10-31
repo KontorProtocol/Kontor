@@ -1,0 +1,1052 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
+
+use anyhow::{Context, Result, ensure};
+use bitcoin::Network;
+use indexer_types::{
+    BlockRow, ContractAddress, Inst, InstKind, OpStatus, Payment, ResultRow, TransactionRow,
+};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+use super::super::super::storage::Population as StoragePopulation;
+use super::super::{ANCHOR_HEIGHT, GAS_LIMIT, receipts, test_provenance};
+use super::configuration::MixedConfig;
+use super::files::FileWorkload;
+use super::oracle::{PaidEffects, root_receipts};
+use super::pagination;
+use crate::bls::taproot_derivation_path;
+use crate::database::queries::{
+    get_contract_id_from_address, get_contract_signer_id, get_identity, insert_block,
+    insert_transaction,
+};
+use crate::reg_tester::derive_taproot_keypair_from_seed;
+use crate::runtime::filestorage::{address as storage_address, api as storage_api};
+use crate::runtime::numerics::{add_decimal, mul_decimal};
+use crate::runtime::staking::{address as staking_address, api as staking};
+use crate::runtime::token::{address as token_address, api as token};
+use crate::runtime::wit::Signer;
+use crate::runtime::wit::kontor::built_in::context::HolderRef;
+use crate::runtime::{Decimal, Runtime, TransactionContext, from_wave_expr, to_wave_expr};
+use crate::test_utils::{new_mock_block_hash, new_mock_transaction, test_runtime};
+
+mod api;
+mod progress;
+
+pub(super) use api::ApiRecipe;
+pub(super) use progress::Progress;
+
+const BLOB_BYTES: usize = 128;
+
+pub(super) struct ExecutionSlice {
+    pub(super) operations: Range<usize>,
+    pub(super) layout: MixedLayout,
+    pub(super) height: u64,
+    pub(super) confirmed: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum MixedLayout {
+    Single {
+        payer: u64,
+        operations_per_transaction: usize,
+    },
+    TwoInputs {
+        signers: [u64; 2],
+    },
+    Aggregate {
+        signers: [u64; 2],
+    },
+}
+
+impl MixedLayout {
+    pub(super) fn payer(self) -> u64 {
+        match self {
+            Self::Single { payer, .. } => payer,
+            Self::TwoInputs { signers } | Self::Aggregate { signers } => signers[0],
+        }
+    }
+
+    pub(super) fn signer(self, index: usize) -> u64 {
+        match self {
+            Self::Single { payer, .. } => payer,
+            Self::TwoInputs { signers } => signers[index / 50],
+            Self::Aggregate { signers } => signers[index % 2],
+        }
+    }
+
+    pub(super) fn position(self, index: usize) -> Result<(u32, u32, u32)> {
+        let (tx, input, op) = match self {
+            Self::Single {
+                operations_per_transaction,
+                ..
+            } => {
+                ensure!(operations_per_transaction > 0);
+                (
+                    index / operations_per_transaction,
+                    0,
+                    index % operations_per_transaction,
+                )
+            }
+            Self::TwoInputs { .. } => (0, index / 50, index % 50),
+            Self::Aggregate { .. } => (0, 0, index),
+        };
+        Ok((
+            u32::try_from(tx)?,
+            u32::try_from(input)?,
+            u32::try_from(op)?,
+        ))
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct MixedWorkload {
+    counter: ContractAddress,
+    failed: ContractAddress,
+    proxy: ContractAddress,
+    crypto: ContractAddress,
+    recipient: u64,
+    rounds: usize,
+    paginated: Option<(ContractAddress, usize)>,
+    files: Option<FileWorkload>,
+    file_round_start: usize,
+    step: u64,
+    previous_hash_index: Option<usize>,
+    counter_before: u64,
+    recipient_before: Decimal,
+    stakes_before: BTreeMap<u64, Decimal>,
+}
+
+impl MixedWorkload {
+    pub(super) async fn restore_timed(
+        runtime: &mut Runtime,
+        payer: u64,
+        transactions: usize,
+        config: MixedConfig,
+    ) -> Result<Self> {
+        config.validate()?;
+        ensure!(matches!(transactions, 50 | 250 | 500 | 1300));
+        ensure!(
+            staking::get_stake(runtime, &payer.to_string())
+                .await?
+                .is_none()
+        );
+        let [counter, failed, proxy, crypto] =
+            ["mixedcounter", "mixedfailed", "mixedproxy", "mixedcrypto"].map(|name| {
+                ContractAddress {
+                    name: name.into(),
+                    height: ANCHOR_HEIGHT,
+                    tx_index: 7,
+                }
+            });
+        let pages = ContractAddress {
+            name: "mixedpages".into(),
+            height: if config.historical_rows > 0 {
+                0
+            } else {
+                ANCHOR_HEIGHT
+            },
+            tx_index: 7,
+        };
+        for address in [&counter, &failed, &proxy, &crypto, &pages] {
+            ensure!(
+                runtime.storage.contract_id(address).await?.is_some(),
+                "saved mixed contract missing"
+            );
+        }
+        let recipient_key = derive_taproot_keypair_from_seed(
+            &[97; 64],
+            &taproot_derivation_path(Network::Regtest),
+        )?
+        .x_only_public_key()
+        .0
+        .to_string();
+        let recipient = get_identity(&runtime.get_storage_conn(), &recipient_key)
+            .await?
+            .context("saved recipient missing")?
+            .signer_id();
+        ensure!(
+            token::balance(runtime, HolderRef::SignerId(recipient))
+                .await?
+                .unwrap_or_default()
+                == Decimal::default()
+        );
+        Self {
+            counter,
+            failed,
+            proxy,
+            crypto,
+            recipient,
+            rounds: transactions / 10,
+            paginated: Some((pages, config.live_keys)),
+            files: None,
+            file_round_start: 0,
+            step: 0,
+            previous_hash_index: None,
+            counter_before: 0,
+            recipient_before: Decimal::default(),
+            stakes_before: BTreeMap::new(),
+        }
+        .with_timed_files(runtime, config.new_files, config.transactions)
+        .await
+    }
+
+    pub(super) async fn prepare(runtime: &mut Runtime, payer: u64, rounds: usize) -> Result<Self> {
+        ensure!(matches!(rounds, 5 | 50));
+        Self::prepare_recipe(runtime, payer, rounds).await
+    }
+
+    pub(super) async fn prepare_timed(
+        runtime: &mut Runtime,
+        payer: u64,
+        transactions: usize,
+    ) -> Result<Self> {
+        ensure!(matches!(transactions, 50 | 250 | 500 | 1300));
+        Self::prepare_recipe(runtime, payer, transactions / 10).await
+    }
+
+    async fn prepare_recipe(runtime: &mut Runtime, payer: u64, rounds: usize) -> Result<Self> {
+        ensure!(
+            staking::get_stake(runtime, &HolderRef::SignerId(payer).to_string())
+                .await?
+                .is_none(),
+            "mixed payer must start without a bond"
+        );
+        let core = Signer::Core(Box::new(Signer::Nobody));
+        runtime
+            .set_context(
+                ANCHOR_HEIGHT,
+                Some(TransactionContext::builder().tx_index(7).build()),
+                None,
+                None,
+            )
+            .await;
+        let [counter, failed, proxy, crypto] =
+            ["mixedcounter", "mixedfailed", "mixedproxy", "mixedcrypto"].map(|name| {
+                ContractAddress {
+                    name: name.into(),
+                    height: ANCHOR_HEIGHT,
+                    tx_index: 7,
+                }
+            });
+        let counter_bytes =
+            include_bytes!("../../../../../../../test-contracts/binaries/counter.wasm.br");
+        let proxy_bytes =
+            include_bytes!("../../../../../../../test-contracts/binaries/proxy.wasm.br");
+        let crypto_bytes =
+            include_bytes!("../../../../../../../test-contracts/binaries/crypto.wasm.br");
+        for (address, bytes) in [
+            (&counter, counter_bytes.as_slice()),
+            (&failed, counter_bytes.as_slice()),
+            (&proxy, proxy_bytes.as_slice()),
+            (&crypto, crypto_bytes.as_slice()),
+        ] {
+            runtime
+                .publish(
+                    &core,
+                    runtime.core_payment(),
+                    &address.name,
+                    bytes,
+                    &test_provenance()?,
+                )
+                .await?;
+        }
+        runtime
+            .execute(
+                Some(&core),
+                Some(runtime.core_payment()),
+                &proxy,
+                &format!("set-contract-address({})", to_wave_expr(counter.clone())),
+            )
+            .await?;
+        let recipient_key = derive_taproot_keypair_from_seed(
+            &[97; 64],
+            &taproot_derivation_path(Network::Regtest),
+        )?
+        .x_only_public_key()
+        .0
+        .to_string();
+        let recipient = runtime
+            .get_or_create_identity(&recipient_key)
+            .await?
+            .signer_id();
+        ensure!(
+            token::balance(runtime, HolderRef::SignerId(recipient))
+                .await?
+                .unwrap_or_default()
+                == Decimal::default()
+        );
+        Ok(Self {
+            counter,
+            failed,
+            proxy,
+            crypto,
+            recipient,
+            rounds,
+            paginated: None,
+            files: None,
+            file_round_start: 0,
+            step: 0,
+            previous_hash_index: None,
+            counter_before: 0,
+            recipient_before: Decimal::default(),
+            stakes_before: BTreeMap::new(),
+        })
+    }
+
+    pub(super) fn next_step(&self, layout: MixedLayout) -> Result<Self> {
+        ensure!(self.step < 6, "sequence exceeds seven blocks");
+        self.next_recipe(layout, self.rounds, self.file_round_start)
+    }
+
+    pub(super) fn next_timed(
+        &self,
+        layout: MixedLayout,
+        transactions: usize,
+        fresh_transactions: usize,
+    ) -> Result<Self> {
+        ensure!(matches!(transactions, 50 | 250 | 500 | 1300));
+        ensure!(matches!(fresh_transactions, 50 | 500));
+        ensure!(fresh_transactions <= transactions);
+        self.next_recipe(
+            layout,
+            transactions / 10,
+            (transactions - fresh_transactions) / 10,
+        )
+    }
+
+    fn next_recipe(
+        &self,
+        layout: MixedLayout,
+        rounds: usize,
+        file_round_start: usize,
+    ) -> Result<Self> {
+        let mut next = self.clone();
+        next.step = self.step.checked_add(1).context("recipe index overflow")?;
+        next.previous_hash_index = Some(self.rounds * 20 - 1);
+        next.counter_before = self
+            .counter_before
+            .checked_add(u64::try_from(self.rounds * 4)?)
+            .context("sequence counter overflow")?;
+        next.recipient_before = add_decimal(
+            self.recipient_before,
+            mul_decimal(
+                Decimal::from("0.001"),
+                Decimal::try_from(u64::try_from(self.rounds * 8)?)?,
+            )?,
+        )?;
+        for signer in (0..self.rounds * 20)
+            .map(|index| layout.signer(index))
+            .collect::<BTreeSet<_>>()
+        {
+            let (_, staked) = self.signer_effects(layout, signer)?;
+            if staked > Decimal::default() {
+                let value = next.stakes_before.entry(signer).or_default();
+                *value = add_decimal(*value, staked)?;
+            }
+        }
+        next.files = self
+            .files
+            .as_ref()
+            .map(FileWorkload::next_recipe)
+            .transpose()?;
+        next.rounds = rounds;
+        next.file_round_start = file_round_start;
+        ensure!(next.file_round_start < next.rounds);
+        ensure!(
+            next.files
+                .as_ref()
+                .is_none_or(|files| { files.len() <= (next.rounds - next.file_round_start) * 2 })
+        );
+        Ok(next)
+    }
+
+    pub(super) async fn with_pagination(
+        mut self,
+        runtime: &mut Runtime,
+        entries: usize,
+        prepared: Option<ContractAddress>,
+    ) -> Result<Self> {
+        let contract = match prepared {
+            Some(contract) => contract,
+            None => pagination::prepare(runtime, entries).await?,
+        };
+        self.paginated = Some((contract, entries));
+        Ok(self)
+    }
+
+    pub(super) async fn with_files(mut self, runtime: &mut Runtime, count: usize) -> Result<Self> {
+        ensure!(count > 0 && count <= self.rounds * 2);
+        self.files = Some(FileWorkload::prepare(runtime, count).await?);
+        Ok(self)
+    }
+
+    pub(super) async fn with_timed_files(
+        mut self,
+        runtime: &mut Runtime,
+        count: usize,
+        fresh_transactions: usize,
+    ) -> Result<Self> {
+        ensure!(matches!((fresh_transactions, count), (50, 5) | (500, 100)));
+        ensure!(fresh_transactions <= self.rounds * 10);
+        self.file_round_start = self.rounds - fresh_transactions / 10;
+        self.with_files(runtime, count).await
+    }
+
+    fn file_index(&self, round: usize, slot: usize) -> Option<usize> {
+        file_index(
+            self.rounds - self.file_round_start,
+            self.files.as_ref()?.len(),
+            round.checked_sub(self.file_round_start)?,
+            slot,
+        )
+    }
+
+    pub(super) fn files(&self) -> Result<&FileWorkload> {
+        self.files.as_ref().context("timed recipe requires files")
+    }
+
+    pub(super) fn file_ids(&self) -> Vec<String> {
+        self.files.as_ref().map_or_else(Vec::new, FileWorkload::ids)
+    }
+
+    pub(super) fn files_through(&self, end: usize) -> Result<usize> {
+        ensure!(end <= self.rounds * 20);
+        Ok((0..end)
+            .filter(|index| self.file_index(index / 20, index % 20).is_some())
+            .count())
+    }
+
+    pub(super) fn counter_after(&self, end: usize) -> Result<u64> {
+        ensure!(end <= self.rounds * 20);
+        self.counter_before
+            .checked_add(u64::try_from(
+                (0..end)
+                    .filter(|index| matches!(index % 20, 8 | 13..=15))
+                    .count(),
+            )?)
+            .context("counter overflow")
+    }
+
+    pub(super) async fn check_file_lifecycle(
+        &self,
+        runtime: &mut Runtime,
+        rows: &[ResultRow],
+    ) -> Result<()> {
+        if let Some(files) = &self.files {
+            files.check(runtime, rows).await?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn operation_counts(&self) -> Value {
+        let files = self.files.as_ref().map_or(0, FileWorkload::len);
+        json!({
+            "operations": self.rounds * 20,
+            "transfers": self.rounds * 8,
+            "storage": self.rounds * 5,
+            "pagination": if self.paginated.is_some() { self.rounds } else { 0 },
+            "proxy_calls": self.rounds * 3,
+            "nested_receipts": self.rounds * 5 - files,
+            "staking": self.rounds * 2 - files,
+            "file_registrations": files,
+            "hashes": self.rounds * 2,
+            "successes": self.rounds * 18,
+            "failures_after_write": self.rounds * 2,
+        })
+    }
+
+    pub(super) fn instructions(&self) -> Vec<Inst> {
+        let mut result = Vec::new();
+        for round in 0..self.rounds {
+            for slot in 0..20 {
+                let (contract, expr) = match slot {
+                    0..=7 => (
+                        token_address(),
+                        token::wave::transfer_call_expr(
+                            HolderRef::SignerId(self.recipient),
+                            Decimal::from("0.001"),
+                        ),
+                    ),
+                    8 => (self.counter.clone(), "increment()".into()),
+                    9 => (self.counter.clone(), format!("fill-blob({BLOB_BYTES})")),
+                    10 => self.paginated.as_ref().map_or_else(
+                        || (self.counter.clone(), "get-blob()".into()),
+                        |(contract, count)| {
+                            (
+                                contract.clone(),
+                                pagination::call(round, *count, self.rounds),
+                            )
+                        },
+                    ),
+                    11..=12 => (
+                        self.failed.clone(),
+                        "set-blob-then-fail(\"must roll back\")".into(),
+                    ),
+                    13..=15 => (self.proxy.clone(), "increment()".into()),
+                    16..=17 if self.file_index(round, slot).is_some() => (
+                        storage_address(),
+                        self.files
+                            .as_ref()
+                            .expect("file workload")
+                            .call(self.file_index(round, slot).expect("file index")),
+                    ),
+                    16..=17 => (
+                        staking_address(),
+                        staking::wave::add_stake_call_expr(Decimal::from("0.001")),
+                    ),
+                    18..=19 => (
+                        self.crypto.clone(),
+                        format!("set-hash(\"round-{round}-slot-{slot}\")"),
+                    ),
+                    _ => unreachable!(),
+                };
+                result.push(Inst {
+                    gas_limit: GAS_LIMIT,
+                    kind: InstKind::Call { contract, expr },
+                });
+            }
+        }
+        result
+    }
+
+    fn validate_range(&self, operations: &Range<usize>) -> Result<()> {
+        ensure!(
+            operations.start < operations.end && operations.end <= self.rounds * 20,
+            "mixed operation range is empty, reversed or out of bounds"
+        );
+        Ok(())
+    }
+
+    pub(super) fn signer_effects(
+        &self,
+        layout: MixedLayout,
+        signer: u64,
+    ) -> Result<(Decimal, Decimal)> {
+        self.signer_effects_range(layout, signer, 0..self.rounds * 20)
+    }
+
+    fn signer_effects_range(
+        &self,
+        layout: MixedLayout,
+        signer: u64,
+        operations: Range<usize>,
+    ) -> Result<(Decimal, Decimal)> {
+        self.validate_range(&operations)?;
+        let indices = operations.filter(|index| layout.signer(*index) == signer);
+        let transfers = indices.clone().filter(|index| index % 20 <= 7).count();
+        let stakes = indices.filter(|index| self.is_stake(*index)).count();
+        Ok((
+            mul_decimal(
+                Decimal::from("0.001"),
+                Decimal::try_from(u64::try_from(transfers)?)?,
+            )?,
+            mul_decimal(
+                Decimal::from("0.001"),
+                Decimal::try_from(u64::try_from(stakes)?)?,
+            )?,
+        ))
+    }
+
+    fn is_stake(&self, index: usize) -> bool {
+        matches!(index % 20, 16..=17) && self.file_index(index / 20, index % 20).is_none()
+    }
+
+    pub(super) fn effects(&self, layout: MixedLayout) -> Result<PaidEffects> {
+        self.effects_range(layout, 0..self.rounds * 20)
+    }
+
+    pub(super) fn effects_range(
+        &self,
+        layout: MixedLayout,
+        operations: Range<usize>,
+    ) -> Result<PaidEffects> {
+        let (transferred, payer_staked) =
+            self.signer_effects_range(layout, layout.payer(), operations.clone())?;
+        let stakes = operations.filter(|index| self.is_stake(*index)).count();
+        Ok(PaidEffects {
+            transferred,
+            payer_staked,
+            staked: mul_decimal(
+                Decimal::from("0.001"),
+                Decimal::try_from(u64::try_from(stakes)?)?,
+            )?,
+        })
+    }
+
+    pub(super) async fn check(
+        &self,
+        runtime: &mut Runtime,
+        all: &[&ResultRow],
+        roots: &[&ResultRow],
+        layout: MixedLayout,
+        execution_height: u64,
+    ) -> Result<()> {
+        self.check_slice(
+            runtime,
+            all,
+            roots,
+            &ExecutionSlice {
+                operations: 0..self.rounds * 20,
+                layout,
+                height: execution_height,
+                confirmed: true,
+            },
+        )
+        .await
+    }
+
+    fn check_return(
+        &self,
+        root: &ResultRow,
+        index: usize,
+        signer: u64,
+        expected_stakes: &mut BTreeMap<u64, Decimal>,
+    ) -> Result<()> {
+        let slot = index % 20;
+        let round = index / 20;
+        let file_index = self.file_index(round, slot);
+        let value = root
+            .value
+            .as_deref()
+            .context("mixed root omitted return value")?;
+        match slot {
+            0..=7 => {
+                ensure!(root.contract == token_address().to_string() && root.func == "transfer");
+                let transfer = token::wave::transfer_parse_return_expr(value)?;
+                ensure!(
+                    transfer.src == HolderRef::SignerId(signer)
+                        && transfer.dst == HolderRef::SignerId(self.recipient)
+                        && transfer.amt == Decimal::from("0.001")
+                );
+            }
+            10 if self.paginated.is_some() => {
+                ensure!(
+                    root.contract
+                        == self
+                            .paginated
+                            .as_ref()
+                            .context("missing page contract")?
+                            .0
+                            .to_string()
+                        && root.func == "entries-page"
+                );
+                pagination::check(
+                    round,
+                    self.paginated.as_ref().context("missing page contract")?.1,
+                    self.rounds,
+                    value,
+                )?;
+            }
+            8..=10 => {
+                ensure!(root.contract == self.counter.to_string());
+                ensure!(root.func == ["increment", "fill-blob", "get-blob"][slot - 8]);
+                ensure!(
+                    value
+                        == if slot == 10 {
+                            to_wave_expr("a".repeat(BLOB_BYTES))
+                        } else {
+                            String::new()
+                        }
+                );
+            }
+            11..=12 => {
+                ensure!(
+                    root.contract == self.failed.to_string() && root.func == "set-blob-then-fail"
+                );
+                ensure!(value == "err(message(\"deliberate failure after write\"))");
+            }
+            13..=15 => ensure!(
+                root.contract == self.proxy.to_string()
+                    && root.func == "fallback"
+                    && value.is_empty()
+            ),
+            16..=17 if file_index.is_some() => {
+                ensure!(
+                    root.contract == storage_address().to_string()
+                        && root.func == "create-agreement"
+                );
+                self.files
+                    .as_ref()
+                    .context("missing file workload")?
+                    .check_receipt(file_index.context("missing file index")?, value)?;
+            }
+            16..=17 => {
+                ensure!(root.contract == staking_address().to_string() && root.func == "add-stake");
+                let expected_stake = expected_stakes.entry(signer).or_default();
+                *expected_stake = add_decimal(*expected_stake, Decimal::from("0.001"))?;
+                let stake = staking::wave::add_stake_parse_return_expr(value)?;
+                ensure!(stake.stake == *expected_stake && stake.withdrawal_height.is_none());
+            }
+            18..=19 => {
+                ensure!(root.contract == self.crypto.to_string() && root.func == "set-hash");
+                let expected =
+                    Sha256::digest(format!("round-{round}-slot-{slot}").as_bytes()).to_vec();
+                ensure!(from_wave_expr::<Vec<u8>>(value) == expected);
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    pub(super) async fn check_slice(
+        &self,
+        runtime: &mut Runtime,
+        all: &[&ResultRow],
+        roots: &[&ResultRow],
+        slice: &ExecutionSlice,
+    ) -> Result<()> {
+        self.validate_range(&slice.operations)?;
+        let layout = slice.layout;
+        let payer = layout.payer();
+        let nested_count = slice
+            .operations
+            .clone()
+            .filter(|index| matches!(index % 20, 13..=15) || self.is_stake(*index))
+            .count();
+        ensure!(roots.len() == slice.operations.len() && all.len() == roots.len() + nested_count);
+        let conn = runtime.get_storage_conn();
+        let staking_id = get_contract_id_from_address(&conn, &staking_address())
+            .await?
+            .context("missing staking contract")?;
+        let staking_signer = get_contract_signer_id(&conn, staking_id)
+            .await?
+            .context("missing staking signer")?;
+        let mut expected_stakes = self.stakes_before.clone();
+        for index in (0..slice.operations.start).filter(|index| self.is_stake(*index)) {
+            let value = expected_stakes.entry(layout.signer(index)).or_default();
+            *value = add_decimal(*value, Decimal::from("0.001"))?;
+        }
+        for (index, root) in slice.operations.clone().zip(roots) {
+            let signer = layout.signer(index);
+            let (tx_index, input_index, op_index) = layout.position(index)?;
+            let slot = index % 20;
+            let round = index / 20;
+            let file_index = self.file_index(round, slot);
+            let nested =
+                matches!(slot, 13..=15) || (matches!(slot, 16..=17) && file_index.is_none());
+            ensure!(
+                root.height == slice.height
+                    && root.tx_index == slice.confirmed.then_some(tx_index)
+                    && root.input_index == Some(input_index)
+                    && root.op_index == Some(op_index)
+                    && root.result_index == u32::from(nested)
+                    && root.signer_id == signer
+                    && root.payer_signer_id == Some(payer)
+                    && root.gas > 0
+                    && root.gas <= GAS_LIMIT,
+                "mixed receipt execution position changed"
+            );
+            ensure!(
+                root.status
+                    == if matches!(slot, 11..=12) {
+                        OpStatus::ContractErr
+                    } else {
+                        OpStatus::Ok
+                    }
+            );
+            self.check_return(root, index, signer, &mut expected_stakes)?;
+            if nested {
+                let children: Vec<_> = all
+                    .iter()
+                    .filter(|row| {
+                        row.txid == root.txid
+                            && row.input_index == root.input_index
+                            && row.op_index == root.op_index
+                            && row.result_index == 0
+                    })
+                    .collect();
+                ensure!(children.len() == 1);
+                let child = children[0];
+                ensure!(
+                    child.status == OpStatus::Ok
+                        && child.signer_id == signer
+                        && child.payer_signer_id.is_none()
+                        && child.height == root.height
+                        && child.tx_index == root.tx_index
+                        && child.input_index == root.input_index
+                        && child.gas > 0
+                        && child.gas <= root.gas
+                );
+                ensure!(
+                    child.contract
+                        == if slot <= 15 {
+                            self.counter.to_string()
+                        } else {
+                            token_address().to_string()
+                        }
+                );
+                ensure!(child.func == if slot <= 15 { "increment" } else { "transfer" });
+                let value = child
+                    .value
+                    .as_deref()
+                    .context("missing nested return value")?;
+                if slot <= 15 {
+                    ensure!(value.is_empty());
+                } else {
+                    let transfer = token::wave::transfer_parse_return_expr(value)?;
+                    ensure!(
+                        transfer.src == HolderRef::SignerId(signer)
+                            && transfer.dst == HolderRef::SignerId(staking_signer)
+                            && transfer.amt == Decimal::from("0.001")
+                    );
+                }
+            }
+        }
+        ensure!(
+            from_wave_expr::<u64>(&runtime.execute_system_view(&self.counter, "get()").await?)
+                == self
+                    .counter_before
+                    .checked_add(u64::try_from(
+                        (0..slice.operations.end)
+                            .filter(|index| matches!(index % 20, 8 | 13..=15))
+                            .count()
+                    )?)
+                    .context("counter overflow")?
+        );
+        ensure!(
+            from_wave_expr::<String>(
+                &runtime
+                    .execute_system_view(&self.counter, "get-blob()")
+                    .await?
+            ) == if self.step > 0 || (0..slice.operations.end).any(|index| index % 20 == 9) {
+                "a".repeat(BLOB_BYTES)
+            } else {
+                String::new()
+            }
+        );
+        ensure!(
+            from_wave_expr::<String>(
+                &runtime
+                    .execute_system_view(&self.failed, "get-blob()")
+                    .await?
+            )
+            .is_empty()
+        );
+
+        ensure!(
+            from_wave_expr::<Option<Vec<u8>>>(
+                &runtime
+                    .execute_system_view(&self.crypto, "get-hash()")
+                    .await?
+            ) == (0..slice.operations.end)
+                .rev()
+                .find(|index| matches!(index % 20, 18..=19))
+                .or(self.previous_hash_index)
+                .map(|index| Sha256::digest(
+                    format!("round-{}-slot-{}", index / 20, index % 20).as_bytes()
+                )
+                .to_vec())
+        );
+        ensure!(
+            token::balance(runtime, HolderRef::SignerId(self.recipient)).await?
+                == Some(add_decimal(
+                    self.recipient_before,
+                    mul_decimal(
+                        Decimal::from("0.001"),
+                        Decimal::try_from(u64::try_from(
+                            (0..slice.operations.end)
+                                .filter(|index| index % 20 <= 7)
+                                .count()
+                        )?)?
+                    )?
+                )?)
+        );
+        for signer in (0..slice.operations.end)
+            .map(|index| layout.signer(index))
+            .collect::<BTreeSet<_>>()
+        {
+            let stake =
+                staking::get_stake(runtime, &HolderRef::SignerId(signer).to_string()).await?;
+            if let Some(expected_stake) = expected_stakes.get(&signer) {
+                let stake = stake.context("missing mixed signer bond")?;
+                ensure!(stake.stake == *expected_stake && stake.withdrawal_height.is_none());
+            } else {
+                ensure!(
+                    stake.is_none(),
+                    "file-only signer unexpectedly acquired a bond"
+                );
+            }
+        }
+        if let Some((contract, count)) = &self.paginated {
+            pagination::check_boundaries(runtime, contract, *count).await?;
+        }
+        Ok(())
+    }
+}
+
+fn file_index(rounds: usize, count: usize, round: usize, slot: usize) -> Option<usize> {
+    let doubled_rounds = count.saturating_sub(rounds);
+    // Descriptors must follow execution order, since creation assigns the
+    // next ledger index and that index affects the collateral calculation.
+    let index = match slot {
+        16 if round < doubled_rounds => round * 2,
+        17 => round + (round + 1).min(doubled_rounds),
+        _ => return None,
+    };
+    (index < count).then_some(index)
+}
+
+#[test]
+fn workload_file_allocation_preserves_ledger_order() {
+    for rounds in [5, 50] {
+        for count in 0..=rounds * 2 {
+            let actual: Vec<_> = (0..rounds)
+                .flat_map(|round| {
+                    (0..20).filter_map(move |slot| file_index(rounds, count, round, slot))
+                })
+                .collect();
+            assert_eq!(
+                actual,
+                (0..count).collect::<Vec<_>>(),
+                "{rounds} rounds, {count} files"
+            );
+            let stakes = (0..rounds)
+                .flat_map(|round| (16..=17).map(move |slot| (round, slot)))
+                .filter(|(round, slot)| file_index(rounds, count, *round, *slot).is_none())
+                .count();
+            assert_eq!(stakes + actual.len(), rounds * 2);
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "real paid runtime calls with synthetic transaction rows; cumulative oracle diagnostic only"]
+async fn workload_sequence_mixed_carries_paid_state() -> Result<()> {
+    let (mut runtime, _directory, _name) = test_runtime().await?;
+    let conn = runtime.get_storage_conn();
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(101)
+            .hash(new_mock_block_hash(101))
+            .build(),
+    )
+    .await?;
+    runtime.set_context(101, None, None, None).await;
+    let core = Signer::Core(Box::new(Signer::Nobody));
+    let public_key =
+        derive_taproot_keypair_from_seed(&[93; 64], &taproot_derivation_path(Network::Regtest))?
+            .x_only_public_key()
+            .0
+            .to_string();
+    let signer = Signer::Id(runtime.get_or_create_identity(&public_key).await?);
+    let payer = signer.signer_id().context("missing mixed payer")?;
+    token::issue_to(
+        &mut runtime,
+        &core,
+        HolderRef::SignerId(payer),
+        Decimal::from("100"),
+    )
+    .await??;
+    StoragePopulation::prepare(&mut runtime, 2, 3, [81; 32]).await?;
+    let first = MixedWorkload::prepare(&mut runtime, payer, 5)
+        .await?
+        .with_files(&mut runtime, 5)
+        .await?;
+    let layout = MixedLayout::Single {
+        payer,
+        operations_per_transaction: 2,
+    };
+    let second = first.next_step(layout)?;
+    for (ordinal, workload) in [&first, &second].into_iter().enumerate() {
+        let height = 102 + u64::try_from(ordinal)?;
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(u32::try_from(height)?))
+                .build(),
+        )
+        .await?;
+        let mut txids = Vec::new();
+        for (index, pair) in workload
+            .instructions()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .enumerate()
+        {
+            let txid = new_mock_transaction(u32::try_from(1000 + ordinal * 50 + index)?).txid;
+            let tx_index = u32::try_from(index)?;
+            let tx_id = insert_transaction(
+                &conn,
+                TransactionRow::builder()
+                    .height(height)
+                    .confirmed_height(height)
+                    .tx_index(tx_index)
+                    .txid(txid.to_string())
+                    .build(),
+            )
+            .await?;
+            txids.push(txid.to_string());
+            for (op_index, instruction) in pair.iter().enumerate() {
+                runtime
+                    .set_context(
+                        height,
+                        Some(TransactionContext {
+                            tx_id: Some(tx_id),
+                            tx_index,
+                            input_index: 0,
+                            op_index: u32::try_from(op_index)?,
+                            txid,
+                        }),
+                        None,
+                        None,
+                    )
+                    .await;
+                let InstKind::Call { contract, expr } = &instruction.kind else {
+                    unreachable!()
+                };
+                let result = runtime
+                    .execute(
+                        Some(&signer),
+                        Some(Payment {
+                            signer_id: payer,
+                            gas_limit: instruction.gas_limit,
+                        }),
+                        contract,
+                        expr,
+                    )
+                    .await?;
+                if matches!((index * 2 + op_index) % 20, 11..=12) {
+                    ensure!(result == "err(message(\"deliberate failure after write\"))");
+                }
+            }
+        }
+        runtime.set_context(height, None, None, None).await;
+        storage_api::record_block_root(&mut runtime, &core).await??;
+        let rows = receipts(&conn, height).await?;
+        let all = rows
+            .iter()
+            .filter(|row| row.txid.as_ref().is_some_and(|txid| txids.contains(txid)))
+            .collect::<Vec<_>>();
+        let mut roots = Vec::new();
+        for txid in &txids {
+            roots.extend(root_receipts(&rows, txid)?);
+        }
+        workload
+            .check(&mut runtime, &all, &roots, layout, height)
+            .await?;
+        workload.check_file_lifecycle(&mut runtime, &rows).await?;
+        if ordinal == 1 {
+            for field in ["counter", "recipient", "stake"] {
+                let mut stale = workload.clone();
+                match field {
+                    "counter" => stale.counter_before = 0,
+                    "recipient" => stale.recipient_before = Decimal::default(),
+                    "stake" => stale.stakes_before.clear(),
+                    _ => unreachable!(),
+                }
+                ensure!(
+                    stale
+                        .check(&mut runtime, &all, &roots, layout, height)
+                        .await
+                        .is_err(),
+                    "reset {field} baseline accepted cumulative state"
+                );
+            }
+        }
+    }
+    Ok(())
+}

@@ -1,3 +1,4 @@
+use std::mem;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
@@ -7,7 +8,7 @@ use metrics::{counter, gauge};
 use tracing::{debug, info, warn};
 
 use crate::block;
-use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
+use crate::consensus::finality_types::{FINALITY_ROLLBACK_DEPTH, StateEvent};
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
@@ -56,10 +57,17 @@ impl<E: Executor> Reactor<E> {
     /// the finality path can now too, because tracking is rehydrated from disk and a
     /// node that missed a verdict may carry a batch anchored far below its tip.
     pub(super) fn check_rollback_depth(&self, to_height: u64) -> Result<()> {
+        if to_height < self.prune_watermark {
+            bail!(
+                "rollback to height {to_height} is below persisted prune watermark {}; \
+                 pruned state cannot be rolled back locally, re-sync required",
+                self.prune_watermark
+            );
+        }
         if !self.prune.enabled {
             return Ok(());
         }
-        let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
+        let retain = self.prune.retain_blocks.max(FINALITY_ROLLBACK_DEPTH);
         if self.last_height.saturating_sub(to_height) > retain {
             bail!(
                 "rollback to height {to_height} is deeper than the prune retain window \
@@ -248,20 +256,31 @@ impl<E: Executor> Reactor<E> {
     /// Runs the simulation with its out-of-transaction state restored on EVERY
     /// exit, not just the successful one.
     ///
-    /// The savepoint covers the database; these two are outside it. The inner
-    /// function is full of `?`, so restoring at the end of it would silently skip
-    /// on error — which is how the height restore was written, and it survives only
-    /// because the caller kills the node on a simulate error. That makes a `bail!`
-    /// load-bearing for correctness, which it should not be.
+    /// The database savepoint does not cover contract-facing metadata or the
+    /// shared operation counters. Isolate the counters so runtime clones cannot
+    /// mutate the originals, and restore context even on a returned error.
+    /// Outer errors remain fatal; this does not recover their database savepoint
+    /// or cover cancellation while the inner future is pending.
     pub(super) async fn simulate(
         &mut self,
         tx: indexer_types::Transaction,
     ) -> Result<Vec<OpWithResult>> {
         let restore_height = self.runtime.storage.height;
+        let restore_context = self.runtime.storage.tx_context.clone();
+        let restore_output = self.runtime.previous_output;
+        let restore_data = self.runtime.op_return_data.clone();
+        let restore_simulating = self.runtime.simulating;
+        let restore_ids = mem::take(&mut self.runtime.id_generation_counter);
+        let restore_results = mem::take(&mut self.runtime.result_id_counter);
         self.runtime.simulating = true;
         let result = self.simulate_inner(tx).await;
-        self.runtime.simulating = false;
+        self.runtime.simulating = restore_simulating;
         self.runtime.storage.height = restore_height;
+        self.runtime.storage.tx_context = restore_context;
+        self.runtime.previous_output = restore_output;
+        self.runtime.op_return_data = restore_data;
+        self.runtime.id_generation_counter = restore_ids;
+        self.runtime.result_id_counter = restore_results;
         result
     }
 
@@ -534,7 +553,7 @@ impl<E: Executor> Reactor<E> {
     }
 
     /// Prune finalized, superseded `contract_state` versions below the finality
-    /// watermark `tip − max(retain, FINALITY_WINDOW)`. No-op for archive nodes
+    /// watermark `tip − max(retain, FINALITY_ROLLBACK_DEPTH)`. No-op for archive nodes
     /// (`prune.enabled == false`) and until the chain is taller than the retain
     /// window. Runs once per block; the per-block churn is small. Returning freed
     /// pages to the OS (`incremental_vacuum`) is a separate, throttled step.
@@ -552,7 +571,7 @@ impl<E: Executor> Reactor<E> {
         if !self.prune.enabled {
             return;
         }
-        let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
+        let retain = self.prune.retain_blocks.max(FINALITY_ROLLBACK_DEPTH);
         // W = how far we COULD prune; `prune_watermark` (W_prev) = how far we HAVE.
         let Some(w) = self.last_height.checked_sub(retain) else {
             return;

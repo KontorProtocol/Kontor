@@ -1,0 +1,15 @@
+package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{view-context, proc-context, contract};
+
+    record entry {
+        key: string,
+        value: string,
+    }
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export seed-entries: func(ctx: borrow<proc-context>, start: u32, count: u32);
+    export entries-page: func(ctx: borrow<view-context>, cursor: option<string>, limit: u32, descending: bool) -> list<entry>;
+}

@@ -1,6 +1,7 @@
 #![no_std]
 contract!(name = "counter");
 
+use core::ops::Bound;
 use stdlib::*;
 
 #[derive(Clone, Default, StorageRoot)]
@@ -59,5 +60,39 @@ impl Guest for Counter {
     // its own keys.
     fn remove_entry(ctx: &ProcContext, key: String) {
         ctx.model().entries().remove(&key);
+    }
+
+    fn entry_page(ctx: &ViewContext, after: Option<String>, limit: u64) -> MapPage {
+        let limit = limit.min(100) as usize;
+        if limit == 0 {
+            return MapPage {
+                items: Vec::new(),
+                next: None,
+            };
+        }
+        let bounds = (
+            after.map_or(Bound::Unbounded, Bound::Excluded),
+            Bound::Unbounded,
+        );
+        let mut rows: Vec<_> = ctx
+            .model()
+            .entries()
+            .range(bounds)
+            .entries()
+            .take(limit + 1)
+            .collect();
+        let next = if rows.len() > limit {
+            rows.pop();
+            rows.last().map(|(key, _)| key.clone())
+        } else {
+            None
+        };
+        MapPage {
+            items: rows
+                .into_iter()
+                .map(|(key, value)| MapEntry { key, value })
+                .collect(),
+            next,
+        }
     }
 }

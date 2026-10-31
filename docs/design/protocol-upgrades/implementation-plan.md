@@ -832,3 +832,12 @@ preserved, and the complete rerun passed with local-network permission.
 Implementation reviews and three-platform/Docker PR qualification remain
 required before merge. This is not production runtime or final protocol
 upgrade-system acceptance.
+
+## K1 proof bundle repin completion
+
+K1 repin PR 610 merged as `13b0d814f7a085d8b84ec88a87ad2682386f2934`.
+The reviewed tree was `5bb92226`. Its 49 Python checks, three platform release
+builds, and two Docker cache jobs passed. The reserved historical first and
+second bundle recipes remain byte-identical; the active proof graphs now use
+the pinned Pulley fork identities. S2 is based on this merged state for final
+qualification and does not reinterpret K1 proof success as S2 acceptance.

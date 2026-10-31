@@ -108,6 +108,11 @@ proptest = "=1.12.0"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 rustix = { version = "=1.1.5", features = ["mm"] }
+libc = "=0.2.191"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+libc = "=0.2.191"
+mach2 = "=0.6.0"
 
 [build-dependencies]
 built = { version = "=0.8.1", features = ["git2"] }

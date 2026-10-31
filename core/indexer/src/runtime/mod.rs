@@ -15,6 +15,8 @@ pub mod numerics;
 pub mod pool;
 pub mod pricing;
 #[cfg(test)]
+mod resource_diagnostics;
+#[cfg(test)]
 mod sequential_tests;
 mod stack;
 pub mod staking;
@@ -23,6 +25,8 @@ pub mod system;
 pub mod token;
 mod types;
 pub mod wit;
+#[cfg(test)]
+pub(crate) mod workload_telemetry;
 
 mod call;
 mod fees;
@@ -32,12 +36,16 @@ mod host_files;
 mod host_numbers;
 mod host_storage;
 mod host_system;
+mod invocation;
 mod lowering;
 
 use bitcoin::XOnlyPublicKey;
 use call::CallOutcome;
 pub use component_cache::ComponentCache;
 use guest_memory::{GuestMemoryLimiter, GuestMemoryLimits};
+use invocation::{InvocationBudget, InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS};
+#[cfg(test)]
+use invocation::{ResourceProbePhase, ResourceProbeRole};
 use libsql::Connection;
 use lowering::Linker;
 use sha2::{Digest, Sha256};
@@ -49,6 +57,8 @@ pub use stdlib::{
 use storage::{ComponentDecodeError, print_component_wit};
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
+#[cfg(test)]
+use workload_telemetry::WorkloadTelemetry;
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
@@ -273,6 +283,12 @@ pub struct Runtime {
     pub gauge: Option<FuelGauge>,
     guest_memory_limits: Option<GuestMemoryLimits>,
     guest_memory_limiter: Option<GuestMemoryLimiter>,
+    invocation_budget: Option<Arc<InvocationBudget>>,
+    invocation_depth: u32,
+    #[cfg(test)]
+    pub(crate) workload_telemetry: Option<Arc<WorkloadTelemetry>>,
+    #[cfg(test)]
+    resource_probe_phase: Option<ResourceProbePhase>,
     #[cfg(test)]
     conversion_probe: Option<conversion_probe::Probe>,
     #[cfg(test)]
@@ -327,7 +343,32 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new_engine() -> Result<Engine> {
+        Self::engine_with_async_stack_size(2 * 1024 * 1024)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_resource_diagnostic_engine() -> Result<Engine> {
+        Self::engine_with_async_stack_size(1024 * 1024)
+    }
+
+    fn engine_with_async_stack_size(async_stack_size: usize) -> Result<Engine> {
+        let reservation = u64::try_from(GuestMemoryLimits::default().per_root)?;
+        Self::engine_with_memory_reservation(async_stack_size, reservation)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_previous_memory_reservation_engine() -> Result<Engine> {
+        Self::engine_with_memory_reservation(2 * 1024 * 1024, 4 * 1024 * 1024 * 1024)
+    }
+
+    fn engine_with_memory_reservation(
+        async_stack_size: usize,
+        memory_reservation: u64,
+    ) -> Result<Engine> {
         let mut config = Config::new();
+        config.target("pulley64-unknown-unknown-elf")?;
+        config.max_wasm_stack(512 * 1024);
+        config.async_stack_size(async_stack_size);
         config.wasm_component_model_async(false);
         config.wasm_component_model_more_async_builtins(false);
         config.wasm_component_model_async_stackful(false);
@@ -335,6 +376,7 @@ impl Runtime {
         config.wasm_component_model_error_context(false);
         config.wasm_shared_everything_threads(false);
         config.wasm_stack_switching(false);
+        config.wasm_threads(false);
         config.concurrency_support(false);
         config.consume_fuel(true);
         config.consume_lifting_fuel(Some(LiftingPrices {
@@ -350,12 +392,27 @@ impl Runtime {
         config.memory_init_cow(false);
         config.wasm_custom_page_sizes(false);
         config.allocation_strategy(InstanceAllocationStrategy::OnDemand);
+        // The shared root limit bounds each admitted memory. Wasmtime's 4 GiB
+        // default reservation needlessly scales with suspended Store count.
+        config.memory_reservation(memory_reservation);
         config.memory_may_move(true);
-        // Ensure deterministic execution
-        config.wasm_threads(false);
         config.wasm_relaxed_simd(false);
         config.cranelift_nan_canonicalization(true);
-        Ok(Engine::new(&config)?)
+        let engine = Engine::new(&config)?;
+        anyhow::ensure!(engine.is_pulley(), "production engine must use Pulley");
+        anyhow::ensure!(
+            engine.get_target().as_deref() == Some("pulley64-unknown-unknown-elf"),
+            "unexpected Pulley target"
+        );
+        anyhow::ensure!(
+            engine.get_max_wasm_stack() == 512 * 1024,
+            "unexpected Pulley logical stack size"
+        );
+        anyhow::ensure!(
+            engine.get_async_stack_size() == async_stack_size,
+            "unexpected async fiber stack size"
+        );
+        Ok(engine)
     }
 
     /// Built-ins every contract gets (the user-land surface, plus the
@@ -414,6 +471,12 @@ impl Runtime {
             gauge: None,
             guest_memory_limits: Some(GuestMemoryLimits::default()),
             guest_memory_limiter: None,
+            invocation_budget: None,
+            invocation_depth: 0,
+            #[cfg(test)]
+            workload_telemetry: None,
+            #[cfg(test)]
+            resource_probe_phase: None,
             #[cfg(test)]
             conversion_probe: None,
             #[cfg(test)]
@@ -803,22 +866,19 @@ impl Runtime {
                 ),
                 ComponentDecodeError::Infrastructure(e) => ExecutionError::NonDeterministic(e),
             })?;
+        component_policy::validate_no_starts(&bytes).map_err(ExecutionError::Deterministic)?;
         if !is_native_contract_id(contract_id) {
             component_policy::validate(&bytes)?;
         }
-        let component = Component::from_binary(&self.engine, &bytes).map_err(|e| {
-            ExecutionError::Deterministic(
-                anyhow!(e).context("contract is not a valid wasm component"),
-            )
-        })?;
-        // Guarded for the same reason as the write in `component_bytes_and_compiled`,
-        // and this is the site that actually matters: a `Publish` inside a simulation
-        // reaches the cache HERE, under a `contracts.id` the rollback frees for reuse.
-        if !self.simulating {
-            self.component_cache
-                .put(contract_id, component.clone(), bytes.len())
-                .await;
-        }
+        let (bytes, component) =
+            self.compile_component_bytes(bytes)
+                .await
+                .map_err(|e| match e {
+                    ComponentDecodeError::Content(e) => ExecutionError::Deterministic(
+                        e.context("contract is not a valid wasm component"),
+                    ),
+                    ComponentDecodeError::Infrastructure(e) => ExecutionError::NonDeterministic(e),
+                })?;
         let linker = if is_native_contract_id(contract_id) {
             &self.linkers.native
         } else {
@@ -837,6 +897,12 @@ impl Runtime {
                 ExecutionError::Deterministic(e.context("contract WIT could not be read"))
             })?;
             Self::validate_user_wit(&wit)?;
+        }
+        // Publish can run inside a simulation under an id that rollback reuses.
+        if !self.simulating {
+            self.component_cache
+                .put_admitted(contract_id, component, bytes.len())
+                .await;
         }
         Ok(())
     }
@@ -1029,13 +1095,42 @@ impl Runtime {
             .result
     }
 
+    /// Compile on a blocking thread: component translation has a deep native
+    /// call chain that can exhaust the async execution thread's finite stack.
+    async fn compile_component_bytes(
+        &self,
+        bytes: Vec<u8>,
+    ) -> std::result::Result<(Vec<u8>, Component), ComponentDecodeError> {
+        let engine = self.engine.clone();
+        let (bytes, compiled) = tokio::task::spawn_blocking(move || {
+            #[cfg(test)]
+            resource_diagnostics::record("compiler_entry");
+            let compiled = Component::from_binary(&engine, &bytes);
+            #[cfg(test)]
+            resource_diagnostics::record("compiler_exit");
+            (bytes, compiled)
+        })
+        .await
+        .map_err(|e| ComponentDecodeError::Infrastructure(e.into()))?;
+        Ok((
+            bytes,
+            compiled.map_err(|e| ComponentDecodeError::Content(e.into()))?,
+        ))
+    }
+
     /// Fetch + JIT-compile the component and cache the compiled artifact,
     /// returning the encoded `bytes` too so a caller that also needs the embedded
     /// WIT pays the decompress/encode/compile exactly once. The bytes are not
     /// cached — only the compiled `Component`.
     async fn component_bytes_and_compiled(&self, contract_id: u64) -> Result<(Vec<u8>, Component)> {
         let bytes = self.storage.component_bytes(contract_id).await?;
-        let component = Component::from_binary(&self.engine, &bytes)?;
+        component_policy::validate_no_starts(&bytes)?;
+        let (bytes, component) =
+            self.compile_component_bytes(bytes)
+                .await
+                .map_err(|e| match e {
+                    ComponentDecodeError::Content(e) | ComponentDecodeError::Infrastructure(e) => e,
+                })?;
         // One of the cache's TWO write sites — `validate_publishable` guards the
         // other, and its guard is the one the publish path depends on.
         // See `Runtime::simulating`: caching a speculative contract's code under an
@@ -1043,30 +1138,85 @@ impl Runtime {
         // WASM on this node alone.
         if !self.simulating {
             self.component_cache
-                .put(contract_id, component.clone(), bytes.len())
+                .put_admitted(contract_id, component.clone(), bytes.len())
                 .await;
         }
         Ok((bytes, component))
     }
 
     pub async fn load_component(&self, contract_id: u64) -> Result<Component> {
-        Ok(match self.component_cache.get(&contract_id).await {
-            Some(component) => {
-                if !Engine::same(component.engine(), &self.engine) {
-                    return Err(anyhow!(
-                        "cached component belongs to a different execution engine"
-                    ));
+        Ok(
+            match self.component_cache.get_admitted(&contract_id).await {
+                Some(component) => {
+                    if !Engine::same(component.engine(), &self.engine) {
+                        return Err(anyhow!(
+                            "cached component belongs to a different execution engine"
+                        ));
+                    }
+                    component
                 }
-                component
-            }
-            None => self.component_bytes_and_compiled(contract_id).await?.1,
-        })
+                None => self.component_bytes_and_compiled(contract_id).await?.1,
+            },
+        )
     }
 
-    pub fn make_store(&self, fuel: u64) -> Result<Store<Runtime>> {
+    pub(crate) fn make_store(&self, fuel: u64) -> Result<InvocationStore> {
+        self.make_store_inner(
+            fuel,
+            #[cfg(test)]
+            ResourceProbeRole::Unassigned,
+        )
+    }
+
+    #[cfg(test)]
+    fn make_store_for_call(&self, fuel: u64, address: &ContractAddress) -> Result<InvocationStore> {
+        let role = self
+            .resource_probe_phase
+            .as_ref()
+            .map_or(ResourceProbeRole::Unassigned, |phase| {
+                phase.classify(address)
+            });
+        self.make_store_inner(fuel, role)
+    }
+
+    #[cfg(test)]
+    fn record_resource_rejection(&self, address: &ContractAddress, kind: &str) {
+        if let Some(budget) = &self.invocation_budget {
+            let role = self
+                .resource_probe_phase
+                .as_ref()
+                .map_or(ResourceProbeRole::Unassigned, |phase| {
+                    phase.classify(address)
+                });
+            budget.record_rejection(role, kind);
+        }
+    }
+
+    fn make_store_inner(
+        &self,
+        fuel: u64,
+        #[cfg(test)] role: ResourceProbeRole,
+    ) -> Result<InvocationStore> {
+        let depth = self
+            .invocation_depth
+            .checked_add(1)
+            .ok_or(InvocationLimitReached)?;
+        if depth > MAX_LIVE_INVOCATIONS {
+            return Err(InvocationLimitReached.into());
+        }
+        let budget = self
+            .invocation_budget
+            .clone()
+            .unwrap_or_else(|| Arc::new(InvocationBudget::default()));
+        #[cfg(test)]
+        let lease = budget.reserve_for_role(role)?;
+        #[cfg(not(test))]
+        let lease = budget.reserve()?;
         // A child receives signer values and WAVE arguments, never parent handles.
         // Invocation ownership frees even resources abandoned by a guest trap.
         let mut runtime = self.clone();
+        runtime.invocation_budget = Some(budget);
+        runtime.invocation_depth = depth;
         runtime.table = Arc::new(Mutex::new(ResourceTable::new()));
         runtime.guest_memory_limiter = match (&self.guest_memory_limiter, self.guest_memory_limits)
         {
@@ -1074,11 +1224,15 @@ impl Runtime {
             (None, Some(limits)) => Some(GuestMemoryLimiter::new_root(limits)),
             (None, None) => None,
         };
-        let mut s = Store::new(&self.engine, runtime);
+        let mut s = InvocationStore::new(Store::new(&self.engine, runtime), lease);
         if s.data().guest_memory_limiter.is_some() {
             s.limiter(|runtime| runtime.guest_memory_limiter.as_mut().unwrap());
         }
-        s.set_fuel(fuel)?;
+        if let Err(error) = s.set_fuel(fuel) {
+            #[cfg(test)]
+            s.record_initialization_failure();
+            return Err(error.into());
+        }
         s.set_hostcall_fuel_enabled(false);
         s.data_mut().fuel_checkpoint = fuel;
         #[cfg(test)]
