@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex as StdMutex};
 use wit_component::{ComponentEncoder, WitPrinter};
 
+use super::bundle_ownership::{BundleOwner, HostFailure};
 #[cfg(test)]
 use super::resource_diagnostics;
 use super::storage_host::StorageHost;
@@ -116,6 +117,8 @@ pub struct Storage {
     pub(crate) host: StorageHost,
     #[builder(skip)]
     pub(super) ownership: Option<ChildContext>,
+    #[builder(skip)]
+    pub(super) bundle_owner: Option<BundleOwner>,
     #[builder(default = Counter::builder().build())]
     pub savepoint_counter: Counter,
     #[builder(default = Stack::builder().build())]
@@ -414,9 +417,14 @@ impl Storage {
                 .validate(true)
                 .encode()
         };
-        let encoded = match &self.ownership {
-            Some(owner) => owner.run_blocking(encode).await,
-            None => tokio::task::spawn_blocking(encode)
+        let encoded = match (&self.ownership, &self.bundle_owner) {
+            (Some(_), Some(_)) => Err(anyhow!("storage has conflicting ownership contexts")),
+            (None, Some(owner)) => owner
+                .run_blocking(encode)
+                .await
+                .map_err(|error| anyhow!(HostFailure::from(error))),
+            (Some(owner), None) => owner.run_blocking(encode).await,
+            (None, None) => tokio::task::spawn_blocking(encode)
                 .await
                 .map_err(anyhow::Error::from),
         }
@@ -570,6 +578,15 @@ impl Storage {
     }
 
     pub async fn commit(&self) -> Result<()> {
+        if let Some(owner) = &self.bundle_owner {
+            anyhow::ensure!(
+                self.ownership.is_none(),
+                "storage has conflicting ownership contexts"
+            );
+            owner
+                .ensure_commit_authorized()
+                .map_err(|error| anyhow!(HostFailure::from(error)))?;
+        }
         if let Some(owner) = &self.ownership {
             owner.ensure_commit_authorized()?;
         }

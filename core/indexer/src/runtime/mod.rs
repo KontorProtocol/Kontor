@@ -6,6 +6,8 @@ mod costs;
 mod genesis_parity;
 extern crate alloc;
 
+mod bundle_ownership;
+mod bundle_session;
 mod component_cache;
 mod component_policy;
 pub mod counter;
@@ -45,6 +47,7 @@ mod selected;
 
 use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
 use bitcoin::XOnlyPublicKey;
+use bundle_ownership::{BundleOwner, HostFailure};
 pub(crate) use call::CallOutcome;
 pub use component_cache::ComponentCache;
 pub(crate) use component_cache::ComponentSource;
@@ -215,6 +218,7 @@ pub struct Runtime {
     store_table_owners: Option<StoreTableOwners>,
     invocation_depth: u32,
     ownership: Option<ChildContext>,
+    bundle_owner: Option<BundleOwner>,
     #[cfg(test)]
     pub(crate) workload_telemetry: Option<Arc<WorkloadTelemetry>>,
     #[cfg(test)]
@@ -344,6 +348,7 @@ impl Runtime {
             store_table_owners: None,
             invocation_depth: 0,
             ownership: None,
+            bundle_owner: None,
             #[cfg(test)]
             workload_telemetry: None,
             #[cfg(test)]
@@ -1123,9 +1128,14 @@ impl Runtime {
             resource_diagnostics::record("compiler_exit");
             (bytes, compiled)
         };
-        let (bytes, compiled) = match &self.ownership {
-            Some(owner) => owner.run_blocking(compile).await,
-            None => tokio::task::spawn_blocking(compile)
+        let (bytes, compiled) = match (&self.ownership, &self.bundle_owner) {
+            (Some(_), Some(_)) => Err(anyhow!("runtime has conflicting ownership contexts")),
+            (None, Some(owner)) => owner
+                .run_blocking(compile)
+                .await
+                .map_err(|error| anyhow!(HostFailure::from(error))),
+            (Some(owner), None) => owner.run_blocking(compile).await,
+            (None, None) => tokio::task::spawn_blocking(compile)
                 .await
                 .map_err(anyhow::Error::from),
         }
@@ -1305,10 +1315,15 @@ impl Runtime {
             s.record_initialization_failure();
             return Err(error.into());
         }
-        if let Some(interval) = self
-            .ownership
-            .as_ref()
-            .and_then(ChildContext::fuel_yield_interval)
+        let yield_interval = match (&self.ownership, &self.bundle_owner) {
+            (Some(_), Some(_)) => {
+                return Err(anyhow!("runtime has conflicting ownership contexts"));
+            }
+            (Some(owner), None) => owner.fuel_yield_interval(),
+            (None, Some(owner)) => owner.fuel_yield_interval(),
+            (None, None) => None,
+        };
+        if let Some(interval) = yield_interval
             && let Err(error) = s.fuel_async_yield_interval(Some(interval))
         {
             #[cfg(test)]

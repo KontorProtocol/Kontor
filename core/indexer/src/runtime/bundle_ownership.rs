@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -6,6 +7,28 @@ use std::sync::Arc;
 pub(crate) type SharedOwner = Arc<dyn Any + Send + Sync>;
 pub(crate) type Payload = Box<dyn Any + Send>;
 pub(crate) type HostError = (u8, String);
+
+#[derive(Debug)]
+pub(crate) struct HostFailure {
+    pub(crate) tag: u8,
+    pub(crate) message: String,
+}
+
+impl From<HostError> for HostFailure {
+    fn from(error: HostError) -> Self {
+        let (tag, message) = normalize(error);
+        Self { tag, message }
+    }
+}
+
+impl fmt::Display for HostFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for HostFailure {}
+
 pub(crate) type HostFuture<T> = Pin<Box<dyn Future<Output = Result<T, HostError>> + Send>>;
 pub(crate) type GuestCompletion = (bool, Payload);
 pub(crate) type GuestFuture = Pin<Box<dyn Future<Output = GuestCompletion> + Send>>;

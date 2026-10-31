@@ -101,7 +101,7 @@ impl OwnerAdapter {
         let submit_guest: SubmitGuest = Arc::new(move |parent, factory| {
             let guest_keeper = guest_keeper.clone();
             Box::pin(async move {
-                let parent = validate(&guest_keeper, parent)?;
+                let parent = validate(&guest_keeper, parent, false)?;
                 let keeper = guest_keeper
                     .upgrade()
                     .ok_or_else(|| infrastructure("operation root expired"))?;
@@ -122,7 +122,7 @@ impl OwnerAdapter {
         let submit_blocking: SubmitBlocking = Arc::new(move |parent, work| {
             let blocking_keeper = blocking_keeper.clone();
             Box::pin(async move {
-                let parent = validate(&blocking_keeper, parent)?;
+                let parent = validate(&blocking_keeper, parent, false)?;
                 parent
                     .run_blocking(work)
                     .await
@@ -132,14 +132,14 @@ impl OwnerAdapter {
 
         let commit_keeper = expected.clone();
         let check_commit: CheckCommit = Arc::new(move |parent| {
-            let parent = validate(&commit_keeper, parent)?;
+            let parent = validate(&commit_keeper, parent, true)?;
             parent
                 .ensure_commit_authorized()
                 .map_err(|error| infrastructure(error.to_string()))
         });
 
         let report_failure: ReportFailure = Arc::new(move |parent, tag| {
-            let _ = validate(&expected, parent)?;
+            let _ = validate(&expected, parent, false)?;
             let keeper = expected
                 .upgrade()
                 .ok_or_else(|| infrastructure("operation root expired"))?;
@@ -173,6 +173,7 @@ fn token(keeper: &Arc<RootKeeper>, context: ChildContext) -> SharedOwner {
 fn validate(
     expected: &Weak<RootKeeper>,
     owner: SharedOwner,
+    allow_settling_root: bool,
 ) -> std::result::Result<ChildContext, HostError> {
     let keeper = expected
         .upgrade()
@@ -182,11 +183,16 @@ fn validate(
         misuse("owner capability has the wrong type")
     })?;
     let issued = token.keeper.upgrade();
+    // The supervisor joins the root task before physical settlement. Only its
+    // token may cross that liveness boundary, and only after the commit CAS.
+    let settling_root = allow_settling_root
+        && token.context.task.local == 0
+        && RootState::load(&keeper.state) == RootState::Committing;
     if !issued
         .as_ref()
         .is_some_and(|issued| Arc::ptr_eq(issued, &keeper))
         || token.context.task.root != keeper.id
-        || !token.context.alive.load(Ordering::SeqCst)
+        || (!token.context.alive.load(Ordering::SeqCst) && !settling_root)
     {
         keeper.quarantine_before_commit();
         return Err(misuse("owner capability is foreign or expired"));

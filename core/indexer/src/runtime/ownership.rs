@@ -18,10 +18,15 @@ use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot}
 use tokio::task::{AbortHandle, Id, JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
-use wasmtime::component::{ResourceTable, Val};
+use wasmtime::component::ResourceTable;
+#[cfg(test)]
+use wasmtime::component::Val;
 
 use super::Runtime;
-use super::invocation::{InvocationBudget, InvocationStore};
+use super::call::GuestCompletion;
+use super::invocation::InvocationBudget;
+#[cfg(test)]
+use super::invocation::InvocationStore;
 use super::pool::Manager;
 use super::pool::{LinkedManager, LinkedSession};
 #[cfg(test)]
@@ -211,13 +216,6 @@ impl Drop for SlotLease {
             "child slot released twice"
         );
     }
-}
-
-pub(super) struct GuestCompletion {
-    pub result: std::result::Result<std::result::Result<(), wasmtime::Error>, String>,
-    pub results: Vec<Val>,
-    pub store: InvocationStore,
-    pub host_panicked: bool,
 }
 
 struct GuestDelivery {
@@ -1062,6 +1060,8 @@ impl CanonicalRootLease {
         }
         runtime.ownership = None;
         runtime.storage.ownership = None;
+        runtime.bundle_owner = None;
+        runtime.storage.bundle_owner = None;
         runtime.invocation_budget = None;
         runtime.store_table_owners = None;
         *runtime.table.lock().await = ResourceTable::new();
@@ -1150,6 +1150,10 @@ where
     );
     let mut authority = keeper.authority.lock().await;
     let runtime: &mut Runtime = authority.as_mut().expect("root authority retained");
+    ensure!(
+        runtime.bundle_owner.is_none() && runtime.storage.bundle_owner.is_none(),
+        "legacy root cannot replace a linked ownership context"
+    );
     runtime.invocation_budget = Some(Arc::new(InvocationBudget::default()));
     runtime.store_table_owners = Some(Arc::new(std::sync::Mutex::new(Vec::new())));
     runtime.storage.ownership = Some(context.clone());
@@ -1304,6 +1308,8 @@ impl OwnerService {
         ensure!(
             runtime.ownership.is_none()
                 && runtime.storage.ownership.is_none()
+                && runtime.bundle_owner.is_none()
+                && runtime.storage.bundle_owner.is_none()
                 && runtime.invocation_budget.is_none()
                 && runtime.store_table_owners.is_none()
                 && Arc::strong_count(&runtime.table) == 1,
@@ -2453,6 +2459,8 @@ async fn restore<T>(keeper: &RootKeeper, result: Result<RootOutcome<T>>) -> Resu
     }
     runtime.ownership = None;
     runtime.storage.ownership = None;
+    runtime.bundle_owner = None;
+    runtime.storage.bundle_owner = None;
     let live_store_table = runtime.store_table_owners.as_ref().is_some_and(|owners| {
         owners
             .lock()
@@ -2549,6 +2557,8 @@ async fn restore_linked<T>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::bundle_ownership::BundleOwner;
+    use super::super::bundle_session::BundleSession;
     use super::super::pool::new_linked;
     use super::adapter::{ExecutorSession, GuestFactory, RootHooks, SessionAction, SessionFactory};
     use super::*;
@@ -3166,6 +3176,155 @@ mod tests {
                 .get::<i64>(0)?,
             1
         );
+        Ok(())
+    }
+
+    fn linked_runtime_session(
+        runtime: Runtime,
+        canonical: bool,
+    ) -> (LinkedSession, Arc<BundleSession>) {
+        let conn = runtime.storage.conn.clone();
+        let origin = runtime.executor_version();
+        let network = runtime.network;
+        let retained = BundleSession::new(runtime);
+        let session = retained.clone();
+        let make_root = Arc::new(
+            move |selection: ExecutionSelection, adapter: OwnerAdapter| {
+                selection
+                    .ensure_runtime(network, origin)
+                    .map_err(|error| (0, format!("{error:#}")))?;
+                let owner = BundleOwner::new(
+                    adapter.root,
+                    adapter.submit_guest,
+                    adapter.submit_blocking,
+                    adapter.check_commit,
+                    adapter.report_failure,
+                    adapter.fuel_yield_interval,
+                );
+                let (prepare, inspect_canonical_drain, settle, reset) =
+                    session.root_hooks(owner, canonical);
+                Ok(RootHooks {
+                    prepare,
+                    inspect_canonical_drain,
+                    settle,
+                    reset,
+                })
+            },
+        );
+        let executor = ExecutorSession {
+            origin,
+            owner: retained.clone(),
+            make_root,
+            recycle: retained.recycle(),
+        };
+        (LinkedSession::new(conn, executor), retained)
+    }
+
+    #[tokio::test]
+    async fn bundle_callbacks_preserve_real_paid_call_and_release_context() -> Result<()> {
+        let (mut runtime, _dir, signer, address) = seeded_paid_oracle().await?;
+        runtime.storage.savepoint().await?;
+        let direct =
+            paid_receipt_snapshot(&mut runtime, &signer, &address, "write-result-payload(1)")
+                .await?;
+        runtime.storage.rollback().await?;
+        let selection = select_legacy_p1(
+            &runtime.storage.conn,
+            runtime.network,
+            ApplicationPosition::View,
+        )
+        .await?;
+        let (session, retained) = linked_runtime_session(runtime, false);
+        let service = OwnerService::new();
+        let owned = LinkedStatefulSession::new(session);
+        let capacity = service.reserve_root_capacity().await?;
+        let operation: LinkedOperation = Box::new(move |opaque, _| {
+            Box::pin(async move {
+                let session = opaque
+                    .downcast::<BundleSession>()
+                    .map_err(|_| (2, "unexpected executor session".into()))?;
+                let mut runtime = session.runtime.lock().await;
+                assert_eq!(
+                    runtime.bundle_owner.as_ref().unwrap().fuel_yield_interval(),
+                    Some(API_FUEL_YIELD_INTERVAL)
+                );
+                runtime.component_cache.clear();
+                let value = paid_receipt_snapshot(
+                    &mut runtime,
+                    &signer,
+                    &address,
+                    "write-result-payload(1)",
+                )
+                .await
+                .map_err(|error| (0, format!("{error:#}")))?;
+                Ok((Box::new(value) as Payload, true))
+            })
+        });
+        let mut handle = service
+            .start_linked_stateful_reserved(&owned, capacity, selection, operation)
+            .await?;
+        let value = handle
+            .result()
+            .await?
+            .downcast::<PaidReceiptSnapshot>()
+            .map_err(|_| anyhow!("unexpected receipt payload"))?;
+        assert_eq!(*value, direct);
+        let checkout = owned.checkout().await?;
+        assert!(checkout.value.as_ref().unwrap().conn.is_autocommit());
+        let recovered = retained.runtime.lock().await;
+        assert!(recovered.bundle_owner.is_none());
+        assert!(recovered.storage.bundle_owner.is_none());
+        assert_eq!(receipt_count(&recovered).await?, 1);
+        assert_eq!(service.active_roots().await, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bundle_canonical_hooks_preserve_paid_settlement_and_rollback() -> Result<()> {
+        let (runtime, _dir, signer, address) = seeded_paid_oracle().await?;
+        let (session, retained) = linked_runtime_session(runtime, true);
+        let service = OwnerService::new();
+        for commit in [false, true] {
+            let selection = select_legacy_p1(
+                &session.conn,
+                Network::Regtest,
+                ApplicationPosition::Committee,
+            )
+            .await?;
+            let capacity = service.reserve_root_capacity().await?;
+            let mut lease = service
+                .begin_linked_canonical_reserved(&session, capacity, selection, false)
+                .await?;
+            {
+                let mut runtime = retained.runtime.lock().await;
+                assert_eq!(
+                    runtime.bundle_owner.as_ref().unwrap().fuel_yield_interval(),
+                    None
+                );
+                runtime.storage.savepoint().await?;
+                let result = paid_receipt_snapshot(
+                    &mut runtime,
+                    &signer,
+                    &address,
+                    "write-result-payload(1)",
+                )
+                .await?;
+                assert_eq!(result.receipt.1, "Ok");
+            }
+            lease.drain().await?;
+            assert!(!session.conn.is_autocommit());
+            lease.settle(commit).await?;
+            lease.complete().await?;
+            assert!(session.conn.is_autocommit());
+            let runtime = retained.runtime.lock().await;
+            assert_eq!(receipt_count(&runtime).await?, i64::from(commit));
+            assert!(runtime.bundle_owner.is_none());
+            assert!(runtime.storage.savepoint_stack.is_empty().await);
+            assert_eq!(service.active_roots().await, 0);
+        }
+        (session.executor.recycle)(session.executor.owner.clone())
+            .await
+            .map_err(|error| anyhow!("recycle failed: {error:?}"))?;
         Ok(())
     }
 
@@ -5095,6 +5254,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expired_tokens_only_allow_root_commit_check_during_settlement() -> Result<()> {
+        let service = OwnerService::new();
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let keeper = Arc::new(RootKeeper::new_stateful(
+            RootId(102),
+            runtime,
+            service.reserve_root_capacity().await?,
+        ));
+        let (sender, _receiver) = mpsc::channel(1);
+        let context = ChildContext::root(
+            keeper.id,
+            RootKind::Api,
+            sender,
+            keeper.state.clone(),
+            keeper.blocking.clone(),
+            keeper.caught_host_panic.clone(),
+        );
+        let adapter = OwnerAdapter::new(&keeper, context.clone());
+        context.alive.store(false, Ordering::SeqCst);
+        keeper
+            .state
+            .store(RootState::Committing as u8, Ordering::SeqCst);
+        let guest: GuestFactory =
+            Box::new(|_| Box::pin(async { (false, Box::new(1u8) as Payload) }));
+        let guest_error = (adapter.submit_guest)(adapter.root.clone(), guest)
+            .await
+            .unwrap_err();
+        assert_eq!(guest_error.0, 2);
+        let blocking_error =
+            (adapter.submit_blocking)(adapter.root.clone(), Box::new(|| Box::new(2u8) as Payload))
+                .await
+                .unwrap_err();
+        assert_eq!(blocking_error.0, 2);
+        assert!((adapter.check_commit)(adapter.root.clone()).is_ok());
+        let expired_child = ChildContext {
+            task: TaskId {
+                root: keeper.id,
+                local: 1,
+            },
+            depth: 1,
+            alive: Arc::new(AtomicBool::new(false)),
+            ..context
+        };
+        let child_adapter = OwnerAdapter::new(&keeper, expired_child);
+        assert_eq!(
+            (child_adapter.check_commit)(child_adapter.root.clone())
+                .unwrap_err()
+                .0,
+            2
+        );
+        keeper.quiescent.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn exported_host_panic_cannot_authorize_sql_commit() -> Result<()> {
         let (runtime, _dir, _name) = test_runtime().await?;
         let conn = runtime.storage.conn.clone();
@@ -5204,6 +5418,94 @@ mod tests {
                 .downcast::<u8>()
                 .map_err(|_| anyhow!("root payload type mismatch"))?,
             7
+        );
+        assert_eq!(service.quarantined_roots().await, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn linked_stateful_commit_uses_root_token_after_operation_returns() -> Result<()> {
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let conn = runtime.storage.conn.clone();
+        conn.execute(
+            "CREATE TABLE linked_stateful_commit (id INTEGER PRIMARY KEY)",
+            (),
+        )
+        .await?;
+        let selection =
+            select_legacy_p1(&conn, Network::Regtest, ApplicationPosition::View).await?;
+        let hook_conn = conn.clone();
+        let make_root = Arc::new(move |_selection, adapter: OwnerAdapter| {
+            let prepare_conn = hook_conn.clone();
+            let prepare: SessionAction = Arc::new(move |_| {
+                let conn = prepare_conn.clone();
+                Box::pin(async move {
+                    conn.execute("BEGIN", ())
+                        .await
+                        .map(|_| ())
+                        .map_err(|error| (0, error.to_string()))
+                })
+            });
+            let settle_conn = hook_conn.clone();
+            let check_commit = adapter.check_commit.clone();
+            let root_token = adapter.root.clone();
+            Ok(RootHooks {
+                prepare,
+                inspect_canonical_drain: Arc::new(|_| Box::pin(async { Ok(()) })),
+                settle: Arc::new(move |_, commit| {
+                    let conn = settle_conn.clone();
+                    let check_commit = check_commit.clone();
+                    let root_token = root_token.clone();
+                    Box::pin(async move {
+                        if commit {
+                            check_commit(root_token)?;
+                        }
+                        conn.execute(if commit { "COMMIT" } else { "ROLLBACK" }, ())
+                            .await
+                            .map(|_| ())
+                            .map_err(|error| (0, error.to_string()))
+                    })
+                }),
+                reset: Arc::new(|_, _, _| Box::pin(async { Ok(()) })),
+            })
+        });
+        let executor = ExecutorSession {
+            origin: ExecutorVersion::LegacyP1,
+            owner: Arc::new(()),
+            make_root,
+            recycle: Arc::new(|_| Box::pin(async { Ok(()) })),
+        };
+        let session = LinkedStatefulSession::new(LinkedSession::new(conn.clone(), executor));
+        let service = OwnerService::new();
+        let operation_conn = conn.clone();
+        let operation: LinkedOperation = Box::new(move |_, _| {
+            Box::pin(async move {
+                operation_conn
+                    .execute("INSERT INTO linked_stateful_commit (id) VALUES (1)", ())
+                    .await
+                    .map_err(|error| (0, error.to_string()))?;
+                Ok((Box::new(7u8) as Payload, true))
+            })
+        });
+        let mut handle = service
+            .start_linked_stateful_reserved(
+                &session,
+                service.reserve_root_capacity().await?,
+                selection,
+                operation,
+            )
+            .await?;
+        let value = handle.result().await?;
+        assert_eq!(*value.downcast::<u8>().expect("root payload type"), 7);
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM linked_stateful_commit", ())
+            .await?;
+        assert_eq!(
+            rows.next()
+                .await?
+                .context("commit count missing")?
+                .get::<i64>(0)?,
+            1
         );
         assert_eq!(service.quarantined_roots().await, 0);
         Ok(())
