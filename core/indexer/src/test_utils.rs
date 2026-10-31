@@ -22,8 +22,10 @@ use indexer_types::{Block, BlockRow, Payment, Transaction, TransactionRow};
 use libsql::Connection;
 use rand::prelude::*;
 use sha2::{Digest, Sha256};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 use tokio::time::{Duration, sleep};
 use wasmtime::Engine;
 
@@ -427,7 +429,36 @@ impl OwnedTestRuntime {
         gas_limit: u64,
         network: bitcoin::Network,
     ) -> Result<(Self, TempDir, String)> {
-        let service = OwnerService::new();
+        Self::new_with_service(gas_limit, network, OwnerService::new(), None).await
+    }
+
+    async fn new_with_service(
+        gas_limit: u64,
+        network: bitcoin::Network,
+        service: OwnerService,
+        completed: Option<oneshot::Sender<Option<PathBuf>>>,
+    ) -> Result<(Self, TempDir, String)> {
+        // A caller can drop the constructor during native publication. Keep
+        // the Runtime and owner alive until that work has settled.
+        tokio::spawn(async move {
+            let result = Self::build_with_service(gas_limit, network, service).await;
+            if let Some(completed) = completed {
+                let directory = result
+                    .as_ref()
+                    .ok()
+                    .map(|(_, directory, _)| directory.path().to_path_buf());
+                let _ = completed.send(directory);
+            }
+            result
+        })
+        .await?
+    }
+
+    async fn build_with_service(
+        gas_limit: u64,
+        network: bitcoin::Network,
+        service: OwnerService,
+    ) -> Result<(Self, TempDir, String)> {
         let (runtime, directory, name) = test_runtime_with_network_owned(network, &service).await?;
         let session = OwnedRuntimeSession::with_service(runtime, service);
         session
@@ -642,6 +673,74 @@ impl OwnedTestRuntime {
     }
 }
 
+#[cfg(test)]
+mod ownership_constructor_tests {
+    use super::*;
+    use crate::runtime::BlockingGate;
+    use anyhow::ensure;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use tokio::time::timeout;
+
+    struct ReleaseGate(Arc<BlockingGate>);
+
+    impl Drop for ReleaseGate {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
+    #[tokio::test]
+    async fn dropped_constructor_waits_for_owned_native_publication_cleanup() -> Result<()> {
+        shared_test_engine().await;
+        let service = OwnerService::new();
+        let gate = Arc::new(BlockingGate::default());
+        let _release = ReleaseGate(gate.clone());
+        service.set_startup_compile_gate(gate.clone());
+        let (completed, finished) = oneshot::channel();
+
+        let constructor = tokio::spawn(OwnedTestRuntime::new_with_service(
+            100_000,
+            bitcoin::Network::Regtest,
+            service.clone(),
+            Some(completed),
+        ));
+        timeout(Duration::from_secs(30), async {
+            while !gate.entered.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        constructor.abort();
+        let stopped = constructor
+            .await
+            .err()
+            .ok_or_else(|| anyhow!("constructor unexpectedly returned"))?;
+        ensure!(stopped.is_cancelled(), "constructor task was not cancelled");
+        ensure!(
+            !service.is_fatal(),
+            "dropped constructor quarantined native publication"
+        );
+        gate.release();
+        let directory = timeout(Duration::from_secs(30), finished)
+            .await??
+            .ok_or_else(|| anyhow!("constructor did not complete after cancellation"))?;
+        timeout(Duration::from_secs(30), async {
+            while directory.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        ensure!(
+            !service.is_fatal()
+                && service.active_roots().await == 0
+                && service.quarantined_roots().await == 0,
+            "native publication did not cleanly finish after constructor cancellation"
+        );
+        Ok(())
+    }
+}
+
 pub fn test_genesis(validators: &[GenesisValidator]) -> GenesisParameters {
     GenesisParameters {
         sigma_min: Decimal::from("1"),
@@ -740,6 +839,8 @@ async fn test_runtime_with_genesis_config_and_engine(
     // Set before publish so contract `init` sees it (the `network()` built-in).
     runtime.network = network;
     if let Some(service) = owner_service {
+        #[cfg(test)]
+        service.apply_startup_compile_gate(&mut runtime);
         runtime
             .publish_native_contracts_owned(genesis, service)
             .await?;
