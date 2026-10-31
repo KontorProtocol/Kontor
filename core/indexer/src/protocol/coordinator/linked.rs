@@ -5,14 +5,17 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use bitcoin::Network;
 use deadpool::managed::{Object, Pool};
+use indexer_types::Block;
 use libsql::Connection;
 
 use super::committee::materialize_committee;
 use super::selection::{ApplicationPosition, ExecutionSelection, select_legacy_p1};
 use crate::consensus::ValidatorSet;
+use crate::database::queries::insert_block_execution_usage;
 use crate::database::storage_callbacks_v1::storage_callbacks;
 use crate::protocol::operations::{AddressEnvelope, ViewOutcome};
 use crate::runtime::bundle_session::BundleSession;
+use crate::runtime::fuel::ExecutionUsage;
 use crate::runtime::ownership::adapter::{
     ExecutorOperations, ExecutorSession, HostFailure, OwnerAdapter, Payload, RootHooks,
     SessionFactory,
@@ -28,6 +31,7 @@ pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession
     let session = BundleSession::new(runtime);
     let operations = ExecutorOperations {
         begin_unit: session.begin_unit(),
+        lifecycle: session.lifecycle(),
         contract_wit: session.contract_wit(),
         view: session.view(),
         committee: session.committee(),
@@ -196,6 +200,33 @@ pub(crate) async fn begin_unit(
     selection.verify_base(&session.conn).await
 }
 
+pub(crate) async fn run_block_lifecycle(
+    session: &LinkedSession,
+    selection: &ExecutionSelection,
+    network: Network,
+    block: &Block,
+) -> Result<()> {
+    selection.ensure_runtime(network, session.origin())?;
+    selection.ensure_execution(network, block.height)?;
+    selection.ensure_block(block.height, block.hash)?;
+    let (user_fuel, system_fuel, deposit_fuel) = (session.executor.operations.lifecycle)(
+        session.executor.owner.clone(),
+        selection.envelope(),
+    )
+    .await
+    .map_err(HostFailure::from)?;
+    insert_block_execution_usage(
+        &session.conn,
+        block.height,
+        ExecutionUsage {
+            user_fuel,
+            system_fuel,
+            deposit_fuel,
+        },
+    )
+    .await
+}
+
 pub(crate) async fn derive_committee(
     session: &LinkedSession,
     selection: &ExecutionSelection,
@@ -219,16 +250,161 @@ mod tests {
     use crate::config::DEFAULT_VIEW_GAS_LIMIT;
     use crate::consensus::{Validator, signing::PrivateKey};
     use crate::database::queries::insert_block;
+    use crate::reactor::executor::{Executor, NoopExecutor};
     use crate::reg_tester::random_x_only_pubkey;
     use crate::runtime::pool::new_linked;
     use crate::runtime::staking::address as staking_address;
     use crate::runtime::{Decimal, GenesisValidator};
     use crate::test_utils::{new_mock_block_hash, test_runtime_with_genesis};
     use indexer_types::BlockRow;
+    use libsql::Value;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
     use tokio::sync::Notify;
     use tokio::time::timeout;
+
+    async fn lifecycle_state(conn: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
+        let mut state = Vec::new();
+        for table in [
+            "blocks",
+            "contract_state",
+            "contract_results",
+            "depositor_footprint",
+            "block_execution_usage",
+            "signers",
+        ] {
+            let mut rows = conn
+                .query(&format!("SELECT * FROM {table} ORDER BY rowid"), ())
+                .await?;
+            let mut values = Vec::new();
+            while let Some(row) = rows.next().await? {
+                values.push(
+                    (0..rows.column_count())
+                        .map(|i| row.get_value(i))
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+            }
+            state.push(values);
+        }
+        Ok(state)
+    }
+
+    #[tokio::test]
+    async fn linked_lifecycle_preserves_state_usage_and_atomic_settlement() -> Result<()> {
+        let key = PrivateKey::from([7; 32]).public_key();
+        let (mut runtime, _dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
+            x_only_pubkey: random_x_only_pubkey(),
+            ed25519_pubkey: key.as_bytes().to_vec(),
+            stake: Decimal::from("100"),
+        }])
+        .await?;
+        let block = Block {
+            height: 2,
+            hash: new_mock_block_hash(2),
+            prev_hash: new_mock_block_hash(1),
+            transactions: Vec::new(),
+        };
+        let conn = runtime.storage.conn.clone();
+        let selection = select_legacy_p1(
+            &conn,
+            Network::Regtest,
+            ApplicationPosition::Block {
+                height: block.height,
+                hash: block.hash,
+                consensus_height: 2,
+            },
+        )
+        .await?;
+        let before = lifecycle_state(&conn).await?;
+        runtime.storage.savepoint().await?;
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(block.height)
+                .hash(block.hash)
+                .build(),
+        )
+        .await?;
+        let previous = runtime.start_usage();
+        NoopExecutor
+            .run_block_lifecycle(&selection, &mut runtime, &block)
+            .await?;
+        let usage = runtime.finish_usage(previous)?;
+        assert!(usage.system_fuel > 0);
+        insert_block_execution_usage(&conn, block.height, usage).await?;
+        let expected = lifecycle_state(&conn).await?;
+        assert_ne!(before, expected);
+        runtime.storage.rollback().await?;
+        assert_eq!(lifecycle_state(&conn).await?, before);
+
+        let session = LinkedSession::new(conn.clone(), link_runtime(runtime, true));
+        let service = OwnerService::new();
+        assert!(
+            run_block_lifecycle(&session, &selection, Network::Regtest, &block)
+                .await
+                .is_err()
+        );
+        for commit in [false, true] {
+            let capacity = service.reserve_root_capacity().await?;
+            let mut lease = service
+                .begin_linked_canonical_reserved(&session, capacity, selection.clone(), false)
+                .await?;
+            assert!(
+                run_block_lifecycle(&session, &selection, Network::Regtest, &block)
+                    .await
+                    .is_err()
+            );
+            begin_unit(&session, &selection, Network::Regtest).await?;
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(block.height)
+                    .hash(block.hash)
+                    .build(),
+            )
+            .await?;
+            let unchanged = lifecycle_state(&conn).await?;
+            let mut wrong_block = block.clone();
+            wrong_block.hash = new_mock_block_hash(3);
+            assert!(
+                run_block_lifecycle(&session, &selection, Network::Regtest, &wrong_block)
+                    .await
+                    .is_err()
+            );
+            let mut wrong_selection = selection.envelope();
+            wrong_selection.3.0 = 4;
+            assert!(
+                (session.executor.operations.lifecycle)(
+                    session.executor.owner.clone(),
+                    wrong_selection
+                )
+                .await
+                .is_err()
+            );
+            assert_eq!(lifecycle_state(&conn).await?, unchanged);
+            run_block_lifecycle(&session, &selection, Network::Regtest, &block).await?;
+            assert_eq!(lifecycle_state(&conn).await?, expected);
+            lease.drain().await?;
+            lease.settle(commit).await?;
+            lease.complete().await?;
+            assert!(conn.is_autocommit());
+            assert_eq!(
+                lifecycle_state(&conn).await?,
+                if commit {
+                    expected.clone()
+                } else {
+                    before.clone()
+                }
+            );
+            assert!(
+                run_block_lifecycle(&session, &selection, Network::Regtest, &block)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(service.active_roots().await, 0);
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn node_pool_routes_real_views_and_releases_read_snapshot() -> Result<()> {

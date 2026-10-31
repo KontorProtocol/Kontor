@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use bitcoin::hashes::Hash;
 use bitcoin::{Transaction as BitcoinTransaction, Txid};
 use indexer_types::{Block, Transaction};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -78,7 +79,14 @@ pub(crate) trait Executor: Sync {
         selection.ensure_block(block.height, block.hash)?;
         let mut runtime = runtime.bind_selection(&selection.envelope())?;
         match selection.version() {
-            ExecutorVersion::LegacyP1 => lifecycle::run_block_lifecycle(&mut runtime, block).await,
+            ExecutorVersion::LegacyP1 => {
+                lifecycle::run_block_lifecycle(
+                    &mut runtime,
+                    block.height,
+                    block.hash.to_byte_array(),
+                )
+                .await
+            }
         }
     }
 

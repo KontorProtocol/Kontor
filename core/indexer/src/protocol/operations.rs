@@ -9,6 +9,10 @@ use super::execution::SelectionEnvelope;
 pub(crate) type SessionOwner = Arc<dyn Any + Send + Sync>;
 pub(crate) type OperationFuture<T> = Pin<Box<dyn Future<Output = Result<T, (u8, String)>> + Send>>;
 pub(crate) type AddressEnvelope = (String, u64, u32);
+// User, system and deposit fuel are distinct persisted accounting categories.
+pub(crate) type UsageEnvelope = (u64, u64, u64);
+pub(crate) type LifecycleCall =
+    Arc<dyn Fn(SessionOwner, SelectionEnvelope) -> OperationFuture<UsageEnvelope> + Send + Sync>;
 // The boolean preserves deterministic classification; the text is P1's Debug
 // rendering used by the public view API, rendered before leaving its graph.
 pub(crate) type ViewOutcome = Result<String, (bool, String)>;

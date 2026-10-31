@@ -7,11 +7,41 @@ use super::bundle_session::{BundleSession, infrastructure};
 use super::{ContractAddress, ExecutionError, Runtime};
 use crate::protocol::execution::SelectionEnvelope;
 use crate::protocol::operations::{
-    BeginUnitCall, CommitteeCall, ContractWitCall, SessionOwner, ViewCall,
+    BeginUnitCall, CommitteeCall, ContractWitCall, LifecycleCall, SessionOwner, ViewCall,
 };
 use crate::protocol::v1::committee::derive_committee;
+use crate::protocol::v1::lifecycle::run_block_lifecycle;
 
 impl BundleSession {
+    pub(crate) fn lifecycle(self: &Arc<Self>) -> LifecycleCall {
+        let expected = self.clone();
+        Arc::new(move |opaque, selection| {
+            let session = expected.clone();
+            Box::pin(async move {
+                session.verify_operation_owner(opaque)?;
+                let mut runtime = session.runtime.lock().await;
+                runtime
+                    .verify_bundle_operation(&selection, 3)
+                    .map_err(infrastructure)?;
+                let mut runtime = runtime.bind_selection(&selection).map_err(infrastructure)?;
+                let (_, height, Some(hash), _) = selection.3 else {
+                    return Err((2, "lifecycle requires a selected block hash".into()));
+                };
+                if runtime.storage.savepoint_stack.is_empty().await {
+                    return Err((2, "lifecycle requires an open canonical unit".into()));
+                }
+                let previous = runtime.start_usage();
+                let result = run_block_lifecycle(&mut runtime, height, hash).await;
+                let usage = runtime.finish_usage(previous);
+                // Preserve execution-error precedence while restoring accounting
+                // even when the lifecycle itself fails.
+                result.map_err(infrastructure)?;
+                let usage = usage.map_err(infrastructure)?;
+                Ok((usage.user_fuel, usage.system_fuel, usage.deposit_fuel))
+            })
+        })
+    }
+
     pub(crate) fn begin_unit(self: &Arc<Self>) -> BeginUnitCall {
         let expected = self.clone();
         Arc::new(move |opaque, selection| {
