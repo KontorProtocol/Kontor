@@ -28,6 +28,13 @@ FEATURE_LOGS = {
     "production": "wasmtime-production-features.txt",
     "qualification": "wasmtime-qualification-features.txt",
 }
+OWNERSHIP_TESTS = (
+    "canonical_lease_drains_native_guest_before_releasing_runtime",
+    "canonical_and_simulation_children_keep_no_yield_policy",
+    "nested_api_children_inherit_actual_fuel_yields",
+    "cancelling_nested_yielding_api_guest_joins_before_runtime_reuse",
+    "cancelling_fuel_yielding_guest_joins_before_pool_reuse",
+)
 CELLS = {
     f"native-stack-{runner}-{profile}": (f"{os_name}-{arch}/{profile}", target_os, target_arch)
     for runner, os_name, arch, target_os, target_arch in (
@@ -46,7 +53,15 @@ CASES = RECURSION | {"paid_reenter", "paid_huge"}
 REPORT_FIELDS = {
     "schema_version", "cell", "source_sha", "lockfile_sha256",
     "wasmtime_revision", "binary", "binary_sha256", "rustc_version_verbose", "host", "cases",
-    "chains", "chain_log", "log_sha256", "wasmtime_features", "feature_logs", "cargo_log",
+    "chains", "chain_log", "owned_chains", "owned_chain_log", "ownership_log",
+    "log_sha256", "wasmtime_features", "feature_logs", "cargo_log",
+}
+OWNED_STACK_SEMANTICS = {
+    "kind", "depth", "outcome", "value", "receipt", "last_depth",
+    "child_markers", "rolled_back", "fuel", "reset", "fixture_contracts",
+    "call_hook_installed", "gas_limit", "paid_fuel_limit", "view_gas_limit",
+    "view_fuel_limit", "system_fuel_ceiling", "gas_to_fuel_multiplier",
+    "max_wasm_stack", "async_stack_size", "engine_target", "component_sha256",
 }
 OBSERVATION_FIELDS = {
     "kind", "depth", "outcome", "value", "receipt", "last_depth",
@@ -182,6 +197,47 @@ def validate_case(case, target_os, target_arch, directory):
     }
 
 
+def validate_owned_stack(case, directory):
+    kind = case["kind"]
+    expected_depths = [0] if kind == "paid_huge" else [case["last_success"], case["first_failure"]]
+    samples = case.get("owned_observations")
+    check(isinstance(samples, list) and len(samples) == len(expected_depths), f"{kind}: missing owned stack samples")
+    check(case.get("owned_summary") == {
+        "kind": kind, "depths": expected_depths,
+        "outcomes": [sample.get("outcome") for sample in samples], "owned": True,
+    }, f"{kind}: invalid owned stack summary")
+    log = case.get("owned_log")
+    check(isinstance(log, str) and Path(log).name == log and (directory / log).is_file(), f"{kind}: missing owned stack log")
+    check(reports_in_log(directory / log, "KONTOR_OWNED_STACK_REPORT:") == samples, f"{kind}: raw owned stack evidence differs")
+    controls = {sample["depth"]: sample for sample in case["control_observations"]}
+    normalized = []
+    for index, (depth, sample) in enumerate(zip(expected_depths, samples)):
+        check(isinstance(sample, dict) and OWNED_STACK_SEMANTICS <= sample.keys(), f"{kind}: incomplete owned stack sample")
+        check(sample["role"] == "owned" and sample["sample_index"] == index and sample["sample_id"] == f"owned:{kind}:{index:04}", f"{kind}: wrong owned sample identity")
+        check(sample["kind"] == kind and sample["depth"] == depth, f"{kind}: wrong owned stack boundary")
+        owner = sample.get("ownership")
+        expected_kind = "api" if kind.startswith("view_") else "canonical"
+        check(isinstance(owner, dict) and set(owner) == {"kind", "fuel_yield_interval", "registered_peak"}, f"{kind}: missing owner evidence")
+        check(owner["kind"] == expected_kind and owner["fuel_yield_interval"] == (100_000 if expected_kind == "api" else None), f"{kind}: wrong owner policy")
+        peak = owner["registered_peak"]
+        check(type(peak) is int and 1 <= peak <= 64, f"{kind}: no registered guest Store")
+        if kind == "paid_reenter":
+            check(peak == min(depth + 1, 64), f"{kind}: descendant Stores were not registered")
+        oracle = controls[depth]
+        check(sample.get("cache_mode") == ("fresh_api_pool_cache" if expected_kind == "api" else "warm_compiled_cache"), f"{kind}: wrong owned cache provenance")
+        check((sample.get("target_os"), sample.get("target_arch")) == (oracle["target_os"], oracle["target_arch"]), f"{kind}: owned target differs")
+        if expected_kind == "api":
+            check(sample.get("state_after_sha256") == sample["reset"]["post"]["persistent_digest_sha256"], f"{kind}: owned API state digest differs")
+        check({field: sample[field] for field in OWNED_STACK_SEMANTICS} == {
+            field: oracle[field] for field in OWNED_STACK_SEMANTICS
+        }, f"{kind}: owned output, receipt, fuel, or rollback differs from unowned control")
+        normalized.append({
+            "semantics": {field: sample[field] for field in sorted(OWNED_STACK_SEMANTICS)},
+            "ownership": owner,
+        })
+    return normalized
+
+
 CHAIN_FIELDS = {
     "mode", "stores", "trials", "component_sha256", "engine_target", "max_wasm_stack",
     "async_stack_size", "target_os", "target_arch", "call_hook_installed",
@@ -190,12 +246,14 @@ TRIAL_FIELDS = {
     "outcome", "fuel", "receipt", "receipt_count", "value", "storage_state", "rolled_back",
     "resource_count", "baseline_resource_count", "savepoint_restored", "stack_empty",
     "host_io_suspended", "leaf_callback_seen", "rollback_clean", "balances",
+    "repeat_index", "state_before_sha256", "state_after_sha256",
 }
 BALANCE_FIELDS = {
     "before", "after", "restored", "burned_before", "burned_after", "supply_before",
     "supply_after", "floor_before", "floor_after", "floor_restored",
 }
 CHAIN_KEYS = {(mode, stores) for mode in ("paid", "view", "core") for stores in (33, 63, 64, 65)}
+OWNED_CHAIN_KEYS = {(mode, stores) for mode in ("paid", "view", "core") for stores in (64, 65)}
 
 
 def decimal_fraction(value):
@@ -229,8 +287,11 @@ def validate_chains(chains, target_os, target_arch):
         trials = chain["trials"]
         check(isinstance(trials, list) and len(trials) == 3, "chain requires three trials")
         expected = ["invocation_limit"] * 3 if stores == 65 else ["ok", "trap", "ok"]
-        for trial, outcome in zip(trials, expected):
+        for repeat_index, (trial, outcome) in enumerate(zip(trials, expected)):
             check(isinstance(trial, dict) and TRIAL_FIELDS <= trial.keys(), "missing chain trial fields")
+            check(type(trial["repeat_index"]) is int and trial["repeat_index"] == repeat_index, "wrong chain repeat index")
+            before, after = trial["state_before_sha256"], trial["state_after_sha256"]
+            check(isinstance(before, str) and HEX_64.fullmatch(before) and after == before, "chain persisted state was not restored")
             check(trial["outcome"] == outcome, "wrong chain outcome")
             check(trial["value"] == ("42" if outcome == "ok" else None), "wrong chain result")
             state = "[2, 0, 0, 0]" if mode != "view" and outcome == "ok" else "[0, 0, 0, 0]"
@@ -247,9 +308,11 @@ def validate_chains(chains, target_os, target_arch):
             if mode == "view":
                 check(receipt is None, "view chain persisted a receipt")
             else:
-                check(isinstance(receipt, dict) and set(receipt) == {"status", "gas"}, "invalid chain receipt")
+                check(isinstance(receipt, dict) and set(receipt) == {"contract_id", "status", "gas", "value"}, "invalid chain receipt")
+                check(type(receipt["contract_id"]) is int and receipt["contract_id"] >= 0, "invalid chain receipt contract")
                 check(receipt["status"] == ("Ok" if outcome == "ok" else "Other"), "wrong chain receipt status")
                 check(type(receipt["gas"]) is int and receipt["gas"] > 0, "invalid chain receipt gas")
+                check(receipt["value"] == ("42" if outcome == "ok" else None), "wrong chain receipt value")
             fuel = trial["fuel"]
             check(isinstance(fuel, dict) and set(fuel) == {"user", "system", "deposit"}, "missing chain fuel")
             check(all(type(value) is int and value >= 0 for value in fuel.values()), "invalid chain fuel")
@@ -266,8 +329,40 @@ def validate_chains(chains, target_os, target_arch):
             else:
                 check(amounts["floor_after"] == amounts["floor_before"], "unexpected chain deposit change")
         if stores == 65:
-            check(trials[0] == trials[1] == trials[2], "over-cap chain trials differ")
+            repeated = [{field: value for field, value in trial.items() if field != "repeat_index"} for trial in trials]
+            check(repeated[0] == repeated[1] == repeated[2], "over-cap chain trials differ")
         normalized.append({field: value for field, value in chain.items() if field not in {"target_os", "target_arch"}})
+    return sorted(normalized, key=lambda chain: (chain["mode"], chain["stores"]))
+
+
+def validate_owned_chains(owned_chains, chains, target_os, target_arch):
+    check(isinstance(owned_chains, list) and len(owned_chains) == len(OWNED_CHAIN_KEYS), "missing owned chain cells")
+    oracle = {(chain["mode"], chain["stores"]): chain for chain in chains}
+    seen = set()
+    normalized = []
+    for chain in owned_chains:
+        check(isinstance(chain, dict) and CHAIN_FIELDS <= chain.keys(), "owned chain lacks report fields")
+        key = (chain["mode"], chain["stores"])
+        check(key in OWNED_CHAIN_KEYS and key not in seen, "duplicate or unexpected owned chain key")
+        seen.add(key)
+        check((chain["target_os"], chain["target_arch"]) == (target_os, target_arch), "owned chain target mismatch")
+        reference = oracle[key]
+        for field in ("component_sha256", "engine_target", "max_wasm_stack", "async_stack_size", "call_hook_installed"):
+            check(chain[field] == reference[field], f"owned chain {key}: {field} differs")
+        trials = chain["trials"]
+        check(isinstance(trials, list) and len(trials) == 1, f"owned chain {key}: missing boundary trial")
+        trial = trials[0]
+        check(isinstance(trial, dict) and TRIAL_FIELDS <= trial.keys(), f"owned chain {key}: missing trial fields")
+        owner = trial.get("ownership")
+        check(isinstance(owner, dict) and set(owner) == {"kind", "fuel_yield_interval", "registered_peak"}, f"owned chain {key}: missing owner evidence")
+        check(owner == {
+            "kind": "api" if key[0] == "view" else "canonical",
+            "fuel_yield_interval": 100_000 if key[0] == "view" else None,
+            "registered_peak": min(key[1], 64),
+        }, f"owned chain {key}: wrong owner policy or descendant count")
+        for field in TRIAL_FIELDS:
+            check(trial[field] == reference["trials"][0][field], f"owned chain {key}: {field} differs from unowned oracle")
+        normalized.append({"mode": key[0], "stores": key[1], "trial": {field: trial[field] for field in sorted(TRIAL_FIELDS)}, "ownership": owner})
     return sorted(normalized, key=lambda chain: (chain["mode"], chain["stores"]))
 
 
@@ -318,7 +413,7 @@ def validate_report(path, cell):
     check(isinstance(report, dict), f"{path}: invalid report")
     check(REPORT_FIELDS <= report.keys(), f"{path}: missing report fields {sorted(REPORT_FIELDS - report.keys())}")
     name, target_os, target_arch = cell
-    check(report["schema_version"] == 5 and report["cell"] == name, f"{name}: mislabeled report")
+    check(report["schema_version"] == 6 and report["cell"] == name, f"{name}: mislabeled report")
     for field, pattern in (("source_sha", HEX_40), ("lockfile_sha256", HEX_64), ("binary_sha256", HEX_64)):
         check(isinstance(report[field], str) and pattern.fullmatch(report[field]), f"{name}: invalid {field}")
     binary = report["binary"]
@@ -333,21 +428,36 @@ def validate_report(path, cell):
     kinds = [case.get("kind") if isinstance(case, dict) else None for case in cases]
     check(len(kinds) == len(CASES) and set(kinds) == CASES, f"{name}: missing or duplicate case")
     normalized_cases = {case["kind"]: validate_case(case, target_os, target_arch, path.parent) for case in cases}
+    normalized_owned_cases = {case["kind"]: validate_owned_stack(case, path.parent) for case in cases}
     logs = [
         sample["log"] for case in cases
         for sample in case["observations"] + case["control_observations"]
     ]
-    logs.extend(case[field] for case in cases for field in ("worker_log", "control_log"))
+    logs.extend(case[field] for case in cases for field in ("worker_log", "control_log", "owned_log"))
     check(len(logs) == len(set(logs)), "duplicate probe sample log")
     chain_log = report["chain_log"]
     check(isinstance(chain_log, str) and Path(chain_log).name == chain_log and chain_log not in logs, "invalid chain log")
     check(reports_in_log(path.parent / chain_log, "CHAIN_PROBE_REPORT:") == report["chains"], "raw chain log disagrees with report")
+    owned_chain_log = report["owned_chain_log"]
+    check(isinstance(owned_chain_log, str) and Path(owned_chain_log).name == owned_chain_log and owned_chain_log not in logs, "invalid owned chain log")
+    check(reports_in_log(path.parent / owned_chain_log, "CHAIN_OWNED_PROBE_REPORT:") == report["owned_chains"], "raw owned chain log disagrees with report")
+    ownership_log = report["ownership_log"]
+    check(isinstance(ownership_log, str) and Path(ownership_log).name == ownership_log and ownership_log not in logs, "invalid ownership lifecycle log")
+    ownership_raw = (path.parent / ownership_log).read_text()
+    check(ownership_raw.count("test result: ok. 1 passed;") == len(OWNERSHIP_TESTS), "ownership lifecycle controls incomplete")
+    for test in OWNERSHIP_TESTS:
+        check(f"runtime::ownership::tests::{test} ... ok" in ownership_raw, f"ownership lifecycle control missing: {test}")
     manifest = report["log_sha256"]
-    check(isinstance(manifest, dict) and set(manifest) == set(logs) | {chain_log, report["cargo_log"]} | set(FEATURE_LOGS.values()), "incomplete raw log manifest")
+    check(isinstance(manifest, dict) and set(manifest) == set(logs) | {chain_log, owned_chain_log, ownership_log, report["cargo_log"]} | set(FEATURE_LOGS.values()), "incomplete raw log manifest")
     for log, digest in manifest.items():
         check(isinstance(digest, str) and HEX_64.fullmatch(digest), "invalid raw log hash")
         check(hashlib.sha256((path.parent / log).read_bytes()).hexdigest() == digest, "raw log hash mismatch")
-    return report, {"probes": normalized_cases, "chains": validate_chains(report["chains"], target_os, target_arch)}
+    validated_chains = validate_chains(report["chains"], target_os, target_arch)
+    validated_owned_chains = validate_owned_chains(report["owned_chains"], report["chains"], target_os, target_arch)
+    return report, {
+        "probes": normalized_cases, "owned_probes": normalized_owned_cases,
+        "chains": validated_chains, "owned_chains": validated_owned_chains,
+    }
 
 
 def compare(directory, upstream_status, source_sha=None, lockfile_sha256=None, component_hashes=None):
@@ -380,7 +490,7 @@ def compare(directory, upstream_status, source_sha=None, lockfile_sha256=None, c
     baseline = next(iter(cases.values()))
     check(all(value == baseline for value in cases.values()), "cross-cell observations differ")
     return {
-        "schema_version": 5, "cells": sorted(reports),
+        "schema_version": 6, "cells": sorted(reports),
         "source_sha": next(iter(reports.values()))["source_sha"],
         "lockfile_sha256": next(iter(reports.values()))["lockfile_sha256"],
         "wasmtime_revision": FORK_REVISION,

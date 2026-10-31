@@ -16,6 +16,14 @@ from sweep import REPORT_PREFIX, parse_transcript, validate_pair
 
 
 TEST_NAME = "runtime::call::tests::native_stack::qualification_probe"
+OWNED_TEST_NAME = "runtime::call::tests::native_stack::owned_stack_control"
+OWNERSHIP_TESTS = (
+    "canonical_lease_drains_native_guest_before_releasing_runtime",
+    "canonical_and_simulation_children_keep_no_yield_policy",
+    "nested_api_children_inherit_actual_fuel_yields",
+    "cancelling_nested_yielding_api_guest_joins_before_runtime_reuse",
+    "cancelling_fuel_yielding_guest_joins_before_pool_reuse",
+)
 DEFAULT_CASES = (
     "paid_recurse",
     "paid_wide",
@@ -41,6 +49,13 @@ def sha256_file(path):
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def source_identity():
+    source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
+        raise ValueError("qualification source worktree is dirty")
+    return source_sha
 
 
 def resolved_features(target, edges, output):
@@ -107,12 +122,58 @@ def qualify_case(binary, kind, output, timeout, max_depth, initial_depth):
         binary, kind, "control", output, timeout, max_depth, initial_depth, depths,
     )
     validate_pair(observations, summary, control, control_summary)
+    owned_observations, owned_summary, owned_log = run_owned_control(
+        binary, kind, depths, output, timeout,
+    )
     return {
         "kind": kind, "boundary": "bounded" if kind == "paid_huge" else "first_failure",
         **({} if kind == "paid_huge" else boundaries),
         "observations": observations, "worker_summary": summary, "worker_log": worker_log,
         "control_observations": control, "control_summary": control_summary, "control_log": control_log,
+        "owned_observations": owned_observations, "owned_summary": owned_summary, "owned_log": owned_log,
     }
+
+
+def run_owned_control(binary, kind, depths, output, timeout):
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("KONTOR_")}
+    environment.update({
+        "KONTOR_STACK_KIND": kind,
+        "KONTOR_OWNED_DEPTHS": ",".join(map(str, depths)),
+    })
+    log = output / f"{kind}-owned.log"
+    try:
+        completed = subprocess.run(
+            [str(binary), "--ignored", "--exact", OWNED_TEST_NAME, "--nocapture"],
+            env=environment, text=True, capture_output=True, timeout=timeout, check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        stdout, stderr = error.stdout or b"", error.stderr or b""
+        log.write_bytes(
+            (stdout.encode() if isinstance(stdout, str) else stdout)
+            + (stderr.encode() if isinstance(stderr, str) else stderr)
+        )
+        raise ValueError(f"{kind} owned: process timed out; see {log}") from error
+    raw = completed.stdout + completed.stderr
+    log.write_text(raw)
+    if completed.returncode != 0:
+        raise ValueError(f"{kind} owned: process exited {completed.returncode}; see {log}")
+    observations = [
+        json.loads(line.split("KONTOR_OWNED_STACK_REPORT:", 1)[1])
+        for line in raw.splitlines() if line.startswith("KONTOR_OWNED_STACK_REPORT:")
+    ]
+    summaries = [
+        json.loads(line.split("KONTOR_OWNED_STACK_SUMMARY:", 1)[1])
+        for line in raw.splitlines() if line.startswith("KONTOR_OWNED_STACK_SUMMARY:")
+    ]
+    if len(observations) != len(depths) or len(summaries) != 1:
+        raise ValueError(f"{kind} owned: missing or duplicate evidence")
+    summary = summaries[0]
+    if summary != {
+        "kind": kind, "depths": depths,
+        "outcomes": [sample["outcome"] for sample in observations], "owned": True,
+    }:
+        raise ValueError(f"{kind} owned: summary differs from observations")
+    return observations, summary, log.name
 
 
 def acceptable_results(results):
@@ -140,6 +201,8 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--case", action="append", choices=DEFAULT_CASES)
     parser.add_argument("--chain-log", type=Path, help="successful chain-matrix raw output to include in qualification")
+    parser.add_argument("--owned-chain-log", type=Path, help="owned chain boundary raw output")
+    parser.add_argument("--ownership-log", type=Path, help="selected ownership lifecycle tests")
     parser.add_argument("--max-depth", type=int, default=32768)
     parser.add_argument("--max-reentry-depth", type=int, default=64)
     parser.add_argument("--initial-depth", type=int, default=1024)
@@ -155,6 +218,8 @@ def main():
     }:
         parser.error("cell must be one of the six production target/profile keys")
     args.output.mkdir(parents=True, exist_ok=True)
+    source_sha = source_identity()
+    binary_sha256 = sha256_file(args.binary)
     target = TARGETS[args.cell.split("/", 1)[0]]
     feature_logs = {
         "production": "wasmtime-production-features.txt",
@@ -183,7 +248,7 @@ def main():
         for case in results
         for sample in case["observations"] + case["control_observations"]
     ]
-    logs.extend(args.output / case[field] for case in results for field in ("worker_log", "control_log"))
+    logs.extend(args.output / case[field] for case in results for field in ("worker_log", "control_log", "owned_log"))
     logs.extend(args.output / name for name in feature_logs.values())
     cargo_log = "cargo.json" if (args.output / "cargo.json").is_file() else None
     if cargo_log is not None:
@@ -199,17 +264,42 @@ def main():
         ]
         chain_log = destination.name
         logs.append(destination)
+    if args.owned_chain_log is None or args.ownership_log is None:
+        raise ValueError("owned chain and ownership lifecycle logs are required")
+    owned_chain_destination = args.output / "owned-chain-matrix.log"
+    if args.owned_chain_log.resolve() != owned_chain_destination.resolve():
+        shutil.copyfile(args.owned_chain_log, owned_chain_destination)
+    owned_chains = [
+        json.loads(line.split("CHAIN_OWNED_PROBE_REPORT:", 1)[1])
+        for line in owned_chain_destination.read_text().splitlines()
+        if line.startswith("CHAIN_OWNED_PROBE_REPORT:")
+    ]
+    if len(owned_chains) != 6:
+        raise ValueError("owned chain matrix lacks six boundary reports")
+    logs.append(owned_chain_destination)
+    ownership_destination = args.output / "ownership-controls.log"
+    if args.ownership_log.resolve() != ownership_destination.resolve():
+        shutil.copyfile(args.ownership_log, ownership_destination)
+    ownership_raw = ownership_destination.read_text()
+    if ownership_raw.count("test result: ok. 1 passed;") != len(OWNERSHIP_TESTS) or any(
+        f"runtime::ownership::tests::{test} ... ok" not in ownership_raw
+        for test in OWNERSHIP_TESTS
+    ):
+        raise ValueError("ownership lifecycle controls are incomplete")
+    logs.append(ownership_destination)
+    if source_identity() != source_sha or sha256_file(args.binary) != binary_sha256:
+        raise ValueError("qualification source or test binary changed during capture")
     report = {
-        "schema_version": 5,
+        "schema_version": 6,
         "cell": args.cell,
-        "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "source_sha": source_sha,
         "lockfile_sha256": sha256_file(args.lockfile),
         "wasmtime_revision": revision,
         "wasmtime_features": features,
         "feature_logs": feature_logs,
         "cargo_log": cargo_log,
         "binary": str(args.binary),
-        "binary_sha256": sha256_file(args.binary),
+        "binary_sha256": binary_sha256,
         "rustc_version_verbose": subprocess.check_output(
             ["rustc", "--version", "--verbose"], text=True
         ),
@@ -217,6 +307,9 @@ def main():
         "cases": results,
         "chains": chains,
         "chain_log": chain_log,
+        "owned_chains": owned_chains,
+        "owned_chain_log": owned_chain_destination.name,
+        "ownership_log": ownership_destination.name,
         "log_sha256": {path.name: sha256_file(path) for path in logs},
     }
     (args.output / "qualification.json").write_text(json.dumps(report, indent=2) + "\n")

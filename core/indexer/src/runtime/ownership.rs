@@ -77,6 +77,7 @@ impl RootKind {
 struct BlockingRegistry {
     next_id: AtomicU64,
     active: Arc<std::sync::Mutex<HashMap<u64, Arc<BlockingState>>>>,
+    panicked: Arc<AtomicBool>,
 }
 
 struct BlockingState {
@@ -85,6 +86,10 @@ struct BlockingState {
 }
 
 impl BlockingRegistry {
+    fn panicked(&self) -> bool {
+        self.panicked.load(Ordering::SeqCst)
+    }
+
     async fn wait_all(&self) {
         loop {
             let entries = self
@@ -125,8 +130,14 @@ impl BlockingRegistry {
         let (sender, receiver) = oneshot::channel();
         let task = tokio::task::spawn_blocking(work);
         let active = self.active.clone();
+        let panicked = self.panicked.clone();
         tokio::spawn(async move {
-            let _ = sender.send(task.await);
+            let result = task.await;
+            // A dropped receiver must not erase the root's panic evidence.
+            if result.as_ref().is_err_and(tokio::task::JoinError::is_panic) {
+                panicked.store(true, Ordering::SeqCst);
+            }
+            let _ = sender.send(result);
             active
                 .lock()
                 .expect("blocking registry poisoned")
@@ -334,7 +345,7 @@ impl ChildContext {
             matches!(
                 RootState::load(&self.state),
                 RootState::Running | RootState::Committing
-            ),
+            ) && !self.blocking.panicked(),
             "operation root cannot commit after cancellation or quarantine"
         );
         Ok(())
@@ -595,6 +606,10 @@ struct OwnerRegistry {
     fatal: AtomicBool,
     #[cfg(test)]
     startup_compile_gate: std::sync::Mutex<Option<Arc<BlockingGate>>>,
+    #[cfg(test)]
+    supervisor_panic_after_root_entered: std::sync::Mutex<Option<Arc<AsyncGate>>>,
+    #[cfg(test)]
+    canonical_release_gate: std::sync::Mutex<Option<Arc<AsyncGate>>>,
 }
 
 type RootStart = Box<dyn FnOnce() -> BoxFuture<'static, ()> + Send>;
@@ -770,6 +785,15 @@ impl OwnerService {
     }
 
     #[cfg(test)]
+    fn set_canonical_release_gate(&self, gate: Arc<AsyncGate>) {
+        *self
+            .registry
+            .canonical_release_gate
+            .lock()
+            .expect("canonical release gate lock poisoned") = Some(gate);
+    }
+
+    #[cfg(test)]
     pub(crate) fn apply_startup_compile_gate(&self, runtime: &mut Runtime) {
         runtime.compile_gate = self
             .registry
@@ -866,9 +890,24 @@ impl OwnerService {
         let (finish, finished) = oneshot::channel();
         let (drained_sender, drained) = oneshot::channel();
         let node_keeper = keeper.clone();
+        #[cfg(test)]
+        let release_gate = self
+            .registry
+            .canonical_release_gate
+            .lock()
+            .expect("canonical release gate lock poisoned")
+            .clone();
         permit.send(Box::new(move || {
             Box::pin(async move {
-                supervise_canonical(node_keeper, receiver, finished, drained_sender).await;
+                let result = supervise_canonical(node_keeper.clone(), receiver, finished).await;
+                #[cfg(test)]
+                if let Some(gate) = release_gate {
+                    gate.wait().await;
+                }
+                // Drain authorizes the next root, so release the supervisor's
+                // Runtime clone before waking the lease.
+                drop(node_keeper);
+                let _ = drained_sender.send(result);
             })
         }));
         Ok(CanonicalRootLease {
@@ -1071,8 +1110,7 @@ async fn supervise_canonical(
     keeper: Arc<RootKeeper>,
     mut receiver: mpsc::Receiver<Admission>,
     mut finish: oneshot::Receiver<()>,
-    drained: oneshot::Sender<Result<()>>,
-) {
+) -> Result<()> {
     let mut children = JoinSet::<(TaskId, GuestCompletion)>::new();
     let mut active = HashMap::<TaskId, RunningChild>::new();
     let mut by_tokio = HashMap::<Id, TaskId>::new();
@@ -1192,16 +1230,19 @@ async fn supervise_canonical(
 
     keeper.blocking.wait_all().await;
     drop(parked_senders);
+    if keeper.blocking.panicked() {
+        keeper.quarantine();
+    }
     if RootState::load(&keeper.state) == RootState::Running
         && !keeper.caught_host_panic.load(Ordering::SeqCst)
     {
         keeper
             .state
             .store(RootState::Committing as u8, Ordering::SeqCst);
-        let _ = drained.send(Ok(()));
+        Ok(())
     } else {
         keeper.quarantine();
-        let _ = drained.send(Err(anyhow!("canonical root quarantined")));
+        Err(anyhow!("canonical root quarantined"))
     }
 }
 
@@ -1231,6 +1272,19 @@ async fn supervise<T, F>(
         runtime.storage.savepoint().await?;
         operation(runtime).await
     });
+    #[cfg(test)]
+    let injected_gate = registry
+        .supervisor_panic_after_root_entered
+        .lock()
+        .expect("supervisor panic gate lock poisoned")
+        .take();
+    #[cfg(test)]
+    if let Some(gate) = injected_gate {
+        while !gate.entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+        panic!("injected operation root supervisor panic");
+    }
     let mut root_result = None;
     let mut children = JoinSet::<(TaskId, GuestCompletion)>::new();
     let mut active = HashMap::<TaskId, RunningChild>::new();
@@ -1393,6 +1447,9 @@ async fn supervise<T, F>(
         }
     }
     keeper.blocking.wait_all().await;
+    if keeper.blocking.panicked() {
+        keeper.quarantine();
+    }
 
     // A closed child receiver remains alive until its parent has joined. Its
     // cancellation must never look like an ordinary guest error to that parent.
@@ -1588,7 +1645,8 @@ mod tests {
     use crate::runtime::storage::BlockingGate;
     use crate::runtime::wit::{Signer, kontor::built_in::context::HolderRef};
     use crate::runtime::{
-        ContractAddress, Decimal, ExecutionError, Linkers, native_provenance, to_wave_expr, token,
+        ContractAddress, Decimal, ExecutionError, Linkers, Storage, native_provenance,
+        to_wave_expr, token,
     };
     use crate::test_utils::test_runtime;
     use bitcoin::Network;
@@ -1639,6 +1697,14 @@ mod tests {
     struct ReleaseBlockingGate(Arc<BlockingGate>);
 
     impl Drop for ReleaseBlockingGate {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
+    struct ReleaseAsyncGate(Arc<AsyncGate>);
+
+    impl Drop for ReleaseAsyncGate {
         fn drop(&mut self) {
             self.0.release();
         }
@@ -2250,6 +2316,136 @@ mod tests {
         Ok(())
     }
 
+    async fn injected_outer_commit_error_has_one_durable_result(after_commit: bool) -> Result<()> {
+        let (mut runtime, dir, name, signer, address) = seeded_paid_oracle_with_name().await?;
+        let committed = new_connection(dir.path(), &name).await?;
+        let payer_before = token::api::balance(&mut runtime, HolderRef::from(&signer)).await?;
+        let burner_before = token::api::balance(&mut runtime, HolderRef::Burner).await?;
+        let checkpoint_before = checkpoint_hash(&runtime.get_storage_conn()).await?;
+        let engine = runtime.engine.clone();
+        let linkers = runtime.linkers.clone();
+        let cache = runtime.component_cache.clone();
+        let service = OwnerService::new();
+        let owned = OwnedRuntimeSession::with_service(runtime, service.clone());
+        let (staged_sender, staged_receiver) = oneshot::channel();
+        let call_signer = signer.clone();
+        let result = owned
+            .run(true, move |runtime| {
+                Box::pin(async move {
+                    if after_commit {
+                        runtime
+                            .storage
+                            .fail_outer_commit_after_once
+                            .store(true, Ordering::SeqCst);
+                    } else {
+                        runtime
+                            .storage
+                            .fail_outer_commit_before_once
+                            .store(true, Ordering::SeqCst);
+                    }
+                    let staged = paid_receipt_snapshot(
+                        runtime,
+                        &call_signer,
+                        &address,
+                        "write-result-payload(1)",
+                    )
+                    .await?;
+                    let staged_checkpoint = checkpoint_hash(&runtime.get_storage_conn()).await?;
+                    let _ = staged_sender.send((staged, staged_checkpoint));
+                    Ok(())
+                })
+            })
+            .await;
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("quarantined")),
+            "uncertain outer commit returned success: {result:?}"
+        );
+        let (staged, staged_checkpoint) = staged_receiver.await?;
+        assert_eq!(staged.outcome, Ok("\"é\\n\"".to_string()));
+        assert!(staged.payer.as_ref() < payer_before.as_ref());
+        assert!(staged.burner.as_ref() > burner_before.as_ref());
+        assert_ne!(staged_checkpoint, checkpoint_before);
+        assert_eq!(service.quarantined_roots().await, 1);
+        assert!(owned.session.checkout().await.is_err());
+        assert!(
+            timeout(
+                Duration::from_secs(2),
+                owned.run(false, |_runtime| Box::pin(async { Ok(()) }))
+            )
+            .await?
+            .is_err(),
+            "poisoned stateful session executed again"
+        );
+
+        let mut observer = Runtime::new_with(
+            engine,
+            linkers,
+            cache,
+            Storage::builder().conn(committed).build(),
+        )
+        .await?;
+        assert_eq!(receipt_count(&observer).await?, i64::from(after_commit));
+        assert_eq!(
+            token::api::balance(&mut observer, HolderRef::from(&signer)).await?,
+            if after_commit {
+                staged.payer
+            } else {
+                payer_before
+            }
+        );
+        assert_eq!(
+            token::api::balance(&mut observer, HolderRef::Burner).await?,
+            if after_commit {
+                staged.burner
+            } else {
+                burner_before
+            }
+        );
+        assert_eq!(
+            checkpoint_hash(&observer.get_storage_conn()).await?,
+            if after_commit {
+                staged_checkpoint
+            } else {
+                checkpoint_before
+            }
+        );
+        if after_commit {
+            let mut rows = observer
+                .storage
+                .conn
+                .query(
+                    "SELECT contract_id, status, gas, value FROM contract_results ORDER BY id",
+                    (),
+                )
+                .await?;
+            let row = rows.next().await?.context("durable paid receipt missing")?;
+            assert_eq!(
+                (
+                    row.get::<u64>(0)?,
+                    row.get::<String>(1)?,
+                    row.get::<u64>(2)?,
+                    row.get::<Option<String>>(3)?,
+                ),
+                staged.receipt
+            );
+            assert!(rows.next().await?.is_none(), "duplicate durable receipt");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failure_before_outer_commit_quarantines_without_settlement() -> Result<()> {
+        injected_outer_commit_error_has_one_durable_result(false).await
+    }
+
+    #[tokio::test]
+    async fn error_after_durable_outer_commit_quarantines_without_double_settlement() -> Result<()>
+    {
+        injected_outer_commit_error_has_one_durable_result(true).await
+    }
+
     #[tokio::test]
     async fn paid_out_of_fuel_matches_with_and_without_api_yielding() -> Result<()> {
         let (mut runtime, _dir, signer, address) = seeded_paid_oracle().await?;
@@ -2663,6 +2859,39 @@ mod tests {
         lease.complete(&mut runtime).await?;
         assert_eq!(service.active_roots().await, 0);
         assert!(runtime.ownership.is_none());
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn canonical_drain_waits_for_supervisor_runtime_release() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let service = OwnerService::new();
+        let gate = Arc::new(AsyncGate::default());
+        let _release = ReleaseAsyncGate(gate.clone());
+        service.set_canonical_release_gate(gate.clone());
+        let mut lease = service.begin_canonical(&mut runtime, false).await?;
+        let mut drain = Box::pin(lease.drain(&runtime));
+        timeout(Duration::from_secs(2), async {
+            while !gate.entered.load(Ordering::SeqCst) {
+                assert!(
+                    tokio::select! {
+                        result = &mut drain => Some(result),
+                        () = tokio::task::yield_now() => None,
+                    }
+                    .is_none(),
+                    "drain completed while supervisor retained the runtime"
+                );
+            }
+        })
+        .await?;
+        assert!(drain.as_mut().now_or_never().is_none());
+        gate.release();
+        drain.await?;
+        lease.complete(&mut runtime).await?;
+
+        let mut next = service.begin_canonical(&mut runtime, false).await?;
+        next.drain(&runtime).await?;
+        next.complete(&mut runtime).await?;
         Ok(())
     }
 
@@ -3739,6 +3968,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn supervisor_panic_fences_live_pool_authority_and_fails_driver() -> Result<()> {
+        let dir = TempDir::new()?;
+        let pool = one_object_pool(&dir).await?;
+        let object = pool.get().await?;
+        let service = OwnerService::new();
+        let gate = Arc::new(AsyncGate::default());
+        let _release = ReleaseAsyncGate(gate.clone());
+        *service
+            .registry
+            .supervisor_panic_after_root_entered
+            .lock()
+            .expect("supervisor panic gate lock poisoned") = Some(gate.clone());
+        let operation_gate = gate.clone();
+        let finished = Arc::new(AtomicBool::new(false));
+        let operation_finished = finished.clone();
+        let mut handle = service
+            .start_pooled(object, move |runtime| {
+                Box::pin(async move {
+                    assert!(!runtime.storage.conn.is_autocommit());
+                    operation_gate.wait().await;
+                    operation_finished.store(true, Ordering::SeqCst);
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: false,
+                    })
+                })
+            })
+            .await?;
+        let driver = service.take_driver().context("owner driver missing")?;
+        let reported = timeout(Duration::from_secs(2), driver).await??;
+        assert!(
+            reported
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("node supervisor panicked")),
+            "supervisor panic did not fail the driver: {reported:?}"
+        );
+        assert!(
+            timeout(Duration::from_secs(2), handle.result())
+                .await?
+                .is_err()
+        );
+        assert!(gate.entered.load(Ordering::SeqCst));
+        assert!(service.is_fatal());
+        assert_eq!(service.quarantined_roots().await, 1);
+        assert_eq!(pool.status().available, 0);
+        assert!(
+            timeout(Duration::from_millis(100), pool.get())
+                .await
+                .is_err()
+        );
+        assert!(service.admission.reserve().await.is_err());
+        gate.release();
+        timeout(Duration::from_secs(2), async {
+            while !finished.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(pool.status().available, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn dropped_blocking_receiver_does_not_release_work_early() -> Result<()> {
         let registry = BlockingRegistry::default();
         let (release, blocked) = std::sync::mpsc::channel();
@@ -3751,6 +4043,115 @@ mod tests {
         );
         release.send(())?;
         timeout(Duration::from_secs(2), registry.wait_all()).await?;
+        Ok(())
+    }
+
+    async fn blocking_worker_panic_fences_pooled_authority(abandon_receiver: bool) -> Result<()> {
+        let dir = TempDir::new()?;
+        let pool = one_object_pool(&dir).await?;
+        let object = pool.get().await?;
+        let poisoned_id = Object::id(&object);
+        let service = OwnerService::new();
+        let mut handle = service
+            .start_pooled(object, move |runtime| {
+                Box::pin(async move {
+                    let owner = runtime.ownership.clone().context("root owner missing")?;
+                    if abandon_receiver {
+                        drop(
+                            owner
+                                .blocking
+                                .spawn(|| -> () { panic!("injected abandoned blocking panic") }),
+                        );
+                    } else {
+                        let result: Result<()> = owner
+                            .run_blocking(|| -> () { panic!("injected attached blocking panic") })
+                            .await;
+                        ensure!(result.is_err(), "blocking panic returned success");
+                        ensure!(
+                            runtime.storage.commit().await.is_err(),
+                            "blocking panic allowed a root commit"
+                        );
+                    }
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: true,
+                    })
+                })
+            })
+            .await?;
+        ensure!(
+            timeout(Duration::from_secs(5), handle.result())
+                .await?
+                .is_err(),
+            "blocking panic returned an owned success"
+        );
+        timeout(Duration::from_secs(5), async {
+            while service.active_roots().await != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        let fresh = timeout(Duration::from_secs(5), pool.get()).await??;
+        assert_ne!(Object::id(&fresh), poisoned_id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn attached_blocking_panic_discards_pooled_authority() -> Result<()> {
+        blocking_worker_panic_fences_pooled_authority(false).await
+    }
+
+    #[tokio::test]
+    async fn abandoned_blocking_panic_discards_pooled_authority() -> Result<()> {
+        blocking_worker_panic_fences_pooled_authority(true).await
+    }
+
+    #[tokio::test]
+    async fn ordinary_blocking_error_keeps_pooled_authority_reusable() -> Result<()> {
+        let dir = TempDir::new()?;
+        let pool = one_object_pool(&dir).await?;
+        let object = pool.get().await?;
+        let original_id = Object::id(&object);
+        let service = OwnerService::new();
+        let mut handle = service
+            .start_pooled(object, move |runtime| {
+                Box::pin(async move {
+                    let owner = runtime.ownership.clone().context("root owner missing")?;
+                    let content = owner
+                        .run_blocking(|| Err::<(), _>(anyhow!("ordinary content error")))
+                        .await?;
+                    ensure!(content.is_err(), "ordinary blocking error was lost");
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: false,
+                    })
+                })
+            })
+            .await?;
+        handle.result().await?;
+        assert_eq!(service.active_roots().await, 0);
+        let reused = timeout(Duration::from_secs(5), pool.get()).await??;
+        assert_eq!(Object::id(&reused), original_id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn canonical_blocking_panic_prevents_drain_and_commit() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let service = OwnerService::new();
+        let mut lease = service.begin_canonical(&mut runtime, false).await?;
+        let owner = runtime
+            .ownership
+            .clone()
+            .context("canonical owner missing")?;
+        let result: Result<()> = owner
+            .run_blocking(|| -> () { panic!("injected canonical blocking panic") })
+            .await;
+        assert!(result.is_err());
+        assert!(lease.drain(&runtime).await.is_err());
+        assert!(runtime.storage.commit().await.is_err());
+        drop(lease);
+        assert!(service.is_fatal());
         Ok(())
     }
 

@@ -38,7 +38,7 @@
     },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
-      "sha256": "f4fdab62c566766af3f757669464d695da281567abffd6a7e27fa3bdc2f4878b"
+      "sha256": "237ffdbbe3eeeede0335e9223994570d29a63c4f63fc8f6acdc5365024393a00"
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
@@ -82,7 +82,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "2a294937f6beacc0b1fe7799d09eca5b61452fffe3aa5af0d44fb7d0508649e1"
+      "sha256": "2d02c2bce92155ad8e15b4344e6ea9157ad6c2a5ec84957165abfb3ca009d9bb"
     },
     "cold_publication_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/cold_publication.rs",
@@ -342,7 +342,7 @@
     },
     "operation_ownership": {
       "path": "core/indexer/src/runtime/ownership.rs",
-      "sha256": "359ccbe4aed9c313b95798719c7f2480ed2f7aec9a62a860e126e0b4dd953847"
+      "sha256": "fec5909edbc71bfbf48421b2aee8bbe38d37eb0665759356c977941699f50abb"
     },
     "pending_host_capture": {
       "path": "tools/native-stack/capture_resource_pending.py",
@@ -362,7 +362,7 @@
     },
     "production_qualification": {
       "path": "tools/native-stack/compare.py",
-      "sha256": "ef5fd32508cd35c07a77bacdf6871c5f342f0d9cd33cbe0e6175d067bde2e387"
+      "sha256": "94516b7406eeed7de2fe998e34ec5a0028bb3fe9dbc1abc345366da76972d713"
     },
     "proxy": {
       "path": "test-contracts/binaries/proxy.wasm.br",
@@ -374,7 +374,7 @@
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "b19d01a97387c11a5221e6c6bf0eaf946ceaf20265819da136dcdd2a8f839855"
+      "sha256": "3d7ccc707471848248ba564ea270f45b1a1e0bc6cb2312bad933c7d44cb87cd4"
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -450,7 +450,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "dce76f1530138aaef9b64edc8c671d9d38ca8a273a6180c0a28b1f21b46457c5"
+      "sha256": "1f61c34150b1048d12c1754534c4a7a42d86fe993abb3792c9d63682340ce2e8"
     },
     "retained_deposit_policy": {
       "path": "core/indexer/src/protocol/v1/deposit.rs",
@@ -554,11 +554,11 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "1e1cbcd8945155446f19920bc91e0c7e21b039dafe3b7dec2bf94766d11b4bb3"
+      "sha256": "db3d9d9de2712517031b4b302abc3af1bc561b36a5b1d6bae5c4a1c4eb21ac3f"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "23ee679951326e1c3dea012361779945b9b5161ee2319cb1e5d02dc1cd86cd7d"
+      "sha256": "03d9f234309b2107d0a03f9805a2ee7fe92f0e8d895c64b4cb137cafb5fd0cf1"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -590,7 +590,7 @@
     },
     "suite_dispatch_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "b19d01a97387c11a5221e6c6bf0eaf946ceaf20265819da136dcdd2a8f839855"
+      "sha256": "3d7ccc707471848248ba564ea270f45b1a1e0bc6cb2312bad933c7d44cb87cd4"
     },
     "suite_registry_builder": {
       "path": "tools/native-stack/resource_suite_registry.py",
@@ -618,7 +618,7 @@
     },
     "test_runtime_setup": {
       "path": "core/indexer/src/test_utils.rs",
-      "sha256": "6a2434bee17a039f84cb96e3651f79622a102049dc545827563bb346d8e5668b"
+      "sha256": "544a7fbf51927a02fcc78b22b3006a16022e1611ef7bd41dc67657db340f9c22"
     },
     "testing_host_imports": {
       "path": "core/indexer/src/runtime/host_files.rs",
@@ -2206,7 +2206,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "dce76f1530138aaef9b64edc8c671d9d38ca8a273a6180c0a28b1f21b46457c5",
+    "source_sha256": "1f61c34150b1048d12c1754534c4a7a42d86fe993abb3792c9d63682340ce2e8",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -2358,7 +2358,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "dce76f1530138aaef9b64edc8c671d9d38ca8a273a6180c0a28b1f21b46457c5",
+    "sha256": "1f61c34150b1048d12c1754534c4a7a42d86fe993abb3792c9d63682340ce2e8",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

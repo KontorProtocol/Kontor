@@ -131,6 +131,12 @@ pub struct Storage {
     pub(super) fail_rollback_once: Arc<AtomicBool>,
     #[cfg(test)]
     #[builder(skip)]
+    pub(super) fail_outer_commit_before_once: Arc<AtomicBool>,
+    #[cfg(test)]
+    #[builder(skip)]
+    pub(super) fail_outer_commit_after_once: Arc<AtomicBool>,
+    #[cfg(test)]
+    #[builder(skip)]
     pub(crate) decode_gate: Option<Arc<BlockingGate>>,
     #[builder(default = 1)]
     pub height: u64,
@@ -580,7 +586,26 @@ impl Storage {
         if let Some(owner) = &self.ownership {
             owner.ensure_commit_authorized()?;
         }
-        storage_session::commit(session_callbacks(&self.conn), &self.savepoint_stack).await
+        #[cfg(test)]
+        let outer = self.savepoint_stack.peek().await == Some(0);
+        #[cfg(test)]
+        if outer
+            && self
+                .fail_outer_commit_before_once
+                .swap(false, Ordering::SeqCst)
+        {
+            return Err(anyhow!("injected failure before outer commit"));
+        }
+        storage_session::commit(session_callbacks(&self.conn), &self.savepoint_stack).await?;
+        #[cfg(test)]
+        if outer
+            && self
+                .fail_outer_commit_after_once
+                .swap(false, Ordering::SeqCst)
+        {
+            return Err(anyhow!("injected failure after durable outer commit"));
+        }
+        Ok(())
     }
 
     pub async fn rollback_transaction(&self) -> Result<()> {

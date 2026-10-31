@@ -1,13 +1,13 @@
 {
   "auxiliary_callsite_citations": {
     "post_observation": [
-      "core/indexer/src/runtime/call/tests/sequential_chains.rs:479-481,541-549: storage-state, actor balance, burner balance, supply, and floor each create one Store after the target"
+      "core/indexer/src/runtime/call/tests/sequential_chains.rs:854-857,916-924: storage-state, actor balance, burner balance, supply, and floor each create one Store after the target"
     ],
     "pre_observation": [
-      "core/indexer/src/runtime/call/tests/sequential_chains.rs:378-381: actor balance, burner balance, floor, and supply each create one native Store before the target"
+      "core/indexer/src/runtime/call/tests/sequential_chains.rs:722-725: actor balance, burner balance, floor, and supply each create one native Store before the target"
     ],
     "rollback_observation": [
-      "core/indexer/src/runtime/call/tests/sequential_chains.rs:575-586: actor balance, floor, burner balance, supply, and storage-state each execute after rollback; asserted rollback_clean proves no short-circuit skipped a call"
+      "core/indexer/src/runtime/call/tests/sequential_chains.rs:960-969: actor balance, floor, burner balance, supply, and storage-state each execute after rollback; asserted rollback_clean proves no short-circuit skipped a call"
     ],
     "target_native_auxiliary": [
       "core/indexer/src/protocol/v1/fees.rs:25,50: with_payment calls token::api::hold and token::api::release around paid deterministic outcomes, including traps and depth rejection",
@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "bcd4ab438d8885794c3735d4c2b70df02ea40670866785fbb4eeb592a49a04bd",
+  "parent_manifest_sha256": "74c21502ec476bdee9b31d64ef1d41b2d05d88fcfda316041a2780b20a52e974",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1207,7 +1207,7 @@
     },
     "chain_fixture": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "2a294937f6beacc0b1fe7799d09eca5b61452fffe3aa5af0d44fb7d0508649e1"
+      "sha256": "2d02c2bce92155ad8e15b4344e6ea9157ad6c2a5ec84957165abfb3ca009d9bb"
     },
     "fees": {
       "path": "core/indexer/src/protocol/v1/fees.rs",
@@ -1287,7 +1287,7 @@
     },
     "v2_manifest_builder": {
       "path": "tools/native-stack/resource_manifest_v2.py",
-      "sha256": "fc85864cea93a215c4cc6f69e557594128d1aa2e9b0fd330a8c571ef3ea905d8"
+      "sha256": "7e5f579516a76d42a3fe280b107b2094aceeaf9b74a14dcc5efdc4ad8eacfeb2"
     },
     "v2_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v2.json",
@@ -1295,7 +1295,7 @@
     },
     "v2_tests": {
       "path": "tools/native-stack/test_resource_evidence_v2.py",
-      "sha256": "c645151afabf7009a1c6d48fc960e735c6e09aefb0c8c759542eaeb299357a3c"
+      "sha256": "141efea0126637c57d2a480cd34e44200e39ed9f06177110207c7441f2adb4ba"
     },
     "v2_validator": {
       "path": "tools/native-stack/resource_evidence_v2.py",
@@ -1303,7 +1303,7 @@
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "dce76f1530138aaef9b64edc8c671d9d38ca8a273a6180c0a28b1f21b46457c5"
+      "sha256": "1f61c34150b1048d12c1754534c4a7a42d86fe993abb3792c9d63682340ce2e8"
     }
   }
 }

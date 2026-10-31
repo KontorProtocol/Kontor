@@ -1,5 +1,7 @@
 mod confirmation;
 pub use confirmation::signed_confirmation_call;
+#[cfg(test)]
+mod owned_runtime_tests;
 
 use anyhow::{Result, anyhow};
 
@@ -20,8 +22,10 @@ use indexer_types::{Block, BlockRow, Payment, Transaction, TransactionRow};
 use libsql::Connection;
 use rand::prelude::*;
 use sha2::{Digest, Sha256};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 use tokio::time::{Duration, sleep};
 use wasmtime::Engine;
 
@@ -34,8 +38,8 @@ use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::token::api as token_api;
 use crate::runtime::wit::{Signer, prover_challenge_key};
 use crate::runtime::{
-    ComponentCache, ComponentSource, ContractAddress, Decimal, GenesisParameters, GenesisValidator,
-    RawFileDescriptor, Runtime, Storage, TransactionContext,
+    ComponentCache, ComponentSource, ContractAddress, Decimal, ExecutionError, GenesisParameters,
+    GenesisValidator, RawFileDescriptor, Runtime, Storage, TransactionContext,
     ownership::{OwnedRuntimeSession, OwnerService},
 };
 use kontor_crypto::{
@@ -426,7 +430,36 @@ impl OwnedTestRuntime {
         gas_limit: u64,
         network: bitcoin::Network,
     ) -> Result<(Self, TempDir, String)> {
-        let service = OwnerService::new();
+        Self::new_with_service(gas_limit, network, OwnerService::new(), None).await
+    }
+
+    async fn new_with_service(
+        gas_limit: u64,
+        network: bitcoin::Network,
+        service: OwnerService,
+        completed: Option<oneshot::Sender<Option<PathBuf>>>,
+    ) -> Result<(Self, TempDir, String)> {
+        // A caller can drop the constructor during native publication. Keep
+        // the Runtime and owner alive until that work has settled.
+        tokio::spawn(async move {
+            let result = Self::build_with_service(gas_limit, network, service).await;
+            if let Some(completed) = completed {
+                let directory = result
+                    .as_ref()
+                    .ok()
+                    .map(|(_, directory, _)| directory.path().to_path_buf());
+                let _ = completed.send(directory);
+            }
+            result
+        })
+        .await?
+    }
+
+    async fn build_with_service(
+        gas_limit: u64,
+        network: bitcoin::Network,
+        service: OwnerService,
+    ) -> Result<(Self, TempDir, String)> {
         let (runtime, directory, name) = test_runtime_with_network_owned(network, &service).await?;
         let session = OwnedRuntimeSession::with_service(runtime, service);
         session
@@ -607,10 +640,16 @@ impl OwnedTestRuntime {
                     if let Some(context) = runtime.tx_context_mut() {
                         context.op_index += 1;
                     }
-                    result.map_err(Into::into)
+                    // A deterministic failure still owns its settled gas and receipt.
+                    // Only infrastructure failure aborts the enclosing operation.
+                    match result {
+                        Err(error @ ExecutionError::NonDeterministic(_)) => Err(error.into()),
+                        outcome => Ok(outcome),
+                    }
                 })
             })
-            .await
+            .await?
+            .map_err(Into::into)
     }
 
     pub async fn issuance(&self, signer: &Signer) -> Result<()> {
@@ -632,6 +671,74 @@ impl OwnedTestRuntime {
                 })
             })
             .await
+    }
+}
+
+#[cfg(test)]
+mod ownership_constructor_tests {
+    use super::*;
+    use crate::runtime::BlockingGate;
+    use anyhow::ensure;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use tokio::time::timeout;
+
+    struct ReleaseGate(Arc<BlockingGate>);
+
+    impl Drop for ReleaseGate {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
+    #[tokio::test]
+    async fn dropped_constructor_waits_for_owned_native_publication_cleanup() -> Result<()> {
+        shared_test_engine().await;
+        let service = OwnerService::new();
+        let gate = Arc::new(BlockingGate::default());
+        let _release = ReleaseGate(gate.clone());
+        service.set_startup_compile_gate(gate.clone());
+        let (completed, finished) = oneshot::channel();
+
+        let constructor = tokio::spawn(OwnedTestRuntime::new_with_service(
+            100_000,
+            bitcoin::Network::Regtest,
+            service.clone(),
+            Some(completed),
+        ));
+        timeout(Duration::from_secs(30), async {
+            while !gate.entered.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        constructor.abort();
+        let stopped = constructor
+            .await
+            .err()
+            .ok_or_else(|| anyhow!("constructor unexpectedly returned"))?;
+        ensure!(stopped.is_cancelled(), "constructor task was not cancelled");
+        ensure!(
+            !service.is_fatal(),
+            "dropped constructor quarantined native publication"
+        );
+        gate.release();
+        let directory = timeout(Duration::from_secs(30), finished)
+            .await??
+            .ok_or_else(|| anyhow!("constructor did not complete after cancellation"))?;
+        timeout(Duration::from_secs(30), async {
+            while directory.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        ensure!(
+            !service.is_fatal()
+                && service.active_roots().await == 0
+                && service.quarantined_roots().await == 0,
+            "native publication did not cleanly finish after constructor cancellation"
+        );
+        Ok(())
     }
 }
 
@@ -738,6 +845,8 @@ async fn test_runtime_with_genesis_config_and_engine(
     // Set before publish so contract `init` sees it (the `network()` built-in).
     runtime.network = network;
     if let Some(service) = owner_service {
+        #[cfg(test)]
+        service.apply_startup_compile_gate(&mut runtime);
         runtime
             .publish_native_contracts_owned(genesis, service)
             .await?;
