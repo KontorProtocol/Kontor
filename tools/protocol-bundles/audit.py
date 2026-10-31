@@ -115,6 +115,34 @@ def verify_psm_archive_copies(graph):
         raise RuntimeError(f"psm native archive copies differ in {graph['graph']}")
 
 
+def private_local_inputs(graphs):
+    inventories = []
+    sets = []
+    for graph in graphs:
+        prefix = graph["namespace"] + "_"
+        expected = {}
+        for item in graph["artifacts"] + graph["native_artifacts"]:
+            path = Path(item["path"])
+            if path in expected and expected[path] != item.get("sha256"):
+                raise RuntimeError(f"conflicting staged graph input hashes: {path}")
+            expected[path] = item.get("sha256")
+        graph_names = set()
+        graph_inputs = []
+        for path in sorted(expected):
+            actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+            if expected[path] != actual_hash:
+                raise RuntimeError(f"staged graph input changed before local ownership audit: {path}")
+            global_names = definitions(path)
+            local = {name: value for name, value in definitions(path, globals_only=False).items()
+                     if name.startswith(prefix) and name not in global_names}
+            graph_names.update(local)
+            graph_inputs.append({"path": str(path), "sha256": actual_hash,
+                                 "definitions": local})
+        sets.append(graph_names)
+        inventories.append({"graph": graph["graph"], "inputs": graph_inputs})
+    return sets, inventories
+
+
 def audit_inputs(graphs, output):
     versions = [next(p["version"] for p in graph["packages"] if p["name"] == "wasmtime") for graph in graphs]
     if len(set(versions)) != len(graphs) or len({suffix(v) for v in versions}) != len(graphs):
@@ -188,15 +216,21 @@ def audit_final(executable, graphs, sets, versions, output, common, kind="proof"
             raise RuntimeError("independent native crypto helpers alias one address")
         observed_native = {name: local_symbols[name] for name in crypto}
     else:
+        local_sets, local_inventory = private_local_inputs(graphs)
+        (output / "input-local-ownership.json").write_text(
+            json.dumps(local_inventory, sort_keys=True) + "\n")
         observed_native = {}
         graph_addresses = []
-        for graph, names in zip(graphs, sets, strict=True):
+        for graph, names, private_locals in zip(graphs, sets, local_sets, strict=True):
             prefix = graph["namespace"] + "_"
             observed = {name: value for name, value in local_symbols.items()
                         if name.startswith(prefix)}
-            unowned = observed.keys() - names
-            if unowned:
-                raise RuntimeError(f"unowned graph-private final definition: {sorted(unowned)[:100]}")
+            global_final = observed.keys() & symbols.keys()
+            unowned_global = global_final - names
+            unowned_local = (observed.keys() - global_final) - names - private_locals
+            if unowned_global or unowned_local:
+                raise RuntimeError(
+                    f"unowned graph-private final definition: {sorted(unowned_global | unowned_local)[:100]}")
             if any(value["address"] is None for value in observed.values()):
                 raise RuntimeError(f"graph-private final definition has no linked address: {graph['graph']}")
             observed_native.update(observed)
