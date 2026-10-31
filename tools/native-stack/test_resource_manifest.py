@@ -286,20 +286,20 @@ class ResourceManifestTests(unittest.TestCase):
                 "thread_category": category, "thread_id": identifier,
                 "process_id": 100, "os_thread_id": 1000 + index,
                 "identity_api": "linux_gettid", "page_size_bytes": 4096,
-                "requested_bytes": 1_048_576 if category == "tokio_worker" else None,
-                "mapped_bytes": 1_048_576, "guard_bytes": 4_096,
+                "requested_bytes": 1_015_808 if category == "tokio_worker" else None,
+                "mapped_bytes": 1_015_808, "guard_bytes": 4_096,
                 "guard_start": base, "guard_end": base + 4096,
                 "guard_verification": "linux_maps_prot_none",
-                "usable_bytes": 1_044_480, "mapped_start": base,
-                "mapped_end": base + 1_048_576, "usable_start": base + 4096,
-                "usable_end": base + 1_048_576, "measurement_api": "pthread stack attributes",
+                "usable_bytes": 1_011_712, "mapped_start": base,
+                "mapped_end": base + 1_015_808, "usable_start": base + 4096,
+                "usable_end": base + 1_015_808, "measurement_api": "pthread stack attributes",
                 "guard_treatment": "guard excluded from usable interval",
                 "guard_verified": True,
             }
 
         runtime = {
             "flavor": "multi_thread", "worker_count": 2,
-            "worker_requested_bytes": 1_048_576,
+            "worker_requested_bytes": 1_015_808,
             "thread_observations": [
                 thread("tokio_worker", "worker-1"),
                 thread("tokio_worker", "worker-2"),

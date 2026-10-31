@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
+#[cfg(target_os = "macos")]
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use indexer_types::Payment;
 use libsql::params;
 use serde_json::json;
@@ -284,6 +286,41 @@ pub(super) async fn run_suspended_64_profile() -> Result<()> {
     run_chain_probe("paid".to_owned(), 63, Some(false), true, true).await
 }
 
+#[cfg(target_os = "macos")]
+async fn record_suspended_vmmap(phase: &str) -> Result<()> {
+    let pid = process::id();
+    let output = timeout(
+        Duration::from_secs(45),
+        Command::new("/usr/bin/vmmap")
+            .arg(pid.to_string())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await??;
+    ensure!(
+        output.status.success()
+            && !output.stdout.is_empty()
+            && output.stdout.len() <= 16 * 1024 * 1024,
+        "suspended-64 vmmap failed or exceeded 16 MiB: status={}, stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    println!(
+        "SUSPENDED_64_VMMAP:{}",
+        json!({
+            "phase": phase,
+            "pid": pid,
+            "command": ["/usr/bin/vmmap", pid.to_string()],
+            "exit_code": output.status.code(),
+            "stdout_base64": STANDARD.encode(&output.stdout),
+            "stdout_sha256": hex::encode(Sha256::digest(&output.stdout)),
+            "stderr_base64": STANDARD.encode(&output.stderr),
+            "stderr_sha256": hex::encode(Sha256::digest(&output.stderr)),
+        })
+    );
+    Ok(())
+}
+
 async fn run_chain_probe(
     mode: String,
     depth: u32,
@@ -297,6 +334,17 @@ async fn run_chain_probe(
     assert!(
         !capacity_profile
             || (mode == "paid" && depth == 63 && diagnostic_reduced == Some(false) && target_only)
+    );
+    let vmmap_enabled = match env::var("KONTOR_SUSPENDED_64_VMMAP") {
+        Ok(value) if value == "1" && capacity_profile => true,
+        Ok(_) => bail!("invalid suspended-64 vmmap diagnostic setting"),
+        Err(env::VarError::NotPresent) => false,
+        Err(error) => return Err(error.into()),
+    };
+    #[cfg(not(target_os = "macos"))]
+    ensure!(
+        !vmmap_enabled,
+        "suspended-64 vmmap diagnostic requires macOS"
     );
     let (mut runtime, _dir, _name) = match diagnostic_reduced {
         Some(reduced) => {
@@ -429,6 +477,10 @@ async fn run_chain_probe(
             teardown_probe_mode.map(|_| ResourceProbePhase::Target(chain_addresses.clone()));
         if capacity_profile && repeat_index == 0 {
             println!("SUSPENDED_64_BASELINE:{}", memory::snapshot()?);
+            #[cfg(target_os = "macos")]
+            if vmmap_enabled {
+                record_suspended_vmmap("baseline").await?;
+            }
         }
         let target = root.clone();
         let task = tokio::spawn(async move {
@@ -469,6 +521,11 @@ async fn run_chain_probe(
                         "profile_id": "suspended_64",
                     })
                 );
+                #[cfg(target_os = "macos")]
+                if vmmap_enabled {
+                    // Keep the guest blocked in its host import until the region map is captured.
+                    record_suspended_vmmap("peak").await?;
+                }
             }
             release.notify_one();
             true

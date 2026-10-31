@@ -109,7 +109,7 @@ class ResourceDiagnosticTraceTests(unittest.TestCase):
         runtime = {
             "scope": "diagnostic_only", "mode": mode, "pid": pid,
             "flavor": "multi_thread", "worker_count": 2,
-            "worker_requested_bytes": 1_048_576,
+            "worker_requested_bytes": 1_015_808,
             "thread_observations": [],
             "blocking_pool_observed": True, "block_on_caller_observed": True,
         }

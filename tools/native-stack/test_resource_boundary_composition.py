@@ -27,7 +27,7 @@ SOURCE_SHA = "1" * 40
 
 def capacity(category, number, base, pid, configuration):
     guard = 4096 if category == "tokio_worker" else 0
-    mapped = (1048576 if configuration == "reduced"
+    mapped = (1015808 if configuration == "reduced"
               and category == "tokio_worker" else 2097152)
     start = base + guard
     return {
@@ -37,7 +37,7 @@ def capacity(category, number, base, pid, configuration):
         "os_thread_id": number,
         "identity_api": "linux_gettid",
         "page_size_bytes": 4096,
-        "requested_bytes": (1048576 if configuration == "reduced"
+        "requested_bytes": (1015808 if configuration == "reduced"
                             and category == "tokio_worker" else None),
         "mapped_bytes": mapped,
         "guard_bytes": guard,
@@ -235,7 +235,7 @@ def make_run(directory, case_id, pid, binary_path, binary_sha,
         "configuration": configuration,
         "case_id": case_id, "process_role": role, "pid": pid,
         "flavor": "multi_thread", "worker_count": 2,
-        "worker_requested_bytes": 1048576 if configuration == "reduced" else None,
+        "worker_requested_bytes": 1015808 if configuration == "reduced" else None,
         "thread_observations": [
             capacity("tokio_worker", 1, 0x1000000, pid, configuration),
             capacity("tokio_worker", 2, 0x2000000, pid, configuration),

@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "3f574544db97a08506a077e9520a8feec82bfb3d315e33b3e8e7a744021edbbe",
+  "parent_manifest_sha256": "bcd4ab438d8885794c3735d4c2b70df02ea40670866785fbb4eeb592a49a04bd",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1207,7 +1207,7 @@
     },
     "chain_fixture": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "1ab2b8869e4a9e147ce1f2ff2230a1d1803ffd7fb5c57a3dd90f9e01c290ac4b"
+      "sha256": "2a294937f6beacc0b1fe7799d09eca5b61452fffe3aa5af0d44fb7d0508649e1"
     },
     "fees": {
       "path": "core/indexer/src/protocol/v1/fees.rs",
@@ -1235,7 +1235,7 @@
     },
     "retained_engine": {
       "path": "core/indexer/src/protocol/v1/engine.rs",
-      "sha256": "b789ce721e51ab2bcdfe48b38cf7679834614449f848156a6803adf0dce4b19d"
+      "sha256": "b42be5da366becc45c86e600fe498b2666eb18547aec1c8a9e6b26d06c26e354"
     },
     "retained_error_policy": {
       "path": "core/indexer/src/protocol/v1/errors.rs",
@@ -1263,7 +1263,7 @@
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "ec20ff51b12d3b774d59d4813fea6e0e31608c6f471e004ef324209ff5c9bacd"
+      "sha256": "6add342dd8d55738decefbd0f0e215d91029e94bc4a4bca5854709a224fa7d61"
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",
@@ -1279,7 +1279,7 @@
     },
     "v1_validator": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "489ff02e3143adc103601854927f9b534a1373f41329a50a77ed143fa08863e8"
+      "sha256": "f3fc8308bd8270a9c3fb5f979ec4e9b3162b1f7f87477535a8ac72c8143cc6dc"
     },
     "v2_capture": {
       "path": "tools/native-stack/capture_resource_chain_v2.py",
@@ -1295,7 +1295,7 @@
     },
     "v2_tests": {
       "path": "tools/native-stack/test_resource_evidence_v2.py",
-      "sha256": "3b1dd2bc42a027962480c9d2724fd048118c988182c1870601785ca952368523"
+      "sha256": "c645151afabf7009a1c6d48fc960e735c6e09aefb0c8c759542eaeb299357a3c"
     },
     "v2_validator": {
       "path": "tools/native-stack/resource_evidence_v2.py",
@@ -1303,7 +1303,7 @@
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "1dc9fbd9cc4ac00a07a410459c4dac9c9b0ab44d5c346910f3bd361ec9c1102f"
+      "sha256": "dce76f1530138aaef9b64edc8c671d9d38ca8a273a6180c0a28b1f21b46457c5"
     }
   }
 }

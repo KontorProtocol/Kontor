@@ -274,6 +274,11 @@ impl Runtime {
         engine::new_resource_diagnostic_engine()
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_previous_memory_reservation_engine() -> Result<Engine> {
+        engine::new_previous_memory_reservation_engine()
+    }
+
     /// Built-ins every contract gets (the user-land surface, plus the
     /// types-only `file-registry-types` for cross-contract ABIs).
     fn register_common(linker: &mut Linker<Self>) -> Result<()> {

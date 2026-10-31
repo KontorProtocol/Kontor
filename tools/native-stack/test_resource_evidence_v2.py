@@ -126,7 +126,7 @@ def bundle_fixture(directory):
         for configuration in ("reduced", "production"):
             pid += 1
             name = f"{case_id}_{role}_{configuration}"
-            usable = 1_048_576 if configuration == "reduced" else 2_097_152
+            usable = 1_015_808 if configuration == "reduced" else 2_097_152
             trials = []
             observations = []
             for index, key in enumerate(binding["trials"]):
