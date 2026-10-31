@@ -15,6 +15,7 @@ class ScopeTests(unittest.TestCase):
             "core/indexer/src/runtime/ownership.rs", "core/indexer/src/runtime/new_module.rs",
             "core/indexer/src/protocol/v2/engine.rs", "core/indexer/src/database/storage.rs",
             "core/indexer/src/reactor/executor.rs", "core/indexer/src/main.rs",
+            "core/indexer/proto/consensus/v1/consensus.proto", "core/indexer/proto/imports/shared.proto",
             "core/indexer/src/api/handlers/contracts.rs", "core/indexer/src/api/env.rs",
             "core/macros/src/lib.rs", "core/numerics/src/lib.rs",
             "core/indexer-types/src/lib.rs", "core/testlib/src/lib.rs",

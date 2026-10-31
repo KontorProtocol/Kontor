@@ -8,6 +8,7 @@ import subprocess
 
 
 PREFIXES = (
+    "core/indexer/proto/",
     "core/indexer/src/runtime/", "core/indexer/src/protocol/",
     "core/indexer/src/database/", "core/indexer/src/reactor/",
     "core/indexer/src/bls/", "core/indexer/src/test_utils/",
