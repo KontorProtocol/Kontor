@@ -582,7 +582,7 @@
     },
     "test_runtime_setup": {
       "path": "core/indexer/src/test_utils.rs",
-      "sha256": "c64a77b20e66150a51668c289726d5d72f0dc8cd65998076bec459a3b3ce72b9"
+      "sha256": "893d7199b878e6ec58b06a2680afe4a3178c95b30e9fb71f747eb28f2f8b736f"
     },
     "testing_host_imports": {
       "path": "core/indexer/src/runtime/host_files.rs",
