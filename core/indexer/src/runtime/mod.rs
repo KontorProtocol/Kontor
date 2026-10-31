@@ -23,6 +23,7 @@ mod sequential_tests;
 pub(crate) mod stack;
 pub mod staking;
 mod storage;
+mod storage_host;
 pub mod system;
 pub mod token;
 mod types;

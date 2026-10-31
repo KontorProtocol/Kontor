@@ -18,10 +18,8 @@ use wit_component::{ComponentEncoder, WitPrinter};
 
 #[cfg(test)]
 use super::resource_diagnostics;
-use crate::database::native_bootstrap::bootstrap_reader;
-use crate::database::queries::{core_callbacks, identity_callbacks, nonce_callbacks};
-use crate::database::storage_contracts_v1::contract_callbacks;
-use crate::database::storage_session_v1::session_callbacks;
+use super::storage_host::StorageHost;
+use crate::database::storage_callbacks_v1::storage_callbacks;
 use crate::protocol::storage_identity::SignerRecord;
 use crate::protocol::v1::native_bootstrap::{self, BootstrapProgress};
 use crate::protocol::v1::storage_contracts;
@@ -37,9 +35,8 @@ use crate::protocol::v1::storage_state::{
 };
 use crate::{
     database::queries::{
-        depositors_affected_by_reorg, footprint_callbacks, key_callbacks, point_callbacks,
-        prune_contract_state, rollback_to_height, row_callbacks, select_block_at_height,
-        state_callbacks,
+        depositors_affected_by_reorg, prune_contract_state, rollback_to_height,
+        select_block_at_height,
     },
     runtime::{ContractAddress, counter::Counter, ownership::ChildContext, stack::Stack},
     test_utils::new_mock_transaction,
@@ -122,6 +119,8 @@ pub struct TransactionContext {
 #[derive(Builder, Clone)]
 pub struct Storage {
     pub conn: Connection,
+    #[builder(default = StorageHost::from(storage_callbacks(&conn)), setters(vis = "pub(crate)"))]
+    pub(crate) host: StorageHost,
     #[builder(skip)]
     pub(super) ownership: Option<ChildContext>,
     #[builder(default = Counter::builder().build())]
@@ -147,47 +146,47 @@ pub struct Storage {
 
 impl Storage {
     pub(crate) async fn native_bootstrap_progress(&self) -> Result<BootstrapProgress> {
-        native_bootstrap::read_progress(bootstrap_reader(&self.conn)).await
+        native_bootstrap::read_progress(self.host.bootstrap.clone()).await
     }
 
     pub(crate) async fn lookup_identity(&self, pubkey: &str) -> Result<Option<u64>> {
-        identity_callbacks(&self.conn).0(pubkey.to_owned())
+        self.host.identity.clone().0(pubkey.to_owned())
             .await
             .map_err(|error| anyhow!(error))
     }
 
     pub(crate) async fn ensure_identity(&self, pubkey: &str) -> Result<u64, IdentityError> {
-        storage_identity::ensure_identity(identity_callbacks(&self.conn), pubkey, self.height).await
+        storage_identity::ensure_identity(self.host.identity.clone(), pubkey, self.height).await
     }
 
     pub(crate) async fn create_core_signer(&self) -> Result<u64, IdentityError> {
-        storage_identity::create_core_signer(core_callbacks(&self.conn)).await
+        storage_identity::create_core_signer(self.host.core.clone()).await
     }
 
     pub(crate) async fn identity_pubkey(&self, signer_id: u64) -> Result<String, IdentityError> {
-        storage_identity::x_only_pubkey(identity_callbacks(&self.conn), signer_id).await
+        storage_identity::x_only_pubkey(self.host.identity.clone(), signer_id).await
     }
 
     pub(crate) async fn identity_bls_key(&self, signer_id: u64) -> Result<Option<Vec<u8>>> {
-        identity_callbacks(&self.conn).5(signer_id)
+        self.host.identity.clone().5(signer_id)
             .await
             .map_err(|error| anyhow!(error))
     }
 
     pub(crate) async fn write_identity_bls_key(&self, signer_id: u64, pubkey: &[u8]) -> Result<()> {
-        identity_callbacks(&self.conn).6(signer_id, pubkey.to_vec(), self.height)
+        self.host.identity.clone().6(signer_id, pubkey.to_vec(), self.height)
             .await
             .map_err(|error| anyhow!(error))
     }
 
     pub(crate) async fn contract_signer(&self, contract_id: u64) -> Result<Option<u64>> {
-        identity_callbacks(&self.conn).7(contract_id)
+        self.host.identity.clone().7(contract_id)
             .await
             .map_err(|error| anyhow!(error))
     }
 
     pub(crate) async fn signer_entry(&self, signer_id: u64) -> Result<Option<SignerRecord>> {
-        identity_callbacks(&self.conn).8(signer_id)
+        self.host.identity.clone().8(signer_id)
             .await
             .map_err(|error| anyhow!(error))
     }
@@ -198,7 +197,7 @@ impl Storage {
         nonce: u64,
         height: u64,
     ) -> Result<u64, IdentityError> {
-        storage_identity::advance_nonce(nonce_callbacks(&self.conn), signer_id, nonce, height).await
+        storage_identity::advance_nonce(self.host.nonce.clone(), signer_id, nonce, height).await
     }
 
     pub async fn get(
@@ -207,13 +206,7 @@ impl Storage {
         contract_id: u64,
         path: &[u8],
     ) -> Result<Option<Vec<u8>>> {
-        Ok(read_value(
-            point_callbacks(&self.conn),
-            max_value_bytes,
-            contract_id,
-            path,
-        )
-        .await?)
+        Ok(read_value(self.host.point.clone(), max_value_bytes, contract_id, path).await?)
     }
 
     /// Write a live value. `depositor` is the signer who collateralizes this row via
@@ -229,7 +222,7 @@ impl Storage {
         deposited_gas: Option<u64>,
     ) -> Result<()> {
         write_value(
-            state_callbacks(&self.conn).0,
+            self.host.state.clone().0,
             (contract_id, self.height, self.effective_tx_id()),
             path,
             value,
@@ -248,7 +241,7 @@ impl Storage {
         contract_id: u64,
         path: &[u8],
     ) -> Result<impl Stream<Item = Result<LiveRow, ReadError>> + Send + 'static> {
-        Ok(live_subtree(state_callbacks(&self.conn), contract_id, path))
+        Ok(live_subtree(self.host.state.clone(), contract_id, path))
     }
 
     /// The write half of a delete: value-less-tombstone the given (already-metered)
@@ -256,7 +249,7 @@ impl Storage {
     /// the freed bytes.
     pub async fn tombstone_rows(&self, contract_id: u64, rows: &[LiveRow]) -> Result<(bool, u64)> {
         Ok(tombstone_rows(
-            state_callbacks(&self.conn).0,
+            self.host.state.clone().0,
             (contract_id, self.height, self.effective_tx_id()),
             rows,
         )
@@ -265,7 +258,7 @@ impl Storage {
 
     /// The eager per-depositor storage-deposit FLOOR cache (see [`FootprintCache`]).
     pub fn footprint(&self) -> FootprintCache {
-        FootprintCache::new(footprint_callbacks(&self.conn))
+        FootprintCache::new(self.host.footprint.clone())
     }
 
     /// Reorg rollback that keeps the off-checkpoint footprint cache coherent
@@ -301,7 +294,7 @@ impl Storage {
         provenance: &[u8],
     ) -> Result<()> {
         Ok(storage_contracts::insert_provenance(
-            contract_callbacks(&self.conn),
+            self.host.contracts.clone(),
             contract_id,
             author_signer_id,
             self.height,
@@ -312,17 +305,17 @@ impl Storage {
     }
 
     pub async fn contract_provenance_publisher(&self, contract_id: u64) -> Result<Option<u64>> {
-        contract_callbacks(&self.conn).6(contract_id)
+        self.host.contracts.clone().6(contract_id)
             .await
             .map_err(|error| anyhow!(error))
     }
 
     pub async fn exists(&self, contract_id: u64, path: &[u8]) -> Result<bool> {
-        Ok(exists(state_callbacks(&self.conn), contract_id, path).await?)
+        Ok(exists(self.host.state.clone(), contract_id, path).await?)
     }
 
     pub async fn contract_id(&self, contract_address: &ContractAddress) -> Result<Option<u64>> {
-        contract_callbacks(&self.conn).2((
+        self.host.contracts.clone().2((
             contract_address.name.clone(),
             contract_address.height,
             contract_address.tx_index,
@@ -332,7 +325,7 @@ impl Storage {
     }
 
     pub async fn contract_address(&self, contract_id: u64) -> Result<Option<ContractAddress>> {
-        Ok(contract_callbacks(&self.conn).3(contract_id)
+        Ok(self.host.contracts.clone().3(contract_id)
             .await
             .map_err(|error| anyhow!(error))?
             .map(|(name, height, tx_index)| ContractAddress {
@@ -343,7 +336,7 @@ impl Storage {
     }
 
     pub async fn contract_bytes(&self, contract_id: u64) -> Result<Option<Vec<u8>>> {
-        contract_callbacks(&self.conn).4(contract_id)
+        self.host.contracts.clone().4(contract_id)
             .await
             .map_err(|error| anyhow!(error))
     }
@@ -449,7 +442,7 @@ impl Storage {
 
     pub async fn insert_contract(&self, name: &str, bytes: &[u8]) -> Result<u64> {
         Ok(storage_contracts::insert_contract(
-            contract_callbacks(&self.conn),
+            self.host.contracts.clone(),
             self.height,
             self.tx_context.as_ref().map(|context| context.tx_index),
             name,
@@ -489,7 +482,7 @@ impl Storage {
             payer_signer_id,
             status.as_str(),
         );
-        contract_callbacks(&self.conn).7(row)
+        self.host.contracts.clone().7(row)
             .await
             .map_err(|error| anyhow!(error))
     }
@@ -503,7 +496,7 @@ impl Storage {
         descending: bool,
     ) -> Result<impl Stream<Item = Result<Vec<u8>, ReadError>> + Send + 'static> {
         Ok(keys(
-            key_callbacks(&self.conn),
+            self.host.keys.clone(),
             contract_id,
             path,
             lo,
@@ -521,7 +514,7 @@ impl Storage {
         descending: bool,
     ) -> StorageRowCursor {
         StorageRowCursor::new(
-            row_callbacks(&self.conn),
+            self.host.rows.clone(),
             contract_id,
             path,
             lo,
@@ -581,7 +574,7 @@ impl Storage {
 
     pub async fn savepoint(&self) -> Result<()> {
         storage_session::savepoint(
-            session_callbacks(&self.conn),
+            self.host.session.clone(),
             &self.savepoint_stack,
             &self.savepoint_counter,
         )
@@ -602,7 +595,7 @@ impl Storage {
         {
             return Err(anyhow!("injected failure before outer commit"));
         }
-        storage_session::commit(session_callbacks(&self.conn), &self.savepoint_stack).await?;
+        storage_session::commit(self.host.session.clone(), &self.savepoint_stack).await?;
         #[cfg(test)]
         if outer
             && self
@@ -619,12 +612,12 @@ impl Storage {
         if self.fail_rollback_once.swap(false, Ordering::SeqCst) {
             return Err(anyhow!("injected rollback transaction failure"));
         }
-        storage_session::rollback_transaction(session_callbacks(&self.conn), &self.savepoint_stack)
+        storage_session::rollback_transaction(self.host.session.clone(), &self.savepoint_stack)
             .await
     }
 
     pub async fn rollback(&self) -> Result<()> {
-        storage_session::rollback(session_callbacks(&self.conn), &self.savepoint_stack).await
+        storage_session::rollback(self.host.session.clone(), &self.savepoint_stack).await
     }
 }
 

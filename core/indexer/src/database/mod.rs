@@ -9,6 +9,7 @@ mod pool;
 pub mod queries;
 pub mod reader;
 pub mod receipt_stream;
+pub(crate) mod storage_callbacks_v1;
 pub(crate) mod storage_contracts_v1;
 pub(crate) mod storage_session_v1;
 pub mod types;
