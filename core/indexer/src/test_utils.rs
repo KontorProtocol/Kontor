@@ -1,5 +1,7 @@
 mod confirmation;
 pub use confirmation::signed_confirmation_call;
+#[cfg(test)]
+mod owned_runtime_tests;
 
 use anyhow::{Result, anyhow};
 
@@ -33,7 +35,7 @@ use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::token::api as token_api;
 use crate::runtime::wit::{Signer, prover_challenge_key};
 use crate::runtime::{
-    ComponentCache, ContractAddress, Decimal, GenesisParameters, GenesisValidator,
+    ComponentCache, ContractAddress, Decimal, ExecutionError, GenesisParameters, GenesisValidator,
     RawFileDescriptor, Runtime, Storage, TransactionContext,
     ownership::{OwnedRuntimeSession, OwnerService},
 };
@@ -606,10 +608,16 @@ impl OwnedTestRuntime {
                     if let Some(context) = runtime.tx_context_mut() {
                         context.op_index += 1;
                     }
-                    result.map_err(Into::into)
+                    // A deterministic failure still owns its settled gas and receipt.
+                    // Only infrastructure failure aborts the enclosing operation.
+                    match result {
+                        Err(error @ ExecutionError::NonDeterministic(_)) => Err(error.into()),
+                        outcome => Ok(outcome),
+                    }
                 })
             })
-            .await
+            .await?
+            .map_err(Into::into)
     }
 
     pub async fn issuance(&self, signer: &Signer) -> Result<()> {
