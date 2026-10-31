@@ -134,6 +134,18 @@ without invalidating every node dependency. The wrapper captures the binary's
 codegen objects, which join the current Cargo archive inventory as concrete
 node-owned inputs to the audit.
 
+For the bounded integration harness, build with `--build-node
+--node-qualification`, then run the recorded executable with `qualify-executors`.
+The opt-in Cargo feature keeps that command out of ordinary node builds. It uses
+fresh temporary databases and one node owner service to exercise both actual
+factories, comparing genesis and resumed genesis, real views and their error
+classification, committee derivation, malformed recognition, and lifecycle
+rollback/replay. It emits JSON observations only after every assertion succeeds.
+The same feature on the in-tree indexer supplies a comparison route; using it
+alone does not establish compatibility with the qualified pre-extraction source.
+This harness is part of K2b acceptance, not its entire transaction and ownership
+coverage. Native ownership is checked by the builder before running it.
+
 Production evidence is under `OUTPUT/TARGET/PROFILE/executors`. Its
 `executor-build.json` records staged libraries, and `node-build.json` records a
 successful node build and ownership audit. Neither is execution qualification.

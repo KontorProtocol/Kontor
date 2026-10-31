@@ -5,6 +5,7 @@ edition = "2024"
 default-run = "kontor"
 
 [features]
+protocol-qualification = []
 testing = []
 
 [[bin]]

@@ -19,6 +19,8 @@ pub mod metrics;
 #[cfg(not(kontor_node))]
 pub mod multi_psbt_test_utils;
 mod protocol;
+#[cfg(feature = "protocol-qualification")]
+pub mod protocol_qualification;
 pub mod reactor;
 pub mod receipt_stream_rotation;
 pub mod reg_tester;

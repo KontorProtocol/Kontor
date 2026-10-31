@@ -26,7 +26,11 @@ use crate::database::storage_callbacks_v1::storage_callbacks;
 use crate::protocol::operations::{
     AddressEnvelope, GenesisEnvelope, RecognitionCall, SessionOwner, ViewOutcome,
 };
+#[cfg(kontor_linked)]
+use crate::protocol::session::{HostError, HostFuture};
 use crate::protocol::session::{SelectionSource, SessionExports};
+#[cfg(kontor_linked)]
+use crate::protocol::storage_callbacks::StorageCallbacks;
 #[cfg(not(kontor_node))]
 use crate::runtime::bundle_session::BundleSession;
 use crate::runtime::fuel::ExecutionUsage;
@@ -136,7 +140,10 @@ fn adapt_session(
 }
 
 #[cfg(not(kontor_linked))]
-fn session_factory(network: Network, view_gas_limit: Option<u64>) -> Result<SessionFactory> {
+pub(crate) fn session_factory(
+    network: Network,
+    view_gas_limit: Option<u64>,
+) -> Result<SessionFactory> {
     let engine = Runtime::new_engine()?;
     let linkers = Runtime::new_linkers(&engine)?;
     let cache = ComponentCache::new();
@@ -162,8 +169,24 @@ fn session_factory(network: Network, view_gas_limit: Option<u64>) -> Result<Sess
 }
 
 #[cfg(kontor_linked)]
-fn session_factory(network: Network, view_gas_limit: Option<u64>) -> Result<SessionFactory> {
-    let factory = std::panic::catch_unwind(retained_factory)
+pub(crate) fn session_factory(
+    network: Network,
+    view_gas_limit: Option<u64>,
+) -> Result<SessionFactory> {
+    retained_session_factory(network, view_gas_limit, retained_factory)
+}
+
+#[cfg(kontor_linked)]
+type RetainedFactory =
+    Arc<dyn Fn(StorageCallbacks, [u8; 4], Option<u64>) -> HostFuture<SessionExports> + Send + Sync>;
+
+#[cfg(kontor_linked)]
+pub(crate) fn retained_session_factory(
+    network: Network,
+    view_gas_limit: Option<u64>,
+    constructor: fn() -> Result<RetainedFactory, HostError>,
+) -> Result<SessionFactory> {
+    let factory = std::panic::catch_unwind(constructor)
         .map_err(|_| HostFailure::from((1, "executor factory export panicked".into())))?
         .map_err(HostFailure::from)?;
     Ok(Arc::new(move |conn| {

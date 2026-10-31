@@ -13,6 +13,9 @@ pub struct ProtocolBundlesArgs {
     /// Link the production node and audit native ownership.
     #[arg(long, conflicts_with = "build_executors")]
     pub build_node: bool,
+    /// Include the isolated executor integration command in the node.
+    #[arg(long, requires = "build_node")]
+    pub node_qualification: bool,
     /// Require all dependencies to be present in the local Cargo cache.
     #[arg(long)]
     pub offline: bool,
@@ -49,6 +52,9 @@ pub fn protocol_bundles(args: ProtocolBundlesArgs) -> Result<()> {
     }
     if args.build_node {
         command.arg("--build-node");
+    }
+    if args.node_qualification {
+        command.arg("--node-qualification");
     }
     if let Some(target) = args.target {
         command.args(["--target", &target]);

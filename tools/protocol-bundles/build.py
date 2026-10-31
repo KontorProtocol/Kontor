@@ -44,9 +44,11 @@ def run(args, cwd, env, log):
         raise RuntimeError(f"command failed ({result.returncode}): {log}\n{log.read_text()[-12000:]}")
 
 
-def metadata(manifest, target, env, offline):
+def metadata(manifest, target, env, offline, features=()):
     command = ["cargo", "metadata", "--locked", "--format-version=1", "--filter-platform", target,
                "--manifest-path", str(manifest)]
+    if features:
+        command.extend(["--features", ",".join(features)])
     if offline:
         command.append("--offline")
     return json.loads(subprocess.check_output(command, cwd=ROOT, env=env, text=True))
@@ -354,7 +356,8 @@ def build_node(graphs, args, base_env, output):
                RUSTFLAGS="-Cpanic=unwind")
     for key in ("KONTOR_PROTOCOL_BUNDLE", "KONTOR_NATIVE_NAMESPACE", "BUNDLE_GRAPH", "BUNDLE_LIFT_RATE"):
         env.pop(key, None)
-    data = metadata(manifest, args.target, env, args.offline)
+    features = ["protocol-qualification"] if args.node_qualification else []
+    data = metadata(manifest, args.target, env, args.offline, features)
     node_dependencies(data)
     sources = source_inputs(ROOT, data, kind="node")
     lock_hash = digest(lock)
@@ -364,7 +367,7 @@ def build_node(graphs, args, base_env, output):
         verify_identity(ROOT, graph, EXECUTOR_GRAPHS)
         verify_staged_inputs(graph)
     sets, versions = audit_inputs(graphs, directory)
-    spec = {"compiler": env["RUSTC"], "source_inputs_sha256": fingerprint(sources),
+    spec = {"compiler": env["RUSTC"], "features": features, "source_inputs_sha256": fingerprint(sources),
             "lock_sha256": lock_hash, "root_objects": str(directory / "root-objects.json"),
             "graphs": [{"graph": graph["graph"], "facade": graph["facade"],
                         "facade_sha256": digest(Path(graph["facade"])),
@@ -383,6 +386,8 @@ def build_node(graphs, args, base_env, output):
                "--message-format=json-render-diagnostics"]
     if args.offline:
         command.append("--offline")
+    if args.node_qualification:
+        command.extend(["--features", "protocol-qualification"])
     log = directory / "build.log"
     run(command, ROOT, env, log)
     executable = node_executable(log)
@@ -397,12 +402,12 @@ def build_node(graphs, args, base_env, output):
     libraries = runtime_libraries(executable, env, graphs)
     if digest(lock) != lock_hash or source_inputs(ROOT, data, kind="node") != sources:
         raise RuntimeError("node source or lock changed during compilation")
-    if metadata(manifest, args.target, env, args.offline) != data:
+    if metadata(manifest, args.target, env, args.offline, features) != data:
         raise RuntimeError("node dependency metadata changed during compilation")
     for graph in graphs:
         verify_identity(ROOT, graph, EXECUTOR_GRAPHS)
         verify_staged_inputs(graph)
-    result = {"executable": str(executable), "executable_sha256": digest(executable),
+    result = {"qualification_command": args.node_qualification, "executable": str(executable), "executable_sha256": digest(executable),
               "source_inputs_sha256": fingerprint(sources), "lock_sha256": lock_hash,
               "link_spec_sha256": digest(spec_path), "build_log_sha256": digest(log),
               "root_codegen_sha256": digest(Path(spec["root_objects"])), "wrapper_sha256": digest(wrapper),
@@ -428,7 +433,11 @@ def main():
                         help="stage production executor libraries for the node linker; does not qualify a node")
     mode.add_argument("--build-node", action="store_true",
                       help="build the production node with retained executors and audit native ownership")
+    parser.add_argument("--node-qualification", action="store_true",
+                        help="include the isolated executor integration command; requires --build-node")
     args = parser.parse_args()
+    if args.node_qualification and not args.build_node:
+        parser.error("--node-qualification requires --build-node")
     production = args.build_executors or args.build_node
     if not 1 <= args.jobs <= 2:
         parser.error("protocol qualification uses one or two compiler jobs")

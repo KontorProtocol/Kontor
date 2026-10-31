@@ -16,6 +16,7 @@ name = "kontor"
 path = "../../core/indexer/src/main.rs"
 
 [features]
+protocol-qualification = []
 testing = []
 
 [dependencies]
