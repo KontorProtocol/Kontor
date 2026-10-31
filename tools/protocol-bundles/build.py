@@ -19,7 +19,7 @@ from provenance import fingerprint, locked_packages, runtime_libraries, source_i
 from provenance import tools as toolchain_inputs
 from source_policy import check as check_source_policy
 from symbol_tool import TOOLCHAIN
-from recipes import GRAPHS, identity, verify_engine_observations, verify_identity, verify_reservations
+from recipes import EXECUTOR_GRAPHS, GRAPHS, identity, verify_engine_observations, verify_identity, verify_reservations
 from capabilities import verify as verify_capabilities
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,8 +52,8 @@ def metadata(manifest, target, env, offline):
     return json.loads(subprocess.check_output(command, cwd=ROOT, env=env, text=True))
 
 
-def identities(graph, data):
-    recipe = GRAPHS[graph]
+def identities(graph, data, graphs=None):
+    recipe = (GRAPHS if graphs is None else graphs)[graph]
     revision, version, itoa = recipe.revision, recipe.version, recipe.itoa
     packages = {p["id"]: p for p in data["packages"]}
     nodes = {node["id"]: node for node in data["resolve"]["nodes"]}
@@ -77,16 +77,25 @@ def identities(graph, data):
         raise RuntimeError(f"{graph}: immutable Wasmtime identity changed")
     if FORBIDDEN & set(nodes[vm["id"]]["features"]):
         raise RuntimeError(f"{graph}: forbidden Wasmtime feature")
-    for name in ("arc-malachitebft-app-channel", "if-watch"):
+    for name in (("arc-malachitebft-app-channel", "if-watch") if recipe.malachite_engine else ()):
         package = one(name)
         if not package["source"].endswith("#" + MALACHITE):
             raise RuntimeError(f"{graph}: unqualified {name} source")
-    if one("itoa")["version"] != itoa:
+    if itoa is not None and one("itoa")["version"] != itoa:
         raise RuntimeError(f"{graph}: missing conflicting itoa version")
-    for name in ("blst", "ring", "secp256k1-sys"):
+    for name in recipe.native_patches:
         package = one(name)
         if Path(package["manifest_path"]).parent.resolve() != ROOT / "core/vendor" / name:
             raise RuntimeError(f"{graph}: missing native patch for {name}")
+    if recipe.kind == "executor":
+        forbidden = {"libsql", "arc-malachitebft-app-channel", "if-watch"}
+        if forbidden & {p["name"] for p in selected}:
+            raise RuntimeError(f"{graph}: executor graph contains node-owned storage or consensus services")
+        # An optional native library still needs its patch if a new dependency
+        # makes it reachable. Absence is not permission to use unowned symbols.
+        for package in selected:
+            if package["name"] == "ring" and Path(package["manifest_path"]).parent.resolve() != ROOT / "core/vendor/ring":
+                raise RuntimeError(f"{graph}: missing native patch for ring")
     return [{"name": p["name"], "version": p["version"], "source": p["source"],
              "features": sorted(nodes[p["id"]]["features"])} for p in selected]
 
@@ -125,8 +134,10 @@ def current_artifacts(log, target_dir, target, package):
     return sorted(archives), facades.pop(), native_outputs, sorted(proc_macros)
 
 
-def build_graph(graph, args, base_env, output):
-    manifest = ROOT / "protocol-bundles" / GRAPHS[graph].directory / "Cargo.toml"
+def build_graph(graph, args, base_env, output, graphs=None):
+    graphs = GRAPHS if graphs is None else graphs
+    selected_recipe = graphs[graph]
+    manifest = ROOT / "protocol-bundles" / selected_recipe.directory / "Cargo.toml"
     lock = manifest.with_name("Cargo.lock")
     recipe = tomllib.loads(manifest.read_text())
     if any(recipe["profile"][profile].get("panic") != "unwind" for profile in ("dev", "release")):
@@ -134,19 +145,19 @@ def build_graph(graph, args, base_env, output):
     graph_output = output / graph
     graph_output.mkdir(parents=True, exist_ok=True)
     lock_hash = digest(lock)
-    graph_identity = identity(ROOT, graph)
+    graph_identity = identity(ROOT, graph, graphs)
     namespace = "kontor_" + graph + "_" + fingerprint(graph_identity)[:24]
     wrapper = ROOT / "tools/protocol-bundles/rustc-wrapper.py"
     target_dir = graph_output / "target" / (namespace + "_" + digest(wrapper)[:16])
     env = dict(base_env, CARGO_TARGET_DIR=str(target_dir), KONTOR_PROTOCOL_BUNDLE="1",
-               KONTOR_NATIVE_NAMESPACE=namespace, BUNDLE_LIFT_RATE=str(GRAPHS[graph].lift_rate),
+               KONTOR_NATIVE_NAMESPACE=namespace, BUNDLE_LIFT_RATE=str(selected_recipe.lift_rate),
                BUNDLE_GRAPH=graph,
                RUSTC_WRAPPER=str(wrapper),
                RUSTFLAGS=f"-Cmetadata={namespace} -Cpanic=unwind")
     data = metadata(manifest, args.target, env, args.offline)
-    packages = identities(graph, data)
-    sources = source_inputs(ROOT, data)
-    source_policy = check_source_policy(ROOT, data)
+    packages = identities(graph, data, graphs)
+    sources = source_inputs(ROOT, data, kind=selected_recipe.kind)
+    source_policy = check_source_policy(ROOT, data, kind=selected_recipe.kind)
     write_json(graph_output / "source-inputs.json", sources)
     write_json(graph_output / "metadata.json", data)
     command = ["cargo", "build", "--locked", "--manifest-path", str(manifest),
@@ -158,7 +169,7 @@ def build_graph(graph, args, base_env, output):
     run(command, ROOT, env, log)
     if digest(lock) != lock_hash:
         raise RuntimeError("locked build modified the dependency lock")
-    if source_inputs(ROOT, data) != sources:
+    if source_inputs(ROOT, data, kind=selected_recipe.kind) != sources:
         raise RuntimeError("source inputs changed while the graph was compiling")
     if metadata(manifest, args.target, env, args.offline) != data:
         raise RuntimeError("resolved metadata changed while the graph was compiling")
@@ -301,6 +312,8 @@ def main():
     parser.add_argument("--profile", choices=("release", "dev"), default="release")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument("--build-executors", action="store_true",
+                        help="stage production executor libraries for the node linker; does not qualify a node")
     args = parser.parse_args()
     if not 1 <= args.jobs <= 2:
         parser.error("protocol qualification uses one or two compiler jobs")
@@ -322,6 +335,8 @@ def main():
         parser.error("qualification must execute natively on a supported target")
     toolchain = toolchain_inputs(env, args.target)
     output = args.output.resolve() / args.target / args.profile
+    if args.build_executors:
+        output /= "executors"
     output.mkdir(parents=True, exist_ok=True)
     lock = (args.output.resolve() / ".build.lock").open("a")
     try:
@@ -329,20 +344,32 @@ def main():
     except BlockingIOError as error:
         raise RuntimeError("another protocol bundle builder owns this output directory") from error
     (output / "qualification.json").unlink(missing_ok=True)
-    verify_reservations(ROOT)
+    if args.build_executors:
+        (output / "executor-build.json").unlink(missing_ok=True)
+    graphs = EXECUTOR_GRAPHS if args.build_executors else GRAPHS
+    verify_reservations(ROOT, graphs)
     verify_capabilities(ROOT)
-    reports = [build_graph(graph, args, env, output) for graph in GRAPHS]
+    reports = [build_graph(graph, args, env, output, graphs) for graph in graphs]
     write_json(output / "build-inputs.json", {"compiler": compiler, "target": args.target,
                "profile": args.profile, "graphs": reports})
-    proof = qualify(reports, args, env, output)
+    proof = None if args.build_executors else qualify(reports, args, env, output)
     for report in reports:
         data = json.loads((output / report["graph"] / "metadata.json").read_text())
-        if fingerprint(source_inputs(ROOT, data)) != report["source_inputs_sha256"]:
+        if fingerprint(source_inputs(ROOT, data, kind=graphs[report["graph"]].kind)) != report["source_inputs_sha256"]:
             raise RuntimeError("source inputs changed before qualification finished")
     if toolchain_inputs(env, args.target) != toolchain:
         raise RuntimeError("common compiler inputs changed during qualification")
-    verify_reservations(ROOT)
+    verify_reservations(ROOT, graphs)
     verify_capabilities(ROOT)
+    if args.build_executors:
+        for report in reports:
+            verify_identity(ROOT, report, graphs)
+            verify_staged_inputs(report)
+        write_json(output / "executor-build.json", {"compiler": compiler, "toolchain_inputs": toolchain,
+                   "target": args.target, "profile": args.profile, "graphs": reports,
+                   "status": "staged libraries; final node link and execution qualification required"})
+        print(f"Executor libraries staged at {output}; node qualification has not run.", flush=True)
+        return
     write_json(output / "qualification.json", {"compiler": compiler, "toolchain_inputs": toolchain, "target": args.target,
                "profile": args.profile, "graphs": reports, "proof": proof})
     print(json.dumps(proof, indent=2), flush=True)

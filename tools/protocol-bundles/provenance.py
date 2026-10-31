@@ -15,7 +15,32 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def source_inputs(root, data):
+RETAINED_TREES = (
+    "protocol-bundles/executor",
+    "core/indexer/src/runtime",
+    "core/indexer/src/protocol",
+    "core/indexer/src/bls",
+    *(f"native-contracts/{name}/wit" for name in ("token", "filestorage", "staking", "system", "nft")),
+)
+
+
+def retained_sources(root):
+    # Cargo metadata inventories package roots, but #[path], build scripts and
+    # WIT generators also read these inputs outside the executor package root.
+    sources = {}
+    for relative in RETAINED_TREES:
+        directory = root / relative
+        if not directory.is_dir():
+            raise RuntimeError(f"missing retained source tree: {relative}")
+        for path in sorted(directory.rglob("*")):
+            if path.is_file() and "__pycache__" not in path.parts:
+                sources[str(path.relative_to(root))] = sha(path)
+    return sources
+
+
+def source_inputs(root, data, *, kind="proof"):
+    if kind not in ("proof", "executor"):
+        raise RuntimeError(f"unknown graph source kind: {kind}")
     verified = verify_sources(data)
     packages = []
     trees = {}
@@ -56,6 +81,8 @@ def source_inputs(root, data):
         for path in sorted(directory.rglob("*")):
             if path.is_file() and "__pycache__" not in path.parts:
                 sources[str(path.relative_to(root))] = sha(path)
+    if kind == "executor":
+        sources.update(retained_sources(root))
     git_sources = {}
     for identity, directory in sorted(trees.items()):
         git_sources[identity] = {
