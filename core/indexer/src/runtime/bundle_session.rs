@@ -11,6 +11,7 @@ use super::bundle_ownership::{
     SharedOwner,
 };
 use super::invocation::InvocationBudget;
+use crate::protocol::execution::SelectionEnvelope;
 
 pub(super) struct BundleSession {
     pub(super) runtime: Mutex<Runtime>,
@@ -27,6 +28,7 @@ impl BundleSession {
         self: &Arc<Self>,
         capability: BundleOwner,
         canonical: bool,
+        selection: SelectionEnvelope,
     ) -> RootHooks {
         let committed = Arc::new(AtomicBool::new(false));
         let expected = self.clone();
@@ -34,10 +36,14 @@ impl BundleSession {
         let prepare: SessionAction = Arc::new(move |opaque| {
             let session = expected.clone();
             let owner = prepare_owner.clone();
+            let selection = selection.clone();
             Box::pin(async move {
                 session.verify_owner(opaque, &owner)?;
                 let mut runtime = session.runtime.lock().await;
                 runtime.ensure_bundle_idle().await.map_err(infrastructure)?;
+                runtime
+                    .install_root_selection(&selection)
+                    .map_err(infrastructure)?;
                 runtime.invocation_budget = Some(Arc::new(InvocationBudget::default()));
                 runtime.store_table_owners = Some(Arc::new(StdMutex::new(Vec::new())));
                 runtime.storage.bundle_owner = Some(owner.clone());
@@ -115,6 +121,7 @@ impl BundleSession {
                 runtime.storage.bundle_owner = None;
                 runtime.invocation_budget = None;
                 runtime.store_table_owners = None;
+                runtime.selected_context = None;
                 *runtime.table.lock().await = ResourceTable::new();
                 Ok(())
             })
@@ -189,7 +196,8 @@ impl Runtime {
                 && self.bundle_owner.is_none()
                 && self.storage.bundle_owner.is_none()
                 && self.invocation_budget.is_none()
-                && self.store_table_owners.is_none(),
+                && self.store_table_owners.is_none()
+                && self.selected_context.is_none(),
             "executor session is still owned by a prior root"
         );
         ensure!(
@@ -200,7 +208,7 @@ impl Runtime {
     }
 }
 
-fn infrastructure(error: Error) -> HostError {
+pub(super) fn infrastructure(error: Error) -> HostError {
     let tag = error
         .downcast_ref::<HostFailure>()
         .map_or(0, |error| error.tag);

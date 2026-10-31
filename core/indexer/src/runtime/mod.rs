@@ -6,6 +6,7 @@ mod costs;
 mod genesis_parity;
 extern crate alloc;
 
+mod bundle_exports;
 mod bundle_ownership;
 mod bundle_session;
 mod component_cache;

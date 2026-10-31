@@ -2562,21 +2562,24 @@ mod tests {
     use super::super::pool::new_linked;
     use super::adapter::{ExecutorSession, GuestFactory, RootHooks, SessionAction, SessionFactory};
     use super::*;
+    use crate::consensus::signing::PrivateKey;
     use crate::database::connection::new_connection;
     use crate::protocol::coordinator::selection::{
         ApplicationPosition, ExecutorVersion, select_legacy_p1,
     };
+    use crate::protocol::v1::committee::derive_committee;
     use crate::reg_tester::random_x_only_pubkey;
-    use crate::runtime::ComponentSource;
     use crate::runtime::call::CallOutcome;
     use crate::runtime::fuel::ExecutionUsage;
+    use crate::runtime::staking::address as staking_address;
     use crate::runtime::storage::BlockingGate;
     use crate::runtime::wit::{Signer, kontor::built_in::context::HolderRef};
+    use crate::runtime::{ComponentSource, GenesisValidator};
     use crate::runtime::{
         ContractAddress, Decimal, ExecutionError, Linkers, Storage, native_provenance,
         to_wave_expr, token,
     };
-    use crate::test_utils::test_runtime;
+    use crate::test_utils::{test_runtime, test_runtime_with_genesis};
     use bitcoin::Network;
     use deadpool::managed::Pool;
     use indexer_types::Payment;
@@ -3202,7 +3205,7 @@ mod tests {
                     adapter.fuel_yield_interval,
                 );
                 let (prepare, inspect_canonical_drain, settle, reset) =
-                    session.root_hooks(owner, canonical);
+                    session.root_hooks(owner, canonical, selection.envelope());
                 Ok(RootHooks {
                     prepare,
                     inspect_canonical_drain,
@@ -3234,6 +3237,7 @@ mod tests {
             ApplicationPosition::View,
         )
         .await?;
+        let envelope = selection.envelope();
         let (session, retained) = linked_runtime_session(runtime, false);
         let service = OwnerService::new();
         let owned = LinkedStatefulSession::new(session);
@@ -3248,6 +3252,16 @@ mod tests {
                     runtime.bundle_owner.as_ref().unwrap().fuel_yield_interval(),
                     Some(API_FUEL_YIELD_INTERVAL)
                 );
+                assert!(runtime.selected_context.is_some());
+                drop(
+                    runtime
+                        .bind_selection(&envelope)
+                        .map_err(|error| (0, error.to_string()))?,
+                );
+                assert!(runtime.selected_context.is_some());
+                let mut changed = envelope.clone();
+                changed.2.1 += 1;
+                assert!(runtime.bind_selection(&changed).is_err());
                 runtime.component_cache.clear();
                 let value = paid_receipt_snapshot(
                     &mut runtime,
@@ -3274,6 +3288,7 @@ mod tests {
         let recovered = retained.runtime.lock().await;
         assert!(recovered.bundle_owner.is_none());
         assert!(recovered.storage.bundle_owner.is_none());
+        assert!(recovered.selected_context.is_none());
         assert_eq!(receipt_count(&recovered).await?, 1);
         assert_eq!(service.active_roots().await, 0);
         Ok(())
@@ -3313,18 +3328,165 @@ mod tests {
             }
             lease.drain().await?;
             assert!(!session.conn.is_autocommit());
+            assert!(retained.runtime.lock().await.selected_context.is_some());
             lease.settle(commit).await?;
+            assert!(retained.runtime.lock().await.selected_context.is_some());
             lease.complete().await?;
             assert!(session.conn.is_autocommit());
             let runtime = retained.runtime.lock().await;
             assert_eq!(receipt_count(&runtime).await?, i64::from(commit));
             assert!(runtime.bundle_owner.is_none());
+            assert!(runtime.selected_context.is_none());
             assert!(runtime.storage.savepoint_stack.is_empty().await);
             assert_eq!(service.active_roots().await, 0);
         }
         (session.executor.recycle)(session.executor.owner.clone())
             .await
             .map_err(|error| anyhow!("recycle failed: {error:?}"))?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bundle_typed_operations_preserve_views_and_committee() -> Result<()> {
+        let key = PrivateKey::from([7; 32]).public_key();
+        let (mut runtime, _dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
+            x_only_pubkey: random_x_only_pubkey(),
+            ed25519_pubkey: key.as_bytes().to_vec(),
+            stake: Decimal::from("100.9999999"),
+        }])
+        .await?;
+        let address = staking_address();
+        let expected_view = runtime
+            .execute(None, None, &address, "get-active-set()")
+            .await?;
+        let error = runtime
+            .execute(None, None, &address, "missing-function()")
+            .await
+            .unwrap_err();
+        let expected_error = (
+            matches!(&error, ExecutionError::Deterministic(_)),
+            format!("{error:?}"),
+        );
+        let expected_committee = derive_committee(&mut runtime).await?;
+        let selection = select_legacy_p1(
+            &runtime.storage.conn,
+            runtime.network,
+            ApplicationPosition::View,
+        )
+        .await?;
+        let envelope = selection.envelope();
+        let address = (address.name, address.height, address.tx_index);
+        let (linked, retained) = linked_runtime_session(runtime, false);
+        let view = retained.view();
+        assert!(
+            view(
+                retained.clone(),
+                envelope.clone(),
+                address.clone(),
+                "get-active-set()".into()
+            )
+            .await
+            .is_err()
+        );
+        let service = OwnerService::new();
+        let owned = LinkedStatefulSession::new(linked.clone());
+        let operation: LinkedOperation = Box::new(move |opaque, _| {
+            Box::pin(async move {
+                assert_eq!(
+                    view(
+                        opaque.clone(),
+                        envelope.clone(),
+                        address.clone(),
+                        "get-active-set()".into()
+                    )
+                    .await?,
+                    Ok(expected_view)
+                );
+                assert_eq!(
+                    view(
+                        opaque.clone(),
+                        envelope.clone(),
+                        address.clone(),
+                        "missing-function()".into()
+                    )
+                    .await?,
+                    Err(expected_error)
+                );
+                let mut changed = envelope.clone();
+                changed.2.1 += 1;
+                assert!(
+                    view(
+                        opaque.clone(),
+                        changed,
+                        address.clone(),
+                        "get-active-set()".into()
+                    )
+                    .await
+                    .is_err()
+                );
+                let mut wrong_purpose = envelope.clone();
+                wrong_purpose.3 = (1, 0, None, 0);
+                assert!(
+                    view(
+                        opaque.clone(),
+                        wrong_purpose,
+                        address.clone(),
+                        "get-active-set()".into()
+                    )
+                    .await
+                    .is_err()
+                );
+                assert_eq!(
+                    view(Arc::new(()), envelope, address, "get-active-set()".into())
+                        .await
+                        .unwrap_err()
+                        .0,
+                    2
+                );
+                Ok((Box::new(()) as Payload, false))
+            })
+        });
+        let capacity = service.reserve_root_capacity().await?;
+        let mut handle = service
+            .start_linked_stateful_reserved(&owned, capacity, selection, operation)
+            .await?;
+        handle.result().await?;
+        drop(owned.checkout().await?);
+        drop(owned);
+        assert!(retained.runtime.lock().await.selected_context.is_none());
+
+        // The canonical session uses the same real runtime after the view root
+        // has finished cleanup, with canonical settlement hooks instead.
+        drop(linked);
+        let runtime = Arc::try_unwrap(retained)
+            .map_err(|_| anyhow!("view callbacks retained session"))?
+            .runtime
+            .into_inner();
+        let (session, retained) = linked_runtime_session(runtime, true);
+        let selection = select_legacy_p1(
+            &session.conn,
+            Network::Regtest,
+            ApplicationPosition::Committee,
+        )
+        .await?;
+        let envelope = selection.envelope();
+        let capacity = service.reserve_root_capacity().await?;
+        let mut lease = service
+            .begin_linked_canonical_reserved(&session, capacity, selection, false)
+            .await?;
+        retained.runtime.lock().await.storage.savepoint().await?;
+        let committee = retained.committee();
+        assert_eq!(
+            committee(retained.clone(), envelope.clone())
+                .await
+                .map_err(|error| anyhow!("{error:?}"))?,
+            expected_committee
+        );
+        lease.drain().await?;
+        lease.settle(false).await?;
+        lease.complete().await?;
+        assert!(committee(retained.clone(), envelope).await.is_err());
+        assert_eq!(service.active_roots().await, 0);
         Ok(())
     }
 

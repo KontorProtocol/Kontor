@@ -91,12 +91,9 @@ impl Runtime {
         Ok(())
     }
 
-    pub(crate) fn bind_selection(
-        &mut self,
-        selection: &SelectionEnvelope,
-    ) -> Result<SelectedRuntime<'_>> {
+    fn resolve_selection(&self, selection: &SelectionEnvelope) -> Result<Arc<SelectedContext>> {
         self.verify_selection_envelope(selection)?;
-        let context = match &self.selected_context {
+        Ok(match &self.selected_context {
             Some(context) => {
                 ensure!(
                     context.selection == *selection,
@@ -117,7 +114,23 @@ impl Runtime {
                     ExecutorVersion::LegacyP1 => Pricing::default(),
                 },
             }),
-        };
+        })
+    }
+
+    pub(super) fn install_root_selection(&mut self, selection: &SelectionEnvelope) -> Result<()> {
+        ensure!(
+            self.selected_context.is_none(),
+            "executor root already has a selection"
+        );
+        self.selected_context = Some(self.resolve_selection(selection)?);
+        Ok(())
+    }
+
+    pub(crate) fn bind_selection(
+        &mut self,
+        selection: &SelectionEnvelope,
+    ) -> Result<SelectedRuntime<'_>> {
+        let context = self.resolve_selection(selection)?;
         let previous = self.selected_context.replace(context);
         Ok(SelectedRuntime {
             runtime: self,
