@@ -5,10 +5,16 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use bitcoin::{BlockHash, Network, Txid, hashes::Hash};
 use deadpool::managed::{Object, Pool};
+#[cfg(kontor_linked)]
+use futures_util::FutureExt;
 use indexer_types::Block;
 #[cfg(test)]
 use indexer_types::Transaction;
+#[cfg(kontor_linked)]
+use kontor_executor_first::factory as retained_factory;
 use libsql::Connection;
+#[cfg(kontor_linked)]
+use std::panic::AssertUnwindSafe;
 
 use super::committee::materialize_committee;
 use super::selection::{
@@ -126,7 +132,8 @@ fn adapt_session(
     }
 }
 
-pub(crate) fn read_only_factory(network: Network, view_gas_limit: u64) -> Result<SessionFactory> {
+#[cfg(not(kontor_linked))]
+fn session_factory(network: Network, view_gas_limit: Option<u64>) -> Result<SessionFactory> {
     let engine = Runtime::new_engine()?;
     let linkers = Runtime::new_linkers(&engine)?;
     let cache = ComponentCache::new();
@@ -136,13 +143,58 @@ pub(crate) fn read_only_factory(network: Network, view_gas_limit: u64) -> Result
         let cache = cache.clone();
         Box::pin(async move {
             let callbacks = storage_callbacks(&conn);
-            let storage = Storage::builder().host(callbacks.into()).conn(conn).build();
+            let storage = Storage::builder()
+                .host(callbacks.into())
+                .conn(conn)
+                .height(if view_gas_limit.is_some() { 1 } else { 0 })
+                .build();
             let mut runtime = Runtime::new_with(engine, linkers, cache, storage).await?;
             runtime.network = network;
-            runtime.view_gas_limit = view_gas_limit;
-            Ok(link_runtime(runtime, false))
+            if let Some(limit) = view_gas_limit {
+                runtime.view_gas_limit = limit;
+            }
+            Ok(link_runtime(runtime, view_gas_limit.is_none()))
         })
     }))
+}
+
+#[cfg(kontor_linked)]
+fn session_factory(network: Network, view_gas_limit: Option<u64>) -> Result<SessionFactory> {
+    let factory = std::panic::catch_unwind(retained_factory)
+        .map_err(|_| HostFailure::from((1, "executor factory export panicked".into())))?
+        .map_err(HostFailure::from)?;
+    Ok(Arc::new(move |conn| {
+        let factory = factory.clone();
+        Box::pin(async move {
+            let callbacks = storage_callbacks(&conn);
+            // Catch both construction and polling panics at the graph boundary.
+            // Neither may be interpreted as a deterministic guest rejection.
+            let exports = AssertUnwindSafe(async move {
+                factory(callbacks, network.magic().to_bytes(), view_gas_limit).await
+            })
+            .catch_unwind()
+            .await
+            .map_err(|_| HostFailure::from((1, "executor session export panicked".into())))?
+            .map_err(HostFailure::from)?;
+            Ok(adapt_session(
+                ExecutorVersion::LegacyP1,
+                network,
+                conn,
+                view_gas_limit.is_none(),
+                exports,
+            ))
+        })
+    }))
+}
+
+pub(crate) fn read_only_factory(network: Network, view_gas_limit: u64) -> Result<SessionFactory> {
+    session_factory(network, Some(view_gas_limit))
+}
+
+pub(crate) async fn canonical_session(conn: Connection, network: Network) -> Result<LinkedSession> {
+    let factory = session_factory(network, None)?;
+    let executor = factory(conn.clone()).await?;
+    Ok(LinkedSession::new(conn, executor))
 }
 
 pub(crate) fn new_read_pool(

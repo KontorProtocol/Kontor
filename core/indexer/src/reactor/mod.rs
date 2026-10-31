@@ -829,14 +829,10 @@ async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
     Ok(Genesis { validator_set })
 }
 
-async fn create_uninitialized_runtime_executor(
+async fn prepare_executor_startup(
     starting_block_height: u64,
     writer: &database::Writer,
-    _owner_service: &OwnerService,
-    bitcoin_client: Client,
-    replay_tx: Option<mpsc::Sender<u64>>,
-    network: bitcoin::Network,
-) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
+) -> Result<(u64, Option<BlockHash>)> {
     let conn = writer.connection();
     let (last_height, last_hash) = match select_block_latest(&conn)
         .await
@@ -897,27 +893,46 @@ async fn create_uninitialized_runtime_executor(
         .await
         .context("Failed to insert native block at height 0")?;
     }
+    Ok((last_height, last_hash))
+}
+
+fn new_runtime_executor(
+    bitcoin_client: Client,
+    replay_tx: Option<mpsc::Sender<u64>>,
+) -> executor::RuntimeExecutor {
+    let exec = executor::RuntimeExecutor::new(bitcoin_client);
+    if let Some(tx) = replay_tx {
+        exec.with_replay_tx(tx)
+    } else {
+        exec
+    }
+}
+
+#[cfg(test)]
+async fn create_uninitialized_runtime_executor(
+    starting_block_height: u64,
+    writer: &database::Writer,
+    owner_service: &OwnerService,
+    bitcoin_client: Client,
+    replay_tx: Option<mpsc::Sender<u64>>,
+    network: Network,
+) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
+    let (last_height, last_hash) = prepare_executor_startup(starting_block_height, writer).await?;
     let storage = Storage::builder()
         .height(0)
         .conn(writer.connection())
         .build();
-
     let mut runtime = Runtime::new(ComponentCache::new(), storage)
         .await
         .context("Failed to initialize runtime")?;
-    #[cfg(test)]
-    _owner_service.apply_startup_compile_gate(&mut runtime);
-    // Set the chain network *before* publishing — native-contract `init` reads
-    // it via the `network()` built-in to self-condition per-network defaults
-    // (e.g. token's dev mint is off at mainnet genesis).
+    owner_service.apply_startup_compile_gate(&mut runtime);
     runtime.network = network;
-
-    let mut exec = executor::RuntimeExecutor::new(bitcoin_client);
-    if let Some(tx) = replay_tx {
-        exec = exec.with_replay_tx(tx);
-    }
-
-    Ok((exec, runtime, last_height, last_hash))
+    Ok((
+        new_runtime_executor(bitcoin_client, replay_tx),
+        runtime,
+        last_height,
+        last_hash,
+    ))
 }
 
 #[cfg(test)]
@@ -959,19 +974,15 @@ pub(crate) async fn create_executor_session(
     u64,
     Option<BlockHash>,
 )> {
-    let (exec, runtime, height, hash) = create_uninitialized_runtime_executor(
-        starting_block_height,
-        writer,
-        owner_service,
-        bitcoin_client,
-        replay_tx,
-        network,
-    )
-    .await?;
-    let session = LinkedSession::new(
-        runtime.get_storage_conn(),
-        linked::link_runtime(runtime, true),
-    );
+    let (height, hash) = prepare_executor_startup(starting_block_height, writer).await?;
+    let exec = new_runtime_executor(bitcoin_client, replay_tx);
+    let session = linked::canonical_session(writer.connection(), network)
+        .await
+        .context("Failed to initialize retained executor session")?;
+    #[cfg(test)]
+    owner_service
+        .apply_linked_startup_compile_gate(&session)
+        .await?;
     let genesis = (
         decimal_to_string(genesis.sigma_min),
         genesis

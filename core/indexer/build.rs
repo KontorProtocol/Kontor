@@ -56,6 +56,7 @@ fn build_protos() {
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(kontor_retained)");
+    println!("cargo:rustc-check-cfg=cfg(kontor_linked)");
     // Explicit protobuf inputs disable Cargo's default package scan. Track Git
     // separately, including linked worktrees, so commits refresh built metadata.
     track_git_head();

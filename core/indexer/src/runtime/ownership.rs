@@ -23,6 +23,8 @@ use wasmtime::component::ResourceTable;
 use wasmtime::component::Val;
 
 use super::Runtime;
+#[cfg(test)]
+use super::bundle_session::BundleSession;
 use super::call::GuestCompletion;
 use super::invocation::InvocationBudget;
 #[cfg(test)]
@@ -1264,6 +1266,21 @@ impl OwnerService {
             .lock()
             .expect("startup gate lock poisoned")
             .clone();
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn apply_linked_startup_compile_gate(
+        &self,
+        session: &LinkedSession,
+    ) -> Result<()> {
+        let owner = session
+            .executor
+            .owner
+            .clone()
+            .downcast::<BundleSession>()
+            .map_err(|_| anyhow!("in-tree compile gate cannot instrument a foreign executor"))?;
+        self.apply_startup_compile_gate(&mut *owner.test_runtime().await);
+        Ok(())
     }
 
     pub async fn active_roots(&self) -> usize {
@@ -2560,7 +2577,6 @@ mod tests {
     use super::super::bundle_session::BundleSession;
     use super::super::pool::new_linked;
     use super::adapter::{ExecutorSession, RootHooks, SessionAction, SessionFactory};
-    use crate::protocol::session::GuestFactory;
     use super::*;
     use crate::consensus::signing::PrivateKey;
     use crate::database::connection::new_connection;
@@ -2568,6 +2584,7 @@ mod tests {
     use crate::protocol::coordinator::selection::{
         ApplicationPosition, ExecutorVersion, select_legacy_p1,
     };
+    use crate::protocol::session::GuestFactory;
     use crate::protocol::v1::committee::derive_committee;
     use crate::reg_tester::random_x_only_pubkey;
     use crate::runtime::call::CallOutcome;
