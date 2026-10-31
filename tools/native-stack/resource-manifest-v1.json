@@ -438,7 +438,7 @@
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
-      "sha256": "e65f53f08b05e700cf36e6dc09a7c1c0c5b4ecee4ec758ac98be3faaee0b9c54"
+      "sha256": "cf758dfda137ff5c288241978411be535161be63035c9c2ddb3514e3a764349e"
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
@@ -514,7 +514,7 @@
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "a9798a3da68a4b5695c90823bc59dbc9e6eeff4771b589d0773731b6b2eb275f"
+      "sha256": "23ee679951326e1c3dea012361779945b9b5161ee2319cb1e5d02dc1cd86cd7d"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",

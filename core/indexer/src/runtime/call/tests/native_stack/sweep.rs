@@ -919,12 +919,12 @@ pub(super) async fn run_resource_pending_host_io(
     );
     if configuration == "production" && process_role == "target_observed" {
         sequential_chains::run_suspended_64_profile().await?;
-        let memory_trace = resource_diagnostics::finish();
+        // Preserve stack sampling for blocking threads introduced after the memory probe.
+        let memory_trace = resource_diagnostics::split_chain();
         ensure!(
             !memory_trace.is_empty(),
             "suspended-64 runtime trace is empty"
         );
-        resource_diagnostics::start_chain();
     }
     let mut current = Fixture::new("view_crypto".to_owned(), configuration == "reduced").await?;
     current.resource_probe = Some(process_role == "target_observed");
