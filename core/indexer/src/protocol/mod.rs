@@ -1,3 +1,4 @@
+pub(crate) mod committee;
 pub(crate) mod coordinator;
 pub(crate) mod native_bootstrap;
 pub(crate) mod storage_aux;
