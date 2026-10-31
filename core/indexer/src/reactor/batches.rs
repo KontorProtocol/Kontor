@@ -372,11 +372,14 @@ impl<E: Executor> Reactor<E> {
                 consensus_height: consensus_height.as_u64(),
             })
             .await?;
-        let parsed_txs: Vec<indexer_types::Transaction> = {
+        let parsed_txs: Vec<PreparedTransaction> = {
             let mut parsed = Vec::with_capacity(batch_txs.len());
             let mut bad: Option<Txid> = None;
             for btx in batch_txs {
-                match self.executor.parse_transaction(&selection, btx) {
+                match self
+                    .executor
+                    .prepare_transaction(&self.recognizer, &selection, btx)?
+                {
                     Some(p) => parsed.push(p),
                     None => {
                         bad = Some(btx.compute_txid());
@@ -449,7 +452,7 @@ impl<E: Executor> Reactor<E> {
             // execute_op. Only non-deterministic errors (Result::Err) abort.
             let _failures = self
                 .executor
-                .execute_transaction(&selection, &mut self.runtime, anchor_height, tx_id, t)
+                .execute_prepared(&selection, &mut self.runtime, anchor_height, tx_id, t)
                 .await
                 .context("execute_transaction failed")?;
         }
@@ -477,7 +480,7 @@ impl<E: Executor> Reactor<E> {
         let executed_ops: u64 = parsed_txs
             .iter()
             .flat_map(|t| t.inputs.iter())
-            .map(|input| input.insts.ops.len() as u64)
+            .map(|(_, operations)| *operations)
             .sum();
         if executed_ops > 0 {
             counter!(ITEMS_INDEXED).increment(executed_ops);

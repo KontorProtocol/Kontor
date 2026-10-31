@@ -1,3 +1,4 @@
+use crate::protocol::coordinator::linked::{PreparedBlock, PreparedTransaction};
 use crate::protocol::coordinator::selection::ApplicationPosition;
 use std::{slice, time::Duration};
 
@@ -7,7 +8,6 @@ use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::{deserialize, serialize as serialize_bitcoin};
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use bitcoin::{Block as BitcoinBlock, Network, Transaction, Witness};
-use indexer_types::Block;
 use libsql::{Connection, Value, params};
 use malachitebft_engine::node::NodeRef;
 use tempfile::TempDir;
@@ -42,8 +42,9 @@ impl Drop for StopEngine {
 
 // Synthetic raw blocks exercise parsing and coordinator behavior. Constructed
 // prevouts and headers do not establish Bitcoin consensus or mempool acceptance.
-fn confirmation_block(tx: &Transaction, position: usize) -> Result<Block> {
-    let block = raw_confirmation_block(tx, position)?.recognize(|tx| filter_map((0, tx.clone())));
+fn confirmation_block(tx: &Transaction, position: usize) -> Result<PreparedBlock> {
+    let block = raw_confirmation_block(tx, position)?
+        .prepare(|tx| Ok(filter_map((0, tx.clone())).map(PreparedTransaction::fixture)))?;
     assert_eq!(block.transactions.len(), 1);
     assert_eq!(block.transactions[0].index, position as u32);
     Ok(block)

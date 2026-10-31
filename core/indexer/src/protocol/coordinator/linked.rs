@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use bitcoin::{Network, Txid, hashes::Hash};
+use bitcoin::{BlockHash, Network, Txid, hashes::Hash};
 use deadpool::managed::{Object, Pool};
 use indexer_types::Block;
 #[cfg(test)]
@@ -213,6 +213,7 @@ pub(crate) struct PreparedTransaction {
     network: Network,
     parsed: SessionOwner,
     pub(crate) txid: Txid,
+    pub(crate) index: u32,
     pub(crate) batchable: bool,
     pub(crate) inputs: Vec<(u32, u64)>,
 }
@@ -251,6 +252,7 @@ impl TransactionRecognizer {
                     network: self.network,
                     parsed,
                     txid: Txid::from_byte_array(txid),
+                    index: 0,
                     batchable,
                     inputs,
                 })
@@ -258,13 +260,42 @@ impl TransactionRecognizer {
     }
 }
 
+pub(crate) struct PreparedBlock {
+    pub(crate) height: u64,
+    pub(crate) hash: BlockHash,
+    pub(crate) prev_hash: BlockHash,
+    pub(crate) transactions: Vec<PreparedTransaction>,
+}
+
+impl PreparedBlock {
+    pub(crate) fn header(&self) -> Block {
+        Block {
+            height: self.height,
+            hash: self.hash,
+            prev_hash: self.prev_hash,
+            transactions: Vec::new(),
+        }
+    }
+}
+
 impl PreparedTransaction {
+    pub(crate) fn payload(
+        &self,
+        selection: &ExecutionSelection,
+        network: Network,
+    ) -> Result<SessionOwner> {
+        selection.ensure_runtime(network, self.origin)?;
+        selection.ensure_runtime(self.network, self.origin)?;
+        Ok(self.parsed.clone())
+    }
+
     pub(crate) fn eligible_for(&self, selection: &ExecutionSelection) -> bool {
         self.batchable && selection.ensure_runtime(self.network, self.origin).is_ok()
     }
 
     #[cfg(test)]
     pub(crate) fn fixture(transaction: Transaction) -> Self {
+        let index = transaction.index;
         let origin = ExecutorVersion::LegacyP1;
         let network = Network::Regtest;
         let (parsed, txid, batchable, inputs) =
@@ -274,6 +305,7 @@ impl PreparedTransaction {
             network,
             parsed,
             txid: Txid::from_byte_array(txid),
+            index,
             batchable,
             inputs,
         }

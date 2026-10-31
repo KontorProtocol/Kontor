@@ -3,12 +3,11 @@ use std::mem;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use indexer_types::{Block, BlockRow, Event, OpWithResult};
+use indexer_types::{BlockRow, Event, OpWithResult};
 use metrics::{counter, gauge};
 use tracing::{debug, info, warn};
 
 use crate::bitcoin_follower::block::BlockInput;
-use crate::block;
 use crate::consensus::finality_types::StateEvent;
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
@@ -16,6 +15,7 @@ use crate::database::queries::{
     insert_block_execution_usage, insert_transaction, select_block_at_height, select_block_latest,
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
+use crate::protocol::coordinator::linked::{PreparedBlock, PreparedTransaction};
 use crate::protocol::coordinator::minimum_prune_retention_blocks;
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
@@ -132,7 +132,7 @@ impl<E: Executor> Reactor<E> {
     async fn block_txn(
         &mut self,
         selection: &ExecutionSelection,
-        block: &Block,
+        block: &PreparedBlock,
         decision: &consensus_state::DeferredDecision,
     ) -> Result<(usize, u64)> {
         selection.verify_base(&self.db_conn()).await?;
@@ -174,8 +174,8 @@ impl<E: Executor> Reactor<E> {
     pub(super) async fn execute_block(
         &mut self,
         selection: &ExecutionSelection,
-        block: &Block,
-    ) -> Result<(usize, u64, Vec<Vec<Vec<Option<anyhow::Error>>>>)> {
+        block: &PreparedBlock,
+    ) -> Result<(usize, u64, Vec<Vec<Vec<Option<String>>>>)> {
         selection.ensure_block_execution(self.runtime.network, block.height, block.hash)?;
         insert_block(
             &self.db_conn(),
@@ -190,7 +190,7 @@ impl<E: Executor> Reactor<E> {
 
         let mut unbatched_count = 0;
         let mut executed_ops: u64 = 0;
-        let mut failures: Vec<Vec<Vec<Option<anyhow::Error>>>> =
+        let mut failures: Vec<Vec<Vec<Option<String>>>> =
             Vec::with_capacity(block.transactions.len());
         for (i, t) in block.transactions.iter().enumerate() {
             if get_transaction_by_txid(&self.db_conn(), &t.txid.to_string())
@@ -217,7 +217,7 @@ impl<E: Executor> Reactor<E> {
             executed_ops += t
                 .inputs
                 .iter()
-                .map(|input| input.insts.ops.len() as u64)
+                .map(|(_, operations)| *operations)
                 .sum::<u64>();
             let tx_id = insert_transaction(
                 &self.db_conn(),
@@ -233,7 +233,7 @@ impl<E: Executor> Reactor<E> {
 
             let tx_failures = self
                 .executor
-                .execute_transaction(selection, &mut self.runtime, block.height, tx_id, t)
+                .execute_prepared(selection, &mut self.runtime, block.height, tx_id, t)
                 .await
                 .context("execute_transaction failed")?;
             failures.push(tx_failures);
@@ -249,12 +249,13 @@ impl<E: Executor> Reactor<E> {
         // Recognition belongs at admission, since the protocol may change while
         // an RPC request waits in the bounded simulation queue.
         let selection = self.simulation_selection().await?;
-        let raw = match self.executor.decode_simulation(&selection, &raw) {
-            Ok(raw) => raw,
+        let tx = match self
+            .executor
+            .prepare_simulation(&self.recognizer, &selection, raw)?
+        {
+            Ok(Some(tx)) => tx,
+            Ok(None) => return Ok(Err("Not a valid Kontor transaction".to_owned())),
             Err(error) => return Ok(Err(error)),
-        };
-        let Some(tx) = self.executor.parse_transaction(&selection, &raw) else {
-            return Ok(Err("Not a valid Kontor transaction".to_owned()));
         };
         self.simulate_selected(selection, tx).await.map(Ok)
     }
@@ -281,7 +282,8 @@ impl<E: Executor> Reactor<E> {
         tx: indexer_types::Transaction,
     ) -> Result<Vec<OpWithResult>> {
         let selection = self.simulation_selection().await?;
-        self.simulate_selected(selection, tx).await
+        self.simulate_selected(selection, PreparedTransaction::fixture(tx))
+            .await
     }
 
     /// Simulate a transaction: execute in a temporary block, inspect results,
@@ -300,7 +302,7 @@ impl<E: Executor> Reactor<E> {
     async fn simulate_selected(
         &mut self,
         selection: ExecutionSelection,
-        tx: indexer_types::Transaction,
+        tx: PreparedTransaction,
     ) -> Result<Vec<OpWithResult>> {
         let restore_height = self.runtime.storage.height;
         let restore_context = self.runtime.storage.tx_context.clone();
@@ -342,7 +344,7 @@ impl<E: Executor> Reactor<E> {
     async fn simulate_inner(
         &mut self,
         selection: &ExecutionSelection,
-        tx: indexer_types::Transaction,
+        tx: PreparedTransaction,
     ) -> Result<Vec<OpWithResult>> {
         // Simulation runs against a FABRICATED block one past the tip and then
         // rolls it away. `execute_block` sets `storage.height` to that block as it
@@ -357,7 +359,7 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("Failed to query latest block for simulation")?;
         let height = block_row.as_ref().map_or(1, |row| row.height + 1);
-        let block = Block {
+        let block = PreparedBlock {
             height,
             hash: new_mock_block_hash(height as u32),
             prev_hash: block_row
@@ -369,7 +371,16 @@ impl<E: Executor> Reactor<E> {
             .execute_block(selection, &block)
             .await
             .context("execute_block failed during simulation")?;
-        let mut results = block::inspect(&self.db_conn(), &block.transactions[0]).await?;
+        let tx = &block.transactions[0];
+        let response = self
+            .runtime
+            .inspect_prepared(
+                &selection.envelope(),
+                tx.payload(selection, self.runtime.network)?,
+                tx.index,
+            )
+            .await?;
+        let mut results: Vec<OpWithResult> = serde_json::from_slice(&response)?;
 
         // Simulate's block has exactly one tx; failures[0] is the per-input
         // per-op failure vec for it. Flatten in declaration order (inputs
@@ -399,12 +410,12 @@ impl<E: Executor> Reactor<E> {
     async fn run_block_lifecycle(
         &mut self,
         selection: &ExecutionSelection,
-        block: &Block,
+        block: &PreparedBlock,
     ) -> Result<()> {
         let previous = self.runtime.start_usage();
         let result = self
             .executor
-            .run_block_lifecycle(selection, &mut self.runtime, block)
+            .run_block_lifecycle(selection, &mut self.runtime, &block.header())
             .await;
         let usage = self.runtime.finish_usage(previous);
         result?;
@@ -479,7 +490,11 @@ impl<E: Executor> Reactor<E> {
                 return Err(error);
             }
         };
-        let block = match self.executor.parse_block(&selection, block).await {
+        let block = match self
+            .executor
+            .prepare_block(&self.recognizer, &selection, block)
+            .await
+        {
             Ok(block) => block,
             Err(error) => {
                 lease.drain(&self.runtime).await?;
@@ -553,7 +568,11 @@ impl<E: Executor> Reactor<E> {
                 .collect();
             if tx
                 .send(Event::Processed {
-                    block: (&block).into(),
+                    block: BlockRow::builder()
+                        .height(block.height)
+                        .hash(block.hash)
+                        .relevant(!block.transactions.is_empty())
+                        .build(),
                     txids,
                 })
                 .await

@@ -11,6 +11,7 @@ use crate::database::queries::{
 use crate::database::types::ContractRow;
 use crate::protocol::coordinator::linked::{PreparedTransaction, TransactionRecognizer};
 use crate::protocol::coordinator::selection::ExecutionSelection;
+use crate::protocol::v1::transactions::decode_simulation;
 use crate::reactor::executor::{Executor, TxPolicy};
 use crate::reactor::mock_bitcoin::MockBitcoin;
 use crate::runtime::wit::Signer;
@@ -229,6 +230,44 @@ impl LiteExecutor {
 }
 
 impl Executor for LiteExecutor {
+    fn prepare_simulation(
+        &self,
+        recognizer: &TransactionRecognizer,
+        selection: &ExecutionSelection,
+        raw: Vec<u8>,
+    ) -> Result<Result<Option<PreparedTransaction>, String>> {
+        match decode_simulation(&raw) {
+            Ok(raw) => Ok(Ok(self.prepare_transaction(recognizer, selection, &raw)?)),
+            Err(error) => Ok(Err(error)),
+        }
+    }
+
+    async fn execute_prepared(
+        &self,
+        selection: &ExecutionSelection,
+        runtime: &mut Runtime,
+        height: u64,
+        tx_id: u64,
+        transaction: &PreparedTransaction,
+    ) -> Result<Vec<Vec<Option<String>>>> {
+        let parsed = runtime.transaction_fixture(
+            &selection.envelope(),
+            transaction.payload(selection, runtime.network)?,
+            transaction.index,
+        )?;
+        Ok(self
+            .execute_transaction(selection, runtime, height, tx_id, &parsed)
+            .await?
+            .into_iter()
+            .map(|input| {
+                input
+                    .into_iter()
+                    .map(|error| error.map(|error| format!("{error:#}")))
+                    .collect()
+            })
+            .collect())
+    }
+
     fn prepare_transaction(
         &self,
         _recognizer: &TransactionRecognizer,

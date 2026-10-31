@@ -1,6 +1,10 @@
+use anyhow::Result;
 use bitcoin::{BlockHash, Transaction as BitcoinTransaction, Txid};
+#[cfg(test)]
 use indexer_types::{Block, Transaction};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+
+use crate::protocol::coordinator::linked::{PreparedBlock, PreparedTransaction};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlockInput {
@@ -45,30 +49,36 @@ impl BlockInput {
         }
     }
 
-    pub(crate) fn recognize(
+    pub(crate) fn prepare(
         self,
-        recognize: impl Fn(&BitcoinTransaction) -> Option<Transaction> + Sync + Send,
-    ) -> Block {
+        recognize: impl Fn(&BitcoinTransaction) -> Result<Option<PreparedTransaction>> + Sync + Send,
+    ) -> Result<PreparedBlock> {
         let transactions = match self.transactions {
             Transactions::Raw(transactions) => transactions
                 .par_iter()
                 .enumerate()
-                .filter_map(|(index, raw)| {
-                    recognize(raw).map(|mut transaction| {
+                .map(|(index, raw)| {
+                    Ok(recognize(raw)?.map(|mut transaction| {
                         transaction.index = index as u32;
                         transaction
-                    })
+                    }))
                 })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
                 .collect(),
             #[cfg(test)]
-            Transactions::Recognized(transactions) => transactions,
+            Transactions::Recognized(transactions) => transactions
+                .into_iter()
+                .map(PreparedTransaction::fixture)
+                .collect(),
         };
-        Block {
+        Ok(PreparedBlock {
             height: self.height,
             hash: self.hash,
             prev_hash: self.prev_hash,
             transactions,
-        }
+        })
     }
 }
 
