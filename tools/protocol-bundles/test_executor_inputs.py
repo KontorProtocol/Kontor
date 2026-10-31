@@ -28,7 +28,7 @@ class ExecutorDependencies(unittest.TestCase):
         data = self.metadata()
         selected = identities("first", data, EXECUTOR_GRAPHS)
         self.assertEqual({p["name"] for p in selected},
-                         {"kontor-executor-first", "wasmtime", "blst", "secp256k1-sys"})
+                         {"kontor-executor-first", "wasmtime", "blst", "secp256k1-sys", "psm", "wit-bindgen"})
         with self.assertRaisesRegex(RuntimeError, "expected one arc-malachitebft-app-channel"):
             identities("first", data, GRAPHS)
 

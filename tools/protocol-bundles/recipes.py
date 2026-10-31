@@ -29,7 +29,7 @@ GRAPHS = {
 EXECUTOR_GRAPHS = {
     "first": Graph("executor-first", "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
                    "51.0.0-kontor.2", None, 512, kind="executor",
-                   native_patches=("blst", "secp256k1-sys"), malachite_engine=False),
+                   native_patches=("blst", "secp256k1-sys", "psm", "wit-bindgen"), malachite_engine=False),
 }
 HISTORICAL = {
     "first": ("75a06735d294f3fc04a4ffff54492d3bf80e4121faa2e2aae64434e5b252db6b",

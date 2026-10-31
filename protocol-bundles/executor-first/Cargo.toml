@@ -51,6 +51,8 @@ sha3 = "=0.12.0"
 malachitebft-signing-ed25519 = { version = "=0.8.2", package = "arc-malachitebft-signing-ed25519", features = ["rand", "serde"] }
 
 [patch.crates-io]
+psm = { path = "../../core/vendor/psm" }
+wit-bindgen = { path = "../../core/vendor/wit-bindgen" }
 blst = { path = "../../core/vendor/blst" }
 ring = { path = "../../core/vendor/ring" }
 secp256k1-sys = { path = "../../core/vendor/secp256k1-sys" }

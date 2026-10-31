@@ -305,6 +305,117 @@ def verify_staged_inputs(graph):
             raise RuntimeError(f"staged compiler plugin changed: {item['staged']}")
 
 
+def node_dependencies(data):
+    names = {package["name"] for package in data["packages"]}
+    if any(name.startswith(("wasmtime", "kontor-executor-")) for name in names):
+        raise RuntimeError("node Cargo graph contains a retained execution implementation")
+    for package in data["packages"]:
+        if package["name"] in {"blst", "secp256k1-sys", "ring", "psm", "wit-bindgen"}:
+            expected = ROOT / "core/vendor" / package["name"]
+            if Path(package["manifest_path"]).parent.resolve() != expected:
+                raise RuntimeError(f"node is missing native patch for {package['name']}")
+
+
+def node_executable(log):
+    executables = set()
+    for line in log.read_text().splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (isinstance(item, dict) and item.get("reason") == "compiler-artifact"
+                and item["target"]["name"] == "kontor" and "bin" in item["target"]["kind"]
+                and item.get("executable")):
+            executables.add(Path(item["executable"]))
+    if len(executables) != 1:
+        raise RuntimeError("missing or ambiguous current node executable")
+    return executables.pop()
+
+
+def node_codegen_objects(path, spec):
+    record = json.loads(path.read_text())
+    if record["spec_sha256"] != digest(spec) or not record["objects"]:
+        raise RuntimeError("node codegen objects do not match this link specification")
+    for item in record["objects"]:
+        if digest(Path(item["path"])) != item["sha256"]:
+            raise RuntimeError("node codegen object changed after compilation")
+    return [Path(item["path"]) for item in record["objects"]]
+
+
+def build_node(graphs, args, base_env, output):
+    manifest = ROOT / "protocol-bundles/node/Cargo.toml"
+    lock = manifest.with_name("Cargo.lock")
+    recipe = tomllib.loads(manifest.read_text())
+    if any(recipe["profile"][profile].get("panic") != "unwind" for profile in ("dev", "release")):
+        raise RuntimeError("node profiles must use the common unwind runtime")
+    directory = output / "node"
+    directory.mkdir(parents=True, exist_ok=True)
+    env = dict(base_env, CARGO_TARGET_DIR=str(directory / "target"), RUSTC_WRAPPER="",
+               RUSTFLAGS="-Cpanic=unwind")
+    for key in ("KONTOR_PROTOCOL_BUNDLE", "KONTOR_NATIVE_NAMESPACE", "BUNDLE_GRAPH", "BUNDLE_LIFT_RATE"):
+        env.pop(key, None)
+    data = metadata(manifest, args.target, env, args.offline)
+    node_dependencies(data)
+    sources = source_inputs(ROOT, data, kind="node")
+    lock_hash = digest(lock)
+    write_json(directory / "metadata.json", data)
+    write_json(directory / "source-inputs.json", sources)
+    for graph in graphs:
+        verify_identity(ROOT, graph, EXECUTOR_GRAPHS)
+        verify_staged_inputs(graph)
+    sets, versions = audit_inputs(graphs, directory)
+    spec = {"compiler": env["RUSTC"], "source_inputs_sha256": fingerprint(sources),
+            "lock_sha256": lock_hash, "root_objects": str(directory / "root-objects.json"),
+            "graphs": [{"graph": graph["graph"], "facade": graph["facade"],
+                        "facade_sha256": digest(Path(graph["facade"])),
+                        "link_inputs": graph["link_inputs"], "build_inputs_sha256": fingerprint(graph)}
+                       for graph in graphs]}
+    spec_path = directory / "link-spec.json"
+    write_json(spec_path, spec)
+    # Cargo does not know that external --extern inputs changed. A content-keyed
+    # workspace wrapper invalidates only the node, preserving dependency caches.
+    wrapper = directory / ("rustc-wrapper-" + fingerprint(spec) + ".py")
+    shutil.copyfile(ROOT / "tools/protocol-bundles/node-rustc-wrapper.py", wrapper)
+    wrapper.chmod(0o755)
+    env.update(RUSTC_WORKSPACE_WRAPPER=str(wrapper), KONTOR_NODE_LINK_SPEC=str(spec_path))
+    command = ["cargo", "build", "--locked", "--manifest-path", str(manifest), "--bin", "kontor",
+               "--target", args.target, "--profile", args.profile, "-j", str(args.jobs),
+               "--message-format=json-render-diagnostics"]
+    if args.offline:
+        command.append("--offline")
+    log = directory / "build.log"
+    run(command, ROOT, env, log)
+    executable = node_executable(log)
+    archives, _, native_outputs, proc_macros = current_artifacts(log, directory / "target", args.target, "indexer")
+    host_inputs = set(archives)
+    host_inputs.update(node_codegen_objects(Path(spec["root_objects"]), spec_path))
+    for script in native_outputs:
+        host_inputs.update(Path(script["out_dir"]).rglob("*.a"))
+    common = verify_common_ownership(graphs, sets, sorted(host_inputs), executable, env, directory,
+                                    kind="executor")
+    helpers = audit_final(executable, graphs, sets, versions, directory, common, kind="executor")
+    libraries = runtime_libraries(executable, env, graphs)
+    if digest(lock) != lock_hash or source_inputs(ROOT, data, kind="node") != sources:
+        raise RuntimeError("node source or lock changed during compilation")
+    if metadata(manifest, args.target, env, args.offline) != data:
+        raise RuntimeError("node dependency metadata changed during compilation")
+    for graph in graphs:
+        verify_identity(ROOT, graph, EXECUTOR_GRAPHS)
+        verify_staged_inputs(graph)
+    result = {"executable": str(executable), "executable_sha256": digest(executable),
+              "source_inputs_sha256": fingerprint(sources), "lock_sha256": lock_hash,
+              "link_spec_sha256": digest(spec_path), "build_log_sha256": digest(log),
+              "root_codegen_sha256": digest(Path(spec["root_objects"])), "wrapper_sha256": digest(wrapper),
+              "native_helpers": helpers, "runtime_libraries": libraries,
+              "compiler_proc_macros": [{"path": str(path), "sha256": digest(path)} for path in proc_macros],
+              "ownership": {name: digest(directory / name) for name in (
+                  "common-reference-ownership.json", "input-ownership.json",
+                  "input-local-ownership.json", "final-ownership.json")},
+              "status": "node linked and native ownership checked; execution qualification required"}
+    write_json(directory / "build-inputs.json", result)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / ".build-cache/protocol-bundles")
@@ -312,9 +423,13 @@ def main():
     parser.add_argument("--profile", choices=("release", "dev"), default="release")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--jobs", type=int, default=2)
-    parser.add_argument("--build-executors", action="store_true",
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--build-executors", action="store_true",
                         help="stage production executor libraries for the node linker; does not qualify a node")
+    mode.add_argument("--build-node", action="store_true",
+                      help="build the production node with retained executors and audit native ownership")
     args = parser.parse_args()
+    production = args.build_executors or args.build_node
     if not 1 <= args.jobs <= 2:
         parser.error("protocol qualification uses one or two compiler jobs")
     env = dict(os.environ, RUSTUP_TOOLCHAIN=TOOLCHAIN, RUSTC_WRAPPER="", CCACHE_DISABLE="1",
@@ -335,7 +450,7 @@ def main():
         parser.error("qualification must execute natively on a supported target")
     toolchain = toolchain_inputs(env, args.target)
     output = args.output.resolve() / args.target / args.profile
-    if args.build_executors:
+    if production:
         output /= "executors"
     output.mkdir(parents=True, exist_ok=True)
     lock = (args.output.resolve() / ".build.lock").open("a")
@@ -344,15 +459,17 @@ def main():
     except BlockingIOError as error:
         raise RuntimeError("another protocol bundle builder owns this output directory") from error
     (output / "qualification.json").unlink(missing_ok=True)
-    if args.build_executors:
+    if production:
         (output / "executor-build.json").unlink(missing_ok=True)
-    graphs = EXECUTOR_GRAPHS if args.build_executors else GRAPHS
+        (output / "node-build.json").unlink(missing_ok=True)
+    graphs = EXECUTOR_GRAPHS if production else GRAPHS
     verify_reservations(ROOT, graphs)
     verify_capabilities(ROOT)
     reports = [build_graph(graph, args, env, output, graphs) for graph in graphs]
     write_json(output / "build-inputs.json", {"compiler": compiler, "target": args.target,
                "profile": args.profile, "graphs": reports})
-    proof = None if args.build_executors else qualify(reports, args, env, output)
+    proof = None if production else qualify(reports, args, env, output)
+    node = build_node(reports, args, env, output) if args.build_node else None
     for report in reports:
         data = json.loads((output / report["graph"] / "metadata.json").read_text())
         if fingerprint(source_inputs(ROOT, data, kind=graphs[report["graph"]].kind)) != report["source_inputs_sha256"]:
@@ -361,13 +478,18 @@ def main():
         raise RuntimeError("common compiler inputs changed during qualification")
     verify_reservations(ROOT, graphs)
     verify_capabilities(ROOT)
-    if args.build_executors:
+    if production:
         for report in reports:
             verify_identity(ROOT, report, graphs)
             verify_staged_inputs(report)
         write_json(output / "executor-build.json", {"compiler": compiler, "toolchain_inputs": toolchain,
                    "target": args.target, "profile": args.profile, "graphs": reports,
                    "status": "staged libraries; final node link and execution qualification required"})
+        if node is not None:
+            write_json(output / "node-build.json", {"compiler": compiler, "toolchain_inputs": toolchain,
+                       "target": args.target, "profile": args.profile, "graphs": reports, "node": node})
+            print(f"Node built at {node['executable']}; execution qualification has not run.", flush=True)
+            return
         print(f"Executor libraries staged at {output}; node qualification has not run.", flush=True)
         return
     write_json(output / "qualification.json", {"compiler": compiler, "toolchain_inputs": toolchain, "target": args.target,

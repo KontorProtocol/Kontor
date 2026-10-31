@@ -105,6 +105,43 @@ byte-identical executables.
 
 ## Isolation and common ownership
 
+### Production node build under development
+
+K2b adds `--build-executors` and `--build-node` to the same builder. These modes
+use production recipes independently of the proof recipes. The executor contains
+the actual retained runtime, host bindings, semantic policy and dependencies.
+The separate `protocol-bundles/node` workspace owns node services and physical
+storage, and its resolved graph must not contain Wasmtime or an executor crate.
+
+`--build-executors` only stages libraries. `--build-node` additionally builds the
+Kontor binary, injects the staged facade into the node library, supplies its
+dependency search paths to both node compiler invocations, and checks native
+ownership in the final executable. A content-keyed workspace compiler wrapper
+makes Cargo rebuild the node when externally staged executor inputs change,
+without invalidating every node dependency. The wrapper captures the binary's
+codegen objects, which join the current Cargo archive inventory as concrete
+node-owned inputs to the audit.
+
+Production evidence is under `OUTPUT/TARGET/PROFILE/executors`. Its
+`executor-build.json` records staged libraries, and `node-build.json` records a
+successful node build and ownership audit. Neither is execution qualification.
+Failure removes the corresponding old success marker and preserves logs.
+Actual multi-executor behavior, cleanup, baseline compatibility and platform
+qualification remain K2b acceptance requirements. The default Docker and release
+routes still require integration before this phase is complete.
+
+Production audit checks the graph-private native symbols that survive linking.
+Proof mode additionally requires the specific helpers exercised by its fixture.
+An unused proof operation, or a dependency absent from the real executor, is not
+a reason to add that dependency to production. Both modes retain input ownership,
+reference ownership and final-definition checks.
+The production node also declares the platform C++ runtime used by its ZeroMQ
+dependency: `libstdc++.so.6` on Linux or `/usr/lib/libc++.1.dylib` on macOS.
+Its actual loaded path, library hash and resolved exports are recorded like the
+other shared platform libraries. Proof mode does not gain this allowance.
+
+### Shared compiler and graph-private inputs
+
 Each graph has its own Cargo workspace, lock, feature resolution, output path
 and compiler metadata. A rustc wrapper adds the graph identity to both target
 and host units, including proc macros, while retaining Cargo's unit metadata.

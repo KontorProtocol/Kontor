@@ -92,6 +92,8 @@ ts-rs = { version = "=12.0.1", features = ["format"] }
 malachitebft-app-channel = { version = "=0.8.2", package = "arc-malachitebft-app-channel" }
 
 [patch.crates-io]
+psm = { path = "vendor/psm" }
+wit-bindgen = { path = "vendor/wit-bindgen" }
 # Opt-in native namespaces keep independently built protocol graphs separate.
 blst = { path = "vendor/blst" }
 ring = { path = "vendor/ring" }

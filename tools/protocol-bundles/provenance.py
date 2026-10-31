@@ -38,8 +38,21 @@ def retained_sources(root):
     return sources
 
 
+def node_sources(root):
+    sources = {}
+    for relative in ("core/indexer/src", "core/indexer/proto"):
+        directory = root / relative
+        if not directory.is_dir():
+            raise RuntimeError(f"missing node source tree: {relative}")
+        for path in sorted(directory.rglob("*")):
+            if path.is_file() and "__pycache__" not in path.parts:
+                sources[str(path.relative_to(root))] = sha(path)
+    sources["core/indexer/build.rs"] = sha(root / "core/indexer/build.rs")
+    return sources
+
+
 def source_inputs(root, data, *, kind="proof"):
-    if kind not in ("proof", "executor"):
+    if kind not in ("proof", "executor", "node"):
         raise RuntimeError(f"unknown graph source kind: {kind}")
     verified = verify_sources(data)
     packages = []
@@ -83,6 +96,8 @@ def source_inputs(root, data, *, kind="proof"):
                 sources[str(path.relative_to(root))] = sha(path)
     if kind == "executor":
         sources.update(retained_sources(root))
+    if kind == "node":
+        sources.update(node_sources(root))
     git_sources = {}
     for identity, directory in sorted(trees.items()):
         git_sources[identity] = {
