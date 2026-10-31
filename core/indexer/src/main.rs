@@ -1,5 +1,7 @@
 use std::io::Write;
 use std::panic;
+#[cfg(feature = "protocol-qualification")]
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread::available_parallelism;
@@ -46,6 +48,9 @@ enum Command {
     #[cfg(feature = "protocol-qualification")]
     /// Exercise retained executors against isolated temporary databases.
     QualifyExecutors,
+    #[cfg(feature = "protocol-qualification")]
+    /// Compare linked execution with a preserved pre-extraction oracle.
+    QualifyExecutorBaseline { archive: PathBuf },
     /// Build reproducible contracts and SDK bindings in the pinned container.
     Build(BuildArgs),
     /// Run the indexer daemon.
@@ -69,6 +74,12 @@ async fn main() -> Result<()> {
         #[cfg(feature = "protocol-qualification")]
         Command::QualifyExecutors => {
             let result = protocol_qualification::run().await?;
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
+        #[cfg(feature = "protocol-qualification")]
+        Command::QualifyExecutorBaseline { archive } => {
+            let result = protocol_qualification::compare_baseline(&archive).await?;
             println!("{}", serde_json::to_string(&result)?);
             Ok(())
         }

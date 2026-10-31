@@ -1,6 +1,7 @@
 //! Bounded execution checks using the same adapters as the production node.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
@@ -25,6 +26,7 @@ use crate::protocol::coordinator::linked::{
 };
 use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
 use crate::protocol::operations::{AddressEnvelope, GenesisEnvelope, SessionOwner};
+use crate::reactor::qualification;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::{LinkedSession, new_linked};
@@ -331,6 +333,24 @@ pub async fn run() -> Result<Value> {
             "deterministic-failures", "simulation-inspection", "transaction-rollback-replay"],
             "executors": outputs}))
     }.await;
+    service.shutdown();
+    result
+}
+
+pub async fn compare_baseline(archive: &Path) -> Result<Value> {
+    let service = OwnerService::new();
+    let result = async {
+        let mut outputs = Vec::new();
+        for (name, factory, _) in factories()? {
+            eprintln!("Comparing actual executor with pre-extraction baseline: {name}");
+            let observations = qualification::compare(archive, factory, &service)
+                .await
+                .context(name)?;
+            outputs.push(json!({"graph":name,"observations":observations}));
+        }
+        Ok(json!({"schema":1,"executors":outputs}))
+    }
+    .await;
     service.shutdown();
     result
 }

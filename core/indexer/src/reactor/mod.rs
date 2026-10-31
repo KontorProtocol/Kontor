@@ -1,3 +1,5 @@
+#[cfg(feature = "protocol-qualification")]
+pub(crate) mod qualification;
 #[cfg(test)]
 mod aggregate_error_tests;
 mod batches;

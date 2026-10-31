@@ -153,6 +153,22 @@ alone does not establish compatibility with the qualified pre-extraction source.
 This harness is part of K2b acceptance, not its entire transaction and ownership
 coverage. Native ownership is checked by the builder before running it.
 
+The same opt-in executable provides `kontor qualify-executor-baseline ARCHIVE`.
+Supply the preserved pre-extraction directory containing `inputs.json`,
+`baseline.json`, `seed.db` and `transaction.bin`. The command verifies the input
+checksums and source agreement, copies the seed into temporary databases, and
+replays both unbatched and batched scenarios through each linked executor and
+the real node coordinator. It compares complete logical database snapshots and
+simulation results, including confirmation, rollback and reconfirmation without
+duplicate execution or charges. Recognition compares the exported transaction
+ID, index and operation positions; parsed instructions remain graph-private and
+their materialized inspection is checked by simulation. This is an explicit
+projection of the old recognition record, not byte equality of that record.
+The command stops and awaits its local consensus engine after each scenario,
+rejects any stage mismatch, and leaves the supplied archive unchanged. Its
+successful JSON output binds the baseline, seed and transaction hashes to the
+observations. Retain that output with the builder's source and binary evidence.
+
 Production evidence is under `OUTPUT/TARGET/PROFILE/executors`. Its
 `executor-build.json` records staged libraries, and `node-build.json` records a
 successful node build and ownership audit. Neither is execution qualification.
