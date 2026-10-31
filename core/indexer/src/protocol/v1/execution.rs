@@ -6,7 +6,7 @@ use tracing::warn;
 use super::storage_identity::IdentityError;
 use super::transactions::TxWalker;
 use crate::bls::{AggregateVerificationError, verify_aggregate};
-use crate::database::types::Identity;
+use crate::protocol::v1::types::Identity;
 use crate::runtime::wit::Signer;
 use crate::runtime::{ExecutionError, Runtime, TransactionContext, system};
 

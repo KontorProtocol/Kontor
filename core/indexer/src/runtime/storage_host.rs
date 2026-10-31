@@ -1,4 +1,5 @@
 use crate::protocol::native_bootstrap::BootstrapRead;
+use crate::protocol::storage_aux::{HistoryCallbacks, MaintenanceCallbacks};
 use crate::protocol::storage_callbacks::StorageCallbacks;
 use crate::protocol::storage_contracts::ContractCallbacks;
 use crate::protocol::storage_footprint::FootprintCallbacks;
@@ -22,6 +23,8 @@ pub(crate) struct StorageHost {
     pub keys: KeyCallbacks,
     pub rows: RowCallbacks,
     pub session: SessionCallbacks,
+    pub history: HistoryCallbacks,
+    pub maintenance: MaintenanceCallbacks,
 }
 
 impl From<StorageCallbacks> for StorageHost {
@@ -38,7 +41,9 @@ impl From<StorageCallbacks> for StorageHost {
             keys,
             rows,
             session,
+            auxiliary,
         ) = callbacks;
+        let (history, maintenance) = auxiliary;
         Self {
             bootstrap,
             identity,
@@ -51,6 +56,8 @@ impl From<StorageCallbacks> for StorageHost {
             keys,
             rows,
             session,
+            history,
+            maintenance,
         }
     }
 }

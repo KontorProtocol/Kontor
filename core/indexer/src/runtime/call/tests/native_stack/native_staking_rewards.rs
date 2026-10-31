@@ -12,7 +12,7 @@ use super::sweep::persistent_digest;
 use crate::database::queries::{
     get_contract_id_from_address, get_contract_signer_id, get_identity,
 };
-use crate::database::types::CORE_SIGNER_ID;
+use crate::protocol::v1::types::CORE_SIGNER_ID;
 use crate::runtime::invocation::{InvocationBudget, ResourceProbePhase, ResourceTeardownRecorder};
 use crate::runtime::numerics::{add_decimal, div_decimal, mul_decimal, sub_decimal};
 use crate::runtime::resource_diagnostics;

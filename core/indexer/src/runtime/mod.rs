@@ -97,12 +97,12 @@ use wit_validator::Validator as WitValidator;
 
 use crate::bls::RegistrationProof;
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
-use crate::database::types::{CORE_SIGNER_ID, Identity};
 use crate::protocol::v1::engine;
 pub use crate::protocol::v1::errors::ExecutionError;
 pub(crate) use crate::protocol::v1::gas::MAX_UNTRUSTED_GAS_LIMIT;
 use crate::protocol::v1::gas::{DEFAULT_NON_PROC_GAS_LIMIT, GAS_TO_FUEL_MULTIPLIER};
 use crate::protocol::v1::native::{NATIVE_CONTRACTS, is_native_contract_id, native_provenance};
+use crate::protocol::v1::types::{CORE_SIGNER_ID, Identity};
 use crate::runtime::{
     counter::Counter,
     deposit::DepositMeter,

@@ -150,8 +150,8 @@ mod tests {
     use wasmtime::{Memory, MemoryType};
 
     use super::*;
-    use crate::database::types::Identity;
     use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
+    use crate::protocol::v1::types::Identity;
     use crate::runtime::Decimal;
     use crate::runtime::wit::Signer;
     use crate::test_utils::test_runtime;

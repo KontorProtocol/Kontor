@@ -32,3 +32,4 @@ mod storage_tests;
 #[cfg(test)]
 mod storage_write_tests;
 pub(crate) mod transactions;
+pub(crate) mod types;

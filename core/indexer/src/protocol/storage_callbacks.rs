@@ -1,4 +1,5 @@
 use super::native_bootstrap::BootstrapRead;
+use super::storage_aux::AuxiliaryCallbacks;
 use super::storage_contracts::ContractCallbacks;
 use super::storage_footprint::FootprintCallbacks;
 use super::storage_identity::{CoreCallbacks, IdentityCallbacks, NonceCallbacks};
@@ -22,4 +23,5 @@ pub(crate) type StorageCallbacks = (
     KeyCallbacks,
     RowCallbacks,
     SessionCallbacks,
+    AuxiliaryCallbacks,
 );

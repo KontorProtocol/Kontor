@@ -23,7 +23,7 @@ use crate::database::storage_callbacks_v1::storage_callbacks;
 use crate::protocol::storage_identity::SignerRecord;
 use crate::protocol::v1::native_bootstrap::{self, BootstrapProgress};
 use crate::protocol::v1::storage_contracts;
-use crate::protocol::v1::storage_error::ReadError;
+use crate::protocol::v1::storage_error::{ReadError, host_failure};
 use crate::protocol::v1::storage_footprint::FootprintCache;
 use crate::protocol::v1::storage_identity::{self, IdentityError};
 use crate::protocol::v1::storage_keys::keys;
@@ -33,14 +33,7 @@ use crate::protocol::v1::storage_session;
 use crate::protocol::v1::storage_state::{
     LiveRow, exists, live_subtree, tombstone_rows, write_value,
 };
-use crate::{
-    database::queries::{
-        depositors_affected_by_reorg, prune_contract_state, rollback_to_height,
-        select_block_at_height,
-    },
-    runtime::{ContractAddress, counter::Counter, ownership::ChildContext, stack::Stack},
-    test_utils::new_mock_transaction,
-};
+use crate::runtime::{ContractAddress, counter::Counter, ownership::ChildContext, stack::Stack};
 
 #[cfg(test)]
 mod variant_tests;
@@ -112,7 +105,7 @@ pub struct TransactionContext {
     pub input_index: u32,
     #[builder(default = 0)]
     pub op_index: u32,
-    #[builder(default = new_mock_transaction(0).txid)]
+    #[builder(default = Txid::from_byte_array([0; 32]))]
     pub txid: Txid,
 }
 
@@ -281,8 +274,12 @@ impl Storage {
         // The band's upper bound (tip) is derived inside the query from the DB's own
         // MAX(height), NOT `self.height` — the in-memory height is 0 until the first block
         // executes, so a reorg right after startup would otherwise capture no depositors.
-        let affected = depositors_affected_by_reorg(&self.conn, target_height).await?;
-        rollback_to_height(&self.conn, target_height).await?;
+        let affected = (self.host.history.0)(target_height)
+            .await
+            .map_err(host_failure)?;
+        (self.host.history.1)(target_height)
+            .await
+            .map_err(host_failure)?;
         self.footprint().recompute(&affected).await?;
         Ok(())
     }
@@ -531,25 +528,23 @@ impl Storage {
         if height > self.height || height + BLOCK_ENTROPY_WINDOW < self.height {
             return Ok(None);
         }
-        Ok(select_block_at_height(&self.conn, height)
-            .await?
-            .map(|b| b.hash.to_byte_array().to_vec()))
+        (self.host.history.2)(height).await.map_err(host_failure)
     }
 
-    /// Incrementally prune the finalized band `(w_prev, w]` (see
-    /// [`prune_contract_state`]) inside a savepoint, so the two DELETEs and the
+    /// Incrementally prune the finalized band `(w_prev, w]` through the node's
+    /// pruning callback inside a savepoint, so the two DELETEs and the
     /// watermark upsert commit (or roll back) atomically through the same
     /// transaction bookkeeping as every other write. Returns rows deleted.
     pub async fn prune(&self, w_prev: u64, w: u64) -> Result<u64> {
         self.savepoint().await?;
-        match prune_contract_state(&self.conn, w_prev, w).await {
+        match (self.host.maintenance.0)(w_prev, w).await {
             Ok(deleted) => {
                 self.commit().await?;
                 Ok(deleted)
             }
             Err(e) => {
                 self.rollback().await?;
-                Err(e.into())
+                Err(host_failure(e))
             }
         }
     }
@@ -557,19 +552,12 @@ impl Storage {
     /// Free pages currently on the SQLite freelist (the prune-vacuum throttle reads
     /// this to decide whether returning pages to the OS is worth it).
     pub async fn freelist_count(&self) -> Result<i64> {
-        let mut rows = self.conn.query("PRAGMA freelist_count;", ()).await?;
-        Ok(match rows.next().await? {
-            Some(row) => row.get(0)?,
-            None => 0,
-        })
+        (self.host.maintenance.1)().await.map_err(host_failure)
     }
 
     /// Return up to `pages` freelist pages to the OS via `PRAGMA incremental_vacuum`.
     pub async fn incremental_vacuum(&self, pages: i64) -> Result<()> {
-        self.conn
-            .query(&format!("PRAGMA incremental_vacuum({pages});"), ())
-            .await?;
-        Ok(())
+        (self.host.maintenance.2)(pages).await.map_err(host_failure)
     }
 
     pub async fn savepoint(&self) -> Result<()> {
@@ -627,12 +615,53 @@ mod tests {
     use crate::database::connection::new_connection;
     use crate::database::queries::{
         create_contract_signer, footprint_cache_get, get_meta_u64, insert_block,
-        live_deposit_gas_sum, max_block_height, set_meta_u64,
+        live_deposit_gas_sum, max_block_height, prune_contract_state, select_block_at_height,
+        set_meta_u64,
     };
     use crate::protocol::v1::storage_error::ReadError;
+    use crate::runtime::ExecutionError;
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use indexer_types::BlockRow;
+    use libsql::Builder as DatabaseBuilder;
     use stdlib::KeyElement;
+
+    #[tokio::test]
+    async fn callback_failures_preserve_causes_and_release_savepoints() -> Result<()> {
+        let database = DatabaseBuilder::new_local(":memory:").build().await?;
+        let conn = database.connect()?;
+        let storage = Storage::builder().conn(conn.clone()).build();
+
+        // An uninitialized database forces real query failures with driver causes.
+        let direct = anyhow::Error::from(select_block_at_height(&conn, 1).await.unwrap_err());
+        let callback = storage.block_entropy(1).await.unwrap_err();
+        assert_eq!(direct.to_string(), callback.to_string());
+        assert_eq!(format!("{direct:#}"), format!("{callback:#}"));
+        assert!(matches!(
+            ExecutionError::from(callback),
+            ExecutionError::NonDeterministic(_)
+        ));
+
+        let direct = anyhow::Error::from(prune_contract_state(&conn, 0, 1).await.unwrap_err());
+        let callback = storage.prune(0, 1).await.unwrap_err();
+        assert_eq!(format!("{direct:#}"), format!("{callback:#}"));
+        assert!(matches!(
+            ExecutionError::from(callback),
+            ExecutionError::NonDeterministic(_)
+        ));
+        assert!(conn.is_autocommit());
+        assert!(storage.savepoint_stack.is_empty().await);
+
+        let error = storage.rollback_with_footprint(0).await.unwrap_err();
+        assert!(matches!(
+            ExecutionError::from(error),
+            ExecutionError::NonDeterministic(_)
+        ));
+        assert!(conn.is_autocommit());
+        assert!(storage.savepoint_stack.is_empty().await);
+        assert!(storage.freelist_count().await? >= 0);
+        storage.incremental_vacuum(0).await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn row_cursor_preserves_versions_and_releases_its_snapshot() -> Result<()> {

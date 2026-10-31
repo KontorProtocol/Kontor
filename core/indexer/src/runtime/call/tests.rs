@@ -7,8 +7,8 @@ use wasmtime::Trap;
 
 use super::{CallOutcome, InvocationStore};
 
-use crate::database::types::Identity;
 use crate::protocol::coordinator::selection::select_test_block;
+use crate::protocol::v1::types::Identity;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::fuel::UsageKind;
 use crate::runtime::numerics::sub_decimal;
