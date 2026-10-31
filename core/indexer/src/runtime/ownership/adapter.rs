@@ -89,10 +89,12 @@ pub(crate) struct OwnerAdapter {
     pub(crate) submit_blocking: SubmitBlocking,
     pub(crate) check_commit: CheckCommit,
     pub(crate) report_failure: ReportFailure,
+    pub(crate) fuel_yield_interval: Option<u64>,
 }
 
 impl OwnerAdapter {
     pub(super) fn new(keeper: &Arc<RootKeeper>, context: ChildContext) -> Self {
+        let fuel_yield_interval = context.fuel_yield_interval();
         let root = token(keeper, context);
         let expected = Arc::downgrade(keeper);
         let guest_keeper = expected.clone();
@@ -156,6 +158,7 @@ impl OwnerAdapter {
             submit_blocking,
             check_commit,
             report_failure,
+            fuel_yield_interval,
         }
     }
 }

@@ -29,6 +29,7 @@ pub(crate) struct BundleOwner {
     submit_blocking: SubmitBlocking,
     check_commit: CheckCommit,
     report_failure: ReportFailure,
+    fuel_yield_interval: Option<u64>,
 }
 
 impl BundleOwner {
@@ -38,6 +39,7 @@ impl BundleOwner {
         submit_blocking: SubmitBlocking,
         check_commit: CheckCommit,
         report_failure: ReportFailure,
+        fuel_yield_interval: Option<u64>,
     ) -> Self {
         Self {
             token,
@@ -45,7 +47,12 @@ impl BundleOwner {
             submit_blocking,
             check_commit,
             report_failure,
+            fuel_yield_interval,
         }
+    }
+
+    pub(crate) fn fuel_yield_interval(&self) -> Option<u64> {
+        self.fuel_yield_interval
     }
 
     pub(crate) async fn run_guest<T, F, Fut>(&self, factory: F) -> Result<(bool, T), HostError>
@@ -102,6 +109,7 @@ impl BundleOwner {
             submit_blocking: self.submit_blocking.clone(),
             check_commit: self.check_commit.clone(),
             report_failure: self.report_failure.clone(),
+            fuel_yield_interval: self.fuel_yield_interval,
         }
     }
 
