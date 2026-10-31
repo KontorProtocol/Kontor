@@ -6,11 +6,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from audit import GDB_SCRIPT, audit_inputs, audit_final, compiler_debug_metadata, definitions, owner
 from build import digest, verify_staged_inputs
-from common_ownership import graph_references, linker_owners, reject_common_shadow, reject_unowned_references, runtime_paths
+from common_ownership import graph_references, linker_owners, platform_owners, reject_common_shadow, reject_unowned_references, runtime_paths
 from provenance import fingerprint, source_inputs
 from symbol_tool import inspect
 
@@ -144,6 +144,45 @@ class Ownership(unittest.TestCase):
                     with patch("common_ownership.subprocess.check_output", return_value=listing(paths + [unexpected])):
                         with self.assertRaisesRegex(RuntimeError, "undeclared shared platform libraries"):
                             runtime_paths(Path("fixture"))
+            cpp = "/usr/lib/libc++.1.dylib"
+            with patch("common_ownership.subprocess.check_output", return_value=listing(paths + [cpp])):
+                self.assertEqual(runtime_paths(Path("fixture"), kind="executor"), paths + [cpp])
+                with self.assertRaisesRegex(RuntimeError, "undeclared shared platform libraries"):
+                    runtime_paths(Path("fixture"))
+            with patch("common_ownership.subprocess.check_output",
+                       return_value=listing(paths + ["/opt/homebrew/lib/libc++.1.dylib"])):
+                with self.assertRaisesRegex(RuntimeError, "undeclared shared platform libraries"):
+                    runtime_paths(Path("fixture"), kind="executor")
+
+    def test_linux_node_cpp_runtime_is_explicit_and_unknown_libraries_stay_rejected(self):
+        def listing(paths):
+            return "".join(f"{Path(path).name} => {path} (0x1234)\n" for path in paths)
+        paths = ["/lib64/libc.so.6", "/lib64/libstdc++.so.6"]
+        with patch("common_ownership.sys.platform", "linux"):
+            with patch("common_ownership.subprocess.check_output", return_value=listing(paths)):
+                self.assertEqual(runtime_paths(Path("fixture"), kind="executor"), paths)
+                with self.assertRaisesRegex(RuntimeError, "undeclared shared platform libraries"):
+                    runtime_paths(Path("fixture"))
+            with patch("common_ownership.subprocess.check_output",
+                       return_value=listing(paths + ["/opt/lib/libunregistered.so"])):
+                with self.assertRaisesRegex(RuntimeError, "undeclared shared platform libraries"):
+                    runtime_paths(Path("fixture"), kind="executor")
+            with self.assertRaisesRegex(RuntimeError, "unknown runtime audit kind"):
+                runtime_paths(Path("fixture"), kind="other")
+
+    def test_node_runtime_still_hashes_actual_library_and_resolves_its_exports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory) / "libstdc++.so.6"
+            library.write_bytes(b"fixture-cpp-runtime")
+            with patch("common_ownership.runtime_paths", return_value=[str(library)]) as paths:
+                with patch("common_ownership.ctypes.CDLL", return_value=Mock(spec=["owned_export"])):
+                    owners, libraries = platform_owners(Path("fixture"), {"owned_export", "absent_export"},
+                                                         kind="executor")
+            paths.assert_called_once_with(Path("fixture"), kind="executor")
+            self.assertEqual(owners, {"owned_export": [str(library)]})
+            self.assertEqual(libraries[0]["path"], str(library))
+            self.assertEqual(libraries[0]["sha256"], digest(library))
+            self.assertEqual(libraries[0]["symbols_resolved_in_library_scope"], ["owned_export"])
 
     def test_bundle_allocator_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "process allocator"):

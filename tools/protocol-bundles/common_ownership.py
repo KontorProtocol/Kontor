@@ -13,12 +13,14 @@ from symbol_tool import inspect
 
 LINUX_RUNTIME = {"libgcc_s.so.1", "libm.so.6", "libc.so.6", "libpthread.so.0",
                  "libdl.so.2", "librt.so.1", "ld-linux-aarch64.so.1", "ld-linux-x86-64.so.2"}
+LINUX_NODE_RUNTIME = LINUX_RUNTIME | {"libstdc++.so.6"}
 MAC_RUNTIME = {"/usr/lib/libSystem.B.dylib",
                # libc links iconv on Apple outside rustc-dep-of-std, even without iconv calls.
                "/usr/lib/libiconv.2.dylib",
                "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
                "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
                "/System/Library/Frameworks/Security.framework/Versions/A/Security"}
+MAC_NODE_RUNTIME = MAC_RUNTIME | {"/usr/lib/libc++.1.dylib"}
 OPTIONAL_UNWIND = {"__unw_add_dynamic_fde", "__unw_add_dynamic_eh_frame_section",
                    "__unw_remove_dynamic_eh_frame_section"}
 
@@ -50,24 +52,28 @@ def references(path):
     return names
 
 
-def runtime_paths(executable):
+def runtime_paths(executable, kind="proof"):
+    if kind not in ("proof", "executor"):
+        raise RuntimeError(f"unknown runtime audit kind: {kind}")
     if sys.platform == "darwin":
         text = subprocess.check_output(["otool", "-L", str(executable)], text=True)
         paths = [line.strip().split(" (", 1)[0] for line in text.splitlines()[1:]]
-        if not set(paths) <= MAC_RUNTIME:
+        permitted = MAC_NODE_RUNTIME if kind == "executor" else MAC_RUNTIME
+        if not set(paths) <= permitted:
             raise RuntimeError(f"undeclared shared platform libraries: {paths}")
     else:
         text = subprocess.check_output(["ldd", str(executable)], text=True)
         paths = re.findall(r"(?:=>\s+)?(/\S+)", text)
-        if not paths or any(Path(path).name not in LINUX_RUNTIME for path in paths):
+        permitted = LINUX_NODE_RUNTIME if kind == "executor" else LINUX_RUNTIME
+        if not paths or any(Path(path).name not in permitted for path in paths):
             raise RuntimeError(f"undeclared shared platform libraries: {paths}")
     return list(dict.fromkeys(paths))
 
 
-def platform_owners(executable, candidates):
+def platform_owners(executable, candidates, kind="proof"):
     owners = {}
     libraries = []
-    for path in runtime_paths(executable):
+    for path in runtime_paths(executable, kind=kind):
         library = ctypes.CDLL(path)
         names = []
         for name in sorted(candidates):
@@ -132,7 +138,7 @@ def reject_unowned_references(graph, names, refs, common, platform, optional, li
         raise RuntimeError(f"{graph['graph']} imports have no declared owner: {sorted(unresolved)[:100]}")
 
 
-def verify(graphs, sets, host_objects, executable, env, output):
+def verify(graphs, sets, host_objects, executable, env, output, kind="proof"):
     common = {}
     inventories = []
     sysroot = Path(subprocess.check_output([env["RUSTC"], "--print", "sysroot"], env=env, text=True).strip())
@@ -164,7 +170,7 @@ def verify(graphs, sets, host_objects, executable, env, output):
         graph_refs.append(names)
         graph_optional.append(optional)
     candidates = set.union(*graph_refs, *sets) - common.keys()
-    platform, libraries = platform_owners(executable, candidates)
+    platform, libraries = platform_owners(executable, candidates, kind=kind)
     linker = linker_owners(executable)
     for graph, names, refs, optional in zip(graphs, sets, graph_refs, graph_optional, strict=True):
         reject_unowned_references(graph, names, refs, common, platform, optional, linker)
