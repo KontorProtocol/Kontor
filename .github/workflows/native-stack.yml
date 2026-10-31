@@ -112,13 +112,33 @@ jobs:
           binary=$(cat target/native-stack-evidence/binary-path)
           mkdir -p "target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ matrix.profile }}"
           "$binary" --exact runtime::call::tests::sequential_chains::deep_sequential_chains_survive_in_separate_processes --nocapture 2>&1 | tee "target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ matrix.profile }}/chain-matrix.log"
+      - name: Exercise owned paid, view, and Core chain boundaries
+        run: |
+          set -o pipefail
+          binary=$(cat target/native-stack-evidence/binary-path)
+          evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ matrix.profile }}"
+          : > "$evidence/owned-chain-matrix.log"
+          for mode in paid view core; do
+            for depth in 63 64; do
+              KONTOR_CHAIN_MODE="$mode" KONTOR_CHAIN_DEPTH="$depth" "$binary" --exact runtime::call::tests::sequential_chains::owned_chain_probe_child --ignored --nocapture 2>&1 | tee -a "$evidence/owned-chain-matrix.log"
+            done
+          done
+      - name: Exercise ownership cancellation, yielding, and drain controls
+        run: |
+          set -o pipefail
+          binary=$(cat target/native-stack-evidence/binary-path)
+          evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ matrix.profile }}"
+          : > "$evidence/ownership-controls.log"
+          for test in canonical_lease_drains_native_guest_before_releasing_runtime canonical_and_simulation_children_keep_no_yield_policy nested_api_children_inherit_actual_fuel_yields cancelling_nested_yielding_api_guest_joins_before_runtime_reuse cancelling_fuel_yielding_guest_joins_before_pool_reuse; do
+            "$binary" --exact "runtime::ownership::tests::$test" --nocapture 2>&1 | tee -a "$evidence/ownership-controls.log"
+          done
       - name: Measure stack boundaries
         env:
           PROFILE: ${{ matrix.profile }}
         run: |
           binary=$(cat target/native-stack-evidence/binary-path)
           evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$PROFILE"
-          python3 tools/native-stack/qualify.py --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/$PROFILE" --output "$evidence" --chain-log "$evidence/chain-matrix.log"
+          python3 tools/native-stack/qualify.py --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/$PROFILE" --output "$evidence" --chain-log "$evidence/chain-matrix.log" --owned-chain-log "$evidence/owned-chain-matrix.log" --ownership-log "$evidence/ownership-controls.log"
       - name: Preserve qualification evidence
         if: always()
         uses: actions/upload-artifact@v7

@@ -8,6 +8,8 @@ use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
+use bitcoin::Network;
+use deadpool::managed::{Object, Pool};
 use indexer_types::Payment;
 use libsql::{Connection, Value as SqlValue, params};
 use serde_json::{Value as JsonValue, json};
@@ -24,8 +26,11 @@ use super::super::sequential_chains;
 use super::{COMPONENT, CRYPTO_COMPONENT, SYSTEM_FUEL_CEILING, canonical};
 use crate::database::queries::live_deposit_gas_sum;
 use crate::runtime::invocation::{
-    InvocationBudget, InvocationLimitReached, ResourceProbePhase, ResourceTeardownRecorder,
+    InvocationBudget, InvocationLimitReached, MAX_LIVE_INVOCATIONS, ResourceProbePhase,
+    ResourceTeardownRecorder,
 };
+use crate::runtime::ownership::{OwnerService, RootOutcome};
+use crate::runtime::pool::Manager;
 use crate::runtime::pricing::Pricing;
 use crate::runtime::resource_diagnostics;
 use crate::runtime::token::api as token;
@@ -48,6 +53,7 @@ struct Sample {
 struct Fixture {
     runtime: Runtime,
     _dir: TempDir,
+    db_name: String,
     kind: String,
     component_sha256: String,
     signer: Signer,
@@ -79,7 +85,7 @@ impl Fixture {
         } else {
             Runtime::new_engine()?
         };
-        let (mut runtime, dir, _name) = test_runtime_with_engine(engine).await?;
+        let (mut runtime, dir, db_name) = test_runtime_with_engine(engine).await?;
         ensure!(
             runtime.pricing.storage_deposit_gas(1) == Some(1)
                 && Pricing::collateral_unit_price() == Decimal::from("1e-9")
@@ -183,6 +189,7 @@ impl Fixture {
         Ok(Self {
             runtime,
             _dir: dir,
+            db_name,
             kind,
             component_sha256,
             signer,
@@ -207,7 +214,37 @@ impl Fixture {
     }
 
     async fn observe(&mut self, depth: u32, role: &str) -> Result<String> {
+        self.observe_with_canonical(depth, role, false).await
+    }
+
+    async fn observe_with_canonical(
+        &mut self,
+        depth: u32,
+        role: &str,
+        owned_canonical: bool,
+    ) -> Result<String> {
         resource_diagnostics::record("sample_preparation_entry");
+        let mut canonical = if owned_canonical {
+            self.runtime.invocation_budget = None;
+            let service = OwnerService::new();
+            let lease = service.begin_canonical(&mut self.runtime, false).await?;
+            self.budget = self
+                .runtime
+                .invocation_budget
+                .as_ref()
+                .context("canonical invocation budget missing")?
+                .clone();
+            ensure!(
+                self.runtime
+                    .ownership
+                    .as_ref()
+                    .is_some_and(|owner| owner.fuel_yield_interval().is_none()),
+                "stack control did not enter canonical ownership"
+            );
+            Some((service, lease))
+        } else {
+            None
+        };
         let sample_index = self.samples.len();
         let sample_id = format!("{role}:{}:{sample_index:04}", self.kind);
         let teardown_recorder = (self.resource_probe == Some(true))
@@ -451,7 +488,17 @@ impl Fixture {
                 self.address.clone(),
             ));
         }
+        if let Some((_, lease)) = canonical.as_mut() {
+            lease.drain(&self.runtime).await?;
+        }
         self.runtime.storage.rollback().await?;
+        if let Some((service, lease)) = canonical.take() {
+            lease.complete(&mut self.runtime).await?;
+            ensure!(
+                service.active_roots().await == 0,
+                "canonical root survived reset"
+            );
+        }
         self.runtime.set_context(1, None, None, None).await;
         ensure!(
             self.runtime.id_generation_counter.get().await == 0
@@ -594,7 +641,22 @@ impl Fixture {
         }
         self.last_report = Some(report.clone());
         if self.resource_probe.is_none() {
-            println!("KONTOR_STACK_REPORT:{report}");
+            if owned_canonical {
+                if self.kind == "paid_reenter" {
+                    ensure!(
+                        self.budget.peak() == (depth + 1).min(MAX_LIVE_INVOCATIONS),
+                        "owned reentry did not register each descendant"
+                    );
+                }
+                report["ownership"] = json!({
+                    "kind": "canonical",
+                    "fuel_yield_interval": null,
+                    "registered_peak": self.budget.peak(),
+                });
+                println!("KONTOR_OWNED_STACK_REPORT:{report}");
+            } else {
+                println!("KONTOR_STACK_REPORT:{report}");
+            }
         }
         println!(
             "KONTOR_STACK_TIMING:{}",
@@ -610,6 +672,192 @@ impl Fixture {
                 "total_sample_ms": total_start.elapsed().as_millis(),
             })
         );
+        self.samples.push(Sample {
+            depth,
+            outcome: outcome.to_string(),
+            id: sample_id,
+        });
+        Ok(outcome.to_string())
+    }
+
+    async fn observe_owned_api(&mut self, depth: u32, role: &str) -> Result<String> {
+        ensure!(
+            self.kind.starts_with("view_"),
+            "API control requires a view"
+        );
+        let conn = self.runtime.get_storage_conn();
+        assert_receipt_stream_initial_state(&conn).await?;
+        ensure!(
+            persistent_digest(&conn).await? == self.baseline_digest,
+            "API control entered with changed state"
+        );
+        let pool = Pool::builder(Manager::new(
+            self._dir.path().to_path_buf(),
+            self.db_name.clone(),
+            Network::Regtest,
+            self.runtime.view_gas_limit,
+        )?)
+        .max_size(1)
+        .build()?;
+        let object = pool.get().await?;
+        let original_id = Object::id(&object);
+        ensure!(
+            object.storage.conn.is_autocommit()
+                && object.storage.savepoint_stack.is_empty().await
+                && object.stack.is_empty().await
+                && object.table.lock().await.iter_mut().count() == 0,
+            "owned API view entered with a dirty pool object"
+        );
+        let service = OwnerService::new();
+        let address = self.address.clone();
+        let expr = expression(&self.kind, depth, &address)?;
+        let mut handle = service
+            .start_pooled(object, move |runtime| {
+                Box::pin(async move {
+                    ensure!(
+                        runtime
+                            .ownership
+                            .as_ref()
+                            .is_some_and(|owner| owner.fuel_yield_interval() == Some(100_000)),
+                        "stack view did not enter API ownership"
+                    );
+                    let budget = runtime
+                        .invocation_budget
+                        .as_ref()
+                        .context("API invocation budget missing")?
+                        .clone();
+                    let previous = runtime.start_usage();
+                    let result = runtime.execute(None, None, &address, &expr).await;
+                    let usage = runtime.finish_usage(previous)?;
+                    ensure!(
+                        budget.live() == 0 && runtime.stack.is_empty().await,
+                        "owned API view retained a guest Store"
+                    );
+                    Ok(RootOutcome {
+                        value: (result, usage, budget.peak()),
+                        commit: false,
+                    })
+                })
+            })
+            .await?;
+        let (result, usage, peak) = handle.result().await?;
+        ensure!(peak >= 1, "owned API call registered no guest Store");
+        let (outcome, value) = match result {
+            Ok(value) => ("ok", Some(value)),
+            Err(ExecutionError::Deterministic(error)) => {
+                let trap = error.chain().find_map(|cause| cause.downcast_ref::<Trap>());
+                let outcome = if error
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<InvocationLimitReached>().is_some())
+                {
+                    "invocation_limit"
+                } else if trap == Some(&Trap::StackOverflow) {
+                    "stack_overflow"
+                } else {
+                    bail!("unexpected owned API error: {error:#}")
+                };
+                (outcome, None)
+            }
+            Err(ExecutionError::NonDeterministic(error)) => {
+                bail!("owned API infrastructure failure: {error:#}")
+            }
+        };
+        let reused = pool.get().await?;
+        ensure!(
+            Object::id(&reused) == original_id
+                && reused.storage.conn.is_autocommit()
+                && reused.storage.savepoint_stack.is_empty().await
+                && reused.stack.is_empty().await
+                && reused.table.lock().await.iter_mut().count() == 0
+                && service.active_roots().await == 0,
+            "owned API view did not return a clean pool object"
+        );
+        ensure!(
+            persistent_digest(&conn).await? == self.baseline_digest,
+            "owned API view changed persistent state"
+        );
+        assert_receipt_stream_initial_state(&conn).await?;
+        let last_depth = self
+            .runtime
+            .execute(None, None, &self.address, "last-depth()")
+            .await?
+            .parse::<u32>()?;
+        ensure!(last_depth == 0, "owned API view changed depth state");
+        let balance_restored = balance(&mut self.runtime, HolderRef::from(&self.signer)).await?;
+        let burned_restored = balance(&mut self.runtime, HolderRef::Burner).await?;
+        let floor_restored = token::floor(&mut self.runtime, HolderRef::from(&self.signer)).await?;
+        let supply_restored = token::total_supply(&mut self.runtime).await?;
+        ensure!(
+            balance_restored == self.baseline_balance
+                && burned_restored == self.baseline_burner
+                && floor_restored == self.baseline_floor
+                && supply_restored == self.baseline_supply,
+            "owned API view changed accounting"
+        );
+        let sample_index = self.samples.len();
+        let sample_id = format!("{role}:{}:{sample_index:04}", self.kind);
+        let report = json!({
+            "role": role,
+            "sample_index": sample_index,
+            "sample_id": sample_id,
+            "cache_mode": "fresh_api_pool_cache",
+            "call_hook_installed": reused.conversion_probe.is_some(),
+            "fixture_contracts": self.fixture_contracts,
+            "kind": self.kind,
+            "depth": depth,
+            "outcome": outcome,
+            "value": value,
+            "receipt": null,
+            "last_depth": last_depth,
+            "child_markers": [],
+            "rolled_back": outcome != "ok",
+            "fuel": {
+                "user": usage.user_fuel,
+                "system": usage.system_fuel,
+                "deposit": usage.deposit_fuel,
+            },
+            "gas_limit": MAX_UNTRUSTED_GAS_LIMIT,
+            "paid_fuel_limit": MAX_UNTRUSTED_GAS_LIMIT * reused.gas_to_fuel_multiplier,
+            "view_gas_limit": reused.view_gas_limit,
+            "view_fuel_limit": reused.fuel_limit_for_view()?,
+            "system_fuel_ceiling": SYSTEM_FUEL_CEILING,
+            "gas_to_fuel_multiplier": reused.gas_to_fuel_multiplier,
+            "max_wasm_stack": reused.engine.get_max_wasm_stack(),
+            "async_stack_size": reused.engine.get_async_stack_size(),
+            "engine_target": reused.engine.get_target(),
+            "component_sha256": self.component_sha256,
+            "target_os": env::consts::OS,
+            "target_arch": env::consts::ARCH,
+            "reset": {
+                "pre": {
+                    "live_invocations": 0,
+                    "stack_empty": true,
+                    "savepoint_intact": true,
+                    "resource_count": 0,
+                    "baseline_resource_count": self.baseline_resources,
+                    "failure_rolled_back": (outcome != "ok").then_some(true),
+                },
+                "post": {
+                    "persistent_digest_sha256": self.baseline_digest,
+                    "baseline_digest_sha256": self.baseline_digest,
+                    "digest_matches": true,
+                    "live_invocations": 0,
+                    "stack_empty": true,
+                    "savepoint_restored": true,
+                    "resource_count": 0,
+                    "balances_restored": true,
+                    "floor_restored": true,
+                    "supply_restored": true,
+                },
+            },
+            "ownership": {
+                "kind": "api",
+                "fuel_yield_interval": 100_000,
+                "registered_peak": peak,
+            },
+            "state_after_sha256": self.baseline_digest,
+        });
+        println!("KONTOR_OWNED_STACK_REPORT:{report}");
         self.samples.push(Sample {
             depth,
             outcome: outcome.to_string(),
@@ -1760,6 +2008,64 @@ pub(super) async fn run(role: &str) -> Result<()> {
         "baseline_digest_sha256": fixture.baseline_digest,
     });
     println!("KONTOR_STACK_SWEEP_SUMMARY:{summary}");
+    Ok(())
+}
+
+pub(super) async fn run_owned_control() -> Result<()> {
+    let kind = env::var("KONTOR_STACK_KIND").context("KONTOR_STACK_KIND is required")?;
+    ensure!(
+        matches!(
+            kind.as_str(),
+            "paid_recurse"
+                | "paid_wide"
+                | "view_recurse"
+                | "view_wide"
+                | "system_recurse"
+                | "system_wide"
+                | "core_recurse"
+                | "core_wide"
+                | "paid_reenter"
+                | "paid_huge"
+        ),
+        "owned stack kind is outside the accepted controls"
+    );
+    let depths = env::var("KONTOR_OWNED_DEPTHS")
+        .context("KONTOR_OWNED_DEPTHS is required")?
+        .split(',')
+        .map(str::parse::<u32>)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    ensure!(
+        (kind == "paid_huge" && depths == [0])
+            || (kind != "paid_huge" && depths.len() == 2 && depths[1] == depths[0] + 1),
+        "owned stack depths must reproduce the unowned boundary"
+    );
+    let mut fixture = Fixture::new(kind.clone(), false).await?;
+    let mut outcomes = Vec::new();
+    for &depth in &depths {
+        let outcome = if kind.starts_with("view_") {
+            fixture.observe_owned_api(depth, "owned").await?
+        } else {
+            fixture.observe_with_canonical(depth, "owned", true).await?
+        };
+        outcomes.push(outcome);
+    }
+    ensure!(
+        outcomes.first().is_some_and(|outcome| outcome == "ok")
+            && (kind == "paid_huge"
+                || outcomes.get(1).is_some_and(|outcome| {
+                    outcome
+                        == if kind == "paid_reenter" {
+                            "invocation_limit"
+                        } else {
+                            "stack_overflow"
+                        }
+                })),
+        "owned stack boundary differs from unowned control"
+    );
+    println!(
+        "KONTOR_OWNED_STACK_SUMMARY:{}",
+        json!({"kind": kind, "depths": depths, "outcomes": outcomes, "owned": true})
+    );
     Ok(())
 }
 

@@ -133,6 +133,22 @@ def write_evidence(directory, report):
     path = directory / report["chain_log"]
     path.write_text("".join("CHAIN_PROBE_REPORT:" + json.dumps(chain) + "\n" for chain in report["chains"]))
     logs[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    for case in report["cases"]:
+        path = directory / case["owned_log"]
+        path.write_text("".join(
+            "KONTOR_OWNED_STACK_REPORT:" + json.dumps(sample) + "\n"
+            for sample in case["owned_observations"]
+        ) + "KONTOR_OWNED_STACK_SUMMARY:" + json.dumps(case["owned_summary"]) + "\n")
+        logs[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    path = directory / report["owned_chain_log"]
+    path.write_text("".join("CHAIN_OWNED_PROBE_REPORT:" + json.dumps(chain) + "\n" for chain in report["owned_chains"]))
+    logs[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    path = directory / report["ownership_log"]
+    path.write_text("".join(
+        f"test runtime::ownership::tests::{test} ... ok\ntest result: ok. 1 passed; 0 failed\n"
+        for test in compare.OWNERSHIP_TESTS
+    ))
+    logs[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
     report["log_sha256"] = logs
     (directory / "qualification.json").write_text(json.dumps(report))
 
@@ -172,6 +188,22 @@ class CompareTests(unittest.TestCase):
                 controls = [deepcopy(next(sample for sample in observations if sample["depth"] == depth)) for depth in control_depths]
                 worker_summary = add_sweep_fields(observations, kind, "worker", boundaries)
                 control_summary = add_sweep_fields(controls, kind, "control", boundaries)
+                owned = []
+                for index, sample in enumerate(controls):
+                    value = {field: sample[field] for field in compare.OWNED_STACK_SEMANTICS}
+                    value.update(
+                        role="owned", sample_index=index, sample_id=f"owned:{kind}:{index:04}",
+                        kind=kind, depth=sample["depth"],
+                        cache_mode="fresh_api_pool_cache" if kind.startswith("view_") else "warm_compiled_cache",
+                        target_os=target_os, target_arch=target_arch,
+                        state_after_sha256=sample["reset"]["post"]["persistent_digest_sha256"],
+                        ownership={
+                            "kind": "api" if kind.startswith("view_") else "canonical",
+                            "fuel_yield_interval": 100000 if kind.startswith("view_") else None,
+                            "registered_peak": min(sample["depth"] + 1, 64) if kind == "paid_reenter" else 1,
+                        },
+                    )
+                    owned.append(value)
                 cases.append({
                     "kind": kind,
                     "boundary": boundary,
@@ -182,9 +214,26 @@ class CompareTests(unittest.TestCase):
                     "control_observations": controls,
                     "worker_summary": worker_summary, "control_summary": control_summary,
                     "worker_log": f"{kind}-worker.log", "control_log": f"{kind}-control.log",
+                    "owned_observations": owned,
+                    "owned_summary": {
+                        "kind": kind, "depths": control_depths,
+                        "outcomes": [sample["outcome"] for sample in owned], "owned": True,
+                    },
+                    "owned_log": f"{kind}-owned.log",
                 })
+            chains = [chain_report(mode, stores, target_os, target_arch) for mode, stores in sorted(compare.CHAIN_KEYS)]
+            owned_chains = []
+            for mode, stores in sorted(compare.OWNED_CHAIN_KEYS):
+                chain = deepcopy(next(chain for chain in chains if (chain["mode"], chain["stores"]) == (mode, stores)))
+                chain["trials"] = [chain["trials"][0]]
+                chain["trials"][0]["ownership"] = {
+                    "kind": "api" if mode == "view" else "canonical",
+                    "fuel_yield_interval": 100000 if mode == "view" else None,
+                    "registered_peak": min(stores, 64),
+                }
+                owned_chains.append(chain)
             report = {
-                "schema_version": 5,
+                "schema_version": 6,
                 "cell": cell,
                 "source_sha": "a" * 40,
                 "lockfile_sha256": "b" * 64,
@@ -200,8 +249,11 @@ class CompareTests(unittest.TestCase):
                 "rustc_version_verbose": "rustc 1.99.1\n",
                 "host": "test host",
                 "cases": cases,
-                "chains": [chain_report(mode, stores, target_os, target_arch) for mode, stores in sorted(compare.CHAIN_KEYS)],
+                "chains": chains,
                 "chain_log": "chain-matrix.log",
+                "owned_chains": owned_chains,
+                "owned_chain_log": "owned-chain-matrix.log",
+                "ownership_log": "ownership-controls.log",
             }
             write_evidence(directory, report)
 
@@ -354,8 +406,48 @@ class CompareTests(unittest.TestCase):
         trial = report["chains"][0]["trials"][0]
         trial["state_before_sha256"] = trial["state_after_sha256"] = "2" * 64
         write_evidence(path.parent, report)
-        with self.assertRaisesRegex(ValueError, "cross-cell observations differ"):
+        with self.assertRaisesRegex(ValueError, "owned output|cross-cell observations differ"):
             compare.compare(self.root, "success")
+
+    def test_missing_or_unowned_stack_evidence_rejected(self):
+        self.mutate(lambda report: report["cases"][0].pop("owned_observations"))
+        self.rejected()
+        self.setUp()
+        self.mutate_all_with_matching_logs(lambda report: report["cases"][0]["owned_observations"][0]["ownership"].__setitem__("kind", "unowned"))
+        self.rejected()
+
+    def test_owned_stack_fuel_and_yield_policy_rejected(self):
+        self.mutate_all_with_matching_logs(lambda report: report["cases"][0]["owned_observations"][0]["fuel"].__setitem__("user", 101))
+        self.rejected()
+        self.setUp()
+        self.mutate_all_with_matching_logs(lambda report: report["cases"][0]["owned_observations"][0]["ownership"].__setitem__("fuel_yield_interval", 100000))
+        self.rejected()
+        self.setUp()
+        self.mutate_all_with_matching_logs(lambda report: report["cases"][0]["owned_observations"][0]["reset"]["post"].__setitem__("digest_matches", False))
+        self.rejected()
+
+    def test_missing_or_unowned_chain_evidence_rejected(self):
+        self.mutate_all_with_matching_logs(lambda report: report["owned_chains"].pop())
+        self.rejected()
+        self.setUp()
+        self.mutate_all_with_matching_logs(lambda report: report["owned_chains"][0]["trials"][0]["ownership"].__setitem__("kind", "unowned"))
+        self.rejected()
+
+    def test_owned_chain_fuel_and_lifecycle_log_rejected(self):
+        self.mutate_all_with_matching_logs(lambda report: report["owned_chains"][0]["trials"][0]["fuel"].__setitem__("user", 101))
+        self.rejected()
+        self.setUp()
+        path, report = self.report()
+        (path.parent / report["ownership_log"]).write_text("test result: ok. 3 passed; 0 failed\n")
+        report["log_sha256"][report["ownership_log"]] = hashlib.sha256((path.parent / report["ownership_log"]).read_bytes()).hexdigest()
+        path.write_text(json.dumps(report))
+        self.rejected()
+
+    def test_owned_raw_log_hash_mismatch_rejected(self):
+        path, report = self.report()
+        with (path.parent / report["cases"][0]["owned_log"]).open("a") as stream:
+            stream.write("unrecorded line\n")
+        self.rejected()
 
     def test_cross_platform_sweep_fuel_difference_rejected(self):
         path, report = self.report()
@@ -363,7 +455,7 @@ class CompareTests(unittest.TestCase):
         for sample in case["observations"] + case["control_observations"]:
             sample["fuel"]["user"] += 1
         write_evidence(path.parent, report)
-        with self.assertRaisesRegex(ValueError, "cross-cell observations differ"):
+        with self.assertRaisesRegex(ValueError, "owned output|cross-cell observations differ"):
             compare.compare(self.root, "success")
 
     def test_extra_qualification_feature_and_chain_hook_rejected(self):

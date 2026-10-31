@@ -82,7 +82,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "184d4574294fdb917d6c2d04d3892fe7c91233d2ffe06e58566f5a8633b6a2ec"
+      "sha256": "2d02c2bce92155ad8e15b4344e6ea9157ad6c2a5ec84957165abfb3ca009d9bb"
     },
     "cold_publication_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/cold_publication.rs",
@@ -342,7 +342,7 @@
     },
     "operation_ownership": {
       "path": "core/indexer/src/runtime/ownership.rs",
-      "sha256": "8d240fd508e1756b9abbcfb74a2e5eaf2cb5f65207486263a5a08be9c97d21e3"
+      "sha256": "511fc8d361f373b42d9160f8822d759a06dc47a9f25b2101e3f3e45d2e9f0b55"
     },
     "pending_host_capture": {
       "path": "tools/native-stack/capture_resource_pending.py",
@@ -362,7 +362,7 @@
     },
     "production_qualification": {
       "path": "tools/native-stack/compare.py",
-      "sha256": "0f914c447d0ff047c1db42726ced284e4c63008279aa9abb322c0d02c12062eb"
+      "sha256": "94516b7406eeed7de2fe998e34ec5a0028bb3fe9dbc1abc345366da76972d713"
     },
     "proxy": {
       "path": "test-contracts/binaries/proxy.wasm.br",
@@ -374,7 +374,7 @@
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "49c7265de72221c0aeacb556519dea06adb30ff64dd1c2448fb621fdead949cb"
+      "sha256": "3d7ccc707471848248ba564ea270f45b1a1e0bc6cb2312bad933c7d44cb87cd4"
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -518,11 +518,11 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "1e1cbcd8945155446f19920bc91e0c7e21b039dafe3b7dec2bf94766d11b4bb3"
+      "sha256": "db3d9d9de2712517031b4b302abc3af1bc561b36a5b1d6bae5c4a1c4eb21ac3f"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "23ee679951326e1c3dea012361779945b9b5161ee2319cb1e5d02dc1cd86cd7d"
+      "sha256": "03d9f234309b2107d0a03f9805a2ee7fe92f0e8d895c64b4cb137cafb5fd0cf1"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -554,7 +554,7 @@
     },
     "suite_dispatch_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "49c7265de72221c0aeacb556519dea06adb30ff64dd1c2448fb621fdead949cb"
+      "sha256": "3d7ccc707471848248ba564ea270f45b1a1e0bc6cb2312bad933c7d44cb87cd4"
     },
     "suite_registry_builder": {
       "path": "tools/native-stack/resource_suite_registry.py",
