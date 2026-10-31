@@ -10,7 +10,7 @@
       "core/indexer/src/runtime/call/tests/sequential_chains.rs:575-586: actor balance, floor, burner balance, supply, and storage-state each execute after rollback; asserted rollback_clean proves no short-circuit skipped a call"
     ],
     "target_native_auxiliary": [
-      "core/indexer/src/runtime/fees.rs:25,50: with_payment calls token::api::hold and token::api::release around paid deterministic outcomes, including traps and depth rejection",
+      "core/indexer/src/protocol/v1/fees.rs:25,50: with_payment calls token::api::hold and token::api::release around paid deterministic outcomes, including traps and depth rejection",
       "core/indexer/src/runtime/invocation.rs:73-77: target-phase token calls are classified separately from chain Stores"
     ]
   },
@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "e9da8ed96833a459b778bedb751ed7c0362da474a6b61c65e39e967addcad0ba",
+  "parent_manifest_sha256": "3f574544db97a08506a077e9520a8feec82bfb3d315e33b3e8e7a744021edbbe",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1203,15 +1203,15 @@
   "sources": {
     "call": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "e8fc353009d8b621cf9b1b18c4f99802955c3ec50c3dff8dfce49c990386da0a"
+      "sha256": "6dfd1f00fe50a24b0f0e62613f7f8ba70905414f76933dbfa78139b012d2bff3"
     },
     "chain_fixture": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
       "sha256": "1ab2b8869e4a9e147ce1f2ff2230a1d1803ffd7fb5c57a3dd90f9e01c290ac4b"
     },
     "fees": {
-      "path": "core/indexer/src/runtime/fees.rs",
-      "sha256": "933ddb57cec320845dd91960ebe164c60ba8dccf54b70b7d608360cc747fa24f"
+      "path": "core/indexer/src/protocol/v1/fees.rs",
+      "sha256": "20b9b761045d4b0b325dedb3fc64e50181c508970ccda31b2bd9d8db19c659fc"
     },
     "historical_phase10_gzip": {
       "path": "tools/native-stack/fixtures/phase10-resource-chain-capture.json.gz",
@@ -1229,6 +1229,10 @@
       "path": "core/indexer/src/runtime/invocation.rs",
       "sha256": "31edb93d9b688625c3cd8640e7773b92fe276e32888a2d3e3ecfe15418215af3"
     },
+    "retained_deposit_policy": {
+      "path": "core/indexer/src/protocol/v1/deposit.rs",
+      "sha256": "661f62249389b89950da8fef0c1e5133da6bd780d7dd24b0e12492231021cca5"
+    },
     "retained_engine": {
       "path": "core/indexer/src/protocol/v1/engine.rs",
       "sha256": "b789ce721e51ab2bcdfe48b38cf7679834614449f848156a6803adf0dce4b19d"
@@ -1236,6 +1240,10 @@
     "retained_error_policy": {
       "path": "core/indexer/src/protocol/v1/errors.rs",
       "sha256": "ae47180264465ad334cc5437d9423a220f319116c3e25cb68044476ae0758528"
+    },
+    "retained_fuel_policy": {
+      "path": "core/indexer/src/protocol/v1/fuel.rs",
+      "sha256": "5af97f7dd5729342dcaa395371b3f1332c4c167065856afca16206b87e9a3e0a"
     },
     "retained_gas_policy": {
       "path": "core/indexer/src/protocol/v1/gas.rs",
@@ -1255,11 +1263,11 @@
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "b104168a99ca41e0444336a76a1930dc1259ea22605bef322ab1200c7efa0b83"
+      "sha256": "ec20ff51b12d3b774d59d4813fea6e0e31608c6f471e004ef324209ff5c9bacd"
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",
-      "sha256": "d535bc8b3def66241f041eee5523315c753cf293c00ba88d75547a2b6da90484"
+      "sha256": "054727b7eaef0e678196b23efda8e7a8fa88e5ecd90017f9d1a0eca2ecbf5856"
     },
     "token": {
       "path": "core/indexer/src/runtime/token.rs",
@@ -1279,7 +1287,7 @@
     },
     "v2_manifest_builder": {
       "path": "tools/native-stack/resource_manifest_v2.py",
-      "sha256": "edf90cd4abbcca970a98a9822b73d6df33b9e0af5ce59afd4732d22d53541d22"
+      "sha256": "fc85864cea93a215c4cc6f69e557594128d1aa2e9b0fd330a8c571ef3ea905d8"
     },
     "v2_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v2.json",

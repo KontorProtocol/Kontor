@@ -1,13 +1,12 @@
 use anyhow::{Result, anyhow};
 use indexer_types::Payment;
 
-use super::call::CallOutcome;
-use super::wit::Signer;
-use super::{ExecutionError, Runtime, token};
 use crate::database::types::Identity;
+use crate::runtime::wit::Signer;
+use crate::runtime::{CallOutcome, ExecutionError, Runtime, token};
 
 impl Runtime {
-    pub(super) async fn with_payment(
+    pub(crate) async fn with_payment(
         &mut self,
         payment: &Payment,
         starting_fuel: u64,

@@ -26,6 +26,8 @@ SOURCES = {
     "chain_fixture": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
     "invocation": "core/indexer/src/runtime/invocation.rs",
     "runtime": "core/indexer/src/runtime/mod.rs",
+    "retained_fuel_policy": "core/indexer/src/protocol/v1/fuel.rs",
+    "retained_deposit_policy": "core/indexer/src/protocol/v1/deposit.rs",
     "retained_error_policy": "core/indexer/src/protocol/v1/errors.rs",
     "retained_native_policy": "core/indexer/src/protocol/v1/native.rs",
     "retained_engine": "core/indexer/src/protocol/v1/engine.rs",
@@ -34,7 +36,7 @@ SOURCES = {
     "retained_pricing_policy": "core/indexer/src/protocol/v1/pricing.rs",
     "selected_policy_binding": "core/indexer/src/runtime/selected.rs",
     "call": "core/indexer/src/runtime/call.rs",
-    "fees": "core/indexer/src/runtime/fees.rs",
+    "fees": "core/indexer/src/protocol/v1/fees.rs",
     "token": "core/indexer/src/runtime/token.rs",
 }
 ROLES = (
@@ -58,7 +60,7 @@ AUXILIARY_EXPECTED_COUNTS = {
 }
 AUXILIARY_CALLSITES = {
     "target_native_auxiliary": [
-        "core/indexer/src/runtime/fees.rs:25,50: with_payment calls token::api::hold and token::api::release around paid deterministic outcomes, including traps and depth rejection",
+        "core/indexer/src/protocol/v1/fees.rs:25,50: with_payment calls token::api::hold and token::api::release around paid deterministic outcomes, including traps and depth rejection",
         "core/indexer/src/runtime/invocation.rs:73-77: target-phase token calls are classified separately from chain Stores",
     ],
     "pre_observation": [

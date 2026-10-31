@@ -45,7 +45,10 @@ def source_inputs(root, data):
                      "core/indexer/src/protocol/v1/resources.rs",
                      "core/indexer/src/protocol/v1/gas.rs",
                      "core/indexer/src/protocol/v1/native.rs",
-                     "core/indexer/src/protocol/v1/errors.rs"):
+                     "core/indexer/src/protocol/v1/errors.rs",
+                     "core/indexer/src/protocol/v1/fuel.rs",
+                     "core/indexer/src/protocol/v1/fees.rs",
+                     "core/indexer/src/protocol/v1/deposit.rs"):
         sources[relative] = sha(root / relative)
     for directory in (root / "protocol-bundles/proof", root / "tools/protocol-bundles",
                       root / "tools/native-crypto/fixtures"):

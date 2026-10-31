@@ -29,7 +29,6 @@ pub mod wit;
 pub(crate) mod workload_telemetry;
 
 mod call;
-mod fees;
 mod guest_memory;
 mod host_context;
 mod host_files;
@@ -43,7 +42,7 @@ mod selected;
 
 use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
 use bitcoin::XOnlyPublicKey;
-use call::CallOutcome;
+pub(crate) use call::CallOutcome;
 pub use component_cache::ComponentCache;
 pub(crate) use component_cache::ComponentSource;
 pub(crate) use guest_memory::GuestMemoryLimitExceeded;

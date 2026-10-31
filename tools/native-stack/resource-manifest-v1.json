@@ -42,7 +42,7 @@
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "e8fc353009d8b621cf9b1b18c4f99802955c3ec50c3dff8dfce49c990386da0a"
+      "sha256": "6dfd1f00fe50a24b0f0e62613f7f8ba70905414f76933dbfa78139b012d2bff3"
     },
     "call_output": {
       "path": "core/indexer/src/runtime/call/result.rs",
@@ -141,8 +141,8 @@
       "sha256": "8610f85f6abdd1bdeb0d32c0916cf154493535299d2c4d8fa0e053f0ee2df875"
     },
     "fee_settlement": {
-      "path": "core/indexer/src/runtime/fees.rs",
-      "sha256": "933ddb57cec320845dd91960ebe164c60ba8dccf54b70b7d608360cc747fa24f"
+      "path": "core/indexer/src/protocol/v1/fees.rs",
+      "sha256": "20b9b761045d4b0b325dedb3fc64e50181c508970ccda31b2bd9d8db19c659fc"
     },
     "fiber_source_capture": {
       "path": "tools/native-stack/capture_fiber_source.py",
@@ -366,7 +366,7 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "b104168a99ca41e0444336a76a1930dc1259ea22605bef322ab1200c7efa0b83"
+      "sha256": "ec20ff51b12d3b774d59d4813fea6e0e31608c6f471e004ef324209ff5c9bacd"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
@@ -418,7 +418,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "2e5306b248aae2ed25d6ec9f0e85dd01d7ab8de506b3b1e65b36e5b50d74dcb7"
+      "sha256": "bece55bbd6709d97eb3612d0cd5ad272be6983e7597c91267e4b88de9f6cb4e8"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -448,6 +448,10 @@
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
       "sha256": "1dc9fbd9cc4ac00a07a410459c4dac9c9b0ab44d5c346910f3bd361ec9c1102f"
     },
+    "retained_deposit_policy": {
+      "path": "core/indexer/src/protocol/v1/deposit.rs",
+      "sha256": "661f62249389b89950da8fef0c1e5133da6bd780d7dd24b0e12492231021cca5"
+    },
     "retained_engine": {
       "path": "core/indexer/src/protocol/v1/engine.rs",
       "sha256": "b789ce721e51ab2bcdfe48b38cf7679834614449f848156a6803adf0dce4b19d"
@@ -455,6 +459,10 @@
     "retained_error_policy": {
       "path": "core/indexer/src/protocol/v1/errors.rs",
       "sha256": "ae47180264465ad334cc5437d9423a220f319116c3e25cb68044476ae0758528"
+    },
+    "retained_fuel_policy": {
+      "path": "core/indexer/src/protocol/v1/fuel.rs",
+      "sha256": "5af97f7dd5729342dcaa395371b3f1332c4c167065856afca16206b87e9a3e0a"
     },
     "retained_gas_policy": {
       "path": "core/indexer/src/protocol/v1/gas.rs",
@@ -478,7 +486,7 @@
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",
-      "sha256": "d535bc8b3def66241f041eee5523315c753cf293c00ba88d75547a2b6da90484"
+      "sha256": "054727b7eaef0e678196b23efda8e7a8fa88e5ecd90017f9d1a0eca2ecbf5856"
     },
     "sqlite_large_values_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_large_values.rs",

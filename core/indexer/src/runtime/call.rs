@@ -63,7 +63,7 @@ struct PreparedCall {
     frame: CallFrame,
 }
 
-pub(super) struct CallOutcome {
+pub(crate) struct CallOutcome {
     pub result: Result<String, ExecutionError>,
     pub remaining_fuel: u64,
 }

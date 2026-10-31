@@ -133,7 +133,7 @@ impl Runtime {
             .or(self.guest_memory_limits)
     }
 
-    pub(super) fn selected_pricing(&self) -> Pricing {
+    pub(crate) fn selected_pricing(&self) -> Pricing {
         self.selected_context
             .as_ref()
             .map_or(self.pricing, |context| context.pricing)

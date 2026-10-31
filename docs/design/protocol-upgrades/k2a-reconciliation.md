@@ -1207,3 +1207,30 @@ formatting and diff checks passed. The initial compile found one stale test impo
 it was corrected before the successful run. Evidence and the lead review are in
 `.build-cache/selected-error-policy-final/`. Independently locked dependencies,
 final prerequisite integration, phase review and acceptance remain outstanding.
+
+## Retained fuel, deposit and fee settlement
+
+P1 now owns the existing fuel cost schedule and consumption methods, deposit
+meter and fee-settlement implementation under `protocol/v1`. Existing runtime
+imports remain available through re-exports. Fuel gauges and their tests stay in
+the runtime facade. The source audit verifies the entire fuel implementation and
+deposit source are unchanged, and the fee implementation differs only in crate
+visibility. No numerical gas limit, charging, rollback or ordering change is made.
+
+The lead traced payment reservation before execution, failed initialization's
+rollback inside the fee scope, deposit exclusion from the execution burn, and
+infrastructure-failure rollback and speculative-cache clearing. Qualification
+manifests and bundle provenance now bind the retained source files. The same
+41 cases and 16 groups remain; regenerated identities do not establish S2
+qualification of this preparation branch.
+
+Against base `3847352360ea60156c3bcefb2157d61258946dc7`, all 23 focused accounting
+regressions passed, the explicit P1 comparison matched all eleven baseline states,
+and indexer/testlib all-target compilation passed. The comparison report SHA-256 is
+`9467bf3e3078af4f6e3808d0ff4a69661986908206b2747bd6cb2a77ecc6ce97`.
+Sixteen source-identity, twenty-one provenance/ownership and eight resource-manifest
+controls passed. An initial provenance test run exposed two missing fixture files;
+the fixtures were updated before the successful run. Commands, source/log hashes,
+the comparison and lead review are in `.build-cache/selected-accounting-policy/`.
+Prerequisite integration, independent phase reviews and production bundle isolation
+remain outstanding.
