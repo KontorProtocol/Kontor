@@ -35,17 +35,24 @@ fn track_git_head() {
 }
 
 fn build_protos() {
+    let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory"));
+    let source = if env::var("CARGO_PKG_NAME").as_deref() == Ok("kontor-node") {
+        manifest.join("../../core/indexer")
+    } else {
+        manifest
+    };
     let protos = &[
         "proto/consensus/v1/consensus.proto",
         "proto/consensus/v1/sync.proto",
         "proto/consensus/v1/liveness.proto",
     ];
 
-    for proto in protos {
-        println!("cargo:rerun-if-changed={proto}");
+    let protos = protos.map(|proto| source.join(proto));
+    for proto in &protos {
+        println!("cargo:rerun-if-changed={}", proto.display());
     }
 
-    let fds = protox::compile(protos, ["proto"]).expect("protobuf compilation");
+    let fds = protox::compile(&protos, [source.join("proto")]).expect("protobuf compilation");
 
     let mut config = prost_build::Config::new();
     config.enable_type_names();
@@ -57,6 +64,11 @@ fn build_protos() {
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(kontor_retained)");
     println!("cargo:rustc-check-cfg=cfg(kontor_linked)");
+    println!("cargo:rustc-check-cfg=cfg(kontor_node)");
+    if env::var("CARGO_PKG_NAME").as_deref() == Ok("kontor-node") {
+        println!("cargo:rustc-cfg=kontor_node");
+        println!("cargo:rustc-cfg=kontor_linked");
+    }
     // Explicit protobuf inputs disable Cargo's default package scan. Track Git
     // separately, including linked worktrees, so commits refresh built metadata.
     track_git_head();

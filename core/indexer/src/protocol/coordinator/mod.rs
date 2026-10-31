@@ -11,4 +11,5 @@ pub(crate) mod v1;
 pub(crate) const fn minimum_prune_retention_blocks() -> u64 {
     v1::FINALITY_ROLLBACK_DEPTH
 }
+#[cfg(not(kontor_node))]
 pub(crate) mod view;

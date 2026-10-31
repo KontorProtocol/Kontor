@@ -27,6 +27,7 @@ use crate::protocol::operations::{
     AddressEnvelope, GenesisEnvelope, RecognitionCall, SessionOwner, ViewOutcome,
 };
 use crate::protocol::session::{SelectionSource, SessionExports};
+#[cfg(not(kontor_node))]
 use crate::runtime::bundle_session::BundleSession;
 use crate::runtime::fuel::ExecutionUsage;
 use crate::runtime::ownership::adapter::{
@@ -35,8 +36,10 @@ use crate::runtime::ownership::adapter::{
 };
 use crate::runtime::ownership::{LinkedCanonicalRootLease, LinkedOperation, OwnerService};
 use crate::runtime::pool::{LinkedManager, LinkedSession, new_linked};
+#[cfg(not(kontor_node))]
 use crate::runtime::{ComponentCache, Runtime, Storage};
 
+#[cfg(not(kontor_node))]
 pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession {
     let origin = runtime.executor_version();
     let network = runtime.network;

@@ -7,6 +7,7 @@ use metrics::{counter, gauge};
 use tracing::{debug, info, warn};
 
 use crate::bitcoin_follower::block::BlockInput;
+use crate::bitcoin_helpers::new_mock_block_hash;
 use crate::consensus::finality_types::StateEvent;
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
@@ -20,7 +21,6 @@ use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
 };
 use crate::runtime::ownership::adapter::HostFailure;
-use crate::test_utils::new_mock_block_hash;
 
 use super::consensus_state;
 use super::executor::Executor;

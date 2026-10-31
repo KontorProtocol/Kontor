@@ -2,14 +2,18 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
+#[cfg(not(kontor_node))]
 use super::selection::{
     ApplicationPosition, ExecutionSelection, ExecutorVersion, select_legacy_p1,
 };
 use crate::consensus::{Address, Validator, ValidatorSet, signing::PublicKey};
 use crate::protocol::committee::Committee;
+#[cfg(not(kontor_node))]
 use crate::protocol::v1::committee;
+#[cfg(not(kontor_node))]
 use crate::runtime::Runtime;
 
+#[cfg(not(kontor_node))]
 pub(crate) async fn derive_selected(
     runtime: &mut Runtime,
     selection: &ExecutionSelection,
@@ -47,6 +51,7 @@ pub(super) fn materialize_committee(members: Committee) -> Result<ValidatorSet> 
     })
 }
 
+#[cfg(not(kontor_node))]
 pub(crate) async fn build_validator_set(runtime: &mut Runtime) -> Result<ValidatorSet> {
     // Startup has an owned runtime but no application savepoint yet. Refresh may
     // already be inside one. A nested storage savepoint keeps every staking read

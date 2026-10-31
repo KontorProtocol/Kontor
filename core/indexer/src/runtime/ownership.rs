@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::future::{Future, pending};
+#[cfg(not(kontor_node))]
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -18,17 +19,22 @@ use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot}
 use tokio::task::{AbortHandle, Id, JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
+#[cfg(not(kontor_node))]
 use wasmtime::component::ResourceTable;
 #[cfg(test)]
 use wasmtime::component::Val;
 
+#[cfg(not(kontor_node))]
 use super::Runtime;
 #[cfg(test)]
 use super::bundle_session::BundleSession;
+#[cfg(not(kontor_node))]
 use super::call::GuestCompletion;
+#[cfg(not(kontor_node))]
 use super::invocation::InvocationBudget;
 #[cfg(test)]
 use super::invocation::InvocationStore;
+#[cfg(not(kontor_node))]
 use super::pool::Manager;
 use super::pool::{LinkedManager, LinkedSession};
 #[cfg(test)]
@@ -226,6 +232,7 @@ struct GuestDelivery {
 }
 
 enum TaskCompletion {
+    #[cfg(not(kontor_node))]
     Local(GuestCompletion),
     Linked(bool, Box<dyn Any + Send>),
 }
@@ -233,6 +240,7 @@ enum TaskCompletion {
 impl TaskCompletion {
     fn host_panicked(&self) -> bool {
         match self {
+            #[cfg(not(kontor_node))]
             Self::Local(completion) => completion.host_panicked,
             Self::Linked(panicked, _) => *panicked,
         }
@@ -292,6 +300,7 @@ impl ChildContext {
         self.kind.fuel_yield_interval()
     }
 
+    #[cfg(not(kontor_node))]
     pub(super) async fn run_guest<F, Fut>(&self, make_future: F) -> Result<GuestCompletion>
     where
         F: FnOnce(ChildContext) -> Fut,
@@ -315,6 +324,7 @@ impl ChildContext {
     {
         match self.run_admission(make_future).await? {
             TaskCompletion::Linked(panicked, payload) => Ok((panicked, payload)),
+            #[cfg(not(kontor_node))]
             TaskCompletion::Local(..) => Err(anyhow!("linked guest received local completion")),
         }
     }
@@ -446,12 +456,15 @@ impl ChildContext {
 }
 
 enum RootAuthority {
+    #[cfg(not(kontor_node))]
     Pooled(Object<Manager>),
+    #[cfg(not(kontor_node))]
     Stateful(Runtime),
     LinkedPooled(Object<LinkedManager>),
     LinkedStateful(LinkedSession),
 }
 
+#[cfg(not(kontor_node))]
 impl Deref for RootAuthority {
     type Target = Runtime;
 
@@ -466,6 +479,7 @@ impl Deref for RootAuthority {
     }
 }
 
+#[cfg(not(kontor_node))]
 impl DerefMut for RootAuthority {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
@@ -478,6 +492,7 @@ impl DerefMut for RootAuthority {
     }
 }
 
+#[cfg(not(kontor_node))]
 struct StatefulSessionInner {
     runtime: std::sync::Mutex<Option<Runtime>>,
     available: Notify,
@@ -485,14 +500,17 @@ struct StatefulSessionInner {
 }
 
 #[derive(Clone)]
+#[cfg(not(kontor_node))]
 pub(crate) struct StatefulSession(Arc<StatefulSessionInner>);
 
 #[derive(Clone)]
+#[cfg(not(kontor_node))]
 pub(crate) struct OwnedRuntimeSession {
     service: OwnerService,
     session: StatefulSession,
 }
 
+#[cfg(not(kontor_node))]
 impl OwnedRuntimeSession {
     #[cfg(test)]
     pub(crate) fn new(runtime: Runtime) -> Self {
@@ -522,11 +540,13 @@ impl OwnedRuntimeSession {
     }
 }
 
+#[cfg(not(kontor_node))]
 struct SessionCheckout {
     session: StatefulSession,
     runtime: Option<Runtime>,
 }
 
+#[cfg(not(kontor_node))]
 impl Drop for SessionCheckout {
     fn drop(&mut self) {
         if let Some(runtime) = self.runtime.take() {
@@ -535,6 +555,7 @@ impl Drop for SessionCheckout {
     }
 }
 
+#[cfg(not(kontor_node))]
 impl StatefulSession {
     fn new(runtime: Runtime) -> Self {
         Self(Arc::new(StatefulSessionInner {
@@ -672,10 +693,12 @@ struct RootKeeper {
 }
 
 impl RootKeeper {
+    #[cfg(not(kontor_node))]
     fn new(id: RootId, authority: Object<Manager>, capacity: OwnedSemaphorePermit) -> Self {
         Self::with_authority(id, RootAuthority::Pooled(authority), capacity)
     }
 
+    #[cfg(not(kontor_node))]
     fn new_stateful(id: RootId, authority: Runtime, capacity: OwnedSemaphorePermit) -> Self {
         Self::with_authority(id, RootAuthority::Stateful(authority), capacity)
     }
@@ -783,6 +806,7 @@ impl RootKeeper {
         let session = match authority.as_ref().expect("root authority retained") {
             RootAuthority::LinkedPooled(object) => &**object,
             RootAuthority::LinkedStateful(session) => session,
+            #[cfg(not(kontor_node))]
             RootAuthority::Pooled(_) | RootAuthority::Stateful(_) => {
                 return Err(anyhow!("linked hooks require a linked session"));
             }
@@ -806,6 +830,7 @@ impl RootKeeper {
         let owner = match authority.as_ref().expect("root authority retained") {
             RootAuthority::LinkedPooled(object) => object.executor.owner.clone(),
             RootAuthority::LinkedStateful(session) => session.executor.owner.clone(),
+            #[cfg(not(kontor_node))]
             RootAuthority::Pooled(_) | RootAuthority::Stateful(_) => {
                 return Err(anyhow!("root has no linked executor"));
             }
@@ -833,7 +858,9 @@ impl Drop for RootKeeper {
             .expect("quarantined root authority retained");
         if self.quiescent.load(Ordering::SeqCst) {
             match object {
+                #[cfg(not(kontor_node))]
                 RootAuthority::Pooled(object) => drop(Object::take(object)),
+                #[cfg(not(kontor_node))]
                 RootAuthority::Stateful(runtime) => drop(runtime),
                 RootAuthority::LinkedPooled(object) => drop(Object::take(object)),
                 RootAuthority::LinkedStateful(session) => drop(session),
@@ -903,6 +930,7 @@ pub(crate) struct OwnedRootHandle<T> {
     result: oneshot::Receiver<Result<T>>,
 }
 
+#[cfg(not(kontor_node))]
 pub(crate) struct CanonicalRootLease {
     keeper: Arc<RootKeeper>,
     registry: Arc<OwnerRegistry>,
@@ -1027,6 +1055,7 @@ impl Drop for LinkedCanonicalRootLease {
     }
 }
 
+#[cfg(not(kontor_node))]
 impl CanonicalRootLease {
     pub(crate) async fn drain(&mut self, runtime: &Runtime) -> Result<()> {
         self.finish
@@ -1077,6 +1106,7 @@ impl CanonicalRootLease {
     }
 }
 
+#[cfg(not(kontor_node))]
 impl Drop for CanonicalRootLease {
     fn drop(&mut self) {
         if !self.complete {
@@ -1125,6 +1155,7 @@ struct RunningChild {
 
 #[derive(Clone)]
 enum ReturnTo {
+    #[cfg(not(kontor_node))]
     Legacy(StatefulSession),
     Linked(LinkedStatefulSession),
 }
@@ -1132,12 +1163,14 @@ enum ReturnTo {
 impl ReturnTo {
     fn quarantine(&self) {
         match self {
+            #[cfg(not(kontor_node))]
             Self::Legacy(session) => session.quarantine(),
             Self::Linked(session) => session.quarantine(),
         }
     }
 }
 
+#[cfg(not(kontor_node))]
 async fn run_legacy_root<T, F>(
     keeper: Arc<RootKeeper>,
     context: ChildContext,
@@ -1313,10 +1346,12 @@ impl OwnerService {
             .map_err(|_| anyhow!("operation-owner test admission closed"))
     }
 
+    #[cfg(not(kontor_node))]
     pub(crate) fn stateful_session(&self, runtime: Runtime) -> StatefulSession {
         StatefulSession::new(runtime)
     }
 
+    #[cfg(not(kontor_node))]
     pub(crate) async fn begin_canonical(
         &self,
         runtime: &mut Runtime,
@@ -1612,6 +1647,7 @@ impl OwnerService {
         Ok(lease)
     }
 
+    #[cfg(not(kontor_node))]
     pub(crate) async fn start_pooled<T, F>(
         &self,
         object: Object<Manager>,
@@ -1628,6 +1664,7 @@ impl OwnerService {
             .await
     }
 
+    #[cfg(not(kontor_node))]
     pub(crate) async fn start_pooled_reserved<T, F>(
         &self,
         object: Object<Manager>,
@@ -1694,6 +1731,7 @@ impl OwnerService {
         Ok(handle)
     }
 
+    #[cfg(not(kontor_node))]
     pub(crate) async fn start_stateful<T, F>(
         &self,
         session: &StatefulSession,
@@ -2341,6 +2379,7 @@ async fn supervise<T, F>(
             };
             registry.roots.lock().await.remove(&keeper.id);
             match (return_to.as_ref(), returned) {
+                #[cfg(not(kontor_node))]
                 (Some(ReturnTo::Legacy(session)), Some(RootAuthority::Stateful(runtime))) => {
                     session.return_runtime(runtime);
                 }
@@ -2373,6 +2412,7 @@ async fn supervise<T, F>(
             keeper.quarantine();
             if let Some(session) = &return_to {
                 match session {
+                    #[cfg(not(kontor_node))]
                     ReturnTo::Legacy(session) => session.quarantine(),
                     ReturnTo::Linked(session) => session.quarantine(),
                 }
@@ -2431,84 +2471,89 @@ async fn restore<T>(keeper: &RootKeeper, result: Result<RootOutcome<T>>) -> Resu
         )
         .await;
     }
-    let stateful = matches!(authority.as_ref(), Some(RootAuthority::Stateful(_)));
-    let runtime: &mut Runtime = authority.as_mut().expect("root authority retained");
-    let wants_commit = result.as_ref().is_ok_and(|outcome| outcome.commit);
-    let commit_authorized = wants_commit
-        && !keeper.caught_host_panic.load(Ordering::SeqCst)
-        && !keeper.blocking.panicked()
-        && keeper
-            .state
-            .compare_exchange(
-                RootState::Running as u8,
-                RootState::Committing as u8,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_ok();
-    if commit_authorized {
-        runtime
-            .storage
-            .commit()
-            .await
-            .context("root commit failed")?;
-    } else if !runtime.storage.conn.is_autocommit() {
-        runtime
-            .storage
-            .rollback_transaction()
-            .await
-            .context("root rollback failed")?;
-        if stateful
-            && (result.is_err()
-                || matches!(
-                    RootState::load(&keeper.state),
-                    RootState::Closing | RootState::Quarantined
-                ))
-        {
-            // A cancelled publication can have populated the cache under an id
-            // that the full rollback makes available to a different contract.
-            runtime.component_cache.clear();
-        }
-    }
-    if !commit_authorized {
-        runtime.stack.clear().await;
-        runtime.deposit.reset().await;
-    }
-    runtime.ownership = None;
-    runtime.storage.ownership = None;
-    runtime.bundle_owner = None;
-    runtime.storage.bundle_owner = None;
-    let live_store_table = runtime.store_table_owners.as_ref().is_some_and(|owners| {
-        owners
-            .lock()
-            .expect("store table tracker poisoned")
-            .iter()
-            .any(|owner| owner.strong_count() != 0)
-    });
-    if !runtime.storage.conn.is_autocommit()
-        || !runtime.storage.savepoint_stack.is_empty().await
-        || !runtime.stack.is_empty().await
-        || runtime
-            .invocation_budget
-            .as_ref()
-            .is_some_and(|budget| budget.live() != 0)
-        || live_store_table
-        || Arc::strong_count(&runtime.table) != 1
+    #[cfg(kontor_node)]
+    unreachable!("linked node authority handled above");
+    #[cfg(not(kontor_node))]
     {
-        return Err(anyhow!(
-            "root still has live SQL, stack, Store or table ownership"
-        ));
+        let stateful = matches!(authority.as_ref(), Some(RootAuthority::Stateful(_)));
+        let runtime: &mut Runtime = authority.as_mut().expect("root authority retained");
+        let wants_commit = result.as_ref().is_ok_and(|outcome| outcome.commit);
+        let commit_authorized = wants_commit
+            && !keeper.caught_host_panic.load(Ordering::SeqCst)
+            && !keeper.blocking.panicked()
+            && keeper
+                .state
+                .compare_exchange(
+                    RootState::Running as u8,
+                    RootState::Committing as u8,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok();
+        if commit_authorized {
+            runtime
+                .storage
+                .commit()
+                .await
+                .context("root commit failed")?;
+        } else if !runtime.storage.conn.is_autocommit() {
+            runtime
+                .storage
+                .rollback_transaction()
+                .await
+                .context("root rollback failed")?;
+            if stateful
+                && (result.is_err()
+                    || matches!(
+                        RootState::load(&keeper.state),
+                        RootState::Closing | RootState::Quarantined
+                    ))
+            {
+                // A cancelled publication can have populated the cache under an id
+                // that the full rollback makes available to a different contract.
+                runtime.component_cache.clear();
+            }
+        }
+        if !commit_authorized {
+            runtime.stack.clear().await;
+            runtime.deposit.reset().await;
+        }
+        runtime.ownership = None;
+        runtime.storage.ownership = None;
+        runtime.bundle_owner = None;
+        runtime.storage.bundle_owner = None;
+        let live_store_table = runtime.store_table_owners.as_ref().is_some_and(|owners| {
+            owners
+                .lock()
+                .expect("store table tracker poisoned")
+                .iter()
+                .any(|owner| owner.strong_count() != 0)
+        });
+        if !runtime.storage.conn.is_autocommit()
+            || !runtime.storage.savepoint_stack.is_empty().await
+            || !runtime.stack.is_empty().await
+            || runtime
+                .invocation_budget
+                .as_ref()
+                .is_some_and(|budget| budget.live() != 0)
+            || live_store_table
+            || Arc::strong_count(&runtime.table) != 1
+        {
+            return Err(anyhow!(
+                "root still has live SQL, stack, Store or table ownership"
+            ));
+        }
+        runtime.invocation_budget = None;
+        runtime.store_table_owners = None;
+        *runtime.table.lock().await = ResourceTable::new();
+        keeper.quiescent.store(true, Ordering::SeqCst);
+        if RootState::load(&keeper.state) == RootState::Closing {
+            return Ok(Err(anyhow!(
+                "operation cancelled before commit authorization"
+            )));
+        }
+        Ok(result.map(|outcome| outcome.value))
     }
-    runtime.invocation_budget = None;
-    runtime.store_table_owners = None;
-    *runtime.table.lock().await = ResourceTable::new();
-    keeper.quiescent.store(true, Ordering::SeqCst);
-    if RootState::load(&keeper.state) == RootState::Closing {
-        return Ok(Err(anyhow!(
-            "operation cancelled before commit authorization"
-        )));
-    }
-    Ok(result.map(|outcome| outcome.value))
 }
 
 async fn restore_linked<T>(
@@ -2519,6 +2564,7 @@ async fn restore_linked<T>(
     let (session, stateful) = match authority {
         RootAuthority::LinkedPooled(object) => (&mut **object, false),
         RootAuthority::LinkedStateful(session) => (session, true),
+        #[cfg(not(kontor_node))]
         RootAuthority::Pooled(_) | RootAuthority::Stateful(_) => {
             return Err(anyhow!("linked restoration received a legacy authority"));
         }

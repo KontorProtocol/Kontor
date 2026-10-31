@@ -6,6 +6,9 @@ mod costs;
 mod genesis_parity;
 extern crate alloc;
 
+mod data;
+pub use data::{GenesisParameters, GenesisValidator, hash_bytes};
+
 mod bundle_exports;
 mod bundle_initialization;
 mod bundle_ownership;
@@ -71,7 +74,6 @@ use lowering::Linker;
 use ownership::AsyncGate;
 #[cfg(not(kontor_retained))]
 use ownership::{ChildContext, OwnerService};
-use sha2::{Digest, Sha256};
 #[cfg(not(kontor_retained))]
 use staking::api::wave::{get_sigma_min_call_expr, get_sigma_min_parse_return_expr};
 pub use stdlib::{
@@ -128,19 +130,6 @@ use crate::runtime::{
     wit::Signer,
 };
 
-#[derive(Clone, Debug)]
-pub struct GenesisParameters {
-    pub sigma_min: Decimal,
-    pub validators: Vec<GenesisValidator>,
-}
-
-#[derive(Clone, Debug)]
-pub struct GenesisValidator {
-    pub x_only_pubkey: String,
-    pub stake: Decimal,
-    pub ed25519_pubkey: Vec<u8>,
-}
-
 impl From<GenesisValidator> for staking::api::ActiveValidatorInfo {
     fn from(v: GenesisValidator) -> Self {
         Self {
@@ -149,13 +138,6 @@ impl From<GenesisValidator> for staking::api::ActiveValidatorInfo {
             ed25519_pubkey: v.ed25519_pubkey,
         }
     }
-}
-
-pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let result = hasher.finalize();
-    result.into()
 }
 
 // RawFileDescriptor's PartialEq/Eq moved to `built-in-types` (the crate that

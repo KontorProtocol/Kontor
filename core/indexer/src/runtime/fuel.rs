@@ -1,8 +1,10 @@
 pub use crate::protocol::v1::fuel::*;
 
 mod gauge;
-pub use gauge::{ExecutionUsage, FuelCharge, FuelGauge, FuelProfile, FuelReport, FuelStats};
+pub use gauge::{FuelCharge, FuelGauge, FuelProfile, FuelReport, FuelStats};
+mod usage;
 pub(crate) use gauge::{UsageKind, record_fuel};
+pub use usage::ExecutionUsage;
 
 #[cfg(test)]
 mod cow_costs;

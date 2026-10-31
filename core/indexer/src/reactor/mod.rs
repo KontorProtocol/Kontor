@@ -70,9 +70,12 @@ use crate::protocol::v1::committee::stake_to_voting_power;
 use crate::runtime::numerics::decimal_to_string;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::pool::LinkedSession;
+#[cfg(test)]
+use crate::runtime::{ComponentCache, Runtime, Storage};
 use crate::stopper::ShutdownSignal;
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
+    bitcoin_helpers::new_mock_block_hash,
     consensus::Genesis,
     database::{
         self,
@@ -81,8 +84,7 @@ use crate::{
             select_block_latest, select_unconfirmed_batch_tx,
         },
     },
-    runtime::{ComponentCache, GenesisParameters, Runtime, Storage},
-    test_utils::new_mock_block_hash,
+    runtime::GenesisParameters,
 };
 use libsql::Connection;
 

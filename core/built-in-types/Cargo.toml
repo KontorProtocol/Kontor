@@ -7,7 +7,8 @@ edition = "2024"
 # Host embedding: wasmtime component derives on the generated types (injected
 # via targeted attributes in lib.rs) plus the `host_facade*` modules the host
 # `bindgen!`'s interface-level `with:` points at.
-host = ["dep:wasmtime", "dep:serde"]
+host = ["dep:wasmtime", "serde"]
+serde = ["dep:serde"]
 
 [dependencies]
 stdlib = { path = "../stdlib" }

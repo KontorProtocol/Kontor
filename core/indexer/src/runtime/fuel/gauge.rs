@@ -4,18 +4,11 @@ use anyhow::{Result, anyhow};
 use indexmap::IndexMap;
 use wasmtime::AsContextMut;
 
-use super::{Fuel, FuelDiscriminants};
+use super::{ExecutionUsage, Fuel, FuelDiscriminants};
 use crate::runtime::Runtime;
 
 #[cfg(test)]
 mod tests;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ExecutionUsage {
-    pub user_fuel: u64,
-    pub system_fuel: u64,
-    pub deposit_fuel: u64,
-}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum UsageKind {

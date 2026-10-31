@@ -6,14 +6,17 @@ use anyhow::Context;
 use deadpool::managed::{self, Pool, RecycleError, RecycleResult};
 use libsql::Connection;
 use thiserror::Error;
+#[cfg(not(kontor_node))]
 use tracing::warn;
+#[cfg(not(kontor_node))]
 use wasmtime::Engine;
+
+#[cfg(not(kontor_node))]
+use super::{ComponentCache, Linkers, Runtime};
 
 use super::ownership::adapter::{ExecutorSession, SessionFactory};
 use crate::{
-    database::connection::new_connection,
-    protocol::coordinator::selection::ExecutorVersion,
-    runtime::{ComponentCache, Linkers, Runtime},
+    database::connection::new_connection, protocol::coordinator::selection::ExecutorVersion,
 };
 
 #[cfg(test)]
@@ -27,6 +30,7 @@ pub enum RuntimeError {
     DatabaseConnection(String),
 }
 
+#[cfg(not(kontor_node))]
 pub struct Manager {
     data_dir: PathBuf,
     filename: String,
@@ -128,6 +132,7 @@ impl managed::Manager for LinkedManager {
     }
 }
 
+#[cfg(not(kontor_node))]
 impl Manager {
     pub(crate) fn new(
         data_dir: PathBuf,
@@ -149,6 +154,7 @@ impl Manager {
     }
 }
 
+#[cfg(not(kontor_node))]
 impl managed::Manager for Manager {
     type Type = Runtime;
     type Error = RuntimeError;
@@ -213,6 +219,7 @@ impl managed::Manager for Manager {
     }
 }
 
+#[cfg(not(kontor_node))]
 pub(crate) async fn new(
     data_dir: PathBuf,
     filename: String,
