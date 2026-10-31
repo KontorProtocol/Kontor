@@ -33,8 +33,29 @@ permissions:
   contents: read
 
 jobs:
+  controls:
+    name: Native stack evidence controls
+    if: github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install Python evidence validator
+        run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
+      # Process-identity controls exercise Linux /proc and cgroups.
+      - name: Test qualification controls
+        run: python3 -m unittest discover -s tools/native-stack -p 'test_*.py' -v
+
   qualify:
     name: Native stack (${{ matrix.os }}, ${{ matrix.profile }})
+    needs: controls
     if: github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
@@ -64,8 +85,6 @@ jobs:
           python-version: "3.13"
       - name: Install Python evidence validator
         run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
-      - name: Test qualification controls
-        run: python3 -m unittest discover -s tools/native-stack -p 'test_*.py' -v
       - name: Check runner architecture
         run: test "$RUNNER_ARCH" = "${{ matrix.arch }}"
       - name: Install dependencies (Linux)
