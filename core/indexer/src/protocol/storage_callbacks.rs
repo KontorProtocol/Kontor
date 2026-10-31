@@ -3,6 +3,7 @@ use super::storage_aux::AuxiliaryCallbacks;
 use super::storage_contracts::ContractCallbacks;
 use super::storage_footprint::FootprintCallbacks;
 use super::storage_identity::{CoreCallbacks, IdentityCallbacks, NonceCallbacks};
+use super::storage_inspection::InspectionCallbacks;
 use super::storage_keys::KeyCallbacks;
 use super::storage_point::PointCallbacks;
 use super::storage_rows::RowCallbacks;
@@ -24,4 +25,5 @@ pub(crate) type StorageCallbacks = (
     RowCallbacks,
     SessionCallbacks,
     AuxiliaryCallbacks,
+    InspectionCallbacks,
 );

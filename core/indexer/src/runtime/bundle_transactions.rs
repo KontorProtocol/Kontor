@@ -6,12 +6,11 @@ use indexer_types::Transaction;
 
 use super::Runtime;
 use super::bundle_session::{BundleSession, infrastructure};
-use crate::block;
 use crate::protocol::execution::SelectionEnvelope;
 use crate::protocol::operations::{
     RecognitionCall, RecognizedEnvelope, SessionOwner, TransactionCall, TransactionOutcome,
 };
-use crate::protocol::v1::{execution, transactions};
+use crate::protocol::v1::{execution, inspection, transactions};
 
 #[cfg(test)]
 mod tests;
@@ -114,7 +113,7 @@ impl Runtime {
             "inspection requires simulation selection"
         );
         let runtime = self.bind_selection(selection)?;
-        let result = block::inspect(&runtime.get_storage_conn(), &transaction).await?;
+        let result = inspection::inspect(&runtime.storage.host.inspection, &transaction).await?;
         Ok(serde_json::to_vec(&result)?)
     }
 

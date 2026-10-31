@@ -6,6 +6,7 @@ pub(crate) mod execution;
 pub(crate) mod fees;
 pub(crate) mod fuel;
 pub(crate) mod gas;
+pub(crate) mod inspection;
 pub(crate) mod lifecycle;
 pub(crate) mod native;
 pub(crate) mod native_bootstrap;

@@ -4,6 +4,7 @@ use crate::protocol::storage_callbacks::StorageCallbacks;
 use crate::protocol::storage_contracts::ContractCallbacks;
 use crate::protocol::storage_footprint::FootprintCallbacks;
 use crate::protocol::storage_identity::{CoreCallbacks, IdentityCallbacks, NonceCallbacks};
+use crate::protocol::storage_inspection::InspectionCallbacks;
 use crate::protocol::storage_keys::KeyCallbacks;
 use crate::protocol::storage_point::PointCallbacks;
 use crate::protocol::storage_rows::RowCallbacks;
@@ -25,6 +26,7 @@ pub(crate) struct StorageHost {
     pub session: SessionCallbacks,
     pub history: HistoryCallbacks,
     pub maintenance: MaintenanceCallbacks,
+    pub inspection: InspectionCallbacks,
 }
 
 impl From<StorageCallbacks> for StorageHost {
@@ -42,6 +44,7 @@ impl From<StorageCallbacks> for StorageHost {
             rows,
             session,
             auxiliary,
+            inspection,
         ) = callbacks;
         let (history, maintenance) = auxiliary;
         Self {
@@ -58,6 +61,7 @@ impl From<StorageCallbacks> for StorageHost {
             session,
             history,
             maintenance,
+            inspection,
         }
     }
 }

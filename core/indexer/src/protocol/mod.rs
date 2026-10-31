@@ -8,6 +8,7 @@ pub(crate) mod storage_callbacks;
 pub(crate) mod storage_contracts;
 pub(crate) mod storage_footprint;
 pub(crate) mod storage_identity;
+pub(crate) mod storage_inspection;
 pub(crate) mod storage_keys;
 pub(crate) mod storage_point;
 pub(crate) mod storage_rows;

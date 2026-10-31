@@ -12,6 +12,7 @@ pub mod receipt_stream;
 pub(crate) mod storage_aux_v1;
 pub(crate) mod storage_callbacks_v1;
 pub(crate) mod storage_contracts_v1;
+pub(crate) mod storage_inspection_v1;
 pub(crate) mod storage_session_v1;
 pub mod types;
 pub mod writer;

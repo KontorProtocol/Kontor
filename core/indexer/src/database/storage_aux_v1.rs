@@ -9,7 +9,7 @@ use super::queries::{
 };
 use crate::protocol::storage_aux::{AuxiliaryCallbacks, StorageFailure};
 
-fn failure(error: impl Error + 'static) -> StorageFailure {
+pub(super) fn failure(error: impl Error + 'static) -> StorageFailure {
     let mut causes = vec![error.to_string()];
     let mut cause = error.source();
     while let Some(error) = cause {

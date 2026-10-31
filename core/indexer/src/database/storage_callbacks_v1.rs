@@ -7,6 +7,7 @@ use super::queries::{
 };
 use super::storage_aux_v1::auxiliary_callbacks;
 use super::storage_contracts_v1::contract_callbacks;
+use super::storage_inspection_v1::inspection_callbacks;
 use super::storage_session_v1::session_callbacks;
 use crate::protocol::storage_callbacks::StorageCallbacks;
 
@@ -24,5 +25,6 @@ pub(crate) fn storage_callbacks(conn: &Connection) -> StorageCallbacks {
         row_callbacks(conn),
         session_callbacks(conn),
         auxiliary_callbacks(conn),
+        inspection_callbacks(conn),
     )
 }
