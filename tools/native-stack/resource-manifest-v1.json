@@ -390,7 +390,7 @@
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "3d7ccc707471848248ba564ea270f45b1a1e0bc6cb2312bad933c7d44cb87cd4"
+      "sha256": "e9a85346c7e600a9ee452113ef3eaf5fe656ef2324c1160127edd16b9bfcc4a2"
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -650,7 +650,7 @@
     },
     "suite_dispatch_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "3d7ccc707471848248ba564ea270f45b1a1e0bc6cb2312bad933c7d44cb87cd4"
+      "sha256": "e9a85346c7e600a9ee452113ef3eaf5fe656ef2324c1160127edd16b9bfcc4a2"
     },
     "suite_registry_builder": {
       "path": "tools/native-stack/resource_suite_registry.py",

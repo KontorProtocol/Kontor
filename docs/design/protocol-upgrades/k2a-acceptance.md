@@ -100,9 +100,18 @@ complete upgrade-system acceptance. Local review does not replace CI.
 
 ## Remaining phase gates and later phases
 
-Before this phase merges: pass current-head CI and verify the actual merge. Integrate the CI scope change
-from PR #615 after its verified merge. Runtime-affecting changes still require
-their applicable cross-platform qualification.
+PR #615 is integrated from verified merge
+`cd74877fa354ec82f664944536e641d39d02a4d5`. Its six-cell qualification and
+all current-head checks passed. The integration preserves the reviewed K2a core
+source and the separately reviewed CI changes exactly; regeneration changes only
+23 SHA-256 fields in the four qualification manifests. All four manifests validate,
+19 CI controls pass, and the 228 qualification controls pass after rerunning the
+two socket-dependent modules outside the socket-restricted sandbox (seven tests,
+including the six initially blocked by socket creation). No runtime correction
+was needed, so the existing independent review coverage is retained.
+
+Before this phase merges: pass current-head CI and verify the actual merge.
+Runtime-affecting changes still require their applicable cross-platform qualification.
 
 K2b must isolate the actual production semantic closure into independently locked
 graphs, with common interfaces free of dependency-owned types. K3 must persist the
