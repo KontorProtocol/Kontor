@@ -89,7 +89,7 @@ impl BundleSession {
                 runtime
                     .verify_bundle_operation(&selection, selection.3.0)
                     .map_err(infrastructure)?;
-                if !matches!(selection.3.0, 1 | 3 | 4 | 5 | 6) {
+                if !matches!(selection.3.0, 1 | 3 | 4 | 5 | 6 | 7) {
                     return Err((2, "executor unit requires a canonical selection".into()));
                 }
                 let runtime = runtime.bind_selection(&selection).map_err(infrastructure)?;

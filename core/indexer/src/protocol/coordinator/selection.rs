@@ -10,6 +10,9 @@ use libsql::Connection;
 pub(crate) enum ApplicationPosition {
     View,
     Committee,
+    Initialization {
+        step: u64,
+    },
     Maintenance {
         rollback_height: Option<u64>,
     },
@@ -61,6 +64,7 @@ impl ExecutionSelection {
         let position = match self.position {
             ApplicationPosition::View => (0, 0, None, 0),
             ApplicationPosition::Committee => (1, 0, None, 0),
+            ApplicationPosition::Initialization { step } => (7, 0, None, step),
             ApplicationPosition::Maintenance { rollback_height } => (
                 6,
                 rollback_height.unwrap_or(0),
@@ -124,7 +128,8 @@ impl ExecutionSelection {
                 ApplicationPosition::Block { .. }
                 | ApplicationPosition::Batch { .. }
                 | ApplicationPosition::Committee
-                | ApplicationPosition::Maintenance { .. },
+                | ApplicationPosition::Maintenance { .. }
+                | ApplicationPosition::Initialization { .. },
                 false,
             ) => true,
             _ => false,
@@ -223,7 +228,8 @@ impl ExecutionSelection {
             ApplicationPosition::View => {
                 bail!("view selection cannot execute canonical transactions")
             }
-            ApplicationPosition::Maintenance { .. } => {
+            ApplicationPosition::Maintenance { .. }
+            | ApplicationPosition::Initialization { .. } => {
                 bail!("maintenance selection cannot execute canonical transactions")
             }
             ApplicationPosition::Committee => {

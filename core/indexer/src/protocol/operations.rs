@@ -63,3 +63,16 @@ pub(crate) type ContractWitCall = Arc<
         + Send
         + Sync,
 >;
+
+// Each initializer step has its own durable boundary. False means roll back on
+// success (a read); the node still owns admission and settlement authority.
+pub(crate) type GenesisEnvelope = (String, Vec<(String, String, Vec<u8>)>);
+pub(crate) type InitializationStep = (
+    bool,
+    Box<dyn FnOnce(SessionOwner, SelectionEnvelope) -> OperationFuture<()> + Send>,
+);
+pub(crate) type InitializeCall = Arc<
+    dyn Fn(SessionOwner, GenesisEnvelope) -> Result<Vec<InitializationStep>, (u8, String)>
+        + Send
+        + Sync,
+>;

@@ -28,32 +28,23 @@ impl<E: Executor> Reactor<E> {
         selection: &ExecutionSelection,
         simulation: bool,
     ) -> Result<LinkedCanonicalRootLease> {
-        let capacity = self.owner_service.reserve_root_capacity().await?;
-        let mut lease = self
-            .owner_service
-            .begin_linked_canonical_reserved(&self.session, capacity, selection.clone(), simulation)
-            .await?;
-        if let Err(error) = linked::begin_unit(&self.session, selection, self.network).await {
-            lease.drain().await?;
-            if !self.session.conn.is_autocommit() {
-                lease.settle(false).await?;
-            }
-            lease.complete().await?;
-            return Err(error);
-        }
-        Ok(lease)
+        linked::begin_canonical_unit(
+            &self.owner_service,
+            &self.session,
+            selection,
+            self.network,
+            simulation,
+        )
+        .await
     }
 
     pub(super) async fn finish_unit<T>(
         &mut self,
-        mut lease: LinkedCanonicalRootLease,
+        lease: LinkedCanonicalRootLease,
         result: Result<T>,
         commit: bool,
     ) -> Result<T> {
-        lease.drain().await?;
-        lease.settle(commit && result.is_ok()).await?;
-        lease.complete().await?;
-        result
+        linked::finish_canonical_unit(lease, result, commit).await
     }
 
     pub(super) async fn maintain_executor(&mut self, rollback_height: Option<u64>) -> Result<()> {

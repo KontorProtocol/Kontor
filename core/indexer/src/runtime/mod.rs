@@ -7,6 +7,7 @@ mod genesis_parity;
 extern crate alloc;
 
 mod bundle_exports;
+mod bundle_initialization;
 mod bundle_ownership;
 pub(crate) mod bundle_session;
 mod component_cache;
@@ -258,6 +259,7 @@ pub struct Runtime {
     // Host wrappers clone Runtime before their charge; copy payload bytes only
     // in the metered transaction accessor.
     pub(crate) op_return_data: Option<Arc<[u8]>>,
+    #[cfg(test)]
     pub(crate) node_label: String,
     /// The chain's Bitcoin network — a genesis-fixed constant exposed to
     /// contracts via the `network()` built-in. Defaults to `Regtest` (tests /
@@ -375,6 +377,7 @@ impl Runtime {
             pricing: Pricing::default(),
             previous_output: None,
             op_return_data: None,
+            #[cfg(test)]
             node_label: String::new(),
             network: bitcoin::Network::Regtest,
             simulating: false,

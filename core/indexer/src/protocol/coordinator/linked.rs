@@ -17,14 +17,16 @@ use super::selection::{
 use crate::consensus::ValidatorSet;
 use crate::database::queries::{insert_block_execution_usage, insert_transaction_execution_usage};
 use crate::database::storage_callbacks_v1::storage_callbacks;
-use crate::protocol::operations::{AddressEnvelope, RecognitionCall, SessionOwner, ViewOutcome};
+use crate::protocol::operations::{
+    AddressEnvelope, GenesisEnvelope, RecognitionCall, SessionOwner, ViewOutcome,
+};
 use crate::runtime::bundle_session::BundleSession;
 use crate::runtime::fuel::ExecutionUsage;
 use crate::runtime::ownership::adapter::{
     ExecutorOperations, ExecutorSession, HostFailure, OwnerAdapter, Payload, RootHooks,
     SessionFactory,
 };
-use crate::runtime::ownership::{LinkedOperation, OwnerService};
+use crate::runtime::ownership::{LinkedCanonicalRootLease, LinkedOperation, OwnerService};
 use crate::runtime::pool::{LinkedManager, LinkedSession, new_linked};
 use crate::runtime::{BundleOwner, ComponentCache, Runtime, SelectionSource, Storage};
 
@@ -35,6 +37,7 @@ pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession
     let recognize = runtime.recognizer();
     let session = BundleSession::new(runtime);
     let operations = ExecutorOperations {
+        initialize: session.initializer(),
         recognize,
         inspect: session.inspect(),
         maintenance: session.maintenance(),
@@ -207,6 +210,64 @@ pub(crate) async fn begin_unit(
         .await
         .map_err(HostFailure::from)?;
     selection.verify_base(&session.conn).await
+}
+
+pub(crate) async fn begin_canonical_unit(
+    service: &OwnerService,
+    session: &LinkedSession,
+    selection: &ExecutionSelection,
+    network: Network,
+    simulation: bool,
+) -> Result<LinkedCanonicalRootLease> {
+    let capacity = service.reserve_root_capacity().await?;
+    let mut lease = service
+        .begin_linked_canonical_reserved(session, capacity, selection.clone(), simulation)
+        .await?;
+    if let Err(error) = begin_unit(session, selection, network).await {
+        lease.drain().await?;
+        if !session.conn.is_autocommit() {
+            lease.settle(false).await?;
+        }
+        lease.complete().await?;
+        return Err(error);
+    }
+    Ok(lease)
+}
+
+pub(crate) async fn finish_canonical_unit<T>(
+    mut lease: LinkedCanonicalRootLease,
+    result: Result<T>,
+    commit: bool,
+) -> Result<T> {
+    lease.drain().await?;
+    lease.settle(commit && result.is_ok()).await?;
+    lease.complete().await?;
+    result
+}
+
+pub(crate) async fn initialize(
+    service: &OwnerService,
+    session: &LinkedSession,
+    network: Network,
+    genesis: GenesisEnvelope,
+) -> Result<()> {
+    let steps = (session.executor.operations.initialize)(session.executor.owner.clone(), genesis)
+        .map_err(HostFailure::from)?;
+    for (index, (commit, step)) in steps.into_iter().enumerate() {
+        let selection = select_legacy_p1(
+            &session.conn,
+            network,
+            ApplicationPosition::Initialization { step: index as u64 },
+        )
+        .await?;
+        let lease = begin_canonical_unit(service, session, &selection, network, false).await?;
+        let result = step(session.executor.owner.clone(), selection.envelope())
+            .await
+            .map_err(HostFailure::from)
+            .map_err(Into::into);
+        finish_canonical_unit(lease, result, commit).await?;
+    }
+    Ok(())
 }
 
 #[derive(Clone)]

@@ -9,8 +9,8 @@ use libsql::Connection;
 
 use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
 use crate::protocol::operations::{
-    BeginUnitCall, CommitteeCall, ContractWitCall, InspectCall, LifecycleCall, MaintenanceCall,
-    RecognitionCall, TransactionCall, ViewCall,
+    BeginUnitCall, CommitteeCall, ContractWitCall, InitializeCall, InspectCall, LifecycleCall,
+    MaintenanceCall, RecognitionCall, TransactionCall, ViewCall,
 };
 
 use super::{ChildContext, RootKeeper, RootState, TaskCompletion};
@@ -75,6 +75,7 @@ pub(crate) struct RootHooks {
 
 #[derive(Clone)]
 pub(crate) struct ExecutorOperations {
+    pub(crate) initialize: InitializeCall,
     pub(crate) inspect: InspectCall,
     pub(crate) maintenance: MaintenanceCall,
     pub(crate) recognize: RecognitionCall,
@@ -90,6 +91,7 @@ pub(crate) struct ExecutorOperations {
 impl Default for ExecutorOperations {
     fn default() -> Self {
         Self {
+            initialize: Arc::new(|_, _| Err((2, "mock has no initializer".into()))),
             inspect: Arc::new(|_, _, _, _| {
                 Box::pin(async { Err((2, "mock has no inspection operation".into())) })
             }),
