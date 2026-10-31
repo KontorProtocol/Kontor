@@ -28,7 +28,7 @@ pub(crate) async fn derive_selected(
     materialize_committee(members)
 }
 
-fn materialize_committee(members: Committee) -> Result<ValidatorSet> {
+pub(super) fn materialize_committee(members: Committee) -> Result<ValidatorSet> {
     let validators = members
         .into_iter()
         .map(|(address, key, voting_power)| {

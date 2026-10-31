@@ -2557,13 +2557,13 @@ async fn restore_linked<T>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::bundle_ownership::BundleOwner;
     use super::super::bundle_session::BundleSession;
     use super::super::pool::new_linked;
     use super::adapter::{ExecutorSession, GuestFactory, RootHooks, SessionAction, SessionFactory};
     use super::*;
     use crate::consensus::signing::PrivateKey;
     use crate::database::connection::new_connection;
+    use crate::protocol::coordinator::linked::link_runtime;
     use crate::protocol::coordinator::selection::{
         ApplicationPosition, ExecutorVersion, select_legacy_p1,
     };
@@ -3187,39 +3187,12 @@ mod tests {
         canonical: bool,
     ) -> (LinkedSession, Arc<BundleSession>) {
         let conn = runtime.storage.conn.clone();
-        let origin = runtime.executor_version();
-        let network = runtime.network;
-        let retained = BundleSession::new(runtime);
-        let session = retained.clone();
-        let make_root = Arc::new(
-            move |selection: ExecutionSelection, adapter: OwnerAdapter| {
-                selection
-                    .ensure_runtime(network, origin)
-                    .map_err(|error| (0, format!("{error:#}")))?;
-                let owner = BundleOwner::new(
-                    adapter.root,
-                    adapter.submit_guest,
-                    adapter.submit_blocking,
-                    adapter.check_commit,
-                    adapter.report_failure,
-                    adapter.fuel_yield_interval,
-                );
-                let (prepare, inspect_canonical_drain, settle, reset) =
-                    session.root_hooks(owner, canonical, selection.envelope());
-                Ok(RootHooks {
-                    prepare,
-                    inspect_canonical_drain,
-                    settle,
-                    reset,
-                })
-            },
-        );
-        let executor = ExecutorSession {
-            origin,
-            owner: retained.clone(),
-            make_root,
-            recycle: retained.recycle(),
-        };
+        let executor = link_runtime(runtime, canonical);
+        let retained = executor
+            .owner
+            .clone()
+            .downcast::<BundleSession>()
+            .unwrap_or_else(|_| panic!("unexpected bundle session type"));
         (LinkedSession::new(conn, executor), retained)
     }
 
@@ -5535,6 +5508,7 @@ mod tests {
                 });
                 Ok(ExecutorSession {
                     origin: ExecutorVersion::LegacyP1,
+                    operations: Default::default(),
                     owner: Arc::new(()),
                     make_root,
                     recycle: action,
@@ -5633,6 +5607,7 @@ mod tests {
         });
         let executor = ExecutorSession {
             origin: ExecutorVersion::LegacyP1,
+            operations: Default::default(),
             owner: Arc::new(()),
             make_root,
             recycle: Arc::new(|_| Box::pin(async { Ok(()) })),
@@ -5686,6 +5661,7 @@ mod tests {
         let make_root_gate = gate.clone();
         let executor = ExecutorSession {
             origin: ExecutorVersion::LegacyP1,
+            operations: Default::default(),
             owner: Arc::new(()),
             make_root: Arc::new(move |_, _| {
                 let action: SessionAction = Arc::new(|_| Box::pin(async { Ok(()) }));
@@ -5756,6 +5732,7 @@ mod tests {
         let root_settlements = settlements.clone();
         let executor = ExecutorSession {
             origin: ExecutorVersion::LegacyP1,
+            operations: Default::default(),
             owner: Arc::new(()),
             make_root: Arc::new(move |_, _| {
                 let prepare_conn = root_conn.clone();
@@ -5831,6 +5808,7 @@ mod tests {
         let action: SessionAction = Arc::new(|_| Box::pin(async { Ok(()) }));
         let executor = ExecutorSession {
             origin: ExecutorVersion::LegacyP1,
+            operations: Default::default(),
             owner: Arc::new(()),
             make_root: Arc::new(move |_, _| {
                 let action: SessionAction = Arc::new(|_| Box::pin(async { Ok(()) }));

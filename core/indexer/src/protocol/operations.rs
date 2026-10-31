@@ -19,3 +19,6 @@ pub(crate) type ViewCall = Arc<
 >;
 pub(crate) type CommitteeCall =
     Arc<dyn Fn(SessionOwner, SelectionEnvelope) -> OperationFuture<Committee> + Send + Sync>;
+
+pub(crate) type BeginUnitCall =
+    Arc<dyn Fn(SessionOwner, SelectionEnvelope) -> OperationFuture<()> + Send + Sync>;

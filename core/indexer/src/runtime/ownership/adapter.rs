@@ -8,6 +8,7 @@ use anyhow::Result;
 use libsql::Connection;
 
 use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
+use crate::protocol::operations::{BeginUnitCall, CommitteeCall, ViewCall};
 
 use super::{ChildContext, RootKeeper, RootState, TaskCompletion};
 
@@ -70,8 +71,33 @@ pub(crate) struct RootHooks {
 }
 
 #[derive(Clone)]
+pub(crate) struct ExecutorOperations {
+    pub(crate) begin_unit: BeginUnitCall,
+    pub(crate) view: ViewCall,
+    pub(crate) committee: CommitteeCall,
+}
+
+#[cfg(test)]
+impl Default for ExecutorOperations {
+    fn default() -> Self {
+        Self {
+            begin_unit: Arc::new(|_, _| {
+                Box::pin(async { Err((2, "mock has no unit operation".into())) })
+            }),
+            view: Arc::new(|_, _, _, _| {
+                Box::pin(async { Err((2, "mock has no view operation".into())) })
+            }),
+            committee: Arc::new(|_, _| {
+                Box::pin(async { Err((2, "mock has no committee operation".into())) })
+            }),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct ExecutorSession {
     pub(crate) origin: ExecutorVersion,
+    pub(crate) operations: ExecutorOperations,
     pub(crate) owner: SharedOwner,
     pub(crate) make_root: RootHookFactory,
     pub(crate) recycle: RecycleHook,

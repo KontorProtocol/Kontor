@@ -8,7 +8,7 @@ extern crate alloc;
 
 mod bundle_exports;
 mod bundle_ownership;
-mod bundle_session;
+pub(crate) mod bundle_session;
 mod component_cache;
 mod component_policy;
 pub mod counter;
@@ -48,7 +48,8 @@ mod selected;
 
 use crate::protocol::execution::ExecutorVersion;
 use bitcoin::XOnlyPublicKey;
-use bundle_ownership::{BundleOwner, HostFailure};
+pub(crate) use bundle_ownership::BundleOwner;
+use bundle_ownership::HostFailure;
 pub(crate) use call::CallOutcome;
 pub use component_cache::ComponentCache;
 pub(crate) use component_cache::ComponentSource;

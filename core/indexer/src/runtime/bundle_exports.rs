@@ -6,11 +6,33 @@ use super::bundle_ownership::HostError;
 use super::bundle_session::{BundleSession, infrastructure};
 use super::{ContractAddress, ExecutionError, Runtime};
 use crate::protocol::execution::SelectionEnvelope;
-use crate::protocol::operations::{CommitteeCall, SessionOwner, ViewCall};
+use crate::protocol::operations::{BeginUnitCall, CommitteeCall, SessionOwner, ViewCall};
 use crate::protocol::v1::committee::derive_committee;
 
 impl BundleSession {
-    pub(super) fn view(self: &Arc<Self>) -> ViewCall {
+    pub(crate) fn begin_unit(self: &Arc<Self>) -> BeginUnitCall {
+        let expected = self.clone();
+        Arc::new(move |opaque, selection| {
+            let session = expected.clone();
+            Box::pin(async move {
+                session.verify_operation_owner(opaque)?;
+                let mut runtime = session.runtime.lock().await;
+                runtime
+                    .verify_bundle_operation(&selection, selection.3.0)
+                    .map_err(infrastructure)?;
+                if !matches!(selection.3.0, 1 | 3 | 4 | 5) {
+                    return Err((2, "executor unit requires a canonical selection".into()));
+                }
+                let runtime = runtime.bind_selection(&selection).map_err(infrastructure)?;
+                if !runtime.storage.savepoint_stack.is_empty().await {
+                    return Err((2, "executor unit transaction is already open".into()));
+                }
+                runtime.storage.savepoint().await.map_err(infrastructure)
+            })
+        })
+    }
+
+    pub(crate) fn view(self: &Arc<Self>) -> ViewCall {
         let expected = self.clone();
         Arc::new(move |opaque, selection, address, expression| {
             let session = expected.clone();
@@ -39,7 +61,7 @@ impl BundleSession {
         })
     }
 
-    pub(super) fn committee(self: &Arc<Self>) -> CommitteeCall {
+    pub(crate) fn committee(self: &Arc<Self>) -> CommitteeCall {
         let expected = self.clone();
         Arc::new(move |opaque, selection| {
             let session = expected.clone();

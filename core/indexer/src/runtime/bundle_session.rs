@@ -13,18 +13,18 @@ use super::bundle_ownership::{
 use super::invocation::InvocationBudget;
 use crate::protocol::execution::SelectionEnvelope;
 
-pub(super) struct BundleSession {
+pub(crate) struct BundleSession {
     pub(super) runtime: Mutex<Runtime>,
 }
 
 impl BundleSession {
-    pub(super) fn new(runtime: Runtime) -> Arc<Self> {
+    pub(crate) fn new(runtime: Runtime) -> Arc<Self> {
         Arc::new(Self {
             runtime: Mutex::new(runtime),
         })
     }
 
-    pub(super) fn root_hooks(
+    pub(crate) fn root_hooks(
         self: &Arc<Self>,
         capability: BundleOwner,
         canonical: bool,
@@ -129,7 +129,7 @@ impl BundleSession {
         (prepare, inspect, settle, reset)
     }
 
-    pub(super) fn recycle(self: &Arc<Self>) -> SessionAction {
+    pub(crate) fn recycle(self: &Arc<Self>) -> SessionAction {
         let expected = self.clone();
         Arc::new(move |opaque| {
             let session = expected.clone();
