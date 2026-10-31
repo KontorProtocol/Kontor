@@ -5,19 +5,28 @@ use anyhow::{Error, Result, ensure};
 use tokio::sync::Mutex;
 use wasmtime::component::ResourceTable;
 
+#[cfg(test)]
+use super::BlockingGate;
 use super::Runtime;
 use super::bundle_ownership::{
-    BundleOwner, HostError, HostFailure, RootHooks, RootReset, RootSettle, SessionAction,
-    SharedOwner,
+    BundleOwner, HostError, HostFailure, RootHooks, RootReset, RootSettle, SelectionSource,
+    SessionAction, SharedOwner,
 };
 use super::invocation::InvocationBudget;
-use crate::protocol::execution::SelectionEnvelope;
 
 pub(crate) struct BundleSession {
     pub(super) runtime: Mutex<Runtime>,
 }
 
 impl BundleSession {
+    #[cfg(test)]
+    pub(crate) async fn set_decode_gate(&self, gate: Arc<BlockingGate>) -> Result<()> {
+        let mut runtime = self.runtime.lock().await;
+        runtime.ensure_bundle_idle().await?;
+        runtime.storage.decode_gate = Some(gate);
+        Ok(())
+    }
+
     pub(crate) fn new(runtime: Runtime) -> Arc<Self> {
         Arc::new(Self {
             runtime: Mutex::new(runtime),
@@ -28,7 +37,7 @@ impl BundleSession {
         self: &Arc<Self>,
         capability: BundleOwner,
         canonical: bool,
-        selection: SelectionEnvelope,
+        selection: SelectionSource,
     ) -> RootHooks {
         let committed = Arc::new(AtomicBool::new(false));
         let expected = self.clone();
@@ -41,9 +50,6 @@ impl BundleSession {
                 session.verify_owner(opaque, &owner)?;
                 let mut runtime = session.runtime.lock().await;
                 runtime.ensure_bundle_idle().await.map_err(infrastructure)?;
-                runtime
-                    .install_root_selection(&selection)
-                    .map_err(infrastructure)?;
                 runtime.invocation_budget = Some(Arc::new(InvocationBudget::default()));
                 runtime.store_table_owners = Some(Arc::new(StdMutex::new(Vec::new())));
                 runtime.storage.bundle_owner = Some(owner.clone());
@@ -51,6 +57,10 @@ impl BundleSession {
                 if !canonical {
                     runtime.storage.savepoint().await.map_err(infrastructure)?;
                 }
+                let selection = selection().await?;
+                runtime
+                    .install_root_selection(&selection)
+                    .map_err(infrastructure)?;
                 Ok(())
             })
         });

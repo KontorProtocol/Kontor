@@ -1,8 +1,11 @@
+use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use bitcoin::Network;
-use deadpool::managed::Object;
+use deadpool::managed::{Object, Pool};
+use libsql::Connection;
 
 use super::committee::materialize_committee;
 use super::selection::{ApplicationPosition, ExecutionSelection, select_legacy_p1};
@@ -15,15 +18,17 @@ use crate::runtime::ownership::adapter::{
     SessionFactory,
 };
 use crate::runtime::ownership::{LinkedOperation, OwnerService};
-use crate::runtime::pool::{LinkedManager, LinkedSession};
-use crate::runtime::{BundleOwner, ComponentCache, Runtime, Storage};
+use crate::runtime::pool::{LinkedManager, LinkedSession, new_linked};
+use crate::runtime::{BundleOwner, ComponentCache, Runtime, SelectionSource, Storage};
 
 pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession {
     let origin = runtime.executor_version();
     let network = runtime.network;
+    let conn = runtime.storage.conn.clone();
     let session = BundleSession::new(runtime);
     let operations = ExecutorOperations {
         begin_unit: session.begin_unit(),
+        contract_wit: session.contract_wit(),
         view: session.view(),
         committee: session.committee(),
     };
@@ -41,8 +46,29 @@ pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession
                 adapter.report_failure,
                 adapter.fuel_yield_interval,
             );
+            let source: SelectionSource = if !canonical && selection.is_public_view() {
+                let conn = conn.clone();
+                Arc::new(move || {
+                    let conn = conn.clone();
+                    Box::pin(async move {
+                        let selection = select_legacy_p1(&conn, network, ApplicationPosition::View)
+                            .await
+                            .map_err(|error| (0, format!("{error:#}")))?;
+                        selection
+                            .ensure_runtime(network, origin)
+                            .map_err(|error| (0, format!("{error:#}")))?;
+                        Ok(selection.envelope())
+                    })
+                })
+            } else {
+                let selection = selection.envelope();
+                Arc::new(move || {
+                    let selection = selection.clone();
+                    Box::pin(async move { Ok(selection) })
+                })
+            };
             let (prepare, inspect_canonical_drain, settle, reset) =
-                retained.root_hooks(owner, canonical, selection.envelope());
+                retained.root_hooks(owner, canonical, source);
             Ok(RootHooks {
                 prepare,
                 inspect_canonical_drain,
@@ -79,6 +105,64 @@ pub(crate) fn read_only_factory(network: Network, view_gas_limit: u64) -> Result
     }))
 }
 
+pub(crate) fn new_read_pool(
+    data_dir: PathBuf,
+    filename: String,
+    network: Network,
+    view_gas_limit: u64,
+) -> Result<Pool<LinkedManager>> {
+    new_linked(
+        data_dir,
+        filename,
+        read_only_factory(network, view_gas_limit)?,
+        std::thread::available_parallelism()?.into(),
+    )
+}
+
+// The closure and its result stay in the node graph. Only the typed operations
+// inside ExecutorSession cross into the retained implementation.
+pub(crate) async fn read_snapshot<T, F, Fut>(
+    service: &OwnerService,
+    object: Object<LinkedManager>,
+    network: Network,
+    read: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(Connection, ExecutorSession, ExecutionSelection) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<T>> + Send + 'static,
+{
+    let capacity = service.reserve_root_capacity().await?;
+    let selection = select_legacy_p1(&object.conn, network, ApplicationPosition::View).await?;
+    let conn = object.conn.clone();
+    let executor = object.executor.clone();
+    let operation: LinkedOperation = Box::new(move |_, _| {
+        Box::pin(async move {
+            // Root preparation pins its selection after opening this snapshot,
+            // so a writer advancing while admission waits cannot mix contexts.
+            let selected = select_legacy_p1(&conn, network, ApplicationPosition::View)
+                .await
+                .map_err(|error| (0, format!("{error:#}")))?;
+            selected
+                .verify_view(&conn, network, executor.origin)
+                .await
+                .map_err(|error| (0, format!("{error:#}")))?;
+            let result = read(conn, executor, selected).await;
+            // Preserve node-local error types (including HTTP status errors).
+            // These read-only jobs always roll back regardless of their result.
+            Ok((Box::new(result) as Payload, false))
+        })
+    });
+    let mut handle = service
+        .start_linked_pooled_reserved(object, capacity, selection, operation)
+        .await?;
+    *handle
+        .result()
+        .await?
+        .downcast::<Result<T>>()
+        .map_err(|_| anyhow!("node read operation returned the wrong payload type"))?
+}
+
 pub(crate) async fn execute_view(
     service: &OwnerService,
     object: Object<LinkedManager>,
@@ -86,33 +170,18 @@ pub(crate) async fn execute_view(
     address: AddressEnvelope,
     expression: String,
 ) -> Result<ViewOutcome> {
-    let capacity = service.reserve_root_capacity().await?;
-    let selection = select_legacy_p1(&object.conn, network, ApplicationPosition::View).await?;
-    let conn = object.conn.clone();
-    let origin = object.origin();
-    let view = object.executor.operations.view.clone();
-    let selected = selection.clone();
-    let operation: LinkedOperation = Box::new(move |owner, _| {
-        Box::pin(async move {
-            // Preparation has opened the owned read transaction. A selection
-            // made before admission must still describe that pinned snapshot.
-            selected
-                .verify_view(&conn, network, origin)
+    read_snapshot(
+        service,
+        object,
+        network,
+        move |_, executor, selection| async move {
+            (executor.operations.view)(executor.owner, selection.envelope(), address, expression)
                 .await
-                .map_err(|error| (0, format!("{error:#}")))?;
-            let outcome = view(owner, selected.envelope(), address, expression).await?;
-            Ok((Box::new(outcome) as Payload, false))
-        })
-    });
-    let mut handle = service
-        .start_linked_pooled_reserved(object, capacity, selection, operation)
-        .await?;
-    handle
-        .result()
-        .await?
-        .downcast::<ViewOutcome>()
-        .map(|outcome| *outcome)
-        .map_err(|_| anyhow!("node view operation returned the wrong payload type"))
+                .map_err(HostFailure::from)
+                .map_err(Into::into)
+        },
+    )
+    .await
 }
 
 pub(crate) async fn begin_unit(
@@ -149,11 +218,17 @@ mod tests {
     use super::*;
     use crate::config::DEFAULT_VIEW_GAS_LIMIT;
     use crate::consensus::{Validator, signing::PrivateKey};
+    use crate::database::queries::insert_block;
     use crate::reg_tester::random_x_only_pubkey;
     use crate::runtime::pool::new_linked;
     use crate::runtime::staking::address as staking_address;
     use crate::runtime::{Decimal, GenesisValidator};
-    use crate::test_utils::test_runtime_with_genesis;
+    use crate::test_utils::{new_mock_block_hash, test_runtime_with_genesis};
+    use indexer_types::BlockRow;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    use tokio::sync::Notify;
+    use tokio::time::timeout;
 
     #[tokio::test]
     async fn node_pool_routes_real_views_and_releases_read_snapshot() -> Result<()> {
@@ -173,20 +248,70 @@ mod tests {
             .await
             .unwrap_err();
         let address = (address.name, address.height, address.tx_index);
-        let factory = read_only_factory(Network::Regtest, DEFAULT_VIEW_GAS_LIMIT)?;
+        let original = read_only_factory(Network::Regtest, DEFAULT_VIEW_GAS_LIMIT)?;
+        let entered = Arc::new(Notify::new());
+        let resume = Arc::new(Notify::new());
+        let first = Arc::new(AtomicBool::new(true));
+        let gate_entered = entered.clone();
+        let gate_resume = resume.clone();
+        let factory: SessionFactory = Arc::new(move |conn| {
+            let original = original.clone();
+            let entered = gate_entered.clone();
+            let resume = gate_resume.clone();
+            let first = first.clone();
+            Box::pin(async move {
+                let mut executor = original(conn).await?;
+                let make_root = executor.make_root.clone();
+                executor.make_root = Arc::new(move |selection, adapter| {
+                    let mut hooks = make_root(selection, adapter)?;
+                    let prepare = hooks.prepare;
+                    let entered = entered.clone();
+                    let resume = resume.clone();
+                    let first = first.clone();
+                    hooks.prepare = Arc::new(move |owner| {
+                        let prepare = prepare.clone();
+                        let entered = entered.clone();
+                        let resume = resume.clone();
+                        let first = first.clone();
+                        Box::pin(async move {
+                            if first.swap(false, Ordering::SeqCst) {
+                                entered.notify_one();
+                                resume.notified().await;
+                            }
+                            prepare(owner).await
+                        })
+                    });
+                    Ok(hooks)
+                });
+                Ok(executor)
+            })
+        });
         let pool = new_linked(dir.path().to_path_buf(), name, factory, 1)?;
         let service = OwnerService::new();
-        assert_eq!(
+        let waiting_service = service.clone();
+        let object = pool.get().await?;
+        let request_address = address.clone();
+        let waiting_view = tokio::spawn(async move {
             execute_view(
-                &service,
-                pool.get().await?,
+                &waiting_service,
+                object,
                 Network::Regtest,
-                address.clone(),
-                "get-active-set()".into()
+                request_address,
+                "get-active-set()".into(),
             )
-            .await?,
-            Ok(expected)
-        );
+            .await
+        });
+        timeout(Duration::from_secs(5), entered.notified()).await?;
+        insert_block(
+            &runtime.storage.conn,
+            BlockRow::builder()
+                .height(2)
+                .hash(new_mock_block_hash(2))
+                .build(),
+        )
+        .await?;
+        resume.notify_one();
+        assert_eq!(waiting_view.await??, Ok(expected));
         assert_eq!(
             execute_view(
                 &service,

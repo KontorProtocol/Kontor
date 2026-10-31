@@ -19,11 +19,13 @@ use tower::ServiceExt;
 use super::{insert_block_at, new_test_env};
 use crate::api::Env;
 use crate::api::handlers::get_healthz_ready;
-use crate::api::handlers::post_contract;
+use crate::api::handlers::{get_contract, post_contract};
 use crate::info::InfoCore;
-use crate::runtime::ownership::RootOutcome;
+use crate::protocol::coordinator::linked::read_snapshot;
+use crate::runtime::bundle_session::BundleSession;
 use crate::runtime::{BlockingGate, ComponentCache, Runtime, Storage, token};
 use crate::test_utils::test_genesis;
+use axum::response::IntoResponse;
 
 async fn seeded_contract_env() -> Result<(Env, String, TempDir)> {
     let (env, conn, dir) = new_test_env().await?;
@@ -54,23 +56,18 @@ fn owned_route(env: Env, started: Arc<Notify>) -> Router {
                         .get()
                         .await
                         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-                    let mut root = env
-                        .owner_service
-                        .start_pooled(object, move |_| {
-                            Box::pin(async move {
-                                started.notify_one();
-                                pending::<()>().await;
-                                Ok(RootOutcome {
-                                    value: (),
-                                    commit: false,
-                                })
-                            })
-                        })
-                        .await
-                        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-                    root.result()
-                        .await
-                        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+                    read_snapshot(
+                        &env.owner_service,
+                        object,
+                        env.config.network,
+                        move |_, _, _| async move {
+                            started.notify_one();
+                            pending::<()>().await;
+                            Ok(())
+                        },
+                    )
+                    .await
+                    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
                     Ok::<_, StatusCode>(StatusCode::OK)
                 }
             }),
@@ -146,6 +143,16 @@ async fn post_contract_matches_direct_view_and_reuses_pool_object() -> Result<()
         assert_eq!(env.owner_service.active_roots().await, 0);
         assert_eq!(env.runtime_pool.status().available, 1);
     }
+    let metadata = get_contract(Path(token::address().to_string()), State(env.clone()))
+        .await
+        .map_err(|_| anyhow!("native contract metadata failed"))?;
+    assert!(metadata.0.0.result.wit.contains("total-supply"));
+    let mut missing_address = token::address();
+    missing_address.name = "missing".into();
+    let missing = get_contract(Path(missing_address.to_string()), State(env.clone())).await;
+    assert!(missing.is_err());
+    let response = missing.err().unwrap().into_response();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     Ok(())
 }
 
@@ -153,8 +160,15 @@ async fn post_contract_matches_direct_view_and_reuses_pool_object() -> Result<()
 async fn post_contract_shutdown_waits_for_cold_decode_before_pool_release() -> Result<()> {
     let (env, _direct, _dir) = seeded_contract_env().await?;
     let gate = Arc::new(BlockingGate::default());
-    let mut object = env.runtime_pool.get().await?;
-    object.storage.decode_gate = Some(gate.clone());
+    let object = env.runtime_pool.get().await?;
+    let session = object
+        .executor
+        .owner
+        .clone()
+        .downcast::<BundleSession>()
+        .map_err(|_| anyhow!("unexpected executor session"))?;
+    session.set_decode_gate(gate.clone()).await?;
+    drop(session);
     drop(object);
     let pool = env.runtime_pool.clone();
     let service = env.owner_service.clone();

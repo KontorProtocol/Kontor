@@ -11,7 +11,8 @@ use crate::database::queries::{
     get_signer_entry_by_id, get_signer_entry_by_x_only_pubkey,
 };
 use crate::database::types::SignerEntry;
-use crate::runtime::{ownership::RootOutcome, pricing::Pricing};
+use crate::protocol::coordinator::linked::read_snapshot;
+use crate::runtime::pricing::Pricing;
 
 /// Identifier accepted by the signer routes. Disambiguated by shape — numeric is
 /// a signer_id, 64-char hex is an x-only pubkey, 192-char hex is a BLS pubkey.
@@ -48,24 +49,22 @@ pub async fn get_signer(
     State(env): State<Env>,
 ) -> Result<SignerResponse> {
     let object = env.runtime_pool.get().await?;
-    let mut owned = env
-        .owner_service
-        .start_pooled(object, move |runtime| {
-            Box::pin(async move {
-                let e = resolve_signer_entry(&runtime.storage.conn, &identifier).await?;
-                Ok(RootOutcome {
-                    value: SignerResponse {
-                        signer_id: e.signer_id,
-                        x_only_pubkey: e.x_only_pubkey,
-                        bls_pubkey: e.bls_pubkey,
-                        next_nonce: e.next_nonce,
-                    },
-                    commit: false,
-                })
+    let result = read_snapshot(
+        &env.owner_service,
+        object,
+        env.config.network,
+        move |conn, _, _| async move {
+            let e = resolve_signer_entry(&conn, &identifier).await?;
+            Ok(SignerResponse {
+                signer_id: e.signer_id,
+                x_only_pubkey: e.x_only_pubkey,
+                bls_pubkey: e.bls_pubkey,
+                next_nonce: e.next_nonce,
             })
-        })
-        .await?;
-    Ok(owned.result().await?.into())
+        },
+    )
+    .await?;
+    Ok(result.into())
 }
 
 /// `GET /api/signers/{identifier}/footprint` — the signer's storage-deposit
@@ -77,31 +76,27 @@ pub async fn get_signer_footprint(
     State(env): State<Env>,
 ) -> Result<FootprintResponse> {
     let object = env.runtime_pool.get().await?;
-    let mut owned = env
-        .owner_service
-        .start_pooled(object, move |runtime| {
-            Box::pin(async move {
-                let conn = &runtime.storage.conn;
-                let entry = resolve_signer_entry(conn, &identifier).await?;
-                // Keep the lookup and aggregation in the same owned read transaction.
-                let rows = find_footprint_by_depositor(conn, entry.signer_id).await?;
-                let (total_deposit, total_footprint_bytes, by_contract) =
-                    aggregate_footprint(rows, Pricing::collateral_unit_price().into())
-                        .map_err(|e| anyhow::anyhow!("footprint aggregation failed: {e:?}"))?;
-                Ok(RootOutcome {
-                    value: FootprintResponse {
-                        signer_id: entry.signer_id,
-                        x_only_pubkey: entry.x_only_pubkey,
-                        total_deposit,
-                        total_footprint_bytes,
-                        by_contract,
-                    },
-                    commit: false,
-                })
+    let result = read_snapshot(
+        &env.owner_service,
+        object,
+        env.config.network,
+        move |conn, _, _| async move {
+            let entry = resolve_signer_entry(&conn, &identifier).await?;
+            let rows = find_footprint_by_depositor(&conn, entry.signer_id).await?;
+            let (total_deposit, total_footprint_bytes, by_contract) =
+                aggregate_footprint(rows, Pricing::collateral_unit_price().into())
+                    .map_err(|e| anyhow::anyhow!("footprint aggregation failed: {e:?}"))?;
+            Ok(FootprintResponse {
+                signer_id: entry.signer_id,
+                x_only_pubkey: entry.x_only_pubkey,
+                total_deposit,
+                total_footprint_bytes,
+                by_contract,
             })
-        })
-        .await?;
-    Ok(owned.result().await?.into())
+        },
+    )
+    .await?;
+    Ok(result.into())
 }
 
 /// Fold per-row deposits into a per-contract breakdown + totals. Per-row deposits

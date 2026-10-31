@@ -4,6 +4,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::protocol::execution::SelectionEnvelope;
+
 pub(crate) type SharedOwner = Arc<dyn Any + Send + Sync>;
 pub(crate) type Payload = Box<dyn Any + Send>;
 pub(crate) type HostError = (u8, String);
@@ -43,6 +45,7 @@ pub(crate) type ReportFailure = Arc<dyn Fn(SharedOwner, u8) -> Result<(), HostEr
 pub(crate) type SessionAction = Arc<dyn Fn(SharedOwner) -> HostFuture<()> + Send + Sync>;
 pub(crate) type RootSettle = Arc<dyn Fn(SharedOwner, bool) -> HostFuture<()> + Send + Sync>;
 pub(crate) type RootReset = Arc<dyn Fn(SharedOwner, bool, bool) -> HostFuture<()> + Send + Sync>;
+pub(crate) type SelectionSource = Arc<dyn Fn() -> HostFuture<SelectionEnvelope> + Send + Sync>;
 pub(crate) type RootHooks = (SessionAction, SessionAction, RootSettle, RootReset);
 
 #[derive(Clone)]

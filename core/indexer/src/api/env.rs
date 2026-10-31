@@ -2,11 +2,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use crate::config::DEFAULT_VIEW_GAS_LIMIT;
 use anyhow::Result;
+use bitcoin::Network;
 use deadpool::managed::Pool;
 use indexer_types::Fees;
 use tokio::sync::{mpsc::Sender, watch};
 
+use crate::protocol::coordinator::linked::new_read_pool;
 use crate::{
     bitcoin_client::Client, config::Config, database, event::EventSubscriber, info::InfoCore,
     reactor::Simulation, runtime, stopper::ShutdownSignal,
@@ -19,7 +22,7 @@ pub struct Env {
     pub reader: database::Reader,
     pub event_subscriber: EventSubscriber,
     pub bitcoin: Client,
-    pub(crate) runtime_pool: Pool<runtime::pool::Manager>,
+    pub(crate) runtime_pool: Pool<runtime::pool::LinkedManager>,
     pub owner_service: runtime::ownership::OwnerService,
     pub simulate_tx: Sender<Simulation>,
     /// Set true once the reactor signals ready (consensus up + initial
@@ -70,13 +73,12 @@ pub struct DaemonEnv {
 
 impl Env {
     pub async fn new_daemon(parts: DaemonEnv) -> Result<Self> {
-        let runtime_pool = runtime::pool::new(
+        let runtime_pool = new_read_pool(
             parts.config.data_dir.clone(),
             parts.database_name,
             parts.config.network,
             parts.config.view_gas_limit,
-        )
-        .await?;
+        )?;
         Ok(Self {
             config: parts.config,
             shutdown: parts.shutdown,
@@ -103,7 +105,10 @@ impl Env {
         let (_, fees_rx) = watch::channel(Fees::floor(1));
         Ok(Self {
             bitcoin: Client::new("".to_string(), "".to_string(), "".to_string())?,
-            config: Config::new_na(),
+            config: Config {
+                network: Network::Regtest,
+                ..Config::new_na()
+            },
             shutdown: ShutdownSignal::never(),
             // Unit-test env skips the reactor; flip ready so handlers that
             // get mounted directly into a test router aren't perma-503'd.
@@ -111,13 +116,12 @@ impl Env {
             failed: Arc::new(AtomicBool::new(false)),
             consensus_listen_addr: watch::channel(None).1,
             event_subscriber: EventSubscriber::new(),
-            runtime_pool: runtime::pool::new(
+            runtime_pool: new_read_pool(
                 db_path.to_path_buf(),
                 db_name,
-                bitcoin::Network::Regtest,
-                crate::config::DEFAULT_VIEW_GAS_LIMIT,
-            )
-            .await?,
+                Network::Regtest,
+                DEFAULT_VIEW_GAS_LIMIT,
+            )?,
             owner_service: runtime::ownership::OwnerService::new(),
             reader,
             simulate_tx,

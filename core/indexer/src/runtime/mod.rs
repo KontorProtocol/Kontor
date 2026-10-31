@@ -48,7 +48,7 @@ mod selected;
 
 use crate::protocol::execution::ExecutorVersion;
 use bitcoin::XOnlyPublicKey;
-pub(crate) use bundle_ownership::BundleOwner;
+pub(crate) use bundle_ownership::{BundleOwner, SelectionSource};
 use bundle_ownership::HostFailure;
 pub(crate) use call::CallOutcome;
 pub use component_cache::ComponentCache;

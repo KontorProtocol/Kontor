@@ -22,3 +22,9 @@ pub(crate) type CommitteeCall =
 
 pub(crate) type BeginUnitCall =
     Arc<dyn Fn(SessionOwner, SelectionEnvelope) -> OperationFuture<()> + Send + Sync>;
+
+pub(crate) type ContractWitCall = Arc<
+    dyn Fn(SessionOwner, SelectionEnvelope, AddressEnvelope) -> OperationFuture<Option<String>>
+        + Send
+        + Sync,
+>;

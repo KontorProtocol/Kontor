@@ -6,7 +6,9 @@ use super::bundle_ownership::HostError;
 use super::bundle_session::{BundleSession, infrastructure};
 use super::{ContractAddress, ExecutionError, Runtime};
 use crate::protocol::execution::SelectionEnvelope;
-use crate::protocol::operations::{BeginUnitCall, CommitteeCall, SessionOwner, ViewCall};
+use crate::protocol::operations::{
+    BeginUnitCall, CommitteeCall, ContractWitCall, SessionOwner, ViewCall,
+};
 use crate::protocol::v1::committee::derive_committee;
 
 impl BundleSession {
@@ -28,6 +30,40 @@ impl BundleSession {
                     return Err((2, "executor unit transaction is already open".into()));
                 }
                 runtime.storage.savepoint().await.map_err(infrastructure)
+            })
+        })
+    }
+
+    pub(crate) fn contract_wit(self: &Arc<Self>) -> ContractWitCall {
+        let expected = self.clone();
+        Arc::new(move |opaque, selection, address| {
+            let session = expected.clone();
+            Box::pin(async move {
+                session.verify_operation_owner(opaque)?;
+                let mut runtime = session.runtime.lock().await;
+                runtime
+                    .verify_bundle_operation(&selection, 0)
+                    .map_err(infrastructure)?;
+                let runtime = runtime.bind_selection(&selection).map_err(infrastructure)?;
+                let address = ContractAddress {
+                    name: address.0,
+                    height: address.1,
+                    tx_index: address.2,
+                };
+                match runtime
+                    .storage
+                    .contract_id(&address)
+                    .await
+                    .map_err(infrastructure)?
+                {
+                    Some(id) => runtime
+                        .storage
+                        .component_wit(id)
+                        .await
+                        .map(Some)
+                        .map_err(infrastructure),
+                    None => Ok(None),
+                }
             })
         })
     }

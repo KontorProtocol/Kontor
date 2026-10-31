@@ -8,7 +8,7 @@ use anyhow::Result;
 use libsql::Connection;
 
 use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
-use crate::protocol::operations::{BeginUnitCall, CommitteeCall, ViewCall};
+use crate::protocol::operations::{BeginUnitCall, CommitteeCall, ContractWitCall, ViewCall};
 
 use super::{ChildContext, RootKeeper, RootState, TaskCompletion};
 
@@ -73,6 +73,7 @@ pub(crate) struct RootHooks {
 #[derive(Clone)]
 pub(crate) struct ExecutorOperations {
     pub(crate) begin_unit: BeginUnitCall,
+    pub(crate) contract_wit: ContractWitCall,
     pub(crate) view: ViewCall,
     pub(crate) committee: CommitteeCall,
 }
@@ -81,6 +82,9 @@ pub(crate) struct ExecutorOperations {
 impl Default for ExecutorOperations {
     fn default() -> Self {
         Self {
+            contract_wit: Arc::new(|_, _, _| {
+                Box::pin(async { Err((2, "mock has no WIT operation".into())) })
+            }),
             begin_unit: Arc::new(|_, _| {
                 Box::pin(async { Err((2, "mock has no unit operation".into())) })
             }),
