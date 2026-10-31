@@ -82,7 +82,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "1ab2b8869e4a9e147ce1f2ff2230a1d1803ffd7fb5c57a3dd90f9e01c290ac4b"
+      "sha256": "2a294937f6beacc0b1fe7799d09eca5b61452fffe3aa5af0d44fb7d0508649e1"
     },
     "cold_publication_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/cold_publication.rs",
@@ -370,7 +370,7 @@
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "3b02824c785b3c35fb2408fd0fd38a1117073c7bfb47baaad3f880f1cb60fe13"
+      "sha256": "b19d01a97387c11a5221e6c6bf0eaf946ceaf20265819da136dcdd2a8f839855"
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -546,7 +546,7 @@
     },
     "suite_dispatch_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "3b02824c785b3c35fb2408fd0fd38a1117073c7bfb47baaad3f880f1cb60fe13"
+      "sha256": "b19d01a97387c11a5221e6c6bf0eaf946ceaf20265819da136dcdd2a8f839855"
     },
     "suite_registry_builder": {
       "path": "tools/native-stack/resource_suite_registry.py",
@@ -562,7 +562,7 @@
     },
     "suite_workflow": {
       "path": ".github/workflows/native-stack-s2.yml",
-      "sha256": "d0b190ade01e1ca842a073bf4ede06c815fe56f507ecc28cb79c8ea8157a58f4"
+      "sha256": "827cd3eb3d28447acd366858723a14784ed060a6999ffa423ae8ae1d480e4328"
     },
     "suspended_64_plan": {
       "path": "tools/native-stack/resource-suspended-64-plan-v1.json",
