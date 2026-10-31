@@ -1,6 +1,7 @@
 # K2a implementation and acceptance
 
-Status: local implementation validation, final phase review and CI pending.
+Status: local implementation validation and all three phase reviews complete;
+current-head CI and merge pending.
 This phase provides the in-tree selected executor and live logical storage adapter.
 It does not complete the protocol-upgrade system or independently isolate Cargo graphs.
 
@@ -53,6 +54,7 @@ later native-retention changes have their own current-source checks.
 | --- | --- |
 | All-target compilation and lint | Indexer and testlib Clippy with warnings denied passed, 21.60 seconds, `clippy-final.log`. |
 | Consolidated regression run | 57 passed, 152.36 seconds, `consolidated-regressions.log`: six database genesis, four coordinator selection, 34 retained protocol, six mempool, three selected-runtime and four staking genesis tests. |
+| Final ingress/view integration | Nine passed, 67.54 seconds, `final-integration.log`: HTTP error precedence/raw admission, pending recognition/backpressure, witness replacement and rollback invalidation, and held/fresh views after contract row-ID reuse. |
 | Fresh genesis comparison | Candidate `ddba0f10` and qualified-base fixture `d066d72f` match every typed logical row across all 22 tables. `fresh-comparison-result.json` records exact revisions, inputs and report hashes. |
 | Interrupted bootstrap | Real owned execution interrupted after partial/full publication, admission floor and nonempty validator initialization matches uninterrupted state after two reopens at each stage. Generated-ID counters remain zero. Included in the consolidated run. |
 | Malformed existing genesis | Artifact/provenance/identity/prefix/receipt/state inconsistencies reject before schema or logical-state changes. Includes negative, overflowing, duplicate and incorrectly attributed receipt indexes. |
@@ -70,11 +72,35 @@ The old preserved execution seed is used to compare execution semantics, not to
 claim its genesis provenance would pass the new startup preflight. Its historical
 native definition is not silently whitelisted. Unsupported prelaunch databases need
 an explicit retained definition if an actual deployment requires one.
+The exact preserved baseline is source
+`213acdecdac67b5cf8587910d9dacbb8f7fd9eb1`, archived locally at
+`/home/wilfred/Documents/Kontor/.build-cache/ownership-final-parity-20261031/seed`.
+Its `inputs.json` binds `seed.db` and `transaction.bin`; `baseline.json` contains
+the 11 stages. Earlier worktree-local baseline archives are not substitutes for
+this final comparison input.
+
+## Phase review
+
+The lead and both independent reviewers examined base
+`dfacbefdac22b898c5bad5b2cae5e2513e147afd` through
+`9ef3c9b777367ddd0769b84db14a96e5a2dfffd2`, whose executable source is `c8e2c3a6`.
+The implementation/state reviewer and integration/failure reviewer independently
+reported no material findings. Both verified the raw evidence and comparison
+inputs, rather than relying on each other's conclusions. Lead findings addressed
+during validation were the batch snapshot representation and the bootstrap retry
+fixture's invalid durable prefix, as recorded in the reconciliation ledger.
+
+Review covered selection and stale preparation, nested immutable context, cache
+and snapshot identity, logical storage/cursor ownership, accounting/order/rollback,
+production ownership preservation, native input retention, preflight rejection and
+bootstrap recovery. Recovery tests reopen committed boundaries; they do not inject
+physical storage failures. Fresh genesis uses one explicit configuration. These
+limits and future-phase requirements remain visible rather than being counted as
+complete upgrade-system acceptance. Local review does not replace CI.
 
 ## Remaining phase gates and later phases
 
-Before this phase merges: complete the lead and both independent phase reviews, address material findings,
-pass current-head CI and verify the actual merge. Integrate the CI scope change
+Before this phase merges: pass current-head CI and verify the actual merge. Integrate the CI scope change
 from PR #615 after its verified merge. Runtime-affecting changes still require
 their applicable cross-platform qualification.
 

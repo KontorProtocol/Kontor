@@ -11,7 +11,8 @@ Fresh genesis matches that base with identical explicit inputs across all 22 tab
 Interrupted bootstrap recovery passes at publication, floor and validator boundaries.
 All-target indexer/testlib Clippy and 57 consolidated current-source regressions
 pass. The current executor also matches all 11 preserved execution-baseline stages.
-The two final phase reviews, current-head CI and verified merge remain required.
+Both final independent phase reviews accepted the source and local evidence, with
+no material findings. Current-head CI and verified merge remain required.
 The current review package is [K2a acceptance](k2a-acceptance.md).
 Independent production dependency isolation is K2b, not a capability of this phase.
 
