@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::env;
+#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::{Arc, Barrier};
@@ -57,6 +59,10 @@ use crate::runtime::resource_diagnostics::{self, ThreadEvent};
 #[cfg(target_os = "macos")]
 mod macos;
 
+// Darwin adds 12 KiB to each pthread stack, so 992 KiB leaves a measured
+// capacity ratio above two against the unchanged 2 MiB production default.
+const REDUCED_WORKER_STACK_BYTES: usize = 992 * 1024;
+
 #[test]
 #[ignore = "run explicitly to isolate a real paid call in a multithread worker"]
 fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
@@ -67,9 +73,10 @@ fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
     );
     let reduced = mode == "reduced";
     #[cfg(target_os = "linux")]
-    let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    let (runtime, workers) = measured_tokio_runtime(reduced.then_some(REDUCED_WORKER_STACK_BYTES))?;
     #[cfg(target_os = "macos")]
-    let (runtime, workers) = macos::measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    let (runtime, workers) =
+        macos::measured_tokio_runtime(reduced.then_some(REDUCED_WORKER_STACK_BYTES))?;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     let worker_ids = workers
         .iter()
@@ -104,7 +111,7 @@ fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
         let mut builder = Builder::new_multi_thread();
         builder.worker_threads(2).enable_all();
         if reduced {
-            builder.thread_stack_size(1024 * 1024);
+            builder.thread_stack_size(REDUCED_WORKER_STACK_BYTES);
         }
         let runtime = builder
             .on_thread_start(move || {
@@ -164,10 +171,10 @@ fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
             "pid": std::process::id(),
             "flavor": "multi_thread",
             "worker_count": workers.len(),
-            "worker_requested_bytes": reduced.then_some(1024 * 1024),
+            "worker_requested_bytes": reduced.then_some(REDUCED_WORKER_STACK_BYTES),
             "thread_observations": [
-                linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
-                linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+                linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(REDUCED_WORKER_STACK_BYTES)),
+                linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(REDUCED_WORKER_STACK_BYTES)),
                 linux_thread_observation(&blocking, "blocking_pool", None),
                 linux_thread_observation(&caller, "block_on_caller", None),
             ],
@@ -184,10 +191,10 @@ fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
             "pid": std::process::id(),
             "flavor": "multi_thread",
             "worker_count": workers.len(),
-            "worker_requested_bytes": reduced.then_some(1024 * 1024),
+            "worker_requested_bytes": reduced.then_some(REDUCED_WORKER_STACK_BYTES),
             "thread_observations": [
-                macos::thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
-                macos::thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+                macos::thread_observation(&workers[0], "tokio_worker", reduced.then_some(REDUCED_WORKER_STACK_BYTES)),
+                macos::thread_observation(&workers[1], "tokio_worker", reduced.then_some(REDUCED_WORKER_STACK_BYTES)),
                 macos::thread_observation(&blocking, "blocking_pool", None),
                 macos::thread_observation(&caller, "block_on_caller", None),
             ],
@@ -349,9 +356,10 @@ fn chain_worker_case() -> Result<()> {
     );
     let reduced = mode == "reduced";
     #[cfg(target_os = "linux")]
-    let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    let (runtime, workers) = measured_tokio_runtime(reduced.then_some(REDUCED_WORKER_STACK_BYTES))?;
     #[cfg(target_os = "macos")]
-    let (runtime, workers) = macos::measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    let (runtime, workers) =
+        macos::measured_tokio_runtime(reduced.then_some(REDUCED_WORKER_STACK_BYTES))?;
     #[cfg(target_os = "linux")]
     let blocking = runtime
         .block_on(async { tokio::task::spawn_blocking(current_linux_stack_range).await })?
@@ -376,7 +384,13 @@ fn chain_worker_case() -> Result<()> {
                 && worker.os_thread_id != caller.os_thread_id
         }) && blocking.thread_id != caller.thread_id
             && blocking.os_thread_id != caller.os_thread_id,
-        "chain worker, blocking, and caller thread categories overlap"
+        "chain worker, blocking, and caller thread categories overlap: workers={:?}, blocking={:?}, caller={:?}",
+        workers
+            .iter()
+            .map(|worker| (worker.thread_id, worker.os_thread_id))
+            .collect::<Vec<_>>(),
+        (blocking.thread_id, blocking.os_thread_id),
+        (caller.thread_id, caller.os_thread_id),
     );
     #[cfg(target_os = "linux")]
     resource_diagnostics::start_chain_with_stack_probe(linux_blocking_thread_observation);
@@ -442,15 +456,31 @@ fn chain_worker_case() -> Result<()> {
     );
     #[cfg(target_os = "linux")]
     let mut thread_observations = vec![
-        linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
-        linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+        linux_thread_observation(
+            &workers[0],
+            "tokio_worker",
+            reduced.then_some(REDUCED_WORKER_STACK_BYTES),
+        ),
+        linux_thread_observation(
+            &workers[1],
+            "tokio_worker",
+            reduced.then_some(REDUCED_WORKER_STACK_BYTES),
+        ),
         linux_thread_observation(&blocking, "blocking_pool", None),
         linux_thread_observation(&caller, "block_on_caller", None),
     ];
     #[cfg(target_os = "macos")]
     let mut thread_observations = vec![
-        macos::thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
-        macos::thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+        macos::thread_observation(
+            &workers[0],
+            "tokio_worker",
+            reduced.then_some(REDUCED_WORKER_STACK_BYTES),
+        ),
+        macos::thread_observation(
+            &workers[1],
+            "tokio_worker",
+            reduced.then_some(REDUCED_WORKER_STACK_BYTES),
+        ),
         macos::thread_observation(&blocking, "blocking_pool", None),
         macos::thread_observation(&caller, "block_on_caller", None),
     ];
@@ -466,7 +496,7 @@ fn chain_worker_case() -> Result<()> {
             "pid": std::process::id(),
             "flavor": "multi_thread",
             "worker_count": workers.len(),
-            "worker_requested_bytes": reduced.then_some(1024 * 1024),
+            "worker_requested_bytes": reduced.then_some(REDUCED_WORKER_STACK_BYTES),
             "thread_observations": thread_observations,
             "blocking_pool_observed": true,
             "block_on_caller_observed": true,
@@ -522,9 +552,10 @@ fn pulley_boundary_worker_case() -> Result<()> {
     };
     let reduced = configuration == "reduced";
     #[cfg(target_os = "linux")]
-    let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    let (runtime, workers) = measured_tokio_runtime(reduced.then_some(REDUCED_WORKER_STACK_BYTES))?;
     #[cfg(target_os = "macos")]
-    let (runtime, workers) = macos::measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    let (runtime, workers) =
+        macos::measured_tokio_runtime(reduced.then_some(REDUCED_WORKER_STACK_BYTES))?;
     #[cfg(target_os = "linux")]
     let blocking = runtime
         .block_on(async { tokio::task::spawn_blocking(current_linux_stack_range).await })?
@@ -599,15 +630,31 @@ fn pulley_boundary_worker_case() -> Result<()> {
     }
     #[cfg(target_os = "linux")]
     let mut thread_observations = vec![
-        linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
-        linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+        linux_thread_observation(
+            &workers[0],
+            "tokio_worker",
+            reduced.then_some(REDUCED_WORKER_STACK_BYTES),
+        ),
+        linux_thread_observation(
+            &workers[1],
+            "tokio_worker",
+            reduced.then_some(REDUCED_WORKER_STACK_BYTES),
+        ),
         linux_thread_observation(&blocking, "blocking_pool", None),
         linux_thread_observation(&caller, "block_on_caller", None),
     ];
     #[cfg(target_os = "macos")]
     let mut thread_observations = vec![
-        macos::thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
-        macos::thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+        macos::thread_observation(
+            &workers[0],
+            "tokio_worker",
+            reduced.then_some(REDUCED_WORKER_STACK_BYTES),
+        ),
+        macos::thread_observation(
+            &workers[1],
+            "tokio_worker",
+            reduced.then_some(REDUCED_WORKER_STACK_BYTES),
+        ),
         macos::thread_observation(&blocking, "blocking_pool", None),
         macos::thread_observation(&caller, "block_on_caller", None),
     ];
@@ -622,7 +669,7 @@ fn pulley_boundary_worker_case() -> Result<()> {
             "pid": std::process::id(),
             "flavor": "multi_thread",
             "worker_count": workers.len(),
-            "worker_requested_bytes": reduced.then_some(1024 * 1024),
+            "worker_requested_bytes": reduced.then_some(REDUCED_WORKER_STACK_BYTES),
             "thread_observations": thread_observations,
             "blocking_pool_observed": true,
             "block_on_caller_observed": true,
@@ -798,9 +845,10 @@ fn finite_stack_worker_case() -> Result<()> {
     );
     let reduced = configuration == "reduced";
     #[cfg(target_os = "linux")]
-    let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    let (runtime, workers) = measured_tokio_runtime(reduced.then_some(REDUCED_WORKER_STACK_BYTES))?;
     #[cfg(target_os = "macos")]
-    let (runtime, workers) = macos::measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    let (runtime, workers) =
+        macos::measured_tokio_runtime(reduced.then_some(REDUCED_WORKER_STACK_BYTES))?;
     #[cfg(target_os = "linux")]
     let blocking = runtime
         .block_on(async { tokio::task::spawn_blocking(current_linux_stack_range).await })?
@@ -942,15 +990,31 @@ fn finite_stack_worker_case() -> Result<()> {
     }
     #[cfg(target_os = "linux")]
     let mut thread_observations = vec![
-        linux_thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
-        linux_thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+        linux_thread_observation(
+            &workers[0],
+            "tokio_worker",
+            reduced.then_some(REDUCED_WORKER_STACK_BYTES),
+        ),
+        linux_thread_observation(
+            &workers[1],
+            "tokio_worker",
+            reduced.then_some(REDUCED_WORKER_STACK_BYTES),
+        ),
         linux_thread_observation(&blocking, "blocking_pool", None),
         linux_thread_observation(&caller, "block_on_caller", None),
     ];
     #[cfg(target_os = "macos")]
     let mut thread_observations = vec![
-        macos::thread_observation(&workers[0], "tokio_worker", reduced.then_some(1024 * 1024)),
-        macos::thread_observation(&workers[1], "tokio_worker", reduced.then_some(1024 * 1024)),
+        macos::thread_observation(
+            &workers[0],
+            "tokio_worker",
+            reduced.then_some(REDUCED_WORKER_STACK_BYTES),
+        ),
+        macos::thread_observation(
+            &workers[1],
+            "tokio_worker",
+            reduced.then_some(REDUCED_WORKER_STACK_BYTES),
+        ),
         macos::thread_observation(&blocking, "blocking_pool", None),
         macos::thread_observation(&caller, "block_on_caller", None),
     ];
@@ -965,7 +1029,7 @@ fn finite_stack_worker_case() -> Result<()> {
             "pid": std::process::id(),
             "flavor": "multi_thread",
             "worker_count": workers.len(),
-            "worker_requested_bytes": reduced.then_some(1024 * 1024),
+            "worker_requested_bytes": reduced.then_some(REDUCED_WORKER_STACK_BYTES),
             "thread_observations": thread_observations,
             "blocking_pool_observed": true,
             "block_on_caller_observed": true,
@@ -1180,7 +1244,8 @@ fn linux_worker_guard_fault_child() -> Result<()> {
         unsafe { setrlimit(RLIMIT_CORE, &limit) } == 0,
         "could not disable core dump"
     );
-    let (runtime, _) = measured_tokio_runtime((mode == "reduced").then_some(1024 * 1024))?;
+    let (runtime, _) =
+        measured_tokio_runtime((mode == "reduced").then_some(REDUCED_WORKER_STACK_BYTES))?;
     runtime.block_on(async move {
         tokio::spawn(async move {
             let stack = current_linux_stack_range()?;
@@ -1522,19 +1587,33 @@ fn measured_tokio_runtime(
     if let Some(size) = worker_stack_size {
         builder.thread_stack_size(size);
     }
+    // Tokio's start hook also runs on blocking-pool threads before they claim a
+    // queued role. The park hook identifies an actual scheduler worker.
+    let done = Arc::new(AtomicBool::new(false));
+    let park_done = Arc::clone(&done);
     let runtime = builder
-        .on_thread_start(move || {
-            let _ = sender.send(current_linux_stack_range());
+        .on_thread_park(move || {
+            if !park_done.load(Ordering::Relaxed) {
+                let _ = sender.send(current_linux_stack_range());
+            }
         })
         .build()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
     let first = receiver
-        .recv_timeout(Duration::from_secs(5))
-        .context("first Tokio worker did not start")?
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .context("first Tokio worker did not park")?
         .context("first Tokio worker stack capacity")?;
-    let second = receiver
-        .recv_timeout(Duration::from_secs(5))
-        .context("second Tokio worker did not start")?
-        .context("second Tokio worker stack capacity")?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let second = loop {
+        let candidate = receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .context("second distinct Tokio worker did not park")?
+            .context("second Tokio worker stack capacity")?;
+        if candidate.thread_id != first.thread_id {
+            break candidate;
+        }
+    };
+    done.store(true, Ordering::Relaxed);
     ensure!(
         first.thread_id != second.thread_id && first.os_thread_id != second.os_thread_id,
         "Tokio did not start distinct workers"
@@ -1545,7 +1624,7 @@ fn measured_tokio_runtime(
 #[cfg(target_os = "linux")]
 #[test]
 fn reduced_tokio_workers_have_measured_usable_ranges() -> Result<()> {
-    let (runtime, reduced) = measured_tokio_runtime(Some(1024 * 1024))?;
+    let (runtime, reduced) = measured_tokio_runtime(Some(REDUCED_WORKER_STACK_BYTES))?;
     let [first, second] = &reduced;
     for stack in [&first, &second] {
         ensure!(

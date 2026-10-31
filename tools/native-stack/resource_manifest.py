@@ -512,7 +512,7 @@ def build_manifest():
                         "test_only": True},
         },
         "runtime": {"flavor": "multi_thread", "worker_count": 2,
-                    "reduced_worker_stack_requested_bytes": 1_048_576,
+                    "reduced_worker_stack_requested_bytes": 1_015_808,
                     "thread_categories": list(THREAD_CATEGORIES),
                     "capacity_fields": list(CAPACITY_FIELDS),
                     "production_to_reduced_worker_usable_min_ratio": 2},

@@ -75,14 +75,15 @@ def observation(definition, sample):
 
 def configuration(directory, manifest, mode, pid, binary_path, binary_sha256,
                   source_sha):
-    size = 2_097_152 if mode == "production" else 1_048_576
-    requested = size
+    fiber_size = 2_097_152 if mode == "production" else 1_048_576
+    worker_size = 2_097_152 if mode == "production" else 1_015_808
+    requested = worker_size
     runtime = {
         "flavor": "multi_thread", "worker_count": 2,
         "worker_requested_bytes": requested,
         "thread_observations": [
-            thread("tokio_worker", "worker-1", size, requested, pid),
-            thread("tokio_worker", "worker-2", size, requested, pid),
+            thread("tokio_worker", "worker-1", worker_size, requested, pid),
+            thread("tokio_worker", "worker-2", worker_size, requested, pid),
             thread("blocking_pool", "blocking", 2_097_152, None, pid),
             thread("block_on_caller", "caller", 2_097_152, None, pid),
         ],
@@ -135,8 +136,8 @@ def configuration(directory, manifest, mode, pid, binary_path, binary_sha256,
         "process": process, "process_log": transcript,
         "engine": {"wasmtime_revision": manifest["wasmtime_revision"],
                    "target": "pulley64-unknown-unknown-elf",
-                   "pulley_stack_bytes": 524288, "fiber_requested_bytes": size,
-                   "fiber_effective_writable_bytes": size,
+                   "pulley_stack_bytes": 524288, "fiber_requested_bytes": fiber_size,
+                   "fiber_effective_writable_bytes": fiber_size,
                    "page_size_bytes": 4096, "guard_bytes": 4096,
                    "allocator": "on_demand_unix", "sanitizer_mode": "none"},
         "runtime": runtime, "cases": cases, "raw_logs": [transcript],
@@ -376,8 +377,8 @@ class ResourceReportControls(unittest.TestCase):
     def test_macos_worker_capacity_requires_guard_below_mapped_stack(self):
         pid = 401
         records = [
-            thread("tokio_worker", "worker-1", 1_048_576, 1_048_576, pid),
-            thread("tokio_worker", "worker-2", 1_048_576, 1_048_576, pid),
+            thread("tokio_worker", "worker-1", 1_019_904, 1_015_808, pid),
+            thread("tokio_worker", "worker-2", 1_019_904, 1_015_808, pid),
             thread("blocking_pool", "blocking", 8_388_608, None, pid),
             thread("block_on_caller", "caller", 8_388_608, None, pid),
         ]
@@ -389,7 +390,7 @@ class ResourceReportControls(unittest.TestCase):
             record["guard_treatment"] = "guard protected below pthread stack range"
         runtime = {
             "flavor": "multi_thread", "worker_count": 2,
-            "worker_requested_bytes": 1_048_576,
+            "worker_requested_bytes": 1_015_808,
             "thread_observations": records,
             "blocking_pool_observed": True, "block_on_caller_observed": True,
         }
@@ -397,6 +398,60 @@ class ResourceReportControls(unittest.TestCase):
         records[0]["guard_end"] += 4096
         with self.assertRaisesRegex(ValueError, "thread guard interval"):
             resource_evidence.thread_capacities(runtime, "reduced", 4096, "macos", pid)
+
+    def test_macos_pthread_offset_is_counted_in_worker_capacity(self):
+        def measured(mode, pid):
+            requested = 1_015_808 if mode == "reduced" else None
+            worker_bytes = (requested or 2_097_152) + 12_288
+            records = [
+                thread("tokio_worker", "worker-1", worker_bytes + 16_384, requested, pid),
+                thread("tokio_worker", "worker-2", worker_bytes + 16_384, requested, pid),
+                thread("blocking_pool", "blocking", 2_125_824, None, pid),
+                thread("block_on_caller", "caller", 2_125_824, None, pid),
+            ]
+            for record in records:
+                low = record["mapped_start"] + 16_384
+                high = record["mapped_end"]
+                record.update({
+                    "identity_api": "macos_pthread_threadid_np",
+                    "page_size_bytes": 16_384,
+                    "guard_bytes": 16_384,
+                    "guard_end": low,
+                    "guard_verification": "macos_mach_vm_region_prot_none",
+                    "mapped_start": low,
+                    "mapped_bytes": high - low,
+                    "usable_start": low,
+                    "usable_end": high,
+                    "usable_bytes": high - low,
+                    "guard_treatment": "guard protected below pthread stack range",
+                })
+            runtime = {
+                "flavor": "multi_thread", "worker_count": 2,
+                "worker_requested_bytes": requested,
+                "thread_observations": records,
+                "blocking_pool_observed": True, "block_on_caller_observed": True,
+            }
+            workers = resource_evidence.thread_capacities(
+                runtime, mode, 16_384, "macos", pid)["tokio_worker"]
+            return runtime, workers
+
+        reduced, reduced_workers = measured("reduced", 402)
+        _, production_workers = measured("production", 403)
+        self.assertGreaterEqual(
+            min(item["usable_bytes"] for item in production_workers),
+            2 * max(item["usable_bytes"] for item in reduced_workers))
+        reduced_workers[0]["usable_end"] -= 12_288
+        reduced_workers[0]["usable_bytes"] -= 12_288
+        with self.assertRaisesRegex(ValueError, "pthread stack offset or layout"):
+            resource_evidence.thread_capacities(reduced, "reduced", 16_384, "macos", 402)
+        reduced_workers[0]["usable_end"] += 12_288
+        reduced_workers[0]["usable_bytes"] += 12_288
+        reduced_workers[0]["mapped_end"] += 4096
+        reduced_workers[0]["mapped_bytes"] += 4096
+        reduced_workers[0]["usable_end"] += 4096
+        reduced_workers[0]["usable_bytes"] += 4096
+        with self.assertRaisesRegex(ValueError, "pthread stack offset or layout"):
+            resource_evidence.thread_capacities(reduced, "reduced", 16_384, "macos", 402)
 
     def test_macos_guard_control_accepts_faulted_children_only(self):
         with tempfile.TemporaryDirectory() as temporary:

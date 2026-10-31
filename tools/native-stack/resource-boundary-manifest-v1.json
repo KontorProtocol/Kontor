@@ -114,7 +114,7 @@
     "own_adjacent_boundary": true,
     "repeats": 2
   },
-  "parent_manifest_sha256": "10b5927bf0ebc4d652824e572a6880d7b739ff4227c54a03eac2e7bdaeb844f3",
+  "parent_manifest_sha256": "2f30b2b9ea3517f5ab96b2bd0a99b4bd016a4f1e3ae2af13a745b3414740990c",
   "remaining_case_ids": [
     "brotli_raw_ceiling",
     "canonical_lift_lower",
@@ -164,7 +164,7 @@
     },
     "composition_tests": {
       "path": "tools/native-stack/test_resource_boundary_composition.py",
-      "sha256": "335e3019dadd31ccca4418ce37862b3f6b173a937b90ddee480b48a909eaa5f4"
+      "sha256": "f945b1769c0741619f31ff25fe4b174fbc28a71bb286993429a0faa6f6eb7f41"
     },
     "depths": {
       "path": "tools/native-stack/resource-boundary-depths-v1.json",
@@ -200,7 +200,7 @@
     },
     "synthetic_guard_tests": {
       "path": "tools/native-stack/test_resource_report.py",
-      "sha256": "f5912254eefebd8970b876b2941f4eb8983382ca934ba74d22cbcdc88755b116"
+      "sha256": "6534cecf055d4f7a491b33cb88b7c45a928b976962893e2be84ac43dda5f126a"
     },
     "tests": {
       "path": "tools/native-stack/test_resource_boundary_evidence.py",
@@ -212,7 +212,7 @@
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "1dc9fbd9cc4ac00a07a410459c4dac9c9b0ab44d5c346910f3bd361ec9c1102f"
+      "sha256": "dce76f1530138aaef9b64edc8c671d9d38ca8a273a6180c0a28b1f21b46457c5"
     }
   }
 }

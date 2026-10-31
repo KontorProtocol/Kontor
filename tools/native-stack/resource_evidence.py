@@ -112,8 +112,8 @@ def thread_capacities(runtime, mode, page_size, os_name, process_id):
     require(type(runtime["worker_count"]) is int and runtime["worker_count"] >= 2,
             f"{mode}: invalid worker count")
     if mode == "reduced":
-        require(runtime["worker_requested_bytes"] == 1_048_576,
-                "reduced workers did not request 1 MiB")
+        require(runtime["worker_requested_bytes"] == 1_015_808,
+                "reduced workers did not request 992 KiB")
     observations = runtime["thread_observations"]
     require(isinstance(observations, list), f"{mode}: missing thread observations")
     by_category = {category: [] for category in THREAD_CATEGORIES}
@@ -148,6 +148,20 @@ def thread_capacities(runtime, mode, page_size, os_name, process_id):
                 and thread["mapped_start"] <= thread["usable_start"]
                 and thread["usable_end"] <= thread["mapped_end"],
                 f"{mode}: actual usable worker range is unverified")
+        if os_name == "macos" and category == "tokio_worker":
+            page = thread["page_size_bytes"]
+            # The arm64 pthread offset is writable stack space, so excluding it
+            # from usable_bytes would misstate the measured capacity ratio.
+            require(page > 0 and thread["mapped_start"] % page == 0
+                    and thread["usable_start"] == thread["mapped_start"]
+                    and thread["usable_end"] == thread["mapped_end"],
+                    f"{mode}: unexpected macOS pthread stack offset or layout")
+            if mode == "reduced":
+                requested = thread["requested_bytes"]
+                require(type(requested) is int and requested % page == 0
+                        and thread["mapped_bytes"] - requested ==
+                            thread["mapped_end"] % page,
+                        f"{mode}: unexpected macOS pthread stack offset or layout")
         require(isinstance(thread["measurement_api"], str) and thread["measurement_api"],
                 f"{mode}: missing stack measurement API")
         require(isinstance(thread["guard_treatment"], str) and

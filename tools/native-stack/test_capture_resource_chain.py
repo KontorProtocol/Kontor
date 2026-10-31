@@ -162,7 +162,7 @@ class ChainObservationTests(unittest.TestCase):
         runtime = {"scope": "paired_chain_worker", "mode": "reduced", "stores": 64,
                    "chain_mode": "paid", "trap_control": False,
                    "pid": 100, "flavor": "multi_thread", "worker_count": 2,
-                   "worker_requested_bytes": 1_048_576,
+                   "worker_requested_bytes": 1_015_808,
                    "thread_observations": [], "blocking_pool_observed": True,
                    "block_on_caller_observed": True}
         categories = {"tokio_worker": [

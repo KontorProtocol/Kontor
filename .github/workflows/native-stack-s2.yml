@@ -85,8 +85,8 @@ jobs:
           retention-days: 90
 
   guard:
-    name: S2 macOS guard (${{ matrix.profile }})
-    if: inputs.stage == 'guard'
+    name: S2 macOS ${{ inputs.stage }} (${{ matrix.profile }})
+    if: inputs.stage == 'guard' || inputs.stage == 'chain'
     runs-on: macos-15
     timeout-minutes: 240
     strategy:
@@ -135,11 +135,25 @@ jobs:
             --evidence-dir "$base/archive/control" > "$base/guard-result.json"
           binary=$(jq -er '.binary_path' "$base/build/resource-build-attestation.json")
           cp "$binary" "$base/archive/$(basename "$binary")"
+      - name: Capture corrected macOS chain cases
+        if: inputs.stage == 'chain'
+        run: |
+          base="$RUNNER_TEMP/native-stack-s2-guard"
+          python3 tools/native-stack/resource_manifest_v2.py
+          python3 tools/native-stack/materialize_phase10_fixture.py \
+            --output "$base/historical/resource-chain-capture.json"
+          control_sha=$(jq -er '.sha256' "$base/guard-result.json")
+          python3 tools/native-stack/capture_resource_chain_v2.py \
+            --cell "$RUNNER_OS-$RUNNER_ARCH/$PROFILE" \
+            --control-capture "$base/archive/control/resource-control-capture.json" \
+            --control-sha256 "$control_sha" \
+            --historical-bundle "$base/historical/resource-chain-capture.json" \
+            --evidence-dir "$base/archive/chain_v2" > "$base/chain-result.json"
       - name: Preserve macOS guard evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: native-stack-s2-macos-guard-${{ matrix.profile }}
+          name: native-stack-s2-macos-${{ inputs.stage }}-${{ matrix.profile }}
           path: ${{ runner.temp }}/native-stack-s2-guard/archive
           if-no-files-found: warn
           retention-days: 90
@@ -147,12 +161,13 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: native-stack-s2-diagnostics-macos-guard-${{ matrix.profile }}
+          name: native-stack-s2-diagnostics-macos-${{ inputs.stage }}-${{ matrix.profile }}
           path: |
             ${{ runner.temp }}/native-stack-s2-guard/build/*.json*
             ${{ runner.temp }}/native-stack-s2-guard/build/*.log
             ${{ runner.temp }}/native-stack-s2-guard/build/*.rs
             ${{ runner.temp }}/native-stack-s2-guard/guard-result.json
+            ${{ runner.temp }}/native-stack-s2-guard/chain-result.json
           if-no-files-found: warn
           retention-days: 90
 
