@@ -51,6 +51,7 @@ sha3 = "=0.12.0"
 malachitebft-signing-ed25519 = { version = "=0.8.2", package = "arc-malachitebft-signing-ed25519", features = ["rand", "serde"] }
 
 [patch.crates-io]
+wasmtime = { git = "https://github.com/wilfreddenton/wasmtime", rev = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7", version = "=51.0.0-kontor.2" }
 psm = { path = "../../core/vendor/psm" }
 wit-bindgen = { path = "../../core/vendor/wit-bindgen" }
 blst = { path = "../../core/vendor/blst" }

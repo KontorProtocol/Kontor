@@ -113,6 +113,18 @@ the actual retained runtime, host bindings, semantic policy and dependencies.
 The separate `protocol-bundles/node` workspace owns node services and physical
 storage, and its resolved graph must not contain Wasmtime or an executor crate.
 
+The production recipes `executor-first` and `executor-second` build the actual
+P1 implementation against Wasmtime `51.0.0-kontor.2` and `51.0.0-kontor.3`,
+respectively. The second enables `addr2line` to exercise independent feature
+resolution. Both retain the P1 lifting rate of 512. These build labels do not
+assign a network protocol version or activate an upgrade.
+
+Shared built-in host types express a compatible Wasmtime dependency, while each
+embedding workspace patches it to its exact retained fork. This prevents those
+types from silently pulling core's older VM into a newer executor. The builder
+still requires exactly one expected Wasmtime identity per executor. Guest builds
+leave that optional host dependency disabled.
+
 `--build-executors` only stages libraries. `--build-node` additionally builds the
 Kontor binary, injects the staged facade into the node library, supplies its
 dependency search paths to both node compiler invocations, and checks native
