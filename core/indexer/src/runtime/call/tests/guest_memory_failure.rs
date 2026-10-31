@@ -229,9 +229,8 @@ async fn swallowed_gc_backing_failure_aborts_before_result_persistence() -> Resu
     let contract_id = runtime.storage.insert_contract("gc-backing", &[]).await?;
     validate_no_starts(&wat::parse_str(WAT)?)?;
     runtime
-        .component_cache
-        .put_admitted(contract_id, Component::new(&engine, WAT)?, WAT.len())
-        .await;
+        .cache_component_fixture(contract_id, Component::new(&engine, WAT)?, WAT.len())
+        .await?;
     let address = ContractAddress {
         name: "gc-backing".into(),
         height: 1,

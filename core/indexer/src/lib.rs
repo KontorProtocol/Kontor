@@ -15,6 +15,7 @@ pub mod legacy_test_utils;
 pub mod logging;
 pub mod metrics;
 pub mod multi_psbt_test_utils;
+mod protocol;
 pub mod reactor;
 pub mod receipt_stream_rotation;
 pub mod reg_tester;

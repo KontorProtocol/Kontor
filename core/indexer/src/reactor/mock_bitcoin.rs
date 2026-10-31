@@ -6,11 +6,12 @@ use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::transaction::Version;
 use bitcoin::{BlockHash, Txid};
 
+use crate::bitcoin_client::types::{MempoolEntry, MempoolEntryFees};
+use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 #[cfg(test)]
 use crate::runtime::ownership::AsyncGate;
 use crate::test_utils::new_mock_block_hash;
-use indexer_types::Block;
 
 /// Create a minimal bitcoin::Transaction with a unique txid derived from the nonce.
 pub fn make_tx(nonce: u32) -> bitcoin::Transaction {
@@ -19,15 +20,6 @@ pub fn make_tx(nonce: u32) -> bitcoin::Transaction {
         lock_time: LockTime::from_consensus(nonce),
         input: vec![],
         output: vec![],
-    }
-}
-
-fn to_indexer_tx(index: usize, tx: &bitcoin::Transaction) -> indexer_types::Transaction {
-    indexer_types::Transaction {
-        txid: tx.compute_txid(),
-        index: index as u32,
-        inputs: vec![],
-        op_return_raw: None,
     }
 }
 
@@ -86,18 +78,10 @@ impl MockBitcoin {
     }
 
     pub fn generate_mempool_txs(&mut self, count: usize) -> Vec<MempoolEvent> {
-        use crate::bitcoin_client::types::{MempoolEntry, MempoolEntryFees};
-        use crate::bitcoin_follower::event::KontorTx;
         let mut events = Vec::with_capacity(count);
         for _ in 0..count {
             self.tx_counter += 1;
             let tx = make_tx(self.tx_counter);
-            let parsed = indexer_types::Transaction {
-                txid: tx.compute_txid(),
-                index: 0,
-                inputs: vec![],
-                op_return_raw: None,
-            };
             let txid = tx.compute_txid();
             let fee = MempoolEntry {
                 vsize: 1,
@@ -108,12 +92,9 @@ impl MockBitcoin {
                 },
                 depends: vec![],
             };
-            events.push(MempoolEvent::KontorTxAdded {
+            events.push(MempoolEvent::TransactionAdded {
                 txid,
-                tx: KontorTx {
-                    raw: tx.clone(),
-                    parsed,
-                },
+                tx: tx.clone(),
                 fee,
             });
             self.mempool.push(tx);
@@ -153,16 +134,7 @@ impl MockBitcoin {
         }
         self.block_txids.insert(height, height_txids);
 
-        let block = Block {
-            height,
-            hash,
-            prev_hash,
-            transactions: confirmed_raw
-                .iter()
-                .enumerate()
-                .map(|(i, tx)| to_indexer_tx(i, tx))
-                .collect(),
-        };
+        let block = BlockInput::new(height, hash, prev_hash, confirmed_raw);
 
         let block_event = BlockEvent::BlockInsert {
             target_height: height,

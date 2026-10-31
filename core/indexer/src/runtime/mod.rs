@@ -2,6 +2,8 @@
 mod conversion_probe;
 #[cfg(test)]
 mod costs;
+#[cfg(test)]
+mod genesis_parity;
 extern crate alloc;
 
 mod component_cache;
@@ -18,7 +20,7 @@ pub mod pricing;
 mod resource_diagnostics;
 #[cfg(test)]
 mod sequential_tests;
-mod stack;
+pub(crate) mod stack;
 pub mod staking;
 mod storage;
 pub mod system;
@@ -29,7 +31,6 @@ pub mod wit;
 pub(crate) mod workload_telemetry;
 
 mod call;
-mod fees;
 mod guest_memory;
 mod host_context;
 mod host_files;
@@ -39,10 +40,14 @@ mod host_system;
 mod invocation;
 mod lowering;
 pub mod ownership;
+mod selected;
 
+use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
 use bitcoin::XOnlyPublicKey;
-use call::CallOutcome;
+pub(crate) use call::CallOutcome;
 pub use component_cache::ComponentCache;
+pub(crate) use component_cache::ComponentSource;
+pub(crate) use guest_memory::GuestMemoryLimitExceeded;
 use guest_memory::{GuestMemoryLimiter, GuestMemoryLimits};
 use invocation::{InvocationBudget, InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS};
 #[cfg(test)]
@@ -66,58 +71,7 @@ use tokio::sync::Mutex;
 #[cfg(test)]
 use workload_telemetry::WorkloadTelemetry;
 
-use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
-
-/// Distinguishes deterministic failures from non-deterministic failures
-/// in the contract execution path.
-#[derive(Debug)]
-pub enum ExecutionError {
-    /// Deterministic failure — all nodes see the same result for the same inputs.
-    /// WASM traps, contract not found, bad arguments, etc.
-    /// Caller should rollback and continue processing.
-    Deterministic(anyhow::Error),
-    /// Non-deterministic failure — DB/IO error, host panic, tokio task failure.
-    /// Different nodes may see different results.
-    /// Caller should propagate to reactor and shut down.
-    NonDeterministic(anyhow::Error),
-}
-
-impl Display for ExecutionError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let (kind, error) = match self {
-            ExecutionError::Deterministic(error) => ("deterministic error", error),
-            ExecutionError::NonDeterministic(error) => ("non-deterministic error", error),
-        };
-        write!(f, "{kind}: ")?;
-        // Expand causes only when the outer caller requests it. Chain formatters
-        // use ordinary Display for each source, avoiding recursive expansion.
-        Display::fmt(error, f)
-    }
-}
-
-impl std::error::Error for ExecutionError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            ExecutionError::Deterministic(e) | ExecutionError::NonDeterministic(e) => {
-                Some(e.as_ref())
-            }
-        }
-    }
-}
-
-/// Convert an anyhow::Error to ExecutionError, preserving the classification
-/// if the error already contains an ExecutionError (e.g. from a cross-contract
-/// call through the WIT foreign::call boundary). Falls back to NonDeterministic
-/// for errors without an ExecutionError inside.
-impl From<anyhow::Error> for ExecutionError {
-    fn from(e: anyhow::Error) -> Self {
-        match e.downcast::<ExecutionError>() {
-            Ok(ee) => ee,
-            Err(e) => ExecutionError::NonDeterministic(e),
-        }
-    }
-}
 
 pub use wit::kontor;
 pub use wit::kontor::built_in::context_types::ContractAddress;
@@ -133,18 +87,21 @@ pub use wit::kontor::built_in::numbers_types::{
 use anyhow::{Result, anyhow};
 use std::str::FromStr;
 use wasmtime::{
-    Config, Engine, InstanceAllocationStrategy, LiftingPrices, Store,
+    Engine, Store,
     component::{Component, HasData, ResourceTable},
 };
 
-use indexer_types::{BuildProvenance, CommitId, Forge, Payment, Platform, Source};
+use indexer_types::{BuildProvenance, Payment};
 use wit_validator::Validator as WitValidator;
 
 use crate::bls::RegistrationProof;
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
-use crate::database;
-use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id};
-use crate::database::types::CORE_SIGNER_ID;
+use crate::database::types::{CORE_SIGNER_ID, Identity};
+use crate::protocol::v1::engine;
+pub use crate::protocol::v1::errors::ExecutionError;
+pub(crate) use crate::protocol::v1::gas::MAX_UNTRUSTED_GAS_LIMIT;
+use crate::protocol::v1::gas::{DEFAULT_NON_PROC_GAS_LIMIT, GAS_TO_FUEL_MULTIPLIER};
+use crate::protocol::v1::native::{NATIVE_CONTRACTS, is_native_contract_id, native_provenance};
 use crate::runtime::{
     counter::Counter,
     deposit::DepositMeter,
@@ -153,9 +110,6 @@ use crate::runtime::{
     stack::{CallFrame, Stack},
     wit::Signer,
 };
-
-/// Paid-operation limit is consensus critical; views reuse the same ceiling.
-pub(crate) const MAX_UNTRUSTED_GAS_LIMIT: u64 = 100_000;
 
 #[derive(Clone, Debug)]
 pub struct GenesisParameters {
@@ -185,43 +139,6 @@ pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     hasher.update(bytes);
     let result = hasher.finalize();
     result.into()
-}
-
-/// Provenance for the native/genesis contracts. `platform` + the pinned `image`
-/// come from the committed native-contracts `build.json`; the source is the
-/// Kontor repo at the node's build commit — which reproduces the committed
-/// binaries (the reproducible-build gate proves that at every commit). A missing
-/// git commit (e.g. a tarball build) → an all-zero "unknown" commit.
-fn native_provenance() -> Result<BuildProvenance> {
-    const BUILD_JSON: &str = include_str!("../../../../native-contracts/binaries/build.json");
-
-    #[derive(serde::Deserialize)]
-    struct BuildMeta {
-        platform: String,
-        image: String,
-    }
-    let meta: BuildMeta = serde_json::from_str(BUILD_JSON)?;
-
-    let commit = crate::built_info::GIT_COMMIT_HASH
-        .and_then(|h| {
-            let mut bytes = [0u8; 20];
-            hex::decode_to_slice(h, &mut bytes).ok().map(|_| bytes)
-        })
-        .map(CommitId::Sha1)
-        .unwrap_or(CommitId::Sha1([0u8; 20]));
-
-    let provenance = BuildProvenance {
-        source: Source {
-            forge: Forge::GitHub,
-            owner: "KontorProtocol".to_string(),
-            repo: "Kontor".to_string(),
-            commit,
-        },
-        image: meta.image,
-        platform: Platform::parse(&meta.platform)?,
-    };
-    provenance.validate()?;
-    Ok(provenance)
 }
 
 // RawFileDescriptor's PartialEq/Eq moved to `built-in-types` (the crate that
@@ -281,6 +198,8 @@ type StoreTableOwners = Arc<StdMutex<Vec<Weak<Mutex<ResourceTable>>>>>;
 #[derive(Clone)]
 pub struct Runtime {
     pub(crate) engine: Engine,
+    executor_version: ExecutorVersion,
+    selected_context: Option<Arc<selected::SelectedContext>>,
     pub(crate) linkers: Arc<Linkers>,
     pub(crate) table: Arc<Mutex<ResourceTable>>,
     pub(crate) component_cache: ComponentCache,
@@ -337,96 +256,29 @@ pub struct Runtime {
     /// lite executor); production paths (reactor, runtime pool) set it from
     /// `config.network`.
     pub(crate) network: bitcoin::Network,
-    /// Set while `simulate` runs a fabricated block it is going to throw away.
-    ///
-    /// The savepoint undoes everything in the DATABASE, but the component cache
-    /// lives outside it and is keyed by `contracts.id` — a rowid the rollback
-    /// frees for reuse (`INTEGER PRIMARY KEY`, no `AUTOINCREMENT`). A `Publish`
-    /// inside a simulation would otherwise leave its compiled WASM cached under
-    /// an id a later real publish can be assigned, and `load_component` would
-    /// serve the simulated contract's code — on this node only, so it diverges
-    /// from the network.
-    ///
-    /// A flag rather than a compensating invalidate: the cache has TWO write
-    /// sites (`component_bytes_and_compiled` and `validate_publishable`), each
-    /// carrying its own `!simulating` guard, so not writing is one check per
-    /// site rather than a cleanup to remember in a function whose first two
-    /// hazards (`height`, then this) were both missed.
+    /// Simulation does not populate the shared compile cache. Keep speculative
+    /// compilation from evicting canonical hot code; snapshot code identity also
+    /// prevents a rolled-back row ID from resolving to a different cached module.
     pub(crate) simulating: bool,
 }
 
 impl Runtime {
+    pub(crate) fn executor_version(&self) -> ExecutorVersion {
+        self.executor_version
+    }
+
     pub fn new_engine() -> Result<Engine> {
-        Self::engine_with_async_stack_size(2 * 1024 * 1024)
+        engine::new_engine()
     }
 
     #[cfg(test)]
     pub(crate) fn new_resource_diagnostic_engine() -> Result<Engine> {
-        Self::engine_with_async_stack_size(1024 * 1024)
-    }
-
-    fn engine_with_async_stack_size(async_stack_size: usize) -> Result<Engine> {
-        let reservation = u64::try_from(GuestMemoryLimits::default().per_root)?;
-        Self::engine_with_memory_reservation(async_stack_size, reservation)
+        engine::new_resource_diagnostic_engine()
     }
 
     #[cfg(test)]
     pub(crate) fn new_previous_memory_reservation_engine() -> Result<Engine> {
-        Self::engine_with_memory_reservation(2 * 1024 * 1024, 4 * 1024 * 1024 * 1024)
-    }
-
-    fn engine_with_memory_reservation(
-        async_stack_size: usize,
-        memory_reservation: u64,
-    ) -> Result<Engine> {
-        let mut config = Config::new();
-        config.target("pulley64-unknown-unknown-elf")?;
-        config.max_wasm_stack(512 * 1024);
-        config.async_stack_size(async_stack_size);
-        config.wasm_component_model_async(false);
-        config.wasm_component_model_more_async_builtins(false);
-        config.wasm_component_model_async_stackful(false);
-        config.wasm_component_model_threading(false);
-        config.wasm_component_model_error_context(false);
-        config.wasm_shared_everything_threads(false);
-        config.wasm_stack_switching(false);
-        config.wasm_threads(false);
-        config.concurrency_support(false);
-        config.consume_fuel(true);
-        config.consume_lifting_fuel(Some(LiftingPrices {
-            lift_value: 512,
-            string_byte: 16,
-            metadata_byte: 16,
-        }));
-        // Wasmtime 48's Mach receiver aborts on an interrupted receive. Kontor
-        // has no Mach-based crash handler, so use POSIX traps on macOS instead.
-        config.macos_use_mach_ports(false);
-        // CoW can skip metered initialization depending on OS/image availability.
-        // Every node must copy the same data segments and charge the same fuel.
-        config.memory_init_cow(false);
-        config.wasm_custom_page_sizes(false);
-        config.allocation_strategy(InstanceAllocationStrategy::OnDemand);
-        // The shared root limit bounds each admitted memory. Wasmtime's 4 GiB
-        // default reservation needlessly scales with suspended Store count.
-        config.memory_reservation(memory_reservation);
-        config.memory_may_move(true);
-        config.wasm_relaxed_simd(false);
-        config.cranelift_nan_canonicalization(true);
-        let engine = Engine::new(&config)?;
-        anyhow::ensure!(engine.is_pulley(), "production engine must use Pulley");
-        anyhow::ensure!(
-            engine.get_target().as_deref() == Some("pulley64-unknown-unknown-elf"),
-            "unexpected Pulley target"
-        );
-        anyhow::ensure!(
-            engine.get_max_wasm_stack() == 512 * 1024,
-            "unexpected Pulley logical stack size"
-        );
-        anyhow::ensure!(
-            engine.get_async_stack_size() == async_stack_size,
-            "unexpected async fiber stack size"
-        );
-        Ok(engine)
+        engine::new_previous_memory_reservation_engine()
     }
 
     /// Built-ins every contract gets (the user-land surface, plus the
@@ -474,6 +326,8 @@ impl Runtime {
     ) -> Result<Self> {
         Ok(Self {
             engine,
+            executor_version: ExecutorVersion::LegacyP1,
+            selected_context: None,
             linkers,
             table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
@@ -504,11 +358,11 @@ impl Runtime {
             deposit: DepositMeter::new(),
             usage_kind: UsageKind::System,
             fuel_checkpoint: 0,
-            gas_limit_for_non_procs: 100_000,
+            gas_limit_for_non_procs: DEFAULT_NON_PROC_GAS_LIMIT,
             // The pool overrides this from node config; trusted internal views
             // select the system budget independently.
             view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
-            gas_to_fuel_multiplier: 1_000,
+            gas_to_fuel_multiplier: GAS_TO_FUEL_MULTIPLIER,
             pricing: Pricing::default(),
             previous_output: None,
             op_return_data: None,
@@ -568,14 +422,16 @@ impl Runtime {
     }
 
     pub fn fuel_limit_for_non_procs(&self) -> u64 {
-        self.gas_limit_for_non_procs * self.gas_to_fuel_multiplier
+        let gas = self.selected_gas_policy();
+        gas.non_proc_allowance * gas.fuel_multiplier
     }
 
     /// Fuel budget for a read-only `/view` call.
     pub fn fuel_limit_for_view(&self) -> Result<u64, ExecutionError> {
-        self.view_gas_limit
-            .min(MAX_UNTRUSTED_GAS_LIMIT)
-            .checked_mul(self.gas_to_fuel_multiplier)
+        let gas = self.selected_gas_policy();
+        gas.view_allowance
+            .min(gas.untrusted_allowance)
+            .checked_mul(gas.fuel_multiplier)
             .ok_or_else(|| {
                 ExecutionError::Deterministic(anyhow!("View gas limit exceeds the fuel range"))
             })
@@ -585,12 +441,12 @@ impl Runtime {
     pub fn core_payment(&self) -> Payment {
         Payment {
             signer_id: CORE_SIGNER_ID,
-            gas_limit: self.gas_limit_for_non_procs,
+            gas_limit: self.selected_gas_policy().non_proc_allowance,
         }
     }
 
     pub fn gas_consumed(&self, starting_fuel: u64, ending_fuel: u64) -> u64 {
-        (starting_fuel - ending_fuel).div_ceil(self.gas_to_fuel_multiplier)
+        (starting_fuel - ending_fuel).div_ceil(self.selected_gas_policy().fuel_multiplier)
     }
 
     pub(crate) async fn publish_native_contracts(
@@ -616,20 +472,22 @@ impl Runtime {
     ) -> Result<()> {
         self.set_context(0, Some(TransactionContext::builder().build()), None, None)
             .await;
+        let bootstrap = self.storage.native_bootstrap_progress().await?;
+        self.result_id_counter
+            .restore(bootstrap.next_result_index)
+            .await;
 
         // Reserve the Core signer row before publishing any contracts. The
         // returned id is asserted equal to CORE_SIGNER_ID inside the query —
         // callers rely on the constant directly rather than reading it back.
-        database::queries::create_core_signer(&self.get_storage_conn()).await?;
+        self.storage.create_core_signer().await?;
 
         // Publish order matches NATIVE_CONTRACTS and determines contract
         // IDs (1-indexed, assigned in iteration order). Adding a contract
         // = appending to the slice; no manual count to maintain.
         let core_signer = Signer::Core(Box::new(Signer::Nobody));
         let payment = self.core_payment();
-        // Native contracts ARE reproducibly built — record their provenance from
-        // the committed build.json (platform + pinned image) plus the source repo
-        // at the node's build commit (CI gates that it reproduces these bytes).
+        // Genesis provenance is part of the retained protocol, never the node build.
         let provenance = native_provenance()?;
         for (name, bytes) in NATIVE_CONTRACTS {
             let mut lease = if let Some(service) = owner_service {
@@ -715,7 +573,7 @@ impl Runtime {
             }
             set_result??;
         }
-        if !genesis.validators.is_empty() {
+        if !genesis.validators.is_empty() && !bootstrap.validators_initialized {
             let validators = genesis.validators.iter().cloned().map(Into::into).collect();
             let mut lease = if let Some(service) = owner_service {
                 Some(service.begin_canonical(self, false).await?)
@@ -754,7 +612,7 @@ impl Runtime {
         name: &str,
         bytes: &[u8],
         // Required for every publish — user ops carry it on the wire; native
-        // (core-signed) contracts derive it from the committed build.json.
+        // (core-signed) contracts use the retained genesis provenance.
         provenance: &BuildProvenance,
     ) -> Result<String, ExecutionError> {
         // Already enforced at decode (block::filter_map); re-checked here before
@@ -970,9 +828,18 @@ impl Runtime {
         // But only the CONTENT half. The read and the task join are this node's own
         // machinery; calling those deterministic would make one node reject a publish
         // its peers accept — the same divergence, silently and in the other direction.
+        let stored = self
+            .storage
+            .stored_component_bytes(contract_id)
+            .await
+            .map_err(|e| match e {
+                ComponentDecodeError::Content(e) => ExecutionError::Deterministic(e),
+                ComponentDecodeError::Infrastructure(e) => ExecutionError::NonDeterministic(e),
+            })?;
+        let source = ComponentSource::new(contract_id, &stored);
         let bytes = self
             .storage
-            .decode_component_bytes(contract_id)
+            .decode_stored_component_bytes(stored)
             .await
             .map_err(|e| match e {
                 ComponentDecodeError::Content(e) => ExecutionError::Deterministic(
@@ -1015,8 +882,9 @@ impl Runtime {
         // Publish can run inside a simulation under an id that rollback reuses.
         if !self.simulating {
             self.component_cache
-                .put_admitted(contract_id, component, bytes.len())
-                .await;
+                .put_selected(source, self.executor_version, component, bytes.len())
+                .await
+                .map_err(ExecutionError::NonDeterministic)?;
         }
         Ok(())
     }
@@ -1086,12 +954,14 @@ impl Runtime {
     pub(crate) async fn get_or_create_identity(
         &self,
         x_only_pubkey: &str,
-    ) -> Result<database::types::Identity, ExecutionError> {
-        let conn = self.get_storage_conn();
+    ) -> Result<Identity, ExecutionError> {
         if self.is_in_view_context().await {
-            return database::queries::get_identity(&conn, x_only_pubkey)
+            return self
+                .storage
+                .lookup_identity(x_only_pubkey)
                 .await
-                .map_err(|e| ExecutionError::NonDeterministic(e.into()))?
+                .map_err(ExecutionError::NonDeterministic)?
+                .map(Identity::new)
                 .ok_or_else(|| {
                     ExecutionError::Deterministic(anyhow!(
                         "signer not found for x-only-pubkey {x_only_pubkey} \
@@ -1099,9 +969,10 @@ impl Runtime {
                     ))
                 });
         }
-        let height = self.storage.height;
-        database::queries::ensure_identity(&conn, x_only_pubkey, height)
+        self.storage
+            .ensure_identity(x_only_pubkey)
             .await
+            .map(Identity::new)
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))
     }
 
@@ -1118,11 +989,11 @@ impl Runtime {
             )));
         };
 
-        let conn = self.get_storage_conn();
-        let existing_bls = identity
-            .bls_pubkey(&conn)
+        let existing_bls = self
+            .storage
+            .identity_bls_key(identity.signer_id())
             .await
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+            .map_err(ExecutionError::NonDeterministic)?;
         if let Some(existing) = existing_bls {
             if existing == bls_pubkey {
                 return Ok(());
@@ -1132,8 +1003,9 @@ impl Runtime {
             )));
         }
 
-        let x_only_pubkey = identity
-            .x_only_pubkey(&conn)
+        let x_only_pubkey = self
+            .storage
+            .identity_pubkey(identity.signer_id())
             .await
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
         let x_only_pk = XOnlyPublicKey::from_str(&x_only_pubkey)
@@ -1161,10 +1033,10 @@ impl Runtime {
         };
         proof.verify().map_err(ExecutionError::Deterministic)?;
 
-        identity
-            .register_bls_key(&conn, &proof.bls_pubkey, self.storage.height)
+        self.storage
+            .write_identity_bls_key(identity.signer_id(), &proof.bls_pubkey)
             .await
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+            .map_err(ExecutionError::NonDeterministic)?;
 
         Ok(())
     }
@@ -1186,9 +1058,29 @@ impl Runtime {
     ) -> Result<String, ExecutionError> {
         let payment = signer.and_then(|s| s.signer_id()).map(|id| Payment {
             signer_id: id,
-            gas_limit: self.gas_limit_for_non_procs,
+            gas_limit: self.selected_gas_policy().non_proc_allowance,
         });
         self.execute(signer, payment, contract_address, expr).await
+    }
+
+    pub(crate) async fn execute_selected_view(
+        &mut self,
+        selection: &ExecutionSelection,
+        contract_address: &ContractAddress,
+        expr: &str,
+    ) -> Result<String, ExecutionError> {
+        selection
+            .verify_view(&self.storage.conn, self.network, self.executor_version)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?;
+        match selection.version() {
+            ExecutorVersion::LegacyP1 => {
+                self.bind_selection(selection)
+                    .map_err(ExecutionError::NonDeterministic)?
+                    .execute(None, None, contract_address, expr)
+                    .await
+            }
+        }
     }
 
     pub(crate) async fn execute(
@@ -1247,8 +1139,18 @@ impl Runtime {
     /// returning the encoded `bytes` too so a caller that also needs the embedded
     /// WIT pays the decompress/encode/compile exactly once. The bytes are not
     /// cached — only the compiled `Component`.
-    async fn component_bytes_and_compiled(&self, contract_id: u64) -> Result<(Vec<u8>, Component)> {
-        let bytes = self.storage.component_bytes(contract_id).await?;
+    async fn component_bytes_and_compiled(
+        &self,
+        source: ComponentSource,
+        stored: Vec<u8>,
+    ) -> Result<(Vec<u8>, Component)> {
+        let bytes = self
+            .storage
+            .decode_stored_component_bytes(stored)
+            .await
+            .map_err(|e| match e {
+                ComponentDecodeError::Content(e) | ComponentDecodeError::Infrastructure(e) => e,
+            })?;
         component_policy::validate_no_starts(&bytes)?;
         let (bytes, component) =
             self.compile_component_bytes(bytes)
@@ -1256,22 +1158,37 @@ impl Runtime {
                 .map_err(|e| match e {
                     ComponentDecodeError::Content(e) | ComponentDecodeError::Infrastructure(e) => e,
                 })?;
-        // One of the cache's TWO write sites — `validate_publishable` guards the
-        // other, and its guard is the one the publish path depends on.
-        // See `Runtime::simulating`: caching a speculative contract's code under an
-        // id the rollback frees would let a later real publish be served the wrong
-        // WASM on this node alone.
+        // Match publication's policy: do not warm shared caches speculatively.
         if !self.simulating {
             self.component_cache
-                .put_admitted(contract_id, component.clone(), bytes.len())
-                .await;
+                .put_selected(
+                    source,
+                    self.executor_version,
+                    component.clone(),
+                    bytes.len(),
+                )
+                .await?;
         }
         Ok((bytes, component))
     }
 
     pub(crate) async fn load_component(&self, contract_id: u64) -> Result<Component> {
+        // Resolve code from this root's snapshot before consulting a shared cache.
+        // An old view can retain an ID whose newer canonical row contains new code.
+        let stored = self
+            .storage
+            .stored_component_bytes(contract_id)
+            .await
+            .map_err(|e| match e {
+                ComponentDecodeError::Content(e) | ComponentDecodeError::Infrastructure(e) => e,
+            })?;
+        let source = ComponentSource::new(contract_id, &stored);
         Ok(
-            match self.component_cache.get_admitted(&contract_id).await {
+            match self
+                .component_cache
+                .get_selected(source, self.executor_version, &self.engine)
+                .await?
+            {
                 Some(component) => {
                     if !Engine::same(component.engine(), &self.engine) {
                         return Err(anyhow!(
@@ -1280,9 +1197,31 @@ impl Runtime {
                     }
                     component
                 }
-                None => self.component_bytes_and_compiled(contract_id).await?.1,
+                None => self.component_bytes_and_compiled(source, stored).await?.1,
             },
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn cache_component_fixture(
+        &self,
+        contract_id: u64,
+        component: Component,
+        size: usize,
+    ) -> Result<()> {
+        let stored = self
+            .storage
+            .contract_bytes(contract_id)
+            .await?
+            .ok_or_else(|| anyhow!("fixture contract missing"))?;
+        self.component_cache
+            .put_selected(
+                ComponentSource::new(contract_id, &stored),
+                self.executor_version,
+                component,
+                size,
+            )
+            .await
     }
 
     pub(crate) fn make_store(&self, fuel: u64) -> Result<InvocationStore> {
@@ -1322,6 +1261,7 @@ impl Runtime {
         fuel: u64,
         #[cfg(test)] role: ResourceProbeRole,
     ) -> Result<InvocationStore> {
+        self.verify_selected_runtime()?;
         let depth = self
             .invocation_depth
             .checked_add(1)
@@ -1349,12 +1289,12 @@ impl Runtime {
             owners.push(Arc::downgrade(&table));
         }
         runtime.table = table;
-        runtime.guest_memory_limiter = match (&self.guest_memory_limiter, self.guest_memory_limits)
-        {
-            (Some(parent), _) => Some(parent.new_child()),
-            (None, Some(limits)) => Some(GuestMemoryLimiter::new_root(limits)),
-            (None, None) => None,
-        };
+        runtime.guest_memory_limiter =
+            match (&self.guest_memory_limiter, self.selected_memory_limits()) {
+                (Some(parent), _) => Some(parent.new_child()),
+                (None, Some(limits)) => Some(GuestMemoryLimiter::new_root(limits)),
+                (None, None) => None,
+            };
         let mut s = InvocationStore::new(Store::new(&self.engine, runtime), lease);
         if s.data().guest_memory_limiter.is_some() {
             s.limiter(|runtime| runtime.guest_memory_limiter.as_mut().unwrap());
@@ -1687,9 +1627,8 @@ mod tests {
         );
     }
 
-    /// A failed publish must not leave its compiled component in the cache: the
-    /// contract id is rolled back and SQLite can reuse it for a different
-    /// contract, which would then be served stale WASM by `load_component`.
+    /// Failed publication must release its speculative cache entry even though
+    /// immutable code identity now prevents a reused row ID from aliasing it.
     #[tokio::test]
     async fn failed_publish_evicts_component_cache() {
         use crate::database::native_contracts::{FILESTORAGE, NATIVE_CONTRACTS};
@@ -1726,19 +1665,9 @@ mod tests {
         );
     }
 
-    /// A simulation must leave NOTHING in the component cache. The savepoint undoes
-    /// the database, but the cache lives outside it and is keyed by `contracts.id` —
-    /// a rowid the rollback frees for reuse. A component compiled while simulating
-    /// would then be served to whatever contract is later assigned that id, on this
-    /// node alone, which is a silent divergence from the rest of the network.
-    ///
-    /// SCOPE: the cache has TWO write sites, and both are covered here —
-    /// `component_bytes_and_compiled` (reached by `load_component`, i.e. calls) and
-    /// `validate_publishable` (reached by `publish`). The publish one is the site the
-    /// hazard is actually about, so it is asserted directly rather than assumed to
-    /// share a path with the other. It does not drive a publish through the reactor's
-    /// `simulate`: the lite executor's transactions carry no ops, so the cluster
-    /// harness cannot express one.
+    /// Speculative code must not evict canonical hot entries. Cover both cache
+    /// writers, loading and publication admission, rather than assuming they share
+    /// a guard. This directly exercises runtime policy, not reactor simulation.
     #[tokio::test]
     async fn simulation_does_not_populate_the_component_cache() {
         let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
@@ -1766,8 +1695,7 @@ mod tests {
             .expect("component still compiles while simulating");
         assert!(
             runtime.component_cache.get(&contract_id).await.is_none(),
-            "a component compiled during simulation must not be cached — the id it \
-             is keyed by is freed by the rollback and can be handed to a real publish"
+            "a component compiled during simulation must not warm the shared cache"
         );
 
         // The publish path caches at its OWN site inside `validate_publishable`, so
@@ -1783,8 +1711,7 @@ mod tests {
         let _ = runtime.validate_publishable(publish_id).await;
         assert!(
             runtime.component_cache.get(&publish_id).await.is_none(),
-            "a publish compiled during simulation must not be cached — this is the \
-             site the id-reuse hazard actually runs through"
+            "publication admission during simulation must not warm the shared cache"
         );
 
         // The guard must be scoped to simulation, not a blanket disable: caching is

@@ -1639,6 +1639,7 @@ mod tests {
     use super::*;
     use crate::database::connection::new_connection;
     use crate::reg_tester::random_x_only_pubkey;
+    use crate::runtime::ComponentSource;
     use crate::runtime::call::CallOutcome;
     use crate::runtime::fuel::ExecutionUsage;
     use crate::runtime::storage::BlockingGate;
@@ -3104,8 +3105,13 @@ mod tests {
         let cached = Component::new(&object.engine, PURE_LOOP_COMPONENT)?;
         object
             .component_cache
-            .put_admitted(u64::MAX, cached, PURE_LOOP_COMPONENT.len())
-            .await;
+            .put_selected(
+                ComponentSource::new(u64::MAX, PURE_LOOP_COMPONENT.as_bytes()),
+                object.executor_version,
+                cached,
+                PURE_LOOP_COMPONENT.len(),
+            )
+            .await?;
         let service = OwnerService::new();
         let entered = Arc::new(AtomicBool::new(false));
         let guest_entered = entered.clone();

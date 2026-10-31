@@ -38,11 +38,11 @@
     },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
-      "sha256": "73a52babbd673041d76cd488d03c69a14511fcbc3a6429fc97c04aec236da70f"
+      "sha256": "360bb078bb26f76652473066fb4c7a27eb124962b72b2cdfc437f687b6ae8e57"
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "c4fcc11c87d902fcb8793507bedfb1f1178c13cc39fd92fe1bc5882bed9ce2b1"
+      "sha256": "6dfd1f00fe50a24b0f0e62613f7f8ba70905414f76933dbfa78139b012d2bff3"
     },
     "call_output": {
       "path": "core/indexer/src/runtime/call/result.rs",
@@ -50,7 +50,7 @@
     },
     "callback_tests": {
       "path": "core/indexer/src/runtime/sequential_tests.rs",
-      "sha256": "37fe5d7ec7b0b6718d2c8ca6e8f8ac4e7ce62d9da17f6677fbbb89ccd40f0b52"
+      "sha256": "f2f5613cbe05260ad018438bb7bb85ffbf8036972eae3c21962fddb11aef8828"
     },
     "canonical_capture": {
       "path": "tools/native-stack/capture_resource_canonical.py",
@@ -102,7 +102,7 @@
     },
     "component_cache": {
       "path": "core/indexer/src/runtime/component_cache.rs",
-      "sha256": "8c1756b671c11d2215f9bbaeaaec93dc4f3928922b48ce162d52a20bf5236bea"
+      "sha256": "02ecaab3142f30f86ea1d54ecb9fa28738325a3ac35465bc813f9937e1d14a9f"
     },
     "core_lockfile": {
       "path": "core/Cargo.lock",
@@ -141,8 +141,8 @@
       "sha256": "8610f85f6abdd1bdeb0d32c0916cf154493535299d2c4d8fa0e053f0ee2df875"
     },
     "fee_settlement": {
-      "path": "core/indexer/src/runtime/fees.rs",
-      "sha256": "f744a02e4049b55876b5be4edf79f1ca94afd62c88f24bea63a06f4ce8c7540f"
+      "path": "core/indexer/src/protocol/v1/fees.rs",
+      "sha256": "20b9b761045d4b0b325dedb3fc64e50181c508970ccda31b2bd9d8db19c659fc"
     },
     "fiber_source_capture": {
       "path": "tools/native-stack/capture_fiber_source.py",
@@ -232,6 +232,10 @@
       "path": "core/indexer/Cargo.toml",
       "sha256": "b8f3848a7408da12f46b25bb91a4c8b6a290f4c8aae94ce561857e4f5a74b9b0"
     },
+    "initial_protocol_definition": {
+      "path": "core/indexer/src/protocol/coordinator/genesis.rs",
+      "sha256": "1a8ddc1d469e5de017b664097b5087c0387eeb6d1772b589bc0a53e168d83a5d"
+    },
     "initialization_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/initialization.rs",
       "sha256": "f0e19cf06543dd63dca0f56c5baf54af6df91c0af5e2113105c39fa267816a9f"
@@ -250,11 +254,19 @@
     },
     "invocation_budget": {
       "path": "core/indexer/src/runtime/invocation.rs",
-      "sha256": "6bfac3ffa8530f58c6fb607b0e6740665a21e46b80e4db8b3aa4de18f1c10856"
+      "sha256": "31edb93d9b688625c3cd8640e7773b92fe276e32888a2d3e3ecfe15418215af3"
     },
     "macos_worker_capacity_guard": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
       "sha256": "55264866e785b6e5679fed896cbe4068c67686396831df57f359e7d75e9c87d0"
+    },
+    "native_bootstrap_abi": {
+      "path": "core/indexer/src/protocol/native_bootstrap.rs",
+      "sha256": "ffb35a1c1cd2cf6d1858d4ffe660a0c26e2abbb140ff6c9e5dce532a97408bbb"
+    },
+    "native_bootstrap_adapter": {
+      "path": "core/indexer/src/database/native_bootstrap.rs",
+      "sha256": "0b036872414aa6a9453d8d6e7c510927b68a470df569b93014b35bffc97a5fb8"
     },
     "native_build_metadata": {
       "path": "native-contracts/binaries/build.json",
@@ -295,6 +307,10 @@
     "native_filestorage_wit": {
       "path": "native-contracts/filestorage/wit/contract.wit",
       "sha256": "240f1d3dd928f0a8005d05bfb0aa823bd48a7974f6f53fa7ea28e1c16c086d0b"
+    },
+    "native_genesis_preflight": {
+      "path": "core/indexer/src/database/genesis.rs",
+      "sha256": "df2d48de625dee05c4520d1a6c7c668b74f197b16218a59d7715da850230c906"
     },
     "native_staking": {
       "path": "native-contracts/staking/src/lib.rs",
@@ -342,7 +358,7 @@
     },
     "operation_ownership": {
       "path": "core/indexer/src/runtime/ownership.rs",
-      "sha256": "11c0d5d364e9670a7372ba26dd1458d1daa4a8f2a65beec84a79e5a3dd561a4b"
+      "sha256": "fec5909edbc71bfbf48421b2aee8bbe38d37eb0665759356c977941699f50abb"
     },
     "pending_host_capture": {
       "path": "tools/native-stack/capture_resource_pending.py",
@@ -358,7 +374,7 @@
     },
     "pricing_source": {
       "path": "core/indexer/src/runtime/pricing.rs",
-      "sha256": "592072830264b77d1e0f0e53112257701dccf861d065e09eb570bb8baed855c1"
+      "sha256": "ce91326d50ae97404892852bef041cdafe119a068c2196f9972be9cd745393db"
     },
     "production_qualification": {
       "path": "tools/native-stack/compare.py",
@@ -370,7 +386,7 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "22db3d1c8fe6965c904d025e442eb869c67eb11c9255287a65f7b1137be00fcf"
+      "sha256": "410aa7470e488d96de065a454156a912b774f504b7387031a03ae990377fc23f"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
@@ -422,7 +438,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "88f52ef3e6c35f6ae684c93459419bcc1143918e96362431c88975ed622462af"
+      "sha256": "20ce5d193c8791ceec3bf4bc963ce0e4c80665ef8b9bac159731008c07978d30"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -452,13 +468,93 @@
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
       "sha256": "1f61c34150b1048d12c1754534c4a7a42d86fe993abb3792c9d63682340ce2e8"
     },
+    "retained_deposit_policy": {
+      "path": "core/indexer/src/protocol/v1/deposit.rs",
+      "sha256": "661f62249389b89950da8fef0c1e5133da6bd780d7dd24b0e12492231021cca5"
+    },
+    "retained_engine": {
+      "path": "core/indexer/src/protocol/v1/engine.rs",
+      "sha256": "b42be5da366becc45c86e600fe498b2666eb18547aec1c8a9e6b26d06c26e354"
+    },
+    "retained_error_policy": {
+      "path": "core/indexer/src/protocol/v1/errors.rs",
+      "sha256": "ae47180264465ad334cc5437d9423a220f319116c3e25cb68044476ae0758528"
+    },
+    "retained_fuel_policy": {
+      "path": "core/indexer/src/protocol/v1/fuel.rs",
+      "sha256": "5af97f7dd5729342dcaa395371b3f1332c4c167065856afca16206b87e9a3e0a"
+    },
+    "retained_gas_policy": {
+      "path": "core/indexer/src/protocol/v1/gas.rs",
+      "sha256": "3799a58b0f915614607ee0b8bcf5f72f02cafc62aa184e20ed1af6074d31ed07"
+    },
+    "retained_native_bootstrap": {
+      "path": "core/indexer/src/protocol/v1/native_bootstrap.rs",
+      "sha256": "3aace4c49b1d986e7548edad0953bff7c8650c484394ae0dc4dcc0ac3fc0501a"
+    },
+    "retained_native_build.json": {
+      "path": "core/indexer/src/protocol/v1/native/build.json",
+      "sha256": "9d927b68696a24aa94bf1d873bbbda7fa77158c6de277f555a58b08150bc0997"
+    },
+    "retained_native_filestorage.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/filestorage.wasm.br",
+      "sha256": "99d32c4b4951531952fa3d4d02473fd3ae4d5b295130a7669bb103e21f60eecd"
+    },
+    "retained_native_manifest.json": {
+      "path": "core/indexer/src/protocol/v1/native/manifest.json",
+      "sha256": "1770b1018bc787d97f1f93fbe058e516c0d9bb291d12c98840e9bd9f29af3e6f"
+    },
+    "retained_native_nft.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/nft.wasm.br",
+      "sha256": "902c8f0674281b9cc88bb631cea895165aeea8747668f25d9eb225c6861547f3"
+    },
+    "retained_native_policy": {
+      "path": "core/indexer/src/protocol/v1/native.rs",
+      "sha256": "5cc61269ddebfac6b711bbf6439564a83b7031da1bb96bbce6244c7ad7448cbe"
+    },
+    "retained_native_provenance.bin": {
+      "path": "core/indexer/src/protocol/v1/native/provenance.bin",
+      "sha256": "466b7ef1f1b0922a48d1d4b385ce9a16e677e7dff1074ddd834e85073f6fd120"
+    },
+    "retained_native_provenance.json": {
+      "path": "core/indexer/src/protocol/v1/native/provenance.json",
+      "sha256": "e63c00f17f4d235c4e79f539288277cac5cef52ba16aa6c1f5c1db35d7ce927d"
+    },
+    "retained_native_staking.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/staking.wasm.br",
+      "sha256": "11bba975a24cdfe022610c6ff219c1cc699864608180081d7634766cef55e278"
+    },
+    "retained_native_system.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/system.wasm.br",
+      "sha256": "2a5a19d5ae14f6c9c56ea552869c1a335f6b0ab68be47fb8764c4af304a170fb"
+    },
+    "retained_native_token.wasm.br": {
+      "path": "core/indexer/src/protocol/v1/native/token.wasm.br",
+      "sha256": "4b5a443f5b26740e61c0ac8fe6bab0b1132b7d6a0f4ae21036166beacb01e500"
+    },
+    "retained_native_toolchain.json": {
+      "path": "core/indexer/src/protocol/v1/native/toolchain.json",
+      "sha256": "3db02c6cec87ef86895528f2d2e966427e2281875e350d787942da919926cb9c"
+    },
+    "retained_pricing_policy": {
+      "path": "core/indexer/src/protocol/v1/pricing.rs",
+      "sha256": "1eccafbea0945dd7b35b4cdc2b39914b2edb7c918a6d9172495f60d184466975"
+    },
+    "retained_resource_policy": {
+      "path": "core/indexer/src/protocol/v1/resources.rs",
+      "sha256": "29797c8b5c7a3b298578562372aa22eaeed7e26c2b1fd3c751f20fb4d7ccd13c"
+    },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
-      "sha256": "48ed4901e83e95cec2fd0d928bbe3c06993f916ab0be5398fe84107d8802a69e"
+      "sha256": "d5fdff24fa8b1594e611318789c79232f3d02a9fdbe8c11894259369a9ac75a8"
     },
     "runtime_pool": {
       "path": "core/indexer/src/runtime/pool.rs",
-      "sha256": "cacdc89a998566f7d13e39a8e4b10c7c5cbcc35b88c476e3ef14f66025760cf1"
+      "sha256": "4f6cafe06de20c77606898e31b4bd81f1f3a0366689ebc3267ce824e053a212a"
+    },
+    "selected_policy_binding": {
+      "path": "core/indexer/src/runtime/selected.rs",
+      "sha256": "054727b7eaef0e678196b23efda8e7a8fa88e5ecd90017f9d1a0eca2ecbf5856"
     },
     "sqlite_large_values_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_large_values.rs",
@@ -582,7 +678,7 @@
     },
     "test_runtime_setup": {
       "path": "core/indexer/src/test_utils.rs",
-      "sha256": "893d7199b878e6ec58b06a2680afe4a3178c95b30e9fb71f747eb28f2f8b736f"
+      "sha256": "544a7fbf51927a02fcc78b22b3006a16022e1611ef7bd41dc67657db340f9c22"
     },
     "testing_host_imports": {
       "path": "core/indexer/src/runtime/host_files.rs",

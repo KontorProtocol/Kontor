@@ -12,6 +12,10 @@ use std::time::Duration;
 
 use crate::stopper::{Shutdown, ShutdownSignal};
 use anyhow::{Result, anyhow};
+use bitcoin::Transaction as BitcoinTransaction;
+use bitcoin::absolute::LockTime;
+use bitcoin::consensus::serialize;
+use bitcoin::transaction::Version;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
@@ -32,7 +36,6 @@ use crate::reactor::{Reactor, Simulation};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::GenesisValidator;
 use crate::runtime::ownership::{AsyncGate, OwnerService};
-use bitcoin::hashes::Hash;
 use indexer_types::Event;
 use indexer_types::OpWithResult;
 use malachitebft_app_channel::app::config::{BootstrapProtocol, DiscoveryConfig, Selector};
@@ -992,19 +995,16 @@ impl ReactorCluster {
     }
 
     /// Send a transaction to a specific node for simulation and await the result.
-    async fn simulate(
-        &self,
-        node: usize,
-        tx: indexer_types::Transaction,
-    ) -> Result<Vec<OpWithResult>> {
+    async fn simulate(&self, node: usize, tx: BitcoinTransaction) -> Result<Vec<OpWithResult>> {
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
         self.simulate_txs[node]
-            .send((tx, ret_tx))
+            .send((serialize(&tx), ret_tx))
             .await
             .map_err(|_| anyhow::anyhow!("simulate channel closed"))?;
         ret_rx
             .await
-            .map_err(|_| anyhow::anyhow!("simulate response channel closed"))?
+            .map_err(|_| anyhow::anyhow!("simulate response channel closed"))??
+            .map_err(anyhow::Error::msg)
     }
 
     /// Assert all nodes produced the same checkpoint for a block at a given height.
@@ -1160,7 +1160,7 @@ async fn assert_missing_tx_invalidation(submitted: usize) -> Result<()> {
     let all_txids: Vec<bitcoin::Txid> = mempool_events
         .iter()
         .filter_map(|e| match e {
-            MempoolEvent::KontorTxAdded { txid, .. } => Some(*txid),
+            MempoolEvent::TransactionAdded { txid, .. } => Some(*txid),
             _ => None,
         })
         .collect();
@@ -1362,7 +1362,7 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
     let batch_txids: Vec<bitcoin::Txid> = mempool_events
         .iter()
         .filter_map(|e| match e {
-            MempoolEvent::KontorTxAdded { txid, .. } => Some(*txid),
+            MempoolEvent::TransactionAdded { txid, .. } => Some(*txid),
             _ => None,
         })
         .collect();
@@ -2010,7 +2010,7 @@ async fn banked_verdicts_survive_the_deadline_and_track_the_pool() -> Result<()>
     let txids: Vec<String> = events
         .iter()
         .filter_map(|e| match e {
-            MempoolEvent::KontorTxAdded { txid, .. } => Some(txid.to_string()),
+            MempoolEvent::TransactionAdded { txid, .. } => Some(txid.to_string()),
             _ => None,
         })
         .collect();
@@ -2154,11 +2154,11 @@ async fn prod_reactor_simulate_transaction() -> Result<()> {
     cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
     // Create a stub transaction for simulation
-    let tx = indexer_types::Transaction {
-        txid: bitcoin::Txid::from_slice(&[0xAA; 32]).unwrap(),
-        index: 0,
-        inputs: vec![],
-        op_return_raw: None,
+    let tx = BitcoinTransaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
     };
 
     // Simulate on node 0 — exercises savepoint → execute → inspect → rollback
@@ -2204,7 +2204,8 @@ async fn prod_reactor_pending_blocks_bounded_under_stalled_consensus() -> Result
                 hash: crate::test_utils::new_mock_block_hash(height as u32),
                 prev_hash: crate::test_utils::new_mock_block_hash(height.saturating_sub(1) as u32),
                 transactions: Vec::new(),
-            },
+            }
+            .into(),
         };
         match tokio::time::timeout(Duration::from_secs(5), producer.send(event)).await {
             Ok(Ok(())) => accepted += 1,

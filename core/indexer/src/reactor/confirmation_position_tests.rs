@@ -1,3 +1,4 @@
+use crate::protocol::coordinator::selection::ApplicationPosition;
 use std::{slice, time::Duration};
 
 use anyhow::{Context, Result};
@@ -14,6 +15,7 @@ use testlib::sample_provenance;
 use tokio::time::timeout;
 
 use super::aggregate_error_tests::reactor;
+use crate::bitcoin_follower::block::BlockInput;
 use crate::block::filter_map;
 use crate::consensus::Height;
 use crate::consensus::signing::PrivateKey;
@@ -41,6 +43,13 @@ impl Drop for StopEngine {
 // Synthetic raw blocks exercise parsing and coordinator behavior. Constructed
 // prevouts and headers do not establish Bitcoin consensus or mempool acceptance.
 fn confirmation_block(tx: &Transaction, position: usize) -> Result<Block> {
+    let block = raw_confirmation_block(tx, position)?.recognize(|tx| filter_map((0, tx.clone())));
+    assert_eq!(block.transactions.len(), 1);
+    assert_eq!(block.transactions[0].index, position as u32);
+    Ok(block)
+}
+
+fn raw_confirmation_block(tx: &Transaction, position: usize) -> Result<BlockInput> {
     assert!(position >= 2);
     let mut raw = genesis_block(Network::Regtest);
     raw.header.prev_blockhash = new_mock_block_hash(1);
@@ -56,20 +65,12 @@ fn confirmation_block(tx: &Transaction, position: usize) -> Result<Block> {
     assert!(raw.txdata[0].is_coinbase());
     assert!(raw.check_merkle_root());
     let hash = raw.block_hash();
-    let parsed: Vec<_> = raw
-        .txdata
-        .into_iter()
-        .enumerate()
-        .filter_map(filter_map)
-        .collect();
-    assert_eq!(parsed.len(), 1);
-    assert_eq!(parsed[0].index, position as u32);
-    Ok(Block {
-        height: 2,
+    Ok(BlockInput::new(
+        2,
         hash,
-        prev_hash: new_mock_block_hash(1),
-        transactions: parsed,
-    })
+        raw.header.prev_blockhash,
+        raw.txdata,
+    ))
 }
 
 async fn effects(conn: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
@@ -202,7 +203,18 @@ async fn run_case(batched: bool) -> Result<()> {
         }
         let before_confirmation = effects(&conn).await?;
         let block = confirmation_block(&raw, 2)?;
-        let (count, ops, failures) = reactor.execute_block(&block).await?;
+        let (count, ops, failures) = reactor
+            .execute_block(
+                &reactor
+                    .select_executor(ApplicationPosition::Block {
+                        height: block.height,
+                        hash: block.hash,
+                        consensus_height: 0,
+                    })
+                    .await?,
+                &block,
+            )
+            .await?;
         assert_eq!(count, usize::from(!batched));
         assert_eq!(ops, u64::from(!batched));
         assert!(failures.iter().flatten().flatten().all(Option::is_none));
@@ -244,7 +256,18 @@ async fn run_case(batched: bool) -> Result<()> {
             assert_eq!(effects(&conn).await?, applied);
             let replacement = confirmation_block(&raw, 4)?;
             assert_ne!(replacement.hash, block.hash);
-            let (count, ops, _) = reactor.execute_block(&replacement).await?;
+            let (count, ops, _) = reactor
+                .execute_block(
+                    &reactor
+                        .select_executor(ApplicationPosition::Block {
+                            height: replacement.height,
+                            hash: replacement.hash,
+                            consensus_height: 0,
+                        })
+                        .await?,
+                    &replacement,
+                )
+                .await?;
             assert_eq!((count, ops), (0, 0));
             assert_eq!(get_confirmation_position(&conn, &txid).await?, Some(4));
             let reconfirmed = get_transaction_by_txid(&conn, &txid).await?.unwrap();

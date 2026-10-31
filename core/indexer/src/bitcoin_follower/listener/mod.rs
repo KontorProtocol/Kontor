@@ -3,23 +3,21 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use tokio::sync::{
     Notify,
     mpsc::{self, Sender, UnboundedSender},
 };
-use tokio::{select, task, time::sleep};
+use tokio::{select, time::sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, trace, warn};
 use zmq::Socket;
 
 use crate::bitcoin_client::client::BitcoinRpc;
 use crate::bitcoin_client::types::MempoolEntry;
-use crate::block::TransactionFilterMap;
 use crate::retry::{new_backoff_limited, retry};
 use crate::stopper::ShutdownSignal;
 
-use super::event::{KontorTx, MempoolEvent};
+use super::event::MempoolEvent;
 use super::messages::{DataMessage, MonitorMessage};
 
 pub struct ListenerConfig {
@@ -45,7 +43,6 @@ impl ListenerConfig {
 /// session guard's `Drop`.
 pub async fn run<C: BitcoinRpc>(
     bitcoin: C,
-    f: TransactionFilterMap,
     event_tx: Sender<MempoolEvent>,
     shutdown: ShutdownSignal,
     poll_notify: Arc<Notify>,
@@ -56,13 +53,12 @@ pub async fn run<C: BitcoinRpc>(
             info!("Listener cancelled");
             Ok(())
         }
-        result = listen(bitcoin, f, event_tx, poll_notify, config) => result,
+        result = listen(bitcoin, event_tx, poll_notify, config) => result,
     }
 }
 
 async fn listen<C: BitcoinRpc>(
     bitcoin: C,
-    f: TransactionFilterMap,
     event_tx: Sender<MempoolEvent>,
     poll_notify: Arc<Notify>,
     config: ListenerConfig,
@@ -70,7 +66,6 @@ async fn listen<C: BitcoinRpc>(
     loop {
         match run_session(
             &bitcoin,
-            f,
             &event_tx,
             &config.zmq_address,
             poll_notify.clone(),
@@ -92,7 +87,6 @@ async fn listen<C: BitcoinRpc>(
 /// reconnect in the outer loop.
 async fn run_session<C: BitcoinRpc>(
     bitcoin: &C,
-    f: TransactionFilterMap,
     event_tx: &Sender<MempoolEvent>,
     zmq_address: &str,
     poll_notify: Arc<Notify>,
@@ -139,14 +133,13 @@ async fn run_session<C: BitcoinRpc>(
         handles: vec![socket_handle, monitor_handle],
     };
 
-    run_event_loop(bitcoin, f, event_tx, socket_rx, monitor_rx, poll_notify).await
+    run_event_loop(bitcoin, event_tx, socket_rx, monitor_rx, poll_notify).await
 }
 
 /// Core event loop: processes monitor events and data messages.
 /// Separated from `run_session` so tests can inject channels directly.
 async fn run_event_loop<C: BitcoinRpc>(
     bitcoin: &C,
-    f: TransactionFilterMap,
     event_tx: &Sender<MempoolEvent>,
     mut socket_rx: mpsc::UnboundedReceiver<Result<(u32, DataMessage)>>,
     mut monitor_rx: mpsc::UnboundedReceiver<Result<MonitorMessage>>,
@@ -173,11 +166,11 @@ async fn run_event_loop<C: BitcoinRpc>(
                         if let MonitorMessage::HandshakeSucceeded = msg {
                             info!("ZMQ connected, fetching mempool snapshot");
 
-                            let snapshot = fetch_mempool(bitcoin, f).await?;
+                            let snapshot = fetch_mempool(bitcoin).await?;
                             let snapshot_seq = snapshot.mempool_sequence;
                             if event_tx
                                 .send(MempoolEvent::Sync {
-                                    kontor_txs: snapshot.kontor_txs,
+                                    transactions: snapshot.transactions,
                                     fees: snapshot.fees,
                                     mempool_min_fee_sat_per_vb: snapshot
                                         .mempool_min_fee_sat_per_vb,
@@ -200,7 +193,7 @@ async fn run_event_loop<C: BitcoinRpc>(
                             last_sequence_number = new_seq;
 
                             for data_message in to_replay {
-                                if !process_delta(data_message, bitcoin, f, event_tx, &poll_notify)
+                                if !process_delta(data_message, bitcoin, event_tx, &poll_notify)
                                     .await?
                                 {
                                     return Ok(());
@@ -239,7 +232,7 @@ async fn run_event_loop<C: BitcoinRpc>(
                             continue;
                         }
 
-                        if !process_delta(data_message, bitcoin, f, event_tx, &poll_notify)
+                        if !process_delta(data_message, bitcoin, event_tx, &poll_notify)
                             .await?
                         {
                             return Ok(());
@@ -304,24 +297,20 @@ fn mempool_sequence_number(msg: &DataMessage) -> Option<u64> {
     }
 }
 
-/// Snapshot of the mempool at a point in time: Kontor-relevant txs (filtered
-/// and parsed) plus fee metadata for every tx in the mempool (used by the
+/// Snapshot of raw transactions and fee metadata for every mempool tx (used by the
 /// fee index in the reactor), and the mempool sequence number so buffered
 /// ZMQ events can be replayed against the snapshot.
 struct MempoolSnapshot {
-    kontor_txs: Vec<(bitcoin::Txid, KontorTx)>,
+    transactions: Vec<bitcoin::Transaction>,
     fees: std::collections::HashMap<bitcoin::Txid, MempoolEntry>,
     mempool_min_fee_sat_per_vb: u64,
     mempool_sequence: u64,
 }
 
 /// Fetch the full mempool via `getrawmempool verbose=true` (fees for all
-/// txs), cross-reference against ZMQ's mempool sequence number, and apply
-/// the Kontor transaction filter to select which txs need raw bytes.
-async fn fetch_mempool<C: BitcoinRpc>(
-    bitcoin: &C,
-    f: TransactionFilterMap,
-) -> Result<MempoolSnapshot> {
+/// txs) and cross-reference against ZMQ's mempool sequence number. Raw
+/// transactions remain intact until the coordinator selects their recognizer.
+async fn fetch_mempool<C: BitcoinRpc>(bitcoin: &C) -> Result<MempoolSnapshot> {
     // Fetch sequence + txid list first (authoritative for ZMQ replay gap
     // detection). `getrawmempool verbose=true` returns the fees but no
     // sequence, so we pair the two calls.
@@ -358,7 +347,7 @@ async fn fetch_mempool<C: BitcoinRpc>(
         mempool_min_fee_sat_per_vb
     );
 
-    // Only Kontor-relevant txs need their raw bytes. Fetch in chunks.
+    // Fetch in chunks without filtering against the currently active protocol.
     let mut txs: Vec<bitcoin::Transaction> = vec![];
     for chunk in mempool_txids.chunks(100) {
         let results = retry(
@@ -371,22 +360,8 @@ async fn fetch_mempool<C: BitcoinRpc>(
         txs.extend(results.into_iter().filter_map(Result::ok));
     }
 
-    // Filter and parse in parallel. Only Kontor txs survive the filter.
-    let kontor_txs: Vec<(bitcoin::Txid, KontorTx)> = task::spawn_blocking(move || {
-        txs.into_par_iter()
-            .enumerate()
-            .filter_map(|(i, tx)| {
-                f((i, tx.clone())).map(|parsed| {
-                    let txid = tx.compute_txid();
-                    (txid, KontorTx { raw: tx, parsed })
-                })
-            })
-            .collect()
-    })
-    .await?;
-
     Ok(MempoolSnapshot {
-        kontor_txs,
+        transactions: txs,
         fees,
         mempool_min_fee_sat_per_vb,
         mempool_sequence,
@@ -398,7 +373,6 @@ async fn fetch_mempool<C: BitcoinRpc>(
 async fn process_delta<C: BitcoinRpc>(
     data_message: DataMessage,
     bitcoin: &C,
-    f: TransactionFilterMap,
     event_tx: &Sender<MempoolEvent>,
     poll_notify: &Notify,
 ) -> Result<bool> {
@@ -425,24 +399,24 @@ async fn process_delta<C: BitcoinRpc>(
                 }
             };
 
-            // Fetch the raw tx to see if it's Kontor-relevant.
+            // The coordinator decides whether these bytes are protocol-relevant.
             let bitcoin_c = bitcoin.clone();
-            let kontor = match retry(
+            let raw = match retry(
                 || bitcoin_c.get_raw_transaction(&txid),
                 "get raw transaction",
                 new_backoff_limited(),
             )
             .await
             {
-                Ok(tx) => f((0, tx.clone())).map(|parsed| KontorTx { raw: tx, parsed }),
+                Ok(tx) => Some(tx),
                 Err(e) => {
                     warn!("Failed to fetch raw tx for {}: {:#}", txid, e);
                     None
                 }
             };
 
-            let event = match kontor {
-                Some(tx) => MempoolEvent::KontorTxAdded {
+            let event = match raw {
+                Some(tx) => MempoolEvent::TransactionAdded {
                     txid,
                     tx,
                     fee: entry,

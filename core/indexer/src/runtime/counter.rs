@@ -21,6 +21,10 @@ impl Counter {
         *value = 0;
     }
 
+    pub(crate) async fn restore(&self, next: u32) {
+        *self.value.lock().await = u64::from(next);
+    }
+
     pub async fn increment(&self) -> u64 {
         let mut value = self.value.lock().await;
         *value += 1;

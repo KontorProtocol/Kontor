@@ -47,6 +47,14 @@ async fn rollback_guard_preserves_deleted_history_boundary_after_reconfiguration
         )
         .await?;
     }
+    reactor.last_height = 108;
+    reactor.prune = PruneConfig {
+        enabled: true,
+        retain_blocks: 6,
+    };
+    // Deadline 108 can invalidate anchor 102 and must restore height 101.
+    ensure!(reactor.check_rollback_depth(101).is_ok());
+    ensure!(reactor.check_rollback_depth(100).is_err());
     // Reproduce a database written by the previous six-block retention policy.
     // Changing configuration cannot restore its discarded predecessor values.
     ensure!(reactor.runtime.storage.prune(0, 102).await? >= 2);

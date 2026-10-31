@@ -1,13 +1,12 @@
 use anyhow::{Result, anyhow};
 use indexer_types::Payment;
 
-use super::call::CallOutcome;
-use super::wit::Signer;
-use super::{ExecutionError, Runtime, token};
 use crate::database::types::Identity;
+use crate::runtime::wit::Signer;
+use crate::runtime::{CallOutcome, ExecutionError, Runtime, token};
 
 impl Runtime {
-    pub(super) async fn with_payment(
+    pub(crate) async fn with_payment(
         &mut self,
         payment: &Payment,
         starting_fuel: u64,
@@ -21,7 +20,7 @@ impl Runtime {
             .map_err(ExecutionError::NonDeterministic)?;
         let result = async {
             let payer = Signer::Core(Box::new(Signer::Id(Identity::new(payment.signer_id))));
-            let hold = self.pricing.gas_hold(payment.gas_limit)?;
+            let hold = self.selected_pricing().gas_hold(payment.gas_limit)?;
             let reserved = Box::pin(token::api::hold(self, &payer, hold))
                 .await
                 .map_err(ExecutionError::NonDeterministic)?;
@@ -45,7 +44,7 @@ impl Runtime {
                 .max(1);
             let reserved_deposit = self.deposit.take().await;
             let burn = self
-                .pricing
+                .selected_pricing()
                 .execution_fee(gas.saturating_sub(reserved_deposit))?;
             Box::pin(token::api::release(self, &payer, burn))
                 .await

@@ -1,10 +1,10 @@
 use super::*;
 use crate::bitcoin_client::mock::MockBitcoinRpc;
 use crate::bitcoin_client::types::{MempoolEntry, MempoolEntryFees};
-use bitcoin::Amount;
 use bitcoin::hashes::Hash;
 use bitcoin::locktime::absolute::LockTime;
 use bitcoin::transaction::Version;
+use bitcoin::{Amount, TxIn, Witness};
 use indexer_types::Block;
 
 /// Minimal mempool entry for listener tests — values don't matter except
@@ -22,7 +22,6 @@ fn stub_entry() -> MempoolEntry {
 }
 
 fn make_block(height: u64) -> Block {
-    use bitcoin::hashes::Hash;
     Block {
         height,
         hash: bitcoin::BlockHash::from_byte_array([height as u8; 32]),
@@ -46,28 +45,12 @@ fn make_tx(nonce: u32) -> bitcoin::Transaction {
     }
 }
 
-/// Filter that accepts all transactions.
-fn accept_all(pair: (usize, bitcoin::Transaction)) -> Option<indexer_types::Transaction> {
-    let (index, tx) = pair;
-    Some(indexer_types::Transaction {
-        txid: tx.compute_txid(),
-        index: index as u32,
-        inputs: vec![],
-        op_return_raw: None,
-    })
-}
-
-/// Filter that rejects all transactions.
-fn reject_all(_: (usize, bitcoin::Transaction)) -> Option<indexer_types::Transaction> {
-    None
-}
-
 #[tokio::test]
 async fn fetch_mempool_empty() {
     let mock = MockBitcoinRpc::new(vec![make_block(1)]);
 
-    let snapshot = fetch_mempool(&mock, reject_all).await.unwrap();
-    assert!(snapshot.kontor_txs.is_empty());
+    let snapshot = fetch_mempool(&mock).await.unwrap();
+    assert!(snapshot.transactions.is_empty());
     assert_eq!(snapshot.mempool_sequence, 0);
 }
 
@@ -77,41 +60,22 @@ async fn fetch_mempool_returns_sequence() {
     mock.set_mempool(vec![make_tx(1)]);
     mock.set_mempool_sequence(42);
 
-    let snapshot = fetch_mempool(&mock, accept_all).await.unwrap();
-    assert_eq!(snapshot.kontor_txs.len(), 1);
+    let snapshot = fetch_mempool(&mock).await.unwrap();
+    assert_eq!(snapshot.transactions.len(), 1);
     assert_eq!(snapshot.mempool_sequence, 42);
 }
 
 #[tokio::test]
-async fn fetch_mempool_returns_filtered_transactions() {
+async fn fetch_mempool_preserves_all_raw_transactions() {
     let mock = MockBitcoinRpc::new(vec![make_block(1)]);
-    let tx1 = make_tx(1);
-    let tx2 = make_tx(2);
-    let tx3 = make_tx(3);
-    let txid1 = tx1.compute_txid();
-    let txid3 = tx3.compute_txid();
-    mock.set_mempool(vec![tx1, tx2, tx3]);
-
-    // Filter that only accepts odd nonces (tx1 and tx3)
-    let f: TransactionFilterMap = |pair| {
-        let (index, tx) = pair;
-        if tx.lock_time.to_consensus_u32() % 2 == 1 {
-            Some(indexer_types::Transaction {
-                txid: tx.compute_txid(),
-                index: index as u32,
-                inputs: vec![],
-                op_return_raw: None,
-            })
-        } else {
-            None
-        }
-    };
-
-    let snapshot = fetch_mempool(&mock, f).await.unwrap();
-    assert_eq!(snapshot.kontor_txs.len(), 2);
-    let txids: Vec<_> = snapshot.kontor_txs.iter().map(|(t, _)| *t).collect();
-    assert!(txids.contains(&txid1));
-    assert!(txids.contains(&txid3));
+    let mut transactions = vec![make_tx(1), make_tx(2), make_tx(3)];
+    transactions[1].input.push(TxIn {
+        witness: Witness::from_slice(&[b"unrecognized witness".as_slice()]),
+        ..TxIn::default()
+    });
+    mock.set_mempool(transactions.clone());
+    let snapshot = fetch_mempool(&mock).await.unwrap();
+    assert_eq!(snapshot.transactions, transactions);
 }
 
 #[tokio::test]
@@ -121,21 +85,17 @@ async fn fetch_mempool_all_accepted() {
     let expected_txids: Vec<_> = txs.iter().map(|tx| tx.compute_txid()).collect();
     mock.set_mempool(txs);
 
-    let snapshot = fetch_mempool(&mock, accept_all).await.unwrap();
+    let snapshot = fetch_mempool(&mock).await.unwrap();
 
-    assert_eq!(snapshot.kontor_txs.len(), 5);
+    assert_eq!(snapshot.transactions.len(), 5);
     for txid in &expected_txids {
-        assert!(snapshot.kontor_txs.iter().any(|(t, _)| *t == *txid));
+        assert!(
+            snapshot
+                .transactions
+                .iter()
+                .any(|tx| tx.compute_txid() == *txid)
+        );
     }
-}
-
-#[tokio::test]
-async fn fetch_mempool_all_rejected() {
-    let mock = MockBitcoinRpc::new(vec![make_block(1)]);
-    mock.set_mempool(vec![make_tx(1), make_tx(2)]);
-
-    let snapshot = fetch_mempool(&mock, reject_all).await.unwrap();
-    assert!(snapshot.kontor_txs.is_empty());
 }
 
 #[tokio::test]
@@ -145,8 +105,8 @@ async fn fetch_mempool_batches_large_mempool() {
     let txs: Vec<_> = (0..250).map(make_tx).collect();
     mock.set_mempool(txs);
 
-    let snapshot = fetch_mempool(&mock, accept_all).await.unwrap();
-    assert_eq!(snapshot.kontor_txs.len(), 250);
+    let snapshot = fetch_mempool(&mock).await.unwrap();
+    assert_eq!(snapshot.transactions.len(), 250);
 }
 
 #[tokio::test]
@@ -194,14 +154,12 @@ async fn process_delta_transaction_added() {
     };
 
     let notify = Notify::new();
-    let open = process_delta(msg, &mock, accept_all, &event_tx, &notify)
-        .await
-        .unwrap();
+    let open = process_delta(msg, &mock, &event_tx, &notify).await.unwrap();
     assert!(open);
 
     match event_rx.try_recv().unwrap() {
-        MempoolEvent::KontorTxAdded { txid: t, .. } => assert_eq!(t, txid),
-        other => panic!("Expected KontorTxAdded, got {:?}", other),
+        MempoolEvent::TransactionAdded { txid: t, .. } => assert_eq!(t, txid),
+        other => panic!("Expected TransactionAdded, got {:?}", other),
     }
 }
 
@@ -218,9 +176,7 @@ async fn process_delta_transaction_removed() {
     };
 
     let notify = Notify::new();
-    let open = process_delta(msg, &mock, accept_all, &event_tx, &notify)
-        .await
-        .unwrap();
+    let open = process_delta(msg, &mock, &event_tx, &notify).await.unwrap();
     assert!(open);
 
     match event_rx.try_recv().unwrap() {
@@ -237,15 +193,9 @@ async fn process_delta_block_events_ignored() {
     let (event_tx, mut event_rx) = mpsc::channel(10);
 
     let notify = Notify::new();
-    let open = process_delta(
-        DataMessage::BlockConnected(hash),
-        &mock,
-        accept_all,
-        &event_tx,
-        &notify,
-    )
-    .await
-    .unwrap();
+    let open = process_delta(DataMessage::BlockConnected(hash), &mock, &event_tx, &notify)
+        .await
+        .unwrap();
     assert!(open);
     assert!(event_rx.try_recv().is_err());
 }
@@ -424,7 +374,6 @@ async fn event_loop_snapshot_then_live_deltas() {
 
     let _ = run_event_loop(
         &mock,
-        accept_all,
         &event_tx,
         socket_rx,
         monitor_rx,
@@ -433,8 +382,10 @@ async fn event_loop_snapshot_then_live_deltas() {
     .await;
 
     let events = collect_events(&mut event_rx);
-    assert!(matches!(&events[0], MempoolEvent::Sync { kontor_txs, .. } if kontor_txs.len() == 3));
-    assert!(matches!(&events[1], MempoolEvent::KontorTxAdded { txid: t, .. } if *t == txid3));
+    assert!(
+        matches!(&events[0], MempoolEvent::Sync { transactions, .. } if transactions.len() == 3)
+    );
+    assert!(matches!(&events[1], MempoolEvent::TransactionAdded { txid: t, .. } if *t == txid3));
     assert_eq!(events.len(), 2);
 }
 
@@ -495,7 +446,6 @@ async fn event_loop_filters_buffered_stale_replays_fresh() {
 
     let _ = run_event_loop(
         &mock,
-        accept_all,
         &event_tx,
         socket_rx,
         monitor_rx,
@@ -507,7 +457,7 @@ async fn event_loop_filters_buffered_stale_replays_fresh() {
     assert!(matches!(&events[0], MempoolEvent::Sync { .. }));
     // Only tx3 replayed (stale ones skipped)
     assert_eq!(events.len(), 2);
-    assert!(matches!(&events[1], MempoolEvent::KontorTxAdded { txid: t, .. } if *t == txid3));
+    assert!(matches!(&events[1], MempoolEvent::TransactionAdded { txid: t, .. } if *t == txid3));
 }
 
 #[tokio::test]
@@ -543,7 +493,6 @@ async fn event_loop_pre_handshake_messages_not_emitted_as_deltas() {
 
     let _ = run_event_loop(
         &mock,
-        accept_all,
         &event_tx,
         socket_rx,
         monitor_rx,
@@ -571,7 +520,6 @@ async fn event_loop_monitor_failure_returns_error() {
 
     let result = run_event_loop(
         &mock,
-        accept_all,
         &event_tx,
         socket_rx,
         monitor_rx,
@@ -613,7 +561,6 @@ async fn event_loop_live_remove_emits_mempool_remove() {
 
     let _ = run_event_loop(
         &mock,
-        accept_all,
         &event_tx,
         socket_rx,
         monitor_rx,
@@ -623,7 +570,9 @@ async fn event_loop_live_remove_emits_mempool_remove() {
 
     let events = collect_events(&mut event_rx);
     assert_eq!(events.len(), 2);
-    assert!(matches!(&events[0], MempoolEvent::Sync { kontor_txs, .. } if kontor_txs.is_empty()));
+    assert!(
+        matches!(&events[0], MempoolEvent::Sync { transactions, .. } if transactions.is_empty())
+    );
     assert!(matches!(&events[1], MempoolEvent::Remove(txid) if *txid == removed_txid));
 }
 
@@ -667,7 +616,6 @@ async fn event_loop_sequence_gap_returns_error() {
 
     let result = run_event_loop(
         &mock,
-        accept_all,
         &event_tx,
         socket_rx,
         monitor_rx,

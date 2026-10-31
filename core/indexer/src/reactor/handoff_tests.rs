@@ -145,7 +145,7 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
             reactor
                 .consensus
                 .pending_blocks
-                .insert(block.height, block.clone());
+                .insert(block.height, block.clone().into());
         }
         if before_finalized {
             reactor.consensus.current_round = round;
@@ -171,7 +171,7 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
             reactor
                 .process_block_event(BlockEvent::BlockInsert {
                     target_height: block_height,
-                    block,
+                    block: block.into(),
                 })
                 .await
         } else {
@@ -244,7 +244,8 @@ async fn check_early_proposal(
             hash,
             prev_hash: new_mock_block_hash(2),
             transactions: Vec::new(),
-        },
+        }
+        .into(),
     );
     assert_eq!(
         reactor.consensus.current_round,

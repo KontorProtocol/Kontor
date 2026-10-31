@@ -31,8 +31,8 @@ use super::token::api as token;
 use super::wit::Signer;
 use super::wit::kontor::built_in::context::HolderRef;
 use super::{
-    ComponentCache, ContractAddress, Decimal, ExecutionError, Linkers, MAX_UNTRUSTED_GAS_LIMIT,
-    Runtime, TransactionContext, native_provenance,
+    ComponentCache, ComponentSource, ContractAddress, Decimal, ExecutionError, Linkers,
+    MAX_UNTRUSTED_GAS_LIMIT, Runtime, TransactionContext, native_provenance,
 };
 use crate::reg_tester::random_x_only_pubkey;
 use crate::test_utils::{test_genesis, test_runtime};
@@ -111,9 +111,8 @@ async fn install_admitted_component_fixture(
     // fixtures whose canonical callbacks cannot be encoded from a plain module.
     let id = runtime.storage.insert_contract(name, &compressed).await?;
     runtime
-        .component_cache
-        .put_admitted(id, component, bytes.len())
-        .await;
+        .cache_component_fixture(id, component, bytes.len())
+        .await?;
     runtime.set_context(1, None, None, None).await;
     Ok(ContractAddress {
         name: name.into(),
@@ -1290,8 +1289,13 @@ async fn core_start_is_rejected_on_publish_and_cold_load() -> Result<()> {
     let unchecked = Component::new(&runtime.engine, "(component)")?;
     runtime
         .component_cache
-        .put_unchecked(id, unchecked, encoded.len())
-        .await;
+        .put_unchecked(
+            ComponentSource::new(id, &bytes),
+            runtime.executor_version,
+            unchecked,
+            encoded.len(),
+        )
+        .await?;
     assert!(runtime.component_cache.get_admitted(&id).await.is_none());
     assert!(runtime.load_component(id).await.is_err());
     runtime.component_cache.clear();
@@ -1403,14 +1407,34 @@ async fn incompatible_native_artifact_prevents_restart() -> Result<()> {
 
 #[tokio::test]
 async fn cached_component_from_another_engine_is_not_executed() -> Result<()> {
-    let (runtime, _dir, _name) = test_runtime().await?;
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let stored = include_bytes!("../../../../test-contracts/binaries/error_test.wasm.br");
+    let id = runtime
+        .storage
+        .insert_contract("engine-cache", stored)
+        .await?;
     let reference = async_engine()?;
     let component = Component::new(&reference, ASYNC_COMPONENTS[0])?;
     runtime
         .component_cache
-        .put_admitted(999_999, component, 1)
-        .await;
-    assert!(runtime.load_component(999_999).await.is_err());
+        .put_selected(
+            ComponentSource::new(id, stored),
+            runtime.executor_version,
+            component,
+            1,
+        )
+        .await?;
+    let selected = runtime.load_component(id).await?;
+    assert!(Engine::same(selected.engine(), &runtime.engine));
+    let address = runtime
+        .storage
+        .contract_address(id)
+        .await?
+        .ok_or_else(|| anyhow!("engine-cache fixture missing"))?;
+    assert_eq!(
+        runtime.execute(None, None, &address, "succeed()").await?,
+        "42"
+    );
     Ok(())
 }
 

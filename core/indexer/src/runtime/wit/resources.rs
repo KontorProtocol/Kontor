@@ -5,10 +5,11 @@ use anyhow::Result as HostResult;
 use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
 
-use crate::database::queries::StorageRowCursor;
 use crate::database::types::{
     CORE_SIGNER_ID, FileMeta, Identity, bytes_to_field_element, validate_padded_len, validate_root,
 };
+use crate::protocol::v1::storage_error::ReadError;
+use crate::protocol::v1::storage_rows::StorageRowCursor;
 use crate::runtime::kontor::built_in::context::HolderRef;
 use crate::runtime::kontor::built_in::{error::Error, file_registry_types::RawFileDescriptor};
 use crate::runtime::{ExecutionError, Runtime};
@@ -159,8 +160,7 @@ impl HasContractId for FallContext {
 pub struct Keys {
     // Each item is a child key's codec element bytes (see stdlib::keycodec); the
     // guest decodes it to `K`.
-    pub stream:
-        Pin<Box<dyn Stream<Item = Result<Vec<u8>, crate::database::queries::Error>> + Send>>,
+    pub stream: Pin<Box<dyn Stream<Item = Result<Vec<u8>, ReadError>> + Send>>,
 }
 
 pub struct StorageRows {

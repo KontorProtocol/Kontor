@@ -7,7 +7,6 @@ use indexer_types::{InstKind, Insts, SignerRef};
 use super::{
     BLS_SIGNATURE_BYTES, KONTOR_BLS_DST, MAX_BLS_BULK_OPS, MAX_BLS_BULK_TOTAL_MESSAGE_BYTES,
 };
-use crate::database::queries::get_signer_entry_by_id;
 use crate::runtime::{ExecutionError, Runtime};
 
 use AggregateVerificationError::{Infrastructure, Rejected};
@@ -49,18 +48,19 @@ impl SignerResolver {
             return Ok(*pk);
         }
 
-        let conn = runtime.get_storage_conn();
-        let entry = get_signer_entry_by_id(&conn, signer_id)
+        let (_, x_only_pubkey, bls_pubkey, _) = runtime
+            .storage
+            .signer_entry(signer_id)
             .await
-            .map_err(|error| Infrastructure(error.into()))?
+            .map_err(Infrastructure)?
             .ok_or_else(|| Rejected(anyhow!("unknown signer_id {signer_id}")))?;
-        let x_only_pubkey = entry.x_only_pubkey.clone().ok_or_else(|| {
+        let x_only_pubkey = x_only_pubkey.clone().ok_or_else(|| {
             Rejected(anyhow!(
                 "signer_id {signer_id} is not a user signer (no x_only_pubkey)"
             ))
         })?;
         self.signer_map.insert(signer_id, x_only_pubkey);
-        let raw_bytes = entry.bls_pubkey.ok_or_else(|| {
+        let raw_bytes = bls_pubkey.ok_or_else(|| {
             Rejected(anyhow!(
                 "signer_id {signer_id} has no BLS pubkey registered"
             ))
@@ -92,12 +92,13 @@ impl SignerResolver {
         let x_only = match claim_pubkey {
             Some(pk) => pk,
             None => {
-                let conn = runtime.get_storage_conn();
-                let entry = get_signer_entry_by_id(&conn, signer_id)
+                let (_, x_only_pubkey, _, _) = runtime
+                    .storage
+                    .signer_entry(signer_id)
                     .await
-                    .map_err(|error| Infrastructure(error.into()))?
+                    .map_err(Infrastructure)?
                     .ok_or_else(|| Rejected(anyhow!("unknown signer_id {signer_id}")))?;
-                entry.x_only_pubkey.ok_or_else(|| {
+                x_only_pubkey.ok_or_else(|| {
                     Rejected(anyhow!(
                         "signer_id {signer_id} is not a user signer (no x_only_pubkey)"
                     ))
