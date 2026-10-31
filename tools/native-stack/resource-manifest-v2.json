@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "c8b63f43861f208e0b6d62e60dad6a99a5bca84dc5234954170ed06d498b0b75",
+  "parent_manifest_sha256": "bff51794f71e4923c86ff4c70104ce0be3b85f3ae900ef4f5f28fa4ba7af13e1",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1207,7 +1207,7 @@
     },
     "chain_fixture": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "2a294937f6beacc0b1fe7799d09eca5b61452fffe3aa5af0d44fb7d0508649e1"
+      "sha256": "184d4574294fdb917d6c2d04d3892fe7c91233d2ffe06e58566f5a8633b6a2ec"
     },
     "fees": {
       "path": "core/indexer/src/runtime/fees.rs",
@@ -1259,7 +1259,7 @@
     },
     "v2_tests": {
       "path": "tools/native-stack/test_resource_evidence_v2.py",
-      "sha256": "c645151afabf7009a1c6d48fc960e735c6e09aefb0c8c759542eaeb299357a3c"
+      "sha256": "141efea0126637c57d2a480cd34e44200e39ed9f06177110207c7441f2adb4ba"
     },
     "v2_validator": {
       "path": "tools/native-stack/resource_evidence_v2.py",
@@ -1267,7 +1267,7 @@
     },
     "worker": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "dce76f1530138aaef9b64edc8c671d9d38ca8a273a6180c0a28b1f21b46457c5"
+      "sha256": "1f61c34150b1048d12c1754534c4a7a42d86fe993abb3792c9d63682340ce2e8"
     }
   }
 }

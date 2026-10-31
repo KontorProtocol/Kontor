@@ -341,6 +341,9 @@ class EvidenceV2Tests(unittest.TestCase):
                 resource_evidence_v2.validate_engine_measurement(wrong_page)
             with (patch.object(resource_evidence_v2, "HISTORICAL_BUNDLE_SHA256",
                                bundle["historical_reference"]["sha256"]),
+                  patch.object(resource_evidence_v2.sys, "platform", "linux"),
+                  patch.object(resource_evidence_v2.platform, "machine",
+                               return_value="aarch64"),
                   patch.object(resource_evidence_v2, "validate_control",
                                return_value=(control, Path(bundle["binary_path"]))) as guard):
                 signatures = resource_evidence_v2.validate_bundle(

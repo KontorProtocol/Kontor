@@ -1624,6 +1624,45 @@ fn measured_tokio_runtime(
 #[cfg(target_os = "linux")]
 #[test]
 fn reduced_tokio_workers_have_measured_usable_ranges() -> Result<()> {
+    // A full test binary may have cached 2 MiB pthread stacks before this
+    // test. glibc can reuse one for a later 992 KiB request, so each side of
+    // the measured ratio needs a fresh process.
+    let (reduced_pid, reduced_max) = worker_capacity_from_fresh_child("reduced")?;
+    let (production_pid, production_min) = worker_capacity_from_fresh_child("production")?;
+    ensure!(
+        reduced_pid != std::process::id() && production_pid != std::process::id(),
+        "worker range control was not measured in a child process"
+    );
+    ensure!(
+        production_min >= reduced_max.saturating_mul(2),
+        "actual worker usable-capacity ratio is below two: production_min={production_min}, reduced_max={reduced_max}"
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "run only as a fresh child of reduced_tokio_workers_have_measured_usable_ranges"]
+fn worker_range_control_child() -> Result<()> {
+    let mode = env::var("KONTOR_RESOURCE_WORKER_RANGE_CHILD")?;
+    let capacity = match mode.as_str() {
+        "reduced" => reduced_worker_usable_capacity()?,
+        "production" => production_worker_usable_capacity()?,
+        _ => bail!("unknown worker range control mode: {mode}"),
+    };
+    println!(
+        "KONTOR_RESOURCE_WORKER_RANGE_CONTROL={}",
+        json!({
+            "mode": mode,
+            "pid": std::process::id(),
+            "capacity_bytes": capacity,
+        })
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn reduced_worker_usable_capacity() -> Result<usize> {
     let (runtime, reduced) = measured_tokio_runtime(Some(REDUCED_WORKER_STACK_BYTES))?;
     let [first, second] = &reduced;
     for stack in [&first, &second] {
@@ -1656,26 +1695,92 @@ fn reduced_tokio_workers_have_measured_usable_ranges() -> Result<()> {
             && caller.os_thread_id != second.os_thread_id,
         "blocking/caller and Tokio worker categories overlap"
     );
-    let (_production_runtime, production) = measured_tokio_runtime(None)?;
+    let reduced_max = reduced
+        .iter()
+        .map(|stack| stack.usable_end - stack.usable_start)
+        .max()
+        .context("reduced workers missing")?;
+    Ok(reduced_max)
+}
+
+#[cfg(target_os = "linux")]
+fn production_worker_usable_capacity() -> Result<usize> {
+    let (_runtime, production) = measured_tokio_runtime(None)?;
     ensure!(
         production
             .iter()
             .all(|stack| stack.process_id == std::process::id()),
         "production worker process identity differs from the current process"
     );
-    let production_min = production
+    production
         .iter()
         .map(|stack| stack.usable_end - stack.usable_start)
         .min()
-        .context("production workers missing")?;
-    let reduced_max = reduced
-        .iter()
-        .map(|stack| stack.usable_end - stack.usable_start)
-        .max()
-        .context("reduced workers missing")?;
+        .context("production workers missing")
+}
+
+#[cfg(target_os = "linux")]
+fn worker_capacity_from_fresh_child(mode: &str) -> Result<(u32, usize)> {
+    let mut child = Command::new(env::current_exe()?)
+        .args([
+            "--exact",
+            "runtime::call::tests::native_stack_resource::worker_range_control_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("KONTOR_RESOURCE_WORKER_RANGE_CHILD", mode)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let started = Instant::now();
+    while child.try_wait()?.is_none() {
+        if started.elapsed() >= Duration::from_secs(30) {
+            if let Err(error) = child.kill()
+                && child.try_wait()?.is_none()
+            {
+                return Err(error.into());
+            }
+            let output = child.wait_with_output()?;
+            bail!(
+                "{mode} worker range control timed out: stdout={}, stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output()?;
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
     ensure!(
-        production_min >= reduced_max.saturating_mul(2),
-        "actual worker usable-capacity ratio is below two: production_min={production_min}, reduced_max={reduced_max}"
+        output.status.success(),
+        "{mode} worker range control failed: status={:?}, stdout={stdout}, stderr={stderr}",
+        output.status
     );
-    Ok(())
+    let reports = stdout
+        .lines()
+        .filter_map(|line| {
+            line.split_once("KONTOR_RESOURCE_WORKER_RANGE_CONTROL=")
+                .map(|(_, value)| value)
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        reports.len() == 1,
+        "{mode} worker range control reported {} measurements: stdout={stdout}, stderr={stderr}",
+        reports.len()
+    );
+    let report: JsonValue = from_str(reports[0])?;
+    ensure!(
+        report["mode"].as_str() == Some(mode),
+        "{mode} worker range control reported the wrong mode: {report}"
+    );
+    let pid = report["pid"]
+        .as_u64()
+        .context("worker range control missing process id")?
+        .try_into()?;
+    let capacity = report["capacity_bytes"]
+        .as_u64()
+        .context("worker range control missing usable capacity")?
+        .try_into()?;
+    Ok((pid, capacity))
 }

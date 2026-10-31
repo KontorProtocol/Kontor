@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 #[cfg(target_os = "macos")]
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use indexer_types::Payment;
@@ -45,9 +45,10 @@ async fn deep_sequential_chains_survive_in_separate_processes() -> Result<()> {
     for mode in ["paid", "view", "core"] {
         for stores in [33_u32, 63, 64, 65] {
             let depth = stores - 1;
+            // Include cold fixture setup in the same allowance as S2 capture.
             // An abort must fail this parent test instead of taking down the suite.
             let output = timeout(
-                Duration::from_secs(120),
+                Duration::from_secs(600),
                 Command::new(env::current_exe()?)
                     .args(["--exact", CHILD, "--ignored", "--nocapture"])
                     .env("KONTOR_CHAIN_MODE", mode)
@@ -55,7 +56,8 @@ async fn deep_sequential_chains_survive_in_separate_processes() -> Result<()> {
                     .kill_on_drop(true)
                     .output(),
             )
-            .await??;
+            .await
+            .with_context(|| format!("chain probe timed out: mode={mode}, stores={stores}"))??;
             assert!(
                 output.status.success(),
                 "{mode} stores={stores}: {}\n{}\n{}",
@@ -357,11 +359,8 @@ async fn run_chain_probe(
         }
         None => test_runtime().await?,
     };
-    let actor = if diagnostic_reduced.is_some() {
-        funded_with_pubkey(&mut runtime, RESOURCE_CHAIN_SIGNER_X_ONLY_PUBKEY).await?
-    } else {
-        funded(&mut runtime).await?
-    };
+    // Cross-platform state digests require the same identity in every fixture.
+    let actor = funded_with_pubkey(&mut runtime, RESOURCE_CHAIN_SIGNER_X_ONLY_PUBKEY).await?;
     let chain = publish_chain(&mut runtime, &actor, depth).await?;
     assert!(runtime.conversion_probe.is_none());
     let entered = Arc::new(Notify::new());

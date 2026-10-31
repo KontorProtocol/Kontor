@@ -75,12 +75,14 @@ def transcript(samples, summary):
 
 def chain_report(mode, stores, target_os, target_arch):
     trials = []
-    for outcome in (["invocation_limit"] * 3 if stores == 65 else ["ok", "trap", "ok"]):
+    for repeat_index, outcome in enumerate(["invocation_limit"] * 3 if stores == 65 else ["ok", "trap", "ok"]):
         changed_state = mode != "view" and outcome == "ok"
         trials.append({
             "outcome": outcome, "value": "42" if outcome == "ok" else None,
             "fuel": {"user": 100 if mode == "paid" else 0, "system": 0 if mode == "paid" else 100, "deposit": 0},
-            "receipt": None if mode == "view" else {"status": "Ok" if outcome == "ok" else "Other", "gas": 10},
+            "receipt": None if mode == "view" else {"contract_id": stores + 5, "status": "Ok" if outcome == "ok" else "Other", "gas": 10, "value": "42" if outcome == "ok" else None},
+            "repeat_index": repeat_index,
+            "state_before_sha256": "1" * 64, "state_after_sha256": "1" * 64,
             "receipt_count": 0 if mode == "view" else stores if outcome == "ok" else 1,
             "storage_state": "[2, 0, 0, 0]" if changed_state else "[0, 0, 0, 0]",
             "rolled_back": True, "resource_count": 0, "baseline_resource_count": 0,
@@ -333,6 +335,27 @@ class CompareTests(unittest.TestCase):
         report["chains"][0]["trials"][0]["fuel"]["system"] += 1
         write_evidence(path.parent, report)
         self.rejected()
+
+    def test_chain_receipt_fields_and_repeat_index_rejected(self):
+        for field, value in (("contract_id", True), ("value", "wrong")):
+            with self.subTest(field=field):
+                chains = [chain_report(mode, stores, "linux", "x86_64") for mode, stores in sorted(compare.CHAIN_KEYS)]
+                chains[0]["trials"][0]["receipt"][field] = value
+                with self.assertRaisesRegex(ValueError, "chain receipt"):
+                    compare.validate_chains(chains, "linux", "x86_64")
+        self.mutate_all_with_matching_logs(lambda report: report["chains"][0]["trials"][1].__setitem__("repeat_index", 0))
+        self.rejected()
+
+    def test_chain_state_must_restore_and_match_across_cells(self):
+        self.mutate_all_with_matching_logs(lambda report: report["chains"][0]["trials"][0].__setitem__("state_after_sha256", "2" * 64))
+        self.rejected()
+        self.setUp()
+        path, report = self.report()
+        trial = report["chains"][0]["trials"][0]
+        trial["state_before_sha256"] = trial["state_after_sha256"] = "2" * 64
+        write_evidence(path.parent, report)
+        with self.assertRaisesRegex(ValueError, "cross-cell observations differ"):
+            compare.compare(self.root, "success")
 
     def test_cross_platform_sweep_fuel_difference_rejected(self):
         path, report = self.report()

@@ -60,7 +60,7 @@ class ResourceControlCaptureTests(unittest.TestCase):
             def state():
                 try:
                     status = Path(f"/proc/{descendant_pid}/stat").read_text()
-                except FileNotFoundError:
+                except (FileNotFoundError, ProcessLookupError):
                     return None
                 return status[status.rfind(")") + 2:].split()[0]
 

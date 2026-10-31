@@ -190,6 +190,7 @@ TRIAL_FIELDS = {
     "outcome", "fuel", "receipt", "receipt_count", "value", "storage_state", "rolled_back",
     "resource_count", "baseline_resource_count", "savepoint_restored", "stack_empty",
     "host_io_suspended", "leaf_callback_seen", "rollback_clean", "balances",
+    "repeat_index", "state_before_sha256", "state_after_sha256",
 }
 BALANCE_FIELDS = {
     "before", "after", "restored", "burned_before", "burned_after", "supply_before",
@@ -229,8 +230,11 @@ def validate_chains(chains, target_os, target_arch):
         trials = chain["trials"]
         check(isinstance(trials, list) and len(trials) == 3, "chain requires three trials")
         expected = ["invocation_limit"] * 3 if stores == 65 else ["ok", "trap", "ok"]
-        for trial, outcome in zip(trials, expected):
+        for repeat_index, (trial, outcome) in enumerate(zip(trials, expected)):
             check(isinstance(trial, dict) and TRIAL_FIELDS <= trial.keys(), "missing chain trial fields")
+            check(type(trial["repeat_index"]) is int and trial["repeat_index"] == repeat_index, "wrong chain repeat index")
+            before, after = trial["state_before_sha256"], trial["state_after_sha256"]
+            check(isinstance(before, str) and HEX_64.fullmatch(before) and after == before, "chain persisted state was not restored")
             check(trial["outcome"] == outcome, "wrong chain outcome")
             check(trial["value"] == ("42" if outcome == "ok" else None), "wrong chain result")
             state = "[2, 0, 0, 0]" if mode != "view" and outcome == "ok" else "[0, 0, 0, 0]"
@@ -247,9 +251,11 @@ def validate_chains(chains, target_os, target_arch):
             if mode == "view":
                 check(receipt is None, "view chain persisted a receipt")
             else:
-                check(isinstance(receipt, dict) and set(receipt) == {"status", "gas"}, "invalid chain receipt")
+                check(isinstance(receipt, dict) and set(receipt) == {"contract_id", "status", "gas", "value"}, "invalid chain receipt")
+                check(type(receipt["contract_id"]) is int and receipt["contract_id"] >= 0, "invalid chain receipt contract")
                 check(receipt["status"] == ("Ok" if outcome == "ok" else "Other"), "wrong chain receipt status")
                 check(type(receipt["gas"]) is int and receipt["gas"] > 0, "invalid chain receipt gas")
+                check(receipt["value"] == ("42" if outcome == "ok" else None), "wrong chain receipt value")
             fuel = trial["fuel"]
             check(isinstance(fuel, dict) and set(fuel) == {"user", "system", "deposit"}, "missing chain fuel")
             check(all(type(value) is int and value >= 0 for value in fuel.values()), "invalid chain fuel")
@@ -266,7 +272,8 @@ def validate_chains(chains, target_os, target_arch):
             else:
                 check(amounts["floor_after"] == amounts["floor_before"], "unexpected chain deposit change")
         if stores == 65:
-            check(trials[0] == trials[1] == trials[2], "over-cap chain trials differ")
+            repeated = [{field: value for field, value in trial.items() if field != "repeat_index"} for trial in trials]
+            check(repeated[0] == repeated[1] == repeated[2], "over-cap chain trials differ")
         normalized.append({field: value for field, value in chain.items() if field not in {"target_os", "target_arch"}})
     return sorted(normalized, key=lambda chain: (chain["mode"], chain["stores"]))
 
