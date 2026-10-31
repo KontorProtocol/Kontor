@@ -10,6 +10,7 @@ use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::filestorage::api as filestorage;
 use crate::runtime::fuel::{FuelDiscriminants, FuelGauge};
 use crate::runtime::numerics::{add_decimal, sub_decimal};
+use crate::runtime::ownership::OwnerService;
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -44,8 +45,17 @@ async fn genesis_floor_bootstrap_retries_and_preserves_later_updates() -> Result
         sigma_min: Decimal::default(),
         validators: Vec::new(),
     };
-    assert!(runtime.publish_native_contracts(&genesis).await.is_err());
+    let owner = OwnerService::new();
+    assert!(
+        runtime
+            .publish_native_contracts_owned(&genesis, &owner)
+            .await
+            .is_err()
+    );
     assert_eq!(api::get_sigma_min(&mut runtime).await?, Decimal::default());
+    // Probe the unfinished contract without leaving non-bootstrap operations
+    // in the durable genesis prefix that startup must validate.
+    runtime.storage.savepoint().await?;
     let signer = funded_signer(&mut runtime).await?;
     api::add_stake(&mut runtime, &signer, Decimal::from("10")).await??;
     assert_eq!(
@@ -54,15 +64,20 @@ async fn genesis_floor_bootstrap_retries_and_preserves_later_updates() -> Result
             "validator admission floor not initialized".into()
         ))
     );
+    runtime.storage.rollback().await?;
     genesis.sigma_min = Decimal::from("7");
-    runtime.publish_native_contracts(&genesis).await?;
+    runtime
+        .publish_native_contracts_owned(&genesis, &owner)
+        .await?;
     assert_eq!(api::get_sigma_min(&mut runtime).await?, genesis.sigma_min);
-    api::register_validator(&mut runtime, &signer, vec![1; 32], Decimal::default()).await??;
     let genesis_checkpoint = get_checkpoint_by_height(&writer.connection(), 0)
         .await?
         .unwrap();
 
     advance(&mut runtime, 1).await?;
+    let signer = funded_signer(&mut runtime).await?;
+    api::add_stake(&mut runtime, &signer, Decimal::from("10")).await??;
+    api::register_validator(&mut runtime, &signer, vec![1; 32], Decimal::default()).await??;
     api::set_sigma_min(&mut runtime, &core(), Decimal::from("12")).await??;
     drop(runtime);
     let storage = Storage::builder()
@@ -71,7 +86,9 @@ async fn genesis_floor_bootstrap_retries_and_preserves_later_updates() -> Result
         .build();
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
     genesis.sigma_min = Decimal::from("99");
-    runtime.publish_native_contracts(&genesis).await?;
+    runtime
+        .publish_native_contracts_owned(&genesis, &owner)
+        .await?;
     assert_eq!(
         get_checkpoint_by_height(&writer.connection(), 0).await?,
         Some(genesis_checkpoint)

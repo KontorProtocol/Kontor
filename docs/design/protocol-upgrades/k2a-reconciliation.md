@@ -1325,4 +1325,35 @@ The fresh-genesis comparison uses a common ignored report harness and explicit
 identical configuration, receipt-stream epoch, native bytes and provenance. Its
 qualified-prerequisite baseline is `dfacbefd` plus the test-only fixed-provenance
 fixture at `d066d72f5bddf9f29eddda5205ea5c890675374d`. Baseline and candidate build/run
-and comparison remain pending; no fresh-genesis parity claim is made yet.
+and comparison were pending at that checkpoint.
+
+The two-revision comparison subsequently passed. Candidate `ddba0f10338edfbb8dc0696f7ad665fa99aeed4b`
+and baseline fixture `d066d72f5bddf9f29eddda5205ea5c890675374d` produced identical
+typed logical rows across all 22 database tables, without table exclusions. Both
+received the same native artifacts, exact provenance bytes, validator configuration,
+and node-local receipt epoch before execution. Their report source fields identify
+the distinct node revisions and are deliberately not part of the state comparison.
+Candidate and baseline execution took 16.90 and 16.92 seconds respectively.
+The reports and hashes are recorded in
+`.build-cache/native-retention/fresh-comparison-result.json`. This establishes
+uninterrupted fresh-genesis parity; interrupted recovery is covered separately by
+the nine recovery tests above. It does not establish complete network identity or
+independent production dependency graphs, which remain K3 and K2b work.
+
+All 50 protocol-bundle Python controls passed with the local compiler cache
+disabled. The first attempt failed because the cache directory was read-only in
+the sandbox; no control assertion failed. Final all-target Clippy found the
+preparation snapshot's large enum representation, now represented as an optional
+snapshot with the same candidate and empty cases. Validation continues before
+phase acceptance.
+
+Final all-target indexer/testlib Clippy passed with warnings denied (21.60 seconds)
+after correcting the snapshot representation and six test-only lints. The existing
+staking bootstrap retry fixture had persisted an invalid-floor error receipt and
+ordinary probe operations at height zero. It now uses the production owned
+bootstrap path, which rolls failed initialization back, and rolls back its unfinished
+floor probes before retrying. Ordinary registration occurs at height one. This
+preserves the rejection, retry, and later-floor-update assertions without accepting
+non-bootstrap operations as a valid durable genesis prefix. The original failure
+is retained in `staking-restart.log`; the other three genesis staking tests passed.
+The corrected fixture's runtime validation remains pending at this checkpoint.

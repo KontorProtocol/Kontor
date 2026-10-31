@@ -451,7 +451,7 @@ mod tests {
                         &native_provenance()?,
                     )
                     .await?;
-                lease.drain(&mut interrupted).await?;
+                lease.drain(&interrupted).await?;
                 interrupted.storage.commit().await?;
                 lease.complete(&mut interrupted).await?;
             }
@@ -459,7 +459,7 @@ mod tests {
                 let mut lease = service.begin_canonical(&mut interrupted, false).await?;
                 interrupted.storage.savepoint().await?;
                 staking::api::set_sigma_min(&mut interrupted, &core, genesis.sigma_min).await??;
-                lease.drain(&mut interrupted).await?;
+                lease.drain(&interrupted).await?;
                 interrupted.storage.commit().await?;
                 lease.complete(&mut interrupted).await?;
             }
@@ -472,7 +472,7 @@ mod tests {
                     genesis.validators.iter().cloned().map(Into::into).collect(),
                 )
                 .await?;
-                lease.drain(&mut interrupted).await?;
+                lease.drain(&interrupted).await?;
                 interrupted.storage.commit().await?;
                 lease.complete(&mut interrupted).await?;
             }

@@ -103,15 +103,10 @@ pub(super) struct ValidatedCandidates {
     pub(super) txs: Vec<bitcoin::Transaction>,
 }
 
-/// What the batch-candidate snapshot found.
-enum ProposalSnapshot {
-    /// Batch candidates that need the bitcoind I/O phase.
-    Batch {
-        selection: ExecutionSelection,
-        txs: Vec<bitcoin::Transaction>,
-        threshold: u64,
-    },
-    Nothing,
+struct ProposalSnapshot {
+    selection: ExecutionSelection,
+    txs: Vec<bitcoin::Transaction>,
+    threshold: u64,
 }
 
 /// Compute the per-batch fee acceptance threshold (sat/vB). Hoisted out
@@ -527,7 +522,7 @@ impl<E: Executor> Reactor<E> {
     /// The state-only half of building a BATCH proposal: candidates judged
     /// entirely on the loop (pool, DB, fee index) with no bitcoind
     /// round-trips. They then go through the I/O phase as an [`IoJob`].
-    async fn make_value_snapshot(&mut self) -> Result<ProposalSnapshot> {
+    async fn make_value_snapshot(&mut self) -> Result<Option<ProposalSnapshot>> {
         let selection = self.preparation_selection().await?;
         let conn = self.db_conn();
 
@@ -570,7 +565,7 @@ impl<E: Executor> Reactor<E> {
             self.consensus.mempool.suppress(txid);
         }
         if txs.is_empty() {
-            return Ok(ProposalSnapshot::Nothing);
+            return Ok(None);
         }
         // Dependency-order the candidates BEFORE the I/O phase, not after. The
         // I/O phase relays each accepted tx before validating the next
@@ -584,11 +579,11 @@ impl<E: Executor> Reactor<E> {
         // Compute the fee threshold once for this candidate set (the index is
         // a snapshot during this pass) and carry it into the I/O phase.
         let threshold = compute_fee_threshold(&self.consensus.mempool_fee_index);
-        Ok(ProposalSnapshot::Batch {
+        Ok(Some(ProposalSnapshot {
             selection,
             txs,
             threshold,
-        })
+        }))
     }
 
     /// Judge an incoming proposal, answering the engine through `reply` —
@@ -808,11 +803,11 @@ impl<E: Executor> Reactor<E> {
         let mut idle_retry = false;
         if !build_in_flight {
             match self.make_value_snapshot().await? {
-                ProposalSnapshot::Batch {
+                Some(ProposalSnapshot {
                     selection,
                     txs,
                     threshold,
-                } => {
+                }) => {
                     info!(
                         candidates = txs.len(),
                         "Validating candidate batch off-loop; reply deferred"
@@ -827,7 +822,7 @@ impl<E: Executor> Reactor<E> {
                         },
                     });
                 }
-                ProposalSnapshot::Nothing => {
+                None => {
                     // Round zero already offered a batching window. On a retry,
                     // peers may have started their timers before this proposer;
                     // another idle wait can make the replacement arrive too late.

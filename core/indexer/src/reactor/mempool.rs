@@ -143,7 +143,7 @@ mod tests {
         pool.candidates.remove(&txid);
         assert_eq!(pool.raw.get(&txid), Some(&raw));
         pool.remove(&txid);
-        assert!(pool.raw.get(&txid).is_none());
+        assert!(!pool.raw.contains_key(&txid));
         assert!(pool.candidates.is_empty());
     }
 
@@ -169,9 +169,9 @@ mod tests {
         pool.insert(prepared(raw.clone(), true));
         pool.replace(vec![prepared(raw, false)]);
         assert!(pool.candidates.is_empty());
-        assert!(pool.raw.get(&txid).is_some());
+        assert!(pool.raw.contains_key(&txid));
         pool.replace(Vec::new());
-        assert!(pool.raw.get(&txid).is_none());
+        assert!(!pool.raw.contains_key(&txid));
     }
     #[test]
     fn late_recognition_cannot_restore_removed_or_suppressed_inputs() {

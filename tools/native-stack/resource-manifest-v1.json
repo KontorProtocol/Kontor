@@ -310,7 +310,7 @@
     },
     "native_genesis_preflight": {
       "path": "core/indexer/src/database/genesis.rs",
-      "sha256": "456dee7d090d3f3e8186b894e810f81c5713da90b62459d4e7eaa3cebfa01f3c"
+      "sha256": "df2d48de625dee05c4520d1a6c7c668b74f197b16218a59d7715da850230c906"
     },
     "native_staking": {
       "path": "native-contracts/staking/src/lib.rs",
