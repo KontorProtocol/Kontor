@@ -171,6 +171,79 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+  suspended_vmmap:
+    name: S2 macOS suspended-64 VM map diagnostic (release)
+    if: inputs.stage == 'vmmap'
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.1"
+      RUSTC_WRAPPER: ""
+      CCACHE_DISABLE: "1"
+      CARGO_BUILD_JOBS: "2"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Expose pinned Rust tools to controlled builds
+        run: |
+          mkdir -p "$CARGO_HOME/bin"
+          for rust_tool in cargo rustc; do
+            if [[ ! -e "$CARGO_HOME/bin/$rust_tool" ]]; then
+              ln -s "$(rustup which --toolchain "$RUSTUP_TOOLCHAIN" "$rust_tool")" "$CARGO_HOME/bin/$rust_tool"
+            fi
+          done
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install evidence and native dependencies
+        run: |
+          python3 -m pip install -r tools/native-stack/requirements-resource.txt
+          brew install boost libevent zeromq
+      - name: Build exact-source release test executable and guard control
+        run: |
+          test "$RUNNER_OS-$RUNNER_ARCH" = macOS-ARM64
+          base="$RUNNER_TEMP/native-stack-s2-vmmap"
+          python3 tools/native-stack/resource_manifest.py
+          python3 tools/native-stack/build_resource_test.py --profile release --output-dir "$base/build"
+          python3 tools/native-stack/capture_resource_control.py \
+            --cargo-artifacts "$base/build/cargo-artifacts.jsonl" \
+            --metadata "$base/build/cargo-metadata.json" \
+            --build-attestation "$base/build/resource-build-attestation.json" \
+            --source-sha "$GITHUB_SHA" \
+            --evidence-dir "$base/archive/control" > "$base/guard-result.json"
+          binary=$(jq -er '.binary_path' "$base/build/resource-build-attestation.json")
+          cp "$binary" "$base/archive/$(basename "$binary")"
+      - name: Capture existing production suspended-64 VM regions
+        run: |
+          base="$RUNNER_TEMP/native-stack-s2-vmmap"
+          binary=$(jq -er '.binary_path' "$base/build/resource-build-attestation.json")
+          python3 tools/native-stack/capture_suspended_vmmap.py \
+            --control-capture "$base/archive/control/resource-control-capture.json" \
+            --binary "$base/archive/$(basename "$binary")" \
+            --output-dir "$base/archive"
+      - name: Preserve VM-region evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-s2-macos-suspended-vmmap-release
+          path: ${{ runner.temp }}/native-stack-s2-vmmap/archive
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Preserve VM-region failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-s2-macos-suspended-vmmap-diagnostics
+          path: |
+            ${{ runner.temp }}/native-stack-s2-vmmap/build/*.json*
+            ${{ runner.temp }}/native-stack-s2-vmmap/build/*.log
+            ${{ runner.temp }}/native-stack-s2-vmmap/guard-result.json
+          if-no-files-found: warn
+          retention-days: 90
+
   capture:
     if: inputs.stage == 'final'
     name: S2 capture (${{ matrix.os }}, ${{ matrix.profile }})

@@ -64,12 +64,20 @@ pub(crate) fn start() {
     start_with_conversion(false, None);
 }
 
-pub(crate) fn start_chain() {
-    start_with_conversion(true, None);
-}
-
 pub(crate) fn start_chain_with_stack_probe(probe: fn() -> JsonValue) {
     start_with_conversion(true, Some(probe));
+}
+
+pub(crate) fn split_chain() -> Vec<ThreadEvent> {
+    let trace = TRACE
+        .get()
+        .expect("resource diagnostic trace was not started");
+    let mut current = trace.lock().expect("resource diagnostic trace lock");
+    let state = current
+        .as_mut()
+        .expect("resource diagnostic trace was not active");
+    state.stack_probed_threads.clear();
+    std::mem::take(&mut state.events)
 }
 
 fn start_with_conversion(conversion_enabled: bool, stack_probe: Option<fn() -> JsonValue>) {

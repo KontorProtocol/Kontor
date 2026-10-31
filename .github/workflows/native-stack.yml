@@ -23,7 +23,7 @@ on:
         required: true
         default: qualify
         type: choice
-        options: [qualify, discovery, guard, chain, final]
+        options: [qualify, discovery, guard, chain, vmmap, final]
       reviewed_discovery_run_id:
         description: Reviewed S2 discovery run ID for the final stage
         required: false
@@ -132,7 +132,7 @@ jobs:
           if-no-files-found: error
 
   s2:
-    if: github.event_name == 'workflow_dispatch' && (inputs.stage == 'discovery' || inputs.stage == 'guard' || inputs.stage == 'chain' || inputs.stage == 'final')
+    if: github.event_name == 'workflow_dispatch' && (inputs.stage == 'discovery' || inputs.stage == 'guard' || inputs.stage == 'chain' || inputs.stage == 'vmmap' || inputs.stage == 'final')
     uses: ./.github/workflows/native-stack-s2.yml
     with:
       stage: ${{ inputs.stage }}
