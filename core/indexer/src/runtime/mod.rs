@@ -140,16 +140,16 @@ use wasmtime::{
     component::{Component, HasData, ResourceTable},
 };
 
-use indexer_types::{BuildProvenance, CommitId, Forge, Payment, Platform, Source};
+use indexer_types::{BuildProvenance, Payment};
 use wit_validator::Validator as WitValidator;
 
 use crate::bls::RegistrationProof;
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
-use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id};
 use crate::database::types::{CORE_SIGNER_ID, Identity};
 use crate::protocol::v1::engine;
 pub(crate) use crate::protocol::v1::gas::MAX_UNTRUSTED_GAS_LIMIT;
 use crate::protocol::v1::gas::{DEFAULT_NON_PROC_GAS_LIMIT, GAS_TO_FUEL_MULTIPLIER};
+use crate::protocol::v1::native::{NATIVE_CONTRACTS, is_native_contract_id, native_provenance};
 use crate::runtime::{
     counter::Counter,
     deposit::DepositMeter,
@@ -187,43 +187,6 @@ pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     hasher.update(bytes);
     let result = hasher.finalize();
     result.into()
-}
-
-/// Provenance for the native/genesis contracts. `platform` + the pinned `image`
-/// come from the committed native-contracts `build.json`; the source is the
-/// Kontor repo at the node's build commit — which reproduces the committed
-/// binaries (the reproducible-build gate proves that at every commit). A missing
-/// git commit (e.g. a tarball build) → an all-zero "unknown" commit.
-fn native_provenance() -> Result<BuildProvenance> {
-    const BUILD_JSON: &str = include_str!("../../../../native-contracts/binaries/build.json");
-
-    #[derive(serde::Deserialize)]
-    struct BuildMeta {
-        platform: String,
-        image: String,
-    }
-    let meta: BuildMeta = serde_json::from_str(BUILD_JSON)?;
-
-    let commit = crate::built_info::GIT_COMMIT_HASH
-        .and_then(|h| {
-            let mut bytes = [0u8; 20];
-            hex::decode_to_slice(h, &mut bytes).ok().map(|_| bytes)
-        })
-        .map(CommitId::Sha1)
-        .unwrap_or(CommitId::Sha1([0u8; 20]));
-
-    let provenance = BuildProvenance {
-        source: Source {
-            forge: Forge::GitHub,
-            owner: "KontorProtocol".to_string(),
-            repo: "Kontor".to_string(),
-            commit,
-        },
-        image: meta.image,
-        platform: Platform::parse(&meta.platform)?,
-    };
-    provenance.validate()?;
-    Ok(provenance)
 }
 
 // RawFileDescriptor's PartialEq/Eq moved to `built-in-types` (the crate that

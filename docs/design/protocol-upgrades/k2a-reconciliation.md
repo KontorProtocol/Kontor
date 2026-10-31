@@ -1160,3 +1160,27 @@ repository's existing `CCACHE_DISABLE=1` setting passed without source changes.
 Evidence and the lead review are under `.build-cache/selected-resource-policy/`.
 This is still K2a preparation, with prerequisite reconciliation, final acceptance,
 consolidated independent reviews and K2b production graph isolation outstanding.
+
+
+## P1 native policy relocation
+
+The existing ordered native registry, privilege/deposit rules, genesis provenance
+constructor and token hold/release result-suppression rule now live under
+`protocol/v1/native.rs`. The database module re-exports the registry for existing
+callers. Included bytes, metadata, contract IDs and behavior remain unchanged.
+The source audit compares the moved definitions with base `0bd7b427`; only import,
+visibility and relative include-path adjustments are allowed. Qualification and
+bundle provenance inputs now include the retained native-policy source.
+
+This is preparation, not a native artifact freeze. The provenance constructor still
+uses the current node build commit and its existing unknown-commit fallback. Final
+retained bytes and serialized provenance must follow qualified prerequisite
+integration, with the compatibility and cross-build checks specified above.
+
+Six focused native policy, publication, restart and nested-accounting tests passed,
+as did the explicit P1 comparison and indexer/testlib all-target compilation.
+All eleven baseline states match, with comparison report SHA-256
+`9f1e9ceb0a4824102aabe251819fbc37a17acd12da8358df02421a905f2e8911`.
+Twenty-nine Python source-binding and manifest controls and formatting checks
+passed. Commands, source/log hashes and the lead review are recorded under
+`.build-cache/selected-native-policy/`. Phase review and acceptance remain open.

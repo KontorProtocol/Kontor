@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "22e39a95e83c3b14c6a3916e7b9e40537f4f37fa1191343e05c4c3bafd811b60",
+  "parent_manifest_sha256": "591a4c7bb680985ac5c22b161ffb236b98949fe4364a31b9a79640563dd7dc8f",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1203,7 +1203,7 @@
   "sources": {
     "call": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "f1a9a9d39249f23874451fbee34feb7fc0573dae256bb34e7da20a5c1935e0ba"
+      "sha256": "5d31a82b6e4b124d00e9e5e2346cf8d9c491ef972e98bd975cd487a6013cbb61"
     },
     "chain_fixture": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
@@ -1237,6 +1237,10 @@
       "path": "core/indexer/src/protocol/v1/gas.rs",
       "sha256": "3799a58b0f915614607ee0b8bcf5f72f02cafc62aa184e20ed1af6074d31ed07"
     },
+    "retained_native_policy": {
+      "path": "core/indexer/src/protocol/v1/native.rs",
+      "sha256": "fb034f7f1fa7576f0796cbb3f1786d9d6e4b7adacb3d1b708e2940af1dcc5efb"
+    },
     "retained_pricing_policy": {
       "path": "core/indexer/src/protocol/v1/pricing.rs",
       "sha256": "1eccafbea0945dd7b35b4cdc2b39914b2edb7c918a6d9172495f60d184466975"
@@ -1247,7 +1251,7 @@
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "f2afa332644e05945a76bc56cd35b7cfdfbd648be16cdd2ebdfdfaa92a9d525f"
+      "sha256": "5fbf6199ad5864ed2b05541087c47f140c84de7541114af9feedfe0dc1ae46f5"
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",
@@ -1271,7 +1275,7 @@
     },
     "v2_manifest_builder": {
       "path": "tools/native-stack/resource_manifest_v2.py",
-      "sha256": "0835e2058eb4e7db4c2ea1622e1d24c10393d32d695e741e0f1dc508164d851e"
+      "sha256": "641944b2b4168d6d16182699fcc86de5735f39e8afa1d73a25de19048f014475"
     },
     "v2_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v2.json",

@@ -17,9 +17,9 @@ use wasmtime::{
 
 use indexer_types::{OpStatus, Payment};
 
-use crate::database::native_contracts::{TOKEN_CONTRACT_ID, is_native_contract_id};
 #[cfg(test)]
 use crate::protocol::v1::gas::SYSTEM_FUEL_CEILING;
+use crate::protocol::v1::native::{is_native_contract_id, records_result};
 
 use super::{
     ContractAddress, Runtime,
@@ -719,7 +719,7 @@ impl Runtime {
         }
         // The highest result index is the API/SDK's canonical operation result.
         // Internal fee transfers must never masquerade as that outcome.
-        if contract_id == TOKEN_CONTRACT_ID && matches!(func_name, "hold" | "release") {
+        if !records_result(contract_id, func_name) {
             return result;
         }
         let value = result.as_ref().map(|v| v.clone()).ok();

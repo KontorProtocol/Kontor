@@ -80,6 +80,7 @@ INPUTS = {
     "token_pages": "core/indexer/src/runtime/token/query_tests.rs",
     "nft_pages": "core/indexer/src/runtime/nft/query_tests.rs",
     "publish_path": "core/indexer/src/runtime/mod.rs",
+    "retained_native_policy": "core/indexer/src/protocol/v1/native.rs",
     "retained_engine": "core/indexer/src/protocol/v1/engine.rs",
     "retained_resource_policy": "core/indexer/src/protocol/v1/resources.rs",
     "retained_gas_policy": "core/indexer/src/protocol/v1/gas.rs",

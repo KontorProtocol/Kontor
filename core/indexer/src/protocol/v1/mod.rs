@@ -3,6 +3,7 @@ pub(crate) mod engine;
 pub(crate) mod execution;
 pub(crate) mod gas;
 pub(crate) mod lifecycle;
+pub(crate) mod native;
 pub(crate) mod pricing;
 pub(crate) mod resources;
 mod storage_bounds;
