@@ -9,6 +9,7 @@ use bitcoin::{Block as BitcoinBlock, Network, Transaction, Witness};
 use indexer_types::Block;
 use libsql::{Connection, Value, params};
 use malachitebft_engine::node::NodeRef;
+use tempfile::TempDir;
 use testlib::sample_provenance;
 use tokio::time::timeout;
 
@@ -26,6 +27,8 @@ use crate::runtime::{
     ContractAddress, Decimal, GenesisValidator, Runtime, TransactionContext, from_wave_expr,
 };
 use crate::test_utils::{new_mock_block_hash, signed_confirmation_call, test_runtime_with_genesis};
+
+mod parity;
 
 struct StopEngine(NodeRef);
 
@@ -125,7 +128,7 @@ async fn assert_successful_write(
     Ok(())
 }
 
-async fn run_case(batched: bool) -> Result<()> {
+async fn fixture() -> Result<(Runtime, TempDir, ContractAddress, Transaction)> {
     let secp = Secp256k1::new();
     let key = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[71; 32])?);
     let public_key = key.x_only_public_key().0.to_string();
@@ -166,6 +169,11 @@ async fn run_case(batched: bool) -> Result<()> {
         tx_index: 0,
     };
     let raw = signed_confirmation_call(&key, address.clone())?;
+    Ok((runtime, dir, address, raw))
+}
+
+async fn run_case(batched: bool) -> Result<()> {
+    let (runtime, dir, address, raw) = fixture().await?;
     let txid = raw.compute_txid().to_string();
     let mut reactor = reactor(runtime, &dir).await?;
     let cleanup = StopEngine(reactor.consensus.engine_handle.actor.clone());

@@ -6,13 +6,15 @@ mod startup_recovery_tests;
 use startup_recovery_tests::StartupFaults;
 
 use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::stopper::{Shutdown, ShutdownSignal};
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
+use tokio::time::timeout;
 use tracing::{Instrument, info, info_span};
 
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
@@ -29,6 +31,7 @@ use crate::reactor::mock_bitcoin::MockBitcoin;
 use crate::reactor::{Reactor, Simulation};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::GenesisValidator;
+use crate::runtime::ownership::{AsyncGate, OwnerService};
 use bitcoin::hashes::Hash;
 use indexer_types::Event;
 use indexer_types::OpWithResult;
@@ -72,6 +75,7 @@ struct ReactorCluster {
     /// Child of the cluster token, so cancelling the cluster still stops everyone
     /// while a single node can also be stopped on its own.
     node_cancels: Vec<Shutdown>,
+    owner_services: Arc<Mutex<Vec<Option<OwnerService>>>>,
     /// Per-node `validate_txs` latency, passed to every spawned/restarted node.
     validation_delay: Option<Duration>,
     block_txs: Vec<mpsc::Sender<BlockEvent>>,
@@ -194,6 +198,7 @@ impl ReactorCluster {
             .map(|_| crate::test_utils::new_test_db_dir().expect("node data dir"))
             .collect();
         let node_cancels: Vec<Shutdown> = (0..total).map(|_| cancel.child()).collect();
+        let owner_services = Arc::new(Mutex::new((0..total).map(|_| None).collect()));
         let mock_bitcoin = Arc::new(Mutex::new(MockBitcoin::new(0)));
         let shared_pubkey = random_x_only_pubkey();
         let (engine, component_cache) = shared_engine_and_cache().await;
@@ -245,6 +250,7 @@ impl ReactorCluster {
                 node_block_rx,
                 node_mempool_rx,
                 node_cancels[i].signal(),
+                owner_services.clone(),
                 decided_tx.clone(),
                 finality_tx.clone(),
                 state_tx.clone(),
@@ -276,6 +282,7 @@ impl ReactorCluster {
             conn_rxs,
             node_dirs,
             node_cancels,
+            owner_services,
             validation_delay,
             block_txs,
             reactor_errors,
@@ -362,6 +369,7 @@ impl ReactorCluster {
             node_block_rx,
             node_mempool_rx,
             self.node_cancels[i].signal(),
+            self.owner_services.clone(),
             self.decided_tx.clone(),
             self.finality_tx.clone(),
             self.state_tx.clone(),
@@ -437,6 +445,7 @@ impl ReactorCluster {
         node_block_rx: mpsc::Receiver<BlockEvent>,
         node_mempool_rx: mpsc::Receiver<MempoolEvent>,
         cancel: ShutdownSignal,
+        owner_services: Arc<Mutex<Vec<Option<OwnerService>>>>,
         dtx: mpsc::Sender<DecidedBatch>,
         ftx: mpsc::Sender<FinalityEvent>,
         stx: mpsc::Sender<StateEvent>,
@@ -467,6 +476,8 @@ impl ReactorCluster {
     ) {
         let genesis = genesis.clone();
         let genesis_vals = genesis_validators.to_vec();
+        let owner_service = OwnerService::new();
+        owner_services.lock().unwrap()[i] = Some(owner_service.clone());
         let span = info_span!("cluster", id = %pubkey, node = i);
         let node = async move {
             let (mut executor, runtime) = if first_boot {
@@ -578,6 +589,7 @@ impl ReactorCluster {
             let mut reactor = Reactor::new(
                 executor,
                 runtime,
+                owner_service,
                 node_block_rx,
                 node_mempool_rx,
                 cancel.clone(),
@@ -638,6 +650,7 @@ impl ReactorCluster {
             node_block_rx,
             node_mempool_rx,
             self.node_cancels[i].signal(),
+            self.owner_services.clone(),
             self.decided_tx.clone(),
             self.finality_tx.clone(),
             self.state_tx.clone(),
@@ -1023,6 +1036,18 @@ impl ReactorCluster {
     async fn shutdown(mut self) {
         self.cancel.cancel();
         while self.join_set.join_next().await.is_some() {}
+    }
+
+    async fn shutdown_with_owners(mut self) -> Result<()> {
+        self.cancel.cancel();
+        for owner in self.owner_services.lock().unwrap().iter().flatten() {
+            owner.shutdown();
+        }
+        while let Some(joined) = self.join_set.join_next().await {
+            joined
+                .map_err(|error| anyhow!("reactor task failed during owner shutdown: {error}"))?;
+        }
+        Ok(())
     }
 }
 
@@ -1678,6 +1703,99 @@ async fn prod_reactor_restart_inside_finality_window_still_rolls_back() -> Resul
     .expect("same-chain finality replay must retain a durable recovery boundary");
     assert_eq!(recovery.surviving_height, 0);
     assert!(recovery.cursor <= before_stream.max_result_id);
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_during_finality_replay_waits_for_active_replay() -> Result<()> {
+    crate::logging::setup();
+    let mut cluster = ReactorCluster::start(3).await?;
+    cluster.wait_for_ready().await;
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
+    for event in cluster.mock_bitcoin().generate_mempool_txs(1) {
+        cluster.send_mempool_event(event);
+    }
+    let batch = cluster.wait_for_batch(1, Duration::from_secs(60)).await;
+    assert_eq!(batch.txids.len(), 1);
+    let mut conns = Vec::new();
+    for index in 0..3 {
+        conns.push(cluster.node_conn(index).await.clone());
+    }
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let mut rows = conns[0]
+                .query(
+                    "SELECT COUNT(*) FROM transactions WHERE batch_height IS NOT NULL",
+                    (),
+                )
+                .await?;
+            if rows.next().await?.expect("batch count").get::<i64>(0)? > 0 {
+                break Ok::<(), anyhow::Error>(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    let gate = Arc::new(AsyncGate::default());
+    cluster.mock_bitcoin().replay_gate = Some(gate.clone());
+    for _ in 0..8 {
+        cluster.mine_empty_and_send();
+    }
+    let all_replaying = timeout(Duration::from_secs(90), async {
+        while gate.entries.load(Ordering::SeqCst) < 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    if all_replaying.is_err() {
+        gate.release();
+        cluster.shutdown_with_owners().await?;
+        return Err(anyhow!("not all reactors reached finality replay"));
+    }
+    let owners: Vec<OwnerService> = cluster
+        .owner_services
+        .lock()
+        .unwrap()
+        .iter()
+        .flatten()
+        .cloned()
+        .collect();
+    let reactor_errors = cluster.reactor_errors.clone();
+    let mut shutdown = tokio::spawn(async move { cluster.shutdown_with_owners().await });
+    let retained = timeout(Duration::from_millis(150), &mut shutdown)
+        .await
+        .is_err();
+    gate.release();
+    assert!(
+        retained,
+        "shutdown released reactors while replay was active"
+    );
+    timeout(Duration::from_secs(30), shutdown).await???;
+    let errors = reactor_errors.lock().unwrap().clone();
+    assert!(
+        errors
+            .iter()
+            .all(|(_, error)| error.contains("operation-owner node admission closed")),
+        "unexpected reactor errors during shutdown: {errors:?}"
+    );
+    for owner in owners {
+        assert_eq!(owner.active_roots().await, 0);
+        assert_eq!(owner.quarantined_roots().await, 0);
+        assert!(!owner.is_fatal());
+        let mut driver = owner.take_driver().expect("node owner has a driver");
+        timeout(Duration::from_secs(2), &mut driver).await???;
+    }
+    for conn in conns {
+        assert!(conn.is_autocommit());
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM transactions WHERE batch_height IS NOT NULL",
+                (),
+            )
+            .await?;
+        assert_eq!(rows.next().await?.expect("batch count").get::<i64>(0)?, 0);
+    }
     Ok(())
 }
 

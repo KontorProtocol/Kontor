@@ -34,6 +34,7 @@ use crate::database::Writer;
 use crate::database::queries::{get_identity, select_latest_consensus_height};
 use crate::reactor::create_runtime_executor;
 use crate::reg_tester::{derive_taproot_keypair_from_seed, workload_bitcoin};
+use crate::runtime::ownership::OwnerService;
 use crate::runtime::staking::api as staking;
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
@@ -177,9 +178,11 @@ async fn workload_timed_mixed_event_replay() -> Result<()> {
         settings.population.replacements,
         [73; 32],
     )?;
+    let owner_service = OwnerService::new();
     let (_, mut runtime, last_height, last_hash) = create_runtime_executor(
         89,
         &writer,
+        &owner_service,
         client.clone(),
         None,
         &validators.genesis,

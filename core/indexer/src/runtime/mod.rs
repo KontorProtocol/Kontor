@@ -38,6 +38,7 @@ mod host_storage;
 mod host_system;
 mod invocation;
 mod lowering;
+pub mod ownership;
 
 use bitcoin::XOnlyPublicKey;
 use call::CallOutcome;
@@ -48,12 +49,17 @@ use invocation::{InvocationBudget, InvocationLimitReached, InvocationStore, MAX_
 use invocation::{ResourceProbePhase, ResourceProbeRole};
 use libsql::Connection;
 use lowering::Linker;
+#[cfg(test)]
+use ownership::AsyncGate;
+use ownership::{ChildContext, OwnerService};
 use sha2::{Digest, Sha256};
 use staking::api::wave::{get_sigma_min_call_expr, get_sigma_min_parse_return_expr};
 pub use stdlib::{
     CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,
     wave_type,
 };
+#[cfg(test)]
+pub(crate) use storage::BlockingGate;
 use storage::{ComponentDecodeError, print_component_wit};
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
@@ -61,7 +67,7 @@ use tokio::sync::Mutex;
 use workload_telemetry::WorkloadTelemetry;
 
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 
 /// Distinguishes deterministic failures from non-deterministic failures
 /// in the contract execution path.
@@ -270,21 +276,25 @@ pub struct Linkers {
     pub native: Linker<Runtime>,
 }
 
+type StoreTableOwners = Arc<StdMutex<Vec<Weak<Mutex<ResourceTable>>>>>;
+
 #[derive(Clone)]
 pub struct Runtime {
-    pub engine: Engine,
-    pub linkers: Arc<Linkers>,
-    pub table: Arc<Mutex<ResourceTable>>,
-    pub component_cache: ComponentCache,
-    pub storage: Storage,
-    pub id_generation_counter: Counter,
-    pub result_id_counter: Counter,
-    pub stack: Stack<CallFrame>,
-    pub gauge: Option<FuelGauge>,
+    pub(crate) engine: Engine,
+    pub(crate) linkers: Arc<Linkers>,
+    pub(crate) table: Arc<Mutex<ResourceTable>>,
+    pub(crate) component_cache: ComponentCache,
+    pub(crate) storage: Storage,
+    pub(crate) id_generation_counter: Counter,
+    pub(crate) result_id_counter: Counter,
+    pub(crate) stack: Stack<CallFrame>,
+    pub(crate) gauge: Option<FuelGauge>,
     guest_memory_limits: Option<GuestMemoryLimits>,
     guest_memory_limiter: Option<GuestMemoryLimiter>,
     invocation_budget: Option<Arc<InvocationBudget>>,
+    store_table_owners: Option<StoreTableOwners>,
     invocation_depth: u32,
+    ownership: Option<ChildContext>,
     #[cfg(test)]
     pub(crate) workload_telemetry: Option<Arc<WorkloadTelemetry>>,
     #[cfg(test)]
@@ -293,36 +303,40 @@ pub struct Runtime {
     conversion_probe: Option<conversion_probe::Probe>,
     #[cfg(test)]
     pub(crate) test_host_error_message: Option<Arc<str>>,
+    #[cfg(test)]
+    compile_gate: Option<Arc<BlockingGate>>,
+    #[cfg(test)]
+    init_host_gate: Option<(u64, Arc<AsyncGate>)>,
     pub(crate) usage_kind: UsageKind,
     pub(crate) fuel_checkpoint: u64,
     /// Transient per-op accumulator of the storage-deposit GAS reserved this op
     /// (the returned-at-settle slice that bounds growth). Reset at the top-level op
     /// start, drained at the settle boundary to compute the execution burn
     /// (`burn = gas - charge`).
-    pub deposit: DepositMeter,
+    pub(crate) deposit: DepositMeter,
     /// Nominal gas limit stamped on system-issued `Payment`s (`core_payment`,
     /// `execute_api`). FIXED — never operator-configurable. Trusted core calls
     /// themselves run unmetered at `SYSTEM_FUEL_CEILING` (decided from the signer in
     /// `invoke`), so this is the Payment's nominal cap, not the core fuel
     /// budget; it still bounds a user-signed `execute_api` call (the test path).
-    pub gas_limit_for_non_procs: u64,
+    pub(crate) gas_limit_for_non_procs: u64,
     /// Requested gas budget for public read-only `/view` calls.
     /// Operator-configurable per node (set from `Config::view_gas_limit` on the
     /// read-only pool runtime). The effective budget cannot exceed
     /// `MAX_UNTRUSTED_GAS_LIMIT`; trusted consensus views use system fuel.
-    pub view_gas_limit: u64,
-    pub gas_to_fuel_multiplier: u64,
-    pub pricing: Pricing,
-    pub previous_output: Option<bitcoin::OutPoint>,
+    pub(crate) view_gas_limit: u64,
+    pub(crate) gas_to_fuel_multiplier: u64,
+    pub(crate) pricing: Pricing,
+    pub(crate) previous_output: Option<bitcoin::OutPoint>,
     // Host wrappers clone Runtime before their charge; copy payload bytes only
     // in the metered transaction accessor.
-    pub op_return_data: Option<Arc<[u8]>>,
-    pub node_label: String,
+    pub(crate) op_return_data: Option<Arc<[u8]>>,
+    pub(crate) node_label: String,
     /// The chain's Bitcoin network — a genesis-fixed constant exposed to
     /// contracts via the `network()` built-in. Defaults to `Regtest` (tests /
     /// lite executor); production paths (reactor, runtime pool) set it from
     /// `config.network`.
-    pub network: bitcoin::Network,
+    pub(crate) network: bitcoin::Network,
     /// Set while `simulate` runs a fabricated block it is going to throw away.
     ///
     /// The savepoint undoes everything in the DATABASE, but the component cache
@@ -338,7 +352,7 @@ pub struct Runtime {
     /// carrying its own `!simulating` guard, so not writing is one check per
     /// site rather than a cleanup to remember in a function whose first two
     /// hazards (`height`, then this) were both missed.
-    pub simulating: bool,
+    pub(crate) simulating: bool,
 }
 
 impl Runtime {
@@ -446,13 +460,13 @@ impl Runtime {
         Ok(Arc::new(Linkers { user, native }))
     }
 
-    pub async fn new(component_cache: ComponentCache, storage: Storage) -> Result<Self> {
+    pub(crate) async fn new(component_cache: ComponentCache, storage: Storage) -> Result<Self> {
         let engine = Self::new_engine()?;
         let linkers = Self::new_linkers(&engine)?;
         Self::new_with(engine, linkers, component_cache, storage).await
     }
 
-    pub async fn new_with(
+    pub(crate) async fn new_with(
         engine: Engine,
         linkers: Arc<Linkers>,
         component_cache: ComponentCache,
@@ -472,7 +486,9 @@ impl Runtime {
             guest_memory_limits: Some(GuestMemoryLimits::default()),
             guest_memory_limiter: None,
             invocation_budget: None,
+            store_table_owners: None,
             invocation_depth: 0,
+            ownership: None,
             #[cfg(test)]
             workload_telemetry: None,
             #[cfg(test)]
@@ -481,6 +497,10 @@ impl Runtime {
             conversion_probe: None,
             #[cfg(test)]
             test_host_error_message: None,
+            #[cfg(test)]
+            compile_gate: None,
+            #[cfg(test)]
+            init_host_gate: None,
             deposit: DepositMeter::new(),
             usage_kind: UsageKind::System,
             fuel_checkpoint: 0,
@@ -498,7 +518,7 @@ impl Runtime {
         })
     }
 
-    pub async fn new_read_only(
+    pub(crate) async fn new_read_only(
         engine: Engine,
         linkers: Arc<Linkers>,
         component_cache: ComponentCache,
@@ -520,7 +540,7 @@ impl Runtime {
         .await
     }
 
-    pub async fn set_context(
+    pub(crate) async fn set_context(
         &mut self,
         height: u64,
         tx_context: Option<TransactionContext>,
@@ -535,20 +555,16 @@ impl Runtime {
         self.op_return_data = op_return_data.map(Arc::from);
     }
 
-    pub fn tx_context(&self) -> Option<&TransactionContext> {
+    pub(crate) fn tx_context(&self) -> Option<&TransactionContext> {
         self.storage.tx_context.as_ref()
     }
 
-    pub fn tx_context_mut(&mut self) -> Option<&mut TransactionContext> {
+    pub(crate) fn tx_context_mut(&mut self) -> Option<&mut TransactionContext> {
         self.storage.tx_context.as_mut()
     }
 
-    pub fn get_storage_conn(&self) -> Connection {
+    pub(crate) fn get_storage_conn(&self) -> Connection {
         self.storage.conn.clone()
-    }
-
-    pub fn set_storage(&mut self, storage: Storage) {
-        self.storage = storage;
     }
 
     pub fn fuel_limit_for_non_procs(&self) -> u64 {
@@ -577,7 +593,27 @@ impl Runtime {
         (starting_fuel - ending_fuel).div_ceil(self.gas_to_fuel_multiplier)
     }
 
-    pub async fn publish_native_contracts(&mut self, genesis: &GenesisParameters) -> Result<()> {
+    pub(crate) async fn publish_native_contracts(
+        &mut self,
+        genesis: &GenesisParameters,
+    ) -> Result<()> {
+        self.publish_native_contracts_inner(genesis, None).await
+    }
+
+    pub(crate) async fn publish_native_contracts_owned(
+        &mut self,
+        genesis: &GenesisParameters,
+        owner_service: &OwnerService,
+    ) -> Result<()> {
+        self.publish_native_contracts_inner(genesis, Some(owner_service))
+            .await
+    }
+
+    async fn publish_native_contracts_inner(
+        &mut self,
+        genesis: &GenesisParameters,
+        owner_service: Option<&OwnerService>,
+    ) -> Result<()> {
         self.set_context(0, Some(TransactionContext::builder().build()), None, None)
             .await;
 
@@ -596,8 +632,29 @@ impl Runtime {
         // at the node's build commit (CI gates that it reproduces these bytes).
         let provenance = native_provenance()?;
         for (name, bytes) in NATIVE_CONTRACTS {
-            self.publish(&core_signer, payment.clone(), name, bytes, &provenance)
-                .await?;
+            let mut lease = if let Some(service) = owner_service {
+                Some(service.begin_canonical(self, false).await?)
+            } else {
+                None
+            };
+            if lease.is_some() {
+                self.storage.savepoint().await?;
+            }
+            let published = self
+                .publish(&core_signer, payment.clone(), name, bytes, &provenance)
+                .await;
+            if let Some(lease) = lease.as_mut() {
+                lease.drain(self).await?;
+                if published.is_ok() {
+                    self.storage.commit().await?;
+                } else {
+                    self.storage.rollback().await?;
+                }
+            }
+            if let Some(lease) = lease {
+                lease.complete(self).await?;
+            }
+            published?;
             // Existing genesis rows bypass publication. Validate their stored
             // artifacts before startup can proceed under this engine policy.
             let address = ContractAddress {
@@ -615,25 +672,82 @@ impl Runtime {
         }
         // Zero is uninitialized, never a valid configured floor. This also
         // resumes an interrupted bootstrap after the contract was published.
+        let mut lease = if let Some(service) = owner_service {
+            Some(service.begin_canonical(self, false).await?)
+        } else {
+            None
+        };
+        if lease.is_some() {
+            self.storage.savepoint().await?;
+        }
         let result = self
             .execute_system_view(&staking::address(), &get_sigma_min_call_expr())
-            .await?;
+            .await;
+        if let Some(lease) = lease.as_mut() {
+            lease.drain(self).await?;
+            self.storage.rollback().await?;
+        }
+        if let Some(lease) = lease {
+            lease.complete(self).await?;
+        }
+        let result = result?;
         if get_sigma_min_parse_return_expr(&result) == Decimal::default() {
-            staking::api::set_sigma_min(self, &core_signer, genesis.sigma_min).await??;
+            let mut lease = if let Some(service) = owner_service {
+                Some(service.begin_canonical(self, false).await?)
+            } else {
+                None
+            };
+            if lease.is_some() {
+                self.storage.savepoint().await?;
+            }
+            let set_result =
+                staking::api::set_sigma_min(self, &core_signer, genesis.sigma_min).await;
+            if let Some(lease) = lease.as_mut() {
+                lease.drain(self).await?;
+                if set_result.as_ref().is_ok_and(|result| result.is_ok()) {
+                    self.storage.commit().await?;
+                } else {
+                    self.storage.rollback().await?;
+                }
+            }
+            if let Some(lease) = lease {
+                lease.complete(self).await?;
+            }
+            set_result??;
         }
         if !genesis.validators.is_empty() {
             let validators = genesis.validators.iter().cloned().map(Into::into).collect();
-            staking::api::set_genesis_set(
+            let mut lease = if let Some(service) = owner_service {
+                Some(service.begin_canonical(self, false).await?)
+            } else {
+                None
+            };
+            if lease.is_some() {
+                self.storage.savepoint().await?;
+            }
+            let set_result = staking::api::set_genesis_set(
                 self,
                 &Signer::Core(Box::new(Signer::Nobody)),
                 validators,
             )
-            .await?;
+            .await;
+            if let Some(lease) = lease.as_mut() {
+                lease.drain(self).await?;
+                if set_result.is_ok() {
+                    self.storage.commit().await?;
+                } else {
+                    self.storage.rollback().await?;
+                }
+            }
+            if let Some(lease) = lease {
+                lease.complete(self).await?;
+            }
+            set_result?;
         }
         Ok(())
     }
 
-    pub async fn publish(
+    pub(crate) async fn publish(
         &mut self,
         signer: &Signer,
         payment: Payment,
@@ -785,7 +899,7 @@ impl Runtime {
     /// the deterministic authz check and the host-side append. All checks are
     /// pure functions of the op + committed state, so they reject identically on
     /// every node (`Deterministic`).
-    pub async fn update_provenance(
+    pub(crate) async fn update_provenance(
         &mut self,
         caller_signer_id: u64,
         contract: &ContractAddress,
@@ -929,7 +1043,7 @@ impl Runtime {
         }
     }
 
-    pub async fn issuance(&mut self, signer: &Signer) -> Result<(), ExecutionError> {
+    pub(crate) async fn issuance(&mut self, signer: &Signer) -> Result<(), ExecutionError> {
         // `Issuance` is a gas-free faucet mint — a dev/test bootstrap
         // convenience. It must never mint on mainnet, where the only intended
         // mint path is protocol emissions; an ungated faucet falsifies the
@@ -962,14 +1076,14 @@ impl Runtime {
     /// degrades to a lookup-only path and returns `Err` on miss
     /// rather than silently creating signer rows during a read-only
     /// API query.
-    pub async fn is_in_view_context(&self) -> bool {
+    pub(crate) async fn is_in_view_context(&self) -> bool {
         match self.stack.peek().await {
             Some(frame) => !frame.is_proc,
             None => false,
         }
     }
 
-    pub async fn get_or_create_identity(
+    pub(crate) async fn get_or_create_identity(
         &self,
         x_only_pubkey: &str,
     ) -> Result<database::types::Identity, ExecutionError> {
@@ -991,7 +1105,7 @@ impl Runtime {
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))
     }
 
-    pub async fn register_bls_key(
+    pub(crate) async fn register_bls_key(
         &mut self,
         signer: &Signer,
         bls_pubkey: &[u8],
@@ -1064,7 +1178,7 @@ impl Runtime {
     /// `payment.signer_id`. For user-driven calls from tests, `signer` is the
     /// user and `payment.signer_id` resolves to their id so the hold charges
     /// the right account.
-    pub async fn execute_api(
+    pub(crate) async fn execute_api(
         &mut self,
         signer: Option<&Signer>,
         contract_address: &ContractAddress,
@@ -1077,7 +1191,7 @@ impl Runtime {
         self.execute(signer, payment, contract_address, expr).await
     }
 
-    pub async fn execute(
+    pub(crate) async fn execute(
         &mut self,
         signer: Option<&Signer>,
         payment: Option<Payment>,
@@ -1102,16 +1216,27 @@ impl Runtime {
         bytes: Vec<u8>,
     ) -> std::result::Result<(Vec<u8>, Component), ComponentDecodeError> {
         let engine = self.engine.clone();
-        let (bytes, compiled) = tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        let gate = self.compile_gate.clone();
+        let compile = move || {
             #[cfg(test)]
             resource_diagnostics::record("compiler_entry");
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                gate.block();
+            }
             let compiled = Component::from_binary(&engine, &bytes);
             #[cfg(test)]
             resource_diagnostics::record("compiler_exit");
             (bytes, compiled)
-        })
-        .await
-        .map_err(|e| ComponentDecodeError::Infrastructure(e.into()))?;
+        };
+        let (bytes, compiled) = match &self.ownership {
+            Some(owner) => owner.run_blocking(compile).await,
+            None => tokio::task::spawn_blocking(compile)
+                .await
+                .map_err(anyhow::Error::from),
+        }
+        .map_err(ComponentDecodeError::Infrastructure)?;
         Ok((
             bytes,
             compiled.map_err(|e| ComponentDecodeError::Content(e.into()))?,
@@ -1144,7 +1269,7 @@ impl Runtime {
         Ok((bytes, component))
     }
 
-    pub async fn load_component(&self, contract_id: u64) -> Result<Component> {
+    pub(crate) async fn load_component(&self, contract_id: u64) -> Result<Component> {
         Ok(
             match self.component_cache.get_admitted(&contract_id).await {
                 Some(component) => {
@@ -1217,7 +1342,13 @@ impl Runtime {
         let mut runtime = self.clone();
         runtime.invocation_budget = Some(budget);
         runtime.invocation_depth = depth;
-        runtime.table = Arc::new(Mutex::new(ResourceTable::new()));
+        let table = Arc::new(Mutex::new(ResourceTable::new()));
+        if let Some(owners) = &self.store_table_owners {
+            let mut owners = owners.lock().expect("store table tracker poisoned");
+            owners.retain(|owner| owner.strong_count() != 0);
+            owners.push(Arc::downgrade(&table));
+        }
+        runtime.table = table;
         runtime.guest_memory_limiter = match (&self.guest_memory_limiter, self.guest_memory_limits)
         {
             (Some(parent), _) => Some(parent.new_child()),
@@ -1229,6 +1360,16 @@ impl Runtime {
             s.limiter(|runtime| runtime.guest_memory_limiter.as_mut().unwrap());
         }
         if let Err(error) = s.set_fuel(fuel) {
+            #[cfg(test)]
+            s.record_initialization_failure();
+            return Err(error.into());
+        }
+        if let Some(interval) = self
+            .ownership
+            .as_ref()
+            .and_then(ChildContext::fuel_yield_interval)
+            && let Err(error) = s.fuel_async_yield_interval(Some(interval))
+        {
             #[cfg(test)]
             s.record_initialization_failure();
             return Err(error.into());

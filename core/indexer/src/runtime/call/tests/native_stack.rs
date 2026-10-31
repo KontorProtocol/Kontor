@@ -429,3 +429,9 @@ async fn qualification_probe() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "run through owned stack controls at retained unowned boundary depths"]
+async fn owned_stack_control() -> Result<()> {
+    sweep::run_owned_control().await
+}

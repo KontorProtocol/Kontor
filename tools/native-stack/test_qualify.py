@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import subprocess
 import tempfile
 import unittest
@@ -15,22 +16,47 @@ SPEC.loader.exec_module(qualify)
 
 
 class QualifyTests(unittest.TestCase):
+    def test_source_identity_rejects_dirty_worktree(self):
+        with patch.object(qualify.subprocess, "check_output", side_effect=["a" * 40 + "\n", " M tools/native-stack/qualify.py\n"]):
+            with self.assertRaisesRegex(ValueError, "worktree is dirty"):
+                qualify.source_identity()
+
+    def test_owned_control_requires_derived_boundary_reports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            completed = subprocess.CompletedProcess([], 0, "test result: ok. 1 passed\n", "")
+            with patch.object(qualify.subprocess, "run", return_value=completed):
+                with self.assertRaisesRegex(ValueError, "missing or duplicate evidence"):
+                    qualify.run_owned_control(Path("binary"), "paid_reenter", [63, 64], output, 600)
+            self.assertTrue((output / "paid_reenter-owned.log").is_file())
+
     def test_worker_and_control_use_distinct_processes_and_preserve_logs(self):
         worker, ws = reentry()
         control, cs = reentry("control")
+        owned = [
+            {"kind": "paid_reenter", "depth": sample["depth"], "outcome": sample["outcome"]}
+            for sample in control
+        ]
+        owned_summary = {"kind": "paid_reenter", "depths": [63, 64], "outcomes": [sample["outcome"] for sample in owned], "owned": True}
+        owned_raw = "".join("KONTOR_OWNED_STACK_REPORT:" + json.dumps(sample) + "\n" for sample in owned)
+        owned_raw += "KONTOR_OWNED_STACK_SUMMARY:" + json.dumps(owned_summary) + "\n"
         outputs = [subprocess.CompletedProcess([], 0, transcript(samples, summary), "") for samples, summary in ((worker, ws), (control, cs))]
+        outputs.append(subprocess.CompletedProcess([], 0, owned_raw, ""))
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             with patch.object(qualify.subprocess, "run", side_effect=outputs) as run:
                 result = qualify.qualify_case(Path("binary"), "paid_reenter", output, 600, 64, 1024)
-            self.assertEqual(run.call_count, 2)
-            worker_env, control_env = [call.kwargs["env"] for call in run.call_args_list]
+            self.assertEqual(run.call_count, 3)
+            worker_env, control_env, owned_env = [call.kwargs["env"] for call in run.call_args_list]
             self.assertEqual(worker_env["KONTOR_STACK_MODE"], "worker")
             self.assertNotIn("KONTOR_STACK_CONTROL_DEPTHS", worker_env)
             self.assertEqual(control_env["KONTOR_STACK_MODE"], "control")
             self.assertEqual(control_env["KONTOR_STACK_CONTROL_DEPTHS"], "63,64")
+            self.assertEqual(owned_env["KONTOR_OWNED_DEPTHS"], "63,64")
+            self.assertIn(qualify.OWNED_TEST_NAME, run.call_args_list[2].args[0])
             self.assertTrue((output / result["worker_log"]).is_file())
             self.assertTrue((output / result["control_log"]).is_file())
+            self.assertTrue((output / result["owned_log"]).is_file())
             names = [sample["log"] for sample in result["observations"] + result["control_observations"]]
             self.assertEqual(len(names), len(set(names)))
             self.assertTrue(all((output / name).is_file() for name in names))

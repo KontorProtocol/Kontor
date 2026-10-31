@@ -51,6 +51,7 @@ use malachitebft_core_types::{LinearTimeouts, Round};
 use metrics::gauge;
 use tracing::{debug, info, warn};
 
+use crate::bitcoin_client::Client;
 use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
@@ -68,6 +69,7 @@ use crate::{
     runtime::{
         ComponentCache, Decimal, GenesisParameters, Runtime, Storage,
         numerics::decimal_to_string,
+        ownership::OwnerService,
         staking::{
             address as staking_address,
             api::wave::{get_active_set_call_expr, get_active_set_parse_return_expr},
@@ -126,9 +128,10 @@ pub struct PruneConfig {
     pub retain_blocks: u64,
 }
 
-pub struct Reactor<E: Executor> {
+pub(crate) struct Reactor<E: Executor> {
     executor: E,
     runtime: Runtime,
+    owner_service: OwnerService,
     shutdown: ShutdownSignal,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
@@ -170,9 +173,10 @@ pub struct Reactor<E: Executor> {
 
 impl<E: Executor> Reactor<E> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         executor: E,
         runtime: Runtime,
+        owner_service: OwnerService,
         block_rx: Receiver<BlockEvent>,
         mempool_rx: Receiver<MempoolEvent>,
         shutdown: ShutdownSignal,
@@ -193,6 +197,7 @@ impl<E: Executor> Reactor<E> {
         Self {
             executor,
             runtime,
+            owner_service,
             shutdown,
             block_rx,
             mempool_rx,
@@ -245,6 +250,19 @@ impl<E: Executor> Reactor<E> {
             .position(|v| v.address == self.consensus.address);
         self.consensus.current_validator_set = vs;
         Ok(())
+    }
+
+    async fn refresh_validator_set_owned(&mut self) -> Result<()> {
+        let mut lease = self
+            .owner_service
+            .begin_canonical(&mut self.runtime, false)
+            .await?;
+        self.runtime.storage.savepoint().await?;
+        let result = self.refresh_validator_set().await;
+        lease.drain(&self.runtime).await?;
+        self.runtime.storage.rollback().await?;
+        lease.complete(&mut self.runtime).await?;
+        result
     }
 
     async fn send_proposal_parts(
@@ -677,41 +695,19 @@ impl<E: Executor> Reactor<E> {
     }
 
     #[tracing::instrument(skip_all, fields(node = %self.runtime.node_label))]
-    pub async fn run(&mut self) -> Result<()> {
-        // Startup is CANCELLABLE. A first-boot footprint reconstruct or a wide
-        // startup finality settle can be slow, and a SIGTERM that lands inside
-        // one must be a clean stop, not a blown shutdown budget and a false
-        // page on a routine rollout. Dropping either mid-flight is safe: both
-        // write transactionally, so the abandonment is a crash the restart
-        // already handles.
-        let shutdown = self.shutdown.clone();
-        let startup = async {
-            // Build the storage-deposit footprint cache from live state before
-            // processing blocks — but only ONCE: `reconstruct` is gated on a
-            // node_meta marker, so this is a no-op after the first build (DB
-            // upgrade / first boot). Block writes and reorgs both maintain the
-            // cache atomically, so a clean restart needs no rebuild.
-            self.runtime.storage.footprint().reconstruct().await?;
+    pub(crate) async fn run(&mut self) -> Result<()> {
+        // A startup mutation is part of the reactor's owned durable unit. It
+        // must finish before shutdown can release the writer or runtime.
+        self.runtime.storage.footprint().reconstruct().await?;
+        self.advance()
+            .await
+            .context("advance failed during startup finality settle")?;
 
-            // Settle any deadline that was ALREADY due when we started.
-            // Rehydration restores the tracking set, but nothing evaluates it
-            // until a tip advance — and a node that restarted at or past a
-            // deadline resumes consensus immediately, so without this it keeps
-            // executing batches on state its peers have already rolled back
-            // until the next Bitcoin block arrives (up to an hour on mainnet,
-            // indefinitely on a stalled chain). That is #515 again by a third
-            // route. The queues are empty here, so the drain inside is a no-op
-            // and only the finality check does work.
-            self.advance()
-                .await
-                .context("advance failed during startup finality settle")
+        let result = if self.shutdown.is_cancelled() {
+            Ok(())
+        } else {
+            self.run_event_loop().await
         };
-        select! {
-            _ = shutdown.cancelled() => return Ok(()),
-            r = startup => r?,
-        }
-
-        let result = self.run_event_loop().await;
 
         // Gracefully stop the Malachite consensus engine — BOUNDED. This wait
         // sits between a reactor fatal and the exit status that reports it, so
@@ -787,10 +783,11 @@ async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
     Ok(Genesis { validator_set })
 }
 
-pub async fn create_runtime_executor(
+pub(crate) async fn create_runtime_executor(
     starting_block_height: u64,
     writer: &database::Writer,
-    bitcoin_client: crate::bitcoin_client::Client,
+    owner_service: &OwnerService,
+    bitcoin_client: Client,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis: &GenesisParameters,
     network: bitcoin::Network,
@@ -863,12 +860,14 @@ pub async fn create_runtime_executor(
     let mut runtime = Runtime::new(ComponentCache::new(), storage)
         .await
         .context("Failed to initialize runtime")?;
+    #[cfg(test)]
+    owner_service.apply_startup_compile_gate(&mut runtime);
     // Set the chain network *before* publishing — native-contract `init` reads
     // it via the `network()` built-in to self-condition per-network defaults
     // (e.g. token's dev mint is off at mainnet genesis).
     runtime.network = network;
     runtime
-        .publish_native_contracts(genesis)
+        .publish_native_contracts_owned(genesis, owner_service)
         .await
         .context("Failed to publish native contracts")?;
 
@@ -880,7 +879,7 @@ pub async fn create_runtime_executor(
     Ok((exec, runtime, last_height, last_hash))
 }
 
-pub async fn start_consensus(
+pub(crate) async fn start_consensus(
     engine_config: engine::EngineConfig,
     runtime: &mut Runtime,
     observation_channels: Option<consensus_state::ObservationChannels>,
@@ -928,6 +927,7 @@ pub async fn start_consensus(
 pub fn run(
     starting_block_height: u64,
     shutdown: ShutdownSignal,
+    owner_service: OwnerService,
     writer: database::Writer,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
@@ -935,7 +935,7 @@ pub fn run(
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
     engine_config: engine::EngineConfig,
-    bitcoin_client: crate::bitcoin_client::Client,
+    bitcoin_client: Client,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis: GenesisParameters,
     observation_channels: Option<consensus_state::ObservationChannels>,
@@ -948,38 +948,29 @@ pub fn run(
     tokio::spawn({
         async move {
             let result: Result<()> = async {
-                // Cancellable, like every other startup phase: genesis loading
-                // and the one-time auto-vacuum conversion are the slowest part
-                // of first boot, and a SIGTERM inside them must be a clean
-                // stop. Both are transactional; dropping them is a crash the
-                // restart already handles.
-                let setup = async {
-                    let setup = create_runtime_executor(
-                        starting_block_height,
-                        &writer,
-                        bitcoin_client,
-                        replay_tx,
-                        &genesis,
-                        network,
-                    )
-                    .await
-                    .context("create_runtime_executor failed")?;
+                // Native publication and its guest work finish before this task
+                // releases the writer, even when shutdown arrives during setup.
+                let (exec, mut runtime, last_height, last_hash) = create_runtime_executor(
+                    starting_block_height,
+                    &writer,
+                    &owner_service,
+                    bitcoin_client,
+                    replay_tx,
+                    &genesis,
+                    network,
+                )
+                .await
+                .context("create_runtime_executor failed")?;
 
-                    // Convert a pre-existing DB to INCREMENTAL auto_vacuum once, so the
-                    // pages freed by pruning can be returned to the OS (fresh DBs are
-                    // already born incremental). Gated on `prune` so archive nodes don't
-                    // pay the one-time conversion VACUUM.
-                    if prune.enabled {
-                        database::init::ensure_incremental_auto_vacuum(&setup.1.storage.conn)
-                            .await
-                            .context("ensure_incremental_auto_vacuum failed")?;
-                    }
-                    Ok::<_, anyhow::Error>(setup)
-                };
-                let (exec, mut runtime, last_height, last_hash) = select! {
-                    _ = shutdown.cancelled() => return Ok(()),
-                    r = setup => r?,
-                };
+                // Existing databases need a one-time conversion before pruning.
+                if prune.enabled {
+                    database::init::ensure_incremental_auto_vacuum(&runtime.storage.conn)
+                        .await
+                        .context("ensure_incremental_auto_vacuum failed")?;
+                }
+                if shutdown.is_cancelled() {
+                    return Ok(());
+                }
 
                 let timeouts = Some(LinearTimeouts {
                     propose: std::time::Duration::from_millis(consensus_propose_timeout_ms),
@@ -1049,7 +1040,8 @@ pub fn run(
                 // placeholder).
                 fee_index.recompute();
 
-                let mut consensus = start_consensus(
+                let mut startup_lease = owner_service.begin_canonical(&mut runtime, false).await?;
+                let consensus_result = start_consensus(
                     engine_config,
                     &mut runtime,
                     observation_channels,
@@ -1057,8 +1049,10 @@ pub fn run(
                     last_height,
                     fee_index,
                 )
-                .await
-                .context("start_consensus failed")?;
+                .await;
+                startup_lease.drain(&runtime).await?;
+                startup_lease.complete(&mut runtime).await?;
+                let mut consensus = consensus_result.context("start_consensus failed")?;
 
                 // Seed pending_transactions with the Kontor txs captured
                 // from the initial Sync.
@@ -1071,6 +1065,7 @@ pub fn run(
                 let mut reactor = Reactor::new(
                     exec,
                     runtime,
+                    owner_service,
                     block_rx,
                     mempool_rx,
                     shutdown.clone(),

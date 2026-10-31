@@ -38,11 +38,11 @@
     },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
-      "sha256": "ce3bee84d5ba6c19f8e6976308eefb6ab5dd7639d33e488754394572719ac768"
+      "sha256": "73a52babbd673041d76cd488d03c69a14511fcbc3a6429fc97c04aec236da70f"
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "0992e2c6dd3f9d9f8adb9e04fce7a63ffe747bde216c34a49fc3580ce713b04b"
+      "sha256": "c4fcc11c87d902fcb8793507bedfb1f1178c13cc39fd92fe1bc5882bed9ce2b1"
     },
     "call_output": {
       "path": "core/indexer/src/runtime/call/result.rs",
@@ -82,7 +82,7 @@
     },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "184d4574294fdb917d6c2d04d3892fe7c91233d2ffe06e58566f5a8633b6a2ec"
+      "sha256": "2d02c2bce92155ad8e15b4344e6ea9157ad6c2a5ec84957165abfb3ca009d9bb"
     },
     "cold_publication_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/cold_publication.rs",
@@ -340,6 +340,10 @@
       "path": "core/indexer/src/runtime/nft/query_tests.rs",
       "sha256": "e9d5b03f7402e85f61fd61548af87587cbd0a8d49b93d6967fdd6cc7b71c26e1"
     },
+    "operation_ownership": {
+      "path": "core/indexer/src/runtime/ownership.rs",
+      "sha256": "11c0d5d364e9670a7372ba26dd1458d1daa4a8f2a65beec84a79e5a3dd561a4b"
+    },
     "pending_host_capture": {
       "path": "tools/native-stack/capture_resource_pending.py",
       "sha256": "bec70482b2d69ec732148a86ce46bbbc55cb81c2ecd6e7ab3af4a21f83e1f2a0"
@@ -358,7 +362,7 @@
     },
     "production_qualification": {
       "path": "tools/native-stack/compare.py",
-      "sha256": "0f914c447d0ff047c1db42726ced284e4c63008279aa9abb322c0d02c12062eb"
+      "sha256": "94516b7406eeed7de2fe998e34ec5a0028bb3fe9dbc1abc345366da76972d713"
     },
     "proxy": {
       "path": "test-contracts/binaries/proxy.wasm.br",
@@ -366,11 +370,11 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "ffd5dda39749fc1febcd449f6e879278307921c79af3130e1e5b123c0c1d08a3"
+      "sha256": "22db3d1c8fe6965c904d025e442eb869c67eb11c9255287a65f7b1137be00fcf"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "49c7265de72221c0aeacb556519dea06adb30ff64dd1c2448fb621fdead949cb"
+      "sha256": "3d7ccc707471848248ba564ea270f45b1a1e0bc6cb2312bad933c7d44cb87cd4"
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -418,7 +422,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "f06549f919f7c28374cc633953bc1da51398b66038650b4051ccd294ab9e0f60"
+      "sha256": "88f52ef3e6c35f6ae684c93459419bcc1143918e96362431c88975ed622462af"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -451,6 +455,10 @@
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
       "sha256": "48ed4901e83e95cec2fd0d928bbe3c06993f916ab0be5398fe84107d8802a69e"
+    },
+    "runtime_pool": {
+      "path": "core/indexer/src/runtime/pool.rs",
+      "sha256": "cacdc89a998566f7d13e39a8e4b10c7c5cbcc35b88c476e3ef14f66025760cf1"
     },
     "sqlite_large_values_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_large_values.rs",
@@ -510,11 +518,11 @@
     },
     "stack_probe_tests": {
       "path": "core/indexer/src/runtime/call/tests/native_stack.rs",
-      "sha256": "1e1cbcd8945155446f19920bc91e0c7e21b039dafe3b7dec2bf94766d11b4bb3"
+      "sha256": "db3d9d9de2712517031b4b302abc3af1bc561b36a5b1d6bae5c4a1c4eb21ac3f"
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "23ee679951326e1c3dea012361779945b9b5161ee2319cb1e5d02dc1cd86cd7d"
+      "sha256": "03d9f234309b2107d0a03f9805a2ee7fe92f0e8d895c64b4cb137cafb5fd0cf1"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -546,7 +554,7 @@
     },
     "suite_dispatch_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "49c7265de72221c0aeacb556519dea06adb30ff64dd1c2448fb621fdead949cb"
+      "sha256": "3d7ccc707471848248ba564ea270f45b1a1e0bc6cb2312bad933c7d44cb87cd4"
     },
     "suite_registry_builder": {
       "path": "tools/native-stack/resource_suite_registry.py",
@@ -574,7 +582,7 @@
     },
     "test_runtime_setup": {
       "path": "core/indexer/src/test_utils.rs",
-      "sha256": "eaf0bda8e242ed339ad5b70181aadf728a5fb80306d16c1908116d815a958a0a"
+      "sha256": "893d7199b878e6ec58b06a2680afe4a3178c95b30e9fb71f747eb28f2f8b736f"
     },
     "testing_host_imports": {
       "path": "core/indexer/src/runtime/host_files.rs",

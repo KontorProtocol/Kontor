@@ -27,6 +27,7 @@ use crate::consensus::{
 };
 use crate::database::queries::select_block_latest;
 use crate::reg_tester::random_x_only_pubkey;
+use crate::runtime::ownership::OwnerService;
 use crate::runtime::staking::api as staking;
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
@@ -97,6 +98,7 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
     let mut reactor = Reactor::new(
         NoopExecutor,
         runtime,
+        OwnerService::new(),
         block_rx,
         mempool_rx,
         shutdown.signal(),

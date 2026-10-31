@@ -25,6 +25,7 @@ use super::{
     invocation::{
         InvocationCapacityExhausted, InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS,
     },
+    ownership::GuestCompletion,
     stack::CallFrame,
     wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
@@ -596,12 +597,17 @@ impl Runtime {
         mut results: Vec<Val>,
         is_fallback: bool,
     ) -> Result<(Result<String, ExecutionError>, InvocationStore)> {
-        let (result, results, mut store) = tokio::spawn(async move {
+        let execute = |mut store: InvocationStore| async move {
             match std::panic::AssertUnwindSafe(func.call_async(&mut store, &params, &mut results))
                 .catch_unwind()
                 .await
             {
-                Ok(call_result) => (Ok(call_result), results, store),
+                Ok(call_result) => GuestCompletion {
+                    result: Ok(call_result),
+                    results,
+                    store,
+                    host_panicked: false,
+                },
                 Err(panic_payload) => {
                     let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
                         s.to_string()
@@ -610,12 +616,33 @@ impl Runtime {
                     } else {
                         "unknown panic".to_string()
                     };
-                    (Err(msg), results, store)
+                    GuestCompletion {
+                        result: Err(msg),
+                        results,
+                        store,
+                        host_panicked: true,
+                    }
                 }
             }
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?;
+        };
+        let GuestCompletion {
+            result,
+            results,
+            mut store,
+            host_panicked: _,
+        } = if let Some(parent) = self.ownership.as_ref() {
+            parent
+                .run_guest(|child| {
+                    store.data_mut().storage.ownership = Some(child.clone());
+                    store.data_mut().ownership = Some(child);
+                    execute(store)
+                })
+                .await?
+        } else {
+            tokio::spawn(execute(store))
+                .await
+                .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?
+        };
 
         let result = Self::decode_result(is_fallback, result, results, &mut store).await;
         Ok((result, store))

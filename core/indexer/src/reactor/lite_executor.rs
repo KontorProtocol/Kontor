@@ -296,6 +296,10 @@ impl Executor for LiteExecutor {
     }
 
     async fn replay_blocks_after(&mut self, after_height: u64) -> anyhow::Result<()> {
+        let replay_gate = { self.mock_bitcoin.lock().unwrap().replay_gate.clone() };
+        if let Some(gate) = replay_gate {
+            gate.wait().await;
+        }
         let events = self.mock_bitcoin.lock().unwrap().get_all_block_events();
         for event in events {
             if let crate::bitcoin_follower::event::BlockEvent::BlockInsert { block, .. } = &event

@@ -8,12 +8,14 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail, ensure};
 #[cfg(target_os = "macos")]
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use bitcoin::Network;
+use deadpool::managed::{Object, Pool};
 use indexer_types::Payment;
 use libsql::params;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::process::Command;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 use wasmtime::Trap;
 
@@ -25,6 +27,8 @@ use crate::runtime::invocation::{
     ResourceProbePhase, ResourceTeardownRecorder,
 };
 use crate::runtime::numerics::sub_decimal;
+use crate::runtime::ownership::{OwnerService, RootOutcome};
+use crate::runtime::pool::Manager;
 use crate::runtime::pricing::Pricing;
 use crate::runtime::resource_diagnostics;
 use crate::runtime::token::api as token;
@@ -272,6 +276,26 @@ async fn chain_probe_child() -> Result<()> {
     run_chain_probe(mode, depth, None, false, false).await
 }
 
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "invoked by native stack qualification at the retained boundary"]
+async fn owned_chain_probe_child() -> Result<()> {
+    let mode = env::var("KONTOR_CHAIN_MODE")?;
+    let depth: u32 = env::var("KONTOR_CHAIN_DEPTH")?.parse()?;
+    ensure!(
+        matches!(depth, 63 | 64),
+        "owned chain depth must be a retained boundary"
+    );
+    if mode == "view" {
+        run_owned_view_chain_probe(depth).await
+    } else {
+        ensure!(
+            matches!(mode.as_str(), "paid" | "core"),
+            "invalid owned chain mode"
+        );
+        run_chain_probe_impl(mode, depth, None, true, false, true).await
+    }
+}
+
 pub(super) async fn resource_chain_probe(mode: String, depth: u32, reduced: bool) -> Result<()> {
     run_chain_probe(mode, depth, Some(reduced), true, false).await
 }
@@ -323,12 +347,235 @@ async fn record_suspended_vmmap(phase: &str) -> Result<()> {
     Ok(())
 }
 
+async fn run_owned_view_chain_probe(depth: u32) -> Result<()> {
+    let (mut writer, dir, db_name) = test_runtime().await?;
+    let actor = funded_with_pubkey(&mut writer, RESOURCE_CHAIN_SIGNER_X_ONLY_PUBKEY).await?;
+    let chain = publish_chain(&mut writer, &actor, depth).await?;
+    println!("OWNED_CHAIN_PHASE:published");
+    let root = chain.last().context("missing chain root")?.clone();
+    let conn = writer.get_storage_conn();
+    assert_receipt_stream_initial_state(&conn).await?;
+    let before_digest = persistent_digest(&conn).await?;
+    let before = balance(&mut writer, HolderRef::from(&actor)).await?;
+    let burned_before = balance(&mut writer, HolderRef::Burner).await?;
+    let floor_before = token::floor(&mut writer, HolderRef::from(&actor)).await?;
+    let supply_before = token::total_supply(&mut writer).await?;
+    let pool = Pool::builder(Manager::new(
+        dir.path().to_path_buf(),
+        db_name,
+        Network::Regtest,
+        writer.view_gas_limit,
+    )?)
+    .max_size(1)
+    .build()?;
+    let mut object = pool.get().await?;
+    let object_id = Object::id(&object);
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let mut user = object.linkers.user.clone();
+    let host_entered = entered.clone();
+    let host_release = release.clone();
+    user.allow_shadowing(true)
+        .instance("kontor:built-in/testing")?
+        .func_wrap_async("host-error", move |_, (): ()| {
+            let entered = host_entered.clone();
+            let release = host_release.clone();
+            Box::new(async move {
+                let wait = release.notified();
+                tokio::pin!(wait);
+                let mut signaled = false;
+                poll_fn(|cx| match wait.as_mut().poll(cx) {
+                    Poll::Pending => {
+                        if !signaled {
+                            entered.notify_one();
+                            signaled = true;
+                        }
+                        Poll::Pending
+                    }
+                    Poll::Ready(()) => Poll::Ready(()),
+                })
+                .await;
+                Ok((String::new(),))
+            })
+        })?;
+    object.linkers = Arc::new(Linkers {
+        user,
+        native: object.linkers.native.clone(),
+    });
+    let service = OwnerService::new();
+    let (budget_sender, budget_receiver) = oneshot::channel();
+    let mut handle = service
+        .start_pooled(object, move |runtime| {
+            Box::pin(async move {
+                ensure!(
+                    runtime
+                        .ownership
+                        .as_ref()
+                        .is_some_and(|owner| owner.fuel_yield_interval() == Some(100_000)),
+                    "view chain did not enter API ownership"
+                );
+                let budget = runtime
+                    .invocation_budget
+                    .as_ref()
+                    .context("API budget missing")?
+                    .clone();
+                let _ = budget_sender.send(budget.clone());
+                let previous = runtime.start_usage();
+                let result = runtime
+                    .execute(None, None, &root, "view-chain-probe(false)")
+                    .await;
+                let usage = runtime.finish_usage(previous)?;
+                Ok(RootOutcome {
+                    value: (result, usage, budget.peak()),
+                    commit: false,
+                })
+            })
+        })
+        .await?;
+    let budget = budget_receiver.await?;
+    let leaf_callback_seen = if depth == 63 {
+        timeout(Duration::from_secs(120), async {
+            tokio::select! {
+                _ = entered.notified() => Ok(()),
+                response = handle.result() => {
+                    let (result, _, _) = response?;
+                    bail!("owned view returned before the leaf host callback: {result:?}")
+                }
+            }
+        })
+        .await??;
+        println!("OWNED_CHAIN_PHASE:leaf_pending");
+        ensure!(
+            budget.live() == depth + 1,
+            "owned view chain did not register descendants"
+        );
+        release.notify_one();
+        true
+    } else {
+        false
+    };
+    let (result, usage, peak) = timeout(Duration::from_secs(120), handle.result()).await??;
+    println!("OWNED_CHAIN_PHASE:result_received");
+    ensure!(
+        budget.live() == 0 && peak == (depth + 1).min(MAX_LIVE_INVOCATIONS),
+        "owned view chain leaked or skipped Stores"
+    );
+    let (outcome, value) = if depth == 64 {
+        ensure!(
+            matches!(result, Err(ExecutionError::Deterministic(ref error))
+                if error.chain().any(|cause| cause.downcast_ref::<InvocationLimitReached>().is_some())
+                    && error.chain().all(|cause| cause.downcast_ref::<Trap>().is_none())),
+            "owned view chain did not return the typed limit: {result:?}"
+        );
+        ("invocation_limit", None)
+    } else {
+        let value = result?;
+        ensure!(value == "42", "owned view chain returned the wrong value");
+        ("ok", Some(value))
+    };
+    let reused = pool.get().await?;
+    ensure!(
+        Object::id(&reused) == object_id
+            && reused.storage.conn.is_autocommit()
+            && reused.storage.savepoint_stack.is_empty().await
+            && reused.stack.is_empty().await
+            && reused.table.lock().await.iter_mut().count() == 0
+            && service.active_roots().await == 0,
+        "owned view chain did not return a clean pool object"
+    );
+    let after_digest = persistent_digest(&conn).await?;
+    ensure!(
+        after_digest == before_digest,
+        "owned view chain changed persistent state"
+    );
+    assert_receipt_stream_initial_state(&conn).await?;
+    let storage_state = writer
+        .execute(None, None, &chain[0], "storage-state()")
+        .await?;
+    ensure!(
+        storage_state == "[0, 0, 0, 0]",
+        "owned view chain changed storage"
+    );
+    let after = balance(&mut writer, HolderRef::from(&actor)).await?;
+    let burned_after = balance(&mut writer, HolderRef::Burner).await?;
+    let floor_after = token::floor(&mut writer, HolderRef::from(&actor)).await?;
+    let supply_after = token::total_supply(&mut writer).await?;
+    ensure!(
+        (after, burned_after, floor_after, supply_after)
+            == (before, burned_before, floor_before, supply_before),
+        "owned view chain changed balances"
+    );
+    let trial = json!({
+        "repeat_index": 0,
+        "outcome": outcome,
+        "fuel": {"user": usage.user_fuel, "system": usage.system_fuel, "deposit": usage.deposit_fuel},
+        "receipt": null,
+        "receipt_count": 0,
+        "value": value,
+        "storage_state": storage_state,
+        "rolled_back": true,
+        "resource_count": 0,
+        "baseline_resource_count": 0,
+        "savepoint_restored": true,
+        "stack_empty": true,
+        "host_io_suspended": leaf_callback_seen,
+        "leaf_callback_seen": leaf_callback_seen,
+        "rollback_clean": true,
+        "state_before_sha256": before_digest,
+        "state_after_sha256": after_digest,
+        "balances": {
+            "before": before.to_string(), "after": after.to_string(), "restored": after.to_string(),
+            "burned_before": burned_before.to_string(), "burned_after": burned_after.to_string(),
+            "supply_before": supply_before.to_string(), "supply_after": supply_after.to_string(),
+            "floor_before": floor_before.to_string(), "floor_after": floor_after.to_string(),
+            "floor_restored": floor_after.to_string(),
+        },
+        "ownership": {"kind": "api", "fuel_yield_interval": 100_000, "registered_peak": peak},
+    });
+    let report = json!({
+        "mode": "view",
+        "stores": depth + 1,
+        "trials": [trial],
+        "component_sha256": {
+            "error_test": hex::encode(Sha256::digest(include_bytes!("../../../../../../test-contracts/binaries/error_test.wasm.br"))),
+            "proxy": hex::encode(Sha256::digest(include_bytes!("../../../../../../test-contracts/binaries/proxy.wasm.br"))),
+        },
+        "engine_target": reused.engine.get_target(),
+        "max_wasm_stack": reused.engine.get_max_wasm_stack(),
+        "async_stack_size": reused.engine.get_async_stack_size(),
+        "target_os": env::consts::OS,
+        "target_arch": env::consts::ARCH,
+        "call_hook_installed": reused.conversion_probe.is_some(),
+    });
+    println!("CHAIN_OWNED_PROBE_REPORT:{report}");
+    Ok(())
+}
+
 async fn run_chain_probe(
     mode: String,
     depth: u32,
     diagnostic_reduced: Option<bool>,
     target_only: bool,
     capacity_profile: bool,
+) -> Result<()> {
+    run_chain_probe_impl(
+        mode,
+        depth,
+        diagnostic_reduced,
+        target_only,
+        capacity_profile,
+        false,
+    )
+    .await
+}
+
+async fn run_chain_probe_impl(
+    mode: String,
+    depth: u32,
+    diagnostic_reduced: Option<bool>,
+    target_only: bool,
+    capacity_profile: bool,
+    owned_canonical: bool,
 ) -> Result<()> {
     assert!(matches!(mode.as_str(), "paid" | "view" | "core"));
     assert!(matches!(depth, 32 | 62 | 63 | 64));
@@ -419,25 +666,50 @@ async fn run_chain_probe(
     let mut over_cap_observation = None;
     let mut trials = Vec::new();
 
-    for (repeat_index, fail) in (if over_cap || target_only {
-        [false, false, false]
+    let attempts = if owned_canonical {
+        vec![false]
+    } else if over_cap || target_only {
+        vec![false, false, false]
     } else {
-        [false, true, false]
-    })
-    .into_iter()
-    .enumerate()
-    {
+        vec![false, true, false]
+    };
+    for (repeat_index, fail) in attempts.into_iter().enumerate() {
         if diagnostic_reduced.is_some() {
             resource_diagnostics::record("chain_attempt_start");
             resource_diagnostics::record("chain_preparation_entry");
         }
         let teardown_recorder = (teardown_probe_mode == Some("on"))
             .then(|| Arc::new(ResourceTeardownRecorder::default()));
-        let budget = Arc::new(match &teardown_recorder {
-            Some(recorder) => InvocationBudget::with_teardown_recorder(recorder.clone()),
-            None => InvocationBudget::default(),
-        });
-        runtime.invocation_budget = Some(budget.clone());
+        let mut canonical = if owned_canonical {
+            ensure!(mode != "view", "view chain requires a pooled API root");
+            runtime.invocation_budget = None;
+            let service = OwnerService::new();
+            let lease = service.begin_canonical(&mut runtime, false).await?;
+            ensure!(
+                runtime
+                    .ownership
+                    .as_ref()
+                    .is_some_and(|owner| owner.fuel_yield_interval().is_none()),
+                "owned chain has no canonical context"
+            );
+            Some((service, lease))
+        } else {
+            None
+        };
+        let budget = if owned_canonical {
+            runtime
+                .invocation_budget
+                .as_ref()
+                .context("canonical budget missing")?
+                .clone()
+        } else {
+            let budget = Arc::new(match &teardown_recorder {
+                Some(recorder) => InvocationBudget::with_teardown_recorder(recorder.clone()),
+                None => InvocationBudget::default(),
+            });
+            runtime.invocation_budget = Some(budget.clone());
+            budget
+        };
         runtime.resource_probe_phase =
             teardown_probe_mode.map(|_| ResourceProbePhase::PreObservation);
         assert_eq!(budget.live(), 0);
@@ -671,7 +943,17 @@ async fn run_chain_probe(
         }
         runtime.resource_probe_phase =
             teardown_probe_mode.map(|_| ResourceProbePhase::RollbackObservation(chain[0].clone()));
+        if let Some((_, lease)) = canonical.as_mut() {
+            lease.drain(&runtime).await?;
+        }
         runtime.storage.rollback().await?;
+        if let Some((service, lease)) = canonical.take() {
+            lease.complete(&mut runtime).await?;
+            ensure!(
+                service.active_roots().await == 0,
+                "canonical chain root remained registered"
+            );
+        }
         assert_receipt_stream_initial_state(&conn).await?;
         let state_after_sha256 = persistent_digest(&conn).await?;
         assert_eq!(state_before_sha256, state_after_sha256);
@@ -697,7 +979,7 @@ async fn run_chain_probe(
         assert_eq!(budget.live(), 0);
         let teardown_events = teardown_recorder.as_ref().map(|recorder| recorder.events());
         runtime.resource_probe_phase = None;
-        trials.push(json!({
+        let mut trial = json!({
             "repeat_index": repeat_index,
             "sample_key": if fail { "trap_control" } else { "target" },
             "outcome": if over_cap { "invocation_limit" } else if fail { "trap" } else { "ok" },
@@ -740,7 +1022,15 @@ async fn run_chain_probe(
             },
             "receipt_count": receipt_count,
             "rollback_clean": rollback_clean,
-        }));
+        });
+        if owned_canonical {
+            trial["ownership"] = json!({
+                "kind": "canonical",
+                "fuel_yield_interval": null,
+                "registered_peak": live_store_peak,
+            });
+        }
+        trials.push(trial);
         if let Some(role) = process_role {
             println!(
                 "CHAIN_PROBE_ATTEMPT:{}",
@@ -787,7 +1077,11 @@ async fn run_chain_probe(
         "target_os": env::consts::OS,
         "target_arch": env::consts::ARCH,
     });
-    println!("CHAIN_PROBE_REPORT:{report}");
+    if owned_canonical {
+        println!("CHAIN_OWNED_PROBE_REPORT:{report}");
+    } else {
+        println!("CHAIN_PROBE_REPORT:{report}");
+    }
     if capacity_profile {
         println!(
             "SUSPENDED_64_COMPLETION:{}",
