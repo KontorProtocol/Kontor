@@ -5,7 +5,67 @@ use stdlib::{KeyElement, KeyPath};
 
 use super::native::{NATIVE_CONTRACTS, STAKING_CONTRACT_ID, TOKEN_CONTRACT_ID};
 use super::storage_identity::CORE_SIGNER_ID;
-use crate::protocol::native_bootstrap::{BootstrapRead, BootstrapReceipt, BootstrapSnapshot};
+use crate::protocol::native_bootstrap::{
+    BootstrapRead, BootstrapReceipt as ReceiptFields, BootstrapSnapshot as SnapshotFields,
+};
+
+struct BootstrapReceipt {
+    contract_id: i64,
+    function: String,
+    tx_id: Option<i64>,
+    input_index: Option<i64>,
+    op_index: Option<i64>,
+    result_index: i64,
+    signer_id: i64,
+    payer_signer_id: Option<i64>,
+    status: String,
+}
+
+struct BootstrapSnapshot {
+    published_count: u64,
+    receipts: Vec<BootstrapReceipt>,
+    admission_floor: Option<Vec<u8>>,
+    validators_initialized: Option<Vec<u8>>,
+}
+
+impl From<ReceiptFields> for BootstrapReceipt {
+    fn from(fields: ReceiptFields) -> Self {
+        let (
+            contract_id,
+            function,
+            tx_id,
+            input_index,
+            op_index,
+            result_index,
+            signer_id,
+            payer_signer_id,
+            status,
+        ) = fields;
+        Self {
+            contract_id,
+            function,
+            tx_id,
+            input_index,
+            op_index,
+            result_index,
+            signer_id,
+            payer_signer_id,
+            status,
+        }
+    }
+}
+
+impl From<SnapshotFields> for BootstrapSnapshot {
+    fn from(fields: SnapshotFields) -> Self {
+        let (published_count, receipts, admission_floor, validators_initialized) = fields;
+        Self {
+            published_count,
+            receipts: receipts.into_iter().map(BootstrapReceipt::from).collect(),
+            admission_floor,
+            validators_initialized,
+        }
+    }
+}
 
 pub(crate) struct BootstrapProgress {
     pub(crate) next_result_index: u32,
@@ -23,7 +83,7 @@ pub(crate) async fn read_progress(read: BootstrapRead) -> Result<BootstrapProgre
     )
     .await
     .map_err(|error| anyhow!(error))?;
-    validate(snapshot)
+    validate(snapshot.into())
 }
 
 fn outer(receipt: &BootstrapReceipt, contract_id: u64, function: &str) -> bool {
