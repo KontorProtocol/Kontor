@@ -1,9 +1,9 @@
 #[cfg(test)]
-mod genesis_parity;
-#[cfg(test)]
 mod conversion_probe;
 #[cfg(test)]
 mod costs;
+#[cfg(test)]
+mod genesis_parity;
 extern crate alloc;
 
 mod component_cache;
