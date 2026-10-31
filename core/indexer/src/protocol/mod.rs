@@ -3,6 +3,7 @@ pub(crate) mod coordinator;
 pub(crate) mod execution;
 pub(crate) mod native_bootstrap;
 pub(crate) mod operations;
+pub(crate) mod session;
 pub(crate) mod storage_aux;
 pub(crate) mod storage_callbacks;
 pub(crate) mod storage_contracts;

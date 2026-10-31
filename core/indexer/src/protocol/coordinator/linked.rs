@@ -20,6 +20,7 @@ use crate::database::storage_callbacks_v1::storage_callbacks;
 use crate::protocol::operations::{
     AddressEnvelope, GenesisEnvelope, RecognitionCall, SessionOwner, ViewOutcome,
 };
+use crate::protocol::session::{SelectionSource, SessionExports};
 use crate::runtime::bundle_session::BundleSession;
 use crate::runtime::fuel::ExecutionUsage;
 use crate::runtime::ownership::adapter::{
@@ -28,40 +29,53 @@ use crate::runtime::ownership::adapter::{
 };
 use crate::runtime::ownership::{LinkedCanonicalRootLease, LinkedOperation, OwnerService};
 use crate::runtime::pool::{LinkedManager, LinkedSession, new_linked};
-use crate::runtime::{BundleOwner, ComponentCache, Runtime, SelectionSource, Storage};
+use crate::runtime::{ComponentCache, Runtime, Storage};
 
 pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession {
     let origin = runtime.executor_version();
     let network = runtime.network;
     let conn = runtime.storage.conn.clone();
-    let recognize = runtime.recognizer();
-    let session = BundleSession::new(runtime);
-    let operations = ExecutorOperations {
-        initialize: session.initializer(),
+    let exports = BundleSession::export(runtime);
+    adapt_session(origin, network, conn, canonical, exports)
+}
+
+fn adapt_session(
+    origin: ExecutorVersion,
+    network: Network,
+    conn: Connection,
+    canonical: bool,
+    exports: SessionExports,
+) -> ExecutorSession {
+    let (operations, owner, roots, recycle) = exports;
+    let (
+        initialize,
+        inspect,
+        maintenance,
         recognize,
-        inspect: session.inspect(),
-        maintenance: session.maintenance(),
-        transaction: session.transaction(),
-        begin_unit: session.begin_unit(),
-        lifecycle: session.lifecycle(),
-        contract_wit: session.contract_wit(),
-        view: session.view(),
-        committee: session.committee(),
+        transaction,
+        begin_unit,
+        lifecycle,
+        contract_wit,
+        view,
+        committee,
+    ) = operations;
+    let operations = ExecutorOperations {
+        initialize,
+        inspect,
+        maintenance,
+        recognize,
+        transaction,
+        begin_unit,
+        lifecycle,
+        contract_wit,
+        view,
+        committee,
     };
-    let retained = session.clone();
     let make_root = Arc::new(
         move |selection: ExecutionSelection, adapter: OwnerAdapter| {
             selection
                 .ensure_runtime(network, origin)
                 .map_err(|error| (0, format!("{error:#}")))?;
-            let owner = BundleOwner::new(
-                adapter.root,
-                adapter.submit_guest,
-                adapter.submit_blocking,
-                adapter.check_commit,
-                adapter.report_failure,
-                adapter.fuel_yield_interval,
-            );
             let source: SelectionSource = if !canonical && selection.is_public_view() {
                 let conn = conn.clone();
                 Arc::new(move || {
@@ -83,8 +97,18 @@ pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession
                     Box::pin(async move { Ok(selection) })
                 })
             };
-            let (prepare, inspect_canonical_drain, settle, reset) =
-                retained.root_hooks(owner, canonical, source);
+            let (prepare, inspect_canonical_drain, settle, reset) = roots(
+                (
+                    adapter.root,
+                    adapter.submit_guest,
+                    adapter.submit_blocking,
+                    adapter.check_commit,
+                    adapter.report_failure,
+                    adapter.fuel_yield_interval,
+                ),
+                canonical,
+                source,
+            );
             Ok(RootHooks {
                 prepare,
                 inspect_canonical_drain,
@@ -96,9 +120,9 @@ pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession
     ExecutorSession {
         origin,
         operations,
-        owner: session.clone(),
+        owner,
         make_root,
-        recycle: session.recycle(),
+        recycle,
     }
 }
 

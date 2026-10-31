@@ -2559,7 +2559,8 @@ async fn restore_linked<T>(
 mod tests {
     use super::super::bundle_session::BundleSession;
     use super::super::pool::new_linked;
-    use super::adapter::{ExecutorSession, GuestFactory, RootHooks, SessionAction, SessionFactory};
+    use super::adapter::{ExecutorSession, RootHooks, SessionAction, SessionFactory};
+    use crate::protocol::session::GuestFactory;
     use super::*;
     use crate::consensus::signing::PrivateKey;
     use crate::database::connection::new_connection;

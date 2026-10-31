@@ -17,6 +17,7 @@ use super::bundle_ownership::{
 use super::counter::Counter;
 use super::invocation::InvocationBudget;
 use super::{Runtime, TransactionContext};
+use crate::protocol::session::{Operations, OwnerCapabilities, SessionExports};
 
 pub(crate) struct BundleSession {
     pub(super) runtime: Mutex<Runtime>,
@@ -60,6 +61,34 @@ impl SimulationContext {
 }
 
 impl BundleSession {
+    pub(crate) fn export(runtime: Runtime) -> SessionExports {
+        let recognize = runtime.recognizer();
+        let session = Self::new(runtime);
+        let operations: Operations = (
+            session.initializer(),
+            session.inspect(),
+            session.maintenance(),
+            recognize,
+            session.transaction(),
+            session.begin_unit(),
+            session.lifecycle(),
+            session.contract_wit(),
+            session.view(),
+            session.committee(),
+        );
+        let retained = session.clone();
+        let roots = Arc::new(
+            move |capabilities: OwnerCapabilities, canonical, selection| {
+                let (token, guest, blocking, check, report, fuel_yield_interval) = capabilities;
+                let owner =
+                    BundleOwner::new(token, guest, blocking, check, report, fuel_yield_interval);
+                retained.root_hooks(owner, canonical, selection)
+            },
+        );
+        let recycle = session.recycle();
+        (operations, session, roots, recycle)
+    }
+
     #[cfg(test)]
     pub(crate) async fn test_runtime(&self) -> MutexGuard<'_, Runtime> {
         self.runtime.lock().await
