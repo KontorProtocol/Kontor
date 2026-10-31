@@ -379,6 +379,9 @@ impl Runtime {
         config.memory_init_cow(false);
         config.wasm_custom_page_sizes(false);
         config.allocation_strategy(InstanceAllocationStrategy::OnDemand);
+        // The shared root limit bounds each admitted memory. Wasmtime's 4 GiB
+        // default reservation needlessly scales with suspended Store count.
+        config.memory_reservation(u64::try_from(GuestMemoryLimits::default().per_root)?);
         config.memory_may_move(true);
         config.wasm_relaxed_simd(false);
         config.cranelift_nan_canonicalization(true);

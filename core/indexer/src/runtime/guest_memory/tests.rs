@@ -33,6 +33,9 @@ fn store(engine: &Engine, limiter: GuestMemoryLimiter) -> Store<TestState> {
 #[test]
 fn runtime_engine_pins_growth_assumptions() -> Result<()> {
     let engine = Runtime::new_engine()?;
+    let reservation = u64::try_from(GuestMemoryLimits::default().per_root)?;
+    assert_eq!(engine.get_memory_reservation(), reservation);
+    assert_eq!(engine.get_gc_heap_reservation(), reservation);
     let features = engine.get_wasm_features();
     assert!(!features.contains(WasmFeatures::CUSTOM_PAGE_SIZES));
     assert!(!features.contains(WasmFeatures::THREADS));

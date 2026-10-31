@@ -366,7 +366,7 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "b47a3f6a7f74acfed46cc3ee16f174584babf47e341101596007b529980974eb"
+      "sha256": "820b67767aa6c31d77b28d329465e0f6a8d0ba123b94e156be831b045c77bee3"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
@@ -438,7 +438,7 @@
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
-      "sha256": "cf758dfda137ff5c288241978411be535161be63035c9c2ddb3514e3a764349e"
+      "sha256": "16c810b05c68d1cd1ee04d9dba583ff50d6c9790c668b1a299202d0acb6bbfe4"
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
