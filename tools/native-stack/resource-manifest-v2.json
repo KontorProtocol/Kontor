@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "3ba215b808f6ea7356e9809f5a2a691fd30b6087a54fc5cfc89fdca314c1fa1e",
+  "parent_manifest_sha256": "20828d7308946df9c02c2dc2e8ca679a981d5daf6f06c059117339a39210df5c",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1207,7 +1207,7 @@
     },
     "chain_fixture": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
-      "sha256": "2a294937f6beacc0b1fe7799d09eca5b61452fffe3aa5af0d44fb7d0508649e1"
+      "sha256": "81ec690d76ce8fdd2b912a8d35829e6fcc787a3f07e55b90086c624d8bf9a87c"
     },
     "fees": {
       "path": "core/indexer/src/runtime/fees.rs",
