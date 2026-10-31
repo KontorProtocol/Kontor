@@ -340,6 +340,10 @@
       "path": "core/indexer/src/runtime/nft/query_tests.rs",
       "sha256": "e9d5b03f7402e85f61fd61548af87587cbd0a8d49b93d6967fdd6cc7b71c26e1"
     },
+    "operation_ownership": {
+      "path": "core/indexer/src/runtime/ownership.rs",
+      "sha256": "950c16d03f07d48dfe51181abd537e089afaf5d9a1abb3e0220c044f18b2669e"
+    },
     "pending_host_capture": {
       "path": "tools/native-stack/capture_resource_pending.py",
       "sha256": "bec70482b2d69ec732148a86ce46bbbc55cb81c2ecd6e7ab3af4a21f83e1f2a0"
@@ -418,7 +422,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "f06549f919f7c28374cc633953bc1da51398b66038650b4051ccd294ab9e0f60"
+      "sha256": "88f52ef3e6c35f6ae684c93459419bcc1143918e96362431c88975ed622462af"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -451,6 +455,10 @@
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
       "sha256": "48ed4901e83e95cec2fd0d928bbe3c06993f916ab0be5398fe84107d8802a69e"
+    },
+    "runtime_pool": {
+      "path": "core/indexer/src/runtime/pool.rs",
+      "sha256": "cacdc89a998566f7d13e39a8e4b10c7c5cbcc35b88c476e3ef14f66025760cf1"
     },
     "sqlite_large_values_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_large_values.rs",

@@ -73,6 +73,8 @@ INPUTS = {
     "macos_worker_capacity_guard": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
     "chain_tests": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
     "invocation_budget": "core/indexer/src/runtime/invocation.rs",
+    "operation_ownership": "core/indexer/src/runtime/ownership.rs",
+    "runtime_pool": "core/indexer/src/runtime/pool.rs",
     "workload_store_telemetry": "core/indexer/src/runtime/workload_telemetry.rs",
     "component_cache": "core/indexer/src/runtime/component_cache.rs",
     "callback_tests": "core/indexer/src/runtime/sequential_tests.rs",
