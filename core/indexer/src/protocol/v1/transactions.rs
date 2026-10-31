@@ -1,3 +1,6 @@
+use bitcoin::consensus::encode::FromHexError;
+use bitcoin::consensus::{Decodable, DecodeError};
+use bitcoin::io::Cursor;
 use bitcoin::{
     OutPoint, Transaction as BitcoinTransaction, XOnlyPublicKey,
     opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
@@ -8,6 +11,22 @@ use indexer_types::{
 };
 
 use super::storage_identity::CORE_SIGNER_ID;
+
+pub(crate) fn decode_simulation(raw: &[u8]) -> Result<BitcoinTransaction, String> {
+    // Match deserialize_hex's consensus_decode entry and trailing-byte check;
+    // deserialize_partial uses a different finite-reader entry point.
+    let mut reader = Cursor::new(raw);
+    let decoded = BitcoinTransaction::consensus_decode(&mut reader)
+        .map_err(DecodeError::Consensus)
+        .and_then(|transaction| {
+            if reader.position() as usize == raw.len() {
+                Ok(transaction)
+            } else {
+                Err(DecodeError::TooManyBytes)
+            }
+        });
+    decoded.map_err(|error| FromHexError::Decode(error).to_string())
+}
 
 pub type TransactionFilterMap = fn((usize, BitcoinTransaction)) -> Option<Transaction>;
 

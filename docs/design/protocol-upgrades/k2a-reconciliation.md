@@ -1085,3 +1085,41 @@ input is run `41110674101`, artifact `13003214982`, capture SHA-256
 Prepare one clean combined candidate, regenerate source manifests, and execute
 the existing final six-cell workflow. Existing production-memory, operational
 performance and consolidated phase-review gates remain separate and open.
+
+## Simulation byte decoding at selected admission
+
+The earlier preparation queued `bitcoin::Transaction`, so the HTTP handler still
+chose the Bitcoin decoder before selecting execution rules. The queue now carries
+owned bytes. Transport hex validation stays in the node; Bitcoin decoding and
+Kontor recognition run through the executor selected at admission. Queue capacity,
+backpressure, HTTP timeout, response-loss behavior and simulation rollback are
+unchanged. This is the existing K2a boundary requirement, not a new phase.
+
+Simulation responses distinguish ordinary malformed/unrecognized input from
+infrastructure failure. An inner rejection produces the existing HTTP 400 envelope
+without stopping the reactor. The outer error remains fatal. P1 decoding retains
+the original `consensus_decode` entry point, complete-input requirement and hex
+endpoint error rendering. Invalid transport syntax preserves the old error
+precedence, including an earlier consensus error before an invalid hex suffix.
+A valid hex payload never decodes a Bitcoin transaction before admission.
+
+The focused HTTP cases compare error text against the previous decoder for invalid
+hex, odd-length hex, an invalid suffix, truncated bytes and trailing bytes. The
+actual reactor test submits malformed bytes and then another simulation while
+mempool recognition is pending, checking that the event loop remains live. The
+preserved P1 baseline comparison also enters through the new byte queue boundary.
+Final prerequisite integration, complete K2a acceptance and phase reviews remain
+required; this change does not establish independently locked bundle isolation.
+
+Validation against base `d870ae16`: all eight focused HTTP/reactor tests passed,
+and the explicitly enabled retained-executor comparison passed with all eleven
+logical states equal to baseline `c7554ca8`. Indexer/testlib all-target compilation
+also passed. The candidate comparison SHA-256 is
+`a0c1a63ce073cd42c4830d243c2bbc9b1eba82c86f4aa6e19398ddc87516f2b9`.
+Commands, changed-source hashes and terminal log hashes are saved under
+`.build-cache/selected-simulation-decode-final/`. The initial compile attempt
+used a private Bitcoin reader type and failed; the successful source instead uses
+the public decoder entry point, with no dependency change. The lead reviewed
+queue consumers, rejection-versus-infrastructure propagation, error precedence,
+trailing-byte rejection and complete-input preservation. Consolidated phase review
+still covers this work before any PR or merge.

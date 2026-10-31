@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, ensure};
 use bitcoin::blockdata::constants::genesis_block;
+use bitcoin::consensus::serialize;
 use bitcoin::{Network, Transaction as BitcoinTransaction, Witness};
 use indexer_types::Transaction;
 use malachitebft_core_types::Round;
@@ -93,8 +94,12 @@ async fn pending_recognition_keeps_blocks_and_requests_live_with_channel_backpre
                 })
                 .await?;
             let (reply, receive) = oneshot::channel();
-            simulate_tx.send((raw.clone(), reply)).await?;
-            ensure!(timeout(Duration::from_secs(5), receive).await???.is_none());
+            simulate_tx.send((vec![0], reply)).await?;
+            let malformed = timeout(Duration::from_secs(5), receive).await???;
+            ensure!(malformed.is_err());
+            let (reply, receive) = oneshot::channel();
+            simulate_tx.send((serialize(&raw), reply)).await?;
+            ensure!(timeout(Duration::from_secs(5), receive).await???.is_err());
             mempool_tx
                 .send(MempoolEvent::Remove(raw.compute_txid()))
                 .await?;

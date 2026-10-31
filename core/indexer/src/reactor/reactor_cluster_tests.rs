@@ -14,6 +14,7 @@ use crate::stopper::{Shutdown, ShutdownSignal};
 use anyhow::{Result, anyhow};
 use bitcoin::Transaction as BitcoinTransaction;
 use bitcoin::absolute::LockTime;
+use bitcoin::consensus::serialize;
 use bitcoin::transaction::Version;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
@@ -997,13 +998,13 @@ impl ReactorCluster {
     async fn simulate(&self, node: usize, tx: BitcoinTransaction) -> Result<Vec<OpWithResult>> {
         let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
         self.simulate_txs[node]
-            .send((tx, ret_tx))
+            .send((serialize(&tx), ret_tx))
             .await
             .map_err(|_| anyhow::anyhow!("simulate channel closed"))?;
         ret_rx
             .await
             .map_err(|_| anyhow::anyhow!("simulate response channel closed"))??
-            .ok_or_else(|| anyhow!("unrecognized simulation transaction"))
+            .map_err(anyhow::Error::msg)
     }
 
     /// Assert all nodes produced the same checkpoint for a block at a given height.

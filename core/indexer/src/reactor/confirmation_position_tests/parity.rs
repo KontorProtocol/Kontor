@@ -137,14 +137,15 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
         );
         let mut unrelated = raw.clone();
         unrelated.input[0].witness.clear();
-        ensure!(reactor.simulate_raw(unrelated).await?.is_none());
+        ensure!(reactor.simulate_raw(serialize(&unrelated)).await?.is_err());
         ensure!(
             state(&conn).await? == initial,
             "unrecognized input changed persisted state"
         );
         let simulated = reactor
-            .simulate_raw(raw.clone())
+            .simulate_raw(serialize(&raw))
             .await?
+            .map_err(anyhow::Error::msg)
             .context("recognized simulation")?;
         report.states.insert(
             format!("{label}/simulation"),

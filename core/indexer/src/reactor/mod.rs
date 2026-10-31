@@ -116,10 +116,9 @@ const MAX_PENDING_BLOCKS: usize = 128;
 /// a transient stall into the crash loop this bound exists to avoid.
 const MAX_DEFERRED_DECISIONS: usize = 4096;
 
-pub type Simulation = (
-    bitcoin::Transaction,
-    oneshot::Sender<Result<Option<Vec<OpWithResult>>>>,
-);
+pub type SimulationOutcome = std::result::Result<Vec<OpWithResult>, String>;
+
+pub type Simulation = (Vec<u8>, oneshot::Sender<Result<SimulationOutcome>>);
 
 /// State-pruning settings for the reactor (see `project_state_pruning`).
 #[derive(Clone, Copy, Debug)]
@@ -686,7 +685,8 @@ impl<E: Executor> Reactor<E> {
                             // `Err` out of `simulate_raw` is infrastructure-only by
                             // construction (savepoint, DB, executor plumbing) —
                             // user-level op failures ride inside `Ok(results)`
-                            // as per-op error fields; unrecognized input is None.
+                            // as per-op error fields; malformed/unrecognized input
+                            // is an ordinary rejection in the inner result.
                             // I5: this node's own I/O
                             // failing must stop this node.
                             bail!("simulation failed: {msg}");

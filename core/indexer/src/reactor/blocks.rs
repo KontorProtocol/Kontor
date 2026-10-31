@@ -3,7 +3,6 @@ use std::mem;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use bitcoin::Transaction as BitcoinTransaction;
 use indexer_types::{Block, BlockRow, Event, OpWithResult};
 use metrics::{counter, gauge};
 use tracing::{debug, info, warn};
@@ -23,9 +22,9 @@ use crate::protocol::coordinator::selection::{
 };
 use crate::test_utils::new_mock_block_hash;
 
-use super::Reactor;
 use super::consensus_state;
 use super::executor::Executor;
+use super::{Reactor, SimulationOutcome};
 
 // Incremental-vacuum throttle. Units are PAGES; the MiB annotations assume the
 // default 4 KiB page_size (Kontor never sets a custom `PRAGMA page_size`, so this
@@ -246,17 +245,18 @@ impl<E: Executor> Reactor<E> {
         Ok((unbatched_count, executed_ops, failures))
     }
 
-    pub(super) async fn simulate_raw(
-        &mut self,
-        raw: BitcoinTransaction,
-    ) -> Result<Option<Vec<OpWithResult>>> {
+    pub(super) async fn simulate_raw(&mut self, raw: Vec<u8>) -> Result<SimulationOutcome> {
         // Recognition belongs at admission, since the protocol may change while
         // an RPC request waits in the bounded simulation queue.
         let selection = self.simulation_selection().await?;
-        let Some(tx) = self.executor.parse_transaction(&selection, &raw) else {
-            return Ok(None);
+        let raw = match self.executor.decode_simulation(&selection, &raw) {
+            Ok(raw) => raw,
+            Err(error) => return Ok(Err(error)),
         };
-        self.simulate_selected(selection, tx).await.map(Some)
+        let Some(tx) = self.executor.parse_transaction(&selection, &raw) else {
+            return Ok(Err("Not a valid Kontor transaction".to_owned()));
+        };
+        self.simulate_selected(selection, tx).await.map(Ok)
     }
 
     fn simulation_selection(

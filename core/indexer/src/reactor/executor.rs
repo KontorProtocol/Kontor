@@ -51,6 +51,16 @@ fn recognize_mempool(
 /// `run_finality_checks`) calls these methods instead of directly manipulating state.
 #[allow(async_fn_in_trait)]
 pub(crate) trait Executor: Sync {
+    fn decode_simulation(
+        &self,
+        selection: &ExecutionSelection,
+        raw: &[u8],
+    ) -> std::result::Result<BitcoinTransaction, String> {
+        match selection.version() {
+            ExecutorVersion::LegacyP1 => transactions::decode_simulation(raw),
+        }
+    }
+
     fn is_batchable(&self, selection: &ExecutionSelection, tx: &Transaction) -> bool {
         match selection.version() {
             ExecutorVersion::LegacyP1 => transactions::is_batchable(&tx.inputs),

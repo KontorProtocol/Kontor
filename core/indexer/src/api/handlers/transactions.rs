@@ -5,6 +5,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use bitcoin::consensus::encode;
+use bitcoin::hex::HexSliceToBytesIter;
 use indexer_types::{
     BroadcastQuery, BroadcastResult, InspectedOp, OpWithResult, PaginatedResponse, TransactionHex,
     TransactionInfo,
@@ -153,13 +154,25 @@ pub async fn post_simulate(
     State(env): State<Env>,
     Json(TransactionHex { hex }): Json<TransactionHex>,
 ) -> Result<Vec<OpWithResult>> {
-    let btx = encode::deserialize_hex::<bitcoin::Transaction>(&hex)
-        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    let raw = HexSliceToBytesIter::new(&hex)
+        .map_err(encode::FromHexError::from)
+        .and_then(|bytes| {
+            bytes
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|_| {
+                    // P1 may report an earlier consensus error before reaching a bad
+                    // hex suffix. Preserve that error precedence for rejected syntax;
+                    // valid hex never decodes a Bitcoin transaction before admission.
+                    encode::deserialize_hex::<bitcoin::Transaction>(&hex)
+                        .expect_err("invalid hex cannot decode a transaction")
+                })
+        })
+        .map_err(|error| HttpError::BadRequest(error.to_string()))?;
     let (ret_tx, ret_rx) = tokio::sync::oneshot::channel();
-    env.simulate_tx.send((btx, ret_tx)).await?;
+    env.simulate_tx.send((raw, ret_tx)).await?;
     Ok(ret_rx
         .await?
         .map_err(|e| HttpError::BadRequest(e.to_string()))?
-        .ok_or_else(|| HttpError::BadRequest("Not a valid Kontor transaction".to_string()))?
+        .map_err(HttpError::BadRequest)?
         .into())
 }

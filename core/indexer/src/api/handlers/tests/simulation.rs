@@ -4,7 +4,8 @@ use anyhow::{Result, anyhow};
 use axum::{Router, http::StatusCode, routing::post};
 use axum_test::TestServer;
 use bitcoin::absolute::LockTime;
-use bitcoin::consensus::encode::serialize_hex;
+use bitcoin::consensus::encode::{deserialize_hex, serialize_hex};
+use bitcoin::consensus::serialize as serialize_bitcoin;
 use bitcoin::key::{Keypair, Secp256k1};
 use bitcoin::opcodes::all::OP_RETURN;
 use bitcoin::script::Builder;
@@ -18,6 +19,7 @@ use tokio::time::timeout;
 
 use super::new_test_env;
 use crate::api::handlers::post_simulate;
+use crate::protocol::v1::transactions::decode_simulation;
 use crate::test_utils::{PublicKey, build_inscription};
 
 fn transaction() -> Transaction {
@@ -62,7 +64,7 @@ fn inscription_input(payload: Vec<u8>) -> Result<TxIn> {
 }
 
 #[tokio::test]
-async fn malformed_bitcoin_simulation_is_bad_request_without_queueing() -> Result<()> {
+async fn malformed_hex_simulation_is_bad_request_without_queueing() -> Result<()> {
     let (mut env, _conn, _dir) = new_test_env().await?;
     let (sender, mut receiver) = mpsc::channel(1);
     env.simulate_tx = sender;
@@ -71,14 +73,17 @@ async fn malformed_bitcoin_simulation_is_bad_request_without_queueing() -> Resul
             .route("/simulate", post(post_simulate))
             .with_state(env),
     );
-    for hex in ["zz".to_owned(), "00".to_owned()] {
+    for hex in ["zz", "0", "000000000001ffzz"].map(str::to_owned) {
+        let expected = deserialize_hex::<Transaction>(&hex)
+            .unwrap_err()
+            .to_string();
         let response = timeout(Duration::from_secs(5), async {
             server.post("/simulate").json(&TransactionHex { hex }).await
         })
         .await?;
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error: ErrorResponse = serde_json::from_slice(response.as_bytes())?;
-        assert!(error.error.starts_with("Bad request: "));
+        assert_eq!(error.error, format!("Bad request: {expected}"));
         assert!(matches!(
             receiver.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
@@ -113,7 +118,8 @@ async fn simulation_preserves_raw_witnesses_and_reactor_error() -> Result<()> {
     let inspect_queue = async {
         let (queued, reply) = receiver.recv().await.expect("simulation queued");
         assert_eq!(
-            queued, raw,
+            queued,
+            serialize_bitcoin(&raw),
             "recognition must not discard any input at RPC arrival"
         );
         assert!(
@@ -149,8 +155,12 @@ async fn unrecognized_simulation_is_bad_request_after_admission() -> Result<()> 
     let pending = server.post("/simulate").json(&request);
     let reject_at_admission = async {
         let (queued, reply) = receiver.recv().await.expect("raw simulation queued");
-        assert_eq!(queued, raw);
-        assert!(reply.send(Ok(None)).is_ok());
+        assert_eq!(queued, serialize_bitcoin(&raw));
+        assert!(
+            reply
+                .send(Ok(Err("Not a valid Kontor transaction".to_owned())))
+                .is_ok()
+        );
     };
     let (response, ()) = timeout(Duration::from_secs(5), async {
         tokio::join!(async { pending.await }, reject_at_admission)
@@ -159,5 +169,41 @@ async fn unrecognized_simulation_is_bad_request_after_admission() -> Result<()> 
     assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
     let error: ErrorResponse = serde_json::from_slice(response.as_bytes())?;
     assert_eq!(error.error, "Bad request: Not a valid Kontor transaction");
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_bitcoin_is_rejected_after_admission_with_legacy_error() -> Result<()> {
+    let (mut env, _conn, _dir) = new_test_env().await?;
+    let (sender, mut receiver) = mpsc::channel(1);
+    env.simulate_tx = sender;
+    let server = TestServer::new(
+        Router::new()
+            .route("/simulate", post(post_simulate))
+            .with_state(env),
+    );
+    let mut trailing = serialize_bitcoin(&transaction());
+    trailing.push(0);
+    for raw in [vec![], vec![0], vec![0xff; 8], trailing] {
+        let hex = hex::encode(&raw);
+        let expected = deserialize_hex::<Transaction>(&hex)
+            .unwrap_err()
+            .to_string();
+        let request = TransactionHex { hex };
+        let pending = server.post("/simulate").json(&request);
+        let reject_at_admission = async {
+            let (queued, reply) = receiver.recv().await.expect("raw bytes queued");
+            assert_eq!(queued, raw);
+            let error = decode_simulation(&queued).unwrap_err();
+            assert!(reply.send(Ok(Err(error))).is_ok());
+        };
+        let (response, ()) = timeout(Duration::from_secs(5), async {
+            tokio::join!(async { pending.await }, reject_at_admission)
+        })
+        .await?;
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let error: ErrorResponse = serde_json::from_slice(response.as_bytes())?;
+        assert_eq!(error.error, format!("Bad request: {expected}"));
+    }
     Ok(())
 }
