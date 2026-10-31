@@ -145,7 +145,9 @@ def audit_inputs(graphs, output):
     return sets, versions
 
 
-def audit_final(executable, graphs, sets, versions, output, common):
+def audit_final(executable, graphs, sets, versions, output, common, kind="proof"):
+    if kind not in ("proof", "executor"):
+        raise RuntimeError(f"unknown final audit kind: {kind}")
     symbols = definitions(executable)
     attributed = {}
     for name, value in symbols.items():
@@ -167,10 +169,6 @@ def audit_final(executable, graphs, sets, versions, output, common):
             raise RuntimeError(f"ambiguous or unowned final definition: {name}: {matches}")
         attributed[name] = dict(value, owner=attribution)
     helpers = ["wasmtime_libunwind_" + suffix(version) for version in versions]
-    if any(name not in symbols for name in helpers):
-        raise RuntimeError("missing graph-private Wasmtime native helper")
-    if len({symbols[name]["address"] for name in helpers}) != len(helpers):
-        raise RuntimeError("Wasmtime graph-private helpers alias one address")
     crypto = []
     for graph in graphs:
         crypto.extend(graph["namespace"] + "_" + name for name in (
@@ -179,10 +177,48 @@ def audit_final(executable, graphs, sets, versions, output, common):
             "ring_core_0_17_14__CRYPTO_memcmp",
         ))
     local_symbols = definitions(executable, globals_only=False)
-    if not set(crypto) <= local_symbols.keys():
-        raise RuntimeError("a required native crypto definition disappeared at final link")
-    if len({local_symbols[name]["address"] for name in crypto}) != len(crypto):
-        raise RuntimeError("independent native crypto helpers alias one address")
+    if kind == "proof":
+        if any(name not in symbols for name in helpers):
+            raise RuntimeError("missing graph-private Wasmtime native helper")
+        if len({symbols[name]["address"] for name in helpers}) != len(helpers):
+            raise RuntimeError("Wasmtime graph-private helpers alias one address")
+        if not set(crypto) <= local_symbols.keys():
+            raise RuntimeError("a required native crypto definition disappeared at final link")
+        if len({local_symbols[name]["address"] for name in crypto}) != len(crypto):
+            raise RuntimeError("independent native crypto helpers alias one address")
+        observed_native = {name: local_symbols[name] for name in crypto}
+    else:
+        observed_native = {}
+        graph_addresses = []
+        for graph, names in zip(graphs, sets, strict=True):
+            prefix = graph["namespace"] + "_"
+            observed = {name: value for name, value in local_symbols.items()
+                        if name.startswith(prefix)}
+            unowned = observed.keys() - names
+            if unowned:
+                raise RuntimeError(f"unowned graph-private final definition: {sorted(unowned)[:100]}")
+            if any(value["address"] is None for value in observed.values()):
+                raise RuntimeError(f"graph-private final definition has no linked address: {graph['graph']}")
+            observed_native.update(observed)
+            for name, value in observed.items():
+                attributed.setdefault(name, dict(value, owner=graph["graph"]))
+            graph_addresses.append({value["address"] for value in observed.values()})
+        for index, addresses in enumerate(graph_addresses):
+            for previous in range(index):
+                if addresses & graph_addresses[previous]:
+                    raise RuntimeError("independent graph-private native definitions alias one address")
+        for name, names, graph in zip(helpers, sets, graphs, strict=True):
+            if name in local_symbols:
+                if name not in names or local_symbols[name]["address"] is None:
+                    raise RuntimeError(f"unowned graph-private Wasmtime native helper: {name}")
+                attributed.setdefault(name, dict(local_symbols[name], owner=graph["graph"]))
+        present_helpers = [name for name in helpers if name in local_symbols]
+        if len({local_symbols[name]["address"] for name in present_helpers}) != len(present_helpers):
+            raise RuntimeError("Wasmtime graph-private helpers alias one address")
     (output / "final-ownership.json").write_text(json.dumps(attributed, sort_keys=True) + "\n")
-    return {"wasmtime": {name: attributed[name] for name in helpers},
-            "crypto": {name: local_symbols[name] for name in crypto}}
+    if kind == "proof":
+        return {"wasmtime": {name: attributed[name] for name in helpers},
+                "crypto": observed_native}
+    return {"wasmtime": {name: attributed[name] for name in helpers if name in local_symbols},
+            "crypto": {name: observed_native[name] for name in crypto if name in observed_native},
+            "native": observed_native}

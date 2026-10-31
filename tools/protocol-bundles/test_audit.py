@@ -64,6 +64,54 @@ class Ownership(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "no linked address"):
                 audit_final(Path("not-linked"), [], [], [], Path("unused"), {})
 
+    def test_executor_final_audit_accepts_linked_native_subset_without_ring(self):
+        first = "kontor_first_blst_keygen"
+        second = "kontor_second_rustsecp256k1_v0_10_0_default_illegal_callback_fn"
+        local = {first: {"address": "1000", "kind": "t"},
+                 second: {"address": "2000", "kind": "t"}}
+        sets = [{first}, {second}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("audit.definitions", side_effect=lambda _path, globals_only=True:
+                       {} if globals_only else local):
+                result = audit_final(Path("linked-node"), self.graphs, sets,
+                                     ["51.0.0-dev", "51.0.0-kontor.1"], root, {}, kind="executor")
+            self.assertEqual(result["wasmtime"], {})
+            self.assertEqual(set(result["native"]), {first, second})
+            self.assertEqual(set(result["crypto"]), {first, second})
+            inventory = json.loads((root / "final-ownership.json").read_text())
+            self.assertEqual(inventory[first]["owner"], "first")
+            self.assertEqual(inventory[second]["owner"], "second")
+            with patch("audit.definitions", side_effect=lambda _path, globals_only=True:
+                       {"unowned_final": {"address": "3000", "kind": "T"}} if globals_only else local):
+                with self.assertRaisesRegex(RuntimeError, "ambiguous or unowned final definition"):
+                    audit_final(Path("linked-node"), self.graphs, sets,
+                                ["51.0.0-dev", "51.0.0-kontor.1"], root, {}, kind="executor")
+            with patch("audit.definitions", side_effect=lambda _path, globals_only=True:
+                       {} if globals_only else local):
+                with self.assertRaisesRegex(RuntimeError, "missing graph-private Wasmtime native helper"):
+                    audit_final(Path("linked-proof"), self.graphs, sets,
+                                ["51.0.0-dev", "51.0.0-kontor.1"], root, {})
+
+    def test_executor_final_audit_rejects_unowned_or_aliased_private_symbols(self):
+        first = "kontor_first_blst_keygen"
+        second = "kontor_second_blst_keygen"
+        sets = [{first}, {second}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for local, message in (
+                ({first: {"address": "1000", "kind": "t"},
+                  second: {"address": "1000", "kind": "t"}}, "alias one address"),
+                ({"kontor_first_unowned": {"address": "1000", "kind": "t"}}, "unowned graph-private"),
+            ):
+                with self.subTest(message=message):
+                    with patch("audit.definitions", side_effect=lambda _path, globals_only=True:
+                               {} if globals_only else local):
+                        with self.assertRaisesRegex(RuntimeError, message):
+                            audit_final(Path("linked-node"), self.graphs, sets,
+                                        ["51.0.0-dev", "51.0.0-kontor.1"], root, {},
+                                        kind="executor")
+
     def test_unknown_symbol_output_is_rejected(self):
         with patch("audit.inspect", return_value="plugin failed to decode object\n"):
             with self.assertRaisesRegex(RuntimeError, "unknown defined-symbol output"):
