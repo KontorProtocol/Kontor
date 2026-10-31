@@ -2,6 +2,7 @@ import importlib.util
 from copy import deepcopy
 import hashlib
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -273,6 +274,36 @@ class CompareTests(unittest.TestCase):
     def test_complete_matrix_passes(self):
         result = compare.compare(self.root, "success")
         self.assertEqual(len(result["cells"]), 6)
+        self.assertEqual(result["profile_policy"], "full")
+
+    def test_release_policy_requires_exact_three_cells_and_preserves_validation(self):
+        with self.assertRaises(ValueError):
+            compare.compare(self.root, "success", profiles="release")
+        for path in self.root.glob("*-dev"):
+            shutil.rmtree(path)
+        result = compare.compare(self.root, "success", "a" * 40, "b" * 64, profiles="release")
+        self.assertEqual(len(result["cells"]), 3)
+        self.assertEqual(result["profile_policy"], "release")
+        with self.assertRaises(ValueError):
+            compare.compare(self.root, "success", profiles="full")
+        for status in ("failure", "cancelled", "skipped"):
+            with self.assertRaises(ValueError):
+                compare.compare(self.root, status, profiles="release")
+        path, report = self.report("native-stack-ubuntu-24.04-release")
+        report["cases"][0]["observations"][0]["fuel"]["user"] += 1
+        write_evidence(path.parent, report)
+        with self.assertRaises(ValueError):
+            compare.compare(self.root, "success", profiles="release")
+
+    def test_profile_policy_cannot_infer_a_partial_matrix(self):
+        for policy in ("dev", "", "automatic"):
+            with self.assertRaises(ValueError):
+                compare.compare(self.root, "success", profiles=policy)
+        for path in self.root.glob("*-dev"):
+            shutil.rmtree(path)
+        shutil.rmtree(self.root / "native-stack-ubuntu-24.04-release")
+        with self.assertRaises(ValueError):
+            compare.compare(self.root, "success", profiles="release")
 
     def test_missing_or_duplicate_cell_rejected(self):
         (self.root / "native-stack-ubuntu-24.04-dev" / "qualification.json").unlink()

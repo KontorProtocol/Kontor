@@ -3,7 +3,7 @@
 ## Automatic qualification scope
 
 Every PR runs the lightweight `Stack qualification change scope` job. Full
-qualification runs when the Git diff touches runtime/ownership, retained protocol
+release qualification and bounded dev smoke run when the Git diff touches runtime/ownership, retained protocol
 code, storage or canonical execution, pooled contract/signer entrypoints, shared
 execution crates, native/test contracts, protocol bundles, or qualification tools.
 Cargo manifests/locks, build scripts, Cargo configuration and Rust toolchain files
@@ -11,20 +11,38 @@ also trigger it. The authoritative selection is
 [`stack_qualification_scope.py`](../ci/stack_qualification_scope.py).
 
 Unrelated documentation, client/mobile code, read-only API presentation, logging,
-metrics and advisory-exception changes retain ordinary CI without the six-cell
-stack matrix. This is a change-scope decision, not a reuse of old reports as new
+metrics and advisory-exception changes retain ordinary CI without the stack qualification
+matrix. This is a change-scope decision, not a reuse of old reports as new
 qualification. Extend the selector when execution inputs move to a new location.
 
 Selection compares the complete PR diff from its merge base (or the full push
 range on main), including removed paths and both sides of renames. Missing Git
-history selects full qualification. A failed selection job cannot produce a
-successful aggregate comparison. Existing matrix cases, strict comparisons and
-failure behavior are unchanged. There are currently no GitHub required status
+history selects release qualification plus dev smoke. A failed selection job cannot
+produce a successful aggregate comparison. Release cases and strict semantic
+comparisons remain unchanged. There are currently no GitHub required status
 checks configured on main; if added, require the scope job and aggregate comparison,
 allowing the aggregate's intentional skip for unrelated changes.
 
-Use the workflow's **Run workflow**, stage **qualify**, to force the complete matrix
-on a chosen ref. Other manual S2 stages retain their existing behavior. The
+Automatic runs fully qualify release builds on Linux x86-64, Linux ARM64 and
+macOS ARM64. Dev builds on those platforms run the eight existing tests listed in
+`dev_smoke.py`, covering paid-call settlement, inherited yield policy, nested
+cancellation, canonical drainage, Store admission and shared memory accounting.
+They do not discover stack boundaries or run deep-chain sweeps. Each test has a
+180-second process timeout and must report exactly one passing test. Evidence
+binds the source, lockfile, compiler host, binary and Cargo/feature/test logs.
+Ordinary `ci.yml` tests use release mode and do not substitute for this dev smoke.
+Smoke is regression coverage, not proof of dev/release boundary equivalence.
+
+The aggregate requires an explicit profile policy: exactly three release reports
+plus all three dev smoke reports, or exactly six full qualification reports.
+Missing artifacts, failed upstream jobs and incomplete smoke logs fail the gate.
+It never infers required coverage from the reports that happen to be present.
+
+Use the workflow's **Run workflow**, stage **qualify**, profiles **full**, to run
+exhaustive dev/release qualification on a chosen ref when a compiler, engine or
+other relevant change warrants it. Profiles **release** runs the normal release
+qualification plus dev smoke. Full dev qualification is manual, not scheduled.
+Other manual S2 stages retain their existing behavior. The
 operator's accepted prelaunch performance disposition remains separate: this
 workflow checks bounded correctness and cross-platform agreement, not throughput.
 
@@ -627,9 +645,9 @@ The Rust worker adaptively finds adjacent boundaries for plain recursion and rec
 
 Schema 6 retains each complete process transcript plus separate extracted sample logs, all covered by a SHA-256 manifest. The driver requires a clean source worktree and verifies that the source head and test-binary hash stay fixed throughout capture. The comparator verifies the extraction against the complete transcript, ordered sample identities, the terminal summary and successful test completion. It also requires owned controls at the discovered boundary depths: canonical roots for paid, system, and Core calls, and a pooled read-only API root for views. The owned reports record the root policy and peak registered Stores; the comparator checks output, receipts, gas, fuel, and rollback against the unowned controls. A signal, timeout, missing sample, failed reset or differing fresh-control result fails qualification without retries. The original scalar probe remains available by invoking the ignored Rust test without `KONTOR_STACK_MODE`; CI uses only the worker/control flow.
 
-The GitHub Actions workflow collects Linux x86-64, Linux ARM64, and macOS ARM64 results in development and release profiles. `compare.py` requires the exact six cells, successful qualification jobs, matching source and lockfile hashes, the approved Wasmtime revision, the Pulley target, the effective stack settings, adjacent repeated stack boundaries, and matching observations. It also checks the root-inclusive 64-Store success and 65-Store rejection in the stack probe. The paid, view, and Core chain fixture runs both unowned and owned 64/65-Store boundary controls. Five existing ownership lifecycle tests cover nested cancellation, API yielding, canonical and simulation no-yield policy, and canonical drain in every cell. The fixed single-frame check is a bounded probe; a passing result does not prove that larger frames are safe.
+The manual full workflow collects Linux x86-64, Linux ARM64, and macOS ARM64 results in development and release profiles. Automatic qualification uses the three release cells and separate bounded dev smoke described above. `compare.py` requires the exact cells selected by its explicit profile policy, successful qualification jobs, matching source and lockfile hashes, the approved Wasmtime revision, the Pulley target, the effective stack settings, adjacent repeated stack boundaries, and matching observations. It also checks the root-inclusive 64-Store success and 65-Store rejection in the stack probe. The paid, view, and Core chain fixture runs both unowned and owned 64/65-Store boundary controls. Five existing ownership lifecycle tests cover nested cancellation, API yielding, canonical and simulation no-yield policy, and canonical drain in every cell. The fixed single-frame check is a bounded probe; a passing result does not prove that larger frames are safe.
 
-Run the comparator's negative controls with `python3 -m unittest discover -s tools/native-stack -p 'test_*.py'`. For full qualification, use the workflow, which preserves the Cargo JSON build log in each evidence directory and supplies the separate chain-matrix log to the driver. A selected local `--case` run is diagnostic and cannot satisfy the six-cell comparator. The historical results in `qualification-results.md` use the earlier async guest fixture and are context only. The synchronous fixture requires a fresh six-cell qualification before S2 can merge.
+Run the comparator's negative controls with `python3 -m unittest discover -s tools/native-stack -p 'test_*.py'`. For full qualification, use the workflow, which preserves the Cargo JSON build log in each evidence directory and supplies the separate chain-matrix log to the driver. A selected local `--case` run is diagnostic and cannot satisfy either full qualification policy. The historical results in `qualification-results.md` use the earlier async guest fixture and are context only. The synchronous fixture requires a fresh six-cell qualification before S2 can merge.
 
 The synchronous probe's compressed SHA-256 is `e396317b4eb14c9a29d47acbe8a9f7b0e29770d47e7df53e4bed12d5c5bfce50`. Its exact encoder inventory is `encoder-inventory/inventory-s2-stack-probe.tsv`, with three embedded modules and zero core or component starts.
 

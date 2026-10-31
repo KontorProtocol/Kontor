@@ -362,7 +362,7 @@
     },
     "production_qualification": {
       "path": "tools/native-stack/compare.py",
-      "sha256": "94516b7406eeed7de2fe998e34ec5a0028bb3fe9dbc1abc345366da76972d713"
+      "sha256": "272beba96133b5d06c627e15db51520582352876c5313701d6e149215042f57f"
     },
     "proxy": {
       "path": "test-contracts/binaries/proxy.wasm.br",
@@ -374,7 +374,7 @@
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "e9a85346c7e600a9ee452113ef3eaf5fe656ef2324c1160127edd16b9bfcc4a2"
+      "sha256": "e74893176e5e9a26fb87c76d36fedbd94e5510b806e43469ea48958ce98e717e"
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -554,7 +554,7 @@
     },
     "suite_dispatch_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "e9a85346c7e600a9ee452113ef3eaf5fe656ef2324c1160127edd16b9bfcc4a2"
+      "sha256": "e74893176e5e9a26fb87c76d36fedbd94e5510b806e43469ea48958ce98e717e"
     },
     "suite_registry_builder": {
       "path": "tools/native-stack/resource_suite_registry.py",

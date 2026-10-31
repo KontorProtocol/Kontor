@@ -43,6 +43,14 @@ class ScopeTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(scope.relevant(path))
 
+    def test_profile_policy_requires_explicit_manual_full_request(self):
+        self.assertEqual(scope.profile_policy("pull_request", {"inputs": {"profiles": "full"}}), "release")
+        self.assertEqual(scope.profile_policy("push", {}), "release")
+        self.assertEqual(scope.profile_policy("workflow_dispatch", {}), "release")
+        self.assertEqual(scope.profile_policy("workflow_dispatch", {"inputs": {"profiles": "full"}}), "full")
+        with self.assertRaises(ValueError):
+            scope.profile_policy("workflow_dispatch", {"inputs": {"profiles": "typo"}})
+
     def test_manual_and_unknown_scope_require_full_run(self):
         self.assertTrue(scope.select("workflow_dispatch", {}, Path.cwd())["required"])
         self.assertTrue(scope.select("unknown", {}, Path.cwd())["required"])
@@ -125,7 +133,7 @@ class GitDiffTests(unittest.TestCase):
             env={**os.environ, "GITHUB_EVENT_PATH": str(event), "GITHUB_EVENT_NAME": "pull_request", "GITHUB_OUTPUT": str(output)},
             text=True, capture_output=True, check=True,
         )
-        self.assertEqual(output.read_text(), "required=false\n")
+        self.assertEqual(output.read_text(), "required=false\nprofile_policy=release\n")
         self.assertEqual(json.loads(result.stdout)["reason"], "no stack qualification inputs changed")
 
 

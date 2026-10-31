@@ -460,13 +460,15 @@ def validate_report(path, cell):
     }
 
 
-def compare(directory, upstream_status, source_sha=None, lockfile_sha256=None, component_hashes=None):
+def compare(directory, upstream_status, source_sha=None, lockfile_sha256=None, component_hashes=None, profiles="full"):
     check(upstream_status == "success", f"upstream qualification jobs: {upstream_status}")
+    check(profiles in {"release", "full"}, "unknown qualification profile policy")
+    expected = {key: cell for key, cell in CELLS.items() if profiles == "full" or key.endswith("-release")}
     directories = {path.name for path in directory.iterdir() if path.is_dir()}
-    check(directories == set(CELLS), f"cell keys differ: missing={sorted(set(CELLS) - directories)} extra={sorted(directories - set(CELLS))}")
+    check(directories == set(expected), f"cell keys differ: missing={sorted(set(expected) - directories)} extra={sorted(directories - set(expected))}")
     reports = {}
     cases = {}
-    for artifact, cell in sorted(CELLS.items()):
+    for artifact, cell in sorted(expected.items()):
         path = directory / artifact / "qualification.json"
         check(path.is_file(), f"missing report: {path}")
         reports[cell[0]], cases[cell[0]] = validate_report(path, cell)
@@ -490,7 +492,7 @@ def compare(directory, upstream_status, source_sha=None, lockfile_sha256=None, c
     baseline = next(iter(cases.values()))
     check(all(value == baseline for value in cases.values()), "cross-cell observations differ")
     return {
-        "schema_version": 6, "cells": sorted(reports),
+        "schema_version": 6, "cells": sorted(reports), "profile_policy": profiles,
         "source_sha": next(iter(reports.values()))["source_sha"],
         "lockfile_sha256": next(iter(reports.values()))["lockfile_sha256"],
         "wasmtime_revision": FORK_REVISION,
@@ -505,6 +507,8 @@ def main():
     parser.add_argument("--directory", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--upstream-status", required=True)
+    parser.add_argument("--profiles", choices=("release", "full"), default="full")
+    parser.add_argument("--smoke-directory", type=Path)
     parser.add_argument("--lockfile", type=Path, default=Path("core/Cargo.lock"))
     args = parser.parse_args()
     try:
@@ -514,8 +518,12 @@ def main():
             name: hashlib.sha256(Path(f"test-contracts/binaries/{name}.wasm.br").read_bytes()).hexdigest()
             for name in ("stack_probe", "error_test", "proxy")
         }
-        result = compare(args.directory, args.upstream_status, source_sha, lockfile_sha256, component_hashes)
-    except (ValueError, OSError, json.JSONDecodeError) as error:
+        result = compare(args.directory, args.upstream_status, source_sha, lockfile_sha256, component_hashes, args.profiles)
+        if args.profiles == "release":
+            from dev_smoke import validate_set
+            check(args.smoke_directory is not None, "release policy requires dev smoke evidence")
+            result["dev_smoke"] = validate_set(args.smoke_directory, source_sha, lockfile_sha256)
+    except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError) as error:
         print(f"native stack qualification rejected: {error}", file=sys.stderr)
         return 1
     args.output.parent.mkdir(parents=True, exist_ok=True)
