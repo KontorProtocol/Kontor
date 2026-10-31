@@ -1,7 +1,29 @@
 # Ownership comparison against the S2 baseline
 
-This test is prepared for the OWNERSHIP-1 acceptance check. It has not yet been
-run against the final qualified and merged S2 source.
+The OWNERSHIP-1 comparison passed on 31 October 2026 against the actual merged
+S2 implementation, `a94587744cd7bce30d6662fb4b32a7c65ce67912` (PR #613).
+The isolated oracle, `213acdecdac67b5cf8587910d9dacbb8f7fd9eb1`, differs from
+that merge only by the two shared test files. The ownership candidate was
+`ca86da1668ca7fe8898493d9093326a78144574b`.
+
+All eleven observation stages matched exactly, including the full typed table
+multisets. Simulation preserved state, and reconfirmation did not execute or
+charge the earlier batch transaction again. The baseline test took 62.99 seconds;
+the ownership comparison took 28.55 seconds. These durations describe correctness
+checks, not a performance comparison.
+
+The retained local evidence is
+`/home/wilfred/Documents/Kontor/.build-cache/ownership-final-parity-20261031/`.
+It includes the runner, build commands and logs, executable checksums, checksummed
+seed and signed transaction, both observation reports and `comparison.json`.
+The baseline report SHA-256 is
+`a869b5af2850ca04d93bd339374307eb5b89bbd5a63b9fde39b20ef4a9f35704`;
+the ownership report SHA-256 is
+`9871dd534c29c9f068016f34c2b6bc2daea96f82aa3c4e9b747edc1675a45452`.
+Their source fields differ as expected; their complete state observations agree.
+
+This is non-cancelled cross-revision evidence. Cancellation, resource cleanup,
+affected platform qualification and consolidated phase reviews remain separate.
 
 Reuse `confirmation_position_tests::parity::retained_executor_matches_baseline`
 from `c7554ca8`, with the fixture and comparison source unchanged. Apply the same
