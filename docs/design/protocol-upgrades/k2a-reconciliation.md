@@ -1,6 +1,21 @@
 # K2a storage reconciliation
 
-Status: preparation only. No P1 baseline freeze, phase acceptance, or merge.
+Status: K2a implementation and validation in progress. No final phase acceptance
+or merge. The checkpoint sections below record earlier states, not outstanding
+requirements when a later section explicitly closes them.
+
+Current integration base: merged OWNERSHIP-1 `dfacbefdac22b898c5bad5b2cae5e2513e147afd`,
+which includes S2. The selected executor, logical storage callbacks, retained native
+inputs and receipt-derived bootstrap recovery are implemented in this branch.
+Fresh genesis matches that base with identical explicit inputs across all 22 tables.
+Interrupted bootstrap recovery passes at publication, floor and validator boundaries.
+All-target indexer/testlib Clippy and 57 consolidated current-source regressions
+pass. The current executor also matches all 11 preserved execution-baseline stages.
+The two final phase reviews, current-head CI and verified merge remain required.
+The current review package is [K2a acceptance](k2a-acceptance.md).
+Independent production dependency isolation is K2b, not a capability of this phase.
+
+## Initial reconciliation checkpoint
 
 Base: `af04da0d992450905c54f8d8b903ea240820e8bb`, freshly fetched from
 origin/main on 29 October 2026. Reconciled source:
@@ -1356,4 +1371,8 @@ floor probes before retrying. Ordinary registration occurs at height one. This
 preserves the rejection, retry, and later-floor-update assertions without accepting
 non-bootstrap operations as a valid durable genesis prefix. The original failure
 is retained in `staking-restart.log`; the other three genesis staking tests passed.
-The corrected fixture's runtime validation remains pending at this checkpoint.
+The corrected fixture subsequently passed in the consolidated 57-test run at
+`c8e2c3a6` (152.36 seconds). The same source passed the preserved execution-state
+comparison in 28.44 seconds, matching all 11 baseline stages. Log/report hashes
+and exact source identities are recorded in
+`.build-cache/native-retention/validation-final.json`.
