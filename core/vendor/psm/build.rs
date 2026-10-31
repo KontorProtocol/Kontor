@@ -14,6 +14,16 @@ const NATIVE_SYMBOLS: [&str; 4] = [
     "rust_psm_on_stack",
 ];
 
+fn namespaced_symbol(namespace: &Namespace, symbol: &str) -> Option<String> {
+    if NATIVE_SYMBOLS.contains(&symbol) {
+        Some(namespace.symbol(symbol))
+    } else if symbol.starts_with('_') && NATIVE_SYMBOLS.contains(&&symbol[1..]) {
+        Some(format!("_{}", namespace.symbol(&symbol[1..])))
+    } else {
+        None
+    }
+}
+
 fn find_assembly(
     arch: &str,
     endian: &str,
@@ -121,7 +131,7 @@ fn main() {
         cfg.define(&*format!("CFG_TARGET_ENV_{}", env), None);
     }
 
-    let asm = if let Some(namespace) = namespace {
+    let asm = if let Some(namespace) = namespace.filter(|_| arch != "wasm32") {
         namespace.require_preprocessable_target();
         if asm.ends_with(".o") {
             panic!("namespaced psm requires assembly source, not a precompiled object");
@@ -134,15 +144,7 @@ fn main() {
             &cfg,
             &[PathBuf::from(asm)],
             &out_dir.join("kontor-assembly"),
-            |symbol| {
-                if NATIVE_SYMBOLS.contains(&symbol) {
-                    Some(namespace.symbol(symbol))
-                } else if symbol.starts_with('_') && NATIVE_SYMBOLS.contains(&&symbol[1..]) {
-                    Some(format!("_{}", namespace.symbol(&symbol[1..])))
-                } else {
-                    None
-                }
-            },
+            |symbol| namespaced_symbol(&namespace, symbol),
         )
         .expect("failed to namespace psm assembly");
         generated
