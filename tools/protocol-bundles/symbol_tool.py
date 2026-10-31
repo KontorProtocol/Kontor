@@ -49,6 +49,21 @@ def archive_member_bytes(path, record):
     if not label.startswith(archive_prefix) or not label.endswith(")"):
         raise RuntimeError(f"object is not an archive member: {label}")
     member = label[len(archive_prefix):-1]
+    return archive_member(path, member)
+
+
+def archive_members(path):
+    command = [str(executable().with_name("llvm-ar")), "t", str(path)]
+    result = subprocess.run(command, text=True, capture_output=True)
+    if result.returncode:
+        raise RuntimeError(f"archive listing failed: {command}\n{result.stderr}")
+    members = result.stdout.splitlines()
+    if not members or len(members) != len(set(members)):
+        raise RuntimeError(f"archive has missing or duplicate member names: {path}")
+    return members
+
+
+def archive_member(path, member):
     command = [str(executable().with_name("llvm-ar")), "p", str(path), member]
     result = subprocess.run(command, capture_output=True)
     if result.returncode:

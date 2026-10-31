@@ -192,6 +192,47 @@ class Ownership(unittest.TestCase):
                         audit_inputs(self.graphs, root)
                     self.graphs[0]["packages"].pop()
 
+    def test_namespaced_native_helpers_and_references_remain_graph_private(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for graph in self.graphs:
+                prefix = graph["namespace"] + "_"
+                names = [prefix + name for name in ("rust_psm_on_stack", "rust_psm_replace_stack",
+                                                    "rust_psm_stack_direction", "rust_psm_stack_pointer",
+                                                    "cabi_realloc_wit_bindgen_0_63_0")]
+                source = "".join(f"int {name}(void) {{ return 1; }}\n" for name in names)
+                artifact = self.object(root, graph["graph"] + "_symbols", source)
+                caller = self.object(root, graph["graph"] + "_caller",
+                                     f"extern int {names[0]}(void); int {prefix}call(void) {{ return {names[0]}(); }}")
+                graph["artifacts"] = [{"path": str(artifact)}, {"path": str(caller)}]
+            sets, _ = audit_inputs(self.graphs, root)
+            self.assertFalse(sets[0] & sets[1])
+            for index, graph in enumerate(self.graphs):
+                references, _ = graph_references(graph, index, sets)
+                self.assertEqual(references, {graph["namespace"] + "_rust_psm_on_stack"})
+
+    def test_duplicate_psm_native_archive_must_match_embedded_object(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            objects = []
+            for index in (1, 2):
+                source_dir = root / str(index)
+                source_dir.mkdir()
+                objects.append(self.object(
+                    source_dir, "psm_native",
+                    f"int kontor_first_rust_psm_on_stack(void) {{ return {index}; }}"))
+            rlib = root / "libpsm-1234567890abcdef.rlib"
+            native = root / "libpsm_s.a"
+            subprocess.run(["ar", "crs", str(rlib), str(objects[0])], check=True)
+            subprocess.run(["ar", "crs", str(native), str(objects[0])], check=True)
+            self.graphs[0]["artifacts"] = [{"path": str(rlib)}]
+            self.graphs[0]["native_artifacts"] = [{"path": str(native)}]
+            audit_inputs(self.graphs, root)
+            native.unlink()
+            subprocess.run(["ar", "crs", str(native), str(objects[1])], check=True)
+            with self.assertRaisesRegex(RuntimeError, "psm native archive copies differ"):
+                audit_inputs(self.graphs, root)
+
     def object(self, root, name, source):
         path = root / (name + ".c")
         path.write_text(source)

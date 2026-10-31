@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import sys
 
-from symbol_tool import inspect, object_records, section_bytes
+from symbol_tool import archive_member, archive_members, inspect, object_records, section_bytes
 
 GDB_SCRIPT = "__rustc_debug_gdb_scripts_section__"
 GDB_PAYLOAD = b"\x01gdb_load_rust_pretty_printers.py\x00"
@@ -97,6 +97,24 @@ def owner(name, graph, version, path=None, value=None):
     raise RuntimeError(f"unowned native input definition in {graph['graph']}: {name}")
 
 
+def verify_psm_archive_copies(graph):
+    rlibs = [Path(item["path"]) for item in graph["artifacts"]
+             if re.fullmatch(r"libpsm-[0-9a-f]{16}\.rlib", Path(item["path"]).name)]
+    archives = [Path(item["path"]) for item in graph["native_artifacts"]
+                if Path(item["path"]).name == "libpsm_s.a"]
+    if not rlibs and not archives:
+        return
+    if len(rlibs) != 1 or len(archives) != 1:
+        raise RuntimeError(f"expected one psm rlib and native archive in {graph['graph']}")
+    members = archive_members(archives[0])
+    if len(members) != 1 or not members[0].endswith(".o"):
+        raise RuntimeError(f"unexpected psm native archive members: {archives[0]}")
+    if archive_members(rlibs[0]).count(members[0]) != 1:
+        raise RuntimeError(f"psm native object missing from rlib: {rlibs[0]}")
+    if archive_member(rlibs[0], members[0]) != archive_member(archives[0], members[0]):
+        raise RuntimeError(f"psm native archive copies differ in {graph['graph']}")
+
+
 def audit_inputs(graphs, output):
     versions = [next(p["version"] for p in graph["packages"] if p["name"] == "wasmtime") for graph in graphs]
     if len(set(versions)) != len(graphs) or len({suffix(v) for v in versions}) != len(graphs):
@@ -115,6 +133,7 @@ def audit_inputs(graphs, output):
             all_names.update(symbols)
             inventory.append({"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                               "definitions": symbols})
+        verify_psm_archive_copies(graph)
         sets.append(all_names)
         inventories.append({"graph": graph["graph"], "inputs": inventory})
     for index, names in enumerate(sets):
