@@ -200,12 +200,12 @@ async fn run_case(batched: bool) -> Result<()> {
             assert_eq!(row.batch_height, Some(1));
             assert_eq!(row.confirmed_height, None);
             assert_eq!(get_confirmation_position(&conn, &txid).await?, None);
-            assert_successful_write(&mut reactor.runtime, &txid, &address).await?;
+            assert_successful_write(&mut *reactor.test_runtime().await, &txid, &address).await?;
         }
         let before_confirmation = effects(&conn).await?;
         let block = confirmation_block(&raw, 2)?;
         let (count, ops, failures) = reactor
-            .execute_block(
+            .execute_block_unit(
                 &reactor
                     .select_executor(ApplicationPosition::Block {
                         height: block.height,
@@ -225,7 +225,7 @@ async fn run_case(batched: bool) -> Result<()> {
         assert_eq!(row.confirmed_height, Some(2));
         assert_eq!(row.tx_index, Some(0));
         assert_eq!(get_confirmation_position(&conn, &txid).await?, Some(2));
-        assert_successful_write(&mut reactor.runtime, &txid, &address).await?;
+        assert_successful_write(&mut *reactor.test_runtime().await, &txid, &address).await?;
         let applied = effects(&conn).await?;
         assert_ne!(applied, original);
         if batched {
@@ -258,7 +258,7 @@ async fn run_case(batched: bool) -> Result<()> {
             let replacement = confirmation_block(&raw, 4)?;
             assert_ne!(replacement.hash, block.hash);
             let (count, ops, _) = reactor
-                .execute_block(
+                .execute_block_unit(
                     &reactor
                         .select_executor(ApplicationPosition::Block {
                             height: replacement.height,

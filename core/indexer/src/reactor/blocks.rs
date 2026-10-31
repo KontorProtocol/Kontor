@@ -1,5 +1,4 @@
 use std::future::Future;
-use std::mem;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
@@ -11,15 +10,16 @@ use crate::bitcoin_follower::block::BlockInput;
 use crate::consensus::finality_types::StateEvent;
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
-    confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
-    insert_block_execution_usage, insert_transaction, select_block_at_height, select_block_latest,
+    confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
+    select_block_at_height, select_block_latest,
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
-use crate::protocol::coordinator::linked::{PreparedBlock, PreparedTransaction};
+use crate::protocol::coordinator::linked::{self, PreparedBlock, PreparedTransaction};
 use crate::protocol::coordinator::minimum_prune_retention_blocks;
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
 };
+use crate::runtime::ownership::adapter::HostFailure;
 use crate::test_utils::new_mock_block_hash;
 
 use super::consensus_state;
@@ -76,14 +76,9 @@ impl<E: Executor> Reactor<E> {
         // The `blocks` cascade + the off-checkpoint footprint-cache reversal run
         // together in one savepoint (capture-before, recompute-after enforced inside),
         // so a crash can't leave the cache durably stale.
-        self.runtime
-            .storage
-            .rollback_with_footprint(height)
+        self.maintain_executor(Some(height))
             .await
             .context("rollback_with_footprint failed")?;
-        // Cascade-deleted contracts free their ids for reuse by replayed
-        // publishes; drop cached components so none is served stale WASM.
-        self.runtime.component_cache.clear();
         self.last_height = height;
 
         // Drop candidates validated against the old tip. An in-flight `IoJob` is
@@ -176,7 +171,7 @@ impl<E: Executor> Reactor<E> {
         selection: &ExecutionSelection,
         block: &PreparedBlock,
     ) -> Result<(usize, u64, Vec<Vec<Vec<Option<String>>>>)> {
-        selection.ensure_block_execution(self.runtime.network, block.height, block.hash)?;
+        selection.ensure_block_execution(self.network, block.height, block.hash)?;
         insert_block(
             &self.db_conn(),
             BlockRow::builder()
@@ -233,7 +228,14 @@ impl<E: Executor> Reactor<E> {
 
             let tx_failures = self
                 .executor
-                .execute_prepared(selection, &mut self.runtime, block.height, tx_id, t)
+                .execute_prepared(
+                    selection,
+                    &self.session,
+                    self.network,
+                    block.height,
+                    tx_id,
+                    t,
+                )
                 .await
                 .context("execute_transaction failed")?;
             failures.push(tx_failures);
@@ -264,7 +266,7 @@ impl<E: Executor> Reactor<E> {
         &self,
     ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
         let conn = self.db_conn();
-        let network = self.runtime.network;
+        let network = self.network;
         async move {
             let tip = select_block_latest(&conn).await?;
             let height = tip.map_or(Ok(1), |row| {
@@ -304,41 +306,9 @@ impl<E: Executor> Reactor<E> {
         selection: ExecutionSelection,
         tx: PreparedTransaction,
     ) -> Result<Vec<OpWithResult>> {
-        let restore_height = self.runtime.storage.height;
-        let restore_context = self.runtime.storage.tx_context.clone();
-        let restore_output = self.runtime.previous_output;
-        let restore_data = self.runtime.op_return_data.clone();
-        let restore_simulating = self.runtime.simulating;
-        let mut lease = self
-            .owner_service
-            .begin_canonical(&mut self.runtime, true)
-            .await?;
-        let restore_ids = mem::take(&mut self.runtime.id_generation_counter);
-        let restore_results = mem::take(&mut self.runtime.result_id_counter);
-        self.runtime.simulating = true;
-        self.runtime
-            .storage
-            .savepoint()
-            .await
-            .context("Failed to begin simulation savepoint")?;
+        let lease = self.begin_unit(&selection, true).await?;
         let result = self.simulate_inner(&selection, tx).await;
-        lease.drain(&self.runtime).await?;
-        let rollback = self
-            .runtime
-            .storage
-            .rollback()
-            .await
-            .context("Failed to rollback simulation");
-        rollback?;
-        lease.complete(&mut self.runtime).await?;
-        self.runtime.simulating = restore_simulating;
-        self.runtime.storage.height = restore_height;
-        self.runtime.storage.tx_context = restore_context;
-        self.runtime.previous_output = restore_output;
-        self.runtime.op_return_data = restore_data;
-        self.runtime.id_generation_counter = restore_ids;
-        self.runtime.result_id_counter = restore_results;
-        result
+        self.finish_unit(lease, result, false).await
     }
 
     async fn simulate_inner(
@@ -372,14 +342,14 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("execute_block failed during simulation")?;
         let tx = &block.transactions[0];
-        let response = self
-            .runtime
-            .inspect_prepared(
-                &selection.envelope(),
-                tx.payload(selection, self.runtime.network)?,
-                tx.index,
-            )
-            .await?;
+        let response = (self.session.executor.operations.inspect)(
+            self.session.executor.owner.clone(),
+            selection.envelope(),
+            tx.payload(selection, self.network)?,
+            tx.index,
+        )
+        .await
+        .map_err(HostFailure::from)?;
         let mut results: Vec<OpWithResult> = serde_json::from_slice(&response)?;
 
         // Simulate's block has exactly one tx; failures[0] is the per-input
@@ -412,14 +382,7 @@ impl<E: Executor> Reactor<E> {
         selection: &ExecutionSelection,
         block: &PreparedBlock,
     ) -> Result<()> {
-        let previous = self.runtime.start_usage();
-        let result = self
-            .executor
-            .run_block_lifecycle(selection, &mut self.runtime, &block.header())
-            .await;
-        let usage = self.runtime.finish_usage(previous);
-        result?;
-        insert_block_execution_usage(&self.db_conn(), block.height, usage?).await
+        linked::run_block_lifecycle(&self.session, selection, self.network, &block.header()).await
     }
 
     /// Execute `block` and record the decision that certifies it in the SAME
@@ -471,68 +434,24 @@ impl<E: Executor> Reactor<E> {
             );
         }
 
-        let mut lease = self
-            .owner_service
-            .begin_canonical(&mut self.runtime, false)
-            .await?;
-        let selection = match self
+        let selection = self
             .select_executor(ApplicationPosition::Block {
                 height,
                 hash,
                 consensus_height: decision.consensus_height.as_u64(),
             })
-            .await
-        {
-            Ok(selection) => selection,
-            Err(error) => {
-                lease.drain(&self.runtime).await?;
-                lease.complete(&mut self.runtime).await?;
-                return Err(error);
-            }
-        };
-        let block = match self
+            .await?;
+        let lease = self.begin_unit(&selection, false).await?;
+        let prepared = self
             .executor
             .prepare_block(&self.recognizer, &selection, block)
-            .await
-        {
+            .await;
+        let block = match prepared {
             Ok(block) => block,
-            Err(error) => {
-                lease.drain(&self.runtime).await?;
-                lease.complete(&mut self.runtime).await?;
-                return Err(error);
-            }
+            Err(error) => return self.finish_unit(lease, Err(error), false).await,
         };
-        self.runtime
-            .storage
-            .savepoint()
-            .await
-            .context("Failed to begin block transaction")?;
-
-        // Everything up to the commit is one transaction, rolled back explicitly
-        // on any error rather than left open for process teardown to discard.
-        // `last_height`/`last_hash` advance only after the commit, so a failed
-        // block leaves no trace in memory either.
         let txn = self.block_txn(&selection, &block, decision).await;
-        lease.drain(&self.runtime).await?;
-        let (unbatched_count, executed_ops) = match txn {
-            Ok(counts) => counts,
-            Err(e) => {
-                self.runtime
-                    .storage
-                    .rollback()
-                    .await
-                    .context("Failed to roll back block transaction")?;
-                lease.complete(&mut self.runtime).await?;
-                return Err(e);
-            }
-        };
-
-        self.runtime
-            .storage
-            .commit()
-            .await
-            .context("Failed to commit block transaction")?;
-        lease.complete(&mut self.runtime).await?;
+        let (unbatched_count, executed_ops) = self.finish_unit(lease, txn, true).await?;
 
         self.last_height = height;
         self.last_hash = Some(hash);
@@ -633,7 +552,7 @@ impl<E: Executor> Reactor<E> {
         // Best-effort GC: a prune failure must NOT fail the block. On error we leave
         // `prune_watermark` unadvanced so the same band `(w_prev, w]` retries next
         // block (the band query is idempotent, so the catch-up is harmless).
-        match self.runtime.storage.prune(w_prev, w).await {
+        match self.prune_state(w_prev, w).await {
             Ok(deleted) => {
                 self.prune_watermark = w; // persisted in the same txn as the deletes
                 if deleted > 0 {
@@ -658,11 +577,11 @@ impl<E: Executor> Reactor<E> {
     /// shrinks it back when the live set has shrunk. Cheap when there's nothing to
     /// do (a single `freelist_count` read).
     async fn maybe_vacuum(&mut self) -> Result<()> {
-        let freelist = self.runtime.storage.freelist_count().await?;
+        let freelist = self.freelist_count().await?;
         let Some(pages) = vacuum_pages_to_reclaim(freelist) else {
             return Ok(());
         };
-        self.runtime.storage.incremental_vacuum(pages).await?;
+        self.vacuum(pages).await?;
         debug!(freelist, reclaimed_pages = pages, "incremental_vacuum");
         Ok(())
     }

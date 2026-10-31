@@ -7,12 +7,49 @@ use super::bundle_session::{BundleSession, infrastructure};
 use super::{ContractAddress, ExecutionError, Runtime};
 use crate::protocol::execution::SelectionEnvelope;
 use crate::protocol::operations::{
-    BeginUnitCall, CommitteeCall, ContractWitCall, LifecycleCall, SessionOwner, ViewCall,
+    BeginUnitCall, CommitteeCall, ContractWitCall, LifecycleCall, MaintenanceCall, SessionOwner,
+    ViewCall,
 };
 use crate::protocol::v1::committee::derive_committee;
 use crate::protocol::v1::lifecycle::run_block_lifecycle;
 
 impl BundleSession {
+    pub(crate) fn maintenance(self: &Arc<Self>) -> MaintenanceCall {
+        let expected = self.clone();
+        Arc::new(move |opaque, selection| {
+            let session = expected.clone();
+            Box::pin(async move {
+                session.verify_operation_owner(opaque)?;
+                let mut runtime = session.runtime.lock().await;
+                runtime
+                    .verify_bundle_operation(&selection, 6)
+                    .map_err(infrastructure)?;
+                let runtime = runtime.bind_selection(&selection).map_err(infrastructure)?;
+                if runtime.storage.savepoint_stack.is_empty().await {
+                    return Err((2, "maintenance requires an open canonical unit".into()));
+                }
+                match selection.3 {
+                    (6, height, None, 1) => {
+                        runtime
+                            .storage
+                            .rollback_with_footprint(height)
+                            .await
+                            .map_err(infrastructure)?;
+                        runtime.component_cache.clear();
+                        Ok(())
+                    }
+                    (6, 0, None, 0) => runtime
+                        .storage
+                        .footprint()
+                        .reconstruct()
+                        .await
+                        .map_err(|error| infrastructure(error.into())),
+                    _ => Err((2, "invalid maintenance selection".into())),
+                }
+            })
+        })
+    }
+
     pub(crate) fn lifecycle(self: &Arc<Self>) -> LifecycleCall {
         let expected = self.clone();
         Arc::new(move |opaque, selection| {
@@ -52,7 +89,7 @@ impl BundleSession {
                 runtime
                     .verify_bundle_operation(&selection, selection.3.0)
                     .map_err(infrastructure)?;
-                if !matches!(selection.3.0, 1 | 3 | 4 | 5) {
+                if !matches!(selection.3.0, 1 | 3 | 4 | 5 | 6) {
                     return Err((2, "executor unit requires a canonical selection".into()));
                 }
                 let runtime = runtime.bind_selection(&selection).map_err(infrastructure)?;

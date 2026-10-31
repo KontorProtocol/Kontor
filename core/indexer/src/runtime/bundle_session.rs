@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 use anyhow::{Error, Result, ensure};
 use bitcoin::OutPoint;
 use tokio::sync::Mutex;
+#[cfg(test)]
+use tokio::sync::MutexGuard;
 use wasmtime::component::ResourceTable;
 
 #[cfg(test)]
@@ -58,6 +60,11 @@ impl SimulationContext {
 }
 
 impl BundleSession {
+    #[cfg(test)]
+    pub(crate) async fn test_runtime(&self) -> MutexGuard<'_, Runtime> {
+        self.runtime.lock().await
+    }
+
     #[cfg(test)]
     pub(crate) async fn set_decode_gate(&self, gate: Arc<BlockingGate>) -> Result<()> {
         let mut runtime = self.runtime.lock().await;

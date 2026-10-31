@@ -180,7 +180,7 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
             )
             .await?;
         let (count, ops, errors) = reactor
-            .execute_block(
+            .execute_block_unit(
                 &reactor
                     .select_executor(ApplicationPosition::Block {
                         height: block.height,
@@ -211,7 +211,7 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
                 )
                 .await?;
             let (count, ops, _) = reactor
-                .execute_block(
+                .execute_block_unit(
                     &reactor
                         .select_executor(ApplicationPosition::Block {
                             height: replacement.height,

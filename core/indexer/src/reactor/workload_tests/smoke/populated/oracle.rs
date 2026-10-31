@@ -233,10 +233,10 @@ impl Before {
         txids: &[String],
         effects: &PaidEffects,
     ) -> Result<Self> {
-        self.account_paid(&mut reactor.runtime, rows, txids, effects)
-            .await?
-            .check_lifecycle(reactor, rows)
-            .await
+        let next = self
+            .account_paid(&mut *reactor.test_runtime().await, rows, txids, effects)
+            .await?;
+        next.check_lifecycle(reactor, rows).await
     }
 
     pub(super) async fn check_batch(
@@ -251,13 +251,21 @@ impl Before {
             "batch changed canonical height"
         );
         let next = self
-            .account_paid(&mut reactor.runtime, rows, txids, effects)
+            .account_paid(&mut *reactor.test_runtime().await, rows, txids, effects)
             .await?;
-        ensure!(token::total_supply(&mut reactor.runtime).await? == next.supply);
-        ensure!(escrow(&mut reactor.runtime, &staking_address()).await? == next.staking_escrow);
-        ensure!(escrow(&mut reactor.runtime, &storage_address()).await? == self.storage_escrow);
-        ensure!(reward_integer(&mut reactor.runtime, 14).await? == self.reward_index);
-        ensure!(reward_integer(&mut reactor.runtime, 16).await? == self.reward_remainder);
+        ensure!(token::total_supply(&mut *reactor.test_runtime().await).await? == next.supply);
+        ensure!(
+            escrow(&mut *reactor.test_runtime().await, &staking_address()).await?
+                == next.staking_escrow
+        );
+        ensure!(
+            escrow(&mut *reactor.test_runtime().await, &storage_address()).await?
+                == self.storage_escrow
+        );
+        ensure!(reward_integer(&mut *reactor.test_runtime().await, 14).await? == self.reward_index);
+        ensure!(
+            reward_integer(&mut *reactor.test_runtime().await, 16).await? == self.reward_remainder
+        );
         Ok(next)
     }
 
@@ -375,7 +383,7 @@ impl Before {
         let hash = reactor.last_hash.context("missing applied block hash")?;
         let mut next = self.clone();
         next.height = height;
-        let runtime = &mut reactor.runtime;
+        let runtime = &mut *reactor.test_runtime().await;
         ensure!(
             balance(runtime, HolderRef::XOnlyPubkey(self.payer.clone())).await?
                 == self.payer_balance

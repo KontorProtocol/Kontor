@@ -114,10 +114,10 @@ impl SimulationRequests {
         warm_cache: bool,
     ) -> Result<()> {
         let before = database_projection(&trial.db_conn()).await?;
-        let height = trial.runtime.storage.height;
+        let height = trial.test_runtime().await.storage.height;
         let tip = (trial.last_height, trial.last_hash);
         let expected_height = tip.0.checked_add(1).context("simulation height overflow")?;
-        ensure!(!trial.runtime.simulating);
+        ensure!(!trial.test_runtime().await.simulating);
         let mut warmed = Vec::new();
         if warm_cache {
             let conn = trial.db_conn();
@@ -132,12 +132,13 @@ impl SimulationRequests {
             // Populate only existing canonical IDs outside simulation. Simulation
             // must still never cache a speculative publication's reusable row ID.
             for id in &warmed {
-                trial.runtime.load_component(*id).await?;
+                trial.test_runtime().await.load_component(*id).await?;
             }
             for id in &warmed {
                 ensure!(
                     trial
-                        .runtime
+                        .test_runtime()
+                        .await
                         .component_cache
                         .get_admitted(id)
                         .await
@@ -158,12 +159,15 @@ impl SimulationRequests {
                     database_projection(&trial.db_conn()).await? == before,
                     "configured simulation persisted state, usage, fees or receipts"
                 );
-                ensure!(
-                    !trial.runtime.simulating
-                        && trial.runtime.storage.height == height
-                        && (trial.last_height, trial.last_hash) == tip,
-                    "configured simulation left speculative reactor context"
-                );
+                {
+                    let runtime = trial.test_runtime().await;
+                    ensure!(
+                        !runtime.simulating
+                            && runtime.storage.height == height
+                            && (trial.last_height, trial.last_hash) == tip,
+                        "configured simulation left speculative reactor context"
+                    );
+                }
                 ensure!(results.len() == self.operations_per_request);
                 for (index, result) in results.iter().enumerate() {
                     ensure!(

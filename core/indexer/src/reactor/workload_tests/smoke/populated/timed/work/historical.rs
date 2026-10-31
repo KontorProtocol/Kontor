@@ -50,25 +50,25 @@ impl HistoricalWork for TimedWork<'_> {
         self.pending.check_unconfirmed(self.reactor).await?;
         self.check_tracking(&self.tracked).await?;
         let tip = (self.reactor.last_height, self.reactor.last_hash);
-        let height = self.reactor.runtime.storage.height;
-        let context = self.reactor.runtime.storage.tx_context.clone();
-        let output = self.reactor.runtime.previous_output;
-        let op_return = self.reactor.runtime.op_return_data.clone();
-        let counters = (
-            self.reactor.runtime.id_generation_counter.get().await,
-            self.reactor.runtime.result_id_counter.get().await,
-        );
-        ensure!(
-            !self.reactor.runtime.simulating
-                && self.reactor.runtime.stack.is_empty().await
-                && self
-                    .reactor
-                    .runtime
-                    .storage
-                    .savepoint_stack
-                    .is_empty()
-                    .await
-        );
+        let height = self.reactor.test_runtime().await.storage.height;
+        let context = self.reactor.test_runtime().await.storage.tx_context.clone();
+        let output = self.reactor.test_runtime().await.previous_output;
+        let op_return = self.reactor.test_runtime().await.op_return_data.clone();
+        let counters = {
+            let runtime = self.reactor.test_runtime().await;
+            (
+                runtime.id_generation_counter.get().await,
+                runtime.result_id_counter.get().await,
+            )
+        };
+        {
+            let runtime = self.reactor.test_runtime().await;
+            ensure!(
+                !runtime.simulating
+                    && runtime.stack.is_empty().await
+                    && runtime.storage.savepoint_stack.is_empty().await
+            );
+        }
         let input = self
             .plan
             .requests
@@ -91,26 +91,23 @@ impl HistoricalWork for TimedWork<'_> {
             &database_projection(&self.reactor.db_conn()).await?,
         )?
         .check(&before)?;
-        ensure!(
-            (self.reactor.last_height, self.reactor.last_hash) == tip
-                && !self.reactor.runtime.simulating
-                && self.reactor.runtime.storage.height == height
-                && self.reactor.runtime.storage.tx_context == context
-                && self.reactor.runtime.previous_output == output
-                && self.reactor.runtime.op_return_data == op_return
-                && (
-                    self.reactor.runtime.id_generation_counter.get().await,
-                    self.reactor.runtime.result_id_counter.get().await
-                ) == counters
-                && self.reactor.runtime.stack.is_empty().await
-                && self
-                    .reactor
-                    .runtime
-                    .storage
-                    .savepoint_stack
-                    .is_empty()
-                    .await
-        );
+        {
+            let runtime = self.reactor.test_runtime().await;
+            ensure!(
+                (self.reactor.last_height, self.reactor.last_hash) == tip
+                    && !runtime.simulating
+                    && runtime.storage.height == height
+                    && runtime.storage.tx_context == context
+                    && runtime.previous_output == output
+                    && runtime.op_return_data == op_return
+                    && (
+                        runtime.id_generation_counter.get().await,
+                        runtime.result_id_counter.get().await
+                    ) == counters
+                    && runtime.stack.is_empty().await
+                    && runtime.storage.savepoint_stack.is_empty().await
+            );
+        }
         self.pending.check_unconfirmed(self.reactor).await?;
         self.check_tracking(&self.tracked).await?;
         let checked = Instant::now();

@@ -339,7 +339,7 @@ impl<'a> TimedWork<'a> {
         }
         self.plan.recipes[block]
             .check_slice(
-                &mut self.reactor.runtime,
+                &mut *self.reactor.test_runtime().await,
                 &all,
                 &roots,
                 &ExecutionSlice {
@@ -407,17 +407,20 @@ impl Work for TimedWork<'_> {
                         && *request == self.api_results.len()
                 );
                 ensure!(self.plan.api.instructions(*request)?.len() == *operations);
-                ensure!(!self.reactor.runtime.simulating && self.simulation.is_none());
+                ensure!(!self.reactor.test_runtime().await.simulating && self.simulation.is_none());
             }
         }
-        self.storage_height = self.reactor.runtime.storage.height;
-        self.transaction_context = self.reactor.runtime.storage.tx_context.clone();
-        self.previous_output = self.reactor.runtime.previous_output;
-        self.op_return_data = self.reactor.runtime.op_return_data.clone();
-        self.operation_counters = (
-            self.reactor.runtime.id_generation_counter.get().await,
-            self.reactor.runtime.result_id_counter.get().await,
-        );
+        self.storage_height = self.reactor.test_runtime().await.storage.height;
+        self.transaction_context = self.reactor.test_runtime().await.storage.tx_context.clone();
+        self.previous_output = self.reactor.test_runtime().await.previous_output;
+        self.op_return_data = self.reactor.test_runtime().await.op_return_data.clone();
+        self.operation_counters = {
+            let runtime = self.reactor.test_runtime().await;
+            (
+                runtime.id_generation_counter.get().await,
+                runtime.result_id_counter.get().await,
+            )
+        };
         self.tip = (self.reactor.last_height, self.reactor.last_hash);
         Checkpoint::capture(
             self.directory,
@@ -481,15 +484,16 @@ impl Work for TimedWork<'_> {
         // cache before its first canonical call. Keep prior execution entries,
         // and restore that cache even if an oracle returns an error.
         let execution_cache = mem::replace(
-            &mut self.reactor.runtime.component_cache,
+            &mut self.reactor.test_runtime().await.component_cache,
             self.observer_cache.clone(),
         );
         let cache_before = execution_cache.workload_metrics().await;
         let result = self.check_observed(event).await;
-        self.reactor.runtime.component_cache = execution_cache;
+        self.reactor.test_runtime().await.component_cache = execution_cache;
         ensure!(
             self.reactor
-                .runtime
+                .test_runtime()
+                .await
                 .component_cache
                 .workload_metrics()
                 .await
@@ -557,7 +561,7 @@ impl TimedWork<'_> {
                 )?;
                 files
                     .check(
-                        &mut self.reactor.runtime,
+                        &mut *self.reactor.test_runtime().await,
                         self.plan.recipes[*block].files()?,
                     )
                     .await?;
@@ -630,7 +634,7 @@ impl TimedWork<'_> {
                 )?;
                 files
                     .check(
-                        &mut self.reactor.runtime,
+                        &mut *self.reactor.test_runtime().await,
                         self.plan.recipes[*block].files()?,
                     )
                     .await?;
@@ -659,26 +663,23 @@ impl TimedWork<'_> {
                     results,
                 )?;
                 after.check(self.before.as_ref().context("missing API prestate")?)?;
-                ensure!(
-                    (self.reactor.last_height, self.reactor.last_hash) == self.tip
-                        && !self.reactor.runtime.simulating
-                        && self.reactor.runtime.storage.height == self.storage_height
-                        && self.reactor.runtime.storage.tx_context == self.transaction_context
-                        && self.reactor.runtime.previous_output == self.previous_output
-                        && self.reactor.runtime.op_return_data == self.op_return_data
-                        && (
-                            self.reactor.runtime.id_generation_counter.get().await,
-                            self.reactor.runtime.result_id_counter.get().await,
-                        ) == self.operation_counters
-                        && self.reactor.runtime.stack.is_empty().await
-                        && self
-                            .reactor
-                            .runtime
-                            .storage
-                            .savepoint_stack
-                            .is_empty()
-                            .await
-                );
+                {
+                    let runtime = self.reactor.test_runtime().await;
+                    ensure!(
+                        (self.reactor.last_height, self.reactor.last_hash) == self.tip
+                            && !runtime.simulating
+                            && runtime.storage.height == self.storage_height
+                            && runtime.storage.tx_context == self.transaction_context
+                            && runtime.previous_output == self.previous_output
+                            && runtime.op_return_data == self.op_return_data
+                            && (
+                                runtime.id_generation_counter.get().await,
+                                runtime.result_id_counter.get().await,
+                            ) == self.operation_counters
+                            && runtime.stack.is_empty().await
+                            && runtime.storage.savepoint_stack.is_empty().await
+                    );
+                }
                 api_result = Some(results.clone());
             }
         }

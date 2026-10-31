@@ -36,6 +36,8 @@ pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession
     let session = BundleSession::new(runtime);
     let operations = ExecutorOperations {
         recognize,
+        inspect: session.inspect(),
+        maintenance: session.maintenance(),
         transaction: session.transaction(),
         begin_unit: session.begin_unit(),
         lifecycle: session.lifecycle(),
@@ -340,7 +342,7 @@ pub(crate) async fn execute_transaction(
         (session.executor.operations.transaction)(
             session.executor.owner.clone(),
             selection.envelope(),
-            transaction.parsed.clone(),
+            transaction.payload(selection, network)?,
             tx_index,
             tx_id,
         )
@@ -562,6 +564,112 @@ mod tests {
             );
             assert_eq!(service.active_roots().await, 0);
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn maintenance_requires_selection_and_preserves_rollback_atomicity() -> Result<()> {
+        let (runtime, _dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
+            x_only_pubkey: random_x_only_pubkey(),
+            ed25519_pubkey: PrivateKey::from([7; 32]).public_key().as_bytes().to_vec(),
+            stake: Decimal::from("100"),
+        }])
+        .await?;
+        let conn = runtime.storage.conn.clone();
+        let before = lifecycle_state(&conn).await?;
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(2)
+                .hash(new_mock_block_hash(2))
+                .build(),
+        )
+        .await?;
+        let with_block = lifecycle_state(&conn).await?;
+        assert_ne!(before, with_block);
+        let session = LinkedSession::new(conn.clone(), link_runtime(runtime, true));
+        let service = OwnerService::new();
+        let maintenance = session.executor.operations.maintenance.clone();
+        let selection = select_legacy_p1(
+            &conn,
+            Network::Regtest,
+            ApplicationPosition::Maintenance {
+                rollback_height: Some(1),
+            },
+        )
+        .await?;
+        assert!(
+            maintenance(session.executor.owner.clone(), selection.envelope())
+                .await
+                .is_err()
+        );
+        for commit in [false, true] {
+            let capacity = service.reserve_root_capacity().await?;
+            let mut lease = service
+                .begin_linked_canonical_reserved(&session, capacity, selection.clone(), false)
+                .await?;
+            assert!(
+                maintenance(session.executor.owner.clone(), selection.envelope())
+                    .await
+                    .is_err()
+            );
+            begin_unit(&session, &selection, Network::Regtest).await?;
+            let mut changed_target = selection.envelope();
+            changed_target.3.1 = 0;
+            assert!(
+                maintenance(session.executor.owner.clone(), changed_target)
+                    .await
+                    .is_err()
+            );
+            let mut changed_purpose = selection.envelope();
+            changed_purpose.3 = (1, 0, None, 0);
+            assert!(
+                maintenance(session.executor.owner.clone(), changed_purpose)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(lifecycle_state(&conn).await?, with_block);
+            maintenance(session.executor.owner.clone(), selection.envelope())
+                .await
+                .map_err(HostFailure::from)?;
+            assert_eq!(lifecycle_state(&conn).await?, before);
+            lease.drain().await?;
+            lease.settle(commit).await?;
+            lease.complete().await?;
+            assert!(conn.is_autocommit());
+            assert_eq!(service.active_roots().await, 0);
+            assert_eq!(
+                lifecycle_state(&conn).await?,
+                if commit {
+                    before.clone()
+                } else {
+                    with_block.clone()
+                }
+            );
+        }
+        assert!(selection.verify_base(&conn).await.is_err());
+        let reconstruct = select_legacy_p1(
+            &conn,
+            Network::Regtest,
+            ApplicationPosition::Maintenance {
+                rollback_height: None,
+            },
+        )
+        .await?;
+        let capacity = service.reserve_root_capacity().await?;
+        let mut lease = service
+            .begin_linked_canonical_reserved(&session, capacity, reconstruct.clone(), false)
+            .await?;
+        begin_unit(&session, &reconstruct, Network::Regtest).await?;
+        maintenance(session.executor.owner.clone(), reconstruct.envelope())
+            .await
+            .map_err(HostFailure::from)?;
+        lease.drain().await?;
+        lease.settle(true).await?;
+        lease.complete().await?;
+        assert!(conn.is_autocommit());
+        assert_eq!(lifecycle_state(&conn).await?, before);
+        assert_eq!(service.active_roots().await, 0);
         Ok(())
     }
 

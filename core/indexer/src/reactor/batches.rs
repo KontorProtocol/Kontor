@@ -409,61 +409,56 @@ impl<E: Executor> Reactor<E> {
             parsed
         };
 
-        let mut lease = self
-            .owner_service
-            .begin_canonical(&mut self.runtime, false)
-            .await?;
-        self.runtime
-            .storage
-            .savepoint()
-            .await
-            .context("Failed to begin batch transaction")?;
-        selection.verify_base(&conn).await?;
-
-        insert_batch(
-            &conn,
-            consensus_height.as_u64(),
-            anchor_height,
-            &anchor_hash.to_string(),
-            certificate,
-            false,
-        )
-        .await
-        .context("Failed to insert batch")?;
-
-        // Store the certified txid list + raw txs for replay/sync recovery
-        self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
-            .await?;
-
-        for t in &parsed_txs {
-            let tx_id = insert_transaction(
+        let lease = self.begin_unit(&selection, false).await?;
+        let result = async {
+            insert_batch(
                 &conn,
-                indexer_types::TransactionRow::builder()
-                    .height(anchor_height)
-                    .batch_height(consensus_height.as_u64())
-                    .txid(t.txid.to_string())
-                    .build(),
+                consensus_height.as_u64(),
+                anchor_height,
+                &anchor_hash.to_string(),
+                certificate,
+                false,
             )
             .await
-            .context("Failed to insert transaction")?;
+            .context("Failed to insert batch")?;
 
-            // Canonical batch processing discards the per-op failure vec —
-            // deterministic op failures are already telemetered via warn! in
-            // execute_op. Only non-deterministic errors (Result::Err) abort.
-            let _failures = self
-                .executor
-                .execute_prepared(&selection, &mut self.runtime, anchor_height, tx_id, t)
+            // Store the certified txid list + raw txs for replay/sync recovery
+            self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
+                .await?;
+
+            for t in &parsed_txs {
+                let tx_id = insert_transaction(
+                    &conn,
+                    indexer_types::TransactionRow::builder()
+                        .height(anchor_height)
+                        .batch_height(consensus_height.as_u64())
+                        .txid(t.txid.to_string())
+                        .build(),
+                )
                 .await
-                .context("execute_transaction failed")?;
-        }
+                .context("Failed to insert transaction")?;
 
-        lease.drain(&self.runtime).await?;
-        self.runtime
-            .storage
-            .commit()
-            .await
-            .context("Failed to commit batch transaction")?;
-        lease.complete(&mut self.runtime).await?;
+                // Canonical batch processing discards the per-op failure vec —
+                // deterministic op failures are already telemetered via warn! in
+                // execute_op. Only non-deterministic errors (Result::Err) abort.
+                let _failures = self
+                    .executor
+                    .execute_prepared(
+                        &selection,
+                        &self.session,
+                        self.network,
+                        anchor_height,
+                        tx_id,
+                        t,
+                    )
+                    .await
+                    .context("execute_transaction failed")?;
+            }
+
+            Ok(())
+        }
+        .await;
+        self.finish_unit(lease, result, true).await?;
         // The in-memory finality obligation must match a persisted batch.
         let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
         self.consensus.unfinalized_batches.push(UnfinalizedBatch {

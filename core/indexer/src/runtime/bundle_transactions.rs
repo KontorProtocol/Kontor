@@ -8,7 +8,8 @@ use super::Runtime;
 use super::bundle_session::{BundleSession, infrastructure};
 use crate::protocol::execution::SelectionEnvelope;
 use crate::protocol::operations::{
-    RecognitionCall, RecognizedEnvelope, SessionOwner, TransactionCall, TransactionOutcome,
+    InspectCall, RecognitionCall, RecognizedEnvelope, SessionOwner, TransactionCall,
+    TransactionOutcome,
 };
 use crate::protocol::v1::{execution, inspection, transactions};
 
@@ -162,6 +163,27 @@ impl Runtime {
 }
 
 impl BundleSession {
+    pub(crate) fn inspect(self: &Arc<Self>) -> InspectCall {
+        let expected = self.clone();
+        Arc::new(move |opaque, selection, parsed, tx_index| {
+            let session = expected.clone();
+            Box::pin(async move {
+                session.verify_operation_owner(opaque)?;
+                let mut runtime = session.runtime.lock().await;
+                runtime
+                    .verify_bundle_operation(&selection, 5)
+                    .map_err(infrastructure)?;
+                if runtime.storage.savepoint_stack.is_empty().await {
+                    return Err((2, "inspection requires an open canonical unit".into()));
+                }
+                runtime
+                    .inspect_prepared(&selection, parsed, tx_index)
+                    .await
+                    .map_err(infrastructure)
+            })
+        })
+    }
+
     pub(crate) fn transaction(self: &Arc<Self>) -> TransactionCall {
         let expected = self.clone();
         Arc::new(move |opaque, selection, parsed, tx_index, tx_id| {

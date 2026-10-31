@@ -131,7 +131,8 @@ async fn block_penalties_converge_and_survive_rollback_and_runtime_reopen() -> R
         at_height(&mut runtime, 2015).await?;
         let mut reactor = reactor(runtime, &dir).await?;
         block(&mut reactor, 2016).await?;
-        let rt = &mut reactor.runtime;
+        let mut runtime_guard = reactor.test_runtime().await;
+        let rt = &mut *runtime_guard;
         let paid = sub_decimal(
             staking::get_staking_info(rt).await?.total_stake,
             validator.stake,
@@ -174,8 +175,10 @@ async fn block_penalties_converge_and_survive_rollback_and_runtime_reopen() -> R
             .hash;
         checkpoints.push(checkpoint.clone());
 
+        drop(runtime_guard);
         reactor.rollback(2015).await?;
-        let rt = &mut reactor.runtime;
+        let mut runtime_guard = reactor.test_runtime().await;
+        let rt = &mut *runtime_guard;
         assert_eq!(
             staking::get_stake(rt, &id.to_string())
                 .await?
@@ -197,6 +200,7 @@ async fn block_penalties_converge_and_survive_rollback_and_runtime_reopen() -> R
             filestorage::reward_balance(rt, id).await??,
             Decimal::default()
         );
+        drop(runtime_guard);
         block(&mut reactor, 2016).await?;
         assert_eq!(
             get_checkpoint_latest(&reactor.db_conn())
@@ -207,40 +211,50 @@ async fn block_penalties_converge_and_survive_rollback_and_runtime_reopen() -> R
         );
 
         // A fresh runtime must derive settlement/cleanup solely from persisted state.
-        let rt = &reactor.runtime;
-        reactor.runtime = Runtime::new_with(
-            rt.engine.clone(),
-            Runtime::new_linkers(&rt.engine)?,
-            rt.component_cache.clone(),
-            Storage::builder()
-                .height(2016)
-                .conn(rt.get_storage_conn())
-                .build(),
-        )
-        .await?;
-        let supply_before_claim = token::total_supply(&mut reactor.runtime).await?;
-        let burner_before_claim = token::balance(&mut reactor.runtime, HolderRef::Burner)
+        let replacement = {
+            let rt = reactor.test_runtime().await;
+            Runtime::new_with(
+                rt.engine.clone(),
+                Runtime::new_linkers(&rt.engine)?,
+                rt.component_cache.clone(),
+                Storage::builder()
+                    .height(2016)
+                    .conn(rt.get_storage_conn())
+                    .build(),
+            )
             .await?
-            .unwrap_or_default();
+        };
+        reactor.replace_test_runtime(replacement);
+        let supply_before_claim = token::total_supply(&mut *reactor.test_runtime().await).await?;
+        let burner_before_claim =
+            token::balance(&mut *reactor.test_runtime().await, HolderRef::Burner)
+                .await?
+                .unwrap_or_default();
         assert_eq!(
-            filestorage::claim_rewards(&mut reactor.runtime, &fixture.hosts[0].1).await??,
+            filestorage::claim_rewards(&mut *reactor.test_runtime().await, &fixture.hosts[0].1)
+                .await??,
             earned_before_exhaustion
         );
         let fees = sub_decimal(
-            token::balance(&mut reactor.runtime, HolderRef::Burner)
+            token::balance(&mut *reactor.test_runtime().await, HolderRef::Burner)
                 .await?
                 .unwrap_or_default(),
             burner_before_claim,
         )?;
         assert_eq!(
-            token::total_supply(&mut reactor.runtime).await?,
+            token::total_supply(&mut *reactor.test_runtime().await).await?,
             sub_decimal(supply_before_claim, fees)?
         );
         let topup = Decimal::from("10");
-        staking::add_stake(&mut reactor.runtime, &fixture.hosts[0].1, topup).await??;
+        staking::add_stake(
+            &mut *reactor.test_runtime().await,
+            &fixture.hosts[0].1,
+            topup,
+        )
+        .await??;
         block(&mut reactor, 2017).await?;
         assert_eq!(
-            staking::get_stake(&mut reactor.runtime, &id.to_string())
+            staking::get_stake(&mut *reactor.test_runtime().await, &id.to_string())
                 .await?
                 .unwrap()
                 .stake,
@@ -272,7 +286,8 @@ async fn exhausting_last_validator_commits_the_penalty_before_halting() -> Resul
     let error = block(&mut reactor, 2016).await.unwrap_err();
     assert!(format!("{error:#}").contains("validator set is empty"));
     assert_eq!(reactor.last_height, 2016);
-    let rt = &mut reactor.runtime;
+    let mut runtime_guard = reactor.test_runtime().await;
+    let rt = &mut *runtime_guard;
     assert!(staking::get_active_set(rt).await?.is_empty());
     // This block's ordering reward was credited and then burned with the bond.
     let storage_paid = storage_escrow(rt).await?;
@@ -334,7 +349,8 @@ async fn fractional_last_validator_leaves_consensus_but_keeps_storage_obligation
     let error = block(&mut reactor, 2016).await.unwrap_err();
     assert!(format!("{error:#}").contains("validator set is empty"));
     assert_eq!(reactor.last_height, 2016);
-    let rt = &mut reactor.runtime;
+    let mut runtime_guard = reactor.test_runtime().await;
+    let rt = &mut *runtime_guard;
     let remaining = staking::get_stake(rt, &node.to_string())
         .await?
         .unwrap()
@@ -356,15 +372,18 @@ async fn fractional_last_validator_leaves_consensus_but_keeps_storage_obligation
             .status,
         ChallengeStatus::Settled
     );
+    drop(runtime_guard);
     reactor.rollback(2015).await?;
     assert_eq!(
-        staking::get_staking_info(&mut reactor.runtime)
+        staking::get_staking_info(&mut *reactor.test_runtime().await)
             .await?
             .total_stake,
         bonded
     );
     assert_eq!(
-        staking::get_active_set(&mut reactor.runtime).await?.len(),
+        staking::get_active_set(&mut *reactor.test_runtime().await)
+            .await?
+            .len(),
         1
     );
     Ok(())

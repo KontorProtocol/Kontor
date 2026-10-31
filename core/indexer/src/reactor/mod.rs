@@ -21,6 +21,7 @@ pub mod mock_bitcoin;
 mod pruning_tests;
 #[cfg(test)]
 mod reactor_cluster_tests;
+mod session;
 #[cfg(test)]
 mod simulation_context_tests;
 #[cfg(test)]
@@ -47,7 +48,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use bitcoin::{BlockHash, Txid};
+use bitcoin::{BlockHash, Network, Txid};
 use malachitebft_app_channel::NetworkMsg;
 use malachitebft_app_channel::app::types::LocallyProposedValue;
 use malachitebft_core_types::{LinearTimeouts, Round};
@@ -59,13 +60,14 @@ use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
 use crate::protocol::coordinator::committee::build_validator_set;
-use crate::protocol::coordinator::linked::TransactionRecognizer;
+use crate::protocol::coordinator::linked::{self, TransactionRecognizer};
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
 };
 #[cfg(test)]
 use crate::protocol::v1::committee::stake_to_voting_power;
 use crate::runtime::ownership::OwnerService;
+use crate::runtime::pool::LinkedSession;
 use crate::stopper::ShutdownSignal;
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
@@ -135,7 +137,9 @@ pub struct PruneConfig {
 pub(crate) struct Reactor<E: Executor> {
     executor: E,
     recognizer: TransactionRecognizer,
-    runtime: Runtime,
+    session: LinkedSession,
+    network: Network,
+    node_label: String,
     owner_service: OwnerService,
     shutdown: ShutdownSignal,
     block_rx: Receiver<BlockEvent>,
@@ -200,15 +204,23 @@ impl<E: Executor> Reactor<E> {
             .validator_index
             .map(|i| format!("node_{i}"))
             .unwrap_or_else(|| "follower".to_string());
+        let network = runtime.network;
+        let node_label = runtime.node_label.clone();
+        let session = LinkedSession::new(
+            runtime.storage.conn.clone(),
+            linked::link_runtime(runtime, true),
+        );
         let recognizer = TransactionRecognizer::new(
-            runtime.executor_version(),
-            runtime.network,
-            runtime.recognizer(),
+            session.origin(),
+            network,
+            session.executor.operations.recognize.clone(),
         );
         Self {
             executor,
             recognizer,
-            runtime,
+            session,
+            network,
+            node_label,
             owner_service,
             shutdown,
             block_rx,
@@ -236,7 +248,7 @@ impl<E: Executor> Reactor<E> {
         position: ApplicationPosition,
     ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
         let conn = self.db_conn();
-        let network = self.runtime.network;
+        let network = self.network;
         async move { select_legacy_p1(&conn, network, position).await }
     }
 
@@ -249,11 +261,9 @@ impl<E: Executor> Reactor<E> {
         })
     }
 
-    /// Clone of the shared write connection from Runtime.storage.
-    /// All DB connections in the reactor (Reactor, ConsensusState, Storage)
-    /// share the same underlying connection via Arc.
+    // Ordering writes and executor callbacks share the unit's physical transaction.
     fn db_conn(&self) -> libsql::Connection {
-        self.runtime.storage.conn.clone()
+        self.session.conn.clone()
     }
 
     /// Check unconfirmed_batch_txs for a raw transaction (DB-level resolution).
@@ -271,8 +281,12 @@ impl<E: Executor> Reactor<E> {
         None
     }
 
-    async fn refresh_validator_set(&mut self) -> Result<()> {
-        let vs = build_validator_set(&mut self.runtime)
+    async fn refresh_validator_set_owned(&mut self) -> Result<()> {
+        let selection = self.select_executor(ApplicationPosition::Committee).await?;
+        let lease = self.begin_unit(&selection, false).await?;
+        let result = linked::derive_committee(&self.session, &selection, self.network).await;
+        let vs = self
+            .finish_unit(lease, result, false)
             .await
             .context("Failed to refresh validator set")?;
         self.consensus.validator_index = vs
@@ -281,19 +295,6 @@ impl<E: Executor> Reactor<E> {
             .position(|v| v.address == self.consensus.address);
         self.consensus.current_validator_set = vs;
         Ok(())
-    }
-
-    async fn refresh_validator_set_owned(&mut self) -> Result<()> {
-        let mut lease = self
-            .owner_service
-            .begin_canonical(&mut self.runtime, false)
-            .await?;
-        self.runtime.storage.savepoint().await?;
-        let result = self.refresh_validator_set().await;
-        lease.drain(&self.runtime).await?;
-        self.runtime.storage.rollback().await?;
-        lease.complete(&mut self.runtime).await?;
-        result
     }
 
     async fn send_proposal_parts(
@@ -743,11 +744,11 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
-    #[tracing::instrument(skip_all, fields(node = %self.runtime.node_label))]
+    #[tracing::instrument(skip_all, fields(node = %self.node_label))]
     pub(crate) async fn run(&mut self) -> Result<()> {
         // A startup mutation is part of the reactor's owned durable unit. It
         // must finish before shutdown can release the writer or runtime.
-        self.runtime.storage.footprint().reconstruct().await?;
+        self.maintain_executor(None).await?;
         self.advance()
             .await
             .context("advance failed during startup finality settle")?;

@@ -188,7 +188,7 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
                 "must not authorize a new consensus height"
             );
             assert!(
-                staking::get_active_set(&mut reactor.runtime)
+                staking::get_active_set(&mut *reactor.test_runtime().await)
                     .await?
                     .is_empty()
             );

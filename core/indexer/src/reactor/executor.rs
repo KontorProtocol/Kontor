@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use bitcoin::consensus::serialize;
+#[cfg(test)]
 use bitcoin::hashes::Hash;
-use bitcoin::{Transaction as BitcoinTransaction, Txid};
+use bitcoin::{Network, Transaction as BitcoinTransaction, Txid};
+#[cfg(test)]
 use indexer_types::Block;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tracing::warn;
@@ -14,18 +16,23 @@ use crate::bitcoin_follower::block::BlockInput;
 use crate::block::filter_map;
 use crate::database::queries::insert_transaction_execution_usage;
 use crate::protocol::coordinator::linked::{
-    PreparedBlock, PreparedTransaction, TransactionRecognizer,
+    self, PreparedBlock, PreparedTransaction, TransactionRecognizer,
 };
-use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
+use crate::protocol::coordinator::selection::ExecutionSelection;
+#[cfg(test)]
+use crate::protocol::coordinator::selection::ExecutorVersion;
 #[cfg(test)]
 use crate::protocol::v1::execution;
 #[cfg(test)]
 pub use crate::protocol::v1::execution::process_input;
+#[cfg(test)]
 use crate::protocol::v1::lifecycle;
 
 use crate::retry::{new_backoff_limited, retry};
+#[cfg(test)]
 use crate::runtime::Runtime;
 use crate::runtime::fuel::ExecutionUsage;
+use crate::runtime::pool::LinkedSession;
 use futures_util::future::BoxFuture;
 
 /// The I/O phase's per-transaction verdict. The reason is for logs only —
@@ -88,27 +95,22 @@ pub(crate) trait Executor: Sync {
     async fn execute_prepared(
         &self,
         selection: &ExecutionSelection,
-        runtime: &mut Runtime,
+        session: &LinkedSession,
+        network: Network,
         height: u64,
         tx_id: u64,
         transaction: &PreparedTransaction,
     ) -> Result<Vec<Vec<Option<String>>>> {
-        selection.ensure_execution(runtime.network, height)?;
-        let payload = transaction.payload(selection, runtime.network)?;
-        let ((user_fuel, system_fuel, deposit_fuel), failures) = runtime
-            .execute_prepared(&selection.envelope(), payload, transaction.index, tx_id)
-            .await?;
-        insert_transaction_execution_usage(
-            &runtime.get_storage_conn(),
+        selection.ensure_execution(network, height)?;
+        linked::execute_transaction(
+            session,
+            selection,
+            network,
+            transaction,
+            transaction.index,
             tx_id,
-            ExecutionUsage {
-                user_fuel,
-                system_fuel,
-                deposit_fuel,
-            },
         )
-        .await?;
-        Ok(failures)
+        .await
     }
 
     async fn prepare_block(
@@ -120,6 +122,7 @@ pub(crate) trait Executor: Sync {
         block.prepare(|raw| self.prepare_transaction(recognizer, selection, raw))
     }
 
+    #[cfg(test)]
     async fn run_block_lifecycle(
         &self,
         selection: &ExecutionSelection,
@@ -269,19 +272,15 @@ impl Executor for NoopExecutor {
     async fn execute_prepared(
         &self,
         selection: &ExecutionSelection,
-        runtime: &mut Runtime,
+        session: &LinkedSession,
+        network: Network,
         height: u64,
         tx_id: u64,
         transaction: &PreparedTransaction,
     ) -> Result<Vec<Vec<Option<String>>>> {
-        selection.ensure_execution(runtime.network, height)?;
-        transaction.payload(selection, runtime.network)?;
-        insert_transaction_execution_usage(
-            &runtime.get_storage_conn(),
-            tx_id,
-            ExecutionUsage::default(),
-        )
-        .await?;
+        selection.ensure_execution(network, height)?;
+        transaction.payload(selection, network)?;
+        insert_transaction_execution_usage(&session.conn, tx_id, ExecutionUsage::default()).await?;
         Ok(Vec::new())
     }
 
@@ -325,7 +324,7 @@ impl Executor for NoopExecutor {
 }
 
 /// Production executor: handles transaction validation, resolution, and op execution.
-/// Does NOT own the Runtime — the reactor owns it and passes &mut Runtime when needed.
+/// Contract execution uses the selected retained session; Bitcoin I/O stays in the node.
 pub struct RuntimeExecutor {
     bitcoin_client: Client,
     replay_tx: Option<tokio::sync::mpsc::Sender<u64>>,

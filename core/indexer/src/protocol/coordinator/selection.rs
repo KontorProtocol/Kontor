@@ -10,6 +10,9 @@ use libsql::Connection;
 pub(crate) enum ApplicationPosition {
     View,
     Committee,
+    Maintenance {
+        rollback_height: Option<u64>,
+    },
     Preparation {
         anchor_height: u64,
         anchor_hash: Option<BlockHash>,
@@ -58,6 +61,12 @@ impl ExecutionSelection {
         let position = match self.position {
             ApplicationPosition::View => (0, 0, None, 0),
             ApplicationPosition::Committee => (1, 0, None, 0),
+            ApplicationPosition::Maintenance { rollback_height } => (
+                6,
+                rollback_height.unwrap_or(0),
+                None,
+                u64::from(rollback_height.is_some()),
+            ),
             ApplicationPosition::Preparation {
                 anchor_height,
                 anchor_hash,
@@ -114,7 +123,8 @@ impl ExecutionSelection {
             (
                 ApplicationPosition::Block { .. }
                 | ApplicationPosition::Batch { .. }
-                | ApplicationPosition::Committee,
+                | ApplicationPosition::Committee
+                | ApplicationPosition::Maintenance { .. },
                 false,
             ) => true,
             _ => false,
@@ -212,6 +222,9 @@ impl ExecutionSelection {
             }
             ApplicationPosition::View => {
                 bail!("view selection cannot execute canonical transactions")
+            }
+            ApplicationPosition::Maintenance { .. } => {
+                bail!("maintenance selection cannot execute canonical transactions")
             }
             ApplicationPosition::Committee => {
                 bail!("committee selection cannot execute canonical transactions")
@@ -415,6 +428,26 @@ mod tests {
         let view = select_legacy_p1(&conn, Network::Regtest, ApplicationPosition::View).await?;
         let committee =
             select_legacy_p1(&conn, Network::Regtest, ApplicationPosition::Committee).await?;
+        for rollback_height in [None, Some(0), Some(1)] {
+            let maintenance = select_legacy_p1(
+                &conn,
+                Network::Regtest,
+                ApplicationPosition::Maintenance { rollback_height },
+            )
+            .await?;
+            maintenance.ensure_canonical_root(false)?;
+            ensure!(maintenance.ensure_canonical_root(true).is_err());
+            ensure!(maintenance.ensure_execution(Network::Regtest, 1).is_err());
+            ensure!(
+                maintenance.envelope().3
+                    == (
+                        6,
+                        rollback_height.unwrap_or(0),
+                        None,
+                        u64::from(rollback_height.is_some())
+                    )
+            );
+        }
         ensure!(committee.ensure_execution(Network::Regtest, 1).is_err());
         ensure!(
             committee

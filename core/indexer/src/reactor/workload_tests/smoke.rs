@@ -531,7 +531,8 @@ async fn workload_real_block_smoke() -> Result<()> {
         .await?
         .context("missing funded payer identity")?
         .signer_id();
-    let balances_before = Balances::capture(&mut history.runtime, &public_key.to_string()).await?;
+    let balances_before =
+        Balances::capture(&mut *history.test_runtime().await, &public_key.to_string()).await?;
     let before = database_projection(&conn).await?;
     let (old_id, old_path, old_height) = {
         let mut rows = conn.query(
@@ -563,7 +564,12 @@ async fn workload_real_block_smoke() -> Result<()> {
         prune_path: old_path.clone(),
     };
     let before_report = reporter
-        .capture(&mut history.runtime, ANCHOR_HEIGHT, anchor, &[])
+        .capture(
+            &mut *history.test_runtime().await,
+            ANCHOR_HEIGHT,
+            anchor,
+            &[],
+        )
         .await?;
     let snapshot = Snapshot::export(&conn, &directory.path().join("frozen.db")).await?;
     stop_engine(&mut history).await?;
@@ -682,12 +688,12 @@ async fn workload_real_block_smoke() -> Result<()> {
         .await?;
         ensure!(
             reporter
-                .capture(&mut trial.runtime, ANCHOR_HEIGHT, anchor, &[])
+                .capture(&mut *trial.test_runtime().await, ANCHOR_HEIGHT, anchor, &[])
                 .await?
                 == before_report,
             "restored typed report differs"
         );
-        trial.runtime.component_cache.clear();
+        trial.test_runtime().await.component_cache.clear();
         apply(&mut trial, block.clone()).await?;
         let rows = receipts(&trial.db_conn(), SMOKE_HEIGHT).await?;
         numeric.compare(&trial.db_conn(), &rows).await?;
@@ -731,7 +737,7 @@ async fn workload_real_block_smoke() -> Result<()> {
         ensure!(paid[2].value.as_deref() == Some("\"é\\né\\n\""));
         let projection = database_projection(&trial.db_conn()).await?;
         let accounting = accounting::check(
-            &mut trial.runtime,
+            &mut *trial.test_runtime().await,
             &balances_before,
             &public_key.to_string(),
             &txid,
@@ -739,8 +745,8 @@ async fn workload_real_block_smoke() -> Result<()> {
         )
         .await?;
         accounting_reports.push(accounting);
-        ensure!(state(&mut trial.runtime, &addresses[0]).await? == [1, 0, 0, 1]);
-        ensure!(state(&mut trial.runtime, &addresses[1]).await? == [0, 0, 0, 0]);
+        ensure!(state(&mut *trial.test_runtime().await, &addresses[0]).await? == [1, 0, 0, 1]);
+        ensure!(state(&mut *trial.test_runtime().await, &addresses[1]).await? == [0, 0, 0, 0]);
         ensure!(
             database_projection(&trial.db_conn()).await? == projection,
             "observation mutated persistent state"
@@ -758,7 +764,12 @@ async fn workload_real_block_smoke() -> Result<()> {
             .map(|transaction| (transaction.txid.to_string(), transaction.index))
             .collect::<Vec<_>>();
         let report = reporter
-            .capture(&mut trial.runtime, SMOKE_HEIGHT, smoke_hash, &raw_positions)
+            .capture(
+                &mut *trial.test_runtime().await,
+                SMOKE_HEIGHT,
+                smoke_hash,
+                &raw_positions,
+            )
             .await?;
         if let Some(output) = &output {
             fs::write(

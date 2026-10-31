@@ -2,8 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::runtime::bundle_session::BundleSession;
+use crate::runtime::pool::LinkedSession;
 use anyhow::Result;
-use bitcoin::{Transaction as BitcoinTransaction, Txid};
+use bitcoin::{Network, Transaction as BitcoinTransaction, Txid};
 
 use crate::database::queries::{
     contract_has_state, get_transaction_by_txid, insert_block, insert_contract, insert_transaction,
@@ -245,18 +247,25 @@ impl Executor for LiteExecutor {
     async fn execute_prepared(
         &self,
         selection: &ExecutionSelection,
-        runtime: &mut Runtime,
+        session: &LinkedSession,
+        network: Network,
         height: u64,
         tx_id: u64,
         transaction: &PreparedTransaction,
     ) -> Result<Vec<Vec<Option<String>>>> {
+        let retained = session
+            .executor
+            .owner
+            .downcast_ref::<BundleSession>()
+            .expect("test runtime session");
+        let mut runtime = retained.test_runtime().await;
         let parsed = runtime.transaction_fixture(
             &selection.envelope(),
-            transaction.payload(selection, runtime.network)?,
+            transaction.payload(selection, network)?,
             transaction.index,
         )?;
         Ok(self
-            .execute_transaction(selection, runtime, height, tx_id, &parsed)
+            .execute_transaction(selection, &mut runtime, height, tx_id, &parsed)
             .await?
             .into_iter()
             .map(|input| {

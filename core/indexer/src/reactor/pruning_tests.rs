@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use anyhow::{Result, ensure};
 use indexer_types::BlockRow;
-use libsql::params;
+use libsql::{AuthAction, AuthContext, Authorization, params};
 use malachitebft_engine::node::NodeRef;
 
 use super::PruneConfig;
@@ -57,7 +59,28 @@ async fn rollback_guard_preserves_deleted_history_boundary_after_reconfiguration
     ensure!(reactor.check_rollback_depth(100).is_err());
     // Reproduce a database written by the previous six-block retention policy.
     // Changing configuration cannot restore its discarded predecessor values.
-    ensure!(reactor.runtime.storage.prune(0, 102).await? >= 2);
+    conn.execute("BEGIN", ()).await?;
+    ensure!(reactor.prune_state(0, 102).await.is_err());
+    ensure!(!conn.is_autocommit());
+    conn.execute("ROLLBACK", ()).await?;
+    conn.authorizer(Some(Arc::new(|context: &AuthContext<'_>| {
+        if matches!(
+            context.action,
+            AuthAction::Delete {
+                table_name: "contract_state"
+            }
+        ) {
+            Authorization::Deny
+        } else {
+            Authorization::Allow
+        }
+    })))?;
+    let failed = reactor.prune_state(0, 102).await;
+    conn.authorizer(None)?;
+    ensure!(failed.is_err());
+    ensure!(conn.is_autocommit());
+    ensure!(get_meta_u64(&conn, PRUNE_WATERMARK_KEY, 0).await? == 0);
+    ensure!(reactor.prune_state(0, 102).await? >= 2);
     let mut rows = conn
         .query(
             "SELECT height FROM contract_state WHERE contract_id = 1 AND path = ? ORDER BY height",

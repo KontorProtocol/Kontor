@@ -84,7 +84,7 @@ impl<'a> Progress<'a> {
         }
         self.workload
             .check_slice(
-                &mut trial.runtime,
+                &mut *trial.test_runtime().await,
                 &all,
                 &roots,
                 &ExecutionSlice {
@@ -99,7 +99,9 @@ impl<'a> Progress<'a> {
             let created = (0..operations.end)
                 .filter(|index| self.workload.file_index(index / 20, index % 20).is_some())
                 .count();
-            files.check_pending(&mut trial.runtime, created).await?;
+            files
+                .check_pending(&mut *trial.test_runtime().await, created)
+                .await?;
         }
         let effects = self
             .workload
