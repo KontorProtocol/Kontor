@@ -608,6 +608,8 @@ struct OwnerRegistry {
     startup_compile_gate: std::sync::Mutex<Option<Arc<BlockingGate>>>,
     #[cfg(test)]
     supervisor_panic_after_root_entered: std::sync::Mutex<Option<Arc<AsyncGate>>>,
+    #[cfg(test)]
+    canonical_release_gate: std::sync::Mutex<Option<Arc<AsyncGate>>>,
 }
 
 type RootStart = Box<dyn FnOnce() -> BoxFuture<'static, ()> + Send>;
@@ -783,6 +785,15 @@ impl OwnerService {
     }
 
     #[cfg(test)]
+    fn set_canonical_release_gate(&self, gate: Arc<AsyncGate>) {
+        *self
+            .registry
+            .canonical_release_gate
+            .lock()
+            .expect("canonical release gate lock poisoned") = Some(gate);
+    }
+
+    #[cfg(test)]
     pub(crate) fn apply_startup_compile_gate(&self, runtime: &mut Runtime) {
         runtime.compile_gate = self
             .registry
@@ -879,9 +890,24 @@ impl OwnerService {
         let (finish, finished) = oneshot::channel();
         let (drained_sender, drained) = oneshot::channel();
         let node_keeper = keeper.clone();
+        #[cfg(test)]
+        let release_gate = self
+            .registry
+            .canonical_release_gate
+            .lock()
+            .expect("canonical release gate lock poisoned")
+            .clone();
         permit.send(Box::new(move || {
             Box::pin(async move {
-                supervise_canonical(node_keeper, receiver, finished, drained_sender).await;
+                let result = supervise_canonical(node_keeper.clone(), receiver, finished).await;
+                #[cfg(test)]
+                if let Some(gate) = release_gate {
+                    gate.wait().await;
+                }
+                // Drain authorizes the next root, so release the supervisor's
+                // Runtime clone before waking the lease.
+                drop(node_keeper);
+                let _ = drained_sender.send(result);
             })
         }));
         Ok(CanonicalRootLease {
@@ -1084,8 +1110,7 @@ async fn supervise_canonical(
     keeper: Arc<RootKeeper>,
     mut receiver: mpsc::Receiver<Admission>,
     mut finish: oneshot::Receiver<()>,
-    drained: oneshot::Sender<Result<()>>,
-) {
+) -> Result<()> {
     let mut children = JoinSet::<(TaskId, GuestCompletion)>::new();
     let mut active = HashMap::<TaskId, RunningChild>::new();
     let mut by_tokio = HashMap::<Id, TaskId>::new();
@@ -1214,10 +1239,10 @@ async fn supervise_canonical(
         keeper
             .state
             .store(RootState::Committing as u8, Ordering::SeqCst);
-        let _ = drained.send(Ok(()));
+        Ok(())
     } else {
         keeper.quarantine();
-        let _ = drained.send(Err(anyhow!("canonical root quarantined")));
+        Err(anyhow!("canonical root quarantined"))
     }
 }
 
@@ -2833,6 +2858,39 @@ mod tests {
         lease.complete(&mut runtime).await?;
         assert_eq!(service.active_roots().await, 0);
         assert!(runtime.ownership.is_none());
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn canonical_drain_waits_for_supervisor_runtime_release() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let service = OwnerService::new();
+        let gate = Arc::new(AsyncGate::default());
+        let _release = ReleaseAsyncGate(gate.clone());
+        service.set_canonical_release_gate(gate.clone());
+        let mut lease = service.begin_canonical(&mut runtime, false).await?;
+        let mut drain = Box::pin(lease.drain(&runtime));
+        timeout(Duration::from_secs(2), async {
+            while !gate.entered.load(Ordering::SeqCst) {
+                assert!(
+                    tokio::select! {
+                        result = &mut drain => Some(result),
+                        () = tokio::task::yield_now() => None,
+                    }
+                    .is_none(),
+                    "drain completed while supervisor retained the runtime"
+                );
+            }
+        })
+        .await?;
+        assert!(drain.as_mut().now_or_never().is_none());
+        gate.release();
+        drain.await?;
+        lease.complete(&mut runtime).await?;
+
+        let mut next = service.begin_canonical(&mut runtime, false).await?;
+        next.drain(&runtime).await?;
+        next.complete(&mut runtime).await?;
         Ok(())
     }
 
