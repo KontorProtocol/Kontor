@@ -1,5 +1,33 @@
 # Native Wasm stack qualification
 
+## Automatic qualification scope
+
+Every PR runs the lightweight `Stack qualification change scope` job. Full
+qualification runs when the Git diff touches runtime/ownership, retained protocol
+code, storage or canonical execution, pooled contract/signer entrypoints, shared
+execution crates, native/test contracts, protocol bundles, or qualification tools.
+Cargo manifests/locks, build scripts, Cargo configuration and Rust toolchain files
+also trigger it. The authoritative selection is
+[`stack_qualification_scope.py`](../ci/stack_qualification_scope.py).
+
+Unrelated documentation, client/mobile code, read-only API presentation, logging,
+metrics and advisory-exception changes retain ordinary CI without the six-cell
+stack matrix. This is a change-scope decision, not a reuse of old reports as new
+qualification. Extend the selector when execution inputs move to a new location.
+
+Selection compares the complete PR diff from its merge base (or the full push
+range on main), including removed paths and both sides of renames. Missing Git
+history selects full qualification. A failed selection job cannot produce a
+successful aggregate comparison. Existing matrix cases, strict comparisons and
+failure behavior are unchanged. There are currently no GitHub required status
+checks configured on main; if added, require the scope job and aggregate comparison,
+allowing the aggregate's intentional skip for unrelated changes.
+
+Use the workflow's **Run workflow**, stage **qualify**, to force the complete matrix
+on a chosen ref. Other manual S2 stages retain their existing behavior. The
+operator's accepted prelaunch performance disposition remains separate: this
+workflow checks bounded correctness and cross-platform agreement, not throughput.
+
 ## Resource amendment preflight
 
 `resource_manifest.py` freezes the mandatory case list, six cells, capacity

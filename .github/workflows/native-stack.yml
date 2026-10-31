@@ -2,20 +2,8 @@ name: Native Wasm stack qualification
 
 on:
   pull_request:
-    paths:
-      - "core/**"
-      - "test-contracts/**"
-      - "tools/native-stack/**"
-      - ".github/workflows/native-stack.yml"
-      - ".github/workflows/native-stack-s2.yml"
   push:
     branches: [main]
-    paths:
-      - "core/**"
-      - "test-contracts/**"
-      - "tools/native-stack/**"
-      - ".github/workflows/native-stack.yml"
-      - ".github/workflows/native-stack-s2.yml"
   workflow_dispatch:
     inputs:
       stage:
@@ -33,9 +21,27 @@ permissions:
   contents: read
 
 jobs:
+  scope:
+    name: Stack qualification change scope
+    if: github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      required: ${{ steps.select.outputs.required }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Test qualification selection
+        run: python3 -m unittest discover -s tools/ci -p 'test_stack_qualification_scope.py' -v
+      - name: Select qualification from the complete change set
+        id: select
+        run: python3 tools/ci/stack_qualification_scope.py
+
   controls:
     name: Native stack evidence controls
-    if: github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify'
+    needs: scope
+    if: needs.scope.outputs.required == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -55,8 +61,8 @@ jobs:
 
   qualify:
     name: Native stack (${{ matrix.os }}, ${{ matrix.profile }})
-    needs: controls
-    if: github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify'
+    needs: [scope, controls]
+    if: needs.scope.outputs.required == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
     strategy:
@@ -150,8 +156,8 @@ jobs:
 
   compare:
     name: Compare native stack outcomes
-    needs: qualify
-    if: always() && (github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify')
+    needs: [scope, qualify]
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify') && (needs.scope.result != 'success' || needs.scope.outputs.required == 'true')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
