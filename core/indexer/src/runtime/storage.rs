@@ -127,6 +127,12 @@ pub struct Storage {
     pub(super) fail_rollback_once: Arc<AtomicBool>,
     #[cfg(test)]
     #[builder(skip)]
+    pub(super) fail_outer_commit_before_once: Arc<AtomicBool>,
+    #[cfg(test)]
+    #[builder(skip)]
+    pub(super) fail_outer_commit_after_once: Arc<AtomicBool>,
+    #[cfg(test)]
+    #[builder(skip)]
     pub(crate) decode_gate: Option<Arc<BlockingGate>>,
     #[builder(default = 1)]
     pub height: u64,
@@ -616,11 +622,29 @@ impl Storage {
         if let Some(owner) = &self.ownership {
             owner.ensure_commit_authorized()?;
         }
+        #[cfg(test)]
+        let outer = self.savepoint_stack.peek().await == Some(0);
+        #[cfg(test)]
+        if outer
+            && self
+                .fail_outer_commit_before_once
+                .swap(false, Ordering::SeqCst)
+        {
+            return Err(anyhow!("injected failure before outer commit"));
+        }
         match self.savepoint_stack.pop().await {
             Some(0) => self.conn.execute("COMMIT", ()).await?,
             Some(i) => self.conn.execute(&format!("RELEASE S{}", i), ()).await?,
             None => 0,
         };
+        #[cfg(test)]
+        if outer
+            && self
+                .fail_outer_commit_after_once
+                .swap(false, Ordering::SeqCst)
+        {
+            return Err(anyhow!("injected failure after durable outer commit"));
+        }
         Ok(())
     }
 

@@ -595,6 +595,8 @@ struct OwnerRegistry {
     fatal: AtomicBool,
     #[cfg(test)]
     startup_compile_gate: std::sync::Mutex<Option<Arc<BlockingGate>>>,
+    #[cfg(test)]
+    supervisor_panic_after_root_entered: std::sync::Mutex<Option<Arc<AsyncGate>>>,
 }
 
 type RootStart = Box<dyn FnOnce() -> BoxFuture<'static, ()> + Send>;
@@ -1231,6 +1233,19 @@ async fn supervise<T, F>(
         runtime.storage.savepoint().await?;
         operation(runtime).await
     });
+    #[cfg(test)]
+    let injected_gate = registry
+        .supervisor_panic_after_root_entered
+        .lock()
+        .expect("supervisor panic gate lock poisoned")
+        .take();
+    #[cfg(test)]
+    if let Some(gate) = injected_gate {
+        while !gate.entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+        panic!("injected operation root supervisor panic");
+    }
     let mut root_result = None;
     let mut children = JoinSet::<(TaskId, GuestCompletion)>::new();
     let mut active = HashMap::<TaskId, RunningChild>::new();
@@ -1587,7 +1602,8 @@ mod tests {
     use crate::runtime::storage::BlockingGate;
     use crate::runtime::wit::{Signer, kontor::built_in::context::HolderRef};
     use crate::runtime::{
-        ContractAddress, Decimal, ExecutionError, Linkers, native_provenance, to_wave_expr, token,
+        ContractAddress, Decimal, ExecutionError, Linkers, Storage, native_provenance,
+        to_wave_expr, token,
     };
     use crate::test_utils::test_runtime;
     use bitcoin::Network;
@@ -1638,6 +1654,14 @@ mod tests {
     struct ReleaseBlockingGate(Arc<BlockingGate>);
 
     impl Drop for ReleaseBlockingGate {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
+    struct ReleaseAsyncGate(Arc<AsyncGate>);
+
+    impl Drop for ReleaseAsyncGate {
         fn drop(&mut self) {
             self.0.release();
         }
@@ -2247,6 +2271,136 @@ mod tests {
         drop(rows);
         assert_eq!(checkpoint_hash(&committed).await?, checkpoint_before);
         Ok(())
+    }
+
+    async fn injected_outer_commit_error_has_one_durable_result(after_commit: bool) -> Result<()> {
+        let (mut runtime, dir, name, signer, address) = seeded_paid_oracle_with_name().await?;
+        let committed = new_connection(dir.path(), &name).await?;
+        let payer_before = token::api::balance(&mut runtime, HolderRef::from(&signer)).await?;
+        let burner_before = token::api::balance(&mut runtime, HolderRef::Burner).await?;
+        let checkpoint_before = checkpoint_hash(&runtime.get_storage_conn()).await?;
+        let engine = runtime.engine.clone();
+        let linkers = runtime.linkers.clone();
+        let cache = runtime.component_cache.clone();
+        let service = OwnerService::new();
+        let owned = OwnedRuntimeSession::with_service(runtime, service.clone());
+        let (staged_sender, staged_receiver) = oneshot::channel();
+        let call_signer = signer.clone();
+        let result = owned
+            .run(true, move |runtime| {
+                Box::pin(async move {
+                    if after_commit {
+                        runtime
+                            .storage
+                            .fail_outer_commit_after_once
+                            .store(true, Ordering::SeqCst);
+                    } else {
+                        runtime
+                            .storage
+                            .fail_outer_commit_before_once
+                            .store(true, Ordering::SeqCst);
+                    }
+                    let staged = paid_receipt_snapshot(
+                        runtime,
+                        &call_signer,
+                        &address,
+                        "write-result-payload(1)",
+                    )
+                    .await?;
+                    let staged_checkpoint = checkpoint_hash(&runtime.get_storage_conn()).await?;
+                    let _ = staged_sender.send((staged, staged_checkpoint));
+                    Ok(())
+                })
+            })
+            .await;
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("quarantined")),
+            "uncertain outer commit returned success: {result:?}"
+        );
+        let (staged, staged_checkpoint) = staged_receiver.await?;
+        assert_eq!(staged.outcome, Ok("\"é\\n\"".to_string()));
+        assert!(staged.payer.as_ref() < payer_before.as_ref());
+        assert!(staged.burner.as_ref() > burner_before.as_ref());
+        assert_ne!(staged_checkpoint, checkpoint_before);
+        assert_eq!(service.quarantined_roots().await, 1);
+        assert!(owned.session.checkout().await.is_err());
+        assert!(
+            timeout(
+                Duration::from_secs(2),
+                owned.run(false, |_runtime| Box::pin(async { Ok(()) }))
+            )
+            .await?
+            .is_err(),
+            "poisoned stateful session executed again"
+        );
+
+        let mut observer = Runtime::new_with(
+            engine,
+            linkers,
+            cache,
+            Storage::builder().conn(committed).build(),
+        )
+        .await?;
+        assert_eq!(receipt_count(&observer).await?, i64::from(after_commit));
+        assert_eq!(
+            token::api::balance(&mut observer, HolderRef::from(&signer)).await?,
+            if after_commit {
+                staged.payer
+            } else {
+                payer_before
+            }
+        );
+        assert_eq!(
+            token::api::balance(&mut observer, HolderRef::Burner).await?,
+            if after_commit {
+                staged.burner
+            } else {
+                burner_before
+            }
+        );
+        assert_eq!(
+            checkpoint_hash(&observer.get_storage_conn()).await?,
+            if after_commit {
+                staged_checkpoint
+            } else {
+                checkpoint_before
+            }
+        );
+        if after_commit {
+            let mut rows = observer
+                .storage
+                .conn
+                .query(
+                    "SELECT contract_id, status, gas, value FROM contract_results ORDER BY id",
+                    (),
+                )
+                .await?;
+            let row = rows.next().await?.context("durable paid receipt missing")?;
+            assert_eq!(
+                (
+                    row.get::<u64>(0)?,
+                    row.get::<String>(1)?,
+                    row.get::<u64>(2)?,
+                    row.get::<Option<String>>(3)?,
+                ),
+                staged.receipt
+            );
+            assert!(rows.next().await?.is_none(), "duplicate durable receipt");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failure_before_outer_commit_quarantines_without_settlement() -> Result<()> {
+        injected_outer_commit_error_has_one_durable_result(false).await
+    }
+
+    #[tokio::test]
+    async fn error_after_durable_outer_commit_quarantines_without_double_settlement() -> Result<()>
+    {
+        injected_outer_commit_error_has_one_durable_result(true).await
     }
 
     #[tokio::test]
@@ -3729,6 +3883,69 @@ mod tests {
         .await?;
         let fresh = timeout(Duration::from_secs(2), pool.get()).await??;
         assert_ne!(Object::id(&fresh), poisoned_id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn supervisor_panic_fences_live_pool_authority_and_fails_driver() -> Result<()> {
+        let dir = TempDir::new()?;
+        let pool = one_object_pool(&dir).await?;
+        let object = pool.get().await?;
+        let service = OwnerService::new();
+        let gate = Arc::new(AsyncGate::default());
+        let _release = ReleaseAsyncGate(gate.clone());
+        *service
+            .registry
+            .supervisor_panic_after_root_entered
+            .lock()
+            .expect("supervisor panic gate lock poisoned") = Some(gate.clone());
+        let operation_gate = gate.clone();
+        let finished = Arc::new(AtomicBool::new(false));
+        let operation_finished = finished.clone();
+        let mut handle = service
+            .start_pooled(object, move |runtime| {
+                Box::pin(async move {
+                    assert!(!runtime.storage.conn.is_autocommit());
+                    operation_gate.wait().await;
+                    operation_finished.store(true, Ordering::SeqCst);
+                    Ok(RootOutcome {
+                        value: (),
+                        commit: false,
+                    })
+                })
+            })
+            .await?;
+        let driver = service.take_driver().context("owner driver missing")?;
+        let reported = timeout(Duration::from_secs(2), driver).await??;
+        assert!(
+            reported
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("node supervisor panicked")),
+            "supervisor panic did not fail the driver: {reported:?}"
+        );
+        assert!(
+            timeout(Duration::from_secs(2), handle.result())
+                .await?
+                .is_err()
+        );
+        assert!(gate.entered.load(Ordering::SeqCst));
+        assert!(service.is_fatal());
+        assert_eq!(service.quarantined_roots().await, 1);
+        assert_eq!(pool.status().available, 0);
+        assert!(
+            timeout(Duration::from_millis(100), pool.get())
+                .await
+                .is_err()
+        );
+        assert!(service.admission.reserve().await.is_err());
+        gate.release();
+        timeout(Duration::from_secs(2), async {
+            while !finished.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(pool.status().available, 0);
         Ok(())
     }
 
