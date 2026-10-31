@@ -9,7 +9,6 @@ use tokio::{
 
 use crate::{
     bitcoin_client::client::BitcoinRpc,
-    block::TransactionFilterMap,
     stopper::{ShutdownSignal, UnexpectedExit},
 };
 
@@ -19,6 +18,7 @@ use self::{
     poller::PollerConfig,
 };
 
+pub mod block;
 pub mod event;
 pub mod listener;
 pub mod messages;
@@ -26,7 +26,6 @@ pub mod poller;
 
 pub async fn run<C: BitcoinRpc>(
     bitcoin: C,
-    f: TransactionFilterMap,
     shutdown: ShutdownSignal,
     starting_block_height: u64,
     known_hashes: Vec<(u64, BlockHash)>,
@@ -52,7 +51,6 @@ pub async fn run<C: BitcoinRpc>(
         let poll_notify = Arc::new(Notify::new());
         let poller_handle = tokio::spawn(poller::run(
             bitcoin.clone(),
-            f,
             block_tx,
             shutdown.clone(),
             start_height,
@@ -64,7 +62,6 @@ pub async fn run<C: BitcoinRpc>(
 
         let listener_handle = tokio::spawn(listener::run(
             bitcoin,
-            f,
             mempool_tx,
             shutdown.clone(),
             poll_notify,

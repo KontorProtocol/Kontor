@@ -7,6 +7,7 @@ use kontor_crypto::{FieldElement, FileDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, DisplayFromStr, serde_as};
 
+pub use crate::protocol::v1::storage_identity::CORE_SIGNER_ID;
 use crate::runtime::ContractAddress;
 
 // ─────────────────────────────────────────────────────────────────
@@ -125,12 +126,6 @@ impl Identity {
         &self.key
     }
 }
-
-/// The reserved signer_id for the Core (system) signer. By construction the
-/// Core row is the first one inserted into `signers` at genesis, so SQLite
-/// auto-increment assigns it id = 1. This constant pins that contract and is
-/// asserted by `create_core_signer`.
-pub const CORE_SIGNER_ID: u64 = 1;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SignerEntry {

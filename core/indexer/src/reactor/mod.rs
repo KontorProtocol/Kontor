@@ -12,7 +12,10 @@ mod handlers;
 mod handoff_tests;
 #[cfg(test)]
 pub(crate) mod lite_executor;
+mod mempool;
 pub mod mempool_fee_index;
+#[cfg(test)]
+mod mempool_tests;
 pub mod mock_bitcoin;
 #[cfg(test)]
 mod pruning_tests;
@@ -29,6 +32,7 @@ pub mod types;
 mod workload_tests;
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
@@ -46,7 +50,6 @@ use tokio::{
 use bitcoin::{BlockHash, Txid};
 use malachitebft_app_channel::NetworkMsg;
 use malachitebft_app_channel::app::types::LocallyProposedValue;
-use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_core_types::{LinearTimeouts, Round};
 use metrics::gauge;
 use tracing::{debug, info, warn};
@@ -55,10 +58,17 @@ use crate::bitcoin_client::Client;
 use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
+use crate::protocol::coordinator::committee::build_validator_set;
+use crate::protocol::coordinator::selection::{
+    ApplicationPosition, ExecutionSelection, select_legacy_p1,
+};
+#[cfg(test)]
+use crate::protocol::v1::committee::stake_to_voting_power;
+use crate::runtime::ownership::OwnerService;
 use crate::stopper::ShutdownSignal;
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
-    consensus::{Genesis, Validator, ValidatorSet, signing::PublicKey},
+    consensus::Genesis,
     database::{
         self,
         queries::{
@@ -66,19 +76,12 @@ use crate::{
             select_block_latest, select_unconfirmed_batch_tx,
         },
     },
-    runtime::{
-        ComponentCache, Decimal, GenesisParameters, Runtime, Storage,
-        numerics::decimal_to_string,
-        ownership::OwnerService,
-        staking::{
-            address as staking_address,
-            api::wave::{get_active_set_call_expr, get_active_set_parse_return_expr},
-        },
-    },
+    runtime::{ComponentCache, GenesisParameters, Runtime, Storage},
     test_utils::new_mock_block_hash,
 };
 
 use executor::Executor;
+use mempool::MempoolPreparation;
 
 /// High-water mark on `consensus_state::pending_blocks`: the reactor stops
 /// draining `block_rx` once this many blocks are buffered ahead of consensus,
@@ -113,10 +116,9 @@ const MAX_PENDING_BLOCKS: usize = 128;
 /// a transient stall into the crash loop this bound exists to avoid.
 const MAX_DEFERRED_DECISIONS: usize = 4096;
 
-pub type Simulation = (
-    indexer_types::Transaction,
-    oneshot::Sender<Result<Vec<OpWithResult>>>,
-);
+pub type SimulationOutcome = std::result::Result<Vec<OpWithResult>, String>;
+
+pub type Simulation = (Vec<u8>, oneshot::Sender<Result<SimulationOutcome>>);
 
 /// State-pruning settings for the reactor (see `project_state_pruning`).
 #[derive(Clone, Copy, Debug)]
@@ -124,7 +126,8 @@ pub struct PruneConfig {
     /// `false` = archive node: full version history retained, no GC.
     pub enabled: bool,
     /// Blocks below the tip to retain before a version is prunable. Floored at
-    /// `FINALITY_ROLLBACK_DEPTH` at use, preserving the invalidated anchor's predecessor.
+    /// the retained coordinator rules' minimum pruning floor at use so it
+    /// cannot reach into a required rollback window.
     pub retain_blocks: u64,
 }
 
@@ -169,6 +172,7 @@ pub(crate) struct Reactor<E: Executor> {
     /// its result is applied when this completes. `None` when idle — one at a
     /// time, so a slow projection never queues behind itself.
     fee_recompute: Option<tokio::task::JoinHandle<Fees>>,
+    mempool_preparation: Option<MempoolPreparation>,
 }
 
 impl<E: Executor> Reactor<E> {
@@ -215,7 +219,26 @@ impl<E: Executor> Reactor<E> {
             io_jobs: VecDeque::new(),
             validated_candidates: None,
             fee_recompute: None,
+            mempool_preparation: None,
         }
+    }
+
+    fn select_executor(
+        &self,
+        position: ApplicationPosition,
+    ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
+        let conn = self.db_conn();
+        let network = self.runtime.network;
+        async move { select_legacy_p1(&conn, network, position).await }
+    }
+
+    fn preparation_selection(
+        &self,
+    ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
+        self.select_executor(ApplicationPosition::Preparation {
+            anchor_height: self.last_height,
+            anchor_hash: self.last_hash,
+        })
     }
 
     /// Clone of the shared write connection from Runtime.storage.
@@ -304,7 +327,7 @@ impl<E: Executor> Reactor<E> {
                     // or finalized history whose retained bytes were pruned.
                     if let Some(tx) = Self::resolve_tx_from_db(&conn, txid, batch_height).await {
                         resolved.push(Some(tx));
-                    } else if let Some((raw, _)) = self.consensus.pending_transactions.get(txid) {
+                    } else if let Some((raw, _)) = self.consensus.mempool.candidates.get(txid) {
                         resolved.push(Some(raw.clone()));
                     } else {
                         rpc_slots.push(resolved.len());
@@ -335,9 +358,9 @@ impl<E: Executor> Reactor<E> {
                 target_height,
                 block,
             } => {
-                let txids: Vec<_> = block.transactions.iter().map(|tx| tx.txid).collect();
+                let txids = block.txids();
                 for txid in &txids {
-                    self.consensus.pending_transactions.remove(txid);
+                    self.consensus.mempool.remove(txid);
                 }
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
@@ -513,6 +536,14 @@ impl<E: Executor> Reactor<E> {
                 }
             };
 
+            let can_read_mempool = self.mempool_preparation.is_none();
+            let mempool_preparation = async {
+                match self.mempool_preparation.as_mut() {
+                    Some(preparation) => (&mut preparation.result).await,
+                    None => pending().await,
+                }
+            };
+
             let debounce_sleep = async {
                 match debounce_deadline {
                     Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -538,41 +569,30 @@ impl<E: Executor> Reactor<E> {
                         .await
                         .context("process_block_event failed")?;
                 }
-                Some(event) = self.mempool_rx.recv() => {
+                // Preserve snapshot/delta order and channel backpressure while
+                // the owned parser runs, without parking consensus or blocks.
+                Some(event) = self.mempool_rx.recv(), if can_read_mempool => {
                     match event {
-                        MempoolEvent::Sync { kontor_txs, fees, mempool_min_fee_sat_per_vb } => {
-                            let kontor_count = kontor_txs.len();
-                            let fee_count = fees.len();
-                            self.consensus.pending_transactions.clear();
-                            for (txid, tx) in kontor_txs {
-                                self.consensus.pending_transactions.insert(
-                                    txid,
-                                    (tx.raw, tx.parsed),
-                                );
-                            }
-                            self.consensus
-                                .mempool_fee_index
-                                .replace(fees, mempool_min_fee_sat_per_vb);
-                            // `replace` reset cached fees to the new
-                            // floor; recompute immediately so consensus
-                            // doesn't read a degraded threshold for the
-                            // 0-2s window before the next tick.
+                        MempoolEvent::Sync { transactions, fees, mempool_min_fee_sat_per_vb } => {
+                            self.consensus.mempool.stage_snapshot(&transactions);
+                            let selection = self.preparation_selection().await?;
+                            self.mempool_preparation = Some(MempoolPreparation {
+                                result: self.executor.parse_mempool(&selection, transactions), selection,
+                            });
+                            self.consensus.mempool_fee_index.replace(fees, mempool_min_fee_sat_per_vb);
                             self.consensus.mempool_fee_index.recompute();
-                            info!(
-                                "MempoolSync: {} Kontor txs, {} fee entries, min fee {} sat/vB",
-                                kontor_count, fee_count, mempool_min_fee_sat_per_vb
-                            );
+                            info!("MempoolSync: recognition started");
                             if self.consensus.pending_proposal.is_some() {
                                 debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
                             }
                         },
-                        MempoolEvent::KontorTxAdded { txid, tx, fee } => {
-                            self.consensus.pending_transactions.insert(txid, (tx.raw, tx.parsed));
+                        MempoolEvent::TransactionAdded { txid, tx, fee } => {
+                            self.consensus.mempool.stage(&tx);
+                            let selection = self.preparation_selection().await?;
+                            self.mempool_preparation = Some(MempoolPreparation {
+                                result: self.executor.parse_mempool(&selection, vec![tx]), selection,
+                            });
                             self.consensus.mempool_fee_index.insert(txid, fee);
-                            debug!("MempoolInsert (Kontor) {}", txid);
-                            if self.consensus.pending_proposal.is_some() {
-                                debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
-                            }
                         },
                         MempoolEvent::MempoolFeeSample { txid, fee } => {
                             self.consensus.mempool_fee_index.insert(txid, fee);
@@ -580,10 +600,29 @@ impl<E: Executor> Reactor<E> {
                             // affect what we can propose.
                         },
                         MempoolEvent::Remove(txid) => {
-                            self.consensus.pending_transactions.remove(&txid);
+                            self.consensus.mempool.remove(&txid);
                             self.consensus.mempool_fee_index.remove(&txid);
                             debug!("MempoolRemove {}", txid);
                         },
+                    }
+                }
+                prepared = mempool_preparation => {
+                    let previous = self.mempool_preparation.take().expect("completed preparation");
+                    let prepared = prepared?;
+                    let selection = self.preparation_selection().await?;
+                    if !previous.selection.same_recognition_rules(&selection) {
+                        self.mempool_preparation = Some(MempoolPreparation {
+                            result: self.executor.parse_mempool(&selection, self.consensus.mempool.raw_inputs()),
+                            selection,
+                        });
+                        continue;
+                    }
+                    let mut recognized = false;
+                    for transaction in prepared {
+                        recognized |= self.consensus.mempool.finish(transaction);
+                    }
+                    if recognized && self.consensus.pending_proposal.is_some() {
+                        debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
                     }
                 }
                 _ = debounce_sleep => {
@@ -638,15 +677,17 @@ impl<E: Executor> Reactor<E> {
                 }
                 option_event = simulate_rx => {
                     if let Some((tx, ret_tx)) = option_event {
-                        let result = self.simulate(tx).await;
+                        let result = self.simulate_raw(tx).await;
                         let err_msg = result.as_ref().err().map(|e| format!("{e:#}"));
                         let _ = ret_tx.send(result);
                         if let Some(msg) = err_msg {
                             // Fatal on purpose, and NOT user-triggerable: an
-                            // `Err` out of `simulate` is infrastructure-only by
+                            // `Err` out of `simulate_raw` is infrastructure-only by
                             // construction (savepoint, DB, executor plumbing) —
                             // user-level op failures ride inside `Ok(results)`
-                            // as per-op error fields. I5: this node's own I/O
+                            // as per-op error fields; malformed/unrecognized input
+                            // is an ordinary rejection in the inner result.
+                            // I5: this node's own I/O
                             // failing must stop this node.
                             bail!("simulation failed: {msg}");
                         }
@@ -731,50 +772,6 @@ impl<E: Executor> Reactor<E> {
 
         result
     }
-}
-
-/// Query the staking contract and build a ValidatorSet from the active validators.
-async fn build_validator_set(runtime: &mut Runtime) -> Result<ValidatorSet> {
-    let result = runtime
-        .execute_system_view(&staking_address(), &get_active_set_call_expr())
-        .await
-        .context("Failed to query active validator set from staking contract")?;
-    let active_set = get_active_set_parse_return_expr(&result);
-
-    let validators: Vec<Validator> = active_set
-        .into_iter()
-        .map(|v| {
-            anyhow::ensure!(
-                v.ed25519_pubkey.len() == 32,
-                "Validator {} has invalid ed25519 pubkey length {}",
-                v.x_only_pubkey,
-                v.ed25519_pubkey.len()
-            );
-            let mut key_bytes = [0u8; 32];
-            key_bytes.copy_from_slice(&v.ed25519_pubkey);
-            let public_key = PublicKey::from_bytes(key_bytes).with_context(|| {
-                format!("Invalid ed25519 pubkey for validator {}", v.x_only_pubkey)
-            })?;
-            let voting_power = stake_to_voting_power(v.stake)
-                .with_context(|| format!("Invalid stake for validator {}", v.x_only_pubkey))?;
-            Ok(Validator::new(public_key, voting_power))
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    ValidatorSet::try_new(validators)
-}
-
-fn stake_to_voting_power(stake: Decimal) -> Result<VotingPower> {
-    let s = decimal_to_string(stake);
-    let integer_part = s
-        .split('.')
-        .next()
-        .context("decimal string missing integer part")?;
-    let power = integer_part
-        .parse::<u64>()
-        .context("stake integer part is not a valid u64")?;
-    anyhow::ensure!(power > 0, "stake is below one voting power unit");
-    Ok(power)
 }
 
 /// Build a Genesis from the staking contract's active validator set.
@@ -998,21 +995,21 @@ pub fn run(
                 let mut log_ticker = tokio::time::interval(std::time::Duration::from_secs(30));
                 log_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 log_ticker.tick().await; // consume the immediate first tick
-                let initial_kontor_txs = loop {
+                let initial_raw_txs = loop {
                     select! {
                         event = mempool_rx.recv() => match event {
                             Some(MempoolEvent::Sync {
-                                kontor_txs,
+                                transactions,
                                 fees,
                                 mempool_min_fee_sat_per_vb,
                             }) => {
                                 fee_index.replace(fees, mempool_min_fee_sat_per_vb);
                                 info!(
-                                    "Initial mempool sync complete: {} Kontor txs, {} fee entries",
-                                    kontor_txs.len(),
+                                    "Initial mempool sync complete: {} raw txs, {} fee entries",
+                                    transactions.len(),
                                     fee_index.len()
                                 );
-                                break kontor_txs;
+                                break transactions;
                             }
                             Some(other) => {
                                 bail!("Mempool delta event before initial Sync: {other:?}");
@@ -1040,6 +1037,9 @@ pub fn run(
                 // placeholder).
                 fee_index.recompute();
 
+                let selection = select_legacy_p1(&runtime.get_storage_conn(), runtime.network,
+                    ApplicationPosition::Preparation { anchor_height: last_height, anchor_hash: last_hash }).await?;
+                let initial_mempool = exec.parse_mempool(&selection, initial_raw_txs).await?;
                 let mut startup_lease = owner_service.begin_canonical(&mut runtime, false).await?;
                 let consensus_result = start_consensus(
                     engine_config,
@@ -1054,13 +1054,7 @@ pub fn run(
                 startup_lease.complete(&mut runtime).await?;
                 let mut consensus = consensus_result.context("start_consensus failed")?;
 
-                // Seed pending_transactions with the Kontor txs captured
-                // from the initial Sync.
-                for (txid, tx) in initial_kontor_txs {
-                    consensus
-                        .pending_transactions
-                        .insert(txid, (tx.raw, tx.parsed));
-                }
+                consensus.mempool.replace(initial_mempool);
 
                 let mut reactor = Reactor::new(
                     exec,

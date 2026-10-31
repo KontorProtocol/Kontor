@@ -6,8 +6,9 @@ use wasmtime::component::{Access, Resource};
 use wasmtime::{AsContext, Trap};
 
 use crate::database::native_contracts::is_deposit_exempt;
-use crate::database::queries::{Error as StorageError, LiveRow};
 use crate::database::types::CORE_SIGNER_ID;
+use crate::protocol::v1::storage_error::ReadError;
+use crate::protocol::v1::storage_state::LiveRow;
 
 use super::{
     ExecutionError, Runtime,
@@ -51,7 +52,7 @@ fn meter_path<T>(accessor: &mut Access<'_, T, Runtime>, path: &[u8]) -> Result<(
 /// stream is dropped before callers write, so no SQL cursor survives mutation.
 async fn collect_delete_rows<T>(
     accessor: &mut Access<'_, T, Runtime>,
-    rows: impl Stream<Item = Result<LiveRow, StorageError>>,
+    rows: impl Stream<Item = Result<LiveRow, ReadError>>,
 ) -> Result<Vec<LiveRow>> {
     let mut rows = Box::pin(rows);
     let mut paid = Vec::new();
@@ -142,8 +143,8 @@ impl Runtime {
             .await
             .map_err(|error| {
                 if matches!(
-                    error.downcast_ref::<StorageError>(),
-                    Some(StorageError::ValueTooLarge)
+                    error.downcast_ref::<ReadError>(),
+                    Some(ReadError::ValueTooLarge)
                 ) {
                     Trap::OutOfFuel.into()
                 } else {
@@ -288,13 +289,13 @@ impl Runtime {
         // the token value is derived (× gas→token) only at the floor read.
         let deposited_gas = if depositor.is_some() {
             let deposit_gas = self
-                .pricing
+                .selected_pricing()
                 .storage_deposit_gas((path.len() + bs.len()) as u64)
                 .ok_or_else(|| {
                     ExecutionError::Deterministic(anyhow!("storage reservation overflow"))
                 })?;
             let deposit_fuel = deposit_gas
-                .checked_mul(self.gas_to_fuel_multiplier)
+                .checked_mul(self.selected_gas_policy().fuel_multiplier)
                 .ok_or_else(|| {
                     ExecutionError::Deterministic(anyhow!("storage reservation overflow"))
                 })?;

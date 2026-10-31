@@ -1,12 +1,65 @@
 use std::char::{CharTryFromError, DecodeUtf16Error};
+use std::error::Error as StdError;
+use std::fmt::{self, Display, Formatter};
 use std::str::Utf8Error;
 
-use wasmtime::{Error, OutOfMemory, Trap};
+use anyhow::{Error as AnyError, Result};
+use indexer_types::OpStatus;
+use wasmtime::{Error as WasmtimeError, OutOfMemory, Trap};
 
-use crate::runtime::ExecutionError;
-use crate::runtime::guest_memory::GuestMemoryLimitExceeded;
+use crate::runtime::GuestMemoryLimitExceeded;
 
-pub(super) fn is_deterministic(error: &Error) -> bool {
+/// Distinguishes deterministic failures from non-deterministic failures
+/// in the contract execution path.
+#[derive(Debug)]
+pub enum ExecutionError {
+    /// Deterministic failure — all nodes see the same result for the same inputs.
+    /// WASM traps, contract not found, bad arguments, etc.
+    /// Caller should rollback and continue processing.
+    Deterministic(AnyError),
+    /// Non-deterministic failure — DB/IO error, host panic, tokio task failure.
+    /// Different nodes may see different results.
+    /// Caller should propagate to reactor and shut down.
+    NonDeterministic(AnyError),
+}
+
+impl Display for ExecutionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let (kind, error) = match self {
+            ExecutionError::Deterministic(error) => ("deterministic error", error),
+            ExecutionError::NonDeterministic(error) => ("non-deterministic error", error),
+        };
+        write!(f, "{kind}: ")?;
+        // Expand causes only when the outer caller requests it. Chain formatters
+        // use ordinary Display for each source, avoiding recursive expansion.
+        Display::fmt(error, f)
+    }
+}
+
+impl StdError for ExecutionError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            ExecutionError::Deterministic(e) | ExecutionError::NonDeterministic(e) => {
+                Some(e.as_ref())
+            }
+        }
+    }
+}
+
+/// Convert an anyhow error to ExecutionError, preserving the classification
+/// if the error already contains an ExecutionError (e.g. from a cross-contract
+/// call through the WIT foreign::call boundary). Falls back to NonDeterministic
+/// for errors without an ExecutionError inside.
+impl From<AnyError> for ExecutionError {
+    fn from(e: AnyError) -> Self {
+        match e.downcast::<ExecutionError>() {
+            Ok(ee) => ee,
+            Err(e) => ExecutionError::NonDeterministic(e),
+        }
+    }
+}
+
+pub(crate) fn is_deterministic(error: &WasmtimeError) -> bool {
     match error.downcast_ref::<ExecutionError>() {
         Some(ExecutionError::Deterministic(_)) => return true,
         Some(ExecutionError::NonDeterministic(_)) => return false,
@@ -23,7 +76,7 @@ pub(super) fn is_deterministic(error: &Error) -> bool {
     }
     // Our generated anyhow host bindings preserve this marker. A host may
     // return the same message or decoder type as a guest conversion failure.
-    if error.is::<anyhow::Error>() {
+    if error.is::<AnyError>() {
         return false;
     }
     let cause = error.root_cause();
@@ -115,4 +168,37 @@ fn is_invalid_discriminant(message: &str) -> bool {
     };
     // Pin Wasmtime's complete format, including canonical decimal integers.
     discriminant >= len && message == format!("discriminant {discriminant} out of range [0..{len})")
+}
+
+/// Categorize the result of a wasm call into a persisted `OpStatus`.
+///
+/// - `Ok(s)` where `s` starts with `"err("` means the contract function
+///   returned a `result<_, error>::Err` value. The call ran cleanly but
+///   the semantic outcome was a failure; storage was rolled back. Treated
+///   as `OpStatus::ContractErr`.
+/// - `Ok(_)` otherwise is a successful call returning either a value or
+///   nothing. `OpStatus::Ok`.
+/// - `Err(ExecutionError::Deterministic(e))` is mapped by looking at the
+///   underlying error for a `wasmtime::Trap` variant. `Trap::OutOfFuel`
+///   becomes `OpStatus::OutOfFuel`; other trap variants become
+///   `OpStatus::Trap`. Non-trap errors become `OpStatus::Other`.
+/// - `Err(NonDeterministic)` shouldn't normally produce a row — those
+///   propagate as fatal infrastructure errors and the block won't
+///   commit. Mapped to `Other` for completeness.
+pub(crate) fn classify_result(result: &Result<String, ExecutionError>) -> OpStatus {
+    match result {
+        Ok(v) if v.starts_with("err(") => OpStatus::ContractErr,
+        Ok(_) => OpStatus::Ok,
+        Err(ExecutionError::Deterministic(e)) => {
+            if let Some(trap) = e.downcast_ref::<Trap>() {
+                match trap {
+                    Trap::OutOfFuel => OpStatus::OutOfFuel,
+                    _ => OpStatus::Trap,
+                }
+            } else {
+                OpStatus::Other
+            }
+        }
+        Err(ExecutionError::NonDeterministic(_)) => OpStatus::Other,
+    }
 }

@@ -7,8 +7,6 @@ use std::{
 
 use anyhow::{Result, bail};
 use bitcoin::BlockHash;
-use indexer_types::Block;
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use tokio::{
     select,
     sync::{
@@ -22,12 +20,11 @@ use tracing::{error, info, warn};
 
 use crate::{
     bitcoin_client::client::BitcoinRpc,
-    block::TransactionFilterMap,
     retry::{new_backoff_unlimited, retry},
     stopper::ShutdownSignal,
 };
 
-use super::event::BlockEvent;
+use super::{block::BlockInput, event::BlockEvent};
 
 const HASH_CACHE_SIZE: usize = 50;
 
@@ -97,11 +94,7 @@ impl BlockHashCache {
 
 // -- Fetch + process a single block --
 
-async fn fetch_and_process<C: BitcoinRpc>(
-    bitcoin: C,
-    height: u64,
-    f: TransactionFilterMap,
-) -> Result<Block> {
+async fn fetch_and_process<C: BitcoinRpc>(bitcoin: C, height: u64) -> Result<BlockInput> {
     let block_hash = retry(
         || bitcoin.get_block_hash(height),
         "get block hash",
@@ -117,22 +110,7 @@ async fn fetch_and_process<C: BitcoinRpc>(
     .await?;
 
     let prev_hash = block.header.prev_blockhash;
-    let transactions = tokio::task::spawn_blocking(move || {
-        block
-            .txdata
-            .into_par_iter()
-            .enumerate()
-            .filter_map(f)
-            .collect()
-    })
-    .await?;
-
-    Ok(Block {
-        height,
-        hash: block_hash,
-        prev_hash,
-        transactions,
-    })
+    Ok(BlockInput::new(height, block_hash, prev_hash, block.txdata))
 }
 
 // -- Delivery: validate block ordering and detect reorgs --
@@ -154,7 +132,7 @@ enum DeliveryResult {
 }
 
 fn deliver_blocks(
-    pending: &mut HashMap<u64, Block>,
+    pending: &mut HashMap<u64, BlockInput>,
     cache: &mut BlockHashCache,
     next_height: u64,
     batch_end: u64,
@@ -259,7 +237,6 @@ async fn wait_for_poll(
 /// is the cancel-safety bug everyone eventually writes once.
 pub async fn run<C: BitcoinRpc>(
     bitcoin: C,
-    f: TransactionFilterMap,
     event_tx: Sender<BlockEvent>,
     shutdown: ShutdownSignal,
     start_height: u64,
@@ -275,7 +252,6 @@ pub async fn run<C: BitcoinRpc>(
         }
         result = poll(
             bitcoin,
-            f,
             event_tx,
             start_height,
             known_hashes,
@@ -289,7 +265,6 @@ pub async fn run<C: BitcoinRpc>(
 #[allow(clippy::too_many_arguments)]
 async fn poll<C: BitcoinRpc>(
     bitcoin: C,
-    f: TransactionFilterMap,
     event_tx: Sender<BlockEvent>,
     start_height: u64,
     known_hashes: Vec<(u64, BlockHash)>,
@@ -381,13 +356,13 @@ async fn poll<C: BitcoinRpc>(
         for height in next_height..batch_end {
             let bitcoin = bitcoin.clone();
             join_set.spawn(async move {
-                let block = fetch_and_process(bitcoin, height, f).await;
+                let block = fetch_and_process(bitcoin, height).await;
                 (height, block)
             });
         }
 
         // 3. Collect results into a buffer
-        let mut pending: HashMap<u64, Block> = HashMap::new();
+        let mut pending: HashMap<u64, BlockInput> = HashMap::new();
         while let Some(result) = join_set.join_next().await {
             match result {
                 Ok((height, Ok(block))) => {

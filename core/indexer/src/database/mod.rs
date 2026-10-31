@@ -1,14 +1,19 @@
 pub mod confirmation;
 pub mod connection;
+mod genesis;
 pub mod init;
 pub(crate) mod maintenance;
+pub(crate) mod native_bootstrap;
 pub mod native_contracts;
 mod pool;
 pub mod queries;
 pub mod reader;
 pub mod receipt_stream;
+pub(crate) mod storage_contracts_v1;
+pub(crate) mod storage_session_v1;
 pub mod types;
 pub mod writer;
 
+pub use genesis::open_node_database;
 pub use reader::Reader;
 pub use writer::Writer;

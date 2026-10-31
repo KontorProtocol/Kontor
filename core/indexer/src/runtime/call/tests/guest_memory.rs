@@ -3,8 +3,8 @@ use indexer_types::Payment;
 use libsql::params;
 use wasmtime::{GcHeapOutOfMemory, Instance, Module, Store};
 
-use super::super::error::is_deterministic;
 use super::funded;
+use crate::protocol::v1::errors::is_deterministic;
 use crate::runtime::guest_memory::{
     GuestMemoryLimitExceeded, GuestMemoryLimiter, GuestMemoryLimits,
 };

@@ -90,6 +90,30 @@ class Recipes(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "differs"):
             verify_engine_observations(log(changed))
 
+    def test_retained_engine_and_facade_are_both_checked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = ("core/indexer/src/runtime/mod.rs",
+                     "core/indexer/src/protocol/v1/engine.rs",
+                     "protocol-bundles/proof/vm.rs")
+            for relative in paths:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / relative).read_bytes())
+            verify(root)
+            retained = root / paths[1]
+            original = retained.read_text()
+            retained.write_text(original.replace("config.wasm_threads(false)",
+                                                 "config.wasm_threads(true)"))
+            with self.assertRaisesRegex(RuntimeError, "synchronous baseline"):
+                verify(root)
+            retained.write_text(original)
+            facade = root / paths[0]
+            facade.write_text(facade.read_text().replace("engine::new_engine()",
+                                                        "other::new_engine()"))
+            with self.assertRaisesRegex(RuntimeError, "delegate"):
+                verify(root)
+
     def test_capability_enable_or_omission_is_rejected(self):
         calls = [f"config.{name}(false);" for name in sorted(DISABLED)]
         settings("\n".join(calls))

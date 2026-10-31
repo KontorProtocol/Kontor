@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use malachitebft_app_channel::app::streaming::StreamContent;
 use malachitebft_app_channel::{AppMsg, Channels, NetworkMsg};
 use malachitebft_core_consensus::Role;
@@ -19,6 +19,7 @@ use crate::consensus::{Ctx, Height, ProposalPart};
 #[derive(Clone)]
 pub(super) struct StartupFaults {
     round_zero: Arc<Barrier>,
+    setup_ready: watch::Sender<bool>,
     dropped_parts: Arc<AtomicUsize>,
     delayed_proposers: Arc<AtomicUsize>,
     retry_failed: watch::Sender<bool>,
@@ -43,7 +44,9 @@ impl StartupFaults {
                     if *round == Round::new(0) {
                         // Initialization speed must not determine the fault:
                         // start all round-zero timers only after every node is up.
-                        faults.round_zero.wait().await;
+                        if faults.round_zero.wait().await.is_leader() {
+                            let _ = faults.setup_ready.send(true);
+                        }
                     } else if *round == Round::new(1) && *role == Role::Proposer {
                         // Peers start their 10.5s proposal timers first. A 3s
                         // proposer delay exceeds the old 20% dissemination margin.
@@ -90,14 +93,21 @@ impl StartupFaults {
 #[tokio::test]
 async fn lost_startup_proposal_recovers_with_a_late_retry_proposer() -> Result<()> {
     let (retry_failed, mut failure) = watch::channel(false);
+    let (setup_ready, mut ready) = watch::channel(false);
     let faults = StartupFaults {
         round_zero: Arc::new(Barrier::new(3)),
+        setup_ready,
         dropped_parts: Arc::new(AtomicUsize::new(0)),
         delayed_proposers: Arc::new(AtomicUsize::new(0)),
         retry_failed,
     };
     let mut cluster = ReactorCluster::start_with_faults(3, 3, None, Some(faults.clone())).await?;
-    let result = timeout(Duration::from_secs(40), async {
+    let result = async {
+        timeout(Duration::from_secs(120), ready.wait_for(|is_ready| *is_ready))
+            .await
+            .context("cluster setup exceeded 120 s")?
+            .context("cluster setup readiness channel closed")?;
+        timeout(Duration::from_secs(40), async {
         let mut decided = HashSet::new();
         let mut first_value = None;
         while decided.len() < 3 {
@@ -120,7 +130,8 @@ async fn lost_startup_proposal_recovers_with_a_late_retry_proposer() -> Result<(
         ensure!(faults.delayed_proposers.load(Ordering::SeqCst) == 1, "retry proposer was not delayed");
         ensure!(cluster.reactor_errors.lock().unwrap().is_empty(), "a reactor exited");
         Ok(())
-    }).await;
+        }).await?
+    }.await;
     cluster.shutdown().await;
-    result?
+    result
 }
