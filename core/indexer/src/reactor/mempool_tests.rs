@@ -1,10 +1,12 @@
 use std::future::pending;
 use std::slice;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, ensure};
 use bitcoin::blockdata::constants::genesis_block;
-use bitcoin::consensus::serialize;
+use bitcoin::consensus::{deserialize, serialize};
+use bitcoin::hashes::Hash;
 use bitcoin::{Network, Transaction as BitcoinTransaction, Witness};
 use indexer_types::Transaction;
 use malachitebft_core_types::Round;
@@ -15,13 +17,17 @@ use tokio::time::timeout;
 use super::aggregate_error_tests::reactor;
 use super::batches::IoApply;
 use super::consensus_state::PendingProposal;
-use super::executor::{RecognizedTransaction, TxPolicy};
+use super::executor::{Executor, RecognizedTransaction, TxPolicy};
 use super::mempool::MempoolPreparation;
 use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::signing::PrivateKey;
-use crate::consensus::{Address, Height};
+use crate::consensus::{Address, Height, ProposalData};
 use crate::database::queries::rollback_to_height;
+use crate::protocol::coordinator::linked::{PreparedTransaction, TransactionRecognizer};
+use crate::protocol::coordinator::selection::{
+    ApplicationPosition, ExecutorVersion, select_legacy_p1,
+};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::{Decimal, GenesisValidator};
 use crate::stopper::Shutdown;
@@ -37,12 +43,12 @@ impl Drop for StopEngine {
 
 fn recognized(raw: BitcoinTransaction) -> RecognizedTransaction {
     RecognizedTransaction {
-        parsed: Some(Transaction {
+        parsed: Some(PreparedTransaction::fixture(Transaction {
             txid: raw.compute_txid(),
             index: 0,
             inputs: Vec::new(),
             op_return_raw: None,
-        }),
+        })),
         raw,
     }
 }
@@ -284,5 +290,123 @@ async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()
         "rollback requires fresh validation"
     );
     ensure!(trial.consensus.mempool.contains_candidate(&raw));
+    Ok(())
+}
+
+#[tokio::test]
+async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -> Result<()> {
+    let (runtime, dir, _) = test_runtime_with_genesis(&[GenesisValidator {
+        x_only_pubkey: random_x_only_pubkey(),
+        ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }])
+    .await?;
+    let mut trial = reactor(runtime, &dir).await?;
+    let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
+    let raw = genesis_block(Network::Regtest).txdata.remove(0);
+    let mut replacement = raw.clone();
+    replacement.input[0].witness = Witness::from_slice(&[b"not batchable".as_slice()]);
+    ensure!(raw.compute_txid() == replacement.compute_txid());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let record = seen.clone();
+    // This deliberately recognizes bytes that P1 rejects, so a node-side P1
+    // fallback cannot pass the dispatch assertions below.
+    trial.recognizer = TransactionRecognizer::new(
+        ExecutorVersion::LegacyP1,
+        Network::Regtest,
+        Arc::new(move |_, bytes| {
+            let raw: BitcoinTransaction = deserialize(&bytes).unwrap();
+            record.lock().unwrap().push(bytes);
+            Ok(Ok(Some((
+                Arc::new(()),
+                raw.compute_txid().to_byte_array(),
+                raw.input[0].witness.is_empty(),
+                Vec::new(),
+            ))))
+        }),
+    );
+    let selection = trial.preparation_selection().await?;
+    let prepared = trial
+        .executor
+        .parse_mempool(
+            &trial.recognizer,
+            &selection,
+            vec![raw.clone(), replacement.clone()],
+        )
+        .await?;
+    ensure!(prepared.len() == 2);
+    ensure!(
+        prepared[0]
+            .parsed
+            .as_ref()
+            .unwrap()
+            .eligible_for(&selection)
+    );
+    ensure!(
+        !prepared[1]
+            .parsed
+            .as_ref()
+            .unwrap()
+            .eligible_for(&selection)
+    );
+    let foreign = select_legacy_p1(
+        &trial.db_conn(),
+        Network::Bitcoin,
+        ApplicationPosition::Preparation {
+            anchor_height: 1,
+            anchor_hash: Some(new_mock_block_hash(1)),
+        },
+    )
+    .await?;
+    ensure!(!prepared[0].parsed.as_ref().unwrap().eligible_for(&foreign));
+    ensure!(
+        trial
+            .executor
+            .parse_mempool(&trial.recognizer, &foreign, vec![raw.clone()])
+            .await
+            .is_err()
+    );
+    ensure!(
+        seen.lock().unwrap().len() == 2,
+        "foreign selection entered the recognizer"
+    );
+    trial
+        .consensus
+        .mempool
+        .replace(prepared.into_iter().take(1).collect());
+    let (reply, receive) = oneshot::channel();
+    trial
+        .validate_and_accept_proposal(
+            &ProposalData::new_batch(1, new_mock_block_hash(1), vec![replacement.clone()]),
+            trial.consensus.address,
+            Height::new(2),
+            Round::new(0),
+            reply,
+        )
+        .await?;
+    ensure!(
+        receive.await?.is_none(),
+        "proposal used cached batch eligibility for another witness"
+    );
+    ensure!(
+        trial.io_jobs.is_empty(),
+        "ineligible proposal reached Bitcoin RPC validation"
+    );
+    ensure!(trial.consensus.mempool.contains_candidate(&raw));
+    ensure!(seen.lock().unwrap().last() == Some(&serialize(&replacement)));
+
+    // Infrastructure failures must not become successful empty preparations.
+    trial.recognizer = TransactionRecognizer::new(
+        ExecutorVersion::LegacyP1,
+        Network::Regtest,
+        Arc::new(|_, _| Err((0, "recognizer unavailable".into()))),
+    );
+    ensure!(
+        trial
+            .executor
+            .parse_mempool(&trial.recognizer, &selection, vec![raw])
+            .await
+            .is_err()
+    );
     Ok(())
 }

@@ -17,7 +17,35 @@ struct RecognizedTransaction {
     transaction: Transaction,
 }
 
+impl RecognizedTransaction {
+    fn envelope(self) -> RecognizedEnvelope {
+        let txid = self.transaction.txid.to_byte_array();
+        let batchable = transactions::is_batchable(&self.transaction.inputs);
+        let inputs = self
+            .transaction
+            .inputs
+            .iter()
+            .map(|input| (input.input_index, input.insts.ops.len() as u64))
+            .collect();
+        (Arc::new(self), txid, batchable, inputs)
+    }
+}
+
 impl Runtime {
+    #[cfg(test)]
+    pub(crate) fn recognition_fixture(
+        version: u32,
+        network: [u8; 4],
+        transaction: Transaction,
+    ) -> RecognizedEnvelope {
+        RecognizedTransaction {
+            version,
+            network,
+            transaction,
+        }
+        .envelope()
+    }
+
     pub(crate) fn recognizer(&self) -> RecognitionCall {
         let version = self.executor_version().tag();
         let network = self.network.magic().to_bytes();
@@ -40,19 +68,12 @@ impl Runtime {
             };
             Ok(Ok(transactions::filter_map((0, raw)).map(
                 |transaction| -> RecognizedEnvelope {
-                    let txid = transaction.txid.to_byte_array();
-                    let batchable = transactions::is_batchable(&transaction.inputs);
-                    let inputs = transaction
-                        .inputs
-                        .iter()
-                        .map(|input| (input.input_index, input.insts.ops.len() as u64))
-                        .collect();
-                    let parsed = Arc::new(RecognizedTransaction {
+                    RecognizedTransaction {
                         version,
                         network,
                         transaction,
-                    });
-                    (parsed, txid, batchable, inputs)
+                    }
+                    .envelope()
                 },
             )))
         })

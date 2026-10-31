@@ -18,7 +18,7 @@ use super::*;
 use crate::bitcoin_client::Client;
 use crate::database::queries::{insert_block, insert_transaction};
 use crate::protocol::coordinator::linked::{
-    begin_unit, execute_transaction, link_runtime, recognize_transaction,
+    TransactionRecognizer, begin_unit, execute_transaction, link_runtime, recognize_transaction,
 };
 use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
 use crate::reactor::executor::{Executor, RuntimeExecutor};
@@ -209,14 +209,15 @@ async fn recognized_transaction_preserves_execution_and_simulation() -> Result<(
         },
     )
     .await?;
-    let recognized = recognize_transaction(
-        &session.executor,
-        &preparation,
+    let recognizer = TransactionRecognizer::new(
+        session.origin(),
         Network::Regtest,
-        bytes.clone(),
-    )?
-    .map_err(|e| anyhow!(e))?
-    .unwrap();
+        session.executor.operations.recognize.clone(),
+    );
+    let mut prepared = executor
+        .parse_mempool(&recognizer, &preparation, vec![raw.clone()])
+        .await?;
+    let recognized = prepared.remove(0).parsed.unwrap();
     assert_eq!(recognized.txid, raw.compute_txid());
     assert!(recognized.batchable);
     assert_eq!(recognized.inputs, [(0, 2)]);

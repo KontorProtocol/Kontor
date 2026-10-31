@@ -24,6 +24,7 @@ use crate::database::queries::{
     select_existing_txids,
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
+use crate::protocol::coordinator::linked::PreparedTransaction;
 pub(super) use crate::protocol::coordinator::v1::batch_is_ordered;
 use crate::protocol::coordinator::v1::{build_replay_queue, dependency_sort};
 
@@ -83,7 +84,7 @@ pub(super) enum IoApply {
         anchor_height: u64,
         anchor_hash: BlockHash,
         /// Parses aligned with the future's pairs — same source order.
-        parsed: Vec<indexer_types::Transaction>,
+        parsed: Vec<PreparedTransaction>,
         reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>,
     },
 }
@@ -555,7 +556,7 @@ impl<E: Executor> Reactor<E> {
             if !unbatched_set.contains(txid) {
                 continue;
             }
-            if self.executor.is_batchable(&selection, parsed) {
+            if parsed.eligible_for(&selection) {
                 txs.push(raw_tx.clone());
             } else {
                 invalid_txids.push(*txid);
@@ -696,14 +697,17 @@ impl<E: Executor> Reactor<E> {
                     // not commit to, so a same-txid variant sitting in this node's
                     // mempool would otherwise be judged (and later voted on) in
                     // place of the witness the proposer actually streamed.
-                    let parsed = if let Some(p) = self.executor.parse_transaction(&selection, tx) {
+                    let parsed = if let Some(p) =
+                        self.executor
+                            .prepare_transaction(&self.recognizer, &selection, tx)?
+                    {
                         p
                     } else {
                         warn!(%txid, "Rejecting proposal: transaction failed to parse");
                         let _ = reply.send(None);
                         return Ok(());
                     };
-                    if !self.executor.is_batchable(&selection, &parsed) {
+                    if !parsed.eligible_for(&selection) {
                         warn!(%txid, "Rejecting proposal: transaction not batchable");
                         let _ = reply.send(None);
                         return Ok(());

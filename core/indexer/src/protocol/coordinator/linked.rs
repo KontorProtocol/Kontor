@@ -6,14 +6,18 @@ use anyhow::{Result, anyhow};
 use bitcoin::{Network, Txid, hashes::Hash};
 use deadpool::managed::{Object, Pool};
 use indexer_types::Block;
+#[cfg(test)]
+use indexer_types::Transaction;
 use libsql::Connection;
 
 use super::committee::materialize_committee;
-use super::selection::{ApplicationPosition, ExecutionSelection, select_legacy_p1};
+use super::selection::{
+    ApplicationPosition, ExecutionSelection, ExecutorVersion, select_legacy_p1,
+};
 use crate::consensus::ValidatorSet;
 use crate::database::queries::{insert_block_execution_usage, insert_transaction_execution_usage};
 use crate::database::storage_callbacks_v1::storage_callbacks;
-use crate::protocol::operations::{AddressEnvelope, SessionOwner, ViewOutcome};
+use crate::protocol::operations::{AddressEnvelope, RecognitionCall, SessionOwner, ViewOutcome};
 use crate::runtime::bundle_session::BundleSession;
 use crate::runtime::fuel::ExecutionUsage;
 use crate::runtime::ownership::adapter::{
@@ -203,11 +207,77 @@ pub(crate) async fn begin_unit(
     selection.verify_base(&session.conn).await
 }
 
+#[derive(Clone)]
 pub(crate) struct PreparedTransaction {
+    origin: ExecutorVersion,
+    network: Network,
     parsed: SessionOwner,
     pub(crate) txid: Txid,
     pub(crate) batchable: bool,
     pub(crate) inputs: Vec<(u32, u64)>,
+}
+
+#[derive(Clone)]
+pub(crate) struct TransactionRecognizer {
+    origin: ExecutorVersion,
+    network: Network,
+    recognize: RecognitionCall,
+}
+
+impl TransactionRecognizer {
+    pub(crate) fn new(
+        origin: ExecutorVersion,
+        network: Network,
+        recognize: RecognitionCall,
+    ) -> Self {
+        Self {
+            origin,
+            network,
+            recognize,
+        }
+    }
+
+    pub(crate) fn recognize(
+        &self,
+        selection: &ExecutionSelection,
+        raw: Vec<u8>,
+    ) -> Result<Result<Option<PreparedTransaction>, String>> {
+        selection.ensure_runtime(self.network, self.origin)?;
+        Ok((self.recognize)(selection.envelope(), raw)
+            .map_err(HostFailure::from)?
+            .map(|recognized| {
+                recognized.map(|(parsed, txid, batchable, inputs)| PreparedTransaction {
+                    origin: self.origin,
+                    network: self.network,
+                    parsed,
+                    txid: Txid::from_byte_array(txid),
+                    batchable,
+                    inputs,
+                })
+            }))
+    }
+}
+
+impl PreparedTransaction {
+    pub(crate) fn eligible_for(&self, selection: &ExecutionSelection) -> bool {
+        self.batchable && selection.ensure_runtime(self.network, self.origin).is_ok()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(transaction: Transaction) -> Self {
+        let origin = ExecutorVersion::LegacyP1;
+        let network = Network::Regtest;
+        let (parsed, txid, batchable, inputs) =
+            Runtime::recognition_fixture(origin.tag(), network.magic().to_bytes(), transaction);
+        Self {
+            origin,
+            network,
+            parsed,
+            txid: Txid::from_byte_array(txid),
+            batchable,
+            inputs,
+        }
+    }
 }
 
 pub(crate) fn recognize_transaction(
@@ -216,17 +286,12 @@ pub(crate) fn recognize_transaction(
     network: Network,
     raw: Vec<u8>,
 ) -> Result<Result<Option<PreparedTransaction>, String>> {
-    selection.ensure_runtime(network, executor.origin)?;
-    Ok((executor.operations.recognize)(selection.envelope(), raw)
-        .map_err(HostFailure::from)?
-        .map(|recognized| {
-            recognized.map(|(parsed, txid, batchable, inputs)| PreparedTransaction {
-                parsed,
-                txid: Txid::from_byte_array(txid),
-                batchable,
-                inputs,
-            })
-        }))
+    TransactionRecognizer::new(
+        executor.origin,
+        network,
+        executor.operations.recognize.clone(),
+    )
+    .recognize(selection, raw)
 }
 
 pub(crate) async fn execute_transaction(

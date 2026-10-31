@@ -3,12 +3,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
-use bitcoin::Txid;
+use bitcoin::{Transaction as BitcoinTransaction, Txid};
 
 use crate::database::queries::{
     contract_has_state, get_transaction_by_txid, insert_block, insert_contract, insert_transaction,
 };
 use crate::database::types::ContractRow;
+use crate::protocol::coordinator::linked::{PreparedTransaction, TransactionRecognizer};
 use crate::protocol::coordinator::selection::ExecutionSelection;
 use crate::reactor::executor::{Executor, TxPolicy};
 use crate::reactor::mock_bitcoin::MockBitcoin;
@@ -228,6 +229,17 @@ impl LiteExecutor {
 }
 
 impl Executor for LiteExecutor {
+    fn prepare_transaction(
+        &self,
+        _recognizer: &TransactionRecognizer,
+        selection: &ExecutionSelection,
+        raw: &BitcoinTransaction,
+    ) -> Result<Option<PreparedTransaction>> {
+        Ok(self
+            .parse_transaction(selection, raw)
+            .map(PreparedTransaction::fixture))
+    }
+
     fn validate_txs(
         &self,
         txs: Vec<bitcoin::Transaction>,

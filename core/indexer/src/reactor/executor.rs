@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
+use bitcoin::consensus::serialize;
 use bitcoin::hashes::Hash;
 use bitcoin::{Transaction as BitcoinTransaction, Txid};
-use indexer_types::{Block, Transaction};
+use indexer_types::Block;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tracing::warn;
 
@@ -11,6 +12,7 @@ use crate::bitcoin_client::{Client, check_mempool_acceptance};
 use crate::bitcoin_follower::block::BlockInput;
 use crate::block::filter_map;
 use crate::database::queries::insert_transaction_execution_usage;
+use crate::protocol::coordinator::linked::{PreparedTransaction, TransactionRecognizer};
 use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
 pub use crate::protocol::v1::execution::process_input;
 use crate::protocol::v1::{execution, lifecycle, transactions};
@@ -30,18 +32,20 @@ pub enum TxPolicy {
 
 pub struct RecognizedTransaction {
     pub raw: BitcoinTransaction,
-    pub parsed: Option<Transaction>,
+    pub(crate) parsed: Option<PreparedTransaction>,
 }
 
 fn recognize_mempool(
     transactions: Vec<BitcoinTransaction>,
-    recognize: impl Fn(&BitcoinTransaction) -> Option<Transaction> + Send + Sync,
-) -> Vec<RecognizedTransaction> {
+    recognize: impl Fn(&BitcoinTransaction) -> Result<Option<PreparedTransaction>> + Send + Sync,
+) -> Result<Vec<RecognizedTransaction>> {
     transactions
         .into_par_iter()
-        .map(|raw| RecognizedTransaction {
-            parsed: recognize(&raw),
-            raw,
+        .map(|raw| {
+            Ok(RecognizedTransaction {
+                parsed: recognize(&raw)?,
+                raw,
+            })
         })
         .collect()
 }
@@ -62,10 +66,17 @@ pub(crate) trait Executor: Sync {
         }
     }
 
-    fn is_batchable(&self, selection: &ExecutionSelection, tx: &Transaction) -> bool {
-        match selection.version() {
-            ExecutorVersion::LegacyP1 => transactions::is_batchable(&tx.inputs),
-        }
+    fn prepare_transaction(
+        &self,
+        recognizer: &TransactionRecognizer,
+        selection: &ExecutionSelection,
+        raw: &BitcoinTransaction,
+    ) -> Result<Option<PreparedTransaction>> {
+        recognizer
+            .recognize(selection, serialize(raw))?
+            .map_err(|error| {
+                anyhow::anyhow!("serialized Bitcoin transaction failed to decode: {error}")
+            })
     }
 
     async fn run_block_lifecycle(
@@ -186,12 +197,14 @@ pub(crate) trait Executor: Sync {
     // lightweight executors whose recognizer has no expensive decoding.
     fn parse_mempool(
         &self,
+        recognizer: &TransactionRecognizer,
         selection: &ExecutionSelection,
         transactions: Vec<BitcoinTransaction>,
     ) -> BoxFuture<'static, Result<Vec<RecognizedTransaction>>> {
-        let prepared =
-            recognize_mempool(transactions, |raw| self.parse_transaction(selection, raw));
-        Box::pin(async move { Ok(prepared) })
+        let prepared = recognize_mempool(transactions, |raw| {
+            self.prepare_transaction(recognizer, selection, raw)
+        });
+        Box::pin(async move { prepared })
     }
 }
 
@@ -199,6 +212,15 @@ pub(crate) trait Executor: Sync {
 pub struct NoopExecutor;
 
 impl Executor for NoopExecutor {
+    fn prepare_transaction(
+        &self,
+        _recognizer: &TransactionRecognizer,
+        _selection: &ExecutionSelection,
+        _raw: &BitcoinTransaction,
+    ) -> Result<Option<PreparedTransaction>> {
+        Ok(None)
+    }
+
     fn validate_txs(
         &self,
         txs: Vec<bitcoin::Transaction>,
@@ -419,17 +441,25 @@ impl Executor for RuntimeExecutor {
 
     fn parse_mempool(
         &self,
+        recognizer: &TransactionRecognizer,
         selection: &ExecutionSelection,
         transactions: Vec<BitcoinTransaction>,
     ) -> BoxFuture<'static, Result<Vec<RecognizedTransaction>>> {
-        let version = selection.version();
+        let recognizer = recognizer.clone();
+        let selection = selection.clone();
         Box::pin(async move {
-            Ok(tokio::task::spawn_blocking(move || match version {
-                ExecutorVersion::LegacyP1 => {
-                    recognize_mempool(transactions, Self::recognize_transaction)
-                }
+            tokio::task::spawn_blocking(move || {
+                recognize_mempool(transactions, |raw| {
+                    recognizer
+                        .recognize(&selection, serialize(raw))?
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "serialized Bitcoin transaction failed to decode: {error}"
+                            )
+                        })
+                })
             })
-            .await?)
+            .await?
         })
     }
 }

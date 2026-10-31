@@ -59,6 +59,7 @@ use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
 use crate::protocol::coordinator::committee::build_validator_set;
+use crate::protocol::coordinator::linked::TransactionRecognizer;
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
 };
@@ -133,6 +134,7 @@ pub struct PruneConfig {
 
 pub(crate) struct Reactor<E: Executor> {
     executor: E,
+    recognizer: TransactionRecognizer,
     runtime: Runtime,
     owner_service: OwnerService,
     shutdown: ShutdownSignal,
@@ -198,8 +200,14 @@ impl<E: Executor> Reactor<E> {
             .validator_index
             .map(|i| format!("node_{i}"))
             .unwrap_or_else(|| "follower".to_string());
+        let recognizer = TransactionRecognizer::new(
+            runtime.executor_version(),
+            runtime.network,
+            runtime.recognizer(),
+        );
         Self {
             executor,
+            recognizer,
             runtime,
             owner_service,
             shutdown,
@@ -577,7 +585,7 @@ impl<E: Executor> Reactor<E> {
                             self.consensus.mempool.stage_snapshot(&transactions);
                             let selection = self.preparation_selection().await?;
                             self.mempool_preparation = Some(MempoolPreparation {
-                                result: self.executor.parse_mempool(&selection, transactions), selection,
+                                result: self.executor.parse_mempool(&self.recognizer, &selection, transactions), selection,
                             });
                             self.consensus.mempool_fee_index.replace(fees, mempool_min_fee_sat_per_vb);
                             self.consensus.mempool_fee_index.recompute();
@@ -590,7 +598,7 @@ impl<E: Executor> Reactor<E> {
                             self.consensus.mempool.stage(&tx);
                             let selection = self.preparation_selection().await?;
                             self.mempool_preparation = Some(MempoolPreparation {
-                                result: self.executor.parse_mempool(&selection, vec![tx]), selection,
+                                result: self.executor.parse_mempool(&self.recognizer, &selection, vec![tx]), selection,
                             });
                             self.consensus.mempool_fee_index.insert(txid, fee);
                         },
@@ -612,7 +620,7 @@ impl<E: Executor> Reactor<E> {
                     let selection = self.preparation_selection().await?;
                     if !previous.selection.same_recognition_rules(&selection) {
                         self.mempool_preparation = Some(MempoolPreparation {
-                            result: self.executor.parse_mempool(&selection, self.consensus.mempool.raw_inputs()),
+                            result: self.executor.parse_mempool(&self.recognizer, &selection, self.consensus.mempool.raw_inputs()),
                             selection,
                         });
                         continue;
@@ -1039,7 +1047,8 @@ pub fn run(
 
                 let selection = select_legacy_p1(&runtime.get_storage_conn(), runtime.network,
                     ApplicationPosition::Preparation { anchor_height: last_height, anchor_hash: last_hash }).await?;
-                let initial_mempool = exec.parse_mempool(&selection, initial_raw_txs).await?;
+                let recognizer = TransactionRecognizer::new(runtime.executor_version(), runtime.network, runtime.recognizer());
+                let initial_mempool = exec.parse_mempool(&recognizer, &selection, initial_raw_txs).await?;
                 let mut startup_lease = owner_service.begin_canonical(&mut runtime, false).await?;
                 let consensus_result = start_consensus(
                     engine_config,
