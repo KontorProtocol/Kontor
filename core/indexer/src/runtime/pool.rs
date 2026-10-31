@@ -1,14 +1,18 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Context;
 use deadpool::managed::{self, Pool, RecycleError, RecycleResult};
+use libsql::Connection;
 use thiserror::Error;
 use tracing::warn;
 use wasmtime::Engine;
 
+use super::ownership::adapter::{ExecutorSession, SessionFactory};
 use crate::{
     database::connection::new_connection,
+    protocol::coordinator::selection::ExecutorVersion,
     runtime::{ComponentCache, Linkers, Runtime},
 };
 
@@ -34,6 +38,94 @@ pub struct Manager {
     /// Applied to each pooled runtime in `create`; the reactor's consensus runtime
     /// is a separate instance and keeps the fixed consensus limit.
     view_gas_limit: u64,
+}
+
+#[derive(Clone)]
+pub(crate) struct LinkedSession {
+    pub(crate) conn: Connection,
+    pub(crate) executor: ExecutorSession,
+    origin: ExecutorVersion,
+    pub(crate) canonical_busy: Arc<AtomicBool>,
+}
+
+impl LinkedSession {
+    pub(crate) fn new(conn: Connection, executor: ExecutorSession) -> Self {
+        let origin = executor.origin;
+        Self {
+            conn,
+            executor,
+            origin,
+            canonical_busy: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub(crate) fn origin(&self) -> ExecutorVersion {
+        self.origin
+    }
+}
+
+pub(crate) struct LinkedManager {
+    data_dir: PathBuf,
+    filename: String,
+    factory: SessionFactory,
+}
+
+impl LinkedManager {
+    pub(crate) fn new(data_dir: PathBuf, filename: String, factory: SessionFactory) -> Self {
+        Self {
+            data_dir,
+            filename,
+            factory,
+        }
+    }
+}
+
+impl managed::Manager for LinkedManager {
+    type Type = LinkedSession;
+    type Error = RuntimeError;
+
+    async fn create(&self) -> Result<Self::Type, Self::Error> {
+        let conn = new_connection(&self.data_dir, &self.filename)
+            .await
+            .map_err(|error| RuntimeError::DatabaseConnection(error.to_string()))?;
+        conn.query("PRAGMA query_only = ON;", ())
+            .await
+            .map_err(|error| RuntimeError::CreationFailed(error.to_string()))?;
+        let factory = self.factory.clone();
+        let construction_conn = conn.clone();
+        // Retain the physical connection in the task if the pool cancels create.
+        let construction = tokio::spawn(async move { factory(construction_conn).await });
+        let executor = construction
+            .await
+            .map_err(|error| RuntimeError::CreationFailed(error.to_string()))?
+            .map_err(|error| RuntimeError::CreationFailed(error.to_string()))?;
+        Ok(LinkedSession::new(conn, executor))
+    }
+
+    async fn recycle(
+        &self,
+        obj: &mut Self::Type,
+        _metrics: &deadpool::managed::Metrics,
+    ) -> RecycleResult<Self::Error> {
+        if obj.canonical_busy.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(RecycleError::Message(
+                "linked session still has a canonical root".into(),
+            ));
+        }
+        (obj.executor.recycle)(obj.executor.owner.clone())
+            .await
+            .map_err(|error| {
+                RecycleError::Message(format!("linked executor recycle failed: {error:?}").into())
+            })?;
+        let _ = obj.conn.execute("ROLLBACK", ()).await;
+        if obj.conn.is_autocommit() {
+            Ok(())
+        } else {
+            Err(RecycleError::Message(
+                "linked pooled connection is still in a transaction".into(),
+            ))
+        }
+    }
 }
 
 impl Manager {
@@ -131,6 +223,18 @@ pub(crate) async fn new(
         .max_size(std::thread::available_parallelism()?.into())
         .build()
         .context("Failed to build runtime pool")
+}
+
+pub(crate) fn new_linked(
+    data_dir: PathBuf,
+    filename: String,
+    factory: SessionFactory,
+    max_size: usize,
+) -> anyhow::Result<Pool<LinkedManager>> {
+    Pool::builder(LinkedManager::new(data_dir, filename, factory))
+        .max_size(max_size)
+        .build()
+        .context("Failed to build linked executor pool")
 }
 
 #[cfg(test)]

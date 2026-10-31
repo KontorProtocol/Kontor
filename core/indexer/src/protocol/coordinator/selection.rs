@@ -65,6 +65,24 @@ impl ExecutionSelection {
         matches!(self.position, ApplicationPosition::View)
     }
 
+    pub(crate) fn ensure_canonical_root(&self, simulation: bool) -> Result<()> {
+        let valid = match (&self.position, simulation) {
+            (ApplicationPosition::Simulation { .. }, true) => true,
+            (
+                ApplicationPosition::Block { .. }
+                | ApplicationPosition::Batch { .. }
+                | ApplicationPosition::Committee,
+                false,
+            ) => true,
+            _ => false,
+        };
+        ensure!(
+            valid,
+            "executor selection purpose does not match canonical root"
+        );
+        Ok(())
+    }
+
     pub(crate) fn ensure_runtime(&self, network: Network, version: ExecutorVersion) -> Result<()> {
         ensure!(
             self.network == network,

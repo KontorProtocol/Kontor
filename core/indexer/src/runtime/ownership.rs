@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::HashMap;
 use std::future::{Future, pending};
 use std::ops::{Deref, DerefMut};
@@ -13,7 +14,7 @@ use deadpool::managed::Object;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use metrics::gauge;
-use tokio::sync::{Mutex, Notify, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio::task::{AbortHandle, Id, JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
@@ -22,8 +23,13 @@ use wasmtime::component::{ResourceTable, Val};
 use super::Runtime;
 use super::invocation::{InvocationBudget, InvocationStore};
 use super::pool::Manager;
+use super::pool::{LinkedManager, LinkedSession};
 #[cfg(test)]
 use super::storage::BlockingGate;
+use crate::protocol::coordinator::selection::ExecutionSelection;
+use adapter::{OwnerAdapter, Payload, RootHooks, SharedOwner};
+
+pub(crate) mod adapter;
 
 const API_DRAIN_LIMIT: Duration = Duration::from_secs(5);
 const NODE_ADMISSION_CAPACITY: usize = 64;
@@ -76,8 +82,14 @@ impl RootKind {
 #[derive(Default)]
 struct BlockingRegistry {
     next_id: AtomicU64,
-    active: Arc<std::sync::Mutex<HashMap<u64, Arc<BlockingState>>>>,
+    gate: Arc<std::sync::Mutex<BlockingGateState>>,
     panicked: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct BlockingGateState {
+    closed: bool,
+    active: HashMap<u64, Arc<BlockingState>>,
 }
 
 struct BlockingState {
@@ -93,9 +105,10 @@ impl BlockingRegistry {
     async fn wait_all(&self) {
         loop {
             let entries = self
-                .active
+                .gate
                 .lock()
                 .expect("blocking registry poisoned")
+                .active
                 .values()
                 .cloned()
                 .collect::<Vec<_>>();
@@ -113,7 +126,7 @@ impl BlockingRegistry {
     fn spawn<F, T>(
         &self,
         work: F,
-    ) -> oneshot::Receiver<std::result::Result<T, tokio::task::JoinError>>
+    ) -> Result<oneshot::Receiver<std::result::Result<T, tokio::task::JoinError>>>
     where
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
@@ -123,13 +136,17 @@ impl BlockingRegistry {
             notify: tokio::sync::Notify::new(),
         });
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        self.active
-            .lock()
-            .expect("blocking registry poisoned")
-            .insert(id, state.clone());
+        {
+            let mut gate = self.gate.lock().expect("blocking registry poisoned");
+            ensure!(
+                !gate.closed,
+                "blocking registration closed after root drain"
+            );
+            gate.active.insert(id, state.clone());
+        }
         let (sender, receiver) = oneshot::channel();
         let task = tokio::task::spawn_blocking(work);
-        let active = self.active.clone();
+        let gate = self.gate.clone();
         let panicked = self.panicked.clone();
         tokio::spawn(async move {
             let result = task.await;
@@ -138,14 +155,18 @@ impl BlockingRegistry {
                 panicked.store(true, Ordering::SeqCst);
             }
             let _ = sender.send(result);
-            active
-                .lock()
+            gate.lock()
                 .expect("blocking registry poisoned")
+                .active
                 .remove(&id);
             state.done.store(true, Ordering::SeqCst);
             state.notify.notify_one();
         });
-        receiver
+        Ok(receiver)
+    }
+
+    fn close_registration(&self) {
+        self.gate.lock().expect("blocking registry poisoned").closed = true;
     }
 }
 
@@ -200,11 +221,25 @@ pub(super) struct GuestCompletion {
 }
 
 struct GuestDelivery {
-    completion: GuestCompletion,
+    completion: TaskCompletion,
     slot: SlotLease,
 }
 
-type GuestFuture = Pin<Box<dyn Future<Output = GuestCompletion> + Send + 'static>>;
+enum TaskCompletion {
+    Local(GuestCompletion),
+    Linked(bool, Box<dyn Any + Send>),
+}
+
+impl TaskCompletion {
+    fn host_panicked(&self) -> bool {
+        match self {
+            Self::Local(completion) => completion.host_panicked,
+            Self::Linked(panicked, _) => *panicked,
+        }
+    }
+}
+
+type GuestFuture = Pin<Box<dyn Future<Output = TaskCompletion> + Send + 'static>>;
 
 struct Admission {
     id: TaskId,
@@ -213,6 +248,7 @@ struct Admission {
     future: GuestFuture,
     completion: oneshot::Sender<GuestDelivery>,
     slot: SlotLease,
+    child_alive: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -225,6 +261,8 @@ pub(super) struct ChildContext {
     slot: Arc<AtomicBool>,
     state: Arc<AtomicU8>,
     blocking: Arc<BlockingRegistry>,
+    panic_seen: Arc<AtomicBool>,
+    alive: Arc<AtomicBool>,
 }
 
 impl ChildContext {
@@ -234,6 +272,7 @@ impl ChildContext {
         sender: mpsc::Sender<Admission>,
         state: Arc<AtomicU8>,
         blocking: Arc<BlockingRegistry>,
+        panic_seen: Arc<AtomicBool>,
     ) -> Self {
         Self {
             task: TaskId { root, local: 0 },
@@ -244,6 +283,8 @@ impl ChildContext {
             slot: Arc::new(AtomicBool::new(false)),
             state,
             blocking,
+            panic_seen,
+            alive: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -256,6 +297,43 @@ impl ChildContext {
         F: FnOnce(ChildContext) -> Fut,
         Fut: Future<Output = GuestCompletion> + Send + 'static,
     {
+        match self
+            .run_admission(move |child| {
+                let future = make_future(child);
+                Box::pin(async move { TaskCompletion::Local(future.await) })
+            })
+            .await?
+        {
+            TaskCompletion::Local(completion) => Ok(completion),
+            TaskCompletion::Linked(..) => Err(anyhow!("local guest received linked completion")),
+        }
+    }
+
+    async fn run_linked_guest<F>(&self, make_future: F) -> Result<(bool, Box<dyn Any + Send>)>
+    where
+        F: FnOnce(ChildContext) -> GuestFuture,
+    {
+        match self.run_admission(make_future).await? {
+            TaskCompletion::Linked(panicked, payload) => Ok((panicked, payload)),
+            TaskCompletion::Local(..) => Err(anyhow!("linked guest received local completion")),
+        }
+    }
+
+    async fn run_admission<F>(&self, make_future: F) -> Result<TaskCompletion>
+    where
+        F: FnOnce(ChildContext) -> GuestFuture,
+    {
+        if RootState::load(&self.state) != RootState::Running {
+            return self.closed_or_infrastructure().await;
+        }
+        ensure!(
+            self.alive.load(Ordering::SeqCst),
+            "guest parent capability expired"
+        );
+        ensure!(
+            !self.panic_seen.load(Ordering::SeqCst),
+            "host panic already observed in operation root"
+        );
         if self
             .slot
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -293,15 +371,19 @@ impl ChildContext {
             slot: Arc::new(AtomicBool::new(false)),
             state: self.state.clone(),
             blocking: self.blocking.clone(),
+            panic_seen: self.panic_seen.clone(),
+            alive: Arc::new(AtomicBool::new(true)),
         };
+        let child_alive = child.alive.clone();
         let (completion, receiver) = oneshot::channel();
         permit.send(Admission {
             id,
             parent: self.task,
             depth: child.depth,
-            future: Box::pin(make_future(child)),
+            future: make_future(child),
             completion,
             slot,
+            child_alive,
         });
         match receiver.await {
             Ok(delivery) if RootState::load(&self.state) == RootState::Running => {
@@ -322,14 +404,24 @@ impl ChildContext {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        let receiver = self.blocking.spawn(work);
+        if RootState::load(&self.state) != RootState::Running {
+            return self.closed_or_infrastructure().await;
+        }
+        ensure!(
+            !self.panic_seen.load(Ordering::SeqCst),
+            "host panic already observed in operation root"
+        );
+        let receiver = match self.blocking.spawn(work) {
+            Ok(receiver) => receiver,
+            Err(_) => return self.closed_or_infrastructure().await,
+        };
         receiver
             .await
             .context("tracked blocking watcher failed")?
             .context("tracked blocking work failed")
     }
 
-    async fn closed_or_infrastructure(&self) -> Result<GuestCompletion> {
+    async fn closed_or_infrastructure<T>(&self) -> Result<T> {
         if RootState::load(&self.state) != RootState::Running {
             if matches!(self.kind, RootKind::Canonical | RootKind::Simulation) {
                 return Err(anyhow!("canonical guest child closed; root quarantined"));
@@ -345,7 +437,8 @@ impl ChildContext {
             matches!(
                 RootState::load(&self.state),
                 RootState::Running | RootState::Committing
-            ) && !self.blocking.panicked(),
+            ) && !self.blocking.panicked()
+                && !self.panic_seen.load(Ordering::SeqCst),
             "operation root cannot commit after cancellation or quarantine"
         );
         Ok(())
@@ -355,6 +448,8 @@ impl ChildContext {
 enum RootAuthority {
     Pooled(Object<Manager>),
     Stateful(Runtime),
+    LinkedPooled(Object<LinkedManager>),
+    LinkedStateful(LinkedSession),
 }
 
 impl Deref for RootAuthority {
@@ -364,6 +459,9 @@ impl Deref for RootAuthority {
         match self {
             Self::Pooled(object) => object,
             Self::Stateful(runtime) => runtime,
+            Self::LinkedPooled(_) | Self::LinkedStateful(_) => {
+                unreachable!("linked authority cannot be dereferenced as a runtime")
+            }
         }
     }
 }
@@ -373,6 +471,9 @@ impl DerefMut for RootAuthority {
         match self {
             Self::Pooled(object) => object,
             Self::Stateful(runtime) => runtime,
+            Self::LinkedPooled(_) | Self::LinkedStateful(_) => {
+                unreachable!("linked authority cannot be dereferenced as a runtime")
+            }
         }
     }
 }
@@ -484,36 +585,133 @@ impl StatefulSession {
     }
 }
 
+struct LinkedStatefulSessionInner {
+    session: std::sync::Mutex<Option<LinkedSession>>,
+    available: Notify,
+    failed: AtomicBool,
+}
+
+#[derive(Clone)]
+pub(crate) struct LinkedStatefulSession(Arc<LinkedStatefulSessionInner>);
+
+struct LinkedSessionCheckout {
+    session: LinkedStatefulSession,
+    value: Option<LinkedSession>,
+}
+
+impl Drop for LinkedSessionCheckout {
+    fn drop(&mut self) {
+        if let Some(value) = self.value.take() {
+            self.session.return_session(value);
+        }
+    }
+}
+
+impl LinkedStatefulSession {
+    pub(crate) fn new(session: LinkedSession) -> Self {
+        Self(Arc::new(LinkedStatefulSessionInner {
+            session: std::sync::Mutex::new(Some(session)),
+            available: Notify::new(),
+            failed: AtomicBool::new(false),
+        }))
+    }
+
+    async fn checkout(&self) -> Result<LinkedSessionCheckout> {
+        loop {
+            let available = self.0.available.notified();
+            tokio::pin!(available);
+            available.as_mut().enable();
+            ensure!(
+                !self.0.failed.load(Ordering::SeqCst),
+                "linked stateful session is quarantined"
+            );
+            if let Some(value) = self
+                .0
+                .session
+                .lock()
+                .expect("linked session lock poisoned")
+                .take()
+            {
+                return Ok(LinkedSessionCheckout {
+                    session: self.clone(),
+                    value: Some(value),
+                });
+            }
+            available.await;
+        }
+    }
+
+    fn return_session(&self, value: LinkedSession) {
+        let previous = self
+            .0
+            .session
+            .lock()
+            .expect("linked session lock poisoned")
+            .replace(value);
+        assert!(previous.is_none(), "linked stateful session returned twice");
+        self.0.available.notify_one();
+    }
+
+    fn quarantine(&self) {
+        self.0.failed.store(true, Ordering::SeqCst);
+        self.0.available.notify_waiters();
+    }
+}
+
 struct RootKeeper {
     id: RootId,
+    linked_hooks: Mutex<Option<RootHooks>>,
     authority: Mutex<Option<RootAuthority>>,
     state: Arc<AtomicU8>,
     closing_at: Arc<std::sync::Mutex<Option<Instant>>>,
     cancellation: CancellationToken,
     blocking: Arc<BlockingRegistry>,
-    caught_host_panic: AtomicBool,
+    caught_host_panic: Arc<AtomicBool>,
     quiescent: AtomicBool,
+    _capacity: OwnedSemaphorePermit,
 }
 
 impl RootKeeper {
-    fn new(id: RootId, authority: Object<Manager>) -> Self {
-        Self::with_authority(id, RootAuthority::Pooled(authority))
+    fn new(id: RootId, authority: Object<Manager>, capacity: OwnedSemaphorePermit) -> Self {
+        Self::with_authority(id, RootAuthority::Pooled(authority), capacity)
     }
 
-    fn new_stateful(id: RootId, authority: Runtime) -> Self {
-        Self::with_authority(id, RootAuthority::Stateful(authority))
+    fn new_stateful(id: RootId, authority: Runtime, capacity: OwnedSemaphorePermit) -> Self {
+        Self::with_authority(id, RootAuthority::Stateful(authority), capacity)
     }
 
-    fn with_authority(id: RootId, authority: RootAuthority) -> Self {
+    fn new_linked_pooled(
+        id: RootId,
+        authority: Object<LinkedManager>,
+        capacity: OwnedSemaphorePermit,
+    ) -> Self {
+        Self::with_authority(id, RootAuthority::LinkedPooled(authority), capacity)
+    }
+
+    fn new_linked_stateful(
+        id: RootId,
+        authority: LinkedSession,
+        capacity: OwnedSemaphorePermit,
+    ) -> Self {
+        Self::with_authority(id, RootAuthority::LinkedStateful(authority), capacity)
+    }
+
+    fn with_authority(
+        id: RootId,
+        authority: RootAuthority,
+        capacity: OwnedSemaphorePermit,
+    ) -> Self {
         Self {
             id,
+            linked_hooks: Mutex::new(None),
             authority: Mutex::new(Some(authority)),
             state: Arc::new(AtomicU8::new(RootState::Running as u8)),
             closing_at: Arc::new(std::sync::Mutex::new(None)),
             cancellation: CancellationToken::new(),
             blocking: Arc::new(BlockingRegistry::default()),
-            caught_host_panic: AtomicBool::new(false),
+            caught_host_panic: Arc::new(AtomicBool::new(false)),
             quiescent: AtomicBool::new(false),
+            _capacity: capacity,
         }
     }
 
@@ -572,6 +770,54 @@ impl RootKeeper {
             }
         }
     }
+
+    fn install_linked_hooks(
+        &self,
+        selection: ExecutionSelection,
+        adapter: OwnerAdapter,
+    ) -> Result<()> {
+        let authority = self
+            .authority
+            .try_lock()
+            .expect("new root authority is uncontended");
+        let session = match authority.as_ref().expect("root authority retained") {
+            RootAuthority::LinkedPooled(object) => &**object,
+            RootAuthority::LinkedStateful(session) => session,
+            RootAuthority::Pooled(_) | RootAuthority::Stateful(_) => {
+                return Err(anyhow!("linked hooks require a linked session"));
+            }
+        };
+        ensure!(
+            session.origin() == selection.version(),
+            "executor session does not match selection"
+        );
+        let hooks = (session.executor.make_root)(selection, adapter)
+            .map_err(adapter::HostFailure::from)
+            .context("executor root hook construction failed")?;
+        *self
+            .linked_hooks
+            .try_lock()
+            .expect("new root hooks are uncontended") = Some(hooks);
+        Ok(())
+    }
+
+    async fn linked_parts(&self) -> Result<(SharedOwner, RootHooks)> {
+        let authority = self.authority.lock().await;
+        let owner = match authority.as_ref().expect("root authority retained") {
+            RootAuthority::LinkedPooled(object) => object.executor.owner.clone(),
+            RootAuthority::LinkedStateful(session) => session.executor.owner.clone(),
+            RootAuthority::Pooled(_) | RootAuthority::Stateful(_) => {
+                return Err(anyhow!("root has no linked executor"));
+            }
+        };
+        let hooks = self
+            .linked_hooks
+            .lock()
+            .await
+            .clone()
+            .context("linked root hooks missing")?;
+        Ok((owner, hooks))
+    }
 }
 
 impl Drop for RootKeeper {
@@ -579,6 +825,7 @@ impl Drop for RootKeeper {
         if RootState::load(&self.state) != RootState::Quarantined {
             return;
         }
+        self.linked_hooks.get_mut().take();
         let object = self
             .authority
             .get_mut()
@@ -588,6 +835,8 @@ impl Drop for RootKeeper {
             match object {
                 RootAuthority::Pooled(object) => drop(Object::take(object)),
                 RootAuthority::Stateful(runtime) => drop(runtime),
+                RootAuthority::LinkedPooled(object) => drop(Object::take(object)),
+                RootAuthority::LinkedStateful(session) => drop(session),
             }
         } else {
             // The last keeper may disappear after a supervisor failure while
@@ -599,9 +848,9 @@ impl Drop for RootKeeper {
     }
 }
 
-#[derive(Default)]
 struct OwnerRegistry {
     next_root: AtomicU64,
+    capacity: Arc<Semaphore>,
     roots: Mutex<HashMap<RootId, Arc<RootKeeper>>>,
     fatal: AtomicBool,
     #[cfg(test)]
@@ -610,6 +859,23 @@ struct OwnerRegistry {
     supervisor_panic_after_root_entered: std::sync::Mutex<Option<Arc<AsyncGate>>>,
     #[cfg(test)]
     canonical_release_gate: std::sync::Mutex<Option<Arc<AsyncGate>>>,
+}
+
+impl Default for OwnerRegistry {
+    fn default() -> Self {
+        Self {
+            next_root: AtomicU64::new(0),
+            capacity: Arc::new(Semaphore::new(NODE_ADMISSION_CAPACITY)),
+            roots: Mutex::new(HashMap::new()),
+            fatal: AtomicBool::new(false),
+            #[cfg(test)]
+            startup_compile_gate: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            supervisor_panic_after_root_entered: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            canonical_release_gate: std::sync::Mutex::new(None),
+        }
+    }
 }
 
 type RootStart = Box<dyn FnOnce() -> BoxFuture<'static, ()> + Send>;
@@ -627,6 +893,9 @@ pub(crate) struct RootOutcome<T> {
     pub commit: bool,
 }
 
+pub(crate) type LinkedOperation =
+    Box<dyn FnOnce(SharedOwner, OwnerAdapter) -> adapter::HostFuture<(Payload, bool)> + Send>;
+
 pub(crate) struct OwnedRootHandle<T> {
     state: Arc<AtomicU8>,
     closing_at: Arc<std::sync::Mutex<Option<Instant>>>,
@@ -640,6 +909,122 @@ pub(crate) struct CanonicalRootLease {
     finish: Option<oneshot::Sender<()>>,
     drained: oneshot::Receiver<Result<()>>,
     complete: bool,
+}
+
+pub(crate) struct LinkedCanonicalRootLease {
+    keeper: Arc<RootKeeper>,
+    registry: Arc<OwnerRegistry>,
+    adapter: OwnerAdapter,
+    root_alive: Arc<AtomicBool>,
+    finish: Option<oneshot::Sender<()>>,
+    drained: oneshot::Receiver<Result<bool>>,
+    settlement_signal: Option<oneshot::Sender<(bool, oneshot::Sender<Result<()>>)>>,
+    drained_success: bool,
+    requires_settlement: bool,
+    settled: bool,
+    settlement_in_flight: bool,
+    complete_signal: Option<oneshot::Sender<()>>,
+    released_signal: Option<oneshot::Sender<()>>,
+    completed: Option<oneshot::Receiver<Result<()>>>,
+    complete: bool,
+}
+
+impl LinkedCanonicalRootLease {
+    pub(crate) fn adapter(&self) -> OwnerAdapter {
+        self.adapter.clone()
+    }
+
+    pub(crate) async fn drain(&mut self) -> Result<()> {
+        self.finish
+            .take()
+            .context("canonical root already drained")?
+            .send(())
+            .map_err(|_| anyhow!("canonical root supervisor disappeared"))?;
+        self.requires_settlement = (&mut self.drained)
+            .await
+            .context("canonical root supervisor disappeared before drain")??;
+        self.root_alive.store(false, Ordering::SeqCst);
+        self.drained_success = true;
+        Ok(())
+    }
+
+    pub(crate) async fn settle(&mut self, commit: bool) -> Result<()> {
+        ensure!(
+            self.drained_success,
+            "canonical settlement requires a drained root"
+        );
+        ensure!(
+            self.requires_settlement,
+            "canonical root has no transaction to settle"
+        );
+        ensure!(
+            !self.settlement_in_flight,
+            "canonical settlement is already running"
+        );
+        let signal = self
+            .settlement_signal
+            .take()
+            .context("canonical settlement already requested")?;
+        let (reply, result) = oneshot::channel();
+        self.settlement_in_flight = true;
+        signal
+            .send((commit, reply))
+            .map_err(|_| anyhow!("canonical settlement supervisor disappeared"))?;
+        result
+            .await
+            .context("canonical settlement supervisor disappeared")??;
+        self.settlement_in_flight = false;
+        self.settled = true;
+        Ok(())
+    }
+
+    pub(crate) async fn complete(mut self) -> Result<()> {
+        ensure!(
+            self.drained_success,
+            "canonical completion requires a drained root"
+        );
+        ensure!(
+            !self.settlement_in_flight,
+            "canonical settlement has not finished"
+        );
+        ensure!(
+            !self.requires_settlement || self.settled,
+            "canonical transaction has not been settled"
+        );
+        ensure!(
+            RootState::load(&self.keeper.state) == RootState::Committing,
+            "canonical root was not drained"
+        );
+        self.complete_signal
+            .take()
+            .context("canonical completion already requested")?
+            .send(())
+            .map_err(|_| anyhow!("canonical completion supervisor disappeared"))?;
+        let completed = self
+            .completed
+            .take()
+            .context("canonical completion receiver missing")?;
+        let released = self
+            .released_signal
+            .take()
+            .context("canonical release sender missing")?;
+        self.complete = true;
+        drop(self);
+        let _ = released.send(());
+        completed
+            .await
+            .context("canonical completion supervisor disappeared")?
+    }
+}
+
+impl Drop for LinkedCanonicalRootLease {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.keeper.quarantine();
+            self.registry.fatal.store(true, Ordering::SeqCst);
+            self.registry.capacity.close();
+        }
+    }
 }
 
 impl CanonicalRootLease {
@@ -695,6 +1080,7 @@ impl Drop for CanonicalRootLease {
         if !self.complete {
             self.keeper.quarantine();
             self.registry.fatal.store(true, Ordering::SeqCst);
+            self.registry.capacity.close();
         }
     }
 }
@@ -732,6 +1118,65 @@ struct RunningChild {
     abort: AbortHandle,
     completion: oneshot::Sender<GuestDelivery>,
     slot: SlotLease,
+    child_alive: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+enum ReturnTo {
+    Legacy(StatefulSession),
+    Linked(LinkedStatefulSession),
+}
+
+impl ReturnTo {
+    fn quarantine(&self) {
+        match self {
+            Self::Legacy(session) => session.quarantine(),
+            Self::Linked(session) => session.quarantine(),
+        }
+    }
+}
+
+async fn run_legacy_root<T, F>(
+    keeper: Arc<RootKeeper>,
+    context: ChildContext,
+    operation: F,
+) -> Result<RootOutcome<T>>
+where
+    F: for<'a> FnOnce(&'a mut Runtime) -> BoxFuture<'a, Result<RootOutcome<T>>> + Send + 'static,
+{
+    ensure!(
+        RootState::load(&keeper.state) == RootState::Running,
+        "root cancelled before execution"
+    );
+    let mut authority = keeper.authority.lock().await;
+    let runtime: &mut Runtime = authority.as_mut().expect("root authority retained");
+    runtime.invocation_budget = Some(Arc::new(InvocationBudget::default()));
+    runtime.store_table_owners = Some(Arc::new(std::sync::Mutex::new(Vec::new())));
+    runtime.storage.ownership = Some(context.clone());
+    runtime.ownership = Some(context);
+    runtime.storage.savepoint().await?;
+    operation(runtime).await
+}
+
+async fn run_linked_root(
+    keeper: Arc<RootKeeper>,
+    adapter: OwnerAdapter,
+    operation: LinkedOperation,
+) -> Result<RootOutcome<Payload>> {
+    ensure!(
+        RootState::load(&keeper.state) == RootState::Running,
+        "root cancelled before execution"
+    );
+    let (owner, hooks) = keeper.linked_parts().await?;
+    (hooks.prepare)(owner.clone())
+        .await
+        .map_err(adapter::HostFailure::from)
+        .context("linked root preparation failed")?;
+    let (value, commit) = operation(owner, adapter)
+        .await
+        .map_err(adapter::HostFailure::from)
+        .context("linked executor failed")?;
+    Ok(RootOutcome { value, commit })
 }
 
 impl OwnerService {
@@ -752,6 +1197,7 @@ impl OwnerService {
             .is_err()
             {
                 node_registry.fatal.store(true, Ordering::SeqCst);
+                node_registry.capacity.close();
                 return Err(anyhow!("operation-owner node supervisor panicked"));
             }
             Ok(())
@@ -772,7 +1218,20 @@ impl OwnerService {
     }
 
     pub fn shutdown(&self) {
+        self.registry.capacity.close();
         wake_owner(&self.shutdown);
+    }
+
+    pub(crate) async fn reserve_root_capacity(&self) -> Result<OwnedSemaphorePermit> {
+        let capacity = self
+            .registry
+            .capacity
+            .clone()
+            .acquire_owned()
+            .await
+            .context("operation-owner root capacity closed")?;
+        ensure!(!self.is_fatal(), "operation-owner service is unavailable");
+        Ok(capacity)
     }
 
     #[cfg(test)]
@@ -855,6 +1314,7 @@ impl OwnerService {
                 && runtime.storage.savepoint_stack.is_empty().await,
             "canonical root cannot start inside an existing transaction"
         );
+        let capacity = self.reserve_root_capacity().await?;
         let permit = self
             .admission
             .reserve()
@@ -869,7 +1329,7 @@ impl OwnerService {
         let store_table_owners = Arc::new(std::sync::Mutex::new(Vec::new()));
         runtime.invocation_budget = Some(budget);
         runtime.store_table_owners = Some(store_table_owners);
-        let keeper = Arc::new(RootKeeper::new_stateful(id, runtime.clone()));
+        let keeper = Arc::new(RootKeeper::new_stateful(id, runtime.clone(), capacity));
         let (sender, receiver) = mpsc::channel(1);
         let kind = if simulation {
             RootKind::Simulation
@@ -882,6 +1342,7 @@ impl OwnerService {
             sender,
             keeper.state.clone(),
             keeper.blocking.clone(),
+            keeper.caught_host_panic.clone(),
         );
         runtime.ownership = Some(context.clone());
         runtime.storage.ownership = Some(context);
@@ -919,9 +1380,235 @@ impl OwnerService {
         })
     }
 
+    pub(crate) async fn begin_linked_canonical_reserved(
+        &self,
+        session: &LinkedSession,
+        capacity: OwnedSemaphorePermit,
+        selection: ExecutionSelection,
+        simulation: bool,
+    ) -> Result<LinkedCanonicalRootLease> {
+        ensure!(
+            session.origin() == selection.version(),
+            "executor session does not match selection"
+        );
+        selection.ensure_canonical_root(simulation)?;
+        ensure!(
+            session.conn.is_autocommit(),
+            "canonical root cannot start inside a transaction"
+        );
+        let permit = self
+            .admission
+            .reserve()
+            .await
+            .context("operation-owner node admission closed")?;
+        ensure!(!self.is_fatal(), "operation-owner service is unavailable");
+        let mut roots = self.registry.roots.lock().await;
+        ensure!(
+            session
+                .canonical_busy
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok(),
+            "canonical executor session is still owned by a prior root"
+        );
+        let id = RootId(self.registry.next_root.fetch_add(1, Ordering::SeqCst));
+        let keeper = Arc::new(RootKeeper::new_linked_stateful(
+            id,
+            session.clone(),
+            capacity,
+        ));
+        roots.insert(id, keeper.clone());
+        drop(roots);
+        let (sender, receiver) = mpsc::channel(1);
+        let kind = if simulation {
+            RootKind::Simulation
+        } else {
+            RootKind::Canonical
+        };
+        let context = ChildContext::root(
+            id,
+            kind,
+            sender,
+            keeper.state.clone(),
+            keeper.blocking.clone(),
+            keeper.caught_host_panic.clone(),
+        );
+        let root_alive = context.alive.clone();
+        let adapter = OwnerAdapter::new(&keeper, context);
+        let hooks_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            keeper.install_linked_hooks(selection, adapter.clone())
+        }));
+        match hooks_result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                keeper.quarantine();
+                self.registry.fatal.store(true, Ordering::SeqCst);
+                self.registry.capacity.close();
+                return Err(error);
+            }
+            Err(_) => {
+                keeper.quarantine();
+                self.registry.fatal.store(true, Ordering::SeqCst);
+                self.registry.capacity.close();
+                return Err(anyhow!("linked canonical root hook construction panicked"));
+            }
+        }
+        let (finish, finished) = oneshot::channel();
+        let (drained_sender, drained) = oneshot::channel();
+        let (ready_sender, ready) = oneshot::channel::<Result<()>>();
+        let (settlement_signal, mut settlement_request) = oneshot::channel();
+        let (complete_signal, complete_request) = oneshot::channel();
+        let (released_signal, released) = oneshot::channel();
+        let (completed_sender, completed) = oneshot::channel();
+        let lease = LinkedCanonicalRootLease {
+            keeper: keeper.clone(),
+            registry: self.registry.clone(),
+            adapter,
+            root_alive,
+            finish: Some(finish),
+            drained,
+            settlement_signal: Some(settlement_signal),
+            drained_success: false,
+            requires_settlement: false,
+            settled: false,
+            settlement_in_flight: false,
+            complete_signal: Some(complete_signal),
+            released_signal: Some(released_signal),
+            completed: Some(completed),
+            complete: false,
+        };
+        let registry = self.registry.clone();
+        let session = session.clone();
+        permit.send(Box::new(move || {
+            Box::pin(async move {
+                let supervised = keeper.clone();
+                let task_registry = registry.clone();
+                let task_session = session.clone();
+                let task = async move {
+                    let (owner, hooks) = supervised.linked_parts().await?;
+                    if let Err(error) = (hooks.prepare)(owner)
+                        .await
+                        .map_err(adapter::HostFailure::from)
+                    {
+                        let _ = ready_sender.send(Err(anyhow!(error.clone())));
+                        return Err(anyhow!(error));
+                    }
+                    if ready_sender.send(Ok(())).is_err() {
+                        supervised.quarantine();
+                        return Err(anyhow!(
+                            "canonical root requester disappeared during preparation"
+                        ));
+                    }
+                    let drain = async {
+                        supervise_canonical(supervised.clone(), receiver, finished).await?;
+                        let (owner, hooks) = supervised.linked_parts().await?;
+                        (hooks.inspect_canonical_drain)(owner)
+                            .await
+                            .map_err(adapter::HostFailure::from)
+                            .context("linked canonical drain inspection failed")
+                    }
+                    .await;
+                    if let Err(error) = drain {
+                        let _ = drained_sender.send(Err(anyhow!(error.to_string())));
+                        return Err(error);
+                    }
+                    let must_settle = !task_session.conn.is_autocommit();
+                    if drained_sender.send(Ok(must_settle)).is_err() {
+                        return Err(anyhow!("canonical root requester disappeared after drain"));
+                    }
+                    let mut complete_request = complete_request;
+                    let mut settled = false;
+                    tokio::select! {
+                        requested = &mut settlement_request => {
+                            if let Ok((commit, reply)) = requested {
+                                let (owner, hooks) = supervised.linked_parts().await?;
+                                let result = (hooks.settle)(owner, commit)
+                                    .await
+                                    .map_err(adapter::HostFailure::from);
+                                let response = result
+                                    .as_ref()
+                                    .map(|_| ())
+                                    .map_err(|error| anyhow!(error.clone()));
+                                let _ = reply.send(response);
+                                result.context("linked canonical settlement failed")?;
+                                settled = true;
+                            }
+                            complete_request.await.context("canonical completion was abandoned")?;
+                        }
+                        requested = &mut complete_request => {
+                            requested.context("canonical completion was abandoned")?;
+                        }
+                    }
+                    ensure!(
+                        !must_settle || settled,
+                        "canonical transaction bypassed settlement"
+                    );
+                    ensure!(
+                        task_session.conn.is_autocommit(),
+                        "canonical SQL commit has not completed"
+                    );
+                    let (owner, hooks) = supervised.linked_parts().await?;
+                    (hooks.reset)(owner, true, false)
+                        .await
+                        .map_err(adapter::HostFailure::from)
+                        .context("linked canonical reset failed")?;
+                    supervised.quiescent.store(true, Ordering::SeqCst);
+                    supervised
+                        .state
+                        .store(RootState::Complete as u8, Ordering::SeqCst);
+                    task_registry.roots.lock().await.remove(&supervised.id);
+                    let _ = released.await;
+                    Ok::<(), anyhow::Error>(())
+                };
+                match std::panic::AssertUnwindSafe(task).catch_unwind().await {
+                    Ok(Ok(())) => {
+                        drop(keeper);
+                        let busy = session.canonical_busy.clone();
+                        drop(session);
+                        busy.store(false, Ordering::SeqCst);
+                        let _ = completed_sender.send(Ok(()));
+                    }
+                    Ok(Err(error)) => {
+                        keeper.quarantine();
+                        registry.fatal.store(true, Ordering::SeqCst);
+                        registry.capacity.close();
+                        let _ = completed_sender.send(Err(error));
+                    }
+                    Err(_) => {
+                        keeper.quarantine();
+                        registry.fatal.store(true, Ordering::SeqCst);
+                        registry.capacity.close();
+                        let _ = completed_sender
+                            .send(Err(anyhow!("linked canonical supervisor panicked")));
+                    }
+                }
+            })
+        }));
+        ready
+            .await
+            .context("linked canonical preparation disappeared")??;
+        Ok(lease)
+    }
+
     pub(crate) async fn start_pooled<T, F>(
         &self,
         object: Object<Manager>,
+        operation: F,
+    ) -> Result<OwnedRootHandle<T>>
+    where
+        T: Send + 'static,
+        F: for<'a> FnOnce(&'a mut Runtime) -> BoxFuture<'a, Result<RootOutcome<T>>>
+            + Send
+            + 'static,
+    {
+        let capacity = self.reserve_root_capacity().await?;
+        self.start_pooled_reserved(object, capacity, operation)
+            .await
+    }
+
+    pub(crate) async fn start_pooled_reserved<T, F>(
+        &self,
+        object: Object<Manager>,
+        capacity: OwnedSemaphorePermit,
         operation: F,
     ) -> Result<OwnedRootHandle<T>>
     where
@@ -939,7 +1626,7 @@ impl OwnerService {
             return Err(anyhow!("operation-owner service is unavailable"));
         }
         let id = RootId(self.registry.next_root.fetch_add(1, Ordering::SeqCst));
-        let keeper = Arc::new(RootKeeper::new(id, object));
+        let keeper = Arc::new(RootKeeper::new(id, object, capacity));
         self.registry.roots.lock().await.insert(id, keeper.clone());
         let (sender, receiver) = mpsc::channel(1);
         let context = ChildContext::root(
@@ -948,6 +1635,7 @@ impl OwnerService {
             sender,
             keeper.state.clone(),
             keeper.blocking.clone(),
+            keeper.caught_host_panic.clone(),
         );
         let (result_sender, result) = oneshot::channel();
         let handle = OwnedRootHandle {
@@ -964,7 +1652,7 @@ impl OwnerService {
                     keeper.clone(),
                     receiver,
                     context,
-                    operation,
+                    move |keeper, context| Box::pin(run_legacy_root(keeper, context, operation)),
                     result_sender,
                     None,
                 );
@@ -975,6 +1663,7 @@ impl OwnerService {
                 {
                     keeper.quarantine();
                     registry.fatal.store(true, Ordering::SeqCst);
+                    registry.capacity.close();
                     panic!("operation root supervisor panicked");
                 }
             })
@@ -993,6 +1682,7 @@ impl OwnerService {
             + Send
             + 'static,
     {
+        let capacity = self.reserve_root_capacity().await?;
         let mut checkout = session.checkout().await?;
         let permit = self
             .admission
@@ -1009,7 +1699,7 @@ impl OwnerService {
                 .runtime
                 .take()
                 .expect("checked-out runtime retained");
-            let keeper = Arc::new(RootKeeper::new_stateful(id, runtime));
+            let keeper = Arc::new(RootKeeper::new_stateful(id, runtime, capacity));
             roots.insert(id, keeper.clone());
             keeper
         };
@@ -1020,6 +1710,7 @@ impl OwnerService {
             sender,
             keeper.state.clone(),
             keeper.blocking.clone(),
+            keeper.caught_host_panic.clone(),
         );
         let (result_sender, result) = oneshot::channel();
         let handle = OwnedRootHandle {
@@ -1037,9 +1728,9 @@ impl OwnerService {
                     keeper.clone(),
                     receiver,
                     context,
-                    operation,
+                    move |keeper, context| Box::pin(run_legacy_root(keeper, context, operation)),
                     result_sender,
-                    Some(return_to.clone()),
+                    Some(ReturnTo::Legacy(return_to.clone())),
                 );
                 if std::panic::AssertUnwindSafe(supervisor)
                     .catch_unwind()
@@ -1049,7 +1740,146 @@ impl OwnerService {
                     keeper.quarantine();
                     return_to.quarantine();
                     registry.fatal.store(true, Ordering::SeqCst);
+                    registry.capacity.close();
                     panic!("operation root supervisor panicked");
+                }
+            })
+        }));
+        Ok(handle)
+    }
+
+    pub(crate) async fn start_linked_pooled_reserved(
+        &self,
+        object: Object<LinkedManager>,
+        capacity: OwnedSemaphorePermit,
+        selection: ExecutionSelection,
+        operation: LinkedOperation,
+    ) -> Result<OwnedRootHandle<Payload>> {
+        ensure!(
+            object.origin() == selection.version(),
+            "executor session does not match selection"
+        );
+        self.start_linked_root(
+            move || RootAuthority::LinkedPooled(object),
+            capacity,
+            selection,
+            operation,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn start_linked_stateful_reserved(
+        &self,
+        session: &LinkedStatefulSession,
+        capacity: OwnedSemaphorePermit,
+        selection: ExecutionSelection,
+        operation: LinkedOperation,
+    ) -> Result<OwnedRootHandle<Payload>> {
+        let mut checkout = session.checkout().await?;
+        ensure!(
+            checkout
+                .value
+                .as_ref()
+                .is_some_and(|value| value.origin() == selection.version()),
+            "executor session does not match selection"
+        );
+        self.start_linked_root(
+            move || {
+                RootAuthority::LinkedStateful(
+                    checkout.value.take().expect("linked session checked out"),
+                )
+            },
+            capacity,
+            selection,
+            operation,
+            Some(ReturnTo::Linked(session.clone())),
+        )
+        .await
+    }
+
+    async fn start_linked_root<F>(
+        &self,
+        authority: F,
+        capacity: OwnedSemaphorePermit,
+        selection: ExecutionSelection,
+        operation: LinkedOperation,
+        return_to: Option<ReturnTo>,
+    ) -> Result<OwnedRootHandle<Payload>>
+    where
+        F: FnOnce() -> RootAuthority,
+    {
+        let permit = self
+            .admission
+            .reserve()
+            .await
+            .context("operation-owner node admission closed")?;
+        ensure!(!self.is_fatal(), "operation-owner service is unavailable");
+        let mut roots = self.registry.roots.lock().await;
+        let id = RootId(self.registry.next_root.fetch_add(1, Ordering::SeqCst));
+        let keeper = Arc::new(RootKeeper::with_authority(id, authority(), capacity));
+        roots.insert(id, keeper.clone());
+        drop(roots);
+        let (sender, receiver) = mpsc::channel(1);
+        let context = ChildContext::root(
+            id,
+            RootKind::Api,
+            sender,
+            keeper.state.clone(),
+            keeper.blocking.clone(),
+            keeper.caught_host_panic.clone(),
+        );
+        let adapter = OwnerAdapter::new(&keeper, context.clone());
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            keeper.install_linked_hooks(selection, adapter.clone())
+        })) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                keeper.quarantine();
+                if let Some(session) = &return_to {
+                    session.quarantine();
+                }
+                return Err(error);
+            }
+            Err(_) => {
+                keeper.quarantine();
+                if let Some(session) = &return_to {
+                    session.quarantine();
+                }
+                return Err(anyhow!("linked root hook construction panicked"));
+            }
+        }
+        let (result_sender, result) = oneshot::channel();
+        let handle = OwnedRootHandle {
+            state: keeper.state.clone(),
+            closing_at: keeper.closing_at.clone(),
+            cancellation: keeper.cancellation.clone(),
+            result,
+        };
+        let registry = self.registry.clone();
+        permit.send(Box::new(move || {
+            Box::pin(async move {
+                let supervisor = supervise(
+                    registry.clone(),
+                    keeper.clone(),
+                    receiver,
+                    context,
+                    move |keeper, _context| Box::pin(run_linked_root(keeper, adapter, operation)),
+                    result_sender,
+                    return_to.clone(),
+                );
+                if std::panic::AssertUnwindSafe(supervisor)
+                    .catch_unwind()
+                    .await
+                    .is_err()
+                {
+                    keeper.quarantine();
+                    if let Some(session) = &return_to {
+                        session.quarantine();
+                    }
+                    registry.fatal.store(true, Ordering::SeqCst);
+                    registry.capacity.close();
+                    panic!("linked operation root supervisor panicked");
                 }
             })
         }));
@@ -1111,7 +1941,7 @@ async fn supervise_canonical(
     mut receiver: mpsc::Receiver<Admission>,
     mut finish: oneshot::Receiver<()>,
 ) -> Result<()> {
-    let mut children = JoinSet::<(TaskId, GuestCompletion)>::new();
+    let mut children = JoinSet::<(TaskId, TaskCompletion)>::new();
     let mut active = HashMap::<TaskId, RunningChild>::new();
     let mut by_tokio = HashMap::<Id, TaskId>::new();
     let mut parked_senders = Vec::<oneshot::Sender<GuestDelivery>>::new();
@@ -1160,7 +1990,7 @@ async fn supervise_canonical(
                             drop(request);
                             continue;
                         }
-                        let Admission { id, parent, depth, future, completion, slot } = request;
+                        let Admission { id, parent, depth, future, completion, slot, child_alive } = request;
                         let abort = children.spawn(async move { (id, future.await) });
                         by_tokio.insert(abort.id(), id);
                         active.insert(id, RunningChild {
@@ -1169,6 +1999,7 @@ async fn supervise_canonical(
                             abort,
                             completion,
                             slot,
+                            child_alive,
                         });
                     }
                     Some(request) => {
@@ -1196,16 +2027,16 @@ async fn supervise_canonical(
                     };
                     let id = by_tokio.remove(&tokio_id).expect("registered child task id");
                     let child = active.remove(&id).expect("registered child completion");
+                    child.child_alive.store(false, Ordering::SeqCst);
                     if aborting == Some(id) {
                         aborting = None;
                     }
                     if let Some(completion) = completion {
-                        if completion.host_panicked {
+                        if completion.host_panicked() {
                             keeper.caught_host_panic.store(true, Ordering::SeqCst);
-                            keeper.quarantine();
                         }
                         if RootState::load(&keeper.state) == RootState::Running
-                            || completion.host_panicked
+                            || completion.host_panicked()
                         {
                             if let Err(delivery) = child.completion.send(GuestDelivery {
                                 completion,
@@ -1228,6 +2059,7 @@ async fn supervise_canonical(
         }
     }
 
+    keeper.blocking.close_registration();
     keeper.blocking.wait_all().await;
     drop(parked_senders);
     if keeper.blocking.panicked() {
@@ -1253,25 +2085,17 @@ async fn supervise<T, F>(
     context: ChildContext,
     operation: F,
     response: oneshot::Sender<Result<T>>,
-    return_to: Option<StatefulSession>,
+    return_to: Option<ReturnTo>,
 ) where
     T: Send + 'static,
-    F: for<'a> FnOnce(&'a mut Runtime) -> BoxFuture<'a, Result<RootOutcome<T>>> + Send + 'static,
+    F: FnOnce(Arc<RootKeeper>, ChildContext) -> BoxFuture<'static, Result<RootOutcome<T>>>
+        + Send
+        + 'static,
 {
     let root_keeper = keeper.clone();
-    let mut root: JoinHandle<Result<RootOutcome<T>>> = tokio::spawn(async move {
-        if RootState::load(&root_keeper.state) != RootState::Running {
-            return Err(anyhow!("root cancelled before execution"));
-        }
-        let mut authority = root_keeper.authority.lock().await;
-        let runtime: &mut Runtime = authority.as_mut().expect("root authority retained");
-        runtime.invocation_budget = Some(Arc::new(InvocationBudget::default()));
-        runtime.store_table_owners = Some(Arc::new(std::sync::Mutex::new(Vec::new())));
-        runtime.storage.ownership = Some(context.clone());
-        runtime.ownership = Some(context);
-        runtime.storage.savepoint().await?;
-        operation(runtime).await
-    });
+    let root_alive = context.alive.clone();
+    let mut root: JoinHandle<Result<RootOutcome<T>>> =
+        tokio::spawn(operation(root_keeper, context));
     #[cfg(test)]
     let injected_gate = registry
         .supervisor_panic_after_root_entered
@@ -1286,7 +2110,7 @@ async fn supervise<T, F>(
         panic!("injected operation root supervisor panic");
     }
     let mut root_result = None;
-    let mut children = JoinSet::<(TaskId, GuestCompletion)>::new();
+    let mut children = JoinSet::<(TaskId, TaskCompletion)>::new();
     let mut active = HashMap::<TaskId, RunningChild>::new();
     let mut by_tokio = HashMap::<Id, TaskId>::new();
     let mut parked_senders = Vec::<oneshot::Sender<GuestDelivery>>::new();
@@ -1302,7 +2126,8 @@ async fn supervise<T, F>(
             RootState::load(&keeper.state),
             RootState::Closing | RootState::Quarantined
         );
-        if closing || root_result.is_some() {
+        let panic_seen = keeper.caught_host_panic.load(Ordering::SeqCst);
+        if closing || root_result.is_some() || panic_seen {
             receiver.close();
             if deadline.is_none() {
                 deadline = Some(
@@ -1334,6 +2159,7 @@ async fn supervise<T, F>(
                 match request {
                     Some(request)
                         if RootState::load(&keeper.state) == RootState::Running
+                            && !keeper.caught_host_panic.load(Ordering::SeqCst)
                             && root_result.is_none() =>
                     {
                         let valid_parent = request.parent.root == keeper.id
@@ -1348,7 +2174,7 @@ async fn supervise<T, F>(
                             drop(request);
                             continue;
                         }
-                        let Admission { id, parent, depth, future, completion, slot } = request;
+                        let Admission { id, parent, depth, future, completion, slot, child_alive } = request;
                         let abort = children.spawn(async move { (id, future.await) });
                         by_tokio.insert(abort.id(), id);
                         active.insert(id, RunningChild {
@@ -1357,6 +2183,7 @@ async fn supervise<T, F>(
                             abort,
                             completion,
                             slot,
+                            child_alive,
                         });
                     }
                     Some(request) => {
@@ -1384,12 +2211,13 @@ async fn supervise<T, F>(
                     };
                     let id = by_tokio.remove(&tokio_id).expect("registered child task id");
                     let child = active.remove(&id).expect("registered child completion");
+                    child.child_alive.store(false, Ordering::SeqCst);
                     debug_assert_eq!(child.parent.root, keeper.id);
                     if aborting == Some(id) {
                         aborting = None;
                     }
                     if let Some(completion) = completion {
-                        if completion.host_panicked {
+                        if completion.host_panicked() {
                             keeper.caught_host_panic.store(true, Ordering::SeqCst);
                         }
                         if RootState::load(&keeper.state) == RootState::Running {
@@ -1412,6 +2240,7 @@ async fn supervise<T, F>(
                 }
             }
             finished = &mut root, if root_result.is_none() => {
+                root_alive.store(false, Ordering::SeqCst);
                 if let Err(error) = &finished
                     && error.is_panic()
                 {
@@ -1432,6 +2261,7 @@ async fn supervise<T, F>(
         }
     }
 
+    keeper.blocking.close_registration();
     if let Some(deadline) = deadline
         && !timed_out
         && tokio::time::timeout_at(deadline, keeper.blocking.wait_all())
@@ -1488,8 +2318,11 @@ async fn supervise<T, F>(
             };
             registry.roots.lock().await.remove(&keeper.id);
             match (return_to.as_ref(), returned) {
-                (Some(session), Some(RootAuthority::Stateful(runtime))) => {
+                (Some(ReturnTo::Legacy(session)), Some(RootAuthority::Stateful(runtime))) => {
                     session.return_runtime(runtime);
+                }
+                (Some(ReturnTo::Linked(session)), Some(RootAuthority::LinkedStateful(value))) => {
+                    session.return_session(value);
                 }
                 (None, None) => {}
                 _ => unreachable!("root authority does not match its return session"),
@@ -1507,13 +2340,19 @@ async fn supervise<T, F>(
                 session.quarantine();
             }
             if let Some(response) = response.take() {
-                let _ = response.send(value);
+                let error = value
+                    .err()
+                    .unwrap_or_else(|| anyhow!("host panic reached operation root"));
+                let _ = response.send(Err(error));
             }
         }
         Ok(_) | Err(_) => {
             keeper.quarantine();
             if let Some(session) = &return_to {
-                session.quarantine();
+                match session {
+                    ReturnTo::Legacy(session) => session.quarantine(),
+                    ReturnTo::Linked(session) => session.quarantine(),
+                }
             }
             if let Some(response) = response.take() {
                 let _ = response.send(Err(anyhow!("operation root quarantined")));
@@ -1558,10 +2397,23 @@ async fn restore_with_deadline<T>(
 
 async fn restore<T>(keeper: &RootKeeper, result: Result<RootOutcome<T>>) -> Result<Result<T>> {
     let mut authority = keeper.authority.lock().await;
+    if matches!(
+        authority.as_ref(),
+        Some(RootAuthority::LinkedPooled(_) | RootAuthority::LinkedStateful(_))
+    ) {
+        return restore_linked(
+            keeper,
+            authority.as_mut().expect("root authority retained"),
+            result,
+        )
+        .await;
+    }
     let stateful = matches!(authority.as_ref(), Some(RootAuthority::Stateful(_)));
     let runtime: &mut Runtime = authority.as_mut().expect("root authority retained");
     let wants_commit = result.as_ref().is_ok_and(|outcome| outcome.commit);
     let commit_authorized = wants_commit
+        && !keeper.caught_host_panic.load(Ordering::SeqCst)
+        && !keeper.blocking.panicked()
         && keeper
             .state
             .compare_exchange(
@@ -1634,10 +2486,76 @@ async fn restore<T>(keeper: &RootKeeper, result: Result<RootOutcome<T>>) -> Resu
     Ok(result.map(|outcome| outcome.value))
 }
 
+async fn restore_linked<T>(
+    keeper: &RootKeeper,
+    authority: &mut RootAuthority,
+    result: Result<RootOutcome<T>>,
+) -> Result<Result<T>> {
+    let (session, stateful) = match authority {
+        RootAuthority::LinkedPooled(object) => (&mut **object, false),
+        RootAuthority::LinkedStateful(session) => (session, true),
+        RootAuthority::Pooled(_) | RootAuthority::Stateful(_) => {
+            return Err(anyhow!("linked restoration received a legacy authority"));
+        }
+    };
+    let hooks = keeper
+        .linked_hooks
+        .lock()
+        .await
+        .clone()
+        .context("linked root hooks missing")?;
+    let owner = session.executor.owner.clone();
+    let wants_commit = result.as_ref().is_ok_and(|outcome| outcome.commit);
+    let commit_authorized = wants_commit
+        && !keeper.caught_host_panic.load(Ordering::SeqCst)
+        && !keeper.blocking.panicked()
+        && keeper
+            .state
+            .compare_exchange(
+                RootState::Running as u8,
+                RootState::Committing as u8,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok();
+    if commit_authorized || !session.conn.is_autocommit() {
+        (hooks.settle)(owner.clone(), commit_authorized)
+            .await
+            .map_err(adapter::HostFailure::from)
+            .context("linked root settlement failed")?;
+    }
+    let clear_cache = stateful
+        && (result.is_err()
+            || matches!(
+                RootState::load(&keeper.state),
+                RootState::Closing | RootState::Quarantined
+            ));
+    (hooks.reset)(owner, false, clear_cache)
+        .await
+        .map_err(adapter::HostFailure::from)
+        .context("linked root reset failed")?;
+    ensure!(
+        session.conn.is_autocommit(),
+        "linked root still has live SQL transaction"
+    );
+    keeper.quiescent.store(true, Ordering::SeqCst);
+    if RootState::load(&keeper.state) == RootState::Closing {
+        return Ok(Err(anyhow!(
+            "operation cancelled before commit authorization"
+        )));
+    }
+    Ok(result.map(|outcome| outcome.value))
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::pool::new_linked;
+    use super::adapter::{ExecutorSession, GuestFactory, RootHooks, SessionAction, SessionFactory};
     use super::*;
     use crate::database::connection::new_connection;
+    use crate::protocol::coordinator::selection::{
+        ApplicationPosition, ExecutorVersion, select_legacy_p1,
+    };
     use crate::reg_tester::random_x_only_pubkey;
     use crate::runtime::ComponentSource;
     use crate::runtime::call::CallOutcome;
@@ -1719,6 +2637,7 @@ mod tests {
             sender,
             Arc::new(AtomicU8::new(RootState::Running as u8)),
             Arc::new(BlockingRegistry::default()),
+            Arc::new(AtomicBool::new(false)),
         ));
         runtime.make_store(fuel)
     }
@@ -2850,6 +3769,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn swallowed_paid_host_panic_cannot_commit_writer() -> Result<()> {
+        let (runtime, _dir, signer, address) = seeded_paid_oracle().await?;
+        let conn = runtime.get_storage_conn();
+        let service = OwnerService::new();
+        let owned = OwnedRuntimeSession::with_service(runtime, service.clone());
+        let result = owned
+            .run(true, move |runtime| {
+                Box::pin(async move {
+                    let error = runtime
+                        .execute_api(Some(&signer), &address, "host-panic()")
+                        .await
+                        .expect_err("host panic must reach the caller");
+                    assert!(error.to_string().contains("host panic"));
+                    Ok(())
+                })
+            })
+            .await;
+        assert!(result.is_err(), "swallowed host panic committed the writer");
+        assert!(
+            timeout(Duration::from_secs(2), owned.session.checkout())
+                .await?
+                .is_err(),
+            "swallowed host panic returned the writer to service"
+        );
+        assert!(conn.is_autocommit());
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM contract_results", ())
+            .await?;
+        assert_eq!(
+            rows.next()
+                .await?
+                .context("panic receipt count missing")?
+                .get::<i64>(0)?,
+            0
+        );
+        assert_eq!(service.active_roots().await, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn canonical_lease_drains_native_guest_before_releasing_runtime() -> Result<()> {
         let (mut runtime, _dir, _name) = test_runtime().await?;
         let service = OwnerService::new();
@@ -3601,7 +4560,12 @@ mod tests {
         let mut runtime = runtime;
 
         for id in 1..=10i64 {
-            let keeper = Arc::new(RootKeeper::new_stateful(RootId(id as u64), runtime));
+            let capacity = Arc::new(Semaphore::new(1)).acquire_owned().await?;
+            let keeper = Arc::new(RootKeeper::new_stateful(
+                RootId(id as u64),
+                runtime,
+                capacity,
+            ));
             {
                 let mut authority = keeper.authority.lock().await;
                 let runtime = authority.as_mut().expect("root authority retained");
@@ -3698,7 +4662,11 @@ mod tests {
                 .context("root authority missing after race")?
             {
                 RootAuthority::Stateful(runtime) => runtime,
-                RootAuthority::Pooled(_) => unreachable!("race uses a stateful writer"),
+                RootAuthority::Pooled(_)
+                | RootAuthority::LinkedPooled(_)
+                | RootAuthority::LinkedStateful(_) => {
+                    unreachable!("race uses a stateful writer")
+                }
             };
         }
         Ok(())
@@ -3837,12 +4805,12 @@ mod tests {
         let (sender, receiver) = oneshot::channel();
         sender
             .send(GuestDelivery {
-                completion: GuestCompletion {
+                completion: TaskCompletion::Local(GuestCompletion {
                     result: Ok(Ok(())),
                     results: Vec::new(),
                     store,
                     host_panicked: false,
-                },
+                }),
                 slot: SlotLease(slot.clone()),
             })
             .map_err(|_| anyhow!("delivery receiver closed"))?;
@@ -3864,6 +4832,7 @@ mod tests {
             sender.clone(),
             state.clone(),
             Arc::new(BlockingRegistry::default()),
+            Arc::new(AtomicBool::new(false)),
         );
         let slot = owner.slot.clone();
         let permit = sender.reserve().await?;
@@ -4034,7 +5003,7 @@ mod tests {
     async fn dropped_blocking_receiver_does_not_release_work_early() -> Result<()> {
         let registry = BlockingRegistry::default();
         let (release, blocked) = std::sync::mpsc::channel();
-        let receiver = registry.spawn(move || blocked.recv());
+        let receiver = registry.spawn(move || blocked.recv())?;
         drop(receiver);
         assert!(
             timeout(Duration::from_millis(30), registry.wait_all())
@@ -4043,6 +5012,425 @@ mod tests {
         );
         release.send(())?;
         timeout(Duration::from_secs(2), registry.wait_all()).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn blocking_drain_closes_registration_before_empty_snapshot() -> Result<()> {
+        let registry = BlockingRegistry::default();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let receiver = registry.spawn(move || blocked.recv())?;
+        registry.close_registration();
+        assert!(registry.spawn(|| 1u8).is_err());
+        assert!(
+            timeout(Duration::from_millis(30), registry.wait_all())
+                .await
+                .is_err()
+        );
+        release.send(())?;
+        timeout(Duration::from_secs(2), registry.wait_all()).await?;
+        receiver.await???;
+        assert!(registry.spawn(|| 2u8).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn root_capacity_retains_quarantined_authority() -> Result<()> {
+        let service = OwnerService::new();
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let mut other_permits = Vec::new();
+        for _ in 0..NODE_ADMISSION_CAPACITY - 1 {
+            other_permits.push(service.reserve_root_capacity().await?);
+        }
+        let capacity = service.reserve_root_capacity().await?;
+        let keeper = Arc::new(RootKeeper::new_stateful(RootId(99), runtime, capacity));
+        service
+            .registry
+            .roots
+            .lock()
+            .await
+            .insert(keeper.id, keeper.clone());
+        keeper.quarantine();
+        assert!(
+            timeout(Duration::from_millis(30), service.reserve_root_capacity())
+                .await
+                .is_err()
+        );
+        keeper.quiescent.store(true, Ordering::SeqCst);
+        service.registry.roots.lock().await.remove(&keeper.id);
+        drop(keeper);
+        let released = timeout(Duration::from_secs(2), service.reserve_root_capacity()).await??;
+        drop(released);
+        drop(other_permits);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reported_bundle_failure_quarantines_even_if_guest_catches_error() -> Result<()> {
+        let service = OwnerService::new();
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let keeper = Arc::new(RootKeeper::new_stateful(
+            RootId(100),
+            runtime,
+            service.reserve_root_capacity().await?,
+        ));
+        let (sender, _receiver) = mpsc::channel(1);
+        let context = ChildContext::root(
+            keeper.id,
+            RootKind::Api,
+            sender,
+            keeper.state.clone(),
+            keeper.blocking.clone(),
+            keeper.caught_host_panic.clone(),
+        );
+        let adapter = OwnerAdapter::new(&keeper, context);
+        assert!((adapter.check_commit)(adapter.root.clone()).is_ok());
+        assert!((adapter.report_failure)(adapter.root.clone(), 2).is_ok());
+        assert_eq!(RootState::load(&keeper.state), RootState::Quarantined);
+        assert!((adapter.check_commit)(adapter.root.clone()).is_err());
+        assert_eq!((adapter.check_commit)(Arc::new(7u8)).unwrap_err().0, 2);
+        assert!((adapter.check_commit)(adapter.root.clone()).is_err());
+        keeper.quiescent.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn exported_host_panic_cannot_authorize_sql_commit() -> Result<()> {
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let conn = runtime.storage.conn.clone();
+        conn.execute(
+            "CREATE TABLE host_panic_commit (id INTEGER PRIMARY KEY)",
+            (),
+        )
+        .await?;
+        let keeper = Arc::new(RootKeeper::new_stateful(
+            RootId(101),
+            runtime,
+            Arc::new(Semaphore::new(1)).acquire_owned().await?,
+        ));
+        {
+            let mut authority = keeper.authority.lock().await;
+            let runtime: &mut Runtime = authority.as_mut().expect("root authority retained");
+            runtime.storage.savepoint().await?;
+            runtime
+                .storage
+                .conn
+                .execute("INSERT INTO host_panic_commit (id) VALUES (1)", ())
+                .await?;
+        }
+        keeper.caught_host_panic.store(true, Ordering::SeqCst);
+        restore(
+            &keeper,
+            Ok(RootOutcome {
+                value: (),
+                commit: true,
+            }),
+        )
+        .await??;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM host_panic_commit", ())
+            .await?;
+        let count: i64 = rows.next().await?.context("count row missing")?.get(0)?;
+        assert_eq!(count, 0);
+        keeper.quarantine();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn linked_guest_runs_under_node_owner_and_returns_opaque_payload() -> Result<()> {
+        let (runtime, dir, name) = test_runtime().await?;
+        let selection = select_legacy_p1(
+            &runtime.storage.conn,
+            Network::Regtest,
+            ApplicationPosition::View,
+        )
+        .await?;
+        let factory: SessionFactory = Arc::new(|_| {
+            Box::pin(async {
+                let action: SessionAction = Arc::new(|_| Box::pin(async { Ok(()) }));
+                let make_root = Arc::new(|_selection, _adapter| {
+                    let action: SessionAction = Arc::new(|_| Box::pin(async { Ok(()) }));
+                    Ok(RootHooks {
+                        prepare: action.clone(),
+                        inspect_canonical_drain: action,
+                        settle: Arc::new(|_, _| Box::pin(async { Ok(()) })),
+                        reset: Arc::new(|_, _, _| Box::pin(async { Ok(()) })),
+                    })
+                });
+                Ok(ExecutorSession {
+                    origin: ExecutorVersion::LegacyP1,
+                    owner: Arc::new(()),
+                    make_root,
+                    recycle: action,
+                })
+            })
+        });
+        let pool = new_linked(dir.path().to_path_buf(), name, factory, 1)?;
+        let service = OwnerService::new();
+        let capacity = service.reserve_root_capacity().await?;
+        let object = pool.get().await?;
+        let operation: LinkedOperation = Box::new(|_, adapter| {
+            Box::pin(async move {
+                let guest: GuestFactory =
+                    Box::new(|_child| Box::pin(async { (false, Box::new(7u8) as Payload) }));
+                let (panicked, payload) =
+                    (adapter.submit_guest)(adapter.root.clone(), guest).await?;
+                if panicked {
+                    return Err((1, "guest unexpectedly panicked".into()));
+                }
+                let value = *payload
+                    .downcast::<u8>()
+                    .map_err(|_| (2, "opaque guest payload type mismatch".into()))?;
+                let blocking = (adapter.submit_blocking)(
+                    adapter.root.clone(),
+                    Box::new(|| Box::new(9u8) as Payload),
+                )
+                .await?;
+                let blocking_value = *blocking
+                    .downcast::<u8>()
+                    .map_err(|_| (2, "opaque blocking payload type mismatch".into()))?;
+                if blocking_value != 9 {
+                    return Err((0, "blocking work returned the wrong value".into()));
+                }
+                Ok((Box::new(value) as Payload, true))
+            })
+        });
+        let mut handle = service
+            .start_linked_pooled_reserved(object, capacity, selection, operation)
+            .await?;
+        let value = handle.result().await?;
+        assert_eq!(
+            *value
+                .downcast::<u8>()
+                .map_err(|_| anyhow!("root payload type mismatch"))?,
+            7
+        );
+        assert_eq!(service.quarantined_roots().await, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn linked_canonical_cleanup_outlives_completion_caller() -> Result<()> {
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let selection = select_legacy_p1(
+            &runtime.storage.conn,
+            Network::Regtest,
+            ApplicationPosition::Committee,
+        )
+        .await?;
+        let gate = Arc::new(AsyncGate::default());
+        let make_root_gate = gate.clone();
+        let executor = ExecutorSession {
+            origin: ExecutorVersion::LegacyP1,
+            owner: Arc::new(()),
+            make_root: Arc::new(move |_, _| {
+                let action: SessionAction = Arc::new(|_| Box::pin(async { Ok(()) }));
+                let reset_gate = make_root_gate.clone();
+                Ok(RootHooks {
+                    prepare: action.clone(),
+                    inspect_canonical_drain: action,
+                    settle: Arc::new(|_, _| Box::pin(async { Ok(()) })),
+                    reset: Arc::new(move |_, _, _| {
+                        let gate = reset_gate.clone();
+                        Box::pin(async move {
+                            gate.wait().await;
+                            Ok(())
+                        })
+                    }),
+                })
+            }),
+            recycle: Arc::new(|_| Box::pin(async { Ok(()) })),
+        };
+        let session = LinkedSession::new(runtime.storage.conn.clone(), executor);
+        let service = OwnerService::new();
+        let mut lease = service
+            .begin_linked_canonical_reserved(
+                &session,
+                service.reserve_root_capacity().await?,
+                selection,
+                false,
+            )
+            .await?;
+        assert!((lease.adapter().check_commit)(lease.adapter().root.clone()).is_ok());
+        lease.drain().await?;
+        let complete = tokio::spawn(lease.complete());
+        timeout(Duration::from_secs(2), async {
+            while !gate.entered.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        complete.abort();
+        let _ = complete.await;
+        assert!(session.canonical_busy.load(Ordering::SeqCst));
+        assert_eq!(service.active_roots().await, 1);
+        gate.release();
+        timeout(Duration::from_secs(2), async {
+            while session.canonical_busy.load(Ordering::SeqCst) || service.active_roots().await != 0
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(service.quarantined_roots().await, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn linked_canonical_settlement_selects_rollback_or_commit_once() -> Result<()> {
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let conn = runtime.storage.conn.clone();
+        conn.execute(
+            "CREATE TABLE linked_canonical_settlement (id INTEGER PRIMARY KEY)",
+            (),
+        )
+        .await?;
+        let selection =
+            select_legacy_p1(&conn, Network::Regtest, ApplicationPosition::Committee).await?;
+        let root_conn = conn.clone();
+        let settlements = Arc::new(AtomicUsize::new(0));
+        let root_settlements = settlements.clone();
+        let executor = ExecutorSession {
+            origin: ExecutorVersion::LegacyP1,
+            owner: Arc::new(()),
+            make_root: Arc::new(move |_, _| {
+                let prepare_conn = root_conn.clone();
+                let settle_conn = root_conn.clone();
+                let count = root_settlements.clone();
+                Ok(RootHooks {
+                    prepare: Arc::new(move |_| {
+                        let conn = prepare_conn.clone();
+                        Box::pin(async move {
+                            conn.execute("BEGIN", ())
+                                .await
+                                .map_err(|error| (0, error.to_string()))?;
+                            Ok(())
+                        })
+                    }),
+                    inspect_canonical_drain: Arc::new(|_| Box::pin(async { Ok(()) })),
+                    settle: Arc::new(move |_, commit| {
+                        let conn = settle_conn.clone();
+                        let count = count.clone();
+                        Box::pin(async move {
+                            conn.execute(if commit { "COMMIT" } else { "ROLLBACK" }, ())
+                                .await
+                                .map_err(|error| (0, error.to_string()))?;
+                            count.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        })
+                    }),
+                    reset: Arc::new(|_, _, _| Box::pin(async { Ok(()) })),
+                })
+            }),
+            recycle: Arc::new(|_| Box::pin(async { Ok(()) })),
+        };
+        let session = LinkedSession::new(conn.clone(), executor);
+        let service = OwnerService::new();
+        for (id, commit) in [(1i64, false), (2i64, true)] {
+            let mut lease = service
+                .begin_linked_canonical_reserved(
+                    &session,
+                    service.reserve_root_capacity().await?,
+                    selection.clone(),
+                    false,
+                )
+                .await?;
+            conn.execute(
+                "INSERT INTO linked_canonical_settlement (id) VALUES (?)",
+                [id],
+            )
+            .await?;
+            lease.drain().await?;
+            lease.settle(commit).await?;
+            assert!(lease.settle(commit).await.is_err());
+            lease.complete().await?;
+        }
+        let mut rows = conn
+            .query("SELECT id FROM linked_canonical_settlement", ())
+            .await?;
+        assert_eq!(
+            rows.next()
+                .await?
+                .context("committed row missing")?
+                .get::<i64>(0)?,
+            2
+        );
+        assert!(rows.next().await?.is_none());
+        assert_eq!(settlements.load(Ordering::SeqCst), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn linked_canonical_admission_rejects_wrong_selection_purpose() -> Result<()> {
+        let (runtime, _dir, _name) = test_runtime().await?;
+        let conn = runtime.storage.conn.clone();
+        let action: SessionAction = Arc::new(|_| Box::pin(async { Ok(()) }));
+        let executor = ExecutorSession {
+            origin: ExecutorVersion::LegacyP1,
+            owner: Arc::new(()),
+            make_root: Arc::new(move |_, _| {
+                let action: SessionAction = Arc::new(|_| Box::pin(async { Ok(()) }));
+                Ok(RootHooks {
+                    prepare: action.clone(),
+                    inspect_canonical_drain: action,
+                    settle: Arc::new(|_, _| Box::pin(async { Ok(()) })),
+                    reset: Arc::new(|_, _, _| Box::pin(async { Ok(()) })),
+                })
+            }),
+            recycle: action,
+        };
+        let session = LinkedSession::new(conn.clone(), executor);
+        let service = OwnerService::new();
+        let view = select_legacy_p1(&conn, Network::Regtest, ApplicationPosition::View).await?;
+        let preparation = select_legacy_p1(
+            &conn,
+            Network::Regtest,
+            ApplicationPosition::Preparation {
+                anchor_height: 0,
+                anchor_hash: None,
+            },
+        )
+        .await?;
+        let committee =
+            select_legacy_p1(&conn, Network::Regtest, ApplicationPosition::Committee).await?;
+        let simulation = select_legacy_p1(
+            &conn,
+            Network::Regtest,
+            ApplicationPosition::Simulation { height: 0 },
+        )
+        .await?;
+        for (selection, simulated) in [
+            (view.clone(), false),
+            (view, true),
+            (preparation, false),
+            (committee, true),
+            (simulation.clone(), false),
+        ] {
+            assert!(
+                service
+                    .begin_linked_canonical_reserved(
+                        &session,
+                        service.reserve_root_capacity().await?,
+                        selection,
+                        simulated,
+                    )
+                    .await
+                    .is_err()
+            );
+            assert!(!session.canonical_busy.load(Ordering::SeqCst));
+            assert_eq!(service.active_roots().await, 0);
+        }
+        let mut lease = service
+            .begin_linked_canonical_reserved(
+                &session,
+                service.reserve_root_capacity().await?,
+                simulation,
+                true,
+            )
+            .await?;
+        lease.drain().await?;
+        lease.complete().await?;
+        assert_eq!(service.active_roots().await, 0);
         Ok(())
     }
 
@@ -4219,7 +5607,8 @@ mod tests {
         let dir = TempDir::new()?;
         let pool = one_object_pool(&dir).await?;
         let object = pool.get().await?;
-        let keeper = Arc::new(RootKeeper::new(RootId(9), object));
+        let capacity = Arc::new(Semaphore::new(1)).acquire_owned().await?;
+        let keeper = Arc::new(RootKeeper::new(RootId(9), object, capacity));
         let mut authority = keeper.authority.lock().await;
         authority
             .as_mut()
