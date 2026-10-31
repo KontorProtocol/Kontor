@@ -34,6 +34,7 @@ pub mod wit;
 #[cfg(test)]
 pub(crate) mod workload_telemetry;
 
+mod bundle_transactions;
 mod call;
 mod guest_memory;
 mod host_context;
@@ -48,8 +49,8 @@ mod selected;
 
 use crate::protocol::execution::ExecutorVersion;
 use bitcoin::XOnlyPublicKey;
-pub(crate) use bundle_ownership::{BundleOwner, SelectionSource};
 use bundle_ownership::HostFailure;
+pub(crate) use bundle_ownership::{BundleOwner, SelectionSource};
 pub(crate) use call::CallOutcome;
 pub use component_cache::ComponentCache;
 pub(crate) use component_cache::ComponentSource;

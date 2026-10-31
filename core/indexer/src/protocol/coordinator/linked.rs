@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use bitcoin::Network;
+use bitcoin::{Network, Txid, hashes::Hash};
 use deadpool::managed::{Object, Pool};
 use indexer_types::Block;
 use libsql::Connection;
@@ -11,9 +11,9 @@ use libsql::Connection;
 use super::committee::materialize_committee;
 use super::selection::{ApplicationPosition, ExecutionSelection, select_legacy_p1};
 use crate::consensus::ValidatorSet;
-use crate::database::queries::insert_block_execution_usage;
+use crate::database::queries::{insert_block_execution_usage, insert_transaction_execution_usage};
 use crate::database::storage_callbacks_v1::storage_callbacks;
-use crate::protocol::operations::{AddressEnvelope, ViewOutcome};
+use crate::protocol::operations::{AddressEnvelope, SessionOwner, ViewOutcome};
 use crate::runtime::bundle_session::BundleSession;
 use crate::runtime::fuel::ExecutionUsage;
 use crate::runtime::ownership::adapter::{
@@ -28,8 +28,11 @@ pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession
     let origin = runtime.executor_version();
     let network = runtime.network;
     let conn = runtime.storage.conn.clone();
+    let recognize = runtime.recognizer();
     let session = BundleSession::new(runtime);
     let operations = ExecutorOperations {
+        recognize,
+        transaction: session.transaction(),
         begin_unit: session.begin_unit(),
         lifecycle: session.lifecycle(),
         contract_wit: session.contract_wit(),
@@ -198,6 +201,65 @@ pub(crate) async fn begin_unit(
         .await
         .map_err(HostFailure::from)?;
     selection.verify_base(&session.conn).await
+}
+
+pub(crate) struct PreparedTransaction {
+    parsed: SessionOwner,
+    pub(crate) txid: Txid,
+    pub(crate) batchable: bool,
+    pub(crate) inputs: Vec<(u32, u64)>,
+}
+
+pub(crate) fn recognize_transaction(
+    executor: &ExecutorSession,
+    selection: &ExecutionSelection,
+    network: Network,
+    raw: Vec<u8>,
+) -> Result<Result<Option<PreparedTransaction>, String>> {
+    selection.ensure_runtime(network, executor.origin)?;
+    Ok((executor.operations.recognize)(selection.envelope(), raw)
+        .map_err(HostFailure::from)?
+        .map(|recognized| {
+            recognized.map(|(parsed, txid, batchable, inputs)| PreparedTransaction {
+                parsed,
+                txid: Txid::from_byte_array(txid),
+                batchable,
+                inputs,
+            })
+        }))
+}
+
+pub(crate) async fn execute_transaction(
+    session: &LinkedSession,
+    selection: &ExecutionSelection,
+    network: Network,
+    transaction: &PreparedTransaction,
+    tx_index: u32,
+    tx_id: u64,
+) -> Result<Vec<Vec<Option<String>>>> {
+    selection.ensure_runtime(network, session.origin())?;
+    selection.ensure_execution(network, selection.envelope().3.1)?;
+    let ((user_fuel, system_fuel, deposit_fuel), failures) =
+        (session.executor.operations.transaction)(
+            session.executor.owner.clone(),
+            selection.envelope(),
+            transaction.parsed.clone(),
+            tx_index,
+            tx_id,
+        )
+        .await
+        .map_err(HostFailure::from)?;
+    insert_transaction_execution_usage(
+        &session.conn,
+        tx_id,
+        ExecutionUsage {
+            user_fuel,
+            system_fuel,
+            deposit_fuel,
+        },
+    )
+    .await?;
+    Ok(failures)
 }
 
 pub(crate) async fn run_block_lifecycle(

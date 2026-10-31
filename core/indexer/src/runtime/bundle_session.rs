@@ -2,20 +2,59 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::{Error, Result, ensure};
+use bitcoin::OutPoint;
 use tokio::sync::Mutex;
 use wasmtime::component::ResourceTable;
 
 #[cfg(test)]
 use super::BlockingGate;
-use super::Runtime;
 use super::bundle_ownership::{
     BundleOwner, HostError, HostFailure, RootHooks, RootReset, RootSettle, SelectionSource,
     SessionAction, SharedOwner,
 };
+use super::counter::Counter;
 use super::invocation::InvocationBudget;
+use super::{Runtime, TransactionContext};
 
 pub(crate) struct BundleSession {
     pub(super) runtime: Mutex<Runtime>,
+    simulation: StdMutex<Option<SimulationContext>>,
+}
+
+struct SimulationContext {
+    height: u64,
+    transaction: Option<TransactionContext>,
+    previous_output: Option<OutPoint>,
+    op_return_data: Option<Arc<[u8]>>,
+    simulating: bool,
+    id_counter: Counter,
+    result_counter: Counter,
+}
+
+impl SimulationContext {
+    fn enter(runtime: &mut Runtime) -> Self {
+        let saved = Self {
+            height: runtime.storage.height,
+            transaction: runtime.storage.tx_context.clone(),
+            previous_output: runtime.previous_output,
+            op_return_data: runtime.op_return_data.clone(),
+            simulating: runtime.simulating,
+            id_counter: std::mem::take(&mut runtime.id_generation_counter),
+            result_counter: std::mem::take(&mut runtime.result_id_counter),
+        };
+        runtime.simulating = true;
+        saved
+    }
+
+    fn restore(self, runtime: &mut Runtime) {
+        runtime.storage.height = self.height;
+        runtime.storage.tx_context = self.transaction;
+        runtime.previous_output = self.previous_output;
+        runtime.op_return_data = self.op_return_data;
+        runtime.simulating = self.simulating;
+        runtime.id_generation_counter = self.id_counter;
+        runtime.result_id_counter = self.result_counter;
+    }
 }
 
 impl BundleSession {
@@ -30,6 +69,7 @@ impl BundleSession {
     pub(crate) fn new(runtime: Runtime) -> Arc<Self> {
         Arc::new(Self {
             runtime: Mutex::new(runtime),
+            simulation: StdMutex::new(None),
         })
     }
 
@@ -50,6 +90,9 @@ impl BundleSession {
                 session.verify_owner(opaque, &owner)?;
                 let mut runtime = session.runtime.lock().await;
                 runtime.ensure_bundle_idle().await.map_err(infrastructure)?;
+                if session.simulation.lock().unwrap().is_some() {
+                    return Err((0, "executor retains prior simulation context".into()));
+                }
                 runtime.invocation_budget = Some(Arc::new(InvocationBudget::default()));
                 runtime.store_table_owners = Some(Arc::new(StdMutex::new(Vec::new())));
                 runtime.storage.bundle_owner = Some(owner.clone());
@@ -61,6 +104,10 @@ impl BundleSession {
                 runtime
                     .install_root_selection(&selection)
                     .map_err(infrastructure)?;
+                if canonical && selection.3.0 == 5 {
+                    *session.simulation.lock().unwrap() =
+                        Some(SimulationContext::enter(&mut runtime));
+                }
                 Ok(())
             })
         });
@@ -126,6 +173,9 @@ impl BundleSession {
                     .map_err(infrastructure)?;
                 if !runtime.storage.savepoint_stack.is_empty().await {
                     return Err((0, "executor root retains a savepoint".into()));
+                }
+                if let Some(saved) = session.simulation.lock().unwrap().take() {
+                    saved.restore(&mut runtime);
                 }
                 runtime.bundle_owner = None;
                 runtime.storage.bundle_owner = None;

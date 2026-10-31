@@ -11,6 +11,29 @@ pub(crate) type OperationFuture<T> = Pin<Box<dyn Future<Output = Result<T, (u8, 
 pub(crate) type AddressEnvelope = (String, u64, u32);
 // User, system and deposit fuel are distinct persisted accounting categories.
 pub(crate) type UsageEnvelope = (u64, u64, u64);
+// The opaque transaction is interpreted only by its originating executor.
+// Metadata is txid, batchability, then (Bitcoin input index, operation count).
+pub(crate) type RecognizedEnvelope = (SessionOwner, [u8; 32], bool, Vec<(u32, u64)>);
+pub(crate) type RecognitionCall = Arc<
+    dyn Fn(
+            SelectionEnvelope,
+            Vec<u8>,
+        ) -> Result<Result<Option<RecognizedEnvelope>, String>, (u8, String)>
+        + Send
+        + Sync,
+>;
+pub(crate) type TransactionOutcome = (UsageEnvelope, Vec<Vec<Option<String>>>);
+pub(crate) type TransactionCall = Arc<
+    dyn Fn(
+            SessionOwner,
+            SelectionEnvelope,
+            SessionOwner,
+            u32,
+            u64,
+        ) -> OperationFuture<TransactionOutcome>
+        + Send
+        + Sync,
+>;
 pub(crate) type LifecycleCall =
     Arc<dyn Fn(SessionOwner, SelectionEnvelope) -> OperationFuture<UsageEnvelope> + Send + Sync>;
 // The boolean preserves deterministic classification; the text is P1's Debug

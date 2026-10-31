@@ -143,7 +143,10 @@ impl BundleSession {
         })
     }
 
-    fn verify_operation_owner(self: &Arc<Self>, opaque: SessionOwner) -> Result<(), HostError> {
+    pub(super) fn verify_operation_owner(
+        self: &Arc<Self>,
+        opaque: SessionOwner,
+    ) -> Result<(), HostError> {
         let supplied = opaque
             .downcast::<Self>()
             .map_err(|_| (2, "executor session has the wrong type".into()))?;
@@ -155,7 +158,11 @@ impl BundleSession {
 }
 
 impl Runtime {
-    fn verify_bundle_operation(&self, selection: &SelectionEnvelope, purpose: u8) -> Result<()> {
+    pub(super) fn verify_bundle_operation(
+        &self,
+        selection: &SelectionEnvelope,
+        purpose: u8,
+    ) -> Result<()> {
         ensure!(
             self.bundle_owner.is_some() && self.selected_context.is_some(),
             "executor operation requires an admitted selected root"
