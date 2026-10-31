@@ -140,7 +140,14 @@ The opt-in Cargo feature keeps that command out of ordinary node builds. It uses
 fresh temporary databases and one node owner service to exercise both actual
 factories, comparing genesis and resumed genesis, real views and their error
 classification, committee derivation, malformed recognition, and lifecycle
-rollback/replay. It emits JSON observations only after every assertion succeeds.
+rollback/replay. Its raw transaction fixture publishes the committed counter
+contract, exercises fee and deposit accounting, distinguishes contract-result
+errors from outer execution failures, and compares simulation/inspection,
+rollback/replay and commit. Final views check successful calls after failures and
+that failed writes did not persist. Synthetic publication provenance tests the
+stored claim, not reproducibility of that claim; the pinned contract workflow
+checks the committed fixture bytes. Bitcoin signature validation is outside this
+execution harness. It emits JSON observations only after every assertion succeeds.
 The same feature on the in-tree indexer supplies a comparison route; using it
 alone does not establish compatibility with the qualified pre-extraction source.
 This harness is part of K2b acceptance, not its entire transaction and ownership

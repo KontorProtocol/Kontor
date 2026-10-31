@@ -29,6 +29,8 @@ use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::{LinkedSession, new_linked};
 
+mod transactions;
+
 const NETWORK: Network = Network::Regtest;
 type Factories = (&'static str, SessionFactory, SessionFactory);
 
@@ -283,6 +285,22 @@ async fn exercise(
         );
         ensure!(service.active_roots().await == 0, "owner root leaked");
     }
+    let transactions = transactions::run(service, &session).await?;
+    let address: AddressEnvelope = ("counter".into(), 3, 7);
+    for (expression, expected) in [("get()", "2"), ("get-blob()", "\"\"")] {
+        let result = execute_view(
+            service,
+            pool.get().await?,
+            NETWORK,
+            address.clone(),
+            expression.into(),
+        )
+        .await?;
+        ensure!(
+            result == Ok(expected.into()),
+            "committed counter state differs: {result:?}"
+        );
+    }
     // These are real graph-owned opaque sessions, not node-owned nominal wrappers.
     let foreign: SessionOwner = Arc::new(());
     ensure!(
@@ -291,7 +309,7 @@ async fn exercise(
     );
     Ok(
         json!({"genesis": initialized, "active_set": active_set, "missing_function": missing,
-        "committee": committee, "malformed_transaction": malformed, "lifecycle": lifecycle}),
+        "committee": committee, "malformed_transaction": malformed, "lifecycle": lifecycle, "transactions": transactions}),
     )
 }
 
@@ -309,7 +327,8 @@ pub async fn run() -> Result<Value> {
             outputs.push(json!({"graph": name, "observations": observations}));
         }
         Ok(json!({"schema": 1, "cases": ["native-genesis", "genesis-resume", "read-only-views",
-            "committee", "malformed-recognition", "lifecycle-rollback-replay", "opaque-session-rejection"],
+            "committee", "malformed-recognition", "lifecycle-rollback-replay", "opaque-session-rejection", "transaction-recognition", "publication", "fees-and-deposits",
+            "deterministic-failures", "simulation-inspection", "transaction-rollback-replay"],
             "executors": outputs}))
     }.await;
     service.shutdown();

@@ -89,7 +89,8 @@ class NodeBuild(unittest.TestCase):
 
     def test_node_source_inventory_covers_external_build_inputs(self):
         files = ('core/indexer/src/main.rs', 'core/indexer/src/protocol/coordinator/linked.rs',
-                 'core/indexer/proto/consensus.proto', 'core/indexer/build.rs')
+                 'core/indexer/proto/consensus.proto', 'core/indexer/build.rs',
+                 'test-contracts/binaries/counter.wasm.br')
         for relative in files:
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
