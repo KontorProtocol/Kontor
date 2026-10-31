@@ -142,7 +142,7 @@ async fn nested_outcomes_preserve_state_refunds_and_cleanup() -> Result<()> {
             runtime.storage.savepoint().await?;
             let selection =
                 select_test_block(&conn, runtime.network, runtime.storage.height).await?;
-            let mut runtime = runtime.bind_selection(&selection)?;
+            let mut runtime = runtime.bind_selection(&selection.envelope())?;
             conn.execute("DELETE FROM contract_results", ()).await?;
             let savepoint = runtime.storage.savepoint_stack.peek().await;
             let actor_before = balance(&mut runtime, HolderRef::from(&actor)).await?;

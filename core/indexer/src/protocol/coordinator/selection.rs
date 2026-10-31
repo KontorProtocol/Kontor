@@ -1,13 +1,10 @@
 #[cfg(test)]
 use crate::database::queries::select_block_at_height;
+pub(crate) use crate::protocol::execution::ExecutorVersion;
+use crate::protocol::execution::SelectionEnvelope;
 use anyhow::{Context, Result, bail, ensure};
-use bitcoin::{BlockHash, Network};
+use bitcoin::{BlockHash, Network, hashes::Hash};
 use libsql::Connection;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ExecutorVersion {
-    LegacyP1,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApplicationPosition {
@@ -57,6 +54,52 @@ pub(crate) struct ExecutionSelection {
 }
 
 impl ExecutionSelection {
+    pub(crate) fn envelope(&self) -> SelectionEnvelope {
+        let position = match self.position {
+            ApplicationPosition::View => (0, 0, None, 0),
+            ApplicationPosition::Committee => (1, 0, None, 0),
+            ApplicationPosition::Preparation {
+                anchor_height,
+                anchor_hash,
+            } => (
+                2,
+                anchor_height,
+                anchor_hash.map(|hash| hash.to_byte_array()),
+                0,
+            ),
+            ApplicationPosition::Block {
+                height,
+                hash,
+                consensus_height,
+            } => (3, height, Some(hash.to_byte_array()), consensus_height),
+            ApplicationPosition::Batch {
+                anchor_height,
+                anchor_hash,
+                consensus_height,
+            } => (
+                4,
+                anchor_height,
+                Some(anchor_hash.to_byte_array()),
+                consensus_height,
+            ),
+            ApplicationPosition::Simulation { height } => (5, height, None, 0),
+        };
+        (
+            self.version.tag(),
+            self.network.magic().to_bytes(),
+            (
+                self.base.receipt_epoch.clone(),
+                self.base.rollback_generation,
+                self.base.block_height,
+                self.base.block_hash.clone(),
+                self.base.latest_transaction,
+                self.base.checkpoint_height,
+                self.base.checkpoint_hash.clone(),
+            ),
+            position,
+        )
+    }
+
     pub(crate) fn version(&self) -> ExecutorVersion {
         self.version
     }

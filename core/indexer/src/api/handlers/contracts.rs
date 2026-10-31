@@ -13,6 +13,7 @@ use crate::api::{Env, error::HttpError, result::Result};
 use crate::database::queries;
 use crate::database::types::ContractQuery;
 use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
+use crate::protocol::coordinator::view::execute_selected_view;
 use crate::runtime::{ContractAddress, ownership::RootOutcome};
 
 pub async fn post_contract(
@@ -25,39 +26,39 @@ pub async fn post_contract(
         .map_err(|_| HttpError::BadRequest("Invalid contract address".to_string()))?;
     let object = env.runtime_pool.get().await?;
     let diagnostic_env = env.clone();
-    let mut owned = env
-        .owner_service
-        .start_pooled(object, move |runtime| {
-            Box::pin(async move {
-                let selection = select_legacy_p1(
-                    &runtime.get_storage_conn(),
-                    runtime.network,
-                    ApplicationPosition::View,
-                )
-                .await?;
-                warn_if_stale_view_snapshot(
-                    &diagnostic_env,
-                    &runtime.storage.conn,
-                    &address,
-                    &expr,
-                )
-                .await;
-                let value = match runtime
-                    .execute_selected_view(&selection, &contract_address, &expr)
-                    .await
-                {
-                    Ok(value) => ViewResult::Ok { value },
-                    Err(error) => ViewResult::Err {
-                        message: format!("{:?}", error),
-                    },
-                };
-                Ok(RootOutcome {
-                    value,
-                    commit: false,
+    let mut owned =
+        env.owner_service
+            .start_pooled(object, move |runtime| {
+                Box::pin(async move {
+                    let selection = select_legacy_p1(
+                        &runtime.get_storage_conn(),
+                        runtime.network,
+                        ApplicationPosition::View,
+                    )
+                    .await?;
+                    warn_if_stale_view_snapshot(
+                        &diagnostic_env,
+                        &runtime.storage.conn,
+                        &address,
+                        &expr,
+                    )
+                    .await;
+                    let value =
+                        match execute_selected_view(runtime, &selection, &contract_address, &expr)
+                            .await
+                        {
+                            Ok(value) => ViewResult::Ok { value },
+                            Err(error) => ViewResult::Err {
+                                message: format!("{:?}", error),
+                            },
+                        };
+                    Ok(RootOutcome {
+                        value,
+                        commit: false,
+                    })
                 })
             })
-        })
-        .await?;
+            .await?;
     Ok(owned.result().await?.into())
 }
 

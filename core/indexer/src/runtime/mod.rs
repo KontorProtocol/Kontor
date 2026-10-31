@@ -45,7 +45,7 @@ mod lowering;
 pub mod ownership;
 mod selected;
 
-use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
+use crate::protocol::execution::ExecutorVersion;
 use bitcoin::XOnlyPublicKey;
 use bundle_ownership::{BundleOwner, HostFailure};
 pub(crate) use call::CallOutcome;
@@ -1067,26 +1067,6 @@ impl Runtime {
             gas_limit: self.selected_gas_policy().non_proc_allowance,
         });
         self.execute(signer, payment, contract_address, expr).await
-    }
-
-    pub(crate) async fn execute_selected_view(
-        &mut self,
-        selection: &ExecutionSelection,
-        contract_address: &ContractAddress,
-        expr: &str,
-    ) -> Result<String, ExecutionError> {
-        selection
-            .verify_view(&self.storage.conn, self.network, self.executor_version)
-            .await
-            .map_err(ExecutionError::NonDeterministic)?;
-        match selection.version() {
-            ExecutorVersion::LegacyP1 => {
-                self.bind_selection(selection)
-                    .map_err(ExecutionError::NonDeterministic)?
-                    .execute(None, None, contract_address, expr)
-                    .await
-            }
-        }
     }
 
     pub(crate) async fn execute(

@@ -13,6 +13,7 @@ use super::Manager;
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
 use crate::database::queries::{insert_block, rollback_to_height};
 use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
+use crate::protocol::coordinator::view::execute_selected_view;
 use crate::runtime::{ContractAddress, TransactionContext};
 use crate::test_utils::{new_mock_block_hash, test_runtime};
 
@@ -93,11 +94,7 @@ async fn held_view_and_fresh_view_execute_their_own_code_after_id_reuse() -> Res
         ApplicationPosition::View,
     )
     .await?;
-    ensure!(
-        old.execute_selected_view(&old_selection, &address, "read()")
-            .await?
-            == "7"
-    );
+    ensure!(execute_selected_view(&mut old, &old_selection, &address, "read()").await? == "7");
 
     rollback_to_height(&conn, 1).await?;
     insert_block(
@@ -126,23 +123,9 @@ async fn held_view_and_fresh_view_execute_their_own_code_after_id_reuse() -> Res
         ApplicationPosition::View,
     )
     .await?;
-    ensure!(
-        fresh
-            .execute_selected_view(&fresh_selection, &address, "read()")
-            .await?
-            == "9"
-    );
-    ensure!(
-        old.execute_selected_view(&old_selection, &address, "read()")
-            .await?
-            == "7"
-    );
-    ensure!(
-        fresh
-            .execute_selected_view(&fresh_selection, &address, "read()")
-            .await?
-            == "9"
-    );
+    ensure!(execute_selected_view(&mut fresh, &fresh_selection, &address, "read()").await? == "9");
+    ensure!(execute_selected_view(&mut old, &old_selection, &address, "read()").await? == "7");
+    ensure!(execute_selected_view(&mut fresh, &fresh_selection, &address, "read()").await? == "9");
     let (entries, _) = manager.component_cache.workload_metrics().await;
     ensure!(
         entries == 2,
@@ -155,7 +138,7 @@ async fn held_view_and_fresh_view_execute_their_own_code_after_id_reuse() -> Res
         .map_err(|e| anyhow::anyhow!("recycle failed: {e:?}"))?;
     old.storage.savepoint().await?;
     ensure!(
-        old.execute_selected_view(&old_selection, &address, "read()")
+        execute_selected_view(&mut old, &old_selection, &address, "read()")
             .await
             .is_err()
     );
@@ -165,11 +148,7 @@ async fn held_view_and_fresh_view_execute_their_own_code_after_id_reuse() -> Res
         ApplicationPosition::View,
     )
     .await?;
-    ensure!(
-        old.execute_selected_view(&recycled_selection, &address, "read()")
-            .await?
-            == "9"
-    );
+    ensure!(execute_selected_view(&mut old, &recycled_selection, &address, "read()").await? == "9");
     old.storage.rollback().await?;
     fresh.storage.rollback().await?;
     Ok(())
