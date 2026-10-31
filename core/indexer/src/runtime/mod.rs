@@ -352,6 +352,19 @@ impl Runtime {
     }
 
     fn engine_with_async_stack_size(async_stack_size: usize) -> Result<Engine> {
+        let reservation = u64::try_from(GuestMemoryLimits::default().per_root)?;
+        Self::engine_with_memory_reservation(async_stack_size, reservation)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_previous_memory_reservation_engine() -> Result<Engine> {
+        Self::engine_with_memory_reservation(2 * 1024 * 1024, 4 * 1024 * 1024 * 1024)
+    }
+
+    fn engine_with_memory_reservation(
+        async_stack_size: usize,
+        memory_reservation: u64,
+    ) -> Result<Engine> {
         let mut config = Config::new();
         config.target("pulley64-unknown-unknown-elf")?;
         config.max_wasm_stack(512 * 1024);
@@ -381,7 +394,7 @@ impl Runtime {
         config.allocation_strategy(InstanceAllocationStrategy::OnDemand);
         // The shared root limit bounds each admitted memory. Wasmtime's 4 GiB
         // default reservation needlessly scales with suspended Store count.
-        config.memory_reservation(u64::try_from(GuestMemoryLimits::default().per_root)?);
+        config.memory_reservation(memory_reservation);
         config.memory_may_move(true);
         config.wasm_relaxed_simd(false);
         config.cranelift_nan_canonicalization(true);

@@ -366,7 +366,7 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "820b67767aa6c31d77b28d329465e0f6a8d0ba123b94e156be831b045c77bee3"
+      "sha256": "ffd5dda39749fc1febcd449f6e879278307921c79af3130e1e5b123c0c1d08a3"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
