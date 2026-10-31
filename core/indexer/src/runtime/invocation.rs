@@ -24,7 +24,7 @@ use super::workload_telemetry::StoreGuard;
 #[cfg(test)]
 use super::{ContractAddress, token};
 
-pub(super) const MAX_LIVE_INVOCATIONS: u32 = 64;
+pub(super) use crate::protocol::v1::resources::MAX_LIVE_INVOCATIONS;
 
 #[derive(Default)]
 pub(super) struct InvocationBudget {

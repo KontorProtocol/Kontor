@@ -1,3 +1,4 @@
+use crate::protocol::coordinator::selection::select_test_block;
 use anyhow::Result;
 use bitcoin::OutPoint;
 use indexer_types::{BlockRow, Input, Inst, InstKind, Insts, Payment, TransactionRow};
@@ -651,7 +652,13 @@ async fn transaction_scope_collects_operations_and_discards_abandoned_execution(
                 .is_none()
         );
         let failures = executor
-            .execute_transaction(&mut runtime, 1, tx_id, &tx)
+            .execute_transaction(
+                &select_test_block(&conn, runtime.network, 1).await?,
+                &mut runtime,
+                1,
+                tx_id,
+                &tx,
+            )
             .await?;
         assert!(failures[0][0].is_none(), "{:?}", failures[0][0]);
         assert!(failures[0][1].is_some() && failures[0][2].is_some());
@@ -703,7 +710,13 @@ async fn transaction_scope_collects_operations_and_discards_abandoned_execution(
     .await?;
     assert!(
         executor
-            .execute_transaction(&mut runtime, 1, tx_id, &tx)
+            .execute_transaction(
+                &select_test_block(&conn, runtime.network, 1).await?,
+                &mut runtime,
+                1,
+                tx_id,
+                &tx
+            )
             .await
             .is_err()
     );

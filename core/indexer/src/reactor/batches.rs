@@ -1,5 +1,4 @@
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
@@ -25,13 +24,16 @@ use crate::database::queries::{
     select_existing_txids,
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
+pub(super) use crate::protocol::coordinator::v1::batch_is_ordered;
+use crate::protocol::coordinator::v1::{build_replay_queue, dependency_sort};
 
 use futures_util::future::BoxFuture;
 
 use super::consensus_state;
-use super::executor::{Executor, TxPolicy, is_batchable};
+use super::executor::{Executor, TxPolicy};
 use super::mempool_fee_index::MempoolFeeIndex;
 use super::{MAX_DEFERRED_DECISIONS, Reactor};
+use crate::protocol::coordinator::selection::{ApplicationPosition, ExecutionSelection};
 
 /// Multiplier applied to `MempoolFeeIndex::fastest_fee()` to derive the
 /// per-batch acceptance threshold, as an integer ratio: 9/10 means we accept
@@ -65,12 +67,14 @@ pub(super) enum IoApply {
     /// `make_value_snapshot`'s candidate set: on apply, fulfill the held
     /// GetValue reply (if it still stands) with the surviving transactions.
     BuildProposal {
+        selection: ExecutionSelection,
         anchor_height: u64,
         anchor_hash: BlockHash,
     },
     /// An incoming batch proposal: on apply, accept (file under `undecided`,
     /// release the engine's reply with `Some`) or reject (`None`).
     ValidateProposal {
+        selection: ExecutionSelection,
         height: Height,
         round: Round,
         /// The authenticated proposer, carried through so the stored
@@ -93,19 +97,16 @@ pub(super) enum IoApply {
 /// only if the anchor still matches, and membership in the pool is re-checked
 /// then (see `try_fulfill_pending_proposal`).
 pub(super) struct ValidatedCandidates {
+    pub(super) selection: ExecutionSelection,
     pub(super) anchor_height: u64,
     pub(super) anchor_hash: BlockHash,
     pub(super) txs: Vec<bitcoin::Transaction>,
 }
 
-/// What the batch-candidate snapshot found.
-enum ProposalSnapshot {
-    /// Batch candidates that need the bitcoind I/O phase.
-    Batch {
-        txs: Vec<bitcoin::Transaction>,
-        threshold: u64,
-    },
-    Nothing,
+struct ProposalSnapshot {
+    selection: ExecutionSelection,
+    txs: Vec<bitcoin::Transaction>,
+    threshold: u64,
 }
 
 /// Compute the per-batch fee acceptance threshold (sat/vB). Hoisted out
@@ -122,96 +123,6 @@ fn compute_fee_threshold(fee_index: &MempoolFeeIndex) -> u64 {
     raw.max(fee_index.min_fee())
 }
 
-/// Topologically sort a batch's transactions so a tx that spends another
-/// batch tx's output comes after that producer. The proposer collects
-/// candidate txs from the mempool in arbitrary order; sorting here lets it
-/// propose a batch that already satisfies the dependency-order consensus
-/// rule (`batch_is_ordered`) rather than having peers vote it down.
-///
-/// Returns batch indices in proposal order. Kahn's algorithm, breaking
-/// ties by lowest original index. Falls back to identity order if a cycle
-/// is somehow present (impossible for valid Bitcoin transactions, but the
-/// sort must still total).
-fn dependency_sort(txs: &[bitcoin::Transaction]) -> Vec<usize> {
-    let index_of: HashMap<Txid, usize> = txs
-        .iter()
-        .enumerate()
-        .map(|(i, tx)| (tx.compute_txid(), i))
-        .collect();
-
-    let mut in_degree = vec![0usize; txs.len()];
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); txs.len()];
-    for (i, tx) in txs.iter().enumerate() {
-        let mut parents: HashSet<usize> = HashSet::new();
-        for input in &tx.input {
-            if let Some(&p) = index_of.get(&input.previous_output.txid)
-                && p != i
-            {
-                parents.insert(p);
-            }
-        }
-        in_degree[i] = parents.len();
-        for p in parents {
-            children[p].push(i);
-        }
-    }
-
-    let mut ready: BinaryHeap<Reverse<usize>> = (0..txs.len())
-        .filter(|&i| in_degree[i] == 0)
-        .map(Reverse)
-        .collect();
-    let mut ordered = Vec::with_capacity(txs.len());
-    while let Some(Reverse(i)) = ready.pop() {
-        ordered.push(i);
-        for &c in &children[i] {
-            in_degree[c] -= 1;
-            if in_degree[c] == 0 {
-                ready.push(Reverse(c));
-            }
-        }
-    }
-
-    if ordered.len() != txs.len() {
-        return (0..txs.len()).collect();
-    }
-    ordered
-}
-
-/// Check that a batch's transactions are in a valid dependency order:
-/// every tx that spends another batch tx's output appears *after* that
-/// producer.
-///
-/// The rule constrains only that parent-before-child relation — it does
-/// not canonicalize the batch. Independent transactions (sharing no UTXO)
-/// may appear in any order, chosen by the proposer. Note this is a
-/// Bitcoin-UTXO dependency, not a contract-state one: two UTXO-independent
-/// txs can still touch the same contract state, so their order — fixed in
-/// the decided value — can change results. That ordering is the
-/// proposer's prerogative, like tx order within a block; the rule enforces
-/// only the structural requirement that an escrow exists before it is
-/// spent (otherwise a detach simply finds nothing to detach).
-///
-/// The dependency-order rule of `ConsensusState::validate_batch`; lives
-/// here next to `dependency_sort`, the proposer-side helper that produces
-/// an order this accepts.
-pub(super) fn batch_is_ordered(txs: &[bitcoin::Transaction]) -> bool {
-    let index_of: HashMap<Txid, usize> = txs
-        .iter()
-        .enumerate()
-        .map(|(i, tx)| (tx.compute_txid(), i))
-        .collect();
-    for (i, tx) in txs.iter().enumerate() {
-        for input in &tx.input {
-            if let Some(&p) = index_of.get(&input.previous_output.txid)
-                && p > i
-            {
-                return false;
-            }
-        }
-    }
-    true
-}
-
 /// Put batches held during a drain pass back at the FRONT of the queue, in their
 /// original order, so nothing is reordered relative to what follows them.
 fn restore_waiting(
@@ -221,189 +132,6 @@ fn restore_waiting(
     while let Some(decision) = waiting.pop_back() {
         queue.push_front(decision);
     }
-}
-
-/// Assemble the post-rollback replay queue: merge the replay set with the decisions
-/// already queued, and drop excluded transactions — plus anything descending from
-/// them — from the batches in the result. Returns the queue and every txid dropped
-/// this pass, which the caller also purges from the proposal pool.
-///
-/// MERGE, not overwrite: the replay set comes from `select_batches_from_anchor`,
-/// which returns only heights that already have a `batches` row, while a queued
-/// decision is queued precisely BECAUSE its anchor was unprocessed and so has no
-/// row. Overwriting drops it permanently — `current_height` has already advanced
-/// past it and `delete_unexecuted_batch_suffix` can only trim a SUFFIX, so the gap
-/// is unrefillable locally or by sync.
-///
-/// The replay set goes FIRST and survivors keep their relative order behind it —
-/// deliberately NOT sorted by consensus height. A survivor BLOCK decision whose
-/// block has not arrived still parks the drain and stops it (batches merely step
-/// aside; blocks cannot, since they must apply in sequence). The replay set is
-/// precisely what raises the tip back up after a rollback, so a survivor ordered
-/// ahead of it can stall the decisions that would make that survivor ready.
-///
-/// The two inputs should be disjoint by height; where they are not, the replayed
-/// copy wins because it was loaded from the decided record.
-fn build_replay_queue(
-    replayed: Vec<(consensus_state::DeferredDecision, Vec<bitcoin::Transaction>)>,
-    survivors: Vec<(consensus_state::DeferredDecision, Vec<bitcoin::Transaction>)>,
-    // Exclusions PER consensus height, already re-verified against the chain.
-    applicable: &HashMap<u64, HashSet<String>>,
-) -> (VecDeque<consensus_state::DeferredDecision>, HashSet<Txid>) {
-    let replayed_heights: Vec<Height> = replayed.iter().map(|(d, _)| d.consensus_height).collect();
-    let survivors: Vec<_> = survivors
-        .into_iter()
-        .filter(|(d, _)| !replayed_heights.contains(&d.consensus_height))
-        .collect();
-
-    // MERGE FIRST, then exclude. The closure has to run over the whole sequence that
-    // will actually execute: a descendant of an excluded tx can sit in a survivor,
-    // since a survivor is queued precisely because its anchor is HIGHER — which is
-    // where a child of an earlier transaction lives.
-    let merged: Vec<_> = replayed.into_iter().chain(survivors).collect();
-
-    let dropped_at = |decision: &consensus_state::DeferredDecision, txid: &Txid| -> bool {
-        applicable
-            .get(&decision.consensus_height.as_u64())
-            .is_some_and(|s| s.contains(&txid.to_string()))
-    };
-
-    // Which txids each decision must drop, computed in EXECUTION order and then
-    // applied in queue order. Two orders, because they answer different questions:
-    //
-    //   * availability — whether a tx's parent output exists when the tx runs — is
-    //     a function of the order transactions EXECUTE, which is anchor order: the
-    //     drain holds every batch aside until the tip reaches its anchor, so a batch
-    //     at a lower anchor runs first regardless of consensus height. That order is
-    //     a shared input `(anchor_height, consensus_height)` — the same one
-    //     `check_finality` renders its verdict in — so every node computes the same
-    //     drops. Walking in QUEUE order instead (replay-set-first, survivors behind)
-    //     was node-local: a lagging node orders a survivor differently from a node
-    //     that already executed the height, so the two kept different tx sets from
-    //     one rollback with identical exclusion rows — silent state divergence.
-    //
-    //   * the QUEUE order is replay-set-first for drain LIVENESS (a survivor block
-    //     decision ordered ahead of the replay set would stall the very decisions
-    //     that raise the tip back up), and is unrelated to availability.
-    //
-    // The walk tracks outputs the original execution produced that this replay will
-    // not: every excluded tx, from the anchor position it was dropped at, until (if
-    // ever) a later position re-decides and keeps it. A keep re-creates its parent's
-    // outputs only from its own position onward, so a child ordered between an
-    // excluded parent and its re-decide drops (#427 through the re-decide door),
-    // while a child ordered before the parent keeps — it never saw those effects in
-    // the original execution either. Exclusions recorded at heights not in this
-    // queue happened below `from_anchor`, before every position here, so they are
-    // unavailable from the start (#427's original shape).
-    let queued_heights: HashSet<u64> = merged
-        .iter()
-        .map(|(d, _)| d.consensus_height.as_u64())
-        .collect();
-    let mut unavailable: HashSet<Txid> = applicable
-        .iter()
-        .filter(|(height, _)| !queued_heights.contains(height))
-        .flat_map(|(_, txids)| txids.iter().filter_map(|t| t.parse::<Txid>().ok()))
-        .collect();
-
-    let mut execution_order: Vec<usize> = (0..merged.len()).collect();
-    execution_order.sort_by_key(|&i| {
-        let (d, _) = &merged[i];
-        match &d.value {
-            Value::Batch { anchor_height, .. } => (*anchor_height, d.consensus_height.as_u64()),
-            // Blocks carry no batch txs; the walk ignores them, so their key only
-            // needs to be stable. Their own height orders them among batches.
-            Value::Block { height, .. } => (*height, d.consensus_height.as_u64()),
-        }
-    });
-
-    // Dropped positions per merged index, so the emit below filters by index and
-    // never re-hashes a tx the walk already hashed here.
-    let mut all_excluded: HashSet<Txid> = HashSet::new();
-    let mut dropped_positions: HashMap<usize, HashSet<usize>> = HashMap::new();
-    for &i in &execution_order {
-        let (decision, txs) = &merged[i];
-        if !matches!(decision.value, Value::Batch { .. }) {
-            continue;
-        }
-        let mut dropped = HashSet::new();
-        for (pos, tx) in txs.iter().enumerate() {
-            let txid = tx.compute_txid();
-            if dropped_at(decision, &txid) {
-                all_excluded.insert(txid);
-                unavailable.insert(txid);
-                dropped.insert(pos);
-            } else if tx
-                .input
-                .iter()
-                .any(|i| unavailable.contains(&i.previous_output.txid))
-            {
-                // A descendant of a tx missing AT THIS EXECUTION POSITION. Dropped in
-                // memory, deliberately NOT recorded in `excluded_batch_txids`: a
-                // descendant's drop is only justified while its parent stays excluded,
-                // and a durable row outlives that justification — the read predicate
-                // re-checks the CHILD's confirmation, never the parent's recovery, so a
-                // recorded child would stay dropped after a reorg heals the parent while
-                // every fresh syncer executes it. Re-deriving from the durable base rows
-                // each pass costs at most one extra rollback (a leaked child re-arms its
-                // own deadline and becomes a base row); a wrong durable drop is a
-                // divergence.
-                all_excluded.insert(txid);
-                unavailable.insert(txid);
-                dropped.insert(pos);
-            } else {
-                // A re-decided copy of a previously excluded tx: from here on its
-                // outputs exist again, so later children survive.
-                unavailable.remove(&txid);
-            }
-        }
-        if !dropped.is_empty() {
-            dropped_positions.insert(i, dropped);
-        }
-    }
-
-    // Emit the queue in its original (replay-first) order — deliberately NOT the
-    // execution order above. Replay-first is the drain's LIVENESS order (a survivor
-    // BLOCK decision ahead of the replay set would stall the tip); the drain
-    // executes each batch only when the tip reaches its anchor, and among batches
-    // sharing an anchor it cannot reverse a cross-batch dependency: the dependent
-    // batch can only be a survivor while its dependency is one (both wait for the
-    // same tip in decided order), never replayed-ahead of a survivor dependency,
-    // because the tip passing an anchor drains every deferred batch at it. So the
-    // deterministic per-position drop set is safe under the node-local queue order.
-    let mut queue = VecDeque::with_capacity(merged.len());
-    for (idx, (mut decision, txs)) in merged.into_iter().enumerate() {
-        if let Value::Batch {
-            anchor_height,
-            anchor_hash,
-            ..
-        } = &decision.value
-        {
-            let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
-            let dropped = dropped_positions.get(&idx);
-            let kept: Vec<bitcoin::Transaction> = txs
-                .iter()
-                .enumerate()
-                .filter(|(pos, _)| !dropped.is_some_and(|d| d.contains(pos)))
-                .map(|(_, tx)| tx.clone())
-                .collect();
-            // Narrowing what we execute must not narrow what we record as decided —
-            // see `DeferredDecision::certified_txs`. The BODIES are retained, not just
-            // the txids: an excluded tx never confirmed, so this is the only copy left
-            // and a peer can get it nowhere else.
-            //
-            // `get_or_insert`, not assignment: a batch can be narrowed by more than
-            // one rollback, and on the second pass `txs` is already the first pass's
-            // survivors for a SURVIVOR decision (a replayed one is reloaded from the
-            // certified list each pass). The earliest list is the decided one.
-            if kept.len() != txs.len() {
-                decision.certified_txs.get_or_insert(txs);
-            }
-            decision.value = Value::new_batch_raw(anchor_height, anchor_hash, kept);
-        }
-        queue.push_back(decision);
-    }
-
-    (queue, all_excluded)
 }
 
 /// What `process_decided_batch` did with a decided batch. Callers must not
@@ -636,11 +364,18 @@ impl<E: Executor> Reactor<E> {
         // exits again). Proposal validation normally rejects unparseable txs before
         // they are decided; if one is decided anyway, record the batch for sync and
         // skip execution uniformly, rather than crash-looping the network.
+        let selection = self
+            .select_executor(ApplicationPosition::Batch {
+                anchor_height,
+                anchor_hash,
+                consensus_height: consensus_height.as_u64(),
+            })
+            .await?;
         let parsed_txs: Vec<indexer_types::Transaction> = {
             let mut parsed = Vec::with_capacity(batch_txs.len());
             let mut bad: Option<Txid> = None;
             for btx in batch_txs {
-                match self.executor.parse_transaction(btx) {
+                match self.executor.parse_transaction(&selection, btx) {
                     Some(p) => parsed.push(p),
                     None => {
                         bad = Some(btx.compute_txid());
@@ -679,6 +414,7 @@ impl<E: Executor> Reactor<E> {
             .savepoint()
             .await
             .context("Failed to begin batch transaction")?;
+        selection.verify_base(&conn).await?;
 
         insert_batch(
             &conn,
@@ -712,7 +448,7 @@ impl<E: Executor> Reactor<E> {
             // execute_op. Only non-deterministic errors (Result::Err) abort.
             let _failures = self
                 .executor
-                .execute_transaction(&mut self.runtime, anchor_height, tx_id, t)
+                .execute_transaction(&selection, &mut self.runtime, anchor_height, tx_id, t)
                 .await
                 .context("execute_transaction failed")?;
         }
@@ -786,16 +522,12 @@ impl<E: Executor> Reactor<E> {
     /// The state-only half of building a BATCH proposal: candidates judged
     /// entirely on the loop (pool, DB, fee index) with no bitcoind
     /// round-trips. They then go through the I/O phase as an [`IoJob`].
-    async fn make_value_snapshot(&mut self) -> Result<ProposalSnapshot> {
+    async fn make_value_snapshot(&mut self) -> Result<Option<ProposalSnapshot>> {
+        let selection = self.preparation_selection().await?;
         let conn = self.db_conn();
 
         // Pre-filter already-processed txids to avoid unnecessary validation
-        let pending_txids: Vec<Txid> = self
-            .consensus
-            .pending_transactions
-            .keys()
-            .copied()
-            .collect();
+        let pending_txids: Vec<Txid> = self.consensus.mempool.candidates.keys().copied().collect();
         let txid_strs: Vec<String> = pending_txids.iter().map(|t| t.to_string()).collect();
         let existing = select_existing_txids(&conn, &txid_strs)
             .await
@@ -808,7 +540,7 @@ impl<E: Executor> Reactor<E> {
         // Remove already-processed txids from the pool
         for txid_str in &existing {
             if let Ok(txid) = txid_str.parse::<Txid>() {
-                self.consensus.pending_transactions.remove(&txid);
+                self.consensus.mempool.suppress(&txid);
             }
         }
 
@@ -819,21 +551,21 @@ impl<E: Executor> Reactor<E> {
         // hold.
         let mut txs = Vec::new();
         let mut invalid_txids = Vec::new();
-        for (txid, (raw_tx, parsed)) in &self.consensus.pending_transactions {
+        for (txid, (raw_tx, parsed)) in &self.consensus.mempool.candidates {
             if !unbatched_set.contains(txid) {
                 continue;
             }
-            if is_batchable(&parsed.inputs) {
+            if self.executor.is_batchable(&selection, parsed) {
                 txs.push(raw_tx.clone());
             } else {
                 invalid_txids.push(*txid);
             }
         }
         for txid in &invalid_txids {
-            self.consensus.pending_transactions.remove(txid);
+            self.consensus.mempool.suppress(txid);
         }
         if txs.is_empty() {
-            return Ok(ProposalSnapshot::Nothing);
+            return Ok(None);
         }
         // Dependency-order the candidates BEFORE the I/O phase, not after. The
         // I/O phase relays each accepted tx before validating the next
@@ -847,7 +579,11 @@ impl<E: Executor> Reactor<E> {
         // Compute the fee threshold once for this candidate set (the index is
         // a snapshot during this pass) and carry it into the I/O phase.
         let threshold = compute_fee_threshold(&self.consensus.mempool_fee_index);
-        Ok(ProposalSnapshot::Batch { txs, threshold })
+        Ok(Some(ProposalSnapshot {
+            selection,
+            txs,
+            threshold,
+        }))
     }
 
     /// Judge an incoming proposal, answering the engine through `reply` —
@@ -951,6 +687,7 @@ impl<E: Executor> Reactor<E> {
                     let _ = reply.send(None);
                     return Ok(());
                 }
+                let selection = self.preparation_selection().await?;
                 let mut parsed_txs = Vec::with_capacity(transactions.len());
                 for tx in transactions {
                     let txid = tx.compute_txid();
@@ -959,14 +696,14 @@ impl<E: Executor> Reactor<E> {
                     // not commit to, so a same-txid variant sitting in this node's
                     // mempool would otherwise be judged (and later voted on) in
                     // place of the witness the proposer actually streamed.
-                    let parsed = if let Some(p) = self.executor.parse_transaction(tx) {
+                    let parsed = if let Some(p) = self.executor.parse_transaction(&selection, tx) {
                         p
                     } else {
                         warn!(%txid, "Rejecting proposal: transaction failed to parse");
                         let _ = reply.send(None);
                         return Ok(());
                     };
-                    if !is_batchable(&parsed.inputs) {
+                    if !self.executor.is_batchable(&selection, &parsed) {
                         warn!(%txid, "Rejecting proposal: transaction not batchable");
                         let _ = reply.send(None);
                         return Ok(());
@@ -978,6 +715,7 @@ impl<E: Executor> Reactor<E> {
                 self.io_jobs.push_back(IoJob {
                     verdicts,
                     apply: IoApply::ValidateProposal {
+                        selection,
                         height,
                         round,
                         proposer,
@@ -1027,19 +765,18 @@ impl<E: Executor> Reactor<E> {
 
         // A candidate set already validated for THIS anchor — banked when the
         // deadline consumed the proposal it was meant for. Judged at use:
-        // anchor must still match, membership is re-checked against the pool,
+        // anchor and exact witness must still match the pool,
         // and `validate_batch` re-runs; anything stale falls through to a
         // fresh snapshot.
         if let Some(banked) = self.validated_candidates.take()
+            && banked
+                .selection
+                .can_reuse_preparation(&self.preparation_selection().await?)
             && banked.anchor_height == last_height
             && banked.anchor_hash == last_hash
         {
             let mut kept = banked.txs;
-            kept.retain(|tx| {
-                self.consensus
-                    .pending_transactions
-                    .contains_key(&tx.compute_txid())
-            });
+            kept.retain(|tx| self.consensus.mempool.contains_candidate(tx));
             if !kept.is_empty() {
                 let order = dependency_sort(&kept);
                 let txs: Vec<bitcoin::Transaction> =
@@ -1066,7 +803,11 @@ impl<E: Executor> Reactor<E> {
         let mut idle_retry = false;
         if !build_in_flight {
             match self.make_value_snapshot().await? {
-                ProposalSnapshot::Batch { txs, threshold } => {
+                Some(ProposalSnapshot {
+                    selection,
+                    txs,
+                    threshold,
+                }) => {
                     info!(
                         candidates = txs.len(),
                         "Validating candidate batch off-loop; reply deferred"
@@ -1075,12 +816,13 @@ impl<E: Executor> Reactor<E> {
                     self.io_jobs.push_back(IoJob {
                         verdicts,
                         apply: IoApply::BuildProposal {
+                            selection,
                             anchor_height: last_height,
                             anchor_hash: last_hash,
                         },
                     });
                 }
-                ProposalSnapshot::Nothing => {
+                None => {
                     // Round zero already offered a batching window. On a retry,
                     // peers may have started their timers before this proposer;
                     // another idle wait can make the replacement arrive too late.
@@ -1146,9 +888,13 @@ impl<E: Executor> Reactor<E> {
         let verdicts = verdicts?;
         match apply {
             IoApply::BuildProposal {
+                selection,
                 anchor_height,
                 anchor_hash,
             } => {
+                if !selection.can_reuse_preparation(&self.preparation_selection().await?) {
+                    return self.try_fulfill_pending_proposal().await.map(|_| ());
+                }
                 // Pool hygiene counts even when the proposal below is stale.
                 let mut kept = Vec::with_capacity(verdicts.len());
                 for (tx, verdict) in verdicts {
@@ -1157,7 +903,7 @@ impl<E: Executor> Reactor<E> {
                         TxPolicy::Rejected(reason) => {
                             let txid = tx.compute_txid();
                             warn!(%txid, %reason, "Dropping candidate transaction");
-                            self.consensus.pending_transactions.remove(&txid);
+                            self.consensus.mempool.reject(&tx);
                         }
                     }
                 }
@@ -1165,12 +911,9 @@ impl<E: Executor> Reactor<E> {
                 // replacement or eviction arrived through the mempool arm —
                 // which now runs freely during validation — and a superseded tx
                 // draws nil votes (txn-mempool-conflict) or, decided, a batch
-                // that can never confirm. Membership at APPLY time is the truth.
-                kept.retain(|tx| {
-                    self.consensus
-                        .pending_transactions
-                        .contains_key(&tx.compute_txid())
-                });
+                // that can never confirm. A txid omits witness data, so compare the
+                // complete raw input rather than just its membership key.
+                kept.retain(|tx| self.consensus.mempool.contains_candidate(tx));
                 if self.consensus.pending_proposal.is_none() {
                     // The deadline already answered with an empty batch, or the
                     // engine moved on. BANK the verdicts for the next GetValue
@@ -1184,6 +927,7 @@ impl<E: Executor> Reactor<E> {
                             "Banking validated candidates for the next proposal"
                         );
                         self.validated_candidates = Some(ValidatedCandidates {
+                            selection,
                             anchor_height,
                             anchor_hash,
                             txs: kept,
@@ -1229,6 +973,7 @@ impl<E: Executor> Reactor<E> {
                     .await
             }
             IoApply::ValidateProposal {
+                selection,
                 height,
                 round,
                 proposer,
@@ -1237,6 +982,10 @@ impl<E: Executor> Reactor<E> {
                 parsed,
                 reply,
             } => {
+                if !selection.can_reuse_preparation(&self.preparation_selection().await?) {
+                    let _ = reply.send(None);
+                    return Ok(());
+                }
                 for (tx, verdict) in &verdicts {
                     if let TxPolicy::Rejected(reason) = verdict {
                         warn!(
@@ -1272,10 +1021,7 @@ impl<E: Executor> Reactor<E> {
                     return Ok(());
                 }
                 for (tx, parsed) in transactions.iter().zip(parsed) {
-                    self.consensus
-                        .pending_transactions
-                        .entry(tx.compute_txid())
-                        .or_insert_with(|| (tx.clone(), parsed));
+                    self.consensus.mempool.cache_proposal(tx, parsed);
                 }
                 let proposed = ProposedValue {
                     height,
@@ -1375,7 +1121,7 @@ impl<E: Executor> Reactor<E> {
         // make_value re-proposes the very txs whose missing confirmations caused
         // this rollback — repeating the same finality failure with no progress.
         for txid in &excluded {
-            self.consensus.pending_transactions.remove(txid);
+            self.consensus.mempool.suppress(txid);
         }
 
         self.consensus
@@ -1927,9 +1673,7 @@ impl<E: Executor> Reactor<E> {
                         .await?;
 
                     for tx in &full_txs {
-                        self.consensus
-                            .pending_transactions
-                            .remove(&tx.compute_txid());
+                        self.consensus.mempool.suppress(&tx.compute_txid());
                     }
 
                     let cert_bytes = encode_commit_certificate(&certificate)

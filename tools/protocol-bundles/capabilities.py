@@ -19,7 +19,11 @@ def settings(source):
 
 def verify(root):
     source = (root / "core/indexer/src/runtime/mod.rs").read_text()
-    node = source.split("pub fn new_engine()", 1)[1].split("\n    pub ", 1)[0]
+    facade = re.search(r"pub fn new_engine\(\) -> Result<Engine>\s*\{([^}]+)\}", source)
+    if (not facade or facade[1].strip() != "engine::new_engine()"
+            or "use crate::protocol::v1::engine;" not in source):
+        raise RuntimeError("node engine does not delegate to retained P1 configuration")
+    node = (root / "core/indexer/src/protocol/v1/engine.rs").read_text()
     proof = (root / "protocol-bundles/proof/vm.rs").read_text()
     if settings(node) != settings(proof):
         raise RuntimeError("node and proof capability settings differ")

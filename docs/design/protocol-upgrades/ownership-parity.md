@@ -25,6 +25,12 @@ Their source fields differ as expected; their complete state observations agree.
 This is non-cancelled cross-revision evidence. Cancellation, resource cleanup,
 affected platform qualification and consolidated phase reviews remain separate.
 
+The selected-executor preparation branch adapts this fixture's call sites to
+explicit executor selection and raw-input admission. Those adaptations belong
+to the later K2a comparison. For OWNERSHIP-1 acceptance, use the unchanged fixture
+on the S2 baseline and the ownership branch, before integrating K2a. Do not use
+the adapted selected-executor fixture as the ownership baseline.
+
 Reuse `confirmation_position_tests::parity::retained_executor_matches_baseline`
 from `c7554ca8`, with the fixture and comparison source unchanged. Apply the same
 test-only files to the final S2 baseline and the ownership candidate. The baseline

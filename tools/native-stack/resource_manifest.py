@@ -35,7 +35,21 @@ FIBER_SOURCE_FILES = {
     "crates/fiber/src/unix.rs": "83121bc6a5becaeae393b99848f6c1fd169e44c1b7857b3b862f74c64b950c4c",
 }
 BASE_COMMIT = "67a52fed58a893ce2c1c05483f86f4fffa02a675"
+RETAINED_NATIVE_INPUTS = {
+    f"retained_native_{name}": f"core/indexer/src/protocol/v1/native/{name}"
+    for name in ("token.wasm.br", "filestorage.wasm.br", "staking.wasm.br",
+                 "system.wasm.br", "nft.wasm.br", "build.json", "toolchain.json",
+                 "provenance.json", "provenance.bin", "manifest.json")
+}
+RETAINED_NATIVE_INPUTS.update({
+    "retained_native_bootstrap": "core/indexer/src/protocol/v1/native_bootstrap.rs",
+    "native_bootstrap_abi": "core/indexer/src/protocol/native_bootstrap.rs",
+    "native_bootstrap_adapter": "core/indexer/src/database/native_bootstrap.rs",
+    "native_genesis_preflight": "core/indexer/src/database/genesis.rs",
+    "initial_protocol_definition": "core/indexer/src/protocol/coordinator/genesis.rs",
+})
 INPUTS = {
+    **RETAINED_NATIVE_INPUTS,
     "core_lockfile": "core/Cargo.lock",
     "indexer_manifest": "core/indexer/Cargo.toml",
     "testlib_manifest": "core/testlib/Cargo.toml",
@@ -82,7 +96,16 @@ INPUTS = {
     "token_pages": "core/indexer/src/runtime/token/query_tests.rs",
     "nft_pages": "core/indexer/src/runtime/nft/query_tests.rs",
     "publish_path": "core/indexer/src/runtime/mod.rs",
-    "fee_settlement": "core/indexer/src/runtime/fees.rs",
+    "retained_fuel_policy": "core/indexer/src/protocol/v1/fuel.rs",
+    "retained_deposit_policy": "core/indexer/src/protocol/v1/deposit.rs",
+    "retained_error_policy": "core/indexer/src/protocol/v1/errors.rs",
+    "retained_native_policy": "core/indexer/src/protocol/v1/native.rs",
+    "retained_engine": "core/indexer/src/protocol/v1/engine.rs",
+    "retained_resource_policy": "core/indexer/src/protocol/v1/resources.rs",
+    "retained_gas_policy": "core/indexer/src/protocol/v1/gas.rs",
+    "retained_pricing_policy": "core/indexer/src/protocol/v1/pricing.rs",
+    "selected_policy_binding": "core/indexer/src/runtime/selected.rs",
+    "fee_settlement": "core/indexer/src/protocol/v1/fees.rs",
     "pricing_source": "core/indexer/src/runtime/pricing.rs",
     "resource_thread_trace": "core/indexer/src/runtime/resource_diagnostics.rs",
     "brotli_path": "core/indexer/src/runtime/storage.rs",

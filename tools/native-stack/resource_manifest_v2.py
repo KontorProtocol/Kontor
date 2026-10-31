@@ -6,12 +6,13 @@ import json
 from pathlib import Path
 
 from resource_manifest import MANIFEST as V1_MANIFEST
-from resource_manifest import ROOT, build_manifest, sha256
+from resource_manifest import ROOT, RETAINED_NATIVE_INPUTS, build_manifest, sha256
 
 
 MANIFEST = Path(__file__).with_name("resource-manifest-v2.json")
 SCHEMA = Path(__file__).with_name("resource-evidence-schema-v2.json")
 SOURCES = {
+    **RETAINED_NATIVE_INPUTS,
     "v2_manifest_builder": "tools/native-stack/resource_manifest_v2.py",
     "v2_validator": "tools/native-stack/resource_evidence_v2.py",
     "v2_capture": "tools/native-stack/capture_resource_chain_v2.py",
@@ -26,8 +27,17 @@ SOURCES = {
     "chain_fixture": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
     "invocation": "core/indexer/src/runtime/invocation.rs",
     "runtime": "core/indexer/src/runtime/mod.rs",
+    "retained_fuel_policy": "core/indexer/src/protocol/v1/fuel.rs",
+    "retained_deposit_policy": "core/indexer/src/protocol/v1/deposit.rs",
+    "retained_error_policy": "core/indexer/src/protocol/v1/errors.rs",
+    "retained_native_policy": "core/indexer/src/protocol/v1/native.rs",
+    "retained_engine": "core/indexer/src/protocol/v1/engine.rs",
+    "retained_resource_policy": "core/indexer/src/protocol/v1/resources.rs",
+    "retained_gas_policy": "core/indexer/src/protocol/v1/gas.rs",
+    "retained_pricing_policy": "core/indexer/src/protocol/v1/pricing.rs",
+    "selected_policy_binding": "core/indexer/src/runtime/selected.rs",
     "call": "core/indexer/src/runtime/call.rs",
-    "fees": "core/indexer/src/runtime/fees.rs",
+    "fees": "core/indexer/src/protocol/v1/fees.rs",
     "token": "core/indexer/src/runtime/token.rs",
 }
 ROLES = (
@@ -51,7 +61,7 @@ AUXILIARY_EXPECTED_COUNTS = {
 }
 AUXILIARY_CALLSITES = {
     "target_native_auxiliary": [
-        "core/indexer/src/runtime/fees.rs:25,50: with_payment calls token::api::hold and token::api::release around paid deterministic outcomes, including traps and depth rejection",
+        "core/indexer/src/protocol/v1/fees.rs:25,50: with_payment calls token::api::hold and token::api::release around paid deterministic outcomes, including traps and depth rejection",
         "core/indexer/src/runtime/invocation.rs:73-77: target-phase token calls are classified separately from chain Stores",
     ],
     "pre_observation": [

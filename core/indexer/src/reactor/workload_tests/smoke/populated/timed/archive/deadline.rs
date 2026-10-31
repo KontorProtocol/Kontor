@@ -201,7 +201,7 @@ async fn workload_saved_timed_missing_confirmation_rolls_back_at_deadline() -> R
         trial
             .process_block_event(BlockEvent::BlockInsert {
                 target_height: deadline,
-                block: block.clone(),
+                block: block.clone().into(),
             })
             .await?;
     }

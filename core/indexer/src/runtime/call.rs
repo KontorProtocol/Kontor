@@ -6,7 +6,7 @@ use super::resource_diagnostics;
 use futures_util::FutureExt;
 use futures_util::future::OptionFuture;
 use wasmtime::{
-    AsContext, AsContextMut, GcHeapOutOfMemory, Store, Trap,
+    AsContext, AsContextMut, GcHeapOutOfMemory, Store,
     component::{
         Access, Func, Resource, Type, Val,
         wasm_wave::{
@@ -17,10 +17,13 @@ use wasmtime::{
 
 use indexer_types::{OpStatus, Payment};
 
-use crate::database::native_contracts::{TOKEN_CONTRACT_ID, is_native_contract_id};
+use crate::protocol::v1::errors::{classify_result, is_deterministic};
+#[cfg(test)]
+use crate::protocol::v1::gas::SYSTEM_FUEL_CEILING;
+use crate::protocol::v1::native::{is_native_contract_id, records_result};
 
 use super::{
-    ContractAddress, MAX_UNTRUSTED_GAS_LIMIT, Runtime,
+    ContractAddress, Runtime,
     fuel::{Fuel, UsageKind, record_fuel},
     invocation::{
         InvocationCapacityExhausted, InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS,
@@ -30,7 +33,6 @@ use super::{
     wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
 
-mod error;
 mod input;
 mod result;
 
@@ -61,7 +63,7 @@ struct PreparedCall {
     frame: CallFrame,
 }
 
-pub(super) struct CallOutcome {
+pub(crate) struct CallOutcome {
     pub result: Result<String, ExecutionError>,
     pub remaining_fuel: u64,
 }
@@ -86,7 +88,7 @@ impl Runtime {
             None,
             None,
             expr,
-            SYSTEM_FUEL_CEILING,
+            self.selected_gas_policy().system_fuel,
             false,
         )
         .await?
@@ -130,6 +132,8 @@ impl Runtime {
         expr: &str,
         fuel_override: Option<u64>,
     ) -> Result<CallOutcome, ExecutionError> {
+        self.verify_selected_runtime()
+            .map_err(ExecutionError::NonDeterministic)?;
         let fuel_limit = self.call_fuel_limit(signer, payment, fuel_override)?;
         if fuel_override.is_none()
             && signer.is_some_and(|signer| !signer.is_core())
@@ -169,6 +173,7 @@ impl Runtime {
         payment: Option<&Payment>,
         fuel_override: Option<u64>,
     ) -> Result<u64, ExecutionError> {
+        let gas = self.selected_gas_policy();
         // The fuel budget is decided ONCE here, from the signer, so it can't drift
         // across the per-context arms below.
         Ok(match fuel_override {
@@ -181,16 +186,17 @@ impl Runtime {
                 // for UNTRUSTED user ops; a finite cap on must-complete system work
                 // would eventually false-halt a healthy network on legitimate growth.
                 // See `SYSTEM_FUEL_CEILING`.
-                (Some(s), _) if s.is_core() => SYSTEM_FUEL_CEILING,
+                (Some(s), _) if s.is_core() => gas.system_fuel,
                 // User op: metered by the payer's committed gas limit.
                 (_, Some(p)) => {
-                    if p.gas_limit > MAX_UNTRUSTED_GAS_LIMIT {
+                    if p.gas_limit > gas.untrusted_allowance {
+                        let maximum = gas.untrusted_allowance;
                         return Err(ExecutionError::Deterministic(anyhow!(
-                            "Gas limit exceeds the maximum of {MAX_UNTRUSTED_GAS_LIMIT}"
+                            "Gas limit exceeds the maximum of {maximum}"
                         )));
                     }
                     p.gas_limit
-                        .checked_mul(self.gas_to_fuel_multiplier)
+                        .checked_mul(gas.fuel_multiplier)
                         .ok_or_else(|| {
                             ExecutionError::Deterministic(anyhow!(
                                 "Gas limit exceeds the fuel range"
@@ -391,7 +397,7 @@ impl Runtime {
             .instantiate_async(&mut store)
             .await
             .map_err(|e| {
-                if error::is_deterministic(&e) {
+                if is_deterministic(&e) {
                     ExecutionError::Deterministic(e.into())
                 } else {
                     ExecutionError::NonDeterministic(e.into())
@@ -668,7 +674,7 @@ impl Runtime {
         // distinguishing generated host errors from native conversion errors.
         let is_deterministic = match &result {
             Ok(Ok(())) => true,
-            Ok(Err(e)) => error::is_deterministic(e),
+            Ok(Err(e)) => is_deterministic(e),
             Err(_) => false,
         };
 
@@ -713,7 +719,7 @@ impl Runtime {
         }
         // The highest result index is the API/SDK's canonical operation result.
         // Internal fee transfers must never masquerade as that outcome.
-        if contract_id == TOKEN_CONTRACT_ID && matches!(func_name, "hold" | "release") {
+        if !records_result(contract_id, func_name) {
             return result;
         }
         let value = result.as_ref().map(|v| v.clone()).ok();
@@ -780,39 +786,6 @@ impl Runtime {
     }
 }
 
-/// Categorize the result of a wasm call into a persisted `OpStatus`.
-///
-/// - `Ok(s)` where `s` starts with `"err("` means the contract function
-///   returned a `result<_, error>::Err` value. The call ran cleanly but
-///   the semantic outcome was a failure; storage was rolled back. Treated
-///   as `OpStatus::ContractErr`.
-/// - `Ok(_)` otherwise is a successful call returning either a value or
-///   nothing. `OpStatus::Ok`.
-/// - `Err(ExecutionError::Deterministic(e))` is mapped by looking at the
-///   underlying error for a `wasmtime::Trap` variant. `Trap::OutOfFuel`
-///   becomes `OpStatus::OutOfFuel`; other trap variants become
-///   `OpStatus::Trap`. Non-trap errors become `OpStatus::Other`.
-/// - `Err(NonDeterministic)` shouldn't normally produce a row — those
-///   propagate as fatal infrastructure errors and the block won't
-///   commit. Mapped to `Other` for completeness.
-fn classify_result(result: &Result<String, ExecutionError>) -> OpStatus {
-    match result {
-        Ok(v) if v.starts_with("err(") => OpStatus::ContractErr,
-        Ok(_) => OpStatus::Ok,
-        Err(ExecutionError::Deterministic(e)) => {
-            if let Some(trap) = e.downcast_ref::<Trap>() {
-                match trap {
-                    Trap::OutOfFuel => OpStatus::OutOfFuel,
-                    _ => OpStatus::Trap,
-                }
-            } else {
-                OpStatus::Other
-            }
-        }
-        Err(ExecutionError::NonDeterministic(_)) => OpStatus::Other,
-    }
-}
-
 /// Max bytes for a single STRING LITERAL in a call expression. The WAVE parser
 /// (`parse_raw_func_call`) recurses ~per character through a string literal,
 /// overflowing the host stack (~32k chars on the default ~2MB thread stack —
@@ -831,24 +804,6 @@ const MAX_STRING_LITERAL_BYTES: usize = 16 * 1024;
 /// overflows at a few thousand levels. 64 is far beyond any real call and far
 /// below the overflow depth. CONSENSUS-LOAD-BEARING — see `MAX_STRING_LITERAL_BYTES`.
 const MAX_EXPR_DEPTH: usize = 64;
-
-/// Fuel budget for trusted Core calls and internal system views, effectively
-/// unmetered. Selected by a Core signer or the explicit system-view entry point.
-///
-/// `i64::MAX as u64`, NOT `u64::MAX`: the remaining fuel is bound into the storage
-/// read path as a SQL i64 size-budget (`CASE WHEN size <= :fuel`, contract_state.rs),
-/// so it must fit in i64 (`u64::MAX as i64 == -1` would make every core read fail).
-/// i64::MAX is the largest i64-safe budget.
-///
-/// Fork-safe: core fuel never enters the checkpoint hash and the call runs inside the
-/// block savepoint, so an over-budget hang can only stall a node a height behind —
-/// never fork committed state. `gas_consumed` is a start−end difference, so true usage
-/// still records. (The cap does not bound wall-clock work; per-block core work is
-/// bounded by design — see the block-lifecycle hooks.)
-///
-/// CONSENSUS-LOAD-BEARING: all nodes must share this value — a node with a lower budget
-/// would stall on a block the others commit. Change only behind a coordinated upgrade.
-const SYSTEM_FUEL_CEILING: u64 = i64::MAX as u64;
 
 /// Deterministically reject a call expression that would overflow the recursive
 /// WAVE parser — along its two recursion axes: an over-long string literal, or

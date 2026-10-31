@@ -1,3 +1,4 @@
+use crate::protocol::coordinator::selection::ApplicationPosition;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
@@ -16,11 +17,12 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-use super::{StopEngine, confirmation_block, fixture, reactor};
+use super::{StopEngine, fixture, raw_confirmation_block, reactor};
 use crate::block::filter_map;
 use crate::built_info::GIT_COMMIT_HASH;
 use crate::consensus::Height;
 use crate::database::connection::new_connection;
+use crate::reactor::executor::Executor;
 use crate::runtime::{ComponentCache, Runtime, Storage};
 use crate::test_utils::new_mock_block_hash;
 
@@ -133,7 +135,18 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
             format!("{label}/recognition"),
             serde_json::to_value(&recognized)?,
         );
-        let simulated = reactor.simulate(recognized).await?;
+        let mut unrelated = raw.clone();
+        unrelated.input[0].witness.clear();
+        ensure!(reactor.simulate_raw(serialize(&unrelated)).await?.is_err());
+        ensure!(
+            state(&conn).await? == initial,
+            "unrecognized input changed persisted state"
+        );
+        let simulated = reactor
+            .simulate_raw(serialize(&raw))
+            .await?
+            .map_err(anyhow::Error::msg)
+            .context("recognized simulation")?;
         report.states.insert(
             format!("{label}/simulation"),
             serde_json::to_value(simulated)?,
@@ -158,8 +171,25 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
                 .states
                 .insert(format!("{label}/executed"), state(&conn).await?);
         }
-        let block = confirmation_block(&raw, 2)?;
-        let (count, ops, errors) = reactor.execute_block(&block).await?;
+        let block = reactor
+            .executor
+            .parse_block(
+                &reactor.preparation_selection().await?,
+                raw_confirmation_block(&raw, 2)?,
+            )
+            .await?;
+        let (count, ops, errors) = reactor
+            .execute_block(
+                &reactor
+                    .select_executor(ApplicationPosition::Block {
+                        height: block.height,
+                        hash: block.hash,
+                        consensus_height: 0,
+                    })
+                    .await?,
+                &block,
+            )
+            .await?;
         ensure!(count == usize::from(!batched) && ops == u64::from(!batched));
         ensure!(errors.iter().flatten().flatten().all(Option::is_none));
         report
@@ -171,8 +201,25 @@ async fn scenario(path: &Path, batched: bool, report: &mut Report) -> Result<()>
             report
                 .states
                 .insert(format!("{label}/rollback"), state(&conn).await?);
-            let replacement = confirmation_block(&raw, 4)?;
-            let (count, ops, _) = reactor.execute_block(&replacement).await?;
+            let replacement = reactor
+                .executor
+                .parse_block(
+                    &reactor.preparation_selection().await?,
+                    raw_confirmation_block(&raw, 4)?,
+                )
+                .await?;
+            let (count, ops, _) = reactor
+                .execute_block(
+                    &reactor
+                        .select_executor(ApplicationPosition::Block {
+                            height: replacement.height,
+                            hash: replacement.hash,
+                            consensus_height: 0,
+                        })
+                        .await?,
+                    &replacement,
+                )
+                .await?;
             ensure!(
                 (count, ops) == (0, 0),
                 "reconfirmation executed or charged again"

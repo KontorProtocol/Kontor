@@ -156,10 +156,9 @@ pub struct Config {
     pub prune: bool,
 
     /// Blocks below the tip to retain before a `contract_state` version becomes
-    /// eligible for pruning. Floored at the consensus finality window plus one
-    /// to retain the invalidated anchor's predecessor. Must stay ABOVE the
-    /// reactor's maximum in-flight block
-    /// buffer (`MAX_PENDING_BLOCKS` + the block channel capacity) plus real
+    /// eligible for pruning. Floored at the retained coordinator policies' rollback
+    /// depth, including the anchor predecessor. Must stay ABOVE the reactor's
+    /// maximum in-flight block buffer (`MAX_PENDING_BLOCKS` + the block channel capacity) plus real
     /// reorg headroom: a rollback queued behind a full buffer is processed only
     /// after the buffered blocks are decided, so `last_height` can sprint that
     /// far past the fork before the rollback lands — the retained history is

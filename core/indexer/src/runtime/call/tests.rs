@@ -8,6 +8,7 @@ use wasmtime::Trap;
 use super::{CallOutcome, InvocationStore};
 
 use crate::database::types::Identity;
+use crate::protocol::coordinator::selection::select_test_block;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::fuel::UsageKind;
 use crate::runtime::numerics::sub_decimal;
@@ -32,6 +33,8 @@ mod guest_memory_failure;
 mod holder_errors;
 mod native_stack;
 mod native_stack_resource;
+mod p1_publication;
+mod p1_transaction_publication;
 mod preparation_fees;
 mod results;
 mod sequential_chains;
@@ -137,6 +140,9 @@ async fn nested_outcomes_preserve_state_refunds_and_cleanup() -> Result<()> {
             // Each case starts from the same state. The outer savepoint models
             // the transaction boundary that discards infrastructure failures.
             runtime.storage.savepoint().await?;
+            let selection =
+                select_test_block(&conn, runtime.network, runtime.storage.height).await?;
+            let mut runtime = runtime.bind_selection(&selection)?;
             conn.execute("DELETE FROM contract_results", ()).await?;
             let savepoint = runtime.storage.savepoint_stack.peek().await;
             let actor_before = balance(&mut runtime, HolderRef::from(&actor)).await?;

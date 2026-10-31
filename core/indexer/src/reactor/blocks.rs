@@ -1,40 +1,30 @@
+use std::future::Future;
 use std::mem;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use bitcoin::hashes::Hash;
 use indexer_types::{Block, BlockRow, Event, OpWithResult};
 use metrics::{counter, gauge};
 use tracing::{debug, info, warn};
 
+use crate::bitcoin_follower::block::BlockInput;
 use crate::block;
-use crate::consensus::finality_types::{FINALITY_ROLLBACK_DEPTH, StateEvent};
+use crate::consensus::finality_types::StateEvent;
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
     insert_block_execution_usage, insert_transaction, select_block_at_height, select_block_latest,
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
-use crate::runtime::{
-    filestorage::api::{
-        accrue_storage_rewards, expire_challenges, generate_challenges_for_block,
-        record_block_root, settle_expired_challenges,
-    },
-    staking::{
-        address as staking_address,
-        api::{
-            distribute_ordering_reward, process_pending_validators,
-            wave::{has_reward_recipients_call_expr, has_reward_recipients_parse_return_expr},
-        },
-    },
-    token::api::mint_emission,
-    wit::Signer,
+use crate::protocol::coordinator::minimum_prune_retention_blocks;
+use crate::protocol::coordinator::selection::{
+    ApplicationPosition, ExecutionSelection, select_legacy_p1,
 };
 use crate::test_utils::new_mock_block_hash;
 
-use super::Reactor;
 use super::consensus_state;
 use super::executor::Executor;
+use super::{Reactor, SimulationOutcome};
 
 // Incremental-vacuum throttle. Units are PAGES; the MiB annotations assume the
 // default 4 KiB page_size (Kontor never sets a custom `PRAGMA page_size`, so this
@@ -67,7 +57,10 @@ impl<E: Executor> Reactor<E> {
         if !self.prune.enabled {
             return Ok(());
         }
-        let retain = self.prune.retain_blocks.max(FINALITY_ROLLBACK_DEPTH);
+        let retain = self
+            .prune
+            .retain_blocks
+            .max(minimum_prune_retention_blocks());
         if self.last_height.saturating_sub(to_height) > retain {
             bail!(
                 "rollback to height {to_height} is deeper than the prune retain window \
@@ -138,9 +131,11 @@ impl<E: Executor> Reactor<E> {
     /// so `handle_block` has a single place to roll back from.
     async fn block_txn(
         &mut self,
+        selection: &ExecutionSelection,
         block: &Block,
         decision: &consensus_state::DeferredDecision,
     ) -> Result<(usize, u64)> {
+        selection.verify_base(&self.db_conn()).await?;
         insert_batch(
             &self.db_conn(),
             decision.consensus_height.as_u64(),
@@ -153,10 +148,10 @@ impl<E: Executor> Reactor<E> {
         .context("Failed to insert block batch decision")?;
 
         let (unbatched_count, executed_ops, _failures) = self
-            .execute_block(block)
+            .execute_block(selection, block)
             .await
             .context("execute_block failed")?;
-        self.run_block_lifecycle(block)
+        self.run_block_lifecycle(selection, block)
             .await
             .context("run_block_lifecycle failed")?;
         Ok((unbatched_count, executed_ops))
@@ -178,8 +173,10 @@ impl<E: Executor> Reactor<E> {
     /// simulate handler consumes it.
     pub(super) async fn execute_block(
         &mut self,
+        selection: &ExecutionSelection,
         block: &Block,
     ) -> Result<(usize, u64, Vec<Vec<Vec<Option<anyhow::Error>>>>)> {
+        selection.ensure_block_execution(self.runtime.network, block.height, block.hash)?;
         insert_block(
             &self.db_conn(),
             BlockRow::builder()
@@ -236,7 +233,7 @@ impl<E: Executor> Reactor<E> {
 
             let tx_failures = self
                 .executor
-                .execute_transaction(&mut self.runtime, block.height, tx_id, t)
+                .execute_transaction(selection, &mut self.runtime, block.height, tx_id, t)
                 .await
                 .context("execute_transaction failed")?;
             failures.push(tx_failures);
@@ -246,6 +243,45 @@ impl<E: Executor> Reactor<E> {
         }
 
         Ok((unbatched_count, executed_ops, failures))
+    }
+
+    pub(super) async fn simulate_raw(&mut self, raw: Vec<u8>) -> Result<SimulationOutcome> {
+        // Recognition belongs at admission, since the protocol may change while
+        // an RPC request waits in the bounded simulation queue.
+        let selection = self.simulation_selection().await?;
+        let raw = match self.executor.decode_simulation(&selection, &raw) {
+            Ok(raw) => raw,
+            Err(error) => return Ok(Err(error)),
+        };
+        let Some(tx) = self.executor.parse_transaction(&selection, &raw) else {
+            return Ok(Err("Not a valid Kontor transaction".to_owned()));
+        };
+        self.simulate_selected(selection, tx).await.map(Ok)
+    }
+
+    fn simulation_selection(
+        &self,
+    ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
+        let conn = self.db_conn();
+        let network = self.runtime.network;
+        async move {
+            let tip = select_block_latest(&conn).await?;
+            let height = tip.map_or(Ok(1), |row| {
+                row.height
+                    .checked_add(1)
+                    .context("simulation height overflow")
+            })?;
+            select_legacy_p1(&conn, network, ApplicationPosition::Simulation { height }).await
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) async fn simulate(
+        &mut self,
+        tx: indexer_types::Transaction,
+    ) -> Result<Vec<OpWithResult>> {
+        let selection = self.simulation_selection().await?;
+        self.simulate_selected(selection, tx).await
     }
 
     /// Simulate a transaction: execute in a temporary block, inspect results,
@@ -261,8 +297,9 @@ impl<E: Executor> Reactor<E> {
     /// mutate the originals, and restore context even on a returned error.
     /// Outer errors remain fatal; the SQL transaction is rolled back before the
     /// reactor reports them. The reactor task must not be cancelled mid-flight.
-    pub(super) async fn simulate(
+    async fn simulate_selected(
         &mut self,
+        selection: ExecutionSelection,
         tx: indexer_types::Transaction,
     ) -> Result<Vec<OpWithResult>> {
         let restore_height = self.runtime.storage.height;
@@ -282,7 +319,7 @@ impl<E: Executor> Reactor<E> {
             .savepoint()
             .await
             .context("Failed to begin simulation savepoint")?;
-        let result = self.simulate_inner(tx).await;
+        let result = self.simulate_inner(&selection, tx).await;
         lease.drain(&self.runtime).await?;
         let rollback = self
             .runtime
@@ -304,6 +341,7 @@ impl<E: Executor> Reactor<E> {
 
     async fn simulate_inner(
         &mut self,
+        selection: &ExecutionSelection,
         tx: indexer_types::Transaction,
     ) -> Result<Vec<OpWithResult>> {
         // Simulation runs against a FABRICATED block one past the tip and then
@@ -314,6 +352,7 @@ impl<E: Executor> Reactor<E> {
         // then inserts `signers(height = <discarded height>)` and trips the
         // `signers.height -> blocks.height` foreign key, which is classified
         // non-deterministic and kills the reactor.
+        selection.verify_base(&self.db_conn()).await?;
         let block_row = select_block_latest(&self.db_conn())
             .await
             .context("Failed to query latest block for simulation")?;
@@ -327,7 +366,7 @@ impl<E: Executor> Reactor<E> {
             transactions: vec![tx],
         };
         let (_unbatched, _executed, failures) = self
-            .execute_block(&block)
+            .execute_block(selection, &block)
             .await
             .context("execute_block failed during simulation")?;
         let mut results = block::inspect(&self.db_conn(), &block.transactions[0]).await?;
@@ -357,71 +396,19 @@ impl<E: Executor> Reactor<E> {
     }
 
     /// Run block lifecycle operations: challenge expiry/generation and epoch transitions.
-    async fn run_block_lifecycle(&mut self, block: &Block) -> Result<()> {
+    async fn run_block_lifecycle(
+        &mut self,
+        selection: &ExecutionSelection,
+        block: &Block,
+    ) -> Result<()> {
         let previous = self.runtime.start_usage();
-        let result = self.run_block_lifecycle_inner(block).await;
+        let result = self
+            .executor
+            .run_block_lifecycle(selection, &mut self.runtime, block)
+            .await;
         let usage = self.runtime.finish_usage(previous);
         result?;
         insert_block_execution_usage(&self.db_conn(), block.height, usage?).await
-    }
-
-    async fn run_block_lifecycle_inner(&mut self, block: &Block) -> Result<()> {
-        let core_signer = Signer::Core(Box::new(Signer::Nobody));
-        let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
-        self.runtime
-            .set_context(block.height, None, None, None)
-            .await;
-        let result = self
-            .runtime
-            .execute_system_view(&staking_address(), &has_reward_recipients_call_expr())
-            .await?;
-        let eligible = has_reward_recipients_parse_return_expr(&result);
-        let emission = mint_emission(&mut self.runtime, &core_signer, eligible).await??;
-        // Credit the block-start active set before penalties can exhaust its last
-        // member. A minted reward must not be stranded behind an empty recipient set.
-        distribute_ordering_reward(&mut self.runtime, &core_signer, emission.ordering_minted)
-            .await??;
-        accrue_storage_rewards(&mut self.runtime, &core_signer).await??;
-        // Finalize the registry root for the block's `create_agreement`s (deferred
-        // off the user's gas) before the challenge lifecycle. No-op if no files
-        // were added this block.
-        record_block_root(&mut self.runtime, &core_signer)
-            .await
-            .context("Failed to record block root")?
-            .map_err(|e| anyhow::anyhow!("{e:?}"))
-            .context("record_block_root returned error")?;
-        expire_challenges(&mut self.runtime, &core_signer, block.height)
-            .await
-            .context("Failed to expire challenges")?;
-        settle_expired_challenges(&mut self.runtime, &core_signer).await??;
-        let challenges = generate_challenges_for_block(
-            &mut self.runtime,
-            &core_signer,
-            block.height,
-            block_hash,
-        )
-        .await
-        .context("Failed to generate challenges")?;
-        if !challenges.is_empty() {
-            info!(
-                "Generated {} challenges at block height {}",
-                challenges.len(),
-                block.height
-            );
-        }
-
-        let change = process_pending_validators(&mut self.runtime, &core_signer, block.height)
-            .await
-            .context("Failed to call process_pending_validators")?
-            .map_err(|e| anyhow::anyhow!("{e:?}"))
-            .context("process_pending_validators returned error")?;
-        if change.activated > 0 || change.deactivated > 0 {
-            info!(
-                "Validator set change at height {}: {} activated, {} deactivated",
-                block.height, change.activated, change.deactivated
-            );
-        }
-        Ok(())
     }
 
     /// Execute `block` and record the decision that certifies it in the SAME
@@ -441,10 +428,11 @@ impl<E: Executor> Reactor<E> {
     /// has always taken the savepoint first, and the block path was the outlier.
     pub(super) async fn handle_block(
         &mut self,
-        block: Block,
+        block: impl Into<BlockInput>,
         decision: &consensus_state::DeferredDecision,
     ) -> Result<()> {
         let started_at = Instant::now();
+        let block = block.into();
         let height = block.height;
         let hash = block.hash;
         let prev_hash = block.prev_hash;
@@ -476,6 +464,29 @@ impl<E: Executor> Reactor<E> {
             .owner_service
             .begin_canonical(&mut self.runtime, false)
             .await?;
+        let selection = match self
+            .select_executor(ApplicationPosition::Block {
+                height,
+                hash,
+                consensus_height: decision.consensus_height.as_u64(),
+            })
+            .await
+        {
+            Ok(selection) => selection,
+            Err(error) => {
+                lease.drain(&self.runtime).await?;
+                lease.complete(&mut self.runtime).await?;
+                return Err(error);
+            }
+        };
+        let block = match self.executor.parse_block(&selection, block).await {
+            Ok(block) => block,
+            Err(error) => {
+                lease.drain(&self.runtime).await?;
+                lease.complete(&mut self.runtime).await?;
+                return Err(error);
+            }
+        };
         self.runtime
             .storage
             .savepoint()
@@ -486,7 +497,7 @@ impl<E: Executor> Reactor<E> {
         // on any error rather than left open for process teardown to discard.
         // `last_height`/`last_hash` advance only after the commit, so a failed
         // block leaves no trace in memory either.
-        let txn = self.block_txn(&block, decision).await;
+        let txn = self.block_txn(&selection, &block, decision).await;
         lease.drain(&self.runtime).await?;
         let (unbatched_count, executed_ops) = match txn {
             Ok(counts) => counts,
@@ -570,7 +581,7 @@ impl<E: Executor> Reactor<E> {
     }
 
     /// Prune finalized, superseded `contract_state` versions below the finality
-    /// watermark `tip − max(retain, FINALITY_ROLLBACK_DEPTH)`. No-op for archive nodes
+    /// watermark `tip − max(retain, minimum_prune_retention_blocks())`. No-op for archive nodes
     /// (`prune.enabled == false`) and until the chain is taller than the retain
     /// window. Runs once per block; the per-block churn is small. Returning freed
     /// pages to the OS (`incremental_vacuum`) is a separate, throttled step.
@@ -588,7 +599,10 @@ impl<E: Executor> Reactor<E> {
         if !self.prune.enabled {
             return;
         }
-        let retain = self.prune.retain_blocks.max(FINALITY_ROLLBACK_DEPTH);
+        let retain = self
+            .prune
+            .retain_blocks
+            .max(minimum_prune_retention_blocks());
         // W = how far we COULD prune; `prune_watermark` (W_prev) = how far we HAVE.
         let Some(w) = self.last_height.checked_sub(retain) else {
             return;
