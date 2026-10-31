@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 
-from audit import INPUT_RUNTIME, definitions
+from audit import GDB_SCRIPT, INPUT_RUNTIME, compiler_debug_metadata, definitions
 from symbol_tool import inspect
 
 LINUX_RUNTIME = {"libgcc_s.so.1", "libm.so.6", "libc.so.6", "libpthread.so.0",
@@ -100,6 +100,8 @@ def graph_references(graph, index, sets):
         refs = references(path)
         names.update(refs)
         strong.update(name for name, kinds in refs.items() if "U" in kinds)
+    if GDB_SCRIPT in names:
+        raise RuntimeError(f"{graph['graph']} references compiler debug metadata as code")
     for other, other_names in enumerate(sets):
         if index != other:
             foreign = (names & other_names) - INPUT_RUNTIME
@@ -146,6 +148,8 @@ def verify(graphs, sets, host_objects, executable, env, output):
         raise RuntimeError("missing concrete host/sysroot input inventory")
     for path in paths:
         names = definitions(path)
+        if GDB_SCRIPT in names:
+            compiler_debug_metadata(path)
         record = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                   "definitions": names}
         inventories.append(record)
