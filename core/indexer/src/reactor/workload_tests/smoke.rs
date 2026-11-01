@@ -468,7 +468,6 @@ async fn workload_real_block_smoke() -> Result<()> {
         &writer,
         &owner_service,
         client.clone(),
-        None,
         &genesis,
         Network::Regtest,
     )

@@ -27,7 +27,6 @@ use crate::database::queries::{
     select_latest_consensus_height,
 };
 use crate::reactor::consensus_state::ObservationChannels;
-use crate::reactor::executor::RuntimeExecutor;
 use crate::reg_tester::workload_bitcoin;
 use crate::runtime::{ComponentCache, Runtime, Storage};
 
@@ -129,8 +128,6 @@ async fn workload_saved_timed_missing_confirmation_rolls_back_at_deadline() -> R
         &mut cleanup,
     )
     .await?;
-    let (replay_tx, mut replay_rx) = mpsc::channel(1);
-    trial.execution.executor = RuntimeExecutor::new(client.clone()).with_replay_tx(replay_tx);
     let (decided_tx, _decided_rx) = mpsc::channel(64);
     let (finality_tx, mut finality_rx) = mpsc::channel(64);
     let (state_tx, mut state_rx) = mpsc::channel(64);
@@ -193,7 +190,6 @@ async fn workload_saved_timed_missing_confirmation_rolls_back_at_deadline() -> R
         }
     }
     // Replay consumes certified bodies before advance returns, without poller redelivery.
-    ensure!(replay_rx.try_recv().is_err());
     let frontier = certified_history::frontier(&trial.db_conn()).await?;
     ensure!(frontier.closed_height == frontier.authenticated_height);
     let events: Vec<_> = std::iter::from_fn(|| finality_rx.try_recv().ok()).collect();

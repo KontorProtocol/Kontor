@@ -295,7 +295,6 @@ impl ReactorCluster {
                 &genesis_validators,
                 peers,
                 addr_tx,
-                node_block_tx,
                 node_block_rx,
                 node_mempool_rx,
                 node_cancels[i].signal(),
@@ -414,7 +413,6 @@ impl ReactorCluster {
             &self.genesis_validators,
             vec![self.seed_addr.clone()],
             addr_tx,
-            node_block_tx,
             node_block_rx,
             node_mempool_rx,
             self.node_cancels[i].signal(),
@@ -488,7 +486,6 @@ impl ReactorCluster {
         genesis_validators: &[GenesisValidator],
         peers: Vec<String>,
         consensus_listen_addr: watch::Sender<Option<String>>,
-        node_block_tx: mpsc::Sender<BlockEvent>,
         node_block_rx: mpsc::Receiver<BlockEvent>,
         node_mempool_rx: mpsc::Receiver<MempoolEvent>,
         cancel: ShutdownSignal,
@@ -533,7 +530,6 @@ impl ReactorCluster {
                 &genesis_vals,
                 session_factory,
                 &owner_service,
-                node_block_tx,
             )
             .await
             .expect("certified cluster session");
@@ -710,7 +706,6 @@ impl ReactorCluster {
             &self.genesis_validators,
             vec![self.seed_addr.clone()],
             addr_tx,
-            node_block_tx,
             node_block_rx,
             node_mempool_rx,
             self.node_cancels[i].signal(),

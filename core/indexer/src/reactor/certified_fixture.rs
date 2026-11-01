@@ -47,7 +47,6 @@ pub(super) async fn reactor(
         &writer,
         &service,
         Client::new("http://127.0.0.1:1".into(), String::new(), String::new())?,
-        None,
         genesis,
         Network::Regtest,
     )

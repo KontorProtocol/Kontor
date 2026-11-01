@@ -356,7 +356,6 @@ async fn check_exit_recovery(
         &writer,
         &service,
         Client::new("http://127.0.0.1:1".into(), String::new(), String::new())?,
-        None,
         genesis,
         Network::Regtest,
     )

@@ -788,25 +788,12 @@ async fn prepare_executor_startup(
     Ok((last_height, last_hash))
 }
 
-fn new_runtime_executor(
-    bitcoin_client: Client,
-    replay_tx: Option<mpsc::Sender<u64>>,
-) -> executor::RuntimeExecutor {
-    let exec = executor::RuntimeExecutor::new(bitcoin_client);
-    if let Some(tx) = replay_tx {
-        exec.with_replay_tx(tx)
-    } else {
-        exec
-    }
-}
-
 #[cfg(test)]
 async fn create_uninitialized_runtime_executor(
     starting_block_height: u64,
     writer: &database::Writer,
     owner_service: &OwnerService,
     bitcoin_client: Client,
-    replay_tx: Option<mpsc::Sender<u64>>,
     network: Network,
 ) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
     let (last_height, last_hash) = prepare_executor_startup(starting_block_height, writer).await?;
@@ -820,7 +807,7 @@ async fn create_uninitialized_runtime_executor(
     owner_service.apply_startup_compile_gate(&mut runtime);
     runtime.network = network;
     Ok((
-        new_runtime_executor(bitcoin_client, replay_tx),
+        executor::RuntimeExecutor::new(bitcoin_client),
         runtime,
         last_height,
         last_hash,
@@ -833,7 +820,6 @@ pub(crate) async fn create_runtime_executor(
     writer: &database::Writer,
     owner_service: &OwnerService,
     bitcoin_client: Client,
-    replay_tx: Option<mpsc::Sender<u64>>,
     genesis: &GenesisParameters,
     network: Network,
 ) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
@@ -842,7 +828,6 @@ pub(crate) async fn create_runtime_executor(
         writer,
         owner_service,
         bitcoin_client,
-        replay_tx,
         network,
     )
     .await?;
@@ -859,7 +844,6 @@ pub(crate) async fn create_executor_session(
     writer: &database::Writer,
     owner_service: &OwnerService,
     bitcoin_client: Client,
-    replay_tx: Option<mpsc::Sender<u64>>,
     genesis: &GenesisParameters,
     network: Network,
 ) -> Result<(
@@ -890,7 +874,7 @@ pub(crate) async fn create_executor_session(
     )
     .await?;
     let (height, hash) = prepare_executor_startup(starting_block_height, writer).await?;
-    let exec = new_runtime_executor(bitcoin_client, replay_tx);
+    let exec = executor::RuntimeExecutor::new(bitcoin_client);
     let session = linked::canonical_session(writer.connection(), network)
         .await
         .context("Failed to initialize retained executor session")?;
@@ -1018,7 +1002,6 @@ pub fn run(
     simulate_rx: Option<Receiver<Simulation>>,
     engine_config: engine::EngineConfig,
     bitcoin_client: Client,
-    replay_tx: Option<mpsc::Sender<u64>>,
     genesis: GenesisParameters,
     observation_channels: Option<consensus_state::ObservationChannels>,
     consensus_propose_timeout_ms: u64,
@@ -1037,8 +1020,7 @@ pub fn run(
                     &writer,
                     &owner_service,
                     bitcoin_client,
-                    replay_tx,
-                    &genesis,
+                                &genesis,
                     network,
                 )
                 .await

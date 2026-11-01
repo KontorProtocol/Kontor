@@ -3,13 +3,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
-use bitcoin::{BlockHash, Network, Transaction as BitcoinTransaction, Txid};
+use bitcoin::{BlockHash, Network, Transaction as BitcoinTransaction};
 use futures_util::future::BoxFuture;
 use indexer_types::Transaction;
-use tokio::sync::{OnceCell, mpsc};
+use tokio::sync::OnceCell;
 
 use super::prepare_executor_startup;
-use crate::bitcoin_follower::event::BlockEvent;
 use crate::block::filter_map;
 use crate::database::Writer;
 use crate::protocol::coordinator::selection::ExecutionSelection;
@@ -36,8 +35,6 @@ pub async fn shared_session_factory() -> SessionFactory {
 /// Uses the production executor with mock Bitcoin I/O and explicit test pauses.
 pub struct LiteExecutor {
     data_dir: PathBuf,
-    mock_bitcoin: Arc<Mutex<MockBitcoin>>,
-    block_tx: mpsc::Sender<BlockEvent>,
     validation_delay: Option<Duration>,
 }
 
@@ -53,7 +50,6 @@ impl LiteExecutor {
         genesis_validators: &[GenesisValidator],
         factory: SessionFactory,
         service: &OwnerService,
-        block_tx: mpsc::Sender<BlockEvent>,
     ) -> Result<(Self, LinkedSession, u64, Option<BlockHash>)> {
         let writer = Writer::new(data_dir, db_name).await?;
         let parameters = test_genesis(genesis_validators);
@@ -101,8 +97,6 @@ impl LiteExecutor {
         Ok((
             Self {
                 data_dir: data_dir.to_path_buf(),
-                mock_bitcoin,
-                block_tx,
                 validation_delay: None,
             },
             session,
@@ -133,11 +127,6 @@ impl Executor for LiteExecutor {
         })
     }
 
-    async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<BitcoinTransaction>> {
-        let mock = self.mock_bitcoin.lock().unwrap();
-        txids.iter().map(|t| mock.get_raw_transaction(t)).collect()
-    }
-
     async fn execute_transaction_inner(
         &self,
         _selection: &ExecutionSelection,
@@ -147,18 +136,6 @@ impl Executor for LiteExecutor {
         tx: &Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
         execution::execute_transaction(runtime, height, tx_id, tx).await
-    }
-
-    async fn replay_blocks_after(&mut self, after_height: u64) -> Result<()> {
-        let events = self.mock_bitcoin.lock().unwrap().get_all_block_events();
-        for event in events {
-            if let BlockEvent::BlockInsert { block, .. } = &event
-                && block.height > after_height
-            {
-                let _ = self.block_tx.send(event).await;
-            }
-        }
-        Ok(())
     }
 
     fn parse_transaction(

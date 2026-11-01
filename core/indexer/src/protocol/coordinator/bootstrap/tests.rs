@@ -28,7 +28,6 @@ async fn live_bootstrap_persists_genesis_and_reopens_without_reapplying_it() -> 
         &writer,
         &service,
         Client::new("".into(), "".into(), "".into())?,
-        None,
         &genesis,
         Network::Regtest,
     )
@@ -57,7 +56,6 @@ async fn live_bootstrap_persists_genesis_and_reopens_without_reapplying_it() -> 
         &writer,
         &service,
         Client::new("".into(), "".into(), "".into())?,
-        None,
         &genesis,
         Network::Regtest,
     )
@@ -88,7 +86,6 @@ async fn live_bootstrap_persists_genesis_and_reopens_without_reapplying_it() -> 
             &writer,
             &service,
             Client::new("".into(), "".into(), "".into())?,
-            None,
             &genesis,
             Network::Regtest
         )
@@ -111,7 +108,6 @@ async fn live_bootstrap_persists_genesis_and_reopens_without_reapplying_it() -> 
             &writer,
             &service,
             Client::new("".into(), "".into(), "".into())?,
-            None,
             &genesis,
             Network::Regtest
         )
@@ -131,7 +127,6 @@ async fn live_bootstrap_persists_genesis_and_reopens_without_reapplying_it() -> 
             &writer,
             &service,
             Client::new("".into(), "".into(), "".into())?,
-            None,
             &genesis,
             Network::Regtest
         )
@@ -164,7 +159,6 @@ async fn populated_untracked_database_is_preserved_and_refused() -> Result<()> {
         &writer,
         &service,
         Client::new("".into(), "".into(), "".into())?,
-        None,
         &test_genesis(&[]),
         Network::Regtest,
     )

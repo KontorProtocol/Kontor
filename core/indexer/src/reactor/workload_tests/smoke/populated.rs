@@ -551,7 +551,6 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
         &writer,
         &owner_service,
         client.clone(),
-        None,
         &validators.genesis,
         Network::Regtest,
     )

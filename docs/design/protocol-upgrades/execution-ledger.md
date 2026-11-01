@@ -1870,3 +1870,41 @@ K4 review remains pending. No production execution changes, PR, push or remote C
 were made for this fixture migration. Manual historical parity/archive migration,
 obsolete replay interfaces, bounded proof transport/admission and the rest of K4
 integration/review/CI remain unfinished.
+
+### K4 obsolete Bitcoin replay plumbing removal
+
+Continuing from `f195f21650213cd31f248bf383c2ae7e22ce42a1`, removed the unused
+`Executor::resolve_transactions` and `replay_blocks_after` interfaces and all three
+implementations. Certified application/recovery already reads retained exact
+inputs. Removed the replay sender from RuntimeExecutor, node startup and session
+constructors, the follower's returned channels, and the poller's rewind request
+branch. Ordinary Bitcoin polling, ZMQ wakeups, startup hash reconciliation, reorg
+rollback and shutdown retain their existing paths. No Bitcoin RPC API was removed.
+
+Removed the now-unreachable mock executor block sender and corresponding cluster
+plumbing. The maintenance pause used to test ownership during rollback remains.
+The manual deadline archive still checks that certified closure finishes before
+advance returns; its obsolete assertion against an unused replay receiver is gone.
+Four tests solely for the removed poller replay-request API were removed with that
+API. All 25 remaining poller tests were retained and passed, including ordering,
+header/witness retention, live/offline reorgs, chain shrink, reorg during catch-up,
+and cancellation. This does not claim that the older manual archive setup has
+been migrated to certified startup.
+
+Local validation, one Cargo/runtime operation at a time and at most two jobs:
+
+- `k4-replay-removal34.log`, session 38385, exit 0: 27 tests passed in 93.61s.
+  In addition to the poller suite, this includes certified A-to-B-to-A replacement
+  and the four-validator missing-local-block recovery regression. Both now run
+  without an executor or poller replay request interface.
+  SHA-256 `f9248e06a5b4b1257726b81315798c1bb3d6160164ff4cc2c6dfcaea11978351`.
+- `k4-replay-main35.log`, session 74962, exit 0: locked `indexer` production
+  `kontor` binary check with the protocol-qualification feature passed in 9.20s.
+- Draft coordinator definition for both checks:
+  `c5273daeae767579060ae9579ed4f322b3e068d899ef11b6c6ae65f9a7dd5e1c`.
+
+Formatting and diff checks passed. Lead inspection traced all removed interface
+call sites and confirmed certified recovery is independent of local Bitcoin
+redelivery. No independent microreview, PR, push or remote CI was started. Remaining
+K4 work includes bounded proof transport/admission, required real-graph integration,
+historical fixture reconciliation, and consolidated review/CI/merge.

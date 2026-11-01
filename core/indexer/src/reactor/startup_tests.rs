@@ -64,7 +64,6 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
             discovery: Default::default(),
         },
         Client::new("".to_string(), "".to_string(), "".to_string())?,
-        None,
         genesis.clone(),
         None,
         1_000,
@@ -155,7 +154,6 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
         &resumed_writer,
         &resumed_owner,
         Client::new("".to_string(), "".to_string(), "".to_string())?,
-        None,
         &genesis,
         bitcoin::Network::Regtest,
     )

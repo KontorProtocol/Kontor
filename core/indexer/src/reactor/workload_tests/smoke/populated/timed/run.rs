@@ -184,7 +184,6 @@ async fn workload_timed_mixed_event_replay() -> Result<()> {
         &writer,
         &owner_service,
         client.clone(),
-        None,
         &validators.genesis,
         Network::Regtest,
     )

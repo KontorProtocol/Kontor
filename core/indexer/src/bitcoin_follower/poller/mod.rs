@@ -9,10 +9,7 @@ use anyhow::{Result, bail};
 use bitcoin::BlockHash;
 use tokio::{
     select,
-    sync::{
-        Notify,
-        mpsc::{Receiver, Sender},
-    },
+    sync::{Notify, mpsc::Sender},
     task::JoinSet,
     time::sleep,
 };
@@ -169,22 +166,6 @@ fn deliver_blocks(
     }
 }
 
-/// Apply a replay request: rewind so redelivery resumes strictly after `height`.
-///
-/// Only ever rewinds. Plain assignment would let a stale request that predates a
-/// poller-side reorg rollback (`apply_rollback`, which sets its own `next_height`
-/// and does not drain the replay channel) move the poller FORWARD and silently
-/// skip blocks — so both consumers of the channel take the minimum instead.
-fn apply_replay(cache: &mut BlockHashCache, next_height: &mut u64, height: u64) {
-    let resume = height + 1;
-    if resume >= *next_height {
-        return;
-    }
-    info!(height, "Replay request received — resetting poller");
-    cache.truncate_above(height);
-    *next_height = resume;
-}
-
 /// Apply a rollback: truncate the cache, update next_height, and send
 /// the Rollback event. Returns `true` if the channel is still open.
 async fn apply_rollback(
@@ -203,21 +184,10 @@ async fn apply_rollback(
         .is_ok()
 }
 
-enum PollResult {
-    Continue,
-    Replay(u64),
-}
-
-/// Wait for the next poll trigger: timer, ZMQ wake, or replay request.
-async fn wait_for_poll(
-    poll_interval: Duration,
-    poll_notify: &Notify,
-    replay_rx: &mut Receiver<u64>,
-) -> PollResult {
+async fn wait_for_poll(poll_interval: Duration, poll_notify: &Notify) {
     select! {
-        _ = sleep(poll_interval) => PollResult::Continue,
-        _ = poll_notify.notified() => PollResult::Continue,
-        Some(height) = replay_rx.recv() => PollResult::Replay(height),
+        _ = sleep(poll_interval) => {},
+        _ = poll_notify.notified() => {},
     }
 }
 
@@ -242,7 +212,6 @@ pub async fn run<C: BitcoinRpc>(
     known_hashes: Vec<(u64, BlockHash)>,
     poll_notify: Arc<Notify>,
     config: PollerConfig,
-    replay_rx: Receiver<u64>,
 ) -> Result<()> {
     select! {
         _ = shutdown.cancelled() => {
@@ -256,12 +225,10 @@ pub async fn run<C: BitcoinRpc>(
             known_hashes,
             poll_notify,
             config,
-            replay_rx,
         ) => result,
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn poll<C: BitcoinRpc>(
     bitcoin: C,
     event_tx: Sender<BlockEvent>,
@@ -269,7 +236,6 @@ async fn poll<C: BitcoinRpc>(
     known_hashes: Vec<(u64, BlockHash)>,
     poll_notify: Arc<Notify>,
     config: PollerConfig,
-    mut replay_rx: Receiver<u64>,
 ) -> Result<()> {
     let mut cache = BlockHashCache::new(HASH_CACHE_SIZE);
     let mut next_height = start_height;
@@ -302,16 +268,6 @@ async fn poll<C: BitcoinRpc>(
     }
 
     loop {
-        // Replay requests must be observed even while catching up. The only other
-        // consumer is `wait_for_poll` below, which is reachable only when idle at
-        // the tip — so a node genuinely behind on Bitcoin (exactly the one a
-        // rollback replay targets) would never read the channel, and the reactor
-        // can block on the bounded send. One try_recv per iteration is free next
-        // to the tip RPC that follows.
-        while let Ok(height) = replay_rx.try_recv() {
-            apply_replay(&mut cache, &mut next_height, height);
-        }
-
         // 1. Discover tip
         let tip = retry(
             || bitcoin.get_blockchain_info(),
@@ -339,13 +295,8 @@ async fn poll<C: BitcoinRpc>(
         }
 
         if tip < next_height {
-            match wait_for_poll(config.poll_interval, &poll_notify, &mut replay_rx).await {
-                PollResult::Continue => continue,
-                PollResult::Replay(height) => {
-                    apply_replay(&mut cache, &mut next_height, height);
-                    continue;
-                }
-            }
+            wait_for_poll(config.poll_interval, &poll_notify).await;
+            continue;
         }
 
         // 2. Spawn parallel fetches for blocks we're behind on
