@@ -2293,3 +2293,14 @@ Raw evidence is in the main workspace `.build-cache/`:
 - `k4-reassembly-max-wire.log`: `495266944574e1531b9179de0a2b42abff33dde334a403838912d448eb05dc12`.
 - `k4-reassembly-ingress.log`: `f9c9eb7594dd9e4ee5473b6d995ec29d53cf48f88d772b5cd5e1addab13fedea`.
 - `k4-reassembly-clippy.log`: `8897a241bfc3ba545619877250003ba2c8df5d7ef8b2cb22ab4579a397cfa9fa`.
+
+The sole independent reviewer closed the reassembly finding at `34bd03ea` and
+approved K4 source review, retaining the completed consolidated coverage and
+legacy-link-set acceptance. It verified admission ordering, duplicate handling,
+checked accounting, completion/discard release, Fin bounds, local reply semantics,
+the identical cherry-pick, raw test results and exactly three updated coordinator
+source hashes. No further workloads were run and no new material finding remained.
+Final-candidate CI is still required. Before the first push, remote main remained
+`fdf6a65d` and GitHub reported no existing K4 PR or branch workflow runs. One scoped
+candidate campaign is needed for the changed coordinator, observer and linked-node
+builds, retaining the automatic release-three/bounded-dev policy.
