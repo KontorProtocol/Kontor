@@ -419,6 +419,89 @@ rollback, I/O failure, crash atomicity, changed exclusions with same H hash, mar
 rollback/reapplication, and byte-for-byte SQL/checkpoint equality. Independent full
 state/receipt comparisons validate equivalent replay beyond checkpoint coverage.
 
+The following concrete K3 decisions were agreed by the lead and the system
+planning reviewer on 1 November 2026 (plan revision 2, SHA-256
+`ed4b9805db24d250621b098ff33b516995b5612d8f058130d57e53e1ee6e85c2`).
+They describe planned work, not implemented capabilities. Implementation starts
+from the verified K2b merge; authorization and live activation remain K6/K7.
+
+Use distinct chain, execution-definition, migration-definition, protocol and
+plan identifiers. Canonical encodings use explicit field order, fixed-width
+integers, checked lengths and domain-separated SHA-256. Definition identity
+commits target-independent semantic sources, locks, features and build policy;
+platform artifacts remain separate mappings. Existing applications receive an
+explicit baseline-execution identity variant. K4 adds the accepted KPM1 manifest
+identity without reinterpreting that variant or the existing numeric P1 tag.
+
+Canonical application lineage records reversible application order, source and
+storage positions, branch, execution identity, complete ordered witness-inclusive
+raw inputs, prior lineage and decision-scoped exclusions. Compute input identity
+before recognition or filtering, including ordinary Bitcoin transactions. A
+valid-anchor empty or all-excluded batch still records its canonical application.
+Stale-anchor or unparseable record-only decisions belong to K4's separate durable
+history. The application cursor is not a maximum consensus height, authenticated
+prefix closure, local receipt epoch or rollback generation.
+
+Migration routines are trusted compiled code registered in each retained graph,
+with a restricted context and no SQL, commit or scheduling authority. Charge
+checked logical computation steps, read/write operations and read/write bytes
+before work or allocation. Count visited scan rows and attempted duplicate or
+tombstone writes, and never refund work on nested rollback. Bound value chunks,
+use indexed ordered traversal, and audit variable-length computation. This is
+logical work accounting, not an instruction sandbox, block budget or gas-number
+change. Exhaustion aborts the entire migration without partial continuation.
+
+Immutable migration input is committed state at migration-unit entry. A rowid or
+height cutoff is insufficient: same-height `INSERT OR REPLACE` destroys earlier
+values. Pre-open one dedicated node-owned connection after database initialization
+and outside writer transactions, with `query_only=ON`. Do not borrow an API pool
+connection or reserve a second ownership root. Admit migration only at the existing
+writer autocommit boundary and attach the reader to that root before cancellable
+preparation. Use migration-only `BEGIN IMMEDIATE` through the existing transaction
+callback, preserving savepoint accounting. Reserve the writer, begin the reader,
+step a real main-database lineage/cursor/anchor query, validate the snapshot against
+writer prestate, then mutate. `BEGIN` or `SELECT 1` alone does not pin the snapshot.
+Ordinary execution keeps its existing transaction mode.
+
+Input metadata and bounded value chunks come from that same pinned reader.
+Multiple routines in one atomic migration share the original input; explicitly
+named current-state reads provide read-your-writes. Never silently commit preceding
+block or batch effects to manufacture a snapshot. Track input callbacks and cursors
+as root-owned resources, without caching a live snapshot in a reusable executor.
+After tasks and callbacks drain, destroy statements, end the read transaction,
+verify autocommit and revoke the input capability before writer settlement/reuse.
+Failure to establish quiescence or cleanup quarantines the owner. Caller-side drop
+alone does not establish cleanup.
+
+Effects, application entry, migration marker and cursor commit in one owned unit.
+The migration key binds chain, plan, H/hash, pre-lineage, optional legacy checkpoint
+and migration definition. An exact surviving committed retry returns its recorded
+result without repeating effects. Rollback restores a contiguous application
+prefix and its markers with state and footprint repair. Keep every surviving
+anchor-H entry in order when rolling back to H; never delete arbitrary middle
+entries by height. Genesis records durable identity and stage progress so crash
+resume does not duplicate applications or substitute configuration midway.
+
+Preserve populated legacy databases whose original witness-inclusive history is
+unavailable. Ordinary legacy execution continues with explicit lineage-unavailable
+status; migration and upgrade readiness fail closed. K4/K9 must provide authentic
+history replay into a separate database, full state/receipt comparison and controlled
+installation. Do not fabricate lineage from checkpoints or silently delete old data.
+
+Acceptance includes both real retained graphs, full typed state/receipt comparison,
+same-txid/different-witness inputs, reordered and empty batches, scoped exclusions,
+same H with different pre-lineage, genesis restart, and preserved legacy data.
+Exercise zero/exact/overflow budgets, oversized reads, duplicate/tombstone writes,
+nonrefunded nested rollback, failure around effects/marker/cursor/commit, reopened
+database atomicity, cancellation and idempotent retry. For snapshots, replace or
+delete/reinsert visited and unvisited same-height keys, insert before and after the
+scan position, and open the first scan after mutation. Input stays original while
+current-state reads reflect writes. Cover cancellation during pinning, callbacks,
+held cursors and cleanup, rejected uncommitted entry, cleanup quarantine, root
+capacity one and saturated API pools. A defined no-op production migration plus
+bounded qualification routines proves the substrate; K7 must still demonstrate a
+real deliberately different P2 migration and activation.
+
 ### K4. Certified history and baseline consensus envelope
 
 Dependencies: K2b/K3. Modules: consensus values/codecs, reactor proposal/decision/startup,
