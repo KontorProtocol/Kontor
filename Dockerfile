@@ -19,6 +19,8 @@ COPY core core
 COPY protocol-bundles protocol-bundles
 RUN cargo fetch --locked --manifest-path protocol-bundles/executor-first/Cargo.toml && \
     cargo fetch --locked --manifest-path protocol-bundles/executor-second/Cargo.toml && \
+    cargo fetch --locked --manifest-path protocol-bundles/consensus-first/Cargo.toml && \
+    cargo fetch --locked --manifest-path protocol-bundles/consensus-second/Cargo.toml && \
     cargo fetch --locked --manifest-path protocol-bundles/node/Cargo.toml
 
 FROM cacher AS protocol-bundle-qualification

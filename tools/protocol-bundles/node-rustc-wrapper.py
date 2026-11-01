@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Supply separately staged executors to the node's compiler invocations."""
+"""Supply separately staged execution and consensus graphs to the node compiler."""
 
 import hashlib
 import json
@@ -23,18 +23,29 @@ def prepare(compiler, arguments, spec):
     if name not in ('indexer', 'kontor'):
         return arguments, None
     link_set = spec.get('link_set')
-    expected = {'legacy-qualification': ['first', 'second'], 'k4-node': ['first', 'observer']}
+    expected = {
+        'legacy-qualification': [('executor', 'first'), ('executor', 'second')],
+        'k4-node': [('executor', 'first'), ('executor', 'observer')],
+        'managed-node': [('executor', 'first'), ('executor', 'observer'),
+                         ('consensus', 'first'), ('consensus', 'second')],
+    }
+    selected = [(graph.get('role', 'executor'), graph['graph']) for graph in spec['graphs']]
     if link_set is not None:
-        if link_set not in expected or [graph['graph'] for graph in spec['graphs']] != expected[link_set]:
-            raise RuntimeError('node link set does not match its executor libraries')
-    if link_set == 'k4-node':
+        if link_set not in expected or selected != expected[link_set]:
+            raise RuntimeError('node link set does not match its independent libraries')
+    if any(role not in ('executor', 'consensus') for role, _ in selected):
+        raise RuntimeError('unknown independent library role')
+    if link_set in ('k4-node', 'managed-node'):
         arguments.extend(['--cfg', 'kontor_observer'])
+    if link_set == 'managed-node':
+        arguments.extend(['--cfg', 'kontor_managed'])
     for graph in spec['graphs']:
         if digest(graph['facade']) != graph['facade_sha256']:
             raise RuntimeError('retained facade changed before node compilation')
         arguments.extend(['-L', 'dependency=' + graph['link_inputs']])
         if name == 'indexer':
-            arguments.extend(['--extern', 'kontor_executor_' + graph['graph'] + '=' + graph['facade']])
+            role = graph.get('role', 'executor')
+            arguments.extend(['--extern', 'kontor_' + role + '_' + graph['graph'] + '=' + graph['facade']])
     if name != 'kontor':
         return arguments, None
     out_dir = Path(arguments[arguments.index('--out-dir') + 1])

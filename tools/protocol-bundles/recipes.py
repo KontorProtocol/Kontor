@@ -60,6 +60,7 @@ OBSERVER_GRAPH = replace(EXECUTOR_GRAPHS["second"], directory="executor-observer
 EXECUTOR_LINK_SETS = {
     "legacy-qualification": RETAINED_EXECUTOR_GRAPHS,
     "k4-node": {"first": RETAINED_EXECUTOR_GRAPHS["first"], "observer": OBSERVER_GRAPH},
+    "managed-node": {"first": RETAINED_EXECUTOR_GRAPHS["first"], "observer": OBSERVER_GRAPH},
 }
 
 MALACHITE_REVISION = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"

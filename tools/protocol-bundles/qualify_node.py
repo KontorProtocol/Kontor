@@ -11,7 +11,8 @@ import sys
 import time
 
 from build import ROOT, digest, write_json
-from recipes import EXECUTOR_LINK_SETS, executor_graphs
+from managed_definition import DESTINATION as MANAGED_DEFINITION
+from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, executor_graphs
 from semantic_baseline import verify as verify_semantics
 from symbol_tool import TOOLCHAIN
 
@@ -39,7 +40,7 @@ CERTIFIED_CHECKS = {
 
 def verify_certified_history(observations, link_set, root=ROOT):
     result = observations.get('certified_history')
-    if link_set != 'k4-node':
+    if link_set not in ('k4-node', 'managed-node'):
         if result is not None:
             raise RuntimeError('legacy qualification cannot claim certified baseline coverage')
         return
@@ -57,12 +58,16 @@ def verify_certified_history(observations, link_set, root=ROOT):
         protocol = bytes.fromhex(result['protocol'])
         executor = hashed(b'kontor/execution-definition/v1',
                           (root / 'protocol-bundles/executor-observer/definition.bin').read_bytes())
+        consensus_path = (MANAGED_DEFINITION if link_set == 'managed-node' else
+                          'core/indexer/src/protocol/coordinator/baseline/consensus.json')
+        consensus = hashed(b'kontor/consensus-definition/v1', (root / consensus_path).read_bytes())
         # KPM1 baseline uses one transaction format and one host ABI.
         valid = (len(manifest) == 272 and len(chain) == len(protocol) == 32
                  and manifest[:4] == b'KPM1' and manifest[4:36] == chain
                  and manifest[36:44] == (1).to_bytes(8, 'big')
                  and manifest[44:76] == bytes(32)
                  and manifest[76:108].hex() == result['executor_definition'] == executor
+                 and manifest[108:140].hex() == consensus
                  and hashed(b'kontor/protocol-manifest/v1', manifest) == result['protocol']
                  and hashed(b'kontor/genesis-era/v1', chain + protocol) == result['era'])
     except (ValueError, TypeError):
@@ -89,6 +94,9 @@ def execute_node(report_path, link_set=None):
     expected_graphs = list(executor_graphs(link_set))
     if [graph['graph'] for graph in report['graphs']] != expected_graphs or not node['qualification_command']:
         raise RuntimeError('node build does not contain the required qualification graphs')
+    expected_consensus = list(CONSENSUS_GRAPHS) if link_set == 'managed-node' else []
+    if [graph['graph'] for graph in report.get('consensus_graphs', [])] != expected_consensus:
+        raise RuntimeError('node build does not contain the required consensus graphs')
     executable = Path(node['installed']['path'])
     if digest(executable) != node['executable_sha256'] or node['installed']['sha256'] != node['executable_sha256']:
         raise RuntimeError('installed node differs from the audited executable')
@@ -127,7 +135,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--profile', choices=('release', 'dev'), default='release')
     parser.add_argument('--offline', action='store_true')
-    parser.add_argument('--link-set', choices=sorted(EXECUTOR_LINK_SETS), default='k4-node')
+    parser.add_argument('--link-set', choices=sorted(EXECUTOR_LINK_SETS), default='managed-node')
     args = parser.parse_args()
     output = args.output.resolve()
     env = dict(os.environ, RUSTUP_TOOLCHAIN=TOOLCHAIN)

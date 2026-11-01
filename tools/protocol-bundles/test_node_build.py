@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from build import digest, install_node, node_codegen_objects, node_dependencies, node_executable
+from build import digest, install_node, node_codegen_objects, node_dependencies, node_executable, node_link_inputs
 from provenance import node_sources
 
 spec = importlib.util.spec_from_file_location('node_wrapper', Path(__file__).with_name('node-rustc-wrapper.py'))
@@ -53,6 +53,7 @@ class NodeBuild(unittest.TestCase):
         self.spec['link_set'] = 'k4-node'
         with self.assertRaisesRegex(RuntimeError, 'does not match'):
             wrapper.prepare('/pinned/rustc', ['--crate-name', 'indexer'], self.spec)
+
         observer = copy.deepcopy(self.spec['graphs'][0])
         observer['graph'] = 'observer'
         self.spec['graphs'].append(observer)
@@ -63,6 +64,50 @@ class NodeBuild(unittest.TestCase):
         self.spec['link_set'] = 'legacy-qualification'
         with self.assertRaisesRegex(RuntimeError, 'does not match'):
             wrapper.prepare('/pinned/rustc', ['--crate-name', 'indexer'], self.spec)
+
+    def test_managed_node_requires_all_four_role_bound_libraries(self):
+        self.spec['link_set'] = 'managed-node'
+        prototype = self.spec['graphs'][0]
+        self.spec['graphs'] = [dict(prototype, role=role, graph=graph) for role, graph in (
+            ('executor', 'first'), ('executor', 'observer'),
+            ('consensus', 'first'), ('consensus', 'second'))]
+        for crate in ('indexer', 'kontor'):
+            args, _ = wrapper.prepare('/pinned/rustc', [
+                '--crate-name', crate, '--out-dir', str(self.root), '-C', 'extra-filename=-abcd'], self.spec)
+            self.assertIn('kontor_managed', args)
+            self.assertIn('kontor_observer', args)
+            self.assertEqual(args.count('-L'), 4)
+            self.assertEqual(args.count('--extern'), 4 if crate == 'indexer' else 0)
+            if crate == 'indexer':
+                for role, graph in (('executor', 'first'), ('executor', 'observer'),
+                                    ('consensus', 'first'), ('consensus', 'second')):
+                    self.assertIn(f'kontor_{role}_{graph}={self.facade}', args)
+        broken = []
+        for index in range(4):
+            missing = copy.deepcopy(self.spec)
+            del missing['graphs'][index]
+            broken.append(missing)
+            wrong_role = copy.deepcopy(self.spec)
+            wrong_role['graphs'][index]['role'] = 'consensus' if index < 2 else 'executor'
+            broken.append(wrong_role)
+        for value in broken:
+            with self.assertRaisesRegex(RuntimeError, 'does not match'):
+                wrapper.prepare('/pinned/rustc', ['--crate-name', 'indexer'], value)
+
+    def test_audit_roles_do_not_relabel_graph_provenance(self):
+        base = dict(self.spec['graphs'][0], namespace='independent-executor')
+        consensus = dict(base, namespace='independent-consensus', identity={'kind': 'consensus'})
+        executors = [base]
+        engines = [consensus]
+        originals = copy.deepcopy((executors, engines))
+        audited, libraries = node_link_inputs(executors, engines)
+        self.assertEqual([graph['graph'] for graph in audited], ['executor-first', 'consensus-first'])
+        self.assertEqual([graph['namespace'] for graph in audited],
+                         ['independent-executor', 'independent-consensus'])
+        self.assertEqual([(graph['role'], graph['graph']) for graph in libraries],
+                         [('executor', 'first'), ('consensus', 'first')])
+        self.assertEqual((executors, engines), originals)
+        self.assertEqual(node_link_inputs(executors, [])[0], executors)
 
     @unittest.skipUnless(os.name == 'posix', 'Cargo pipe jobserver uses POSIX descriptors')
     def test_wrapper_preserves_cargo_jobserver_descriptors(self):
@@ -92,7 +137,7 @@ class NodeBuild(unittest.TestCase):
 
     def test_node_graph_rejects_hidden_executor_dependency(self):
         node_dependencies({'packages': [{'name': 'libsql'}]})
-        for name in ('wasmtime', 'wasmtime-internal-cranelift', 'kontor-executor-first'):
+        for name in ('wasmtime', 'wasmtime-internal-cranelift', 'kontor-executor-first', 'kontor-consensus-first'):
             with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'retained execution'):
                 node_dependencies({'packages': [{'name': name}]})
         with self.assertRaisesRegex(RuntimeError, 'native patch'):

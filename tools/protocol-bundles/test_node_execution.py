@@ -11,14 +11,18 @@ from qualify_node import CASES, CERTIFIED_CHECKS, execute_node, verify_certified
 from test_semantic_baseline import sample_observation
 
 
-def certified_sample():
+def certified_sample(link_set="k4-node"):
     """Synthetic gate input, never evidence that the Rust fixture ran."""
     def hashed(domain, value):
         return hashlib.sha256(domain + b'\0' + value).hexdigest()
     executor = hashed(b'kontor/execution-definition/v1',
                       (ROOT / 'protocol-bundles/executor-observer/definition.bin').read_bytes())
     chain = bytes([7]) * 32
-    manifest = b'KPM1' + chain + (1).to_bytes(8, 'big') + bytes(32) + bytes.fromhex(executor) + bytes(164)
+    consensus_path = ('core/indexer/src/protocol/coordinator/managed/definitions/first.json'
+                      if link_set == 'managed-node' else
+                      'core/indexer/src/protocol/coordinator/baseline/consensus.json')
+    consensus = bytes.fromhex(hashed(b'kontor/consensus-definition/v1', (ROOT / consensus_path).read_bytes()))
+    manifest = b'KPM1' + chain + (1).to_bytes(8, 'big') + bytes(32) + bytes.fromhex(executor) + consensus + bytes(132)
     protocol = hashed(b'kontor/protocol-manifest/v1', manifest)
     return {**{key: True for key in CERTIFIED_CHECKS}, 'authenticated': 15, 'closed': 15,
             'executor_definition': executor, 'manifest': manifest.hex(), 'chain': chain.hex(),
@@ -68,6 +72,12 @@ class NodeExecution(unittest.TestCase):
                 verify_certified_history({'certified_history': altered}, 'k4-node')
         with self.assertRaisesRegex(RuntimeError, 'legacy qualification'):
             verify_certified_history({'certified_history': original}, 'legacy-qualification')
+
+    def test_consensus_definition_cannot_be_substituted_between_link_sets(self):
+        for selected, other in (('managed-node', 'k4-node'), ('k4-node', 'managed-node')):
+            verify_certified_history({'certified_history': certified_sample(selected)}, selected)
+            with self.assertRaisesRegex(RuntimeError, 'baseline identity'):
+                verify_certified_history({'certified_history': certified_sample(other)}, selected)
 
     def test_k4_execution_rejects_missing_certified_evidence(self):
         self.observations['executors'][1]['graph'] = 'observer'

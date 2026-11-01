@@ -2974,3 +2974,57 @@ libraries, not final independent executor-plus-consensus production-link evidenc
 The production builder, K6 authorization/rehearsal, activation/recovery and the
 consolidated K5/K6 review remain outstanding. Existing warnings for unselected
 later-phase helpers remain visible. No PR or CI campaign was launched.
+
+### K5 combined managed-node builder and evidence checkpoint
+
+From base `5721f50f88453a29ca3ec559758b79cbcd22b5a8`, the production builder
+now defaults to `managed-node`. It builds retained `first` and current `observer`
+executors plus `consensus-first` and `consensus-second` independently, and links
+all four into the daemon with managed startup enabled. Role-qualified audit
+labels prevent the two `first` graphs from aliasing. Their original identities,
+source inventories and staged-library fingerprints remain separate. Node Cargo
+resolution rejects accidental inclusion of an executor or consensus facade.
+There is no IPC, dependency unification or Malachite fork change.
+
+The builder applies existing common-resource and final native-symbol ownership
+checks to the combined graph set. It verifies the managed definition against the
+locked all-target coordinator and first-consensus metadata. Qualification now
+requires both consensus source inventories, link bindings, interface controls
+and actual typed-adapter test logs. Certified-history evidence must match the
+selected consensus definition as well as the observer executor. The CI artifact
+paths include this evidence in the existing scoped job and comparison; no new
+matrix or always-on PR job was added.
+
+Local Linux ARM dev evidence is `.build-cache/k5-managed-node-qualification.json`
+and the raw reports under
+`.build-cache/k5-node-linked/aarch64-unknown-linux-gnu/dev/`.
+The combined build/audits/controls passed in 279.68 seconds. The installed daemon
+hash is `cc16228b8eae58b5af8068b38402e402f0282a738a38588c3951926c761c1db0`.
+The 25-case executor harness passed in 190.21 seconds, including equality against
+the preserved semantic baseline and all 17 certified-history checks, with 15
+certified and closed decisions. The current comparator accepted the actual local
+cell, including both consensus graphs and seven adapter tests. This is one local
+dev cell, not cross-platform qualification or a performance acceptance campaign.
+
+The first local driver omitted `--install-node`, so it stopped after the successful
+build with a missing installation record, before executing any runtime cases.
+`.build-cache/k5-managed-node-before-install.json` preserves that failure. The
+recovery driver used the existing hash-checking `install_node` helper on the same
+audited executable, preserved the pre-install report, then executed and verified
+it without rebuilding or changing its source evidence. The normal CI runner
+already supplies `--install-node`.
+
+Thirty-six node builder/runner/comparator tests passed. Five interface-control
+and twelve consensus-input tests also passed. Negative controls cover missing or
+substituted consensus graphs, stale interface and adapter bindings, incomplete
+adapter test logs, and substitution between K4 and managed consensus identities.
+The workflow YAML parses and `git diff --check` passes. Lead review traced the
+four graph roles through compilation, audit input sets, source bindings, installed
+binary hashes and uploaded evidence paths. Independent review remains consolidated
+around the complete K5/K6 group.
+
+The certified-history fixture deliberately retains its isolated legacy engine
+path. This result does not turn that fixture into managed-engine startup evidence;
+the prior managed startup tests cover that separately. Integrated managed runtime
+acceptance in the final independently linked daemon, K6 authorization/rehearsal,
+and grouped review/CI/merge remain outstanding. No PR or CI campaign was launched.

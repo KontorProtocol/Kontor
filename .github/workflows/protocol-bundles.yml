@@ -101,32 +101,39 @@ jobs:
       - name: Build node qualification image
         if: runner.os == 'Linux'
         run: docker build --target protocol-bundle-qualification -t kontor-protocol-qualification .
-      - name: Qualify both real bundles in the node Docker environment
+      - name: Qualify executor and consensus bundles in the node Docker environment
         if: runner.os == 'Linux'
         run: |
           mkdir -p target/protocol-evidence
           docker run --rm --mount type=bind,src="$PWD/target/protocol-evidence",dst=/evidence kontor-protocol-qualification python3 tools/protocol-bundles/qualify_node.py --output /evidence --profile "${{ matrix.profile }}" --offline
-      - name: Qualify both real bundles with the macOS node test profile
+      - name: Qualify executor and consensus bundles with the macOS node test profile
         if: runner.os == 'macOS'
         run: |
           python3 tools/protocol-bundles/qualify_node.py --profile "${{ matrix.profile }}" --output target/protocol-evidence
-          test -f target/protocol-evidence/aarch64-apple-darwin/${{ matrix.profile }}/executors/k4-node/node-execution.json
+          test -f target/protocol-evidence/aarch64-apple-darwin/${{ matrix.profile }}/executors/managed-node/node-execution.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: protocol-bundle-evidence-${{ matrix.os }}-${{ matrix.profile }}
           path: |
-            target/protocol-evidence/*/*/executors/k4-node/*.json
-            target/protocol-evidence/*/*/executors/k4-node/*.log
-            target/protocol-evidence/*/*/executors/k4-node/first/*.json
-            target/protocol-evidence/*/*/executors/k4-node/first/*.log
-            target/protocol-evidence/*/*/executors/k4-node/observer/*.json
-            target/protocol-evidence/*/*/executors/k4-node/observer/*.log
-            target/protocol-evidence/*/*/executors/k4-node/node/*.json
-            target/protocol-evidence/*/*/executors/k4-node/node/*.log
-            target/protocol-evidence/*/*/executors/k4-node/node/type-boundary/*.json
-            target/protocol-evidence/*/*/executors/k4-node/node/type-boundary/*.log
-            target/protocol-evidence/*/*/executors/k4-node/node/type-boundary/*.rs
+            target/protocol-evidence/*/*/executors/managed-node/*.json
+            target/protocol-evidence/*/*/executors/managed-node/*.log
+            target/protocol-evidence/*/*/executors/managed-node/first/*.json
+            target/protocol-evidence/*/*/executors/managed-node/first/*.log
+            target/protocol-evidence/*/*/executors/managed-node/observer/*.json
+            target/protocol-evidence/*/*/executors/managed-node/observer/*.log
+            target/protocol-evidence/*/*/executors/managed-node/node/*.json
+            target/protocol-evidence/*/*/executors/managed-node/node/*.log
+            target/protocol-evidence/*/*/executors/managed-node/node/type-boundary/*.json
+            target/protocol-evidence/*/*/executors/managed-node/node/type-boundary/*.log
+            target/protocol-evidence/*/*/executors/managed-node/node/type-boundary/*.rs
+            target/protocol-evidence/*/*/consensus/*/*.json
+            target/protocol-evidence/*/*/consensus/*/*.log
+            target/protocol-evidence/*/*/executors/managed-node/node/consensus/type-boundary/*.json
+            target/protocol-evidence/*/*/executors/managed-node/node/consensus/type-boundary/*.log
+            target/protocol-evidence/*/*/executors/managed-node/node/consensus/type-boundary/*.rs
+            target/protocol-evidence/*/*/executors/managed-node/node/consensus/node-adapter/*.rs
+            target/protocol-evidence/*/*/executors/managed-node/node/consensus/node-adapter/*.log
           if-no-files-found: error
 
   compare:

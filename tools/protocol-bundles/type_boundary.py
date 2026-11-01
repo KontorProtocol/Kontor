@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import re
 import subprocess
 
 from provenance import fingerprint, sha
@@ -211,3 +212,27 @@ def adapter_tests_passed(returncode, output):
     return (returncode == 0
             and f'test result: ok. {len(ADAPTER_TESTS)} passed; 0 failed; 0 ignored;' in output
             and all(f'test {name} ... ok' in output for name in ADAPTER_TESTS))
+
+
+def verify_node_adapter_report(directory, binding, graphs):
+    if (probes_for(graphs) is not CONSENSUS_PROBES or binding['tests'] != ADAPTER_TESTS
+            or binding['libraries'] != inputs_for(graphs, False)[1]
+            or binding['graph_inputs'] != {graph['graph']: fingerprint(graph) for graph in graphs}):
+        raise RuntimeError('node adapter inputs changed')
+    for name, key in (('adapter.rs', 'source_sha256'), ('compile.log', 'compiler_log_sha256'),
+                      ('test.log', 'test_log_sha256')):
+        if sha(directory / name) != binding[key]:
+            raise RuntimeError('node adapter evidence binding changed')
+    source = (directory / 'adapter.rs').read_text()
+    paths = re.fullmatch(r'mod managed \{\n#\[path = ("[^\n]+")\]\npub\(crate\) mod types;\n'
+                         r'#\[path = ("[^\n]+")\]\npub\(crate\) mod adapter;\n}\n', source)
+    if paths is None:
+        raise RuntimeError('node adapter source changed')
+    modules = [Path(json.loads(path)) for path in paths.groups()]
+    suffix = Path('core/indexer/src/protocol/coordinator/managed')
+    if (modules[0].parent != modules[1].parent or not modules[0].is_absolute()
+            or not str(modules[0]).endswith(str(suffix / 'types.rs'))
+            or not str(modules[1]).endswith(str(suffix / 'adapter.rs'))):
+        raise RuntimeError('node adapter source does not use production modules')
+    if not adapter_tests_passed(0, (directory / 'test.log').read_text()):
+        raise RuntimeError('node adapter tests missing or failed')
