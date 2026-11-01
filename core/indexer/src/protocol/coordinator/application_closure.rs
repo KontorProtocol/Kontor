@@ -93,16 +93,20 @@ pub(crate) struct ClosurePlan {
     pub(crate) decision: [u8; 32],
     pub(crate) previous_closure: [u8; 32],
     pub(crate) input: CanonicalPosition,
+    pub(crate) replacement_rollback: Option<u64>,
 }
 
 impl ClosurePlan {
     pub(crate) fn initial_work(&self) -> Vec<WorkItem> {
-        vec![
-            WorkItem::Execute {
-                decision: self.height,
-            },
-            WorkItem::Finality,
-        ]
+        let mut work = Vec::new();
+        if let Some(height) = self.replacement_rollback {
+            work.push(WorkItem::Rollback { height });
+        }
+        work.push(WorkItem::Execute {
+            decision: self.height,
+        });
+        work.push(WorkItem::Finality);
+        work
     }
 
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
@@ -117,6 +121,17 @@ impl ClosurePlan {
         output.fixed(&self.decision)?;
         output.fixed(&self.previous_closure)?;
         self.input.encode(&mut output)?;
+        match self.replacement_rollback {
+            None => output.tag(0)?,
+            Some(height) => {
+                ensure!(
+                    height < self.input.storage_height,
+                    "replacement rollback must remove a block"
+                );
+                output.tag(1)?;
+                output.u64(height)?;
+            }
+        }
         Ok(output.finish())
     }
 
@@ -132,6 +147,11 @@ impl ClosurePlan {
             decision: input.fixed()?,
             previous_closure: input.fixed()?,
             input: CanonicalPosition::decode(&mut input)?,
+            replacement_rollback: match input.tag()? {
+                0 => None,
+                1 => Some(input.u64()?),
+                _ => anyhow::bail!("invalid replacement rollback tag"),
+            },
         };
         input.finish()?;
         plan.encode()?;

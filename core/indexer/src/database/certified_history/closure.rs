@@ -228,6 +228,14 @@ pub(crate) async fn begin(conn: &Connection, height: u64) -> Result<Progress> {
             decision: decision.id()?,
             previous_closure: state.closure_id.context("missing preceding closure")?,
             input: position,
+            replacement_rollback: match decision.descriptor.command {
+                Command::Block { height, .. } if height <= position.storage_height => Some(
+                    height
+                        .checked_sub(1)
+                        .context("cannot replace native genesis")?,
+                ),
+                _ => None,
+            },
         };
         tx.execute(
             "INSERT INTO closure_plans (height, plan_id, record) VALUES (?1, ?2, ?3)",

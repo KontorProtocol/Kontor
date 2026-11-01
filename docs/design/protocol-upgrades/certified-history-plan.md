@@ -31,9 +31,9 @@ records. These checks do not establish complete reactor behavior or cross-platfo
 qualification. The durable Decided/Finalized callbacks and next-height gate are now
 connected, as are certified-branch admission rules. Live block and batch handlers
 now commit through owned stages, and completed-closure/committee publication has a
-validated persistence API. The reactor finality/replay driver, rollback stages,
-post-genesis startup recovery and oversized-proof transport still need complete
-integration and qualification.
+validated persistence API. Certified replacements now plan and execute owned
+rollback stages. The reactor finality/replay driver, post-genesis startup recovery
+and oversized-proof transport still need complete integration and qualification.
 The Bitcoin poller now retains the complete decoded Bitcoin block, including its
 header and transaction witnesses. Its checked history conversion validates the
 requested hash, parent, size and Bitcoin commitments, and replay reconstructs the
@@ -106,15 +106,24 @@ and an applied Bitcoin tip matching the certified branch. Exact retries return t
 retained record. Startup verifies the completed stage chain and canonical position
 before selecting its next committee.
 The focused callback qualification now runs actual block/batch handlers through
-three certified decisions: a block at Bitcoin height 100, an empty executed batch,
-and an unrecognized batch recorded without application. It injects stage-write and
-closure-publication failures, checks rollback and retry, reopens the database,
-verifies historical records and releases the next-height gate only after completion.
+four certified decisions: a block at Bitcoin height 100, an empty executed batch,
+an unrecognized batch recorded without application, and a same-height replacement.
+It injects application-stage, rollback-stage and closure-publication failures,
+checks rollback and retry, reopens the database, verifies historical records and
+releases the next-height gate only after completion. Replacement plans persist the
+rollback to height 99 before executing their retained block. The rollback transaction
+includes maintenance, canonical lineage truncation, registration observation and
+stage progress. Native genesis and historical authority remain intact.
+Local Bitcoin rollback notifications now invalidate candidate caches without changing
+canonical execution or certified history. The proposer admits same-height replacements
+against D and rejects exact duplicates. This local qualification passed two tests in
+34.95 seconds after a 39.56-second build; evidence is retained in
+`.build-cache/k4-replacement-stages-final.log`.
 For this qualification, the no-obligation finality stage is driven explicitly using
 the real finality check and owned stage APIs. The production event loop does not yet
 drive finality stages or publish completion automatically. Full event-loop recovery,
-owned rollback/replay, replacement candidate caches, obsolete unit-fixture migration
-and proof paging remain unfinished. This checkpoint is not a merge candidate.
+finality replay scheduling, obsolete unit-fixture migration and proof paging remain
+unfinished. This checkpoint is not a merge candidate.
 Both explicit link sets still need their complete integration acceptance evidence.
 
 ## Result and boundaries
@@ -353,3 +362,51 @@ Use the existing mock Bitcoin service and real linked-node qualification harness
 Complete focused local checks and one consolidated lead plus independent review
 before a coherent final CI candidate. Preserve scoped release-three/bounded-dev
 coverage and the operator's CI cost policy. No performance campaign is reopened.
+
+
+## Finality replay clarification (1 November 2026)
+
+The sole planning reviewer explicitly agreed this policy against checkpoint
+`fe1b14ec8d22b4effd0f95bf5c2bf22e05e57ba0`. It completes the deterministic
+replacement rules below; implementation and acceptance remain pending.
+
+At finality verdict C, freeze the surviving branch intervals at that prefix.
+For each replayed Bitcoin height, select the D interval containing C. A batch is
+eligible only when its original decision is at most C, lies in that same interval,
+and names the matching anchor height and hash. An A-to-B-to-A replacement creates
+a new incarnation of A. It must not resurrect batches from the first A interval.
+Unchanged lower intervals retain their eligible batches.
+
+Roll back to the minimum failed anchor minus one, preserving the native baseline.
+Execute selected blocks in ascending Bitcoin height, each followed by all eligible
+batches at that anchor in original consensus order, including passing and not-yet-due
+batches. Retain the existing block transaction and lifecycle ordering.
+
+Filter direct exclusions by the same surviving interval rule before deriving
+subsequent unavailable descendants. This includes exclusion seeds below the rollback
+height. Preserve the existing confirmation/deadline applicability predicate and
+decision attribution. A later retained re-decision may restore a parent's output
+availability for subsequent work. Effective descendant exclusions belong only to
+that replay attempt, never permanent global child-exclusion rows.
+
+Bind each frozen attempt to C, the input lineage, selected interval identities,
+applicable direct exclusions and derived per-decision drops. Resume those exact
+subsets after a crash; do not derive them from partially replayed SQL state. Evaluate
+finality again after finishing the attempt. Later verdicts recompute applicability.
+Historical certificate verification still processes the earlier certified history
+and its authority transitions, including subsequently displaced branches.
+
+Replace the intermediate suffix-vector representation before integrating arbitrary
+replay: append immutable ordered plan rows once, commit their count and ordered
+digest, and atomically advance an indexed cursor with each stage's effects and
+observation. Build plans in bounded pages into unpublished staging rows; publish the
+completed plan and verdict metadata before rollback. Recover the chain once and
+load one bounded decision body at a time. Use indexed attempt-scoped availability
+state where needed. Do not introduce a replay-count cap, truncate accepted work, or
+copy the remaining suffix into every stage. Bitcoin depth does not bound the number
+of batches at one anchor.
+
+Acceptance includes A-to-B-to-A without resurrection, retained lower-anchor batches,
+superseded exclusion seeds, reorg-healed exclusions, parent re-decision between
+children, passing batches sharing a failed anchor, interrupted replay, and many
+batches at shallow Bitcoin depth with linear worklist storage and bounded iteration.

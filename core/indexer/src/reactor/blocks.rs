@@ -10,6 +10,7 @@ use tracing::{debug, info, warn};
 use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_helpers::new_mock_block_hash;
 use crate::consensus::finality_types::StateEvent;
+use crate::database::canonical_history;
 use crate::database::certified_history;
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
@@ -78,12 +79,40 @@ impl<E: Executor> Reactor<E> {
     }
 
     pub(super) async fn rollback(&mut self, height: u64) -> Result<()> {
-        // The `blocks` cascade + the off-checkpoint footprint-cache reversal run
-        // together in one savepoint (capture-before, recompute-after enforced inside),
-        // so a crash can't leave the cache durably stale.
-        self.maintain_executor(Some(height))
+        self.check_rollback_depth(height)?;
+        let conn = self.db_conn();
+        let frontier = certified_history::frontier(&conn).await?;
+        let boundary =
+            certified_history::branch::boundary(&conn, self.consensus.protocol_context).await?;
+        ensure!(
+            height >= boundary.first_height - 1,
+            "rollback crosses native genesis boundary"
+        );
+        let stage = begin_stage(
+            &self.owner_service,
+            &self.session,
+            self.network,
+            frontier.authenticated_height,
+        )
+        .await?
+        .context("rollback has no pending closure stage")?;
+        let remaining = stage.remaining_after();
+        let result = async {
+            ensure!(
+                stage.action() == (WorkItem::Rollback { height }),
+                "rollback differs from closure work item"
+            );
+            (self.session.executor.operations.maintenance)(
+                self.session.executor.owner.clone(),
+                stage.selection().envelope(),
+            )
             .await
-            .context("rollback_with_footprint failed")?;
+            .map_err(HostFailure::from)?;
+            canonical_history::rollback(&conn, height).await?;
+            Ok(((), StageOutcome::RolledBack, remaining))
+        }
+        .await;
+        stage.finish(result).await?;
         self.last_height = height;
 
         // Drop candidates validated against the old tip. An in-flight `IoJob` is
@@ -104,14 +133,14 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("Failed to read the post-rollback tip block")?
         {
-            Some(row) => {
+            Some(row) if height >= boundary.first_height => {
                 info!("Rollback to height {} ({})", height, row.hash);
                 self.last_hash = Some(row.hash);
             }
-            None => {
-                warn!("Rollback to height {}, no previous block found", height);
+            _ if height < boundary.first_height => {
                 self.last_hash = None;
             }
+            _ => bail!("post-rollback Bitcoin block is missing at height {height}"),
         }
 
         if let Some(tx) = &self.event_tx
@@ -503,9 +532,8 @@ impl<E: Executor> Reactor<E> {
 
         self.last_height = height;
         self.last_hash = Some(hash);
-        // Blocks at or below the tip can no longer be proposed or decided.
-        // Dropping them keeps `pending_block_value` proposing only heights still ahead,
-        // and keeps `validate_batch`'s "a block is pending" gate honest.
+        // Discard consumed candidates. A later local reorg can supply a new
+        // replacement at the same height; branch admission checks it independently.
         self.consensus.pending_blocks.retain(|&h, _| h > height);
 
         // Reflect what's actually persisted, not what we're mid-processing.

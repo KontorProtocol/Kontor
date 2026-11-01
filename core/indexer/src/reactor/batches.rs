@@ -510,28 +510,25 @@ impl<E: Executor> Reactor<E> {
         Ok(BatchOutcome::Executed)
     }
 
-    /// The next pending Bitcoin block as a proposal value, if any. Blocks
-    /// outrank batches and need no I/O, so this fast path runs UNCONDITIONALLY
-    /// — a batch validation in flight must never starve block proposals, or a
-    /// slow bitcoind would stall the chain through the proposer.
-    ///
-    /// Range-bounded, not `first_key_value`: an entry at or below the tip is
-    /// already applied, and proposing it stops the chain — peers vote it valid
-    /// (they still hold the block), it is decided, the finalize gate rejects it
-    /// as out of order, and it stays the minimum forever so no newer block is
-    /// ever proposed. The insert side refuses to buffer those now; this makes
-    /// the proposer independently unable to emit one.
-    fn pending_block_value(&self) -> Result<Option<Value>> {
-        self.consensus
-            .pending_blocks
-            .range(self.last_height + 1..)
-            .next()
-            .map(|(_, block)| -> Result<Value> {
-                Ok(Value::from_input(
-                    block.exact_input(self.consensus.protocol_context)?,
-                )?)
-            })
-            .transpose()
+    // A replacement can be at or below the applied tip. The certified branch,
+    // rather than the local cursor, distinguishes replacements from duplicates.
+    pub(super) async fn pending_block_value(&mut self) -> Result<Option<Value>> {
+        let conn = self.db_conn();
+        for block in self.consensus.pending_blocks.values() {
+            let input = block.exact_input(self.consensus.protocol_context)?;
+            match branch::validate(
+                &conn,
+                self.consensus.protocol_context,
+                &input.descriptor().command,
+            )
+            .await
+            {
+                Ok(()) => return Ok(Some(Value::from_input(input)?)),
+                Err(error) if error.downcast_ref::<branch::Rejected>().is_some() => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(None)
     }
 
     fn batch_proposal_value(
@@ -817,10 +814,9 @@ impl<E: Executor> Reactor<E> {
             None => return Ok(false),
         };
 
-        // Blocks first, always — even with a batch validation in flight. They
-        // need no I/O, and a chain whose block proposals queue behind a slow
-        // bitcoind is the head-of-line blocking this design removes.
-        if let Some(value) = self.pending_block_value()? {
+        // Block proposals require only local branch checks, so pending bitcoind
+        // validation must not delay them.
+        if let Some(value) = self.pending_block_value().await? {
             self.fulfill_pending_with(value).await?;
             return Ok(true);
         }

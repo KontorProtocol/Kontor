@@ -62,14 +62,14 @@ use metrics::gauge;
 use tracing::{debug, info, warn};
 
 use crate::bitcoin_client::Client;
-use crate::consensus::finality_types::StateEvent;
 use crate::consensus::Ctx;
 #[cfg(test)]
 use crate::database::canonical_history;
+use crate::database::certified_history;
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
+use crate::protocol::coordinator::bootstrap;
 #[cfg(test)]
 use crate::protocol::coordinator::committee::build_validator_set;
-use crate::protocol::coordinator::bootstrap;
 use crate::protocol::coordinator::linked::{self, TransactionRecognizer};
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
@@ -344,27 +344,12 @@ impl<E: Executor> Reactor<E> {
                 }
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
-                // A block at or below the tip is already applied and can never be
-                // proposed or executed again — buffering it is not merely useless,
-                // it HALTS THE CHAIN. `pending_block_value` proposes the minimum pending
-                // height, peers still hold the block so they vote it valid, and it
-                // is decided; the finalize gate then refuses it as out of order and
-                // nothing removes it from the buffer. It stays the minimum forever,
-                // newer blocks are never proposed, and the only thing that would
-                // clear it — a successful block execution — is exactly what the loop
-                // prevents.
-                //
-                // Reachable from the poller: `replay_blocks_after` re-sends stored
-                // block events, and the finality path deliberately keeps
-                // `pending_blocks` across a rollback, so a replayed block can land
-                // after the deferred drain has already carried the tip past it.
-                if block.height <= self.last_height {
-                    debug!(
-                        block_height = block.height,
-                        %block.hash,
-                        last_height = self.last_height,
-                        "Ignoring block at or below the tip — already applied"
-                    );
+                let conn = self.db_conn();
+                let frontier = certified_history::frontier(&conn).await?;
+                if certified_history::branch::at(&conn, block.height, frontier.authenticated_height)
+                    .await?
+                    == Some(block.hash)
+                {
                     return Ok(());
                 }
 
@@ -391,43 +376,16 @@ impl<E: Executor> Reactor<E> {
                 }
             }
             BlockEvent::Rollback { to_height } => {
-                info!(to_height, "Bitcoin rollback — truncating state");
-                // A reorg deeper than `retain` would land in pruned territory (the
-                // per-height versions needed to rebuild the as-of-`to_height` snapshot
-                // are gone), so we BAIL rather than corrupt. This hard exit is the
-                // intended behaviour, not a stopgap: `retain` defaults to ~1 day of
-                // Bitcoin blocks, and a reorg that deep means Bitcoin itself violated
-                // the finality assumption the WHOLE consensus rests on — every node's
-                // anchored "finalized" batches are then invalid, pruned or not. There
-                // is no local recovery (auto-replay would just rebuild onto the same
-                // broken assumption), so halting for operator intervention is correct.
-                // Hence the guard keys off `retain` (the assumption) — not the actual
-                // prune watermark — because what it really detects is "Bitcoin broke
-                // finality", which is catastrophic independent of pruning.
-                self.check_rollback_depth(to_height)
-                    .context("Bitcoin reorg too deep")?;
-                self.rollback(to_height)
-                    .await
-                    .context("rollback failed during Bitcoin reorg")?;
-                // Decided values above the fork are anchored to blocks that no
-                // longer exist — they are deliberately forgotten here (their
-                // rows stay in the batches table as consensus history) and the
-                // network re-decides against the new chain; their txs return
-                // via the mempool. Do NOT reload them into deferred_decisions:
-                // old-chain entries would order ahead of new-chain decisions in
-                // the drain queue and wedge it (a batch waiting on an anchor
-                // whose only block decision is queued behind it).
+                // Local Bitcoin observations invalidate proposal candidates. Only a
+                // certified replacement may roll back canonical execution or authority.
                 self.consensus
-                    .clear_on_rollback(&self.db_conn(), to_height)
-                    .await
-                    .context("clear_on_rollback failed during Bitcoin reorg")?;
-                let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;
-                self.consensus
-                    .emit_state_event(StateEvent::RollbackExecuted {
-                        to_anchor: to_height,
-                        entries_removed: 0,
-                        checkpoint,
-                    });
+                    .pending_blocks
+                    .retain(|height, _| *height <= to_height);
+                self.validated_candidates = None;
+                info!(
+                    to_height,
+                    "Bitcoin reorg invalidated local block candidates"
+                );
             }
         }
         Ok(())

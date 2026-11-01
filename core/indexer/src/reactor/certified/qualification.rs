@@ -14,6 +14,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::bitcoin_client::Client;
 use crate::bitcoin_follower::block::BlockInput;
+use crate::bitcoin_follower::event::BlockEvent;
 use crate::consensus::codec::encode_commit_certificate;
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, Value, Vote};
@@ -255,9 +256,74 @@ pub(crate) async fn run(
             ensure!(reactor.consensus.closed_next_height(&conn, Height::new(height)).await?.is_some());
         }
         ensure!(certified_startup(&reopened).await?.1 == Height::new(4));
+        let before_replacement = closure::canonical_position(&conn, baseline.context.chain).await?;
+        let old_hash = genesis_block(network).block_hash();
+        let mut replacement = genesis_block(network);
+        replacement.header.nonce = replacement.header.nonce.wrapping_add(1);
+        let replacement_hash = replacement.block_hash();
+        let replacement_value = Value::from_input(ExactInput::block(baseline.context, 100, serialize(&replacement))?)?;
+        let replacement_block = BlockInput::from_exact(replacement_value.input())?;
+        reactor.consensus.pending_blocks.insert(100, replacement_block.clone());
+        reactor.process_block_event(BlockEvent::Rollback { to_height: 99 }).await?;
+        ensure!(reactor.consensus.pending_blocks.is_empty());
+        ensure!(reactor.last_height == 100 && reactor.last_hash == Some(old_hash));
+        ensure!(closure::canonical_position(&conn, baseline.context.chain).await? == before_replacement);
+        ensure!(certified_history::branch::tip(&conn).await? == Some((100, old_hash)));
+        reactor.consensus.pending_blocks.insert(100, BlockInput::from_exact(value.input())?);
+        ensure!(reactor.pending_block_value().await?.is_none());
+        reactor.consensus.pending_blocks.insert(100, replacement_block.clone());
+        ensure!(reactor.pending_block_value().await? == Some(replacement_value.clone()));
+
+        let proof = certificate_at(&replacement_value, 4, 0);
+        let replacement_decision = DeferredDecision {
+            consensus_height: Height::new(4), value: replacement_value.clone(),
+            certificate: encode_commit_certificate(&proof)?.encode_to_vec(), execution_txs: None,
+        };
+        reactor.consensus.undecided.entry(Height::new(4)).or_default().insert(Round::new(0), ProposedValue {
+            height: Height::new(4), round: Round::new(0), valid_round: Round::Nil,
+            proposer: reactor.consensus.address, value: replacement_value, validity: Validity::Valid,
+        });
+        let (reply, ack) = oneshot::channel();
+        reactor.consensus.receive_decision(&conn, proof, reply).await?;
+        ack.await?;
+        let plan = closure::begin(&conn, 4).await?;
+        ensure!(plan.remaining == vec![WorkItem::Rollback { height: 99 }, WorkItem::Execute { decision: 4 }, WorkItem::Finality]);
+        ensure!(reactor.rollback(98).await.is_err());
+        conn.execute_batch("CREATE TRIGGER interrupt_rollback_stage BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected rollback stage failure'); END").await?;
+        ensure!(reactor.rollback(99).await.is_err());
+        ensure!(reactor.last_height == 100 && reactor.last_hash == Some(old_hash));
+        ensure!(closure::canonical_position(&conn, baseline.context.chain).await? == before_replacement);
+        ensure!(select_block_at_height(&conn, 100).await?.context("old block lost after interrupted rollback")?.hash == old_hash);
+        ensure!(closure::recover(&reopened, 4).await?.stage == 0);
+        ensure!(conn.is_autocommit() && service.active_roots().await == 0);
+        conn.execute_batch("DROP TRIGGER interrupt_rollback_stage").await?;
+        reactor.rollback(99).await?;
+        let rolled_back = closure::recover(&reopened, 4).await?;
+        ensure!(rolled_back.stage == 1 && rolled_back.remaining == vec![WorkItem::Execute { decision: 4 }, WorkItem::Finality]);
+        ensure!(reactor.last_height == 99 && reactor.last_hash.is_none());
+        ensure!(select_block_at_height(&conn, 100).await?.is_none());
+        ensure!(select_block_at_height(&conn, 0).await?.is_some());
+        ensure!(certified_history::branch::at(&conn, 100, 1).await? == Some(old_hash));
+        ensure!(certified_history::branch::tip(&conn).await? == Some((100, replacement_hash)));
+        ensure!(completion::completed(&reopened, 1).await? == completed);
+        ensure!(certified_history::load(&conn, 2).await?.decision().height == 2);
+        ensure!(certified_history::committee(&conn, 4).await?.height == 4);
+        ensure!(certified_startup(&reopened).await.is_err());
+        reactor.handle_block(replacement_block, &replacement_decision).await?;
+        let stage = begin_stage(service, &reactor.session, network, 4).await?.context("replacement finality stage absent")?;
+        let result = async {
+            let (_, rollback) = reactor.consensus.run_finality_checks(&conn, 100).await?;
+            ensure!(rollback.is_none());
+            Ok(((), StageOutcome::FinalityEvaluated, stage.remaining_after()))
+        }.await;
+        stage.finish(result).await?;
+        let replacement_closure = completion::publish(&conn, 4).await?;
+        ensure!(replacement_closure.stages == 3 && replacement_closure.bitcoin_hash == replacement_hash.to_byte_array());
+        ensure!(reactor.consensus.closed_next_height(&conn, Height::new(4)).await?.is_some());
+        ensure!(certified_startup(&reopened).await?.1 == Height::new(5));
         ensure!(completion::completed(&reopened, 1).await? == completed);
         ensure!(service.active_roots().await == 0);
-        Ok(json!({"authenticated": 3, "closed": 3, "owned_batch_stages": true, "owned_block_stage": true,
+        Ok(json!({"authenticated": 4, "closed": 4, "owned_replacement_rollback": true, "local_reorg_is_not_authority": true, "owned_batch_stages": true, "owned_block_stage": true,
             "closure_publication_atomic": true, "next_height_after_closure": true, "ack_after_durable_input": true,
             "interrupted_append_rolled_back": true, "finalization_without_volatile_cache": true,
             "original_and_one_augmentation": true, "reopen_verified": true}))
