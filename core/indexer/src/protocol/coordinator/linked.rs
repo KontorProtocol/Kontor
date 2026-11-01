@@ -177,7 +177,7 @@ pub(crate) fn session_factory(
 }
 
 #[cfg(kontor_linked)]
-type RetainedFactory =
+pub(crate) type RetainedFactory =
     Arc<dyn Fn(StorageCallbacks, [u8; 4], Option<u64>) -> HostFuture<SessionExports> + Send + Sync>;
 
 #[cfg(kontor_linked)]
@@ -193,6 +193,41 @@ pub(crate) fn retained_session_factory(
         let factory = factory.clone();
         Box::pin(async move {
             let callbacks = storage_callbacks(&conn);
+            // Catch both construction and polling panics at the graph boundary.
+            // Neither may be interpreted as a deterministic guest rejection.
+            let exports = AssertUnwindSafe(async move {
+                factory(callbacks, network.magic().to_bytes(), view_gas_limit).await
+            })
+            .catch_unwind()
+            .await
+            .map_err(|_| HostFailure::from((1, "executor session export panicked".into())))?
+            .map_err(HostFailure::from)?;
+            Ok(adapt_session(
+                ExecutorVersion::LegacyP1,
+                network,
+                conn,
+                view_gas_limit.is_none(),
+                exports,
+            ))
+        })
+    }))
+}
+
+#[cfg(all(kontor_linked, feature = "protocol-qualification"))]
+pub(crate) fn retained_session_factory_with_callbacks(
+    network: Network,
+    view_gas_limit: Option<u64>,
+    constructor: fn() -> Result<RetainedFactory, HostError>,
+    decorate: Arc<dyn Fn(StorageCallbacks) -> StorageCallbacks + Send + Sync>,
+) -> Result<SessionFactory> {
+    let factory = std::panic::catch_unwind(constructor)
+        .map_err(|_| HostFailure::from((1, "executor factory export panicked".into())))?
+        .map_err(HostFailure::from)?;
+    Ok(Arc::new(move |conn| {
+        let factory = factory.clone();
+        let decorate = decorate.clone();
+        Box::pin(async move {
+            let callbacks = decorate(storage_callbacks(&conn));
             // Catch both construction and polling panics at the graph boundary.
             // Neither may be interpreted as a deterministic guest rejection.
             let exports = AssertUnwindSafe(async move {

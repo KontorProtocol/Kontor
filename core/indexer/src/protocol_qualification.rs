@@ -31,6 +31,8 @@ use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::{LinkedSession, new_linked};
 
+#[cfg(kontor_linked)]
+mod ownership;
 mod transactions;
 
 const NETWORK: Network = Network::Regtest;
@@ -133,6 +135,7 @@ async fn state(conn: &Connection) -> Result<BTreeMap<String, (u64, String)>> {
 }
 
 async fn exercise(
+    _name: &str,
     service: &OwnerService,
     canonical: SessionFactory,
     read: SessionFactory,
@@ -309,9 +312,14 @@ async fn exercise(
         (session.executor.operations.initialize)(foreign, genesis()).is_err(),
         "executor accepted an unrelated opaque session"
     );
+    #[cfg(kontor_linked)]
+    let ownership = ownership::qualify_graph(_name, dir.path(), &conn).await?;
+    #[cfg(not(kontor_linked))]
+    let ownership = json!({});
     Ok(
         json!({"genesis": initialized, "active_set": active_set, "missing_function": missing,
-        "committee": committee, "malformed_transaction": malformed, "lifecycle": lifecycle, "transactions": transactions}),
+        "committee": committee, "malformed_transaction": malformed, "lifecycle": lifecycle, "transactions": transactions,
+        "ownership": ownership}),
     )
 }
 
@@ -322,17 +330,52 @@ pub async fn run() -> Result<Value> {
     let result = async {
         for (name, canonical, read) in factories {
             eprintln!("Qualifying actual executor: {name}");
-            let observations = exercise(&service, canonical, read).await.with_context(|| name)?;
+            let observations = exercise(name, &service, canonical, read)
+                .await
+                .with_context(|| name)?;
             if let Some(previous) = outputs.first() {
-                ensure!(observations == previous["observations"], "retained executor outcomes differ");
+                ensure!(
+                    observations == previous["observations"],
+                    "retained executor outcomes differ"
+                );
             }
             outputs.push(json!({"graph": name, "observations": observations}));
         }
-        Ok(json!({"schema": 1, "cases": ["native-genesis", "genesis-resume", "read-only-views",
-            "committee", "malformed-recognition", "lifecycle-rollback-replay", "opaque-session-rejection", "transaction-recognition", "publication", "fees-and-deposits",
-            "deterministic-failures", "simulation-inspection", "transaction-rollback-replay"],
-            "executors": outputs}))
-    }.await;
+        #[cfg(kontor_linked)]
+        let node_capacity = ownership::qualify_node_capacity(&service).await?;
+        #[cfg(not(kontor_linked))]
+        let node_capacity = json!({});
+        #[cfg(kontor_linked)]
+        let export_panics = ownership::qualify_export_panics().await?;
+        #[cfg(not(kontor_linked))]
+        let export_panics = json!({});
+        let mut cases = vec![
+            "native-genesis",
+            "genesis-resume",
+            "read-only-views",
+            "committee",
+            "malformed-recognition",
+            "lifecycle-rollback-replay",
+            "opaque-session-rejection",
+            "transaction-recognition",
+            "publication",
+            "fees-and-deposits",
+            "deterministic-failures",
+            "simulation-inspection",
+            "transaction-rollback-replay",
+        ];
+        #[cfg(kontor_linked)]
+        cases.extend([
+            "pending-host-callback-cancellation",
+            "host-callback-failure-panic",
+            "held-cursor-cancellation",
+            "node-wide-capacity-shutdown",
+            "export-panic-classification",
+        ]);
+        Ok(json!({"schema": 1, "cases": cases, "executors": outputs,
+            "node_capacity": node_capacity, "export_panics": export_panics}))
+    }
+    .await;
     service.shutdown();
     result
 }

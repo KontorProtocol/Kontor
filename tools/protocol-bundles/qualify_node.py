@@ -17,7 +17,9 @@ from symbol_tool import TOOLCHAIN
 CASES = {"native-genesis", "genesis-resume", "read-only-views", "committee",
          "malformed-recognition", "lifecycle-rollback-replay", "opaque-session-rejection",
          "transaction-recognition", "publication", "fees-and-deposits", "deterministic-failures",
-         "simulation-inspection", "transaction-rollback-replay"}
+         "simulation-inspection", "transaction-rollback-replay", "pending-host-callback-cancellation",
+         "host-callback-failure-panic", "held-cursor-cancellation", "node-wide-capacity-shutdown",
+         "export-panic-classification"}
 
 def execute_node(report_path):
     directory = report_path.parent
