@@ -1,4 +1,4 @@
-use bitcoin::{BlockHash, hashes::Hash};
+use bitcoin::{BlockHash, blockdata::constants::genesis_block, consensus::serialize, hashes::Hash};
 use indexer_types::BlockRow;
 use tempfile::TempDir;
 
@@ -8,9 +8,7 @@ use crate::database::canonical_history::{self, HistoryState};
 use crate::database::certified_history;
 use crate::database::connection::new_connection;
 use crate::database::queries::insert_block;
-use crate::protocol::canonical_application::{
-    ApplicationSource, CanonicalApplication, DecisionExclusions,
-};
+use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
 use crate::protocol::canonical_input::CanonicalInput;
 use crate::protocol::coordinator::certified_decision::tests::proof;
 use crate::protocol::coordinator::certified_decision::{AuthenticatedDecision, Decision};
@@ -75,7 +73,8 @@ async fn owned_closure_stage_records_real_observation_and_rolls_back_failed_effe
     )?;
     certified_history::finish_genesis(&conn, &snapshot).await?;
     let authority = snapshot.authority()?;
-    let input = ExactInput::batch(context, 0, BlockHash::all_zeros(), &[])?;
+    let block = genesis_block(Network::Regtest);
+    let input = ExactInput::block(context, 1, serialize(&block))?;
     let decision = Decision {
         height: 1,
         predecessor: authority.decision,
@@ -92,7 +91,10 @@ async fn owned_closure_stage_records_real_observation_and_rolls_back_failed_effe
         .await?
         .unwrap();
     assert_eq!(stage.action(), WorkItem::Execute { decision: 1 });
-    assert_eq!(stage.selection().envelope().3.0, 4);
+    assert_eq!(
+        stage.selection().envelope().3,
+        (3, 1, Some(block.block_hash().to_byte_array()), 1)
+    );
     assert!(!conn.is_autocommit());
     conn.execute("INSERT INTO owned_effect VALUES (1)", ())
         .await?;
@@ -126,26 +128,33 @@ async fn owned_closure_stage_records_real_observation_and_rolls_back_failed_effe
         ordinal: cursor.ordinal + 1,
         parent_lineage: cursor.lineage,
         execution: ExecutionIdentity::Baseline(session.executor.execution_definition?),
-        storage_height: 0,
-        source: ApplicationSource::Batch {
-            anchor_height: 0,
-            anchor_hash: [0; 32],
-            exclusions: DecisionExclusions {
-                consensus_height: 1,
-                direct: vec![],
-                effective: vec![],
-            },
+        storage_height: 1,
+        source: ApplicationSource::BlockTransactions {
+            height: 1,
+            hash: block.block_hash().to_byte_array(),
+            parent_hash: block.header.prev_blockhash.to_byte_array(),
         },
-        input: Some(CanonicalInput::bitcoin(&[])?),
+        input: Some(CanonicalInput::bitcoin(&block.txdata)?),
+    };
+    let lifecycle = CanonicalApplication {
+        ordinal: application.ordinal + 1,
+        parent_lineage: application.lineage()?,
+        source: ApplicationSource::BlockLifecycle {
+            height: 1,
+            hash: block.block_hash().to_byte_array(),
+        },
+        input: None,
+        ..application.clone()
     };
     conn.execute("INSERT INTO owned_effect VALUES (1)", ())
         .await?;
     canonical_history::append(&conn, &application).await?;
+    canonical_history::append(&conn, &lifecycle).await?;
     let remaining = stage.remaining_after();
     let (_, record) = stage
         .finish(Ok(((), StageOutcome::Applied, remaining)))
         .await?;
-    assert_eq!(record.applications, vec![application]);
+    assert_eq!(record.applications, vec![application, lifecycle]);
     assert!(conn.is_autocommit());
     assert_eq!(service.active_roots().await, 0);
     let observed = registrations::at(&conn, 1, 1).await?;

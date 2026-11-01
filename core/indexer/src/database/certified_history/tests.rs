@@ -70,7 +70,13 @@ pub(super) async fn prepared() -> Result<(
     let directory = TempDir::new()?;
     let conn = new_connection(directory.path(), "certified.db").await?;
     initialize(&conn).await?;
-    let (mut authority, input, mut decision, keys) = fixture();
+    let (mut authority, _, mut decision, keys) = fixture();
+    let input = ExactInput::block(
+        authority.context,
+        1,
+        serialize(&genesis_block(Network::Regtest)),
+    )?;
+    decision.descriptor = input.descriptor().clone();
     begin_genesis(&conn, authority.context).await?;
     conn.execute_batch("BEGIN IMMEDIATE").await?;
     canonical_history::bind_genesis(&conn, authority.context.chain).await?;

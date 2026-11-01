@@ -5,7 +5,6 @@ use super::*;
 use crate::database::certified_history::tests::{observed, prepared};
 use crate::database::certified_history::{append, initialize};
 use crate::database::connection::new_connection;
-use crate::protocol::canonical_application::DecisionExclusions;
 use crate::protocol::coordinator::certified_decision::AuthenticatedDecision;
 use crate::protocol::coordinator::certified_decision::tests::proof;
 use crate::protocol::coordinator::certified_input::ExactInput;
@@ -35,7 +34,7 @@ async fn commit_stage(
     super::commit_stage(conn, ticket, outcome, remaining, observation).await
 }
 
-async fn fixture() -> Result<(TempDir, Connection, CanonicalApplication)> {
+async fn fixture() -> Result<(TempDir, Connection, Vec<CanonicalApplication>)> {
     let (directory, conn, authority, input, decision, keys) = prepared().await?;
     let canonical_input = CanonicalInput::bitcoin(&input.transactions()?)?;
     let certified = AuthenticatedDecision::verify(
@@ -46,26 +45,41 @@ async fn fixture() -> Result<(TempDir, Connection, CanonicalApplication)> {
     )?;
     append(&conn, &certified).await?;
     let initial = begin(&conn, 1).await?;
+    let Command::Block {
+        height,
+        hash,
+        parent,
+        ..
+    } = certified.decision().descriptor.command
+    else {
+        panic!("fixture must start with a certified block");
+    };
     let application = CanonicalApplication {
         chain: authority.context.chain,
         ordinal: initial.position.ordinal + 1,
         parent_lineage: initial.position.lineage,
         execution: ExecutionIdentity::Baseline(ExecutionDefinitionId([17; 32])),
-        storage_height: 0,
-        source: ApplicationSource::Batch {
-            anchor_height: 0,
-            anchor_hash: [0; 32],
-            exclusions: DecisionExclusions {
-                consensus_height: 1,
-                direct: vec![],
-                effective: vec![],
-            },
+        storage_height: height,
+        source: ApplicationSource::BlockTransactions {
+            height,
+            hash: hash.to_byte_array(),
+            parent_hash: parent.to_byte_array(),
         },
         input: Some(canonical_input),
     };
+    let lifecycle = CanonicalApplication {
+        ordinal: application.ordinal + 1,
+        parent_lineage: application.lineage()?,
+        source: ApplicationSource::BlockLifecycle {
+            height,
+            hash: hash.to_byte_array(),
+        },
+        input: None,
+        ..application.clone()
+    };
     conn.execute("CREATE TABLE stage_effect (value INTEGER)", ())
         .await?;
-    Ok((directory, conn, application))
+    Ok((directory, conn, vec![application, lifecycle]))
 }
 
 async fn observation(conn: &Connection, ticket: &StageTicket) -> Result<RegistrationSnapshot> {
@@ -78,7 +92,7 @@ async fn observation(conn: &Connection, ticket: &StageTicket) -> Result<Registra
     )
 }
 
-async fn apply(conn: &Connection, application: &CanonicalApplication) -> Result<StageRecord> {
+async fn apply(conn: &Connection, applications: &[CanonicalApplication]) -> Result<StageRecord> {
     let unit = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .await?;
@@ -86,7 +100,9 @@ async fn apply(conn: &Connection, application: &CanonicalApplication) -> Result<
     assert_eq!(ticket.action(), WorkItem::Execute { decision: 1 });
     unit.execute("INSERT INTO stage_effect VALUES (1)", ())
         .await?;
-    canonical_history::append(&unit, application).await?;
+    for application in applications {
+        canonical_history::append(&unit, application).await?;
+    }
     let observed = observation(&unit, &ticket).await?;
     let record = commit_stage(
         &unit,
@@ -124,7 +140,7 @@ async fn closure_stage_effects_observation_and_worklist_commit_atomically() -> R
     );
     conn.execute_batch("DROP TRIGGER interrupt_stage").await?;
     let record = apply(&conn, &application).await?;
-    assert_eq!(record.applications, vec![application]);
+    assert_eq!(record.applications, application);
     let after = recover(&conn, 1).await?;
     assert_eq!(after.stage, 1);
     assert_eq!(after.next.map(|next| next.0), Some(WorkItem::Finality));
@@ -189,7 +205,7 @@ async fn closure_stage_rejects_stale_tickets_and_untracked_effects() -> Result<(
             .is_err()
     );
     unit.rollback().await?;
-    let mut stray = application;
+    let mut stray = application.last().unwrap().clone();
     stray.ordinal += 1;
     stray.parent_lineage = progress(&conn, 1).await?.position.lineage;
     let unit = conn
@@ -211,18 +227,21 @@ async fn closure_stage_rejects_substituted_inputs_and_invented_work() -> Result<
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await?;
         let ticket = prepare(&unit, 1).await?.unwrap();
-        let mut application = application.clone();
+        let mut applications = application.clone();
         if variant == 0 {
-            application.input = Some(CanonicalInput::Bitcoin([99; 32]));
+            applications[0].input = Some(CanonicalInput::Bitcoin([99; 32]));
         }
         if variant == 1 {
-            application.source = ApplicationSource::BlockLifecycle {
-                height: 0,
+            applications[0].source = ApplicationSource::BlockLifecycle {
+                height: applications[0].storage_height,
                 hash: [0; 32],
             };
-            application.input = None;
+            applications[0].input = None;
         }
-        canonical_history::append(&unit, &application).await?;
+        applications[1].parent_lineage = applications[0].lineage()?;
+        for application in &applications {
+            canonical_history::append(&unit, application).await?;
+        }
         let observed = observation(&unit, &ticket).await?;
         let work = if variant == 2 {
             vec![WorkItem::Execute { decision: 2 }]

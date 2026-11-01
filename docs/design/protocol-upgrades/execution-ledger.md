@@ -1488,3 +1488,51 @@ fixtures. Broader replay cases, bounded proof transport, consolidated lead and
 independent review, and scoped final-candidate CI/merge remain required. This
 checkpoint does not establish a passing full unit suite or linked cross-platform
 qualification. No remote CI or additional review round was launched.
+
+### K4 journal fixture repair and certified A-B-A replacement
+
+The journal fixture check on checkpoint `1f77e52e` reported 4 passing and 10 failing
+tests, all failures caused by fixtures beginning with a batch before the first
+certified Bitcoin block (`.build-cache/k4-journal-fixtures9.log`, 17.04 seconds).
+The common database fixture now starts with an exact block. Closure fixtures
+record both the block-transaction application and its lifecycle application, and
+the owned-stage fixture checks the block selection envelope. Their rollback,
+corrupt-record, stale-ticket, substituted-input and invented-work assertions
+remain. One negative control initially failed too early because its substituted
+lifecycle used a different storage height; it now remains structurally valid so
+the closure's semantic check must reject it.
+
+The corrected journal/owned-stage family passed 14 tests in 17.24 seconds,
+session 36031, exit 0, `.build-cache/k4-journal-fixtures11.log`, SHA-256
+`4011ac2e6570ab4044fbde612bd95f3515ae58041ba55eb22be87cb34bac2743`.
+This evidence precedes the additional branch-restoration test and resulting draft
+coordinator identity update.
+
+Added an actual executor/reactor callback test of certified A-B-A replacement at
+the initial Bitcoin height. Each decision has a real signature and retained raw
+Bitcoin body. The test awaits Next after each completed closure, then reopens
+through executor/consensus startup. It checks all three immutable closure records,
+each decision's historical Bitcoin branch, the final authenticated/closed frontier,
+equal canonical lineage/cursor for the two A executions, and equal token supply
+(no duplicate emission). The first and third closure IDs remain distinct despite
+equal canonical output. This is baseline replacement coverage with empty user
+transaction bodies, not cross-upgrade or all finality-replay acceptance.
+
+That test passed in 41.83 seconds, build 57.72 seconds, session 43062, exit 0,
+`.build-cache/k4-branch-restoration12.log`, SHA-256
+`7396e6529fdcebc302cbced96feb05c1fecc6763272db6559f96c51464c031f3`.
+The tested draft coordinator definition is
+`360a32f8e8f58c0b571ef488423f3932436c0ecbdbf1c18d742a9ff20efbe717`.
+Formatting and diff checks passed. No production semantic rule was changed by
+this fixture work, and no remote CI or additional independent review was started.
+
+The operator asked whether first-block admission was only a test requirement.
+Clarified that it is a K4 production startup restriction already recorded in the
+agreed plan: the initial H0-1/zero-hash scheduling placeholder is not a Bitcoin
+anchor. After the first certified block, multiple batches can anchor to the same
+block. This is not a requirement to wait for a new Bitcoin block for each batch.
+
+Remaining K4 work includes migration of older reactor/mock-cluster/archive
+fixtures, further finality replay cases (kept batches, parent redeclaration,
+reorg healing and many small batches), proof paging and resource admission,
+consolidated review, scoped CI and merge. The full unit suite has not passed.

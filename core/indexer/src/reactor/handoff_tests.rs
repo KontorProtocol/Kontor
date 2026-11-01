@@ -34,6 +34,7 @@ use crate::database::{Writer, canonical_history, certified_history};
 use crate::protocol::coordinator::certified_input::EraContext;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::staking::{self, api as staking_api};
+use crate::runtime::token::api as token_api;
 use crate::runtime::{Decimal, GenesisParameters, GenesisValidator};
 use crate::stopper::Shutdown;
 use crate::test_utils::test_genesis;
@@ -53,6 +54,101 @@ async fn last_validator_exit_halts_before_releasing_the_next_height() -> Result<
     for deferred in [false, true] {
         check_handoff(deferred, true, false).await?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn certified_a_b_a_replacement_preserves_history_and_restores_execution() -> Result<()> {
+    let key = PrivateKey::from([17; 32]);
+    let owner = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[31; 32])?);
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: owner.x_only_public_key().0.to_string(),
+        ed25519_pubkey: key.public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100.9999999"),
+    }]);
+    let dir = TempDir::new()?;
+    let mut reactor = certified_fixture::reactor(dir.path(), &genesis, key.clone(), 1).await?;
+    let a = certified_fixture::empty_block(1);
+    let b = certified_fixture::block(1, a.prev_hash, 1, Vec::new());
+    let mut saved = Vec::new();
+    let mut first_state = None;
+    let mut first_supply = None;
+    for (index, block) in [a.clone(), b.clone(), a.clone()].into_iter().enumerate() {
+        let height = Height::new(index as u64 + 1);
+        let value = Value::from_input(block.exact_input(reactor.consensus.protocol_context)?)?;
+        let proof = certified_fixture::certificate(&key, &value, height, Round::new(0));
+        certified_fixture::proposal(&mut reactor, value, height, Round::new(0));
+        let (reply, received) = oneshot::channel();
+        reactor
+            .consensus
+            .receive_decision(&reactor.db_conn(), proof.clone(), reply)
+            .await?;
+        received.await?;
+        let (reply, next) = oneshot::channel();
+        reactor.handle_finalized(proof, reply).await?;
+        reactor.advance().await?;
+        let Next::Start(next_height, _) = next.await? else {
+            panic!("missing successor")
+        };
+        assert_eq!(next_height, Height::new(index as u64 + 2));
+        let conn = reactor.db_conn();
+        let state = canonical_history::state(&conn).await?;
+        let supply = token_api::total_supply(&mut *reactor.execution.test_runtime().await).await?;
+        if index == 0 {
+            first_state = Some(state);
+            first_supply = Some(supply);
+        } else if index == 2 {
+            assert_eq!(Some(state), first_state);
+            assert_eq!(
+                Some(supply),
+                first_supply,
+                "replacement must not duplicate emission"
+            );
+        }
+        assert_eq!(reactor.execution.last_hash, Some(block.hash));
+        saved.push(completion::completed(&conn, height.as_u64()).await?);
+    }
+    reactor
+        .consensus
+        .engine_handle
+        .actor
+        .get_cell()
+        .stop_and_wait(None, Some(Duration::from_secs(5)))
+        .await?;
+    drop(reactor);
+    let reactor = certified_fixture::reactor(dir.path(), &genesis, key, 1).await?;
+    let conn = reactor.db_conn();
+    let frontier = certified_history::frontier(&conn).await?;
+    assert_eq!(
+        (frontier.authenticated_height, frontier.closed_height),
+        (3, 3)
+    );
+    assert_eq!(canonical_history::state(&conn).await?, first_state.unwrap());
+    assert_eq!(reactor.execution.last_hash, Some(a.hash));
+    for (index, expected) in [a.hash, b.hash, a.hash].into_iter().enumerate() {
+        let height = index as u64 + 1;
+        assert_eq!(
+            certified_history::branch::at(&conn, 1, height).await?,
+            Some(expected)
+        );
+        assert_eq!(completion::completed(&conn, height).await?, saved[index]);
+        assert_eq!(
+            certified_history::load(&conn, height)
+                .await?
+                .decision()
+                .height,
+            height
+        );
+    }
+    assert_ne!(saved[0].id()?, saved[2].id()?);
+    assert_eq!(saved[0].output, saved[2].output);
+    reactor
+        .consensus
+        .engine_handle
+        .actor
+        .get_cell()
+        .stop_and_wait(None, Some(Duration::from_secs(5)))
+        .await?;
     Ok(())
 }
 
