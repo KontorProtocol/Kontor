@@ -2482,3 +2482,39 @@ control remain unfinished. Unused-code warnings reflect that unwired state and
 are not suppressed. The existing live baseline reference remains unchanged;
 its replacement and old-database preflight belong to the managed-baseline
 integration, so this checkpoint is not a final-candidate node build.
+
+### K5/K6 private consensus event bridge, 1 November 2026
+
+Added the graph-private adapter for the real Malachite application messages and
+proposal-publication channel. Events cross the intended boundary as owned bytes
+with generation, operation and one-use reply token. The private registry keeps
+Tokio reply senders inside their resolved graph. Retirement closes both delivered
+and queued requests, and rejects subsequent event delivery and publication.
+Nonblocking channel polling and publication preserve bounded queue backpressure.
+
+The adapter preserves actual Kontor value encoding, decision certificates,
+committee order, height parameters and separate peer-fault/local-transient sync
+outcomes. It checks reply positions, history ranges and trailing adapter bytes.
+Vote extensions remain disabled. Finalization misbehavior evidence remains a
+diagnostic string, matching its existing logging-only reactor use. Network wire
+envelopes remain separate from the in-process adapter encoding.
+
+Reply results distinguish stale generation, unknown token, wrong operation,
+malformed payload and ordinary receiver expiry without text comparisons. A
+malformed addressed reply consumes its capability and retires the bridge; normal
+GetValue expiry does not fault it. The lifecycle owner must act on bridge faults
+and retain engine ownership until join, which is still pending integration.
+
+Both independent locked graphs passed 39 library tests (zero ignored or failed),
+including real-value/certificate translation, delayed and duplicate replies,
+retirement of buffered requests, bounded publication, malformed framing,
+committee-order retention and unsupported extensions. Formatting and whitespace
+checks pass. Raw logs and source/lock bindings are recorded in
+`.build-cache/k5-consensus-bridge.json`. No CI was launched for this intermediate
+local checkpoint.
+
+These tests exercise the real graph types and channels, not a live managed engine
+or the node reactor. Managed owner/start/join, node adapter, linked graph
+provenance, the new baseline/preflight, durable signing and upgrade authorization
+remain unfinished. This is progress within the agreed K5/K6 group, not its
+acceptance or a production integration claim. Consolidated review remains pending.
