@@ -2250,3 +2250,46 @@ report hashes, checked all 536 qualification source entries against `f6d1b320`,
 and confirmed both original definitions, the 25 cases, the semantic baseline and
 explicitly absent certified-history claim. It accepted this acceptance gap as
 closed. The reassembly correction and final-candidate CI remain outstanding.
+
+
+### K4 proposal reassembly review correction, 1 November 2026
+
+Integrated the bounded defensive implementation `e696f75b` as `9a48cb91` after
+lead source inspection and terminal validation. The changed files are the proposal
+reassembly map, its export and the reactor caller. Admission now limits aggregate
+retained stream IDs, descriptor/body bytes and a conservative 256-byte per-part
+allowance to 16 MiB. The existing stream and part count limits remain. Duplicate
+sequences do not recharge, refusal leaves no empty stream or seen sequence, and
+completion or explicit discard releases the stream's exact accumulated charge.
+Impossible Fin sequence values are refused before sequence arithmetic. Local
+saturation maps to the existing no-completed-proposal reply, not invalid consensus
+work. Round changes do not clear live streams.
+
+Lead review traced Value::size_bytes, the stream-ID ownership path, accounting
+before retention, completion/removal and the handler's reply classification. The
+budget is not total RSS: decoded transactions and transient decoding add memory.
+Abandoned streams remain bounded but can stay until completion, explicit discard
+or map destruction. There is no new production discard caller, eviction policy,
+transport retry protocol or guarantee of fair admission under a flood.
+
+The implementer ran the exact source without edits during execution: 11 reassembly
+unit tests passed in0.54s (after2m25s compilation); the maximal proposal encoding
+test passed in1.66s; the real reactor early-proposal/committee handoff regression
+passed in69.47s; package Clippy for lib/tests with warnings denied passed in42.73s.
+The lead inspected the raw logs and unchanged three-file cherry-pick. Formatting
+and whitespace checks pass. These bounded checks address the identified regression;
+they do not replace the pending final-candidate platform campaign.
+
+The observer execution definition remains unchanged. Refreshed only the unreleased
+draft coordinator source reference, now
+`3d06eb32c3a3b61ccbe9b3a7c56910b7ec52a84d1771bafd1366bdfa1365f3a4`.
+No historical definition or frozen source changed. Focused independent review of
+this delta is required before opening the PR; the remainder of the consolidated
+K4 review and its evidence remain valid within their recorded source scope.
+
+Raw evidence is in the main workspace `.build-cache/`:
+
+- `k4-reassembly-part-streams.log`: `8bcb9f6ca112c8e1c1f4ddd4f5bfba2d5e6f53309ae2044016809689df63a5c3`.
+- `k4-reassembly-max-wire.log`: `495266944574e1531b9179de0a2b42abff33dde334a403838912d448eb05dc12`.
+- `k4-reassembly-ingress.log`: `f9c9eb7594dd9e4ee5473b6d995ec29d53cf48f88d772b5cd5e1addab13fedea`.
+- `k4-reassembly-clippy.log`: `8897a241bfc3ba545619877250003ba2c8df5d7ef8b2cb22ab4579a397cfa9fa`.
