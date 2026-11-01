@@ -10,6 +10,7 @@ from provenance import fingerprint, package_sources, repository_sources
 from qualify_node import CASES
 from recipes import EXECUTOR_GRAPHS, identity
 from symbol_tool import TOOLCHAIN
+from type_boundary import verify_report as verify_interface_report
 
 TARGETS = {'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu', 'aarch64-apple-darwin'}
 OWNERSHIP = {'common-reference-ownership.json', 'input-ownership.json',
@@ -133,6 +134,7 @@ def load_cell(path, root):
         sources(directory / name, graph, root, 'executor')
         file_hash(directory / name / 'build.log', graph['build_log_sha256'])
         file_hash(root / 'tools/protocol-bundles/rustc-wrapper.py', graph['wrapper_sha256'])
+    verify_interface_report(node_dir / 'type-boundary', node['interface_checks'], build['graphs'], cell[0])
     return cell, observations, {key: compiler[key] for key in ('release', 'commit-hash', 'LLVM version')}
 
 

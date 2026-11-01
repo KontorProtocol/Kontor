@@ -12,6 +12,7 @@ from provenance import fingerprint, package_sources, repository_sources
 from qualify_node import CASES
 from recipes import EXECUTOR_GRAPHS, identity
 from symbol_tool import TOOLCHAIN
+from type_boundary import PROBES, inputs_for
 
 
 class NodeComparison(unittest.TestCase):
@@ -51,6 +52,10 @@ class NodeComparison(unittest.TestCase):
                      'source_inputs_sha256': fingerprint(self.sources['executor']),
                      'build_log_sha256': digest(graph_dir / 'build.log'),
                      'wrapper_sha256': digest(ROOT / 'tools/protocol-bundles/rustc-wrapper.py')}
+            graph['link_inputs'] = f'/synthetic/{name}'
+            graph['facade'] = f'/synthetic/{name}/libkontor_executor_{name}.rlib'
+            graph['artifacts'] = [{'path': path, 'sha256': 'synthetic-' + path} for path in (
+                graph['facade'], f'/synthetic/{name}/libwasmtime-test.rlib', f'/synthetic/{name}/libtokio-test.rlib')]
             write_json(graph_dir / 'build-inputs.json', graph)
             graphs.append(graph)
         node = {'qualification_command': True, 'executable_sha256': 'synthetic-binary-hash',
@@ -73,6 +78,20 @@ class NodeComparison(unittest.TestCase):
             write_json(node_dir / name, {'synthetic': name})
             node['ownership'][name] = digest(node_dir / name)
         compiler = f'rustc {TOOLCHAIN}\nrelease: {TOOLCHAIN}\nhost: {target}\ncommit-hash: test-commit\nLLVM version: test-llvm\n'
+        checks = node_dir / 'type-boundary'
+        checks.mkdir()
+        controls = {}
+        for name, (expected, source) in PROBES.items():
+            source_path = checks / f'{name}.rs'
+            source_path.write_text(source)
+            log = checks / f'{name}.log'
+            log.write_text(json.dumps({'level': 'error', 'code': {'code': expected}}) if expected else '')
+            controls[name] = {'expected_error': expected, 'returncode': 1 if expected else 0,
+                              'source_sha256': digest(source_path), 'diagnostics_sha256': digest(log)}
+        write_json(checks / 'result.json', {'schema': 1, 'status': 'passed', 'target': target,
+                   'libraries': inputs_for(graphs, False)[1],
+                   'graph_inputs': {graph['graph']: fingerprint(graph) for graph in graphs}, 'controls': controls})
+        node['interface_checks'] = {'report_sha256': digest(checks / 'result.json'), 'controls': list(PROBES)}
         build = {'target': target, 'profile': profile, 'compiler': compiler,
                  'toolchain_inputs': {'compiler': compiler}, 'node': node, 'graphs': graphs}
         write_json(directory / 'node-build.json', build)
@@ -136,6 +155,21 @@ class NodeComparison(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'hash mismatch'):
                     compare(self.root, ROOT, 'release', 'success')
                 path.write_bytes(original)
+
+    def test_rehashed_unrelated_compile_error_is_not_type_isolation(self):
+        directory = self.cells[0]
+        checks = directory / 'node/type-boundary'
+        log = checks / 'wasmtime-engine.log'
+        log.write_text(json.dumps({'level': 'error', 'code': {'code': 'E0463'}}))
+        report = json.loads((checks / 'result.json').read_text())
+        report['controls']['wasmtime-engine']['diagnostics_sha256'] = digest(log)
+        write_json(checks / 'result.json', report)
+        build = json.loads((directory / 'node-build.json').read_text())
+        build['node']['interface_checks']['report_sha256'] = digest(checks / 'result.json')
+        write_json(directory / 'node-build.json', build)
+        self.bind(directory)
+        with self.assertRaisesRegex(RuntimeError, 'interface control failed'):
+            compare(self.root, ROOT, 'release', 'success')
 
     def test_rehashed_stale_checkout_sources_reject(self):
         directory = self.cells[0]

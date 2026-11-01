@@ -121,6 +121,9 @@ jobs:
             target/protocol-evidence/*/*/executors/second/*.log
             target/protocol-evidence/*/*/executors/node/*.json
             target/protocol-evidence/*/*/executors/node/*.log
+            target/protocol-evidence/*/*/executors/node/type-boundary/*.json
+            target/protocol-evidence/*/*/executors/node/type-boundary/*.log
+            target/protocol-evidence/*/*/executors/node/type-boundary/*.rs
           if-no-files-found: error
 
   compare:

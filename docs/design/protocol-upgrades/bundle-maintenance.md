@@ -222,6 +222,16 @@ node execution or build inputs still require the selected matrix; missing Git
 history requires qualification. Unrelated changes skip both groups. Builder
 checks run once before the matrix rather than once per platform.
 
+Qualification also compiles five interface controls against the exact staged
+production libraries, without linking or running another node. The public
+factory signatures must be interchangeable structural standard-library types.
+Wasmtime engines and Tokio handles from different graphs must fail with Rust's
+type-mismatch diagnostic, and direct access to each graph's private runtime must
+fail with a privacy diagnostic. Missing dependencies or unrelated compilation
+errors do not count as successful negative controls. The node build report binds
+these controls, their source, diagnostics and library hashes; the platform
+comparator validates those bindings before accepting execution results.
+
 Production audit checks the graph-private native symbols that survive linking.
 Proof mode additionally requires the specific helpers exercised by its fixture.
 An unused proof operation, or a dependency absent from the real executor, is not
