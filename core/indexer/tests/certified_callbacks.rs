@@ -18,6 +18,7 @@ async fn decision_ack_and_finalization_use_durable_exact_inputs() -> Result<()> 
     assert_eq!(evidence["automatic_finality_replay"], true);
     assert_eq!(evidence["live_closure_driver"], true);
     assert_eq!(evidence["engine_free_recovery"], true);
+    assert_eq!(evidence["interrupted_replay_matches_uninterrupted"], true);
     assert_eq!(evidence["owned_block_stage"], true);
     assert_eq!(evidence["owned_replacement_rollback"], true);
     assert_eq!(evidence["bounded_work_plan"], true);

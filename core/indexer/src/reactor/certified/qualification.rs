@@ -1,3 +1,5 @@
+mod recovery;
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -291,9 +293,9 @@ pub(crate) async fn run(
         Ok((mut reactor, reopened, decision, completed)) => async {
             qualify_batches(&mut reactor, &reopened, service, &decision, &completed).await?;
             qualify_replacement(&mut reactor, &reopened, service, &decision, &completed).await?;
-            qualify_finality(&mut reactor, &reopened, service).await?;
+            qualify_finality(&mut reactor, &reopened, service, &factory).await?;
             qualify_live_closure(&mut reactor).await?;
-            Ok((json!({"authenticated": 15, "closed": 15, "engine_free_recovery": true, "live_closure_driver": true, "automatic_finality_replay": true, "owned_replacement_rollback": true, "bounded_work_plan": true, "replay_plan_publication_atomic": true, "local_reorg_is_not_authority": true, "owned_batch_stages": true, "owned_block_stage": true,
+            Ok((json!({"authenticated": 15, "closed": 15, "engine_free_recovery": true, "interrupted_replay_matches_uninterrupted": true, "live_closure_driver": true, "automatic_finality_replay": true, "owned_replacement_rollback": true, "bounded_work_plan": true, "replay_plan_publication_atomic": true, "local_reorg_is_not_authority": true, "owned_batch_stages": true, "owned_block_stage": true,
             "closure_publication_atomic": true, "next_height_after_closure": true, "ack_after_durable_input": true,
             "interrupted_append_rolled_back": true, "finalization_without_volatile_cache": true,
             "original_and_one_augmentation": true, "reopen_verified": true}), reactor))
@@ -344,6 +346,7 @@ async fn qualify_finality(
     reactor: &mut Reactor<RuntimeExecutor>,
     reopened: &Connection,
     service: &OwnerService,
+    factory: &SessionFactory,
 ) -> Result<()> {
     let conn = reactor.db_conn();
     let network = reactor.execution.network;
@@ -384,6 +387,7 @@ async fn qualify_finality(
                 reactor
                     .handle_block(BlockInput::from_exact(value.input())?, &decision)
                     .await?;
+                recovery::compare(&reactor.execution, factory, next_height).await?;
                 let before = closure::progress(&conn, next_height).await?;
                 let origin = before.work_origin()?;
                 conn.execute_batch("CREATE TRIGGER interrupt_finality_seed BEFORE INSERT ON closure_finality_seeds BEGIN SELECT RAISE(ABORT, 'injected planner write failure'); END").await?;

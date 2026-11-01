@@ -663,3 +663,31 @@ comparison against uninterrupted execution. Broader replay-policy cases, legacy
 unit-fixture adaptation, bounded proof serving, independent graph acceptance and
 consolidated K4 review remain. No remote CI, performance campaign or merge was
 performed for this checkpoint.
+
+### Interrupted finality/replay parity checkpoint
+
+A frozen database immediately before the parent-deadline verdict is now forked into
+uninterrupted and interrupted executions. Both fork contexts use fresh actual executor
+sessions and have no engine handle. The interrupted path reopens between multiple
+planning pages, after rollback and after each replayed batch. A failed replay-stage
+commit must leave every persistent table unchanged before reopening. Completion must
+match the uninterrupted path's entire typed SQL snapshot, including receipt-stream
+metadata, frozen planning work, replay inputs, canonical application lineage,
+registration observations and historical authority. No tables are excluded from
+this comparison. The fixture also compares the completed closure and applied tip.
+
+The focused callback/branch tests passed (2 tests, 115.15s; build 40.67s). Evidence:
+`.build-cache/k4-replay-parity.log`, SHA-256
+`212aeeb8bce16da71c31a33c6d049305fe20f6a5f6c387e7cc9961aa8e69bd10`;
+coordinator definition
+`346ff34104c8241da63abc0661945a72d55831b8f793e06b47cf81bddc1d54ef`.
+This closes the interrupted multi-page planning and frozen-batch replay parity gap
+for the parent/child deadline scenario. Wider replay-policy scenarios and complete
+node/cluster integration remain required.
+
+The broader unit-test compile was attempted separately and failed with 136 errors.
+Most are test-only references to the fields/helpers moved into ExecutionContext;
+the rest include old hash-only value constructors, obsolete replay-queue assertions
+and an obsolete transaction-resolver test. These must be adapted, without restoring
+production fallbacks or weakening the behavioral assertions. No unit-suite pass or
+full K4 acceptance is claimed by the focused regression result.

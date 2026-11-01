@@ -1383,3 +1383,20 @@ Bitcoin RPC. Shutdown and persisted pruning rejection are covered. Full startup
 supervisor/cluster behavior and interrupted multi-page/batch replay parity still
 need acceptance coverage. Existing broad fixtures still require K4 API adaptation.
 No remote CI or new performance work was launched.
+
+### K4 interrupted planning/replay equivalence
+
+Added a frozen-input comparison of uninterrupted closure recovery against fresh
+executor sessions reopened after planning pages, rollback and replayed batches,
+including a failed replay-stage publication. All persistent SQL tables must match;
+closure identity, applied position and ownership settlement are checked separately.
+The test uses the same production step/recovery methods as the live reactor.
+
+Focused qualification passed: 2 tests, 115.15s, 40.67s build, terminal exit 0.
+Log `.build-cache/k4-replay-parity.log`, SHA-256
+`212aeeb8bce16da71c31a33c6d049305fe20f6a5f6c387e7cc9961aa8e69bd10`.
+Definition `346ff34104c8241da63abc0661945a72d55831b8f793e06b47cf81bddc1d54ef`.
+Separate broader unit compile (`.build-cache/k4-unit-fixtures-build.log`) failed
+with 136 errors in old fixtures and moved test accessors. This is an outstanding
+integration task, not a skipped acceptance gate. No CI campaign or review round
+was started for this intermediate checkpoint.
