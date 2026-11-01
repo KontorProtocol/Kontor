@@ -2692,11 +2692,22 @@ tests. The checker requires both bundles' named tests to execute with no failure
 or ignored tests, and records source, library, executable and log hashes. Node
 adapter sources are included in the staging provenance inventory.
 
-At this source checkpoint, formatting/whitespace checks and 75 focused Python/C
-tooling tests pass (`.build-cache/k5-node-adapter-tooling-tests.log`). The Rust
-adapter tests and CLI compilation have not yet run: the delegated signer still
-owns the Cargo/runtime slot. The new node module is gated by `kontor_managed`;
-the production builder does not enable it yet. No production reactor wiring,
-control-thread implementation, managed baseline activation or successful linked
-handoff is claimed. Those remain part of this grouped implementation, followed
-by the consolidated review and required CI.
+Formatting/whitespace checks and 75 focused Python/C tooling tests passed
+(`.build-cache/k5-node-adapter-tooling-tests.log`). After the signer agent returned
+the slot, the maintained CLI compiled and the local staging run built both real
+consensus graphs, passed their native input ownership audit, and passed all seven
+actual-library type/privacy checks. The stored interface report was verified
+against the staged graph reports and raw diagnostics.
+
+The subsequent adapter test compile failed with E0583: importing the parent module
+through an external `#[path]` changed Rust's child-module lookup directory. The
+harness now explicitly imports the actual adapter and DTO files. Seventeen focused
+tooling checks pass after this fix, but its Rust compilation remains pending while
+the signer agent runs its final checks. The partial run is recorded honestly as
+exit 1 in `.build-cache/k5-consensus-staging-partial.json`; no successful consensus
+qualification marker was produced.
+
+The node module is gated by `kontor_managed`; the production builder does not
+enable it yet. Production reactor wiring, control-thread implementation, managed
+baseline activation and a successful linked handoff remain part of this grouped
+implementation, followed by the consolidated review and required CI.

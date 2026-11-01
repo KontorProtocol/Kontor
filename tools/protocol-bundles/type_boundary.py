@@ -178,8 +178,13 @@ def verify_node_adapter(root, graphs, target, env, output):
     directory = output / 'node-adapter'
     directory.mkdir(exist_ok=True)
     source = directory / 'adapter.rs'
-    module = root / 'core/indexer/src/protocol/coordinator/managed.rs'
-    source.write_text(f'#[path = {json.dumps(str(module))}]\nmod managed;\n')
+    module = root / 'core/indexer/src/protocol/coordinator/managed'
+    # An out-of-line #[path] module changes Rust's child-module search root.
+    # Bind the two actual adapter files explicitly without importing unrelated
+    # coordinator services into this small executable.
+    source.write_text('mod managed {\n' + ''.join(
+        f'#[path = {json.dumps(str(module / (name + ".rs")))}]\npub(crate) mod {name};\n'
+        for name in ('types', 'adapter')) + '}\n')
     arguments, libraries = inputs_for(graphs, True)
     for graph in graphs:
         arguments.extend(['--extern', f"kontor_consensus_{graph['graph']}={graph['facade']}"])
