@@ -81,7 +81,7 @@ pub(crate) async fn begin_stage(
         return Ok(None);
     };
     let position = match action {
-        WorkItem::Execute { decision } => {
+        WorkItem::Execute { decision } | WorkItem::Replay { decision, .. } => {
             let input = load(&session.conn, decision).await?;
             match input.decision().descriptor.command {
                 Command::Batch {

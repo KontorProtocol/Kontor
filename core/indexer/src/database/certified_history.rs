@@ -18,6 +18,7 @@ pub(crate) mod closure;
 pub(crate) mod completion;
 pub(crate) mod registrations;
 pub(crate) mod replay;
+pub(crate) mod replay_input;
 pub(crate) mod work;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

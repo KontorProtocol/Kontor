@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::hashes::Hash;
 use libsql::{Connection, TransactionBehavior, params};
 
-use super::{Status, durable_writer, fixed, frontier, load, registrations, work};
+use super::{Status, durable_writer, fixed, frontier, load, registrations, replay_input, work};
 use crate::database::canonical_history::{self, HistoryState};
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
 use crate::protocol::canonical_input::CanonicalInput;
@@ -329,8 +329,18 @@ pub(crate) async fn prepare(conn: &Connection, height: u64) -> Result<Option<Sta
 }
 
 async fn validate_application_source(conn: &Connection, record: &StageRecord) -> Result<()> {
-    let WorkItem::Execute { decision: height } = record.action else {
-        return Ok(());
+    let (height, frozen) = match record.action {
+        WorkItem::Execute { decision } => (decision, None),
+        WorkItem::Replay { decision, input } => {
+            let origin = work::published(conn, record.remaining.plan).await?.origin;
+            let frozen = replay_input::get(conn, input, origin, decision).await?;
+            ensure!(
+                record.outcome != StageOutcome::ReplacedAnchorBatch,
+                "selected replay batch has a different anchor"
+            );
+            (decision, Some(frozen))
+        }
+        _ => return Ok(()),
     };
     let certified = load(conn, height).await?;
     let command = &certified.decision().descriptor.command;
@@ -365,6 +375,9 @@ async fn validate_application_source(conn: &Connection, record: &StageRecord) ->
                 applied_height == anchor_height
                     && *applied_hash == anchor_hash.to_byte_array()
                     && exclusions.consensus_height == height
+                    && frozen
+                        .as_ref()
+                        .is_none_or(|frozen| *exclusions == frozen.exclusions)
                     && application.input == Some(input),
                 "batch stage differs from certified input"
             );

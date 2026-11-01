@@ -19,9 +19,10 @@ use crate::bitcoin_follower::event::BlockEvent;
 use crate::consensus::codec::encode_commit_certificate;
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, Value, Vote};
-use crate::database::certified_history::{self, closure, completion, work};
+use crate::database::certified_history::{self, closure, completion, replay_input, work};
 use crate::database::connection::new_connection;
 use crate::database::queries::{insert_batch, insert_block, select_block_at_height};
+use crate::protocol::canonical_application::{ApplicationSource, DecisionExclusions};
 use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
 use crate::protocol::coordinator::bootstrap;
 use crate::protocol::coordinator::certified_decision::{AuthenticatedDecision, Decision};
@@ -29,6 +30,7 @@ use crate::protocol::coordinator::certified_input::ExactInput;
 use crate::protocol::coordinator::closure_execution::begin_stage;
 use crate::protocol::coordinator::decision::DeferredDecision;
 use crate::protocol::coordinator::linked::initialize;
+use crate::protocol::coordinator::replay_input::ReplayInput;
 use crate::protocol::operations::GenesisEnvelope;
 use crate::reactor::batches::BatchOutcome;
 use crate::reactor::consensus_state::certified_startup;
@@ -288,6 +290,106 @@ pub(crate) async fn run(
             let record = closure::stage(&conn, height, 1).await?;
             ensure!(record.outcome == if height == 2 { StageOutcome::Applied } else { StageOutcome::UnrecognizedBatch });
             ensure!(record.applications.len() == if height == 2 { 1 } else { 0 });
+            if height == 3 {
+                let before = closure::progress(&conn, height).await?;
+                let origin = before.work_origin()?;
+                let retained = certified_history::load(&conn, height).await?;
+                let txid = raw[0].compute_txid().to_byte_array();
+                let frozen = ReplayInput {
+                    origin, decision: retained.decision().id()?, interval_since: 1, dropped_positions: vec![0],
+                    exclusions: DecisionExclusions { consensus_height: height, direct: vec![txid], effective: vec![txid] },
+                };
+                let mut trailing = frozen.encode()?;
+                trailing.push(0);
+                ensure!(ReplayInput::decode(&trailing).is_err());
+                let mut invalid = frozen.clone();
+                invalid.exclusions.direct.push(txid);
+                ensure!(invalid.encode().is_err());
+                invalid = frozen.clone();
+                invalid.exclusions.effective.clear();
+                ensure!(invalid.encode().is_err());
+                invalid = frozen.clone();
+                invalid.dropped_positions = vec![raw.len() as u64];
+                ensure!(invalid.transactions(&raw).is_err());
+                invalid = frozen.clone();
+                invalid.dropped_positions = vec![0, 0];
+                ensure!(invalid.encode().is_err());
+                // Effective txid sets alone cannot distinguish two occurrences.
+                let repeated = vec![raw[0].clone(), raw[0].clone()];
+                let mut occurrence = frozen.clone();
+                occurrence.exclusions.direct.clear();
+                ensure!(occurrence.transactions(&repeated)? == raw);
+                let old_batch = certified_history::load(&conn, 2).await?;
+                let empty = ReplayInput {
+                    origin, decision: old_batch.decision().id()?, interval_since: 1, dropped_positions: vec![],
+                    exclusions: DecisionExclusions { consensus_height: 2, direct: vec![], effective: vec![] },
+                };
+                // The planner is not wired yet. Supply an explicit attempt to
+                // exercise frozen subsets through actual rollback and execution.
+                for interrupt in [true, false] {
+                    if interrupt {
+                        conn.execute_batch("CREATE TRIGGER interrupt_frozen_plan BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected frozen plan failure'); END").await?;
+                    }
+                    let stage = begin_stage(service, &reactor.session, network, height).await?.context("missing freeze stage")?;
+                    let result = async {
+                        let draft = work::begin(&conn, origin).await?;
+                        let mut bad = frozen.clone();
+                        bad.interval_since = 2;
+                        ensure!(replay_input::insert(&conn, &bad).await.is_err());
+                        bad = frozen.clone();
+                        bad.exclusions.direct = vec![[44; 32]];
+                        bad.exclusions.effective = bad.exclusions.direct.clone();
+                        ensure!(replay_input::insert(&conn, &bad).await.is_err());
+                        let input = replay_input::insert(&conn, &frozen).await?;
+                        ensure!(replay_input::insert(&conn, &frozen).await? == input);
+                        let mut wrong_origin = origin;
+                        wrong_origin.previous = [71; 32];
+                        ensure!(replay_input::get(&conn, input, wrong_origin, height).await.is_err());
+                        ensure!(replay_input::get(&conn, input, origin, 2).await.is_err());
+                        let empty_input = replay_input::insert(&conn, &empty).await?;
+                        let draft = work::append(&conn, draft, &[
+                            WorkItem::Rollback { height: 99 }, WorkItem::Execute { decision: 1 },
+                            WorkItem::Replay { decision: 2, input: empty_input },
+                            WorkItem::Replay { decision: height, input }, WorkItem::Finality,
+                        ]).await?;
+                        conn.execute_batch("SAVEPOINT corrupt_replay_input").await?;
+                        conn.execute("UPDATE closure_replay_inputs SET record = ?2 WHERE input_id = ?1", params![input.to_vec(), empty.encode()?]).await?;
+                        ensure!(work::publish(&conn, draft).await.is_err());
+                        conn.execute_batch("ROLLBACK TO corrupt_replay_input; RELEASE corrupt_replay_input").await?;
+                        let cursor = work::publish(&conn, draft).await?;
+                        ensure!(replay_input::insert(&conn, &frozen).await.is_err());
+                        Ok(((), StageOutcome::FinalityEvaluated, cursor))
+                    }.await;
+                    let finished = stage.finish(result).await;
+                    if interrupt {
+                        ensure!(finished.is_err());
+                        ensure!(replay_input::get(&reopened, frozen.id()?, origin, height).await.is_err());
+                        ensure!(closure::recover(&reopened, height).await? == before);
+                        conn.execute_batch("DROP TRIGGER interrupt_frozen_plan").await?;
+                    } else {
+                        finished?;
+                    }
+                }
+                ensure!(replay_input::get(&reopened, frozen.id()?, origin, height).await? == frozen);
+                reactor.rollback(99).await?;
+                reactor.handle_block(BlockInput::from_exact(decision.value.input())?, &decision).await?;
+                reactor.process_decided_batch(100, genesis_block(network).block_hash(), Height::new(2), old_batch.proof(), &[], None).await?;
+                // No live direct-exclusion rows exist. Re-derivation would lose
+                // the saved direct receipt; trying the original subset must fail.
+                ensure!(conn.query("SELECT 1 FROM excluded_batch_txids", ()).await?.next().await?.is_none());
+                let pending = closure::recover(&reopened, height).await?;
+                ensure!(reactor.process_decided_batch(100, genesis_block(network).block_hash(), Height::new(height), &proof_bytes, &raw, None).await.is_err());
+                ensure!(closure::recover(&reopened, height).await? == pending);
+                conn.execute_batch("CREATE TRIGGER interrupt_frozen_batch BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected frozen batch failure'); END").await?;
+                ensure!(reactor.process_decided_batch(100, genesis_block(network).block_hash(), Height::new(height), &proof_bytes, &[], Some(&raw)).await.is_err());
+                ensure!(closure::recover(&reopened, height).await? == pending);
+                conn.execute_batch("DROP TRIGGER interrupt_frozen_batch").await?;
+                ensure!(reactor.process_decided_batch(100, genesis_block(network).block_hash(), Height::new(height), &proof_bytes, &[], Some(&raw)).await? == BatchOutcome::Executed);
+                let replayed = closure::stage(&conn, height, pending.stage + 1).await?;
+                let ApplicationSource::Batch { exclusions, .. } = &replayed.applications[0].source else { anyhow::bail!("missing replay batch application"); };
+                ensure!(*exclusions == frozen.exclusions);
+                ensure!(replay_input::get(&reopened, frozen.id()?, origin, height).await? == frozen);
+            }
             let stage = begin_stage(service, &reactor.session, network, height).await?.context("missing batch finality stage")?;
             let result = async {
                 let (_, rollback) = reactor.consensus.run_finality_checks(&conn, 100).await?;

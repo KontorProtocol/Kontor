@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use libsql::{Connection, params};
 
-use super::fixed;
+use super::{fixed, replay_input};
 use crate::protocol::coordinator::application_closure::WorkItem;
 use crate::protocol::coordinator::closure_work::{
     WorkCursor, WorkOrigin, decode_item, item_bytes, item_digest, plan_id,
@@ -98,10 +98,10 @@ pub(crate) async fn begin(conn: &Connection, origin: WorkOrigin) -> Result<Draft
     for_origin(conn, origin).await
 }
 
-async fn validate_item(conn: &Connection, height: u64, item: WorkItem) -> Result<()> {
-    if let WorkItem::Execute { decision } = item {
+async fn validate_item(conn: &Connection, origin: WorkOrigin, item: WorkItem) -> Result<()> {
+    if let WorkItem::Execute { decision } | WorkItem::Replay { decision, .. } = item {
         ensure!(
-            decision > 0 && decision <= height,
+            decision > 0 && decision <= origin.height,
             "work refers to future decision"
         );
         ensure!(
@@ -115,6 +115,9 @@ async fn validate_item(conn: &Connection, height: u64, item: WorkItem) -> Result
             .is_some(),
             "work lacks retained certified decision"
         );
+    }
+    if let WorkItem::Replay { decision, input } = item {
+        replay_input::get(conn, input, origin, decision).await?;
     }
     Ok(())
 }
@@ -134,7 +137,7 @@ pub(crate) async fn append(
         "work draft is stale or published"
     );
     for &item in items {
-        validate_item(conn, draft.origin.height, item).await?;
+        validate_item(conn, draft.origin, item).await?;
         let digest = item_digest(draft.digest, draft.count, item)?;
         conn.execute("INSERT INTO closure_work_items (plan_key, ordinal, item, previous, digest) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![key.to_vec(), draft.count.to_be_bytes().to_vec(), item_bytes(item)?, draft.digest.to_vec(), digest.to_vec()]).await?;
@@ -157,7 +160,7 @@ pub(crate) async fn verify(conn: &Connection, draft: Draft) -> Result<()> {
             "work plan has a gap or changed prefix"
         );
         let item = decode_item(&row.get::<Vec<u8>>(1)?)?;
-        validate_item(conn, draft.origin.height, item).await?;
+        validate_item(conn, draft.origin, item).await?;
         digest = item_digest(digest, count, item)?;
         ensure!(
             fixed::<32>(row.get(3)?)? == digest,

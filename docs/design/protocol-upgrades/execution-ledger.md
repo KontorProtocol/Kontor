@@ -1269,3 +1269,25 @@ named executors. The first test invocation encountered a read-only ccache direct
 disabling ccache allowed the C-object controls to run successfully. This is not
 relocated compilation/link acceptance. CLI link-set selection, observer exports,
 node integration and the rest of K4 remain outstanding; no new CI was launched.
+
+
+## K4 frozen replay input checkpoint
+
+From base checkpoint `5e3a2fd00d5e406194e6b73a2953473eae028094`, replay work now
+binds exact per-batch frozen inputs and the actual batch execution/source validator
+consumes them. The lead traced plan publication, subset validation before effects,
+owned rollback, stage failure/retry, immutable branch eligibility and recovery.
+An occurrence-identity gap found during inspection was fixed by recording dropped
+positions in addition to the exclusion txid sets. Shared retained executor sources
+and released definitions are unchanged. The unreleased coordinator definition is
+`d2d49f6fc726d723969fb660c7022c15e7a77d6fe6994c5571370d879e9c999e`.
+
+The final local `certified_callbacks` run passed both tests, zero failures, in
+59.73 seconds (39.33-second build). Raw evidence is
+`.build-cache/k4-frozen-positions.log`, SHA-256
+`b57e4982919e8704849c778b5fb55ae1635f8e6082ca3202ce70188aa9d7f2a7`.
+This is focused production-library integration coverage, not the broad unit suite
+or final independent-graph qualification. The test supplies its own replay verdict;
+automatic bounded verdict generation, full live driver, startup recovery and old
+unit-fixture adaptation remain. Consolidated independent review remains at the
+complete K4 group, with no additional microreview, push or CI campaign here.

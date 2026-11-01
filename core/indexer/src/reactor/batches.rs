@@ -17,7 +17,7 @@ use crate::consensus::finality_types::{
     DecidedBatch, FINALITY_WINDOW, StateEvent, UnfinalizedBatch, deadline_for,
 };
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, ProposalData, Value};
-use crate::database::certified_history::{self, branch};
+use crate::database::certified_history::{self, branch, replay_input, work};
 use crate::database::queries::{
     delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids,
     insert_excluded_batch_txids, insert_transaction, insert_unconfirmed_batch_tx,
@@ -286,13 +286,14 @@ impl<E: Executor> Reactor<E> {
         .context("batch application has no pending closure stage")?;
         let remaining = stage.remaining_after();
         let result = async {
-            ensure!(
-                stage.action()
-                    == (WorkItem::Execute {
-                        decision: consensus_height.as_u64()
-                    }),
-                "batch application differs from closure work item"
-            );
+            let frozen = match stage.action() {
+                WorkItem::Execute { decision } if decision == consensus_height.as_u64() => None,
+                WorkItem::Replay { decision, input } if decision == consensus_height.as_u64() => {
+                    let origin = work::published(&conn, remaining.plan).await?.origin;
+                    Some(replay_input::get(&conn, input, origin, decision).await?)
+                }
+                _ => bail!("batch application differs from closure work item"),
+            };
             let retained = certified_history::load(&conn, consensus_height.as_u64()).await?;
             let expected = ExactInput::batch(
                 self.consensus.protocol_context,
@@ -304,6 +305,16 @@ impl<E: Executor> Reactor<E> {
                 *retained.input() == expected,
                 "batch application differs from retained certified bytes"
             );
+            if let Some(frozen) = &frozen {
+                ensure!(
+                    frozen.transactions(certified.unwrap_or(batch_txs))? == batch_txs,
+                    "batch execution subset differs from frozen replay input"
+                );
+                ensure!(
+                    self.last_height == anchor_height && self.last_hash == Some(anchor_hash),
+                    "selected replay batch has a different anchor"
+                );
+            }
             let selection = stage.selection();
             // A decided batch may only EXECUTE against the exact chain state it was
             // anchored to: the local tip must sit at `anchor_height` with
@@ -387,18 +398,22 @@ impl<E: Executor> Reactor<E> {
             };
 
             let input = CanonicalInput::bitcoin(certified.unwrap_or(batch_txs))?;
-            let mut applicable = select_decision_exclusions(&conn, consensus_height.as_u64())
-                .await?
-                .iter()
-                .map(|value| value.parse::<Txid>().map(|id| id.to_byte_array()))
-                .collect::<Result<Vec<_>, _>>()?;
-            applicable.sort_unstable();
-            let exclusions = DecisionExclusions::for_batch(
-                consensus_height.as_u64(),
-                certified.unwrap_or(batch_txs),
-                batch_txs,
-                &applicable,
-            )?;
+            let exclusions = if let Some(frozen) = frozen {
+                frozen.exclusions
+            } else {
+                let mut applicable = select_decision_exclusions(&conn, consensus_height.as_u64())
+                    .await?
+                    .iter()
+                    .map(|value| value.parse::<Txid>().map(|id| id.to_byte_array()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                applicable.sort_unstable();
+                DecisionExclusions::for_batch(
+                    consensus_height.as_u64(),
+                    certified.unwrap_or(batch_txs),
+                    batch_txs,
+                    &applicable,
+                )?
+            };
             insert_batch(
                 &conn,
                 consensus_height.as_u64(),

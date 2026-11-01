@@ -33,6 +33,7 @@ impl CanonicalPosition {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkItem {
     Execute { decision: u64 },
+    Replay { decision: u64, input: [u8; 32] },
     Rollback { height: u64 },
     Finality,
     Observe,
@@ -48,6 +49,11 @@ impl WorkItem {
             Self::Rollback { height } => {
                 output.tag(1)?;
                 output.u64(height)?;
+            }
+            Self::Replay { decision, input } => {
+                output.tag(4)?;
+                output.u64(decision)?;
+                output.fixed(&input)?;
             }
             Self::Finality => output.tag(2)?,
             Self::Observe => output.tag(3)?,
@@ -65,6 +71,10 @@ impl WorkItem {
             },
             2 => Self::Finality,
             3 => Self::Observe,
+            4 => Self::Replay {
+                decision: input.u64()?,
+                input: input.fixed()?,
+            },
             _ => anyhow::bail!("unknown closure work item"),
         })
     }
@@ -182,7 +192,7 @@ impl StageRecord {
             matches!(
                 (self.action, self.outcome),
                 (
-                    WorkItem::Execute { .. },
+                    WorkItem::Execute { .. } | WorkItem::Replay { .. },
                     StageOutcome::Applied
                         | StageOutcome::UnrecognizedBatch
                         | StageOutcome::ReplacedAnchorBatch
@@ -192,7 +202,7 @@ impl StageRecord {
             ),
             "stage outcome does not match action"
         );
-        if let WorkItem::Execute { decision } = self.action {
+        if let WorkItem::Execute { decision } | WorkItem::Replay { decision, .. } = self.action {
             ensure!(
                 decision > 0 && decision <= self.height,
                 "closure work refers to future decision"

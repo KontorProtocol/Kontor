@@ -471,3 +471,40 @@ future-prefix rejection, a fully filtered exclusion page, confirmation attributi
 and reorg-healed applicability. The actual authenticated callback fixture rejects a
 changed execution index. Index fixtures do not prove that a finality verdict
 legitimately produced their synthetic exclusions or replace full reactor acceptance.
+
+
+### Frozen batch replay inputs
+
+Replay work items now commit a stored input record binding the verdict and its
+pre-state lineage, originating closure stage, original certified decision, selected
+branch interval, direct/effective exclusion receipt, and exact dropped transaction
+positions. Positions preserve occurrence-level filtering even when a raw batch
+contains repeated transaction IDs. The record is checked against the retained full
+input and historical branch interval before admission. Only an unpublished plan at
+its finality pre-state can accept these records; publication commits their digests
+through the ordered work list.
+
+The actual batch handler validates the supplied execution subset against that record
+before parsing or effects. It uses the frozen exclusion receipt instead of querying
+mutable confirmation/exclusion state. Replay requires the selected anchor to be the
+current canonical tip. Application-stage persistence and recovery also verify that
+the resulting batch application carries the same frozen receipt. Ordinary first
+execution keeps its existing path.
+
+The focused callback checks passed locally in 59.73 seconds after a 39.33-second
+build (`.build-cache/k4-frozen-positions.log`, SHA-256
+`b57e4982919e8704849c778b5fb55ae1635f8e6082ca3202ce70188aa9d7f2a7`).
+They include actual rollback/block/batch handlers, database reopen, a fully excluded
+batch with no live direct-exclusion rows, an incorrect supplied subset, atomic retry
+of plan publication and batch-stage failure, changed stored input rejection at plan
+publication, wrong interval/origin/decision rejection, and repeated-transaction
+position handling. The plan and direct exclusion in this fixture are explicitly
+supplied by the test. This proves frozen-input consumption and persistence, not
+legitimate finality verdict derivation or complete reactor/startup recovery.
+
+Remaining integration is the bounded finality planner: capture the applicable seed
+set before rollback, derive descendants using indexed attempt-scoped availability,
+freeze each selected batch and publish the complete verdict/work plan atomically.
+The volatile live replay driver and pre-engine recovery still need replacement,
+followed by complete K4 acceptance and the grouped review. No PR or CI run has been
+started for these intermediate checkpoints.

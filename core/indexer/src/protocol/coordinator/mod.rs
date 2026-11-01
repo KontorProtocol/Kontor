@@ -13,6 +13,7 @@ pub(crate) mod linked;
 pub(crate) mod manifest;
 pub(crate) mod migration;
 pub(crate) mod registration_history;
+pub(crate) mod replay_input;
 pub(crate) mod selection;
 pub(crate) mod v1;
 

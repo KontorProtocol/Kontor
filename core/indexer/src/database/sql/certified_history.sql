@@ -91,10 +91,18 @@ CREATE TABLE IF NOT EXISTS closure_work_plans (
 CREATE TABLE IF NOT EXISTS closure_work_items (
     plan_key BLOB NOT NULL REFERENCES closure_work_plans(plan_key),
     ordinal BLOB NOT NULL CHECK (length(ordinal) = 8),
-    item BLOB NOT NULL CHECK (length(item) <= 9),
+    item BLOB NOT NULL CHECK (length(item) <= 41),
     previous BLOB NOT NULL CHECK (length(previous) = 32),
     digest BLOB NOT NULL CHECK (length(digest) = 32),
     PRIMARY KEY (plan_key, ordinal)
+);
+
+CREATE TABLE IF NOT EXISTS closure_replay_inputs (
+    input_id BLOB PRIMARY KEY CHECK (length(input_id) = 32),
+    plan_key BLOB NOT NULL REFERENCES closure_work_plans(plan_key),
+    decision BLOB NOT NULL REFERENCES certified_decisions(height),
+    record BLOB NOT NULL,
+    UNIQUE (plan_key, decision)
 );
 
 CREATE TABLE IF NOT EXISTS closure_stages (
