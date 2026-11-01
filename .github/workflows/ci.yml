@@ -12,6 +12,10 @@ env:
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: true
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   quality-checks:
     name: Lint & Security Audit
@@ -76,6 +80,9 @@ jobs:
           cargo audit --file ../protocol-bundles/second/Cargo.lock
           cargo audit --file ../protocol-bundles/pulley-first/Cargo.lock
           cargo audit --file ../protocol-bundles/pulley-second/Cargo.lock
+          cargo audit --file ../protocol-bundles/executor-first/Cargo.lock
+          cargo audit --file ../protocol-bundles/executor-second/Cargo.lock
+          cargo audit --file ../protocol-bundles/node/Cargo.lock
         working-directory: ./core
 
   test:
