@@ -8,7 +8,7 @@ summarized in [the implementation plan](implementation-plan.md) and
 are historical evidence, not the current phase status.
 
 The local production worktree now builds both real independently locked executor
-graphs and links them into the node. The bounded ARM64 dev run matches thirteen
+graphs and links them into the node. The bounded ARM64 dev run matches eighteen
 scenario groups across both graphs. The separate preserved-input comparison
 matches all eleven pre-extraction logical-state stages. No cross-platform result
 is inferred from that local run.
@@ -20,6 +20,7 @@ Recent local implementation checkpoints:
 - `7850ead2`: audited production node installation and Docker build route.
 - `deef86aa` and `f0f09445`: explicit release3/full6 comparison and CI scope selection.
 - `aeaa83cf` and `53bb95a0`: actual-library compile controls and their evidence bindings.
+- `a7807439`: actual linked-node callback, cursor, admission and panic ownership cases.
 
 The compile controls accept the shared structural factory signatures and reject
 cross-graph Wasmtime Engine and Tokio Handle values and private Runtime imports.
@@ -27,12 +28,21 @@ All five controls passed against actual staged libraries. The builder/comparator
 test suite passes 93 tests; the CI helper suite passes 24 tests. Missing dependencies
 and unrelated compiler failures cannot satisfy a negative compile control.
 
-The Daybreak implementer is completing actual linked-graph ownership qualification
-under task `kontor-k2b-linked-ownership`, in an isolated worktree. Pending callback
-I/O, cancellation, opaque cursor cleanup, fault classification and shared node
-capacity must be validated before acceptance. A source patch or running build is
-not a passing result. The full release container, final platform qualification,
-consolidated lead/two independent reviews, PR CI and merge are still pending.
+The linked-ownership task was integrated after lead source review and validation
+of its actual node report against the integrated source. Its ARM64 dev executable
+hash is `53db1247acffef7e01983a2aeceb7d7e4ae1ac58fb070ea53c15e3ed131524d2`.
+The five added groups check pending callback cancellation, ordinary callback
+failure versus panic quarantine, a guest-held cursor during cancellation, shared
+capacity/shutdown with both graphs, and direct export panic classification.
+The run also passed the five actual-library compile controls. Evidence is retained
+under `.build-cache/linked-ownership-qualification/aarch64-unknown-linux-gnu/dev/executors`
+in the parent workspace. This does not establish the remaining raw guest panic
+payload or missing-context publication/provenance behavior.
+
+The Daybreak implementer is addressing that remaining clause under bounded task
+`kontor-k2b-panic-parity`. A source patch or running build is not a passing result.
+The full release container, final platform qualification, consolidated lead/two
+independent reviews, PR CI and merge are still pending.
 
 No K2b broad CI campaign has been launched. Comparator-only changes select focused
 controls; execution/build changes retain the required platform matrix. Before

@@ -78,11 +78,13 @@ Node-owned scheduling and physical SQL sessions drive retained operations and
 cleanup through the typed facade. Recognition, canonical transactions, lifecycle,
 committee derivation, views and simulation now use that facade.
 
-The actual linked ARM64 dev executable passes thirteen bounded scenario groups
+The actual linked ARM64 dev executable passes eighteen bounded scenario groups
 through both graphs: genesis/resume, views, committee, malformed recognition,
 lifecycle rollback/replay, opaque-session rejection, transaction recognition,
 publication, fees/deposits, deterministic failures, simulation inspection and
-transaction rollback/replay. The preserved pre-extraction comparison also passes
+transaction rollback/replay, pending callback cancellation, callback failure/panic,
+guest-held cursor cancellation, shared admission/shutdown and export panic
+classification. The preserved pre-extraction comparison also passes
 all eleven recorded logical-state stages, including confirmation without
 reexecution and rollback/reconfirmation. Five compile controls against the actual
 libraries accept the structural factory interface and reject graph-owned engine
@@ -96,11 +98,12 @@ comparison explicitly requires release results from all three supported platform
 with exhaustive dev/release comparison available only manually. Comparator-only
 changes run focused evidence controls instead of rebuilding all platforms.
 
-Before K2b can merge, finish actual linked-graph pending-I/O, cancellation, cursor,
-fault and shared-capacity coverage; validate the complete release image and
+Before K2b can merge, finish the remaining guest panic payload and missing-context
+publication/provenance checks; validate the complete release image and
 required platform checks; consolidate the lead and two independent phase reviews;
-and pass final-candidate CI. The Daybreak implementer has the bounded ownership
-qualification assignment. No delegated result is accepted solely from its status
+and pass final-candidate CI. The Daybreak implementer has the bounded panic-parity
+assignment. The integrated ownership checks establish one local dev cell, not
+release-platform qualification. No delegated result is accepted solely from its status
 message. No K2b PR or broad CI campaign has been started at this checkpoint.
 The remaining activation, authorization, consensus handoff, migration, historical
 verification and recovery phases below are still required for goal completion.
