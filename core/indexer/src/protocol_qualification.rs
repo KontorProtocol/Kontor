@@ -73,7 +73,7 @@ fn alternate_factory(view_gas_limit: Option<u64>) -> Result<SessionFactory> {
 
 #[cfg(all(test, not(kontor_linked)))]
 #[tokio::test]
-async fn reactor_canonical_history_callers() -> Result<()> {
+async fn retained_canonical_history_adapters() -> Result<()> {
     let service = OwnerService::new();
     let result = history_qualification::run(
         session_factory(NETWORK, None)?,
@@ -434,6 +434,12 @@ pub async fn run() -> Result<Value> {
             }
             outputs.push(json!({"graph": name, "observations": observations}));
         }
+        #[cfg(any(not(kontor_linked), kontor_observer))]
+        let certified_history =
+            certified::qualification::run(session_factory(NETWORK, None)?, &service, genesis())
+                .await?;
+        #[cfg(all(kontor_linked, not(kontor_observer)))]
+        let certified_history = Value::Null;
         #[cfg(kontor_linked)]
         let node_capacity = ownership::qualify_node_capacity(&service).await?;
         #[cfg(not(kontor_linked))]
@@ -443,7 +449,7 @@ pub async fn run() -> Result<Value> {
         #[cfg(not(kontor_linked))]
         let export_panics = json!({});
         let cases = vec![
-            "reactor-canonical-history",
+            "retained-canonical-history-adapters",
             "atomic-migration-and-retry",
             "migration-input-snapshot-and-work",
             "production-migration-registry-isolation",
@@ -478,7 +484,7 @@ pub async fn run() -> Result<Value> {
         };
         Ok(json!({"schema": 1, "cases": cases, "executors": outputs,
             "node_capacity": node_capacity, "export_panics": export_panics,
-            "storage_contracts": storage_contracts}))
+            "storage_contracts": storage_contracts, "certified_history": certified_history}))
     }
     .await;
     service.shutdown();

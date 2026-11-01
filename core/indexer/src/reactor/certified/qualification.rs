@@ -1,3 +1,4 @@
+mod fixture;
 mod recovery;
 
 use std::path::Path;
@@ -17,6 +18,7 @@ use tempfile::TempDir;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot, watch};
 
+use self::fixture::issuance_transaction;
 use crate::bitcoin_client::Client;
 use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_follower::event::BlockEvent;
@@ -39,7 +41,6 @@ use crate::protocol::coordinator::decision::DeferredDecision;
 use crate::protocol::coordinator::linked::initialize;
 use crate::protocol::coordinator::replay_input::ReplayInput;
 use crate::protocol::operations::GenesisEnvelope;
-use crate::protocol_qualification::fixture::issuance_transaction;
 use crate::reactor::batches::BatchOutcome;
 use crate::reactor::consensus_state::certified_startup;
 use crate::reactor::engine::EngineConfig;
@@ -295,7 +296,10 @@ pub(crate) async fn run(
             qualify_replacement(&mut reactor, &reopened, service, &decision, &completed).await?;
             qualify_finality(&mut reactor, &reopened, service, &factory).await?;
             qualify_live_closure(&mut reactor).await?;
-            Ok((json!({"authenticated": 15, "closed": 15, "engine_free_recovery": true, "interrupted_replay_matches_uninterrupted": true, "live_closure_driver": true, "automatic_finality_replay": true, "owned_replacement_rollback": true, "bounded_work_plan": true, "replay_plan_publication_atomic": true, "local_reorg_is_not_authority": true, "owned_batch_stages": true, "owned_block_stage": true,
+            Ok((json!({"executor_definition": hex::encode(baseline.manifest.executor.0),
+                "protocol": hex::encode(baseline.context.protocol.0), "chain": hex::encode(baseline.context.chain.0),
+                "manifest": hex::encode(baseline.manifest.encode()?), "era": hex::encode(baseline.context.era),
+                "authenticated": 15, "closed": 15, "engine_free_recovery": true, "interrupted_replay_matches_uninterrupted": true, "live_closure_driver": true, "automatic_finality_replay": true, "owned_replacement_rollback": true, "bounded_work_plan": true, "replay_plan_publication_atomic": true, "local_reorg_is_not_authority": true, "owned_batch_stages": true, "owned_block_stage": true,
             "closure_publication_atomic": true, "next_height_after_closure": true, "ack_after_durable_input": true,
             "interrupted_append_rolled_back": true, "finalization_without_volatile_cache": true,
             "original_and_one_augmentation": true, "reopen_verified": true}), reactor))

@@ -1993,3 +1993,53 @@ This is an operator-directed scope change, not an assertion that K4 is complete.
 Remaining K4 work includes historical fixture reconciliation, real retained-graph
 integration, ordinary framing/admission checks, consolidated review, scoped CI and
 merge. No new test or CI campaign is needed for these documentation-only edits.
+
+
+### K4 retained and certified acceptance harness repair, 1 November 2026
+The sole planning reviewer explicitly agreed the split against 8d59b615:
+retained first/second/observer execution and journal adapters retain per-graph
+qualification; the current K4 certified baseline runs separately using the actual
+observer factory. The original first lacks registration observation and cannot
+honestly serve as the current certified baseline. No certificates or committee
+history are manufactured for the old graphs.
+
+The old history fixture failed locally at consensus startup with missing
+certified_history_state. It now exercises the production block transaction,
+lifecycle, linked root/ownership, maintenance and journal adapters without a
+consensus engine. Empty/all-excluded synthetic batch applications check journal
+integration and surviving anchor prefixes, not current Reactor construction.
+The existing fifteen-decision certified fixture retains the real caller checks
+for admission, empty/excluded batches, closure, finality/replacement replay,
+atomicity and engine-free recovery. It runs separately in k4-node before the
+node-capacity check shuts down the shared owner service.
+
+Both execution and cross-platform comparison gates require this separate result,
+including all completion assertions and observer definition/manifest/protocol/era
+bindings. Legacy qualification cannot claim this coverage. The case formerly
+named reactor-canonical-history is now retained-canonical-history-adapters.
+The semantic oracle fixture was restored byte-for-byte to K3; the new issuance
+helper lives in the certified fixture instead of invalidating historical evidence.
+
+Validation: the pre-fix fixture failed (session55735, exit101); repaired adapter
+fixture passed (session51807, exit0, 1 test,29.41s after79s build); Python gates
+passed 7+16 tests including missing/altered certified-result rejection; certified
+integration passed (session32313, exit0,2 tests,115.50s after27.16s build); node
+binary check passed after ordering the certified check before shutdown
+(session69411,exit0,4.33s). Draft coordinator definition:
+0b4e50018cb248f7b265f0c5d20bc1b14cc307c42bd42f316d6a643ec1df075f.
+
+Local raw logs under .build-cache, SHA-256:
+
+- `k4-history-fixture38-before.log`: `71642b29b16d8886b80eada5d0467d62c917269f623c779a9d3cd47194716f6d`.
+- `k4-history-adapters39.log`: `bd4465fa901a651f83a62c4ff9ceb8f5ef098275db40bd83d82bf6c82de24d94`.
+- `k4-history-execution-gates39.log`: `9b281161641fb306d267739bbb724e97c30d21afe1248d97f7c24024b1b05ad9`.
+- `k4-history-comparison-gates39.log`: `481fc384c2826a04e5a708c778b878b61a1f10ae57860998d7293d1d411e5688`.
+- `k4-certified-integration40.log`: `41a2cc29e11827eb7fd98ffa1dfbde994331e1096cc9d5c1812e32ca41833477`.
+- `k4-history-node41.log`: `b13cd986951eb77e137539db06ce42225c8e30c5e90a24609b19f59cfd1eab04`.
+
+These results do not yet prove the separately linked k4-node executable passes.
+The certified fixture uses supplied signed certificates and a disabled-consensus
+engine; it is not multi-validator networking evidence. The combined independent
+build/run, manual historical-fixture reconciliation, final K4 review and scoped
+CI remain. No PR, push or remote CI was started for this checkpoint. Oversized
+certificate paging remains deferred; K5 lifecycle work remains in K5/K6.

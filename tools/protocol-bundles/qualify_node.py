@@ -2,6 +2,7 @@
 """Build and execute the real retained-node integration checks."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,7 +24,51 @@ CASES = {"native-genesis", "genesis-resume", "read-only-views", "committee", "re
          "host-callback-failure-panic", "held-cursor-cancellation", "node-wide-capacity-shutdown",
          "export-panic-classification", "required-storage-contract-before-construction",
          "atomic-migration-and-retry", "migration-input-snapshot-and-work",
-         "production-migration-registry-isolation", "reactor-canonical-history"}
+         "production-migration-registry-isolation", "retained-canonical-history-adapters"}
+
+
+CERTIFIED_CHECKS = {
+    "engine_free_recovery", "interrupted_replay_matches_uninterrupted", "live_closure_driver",
+    "automatic_finality_replay", "owned_replacement_rollback", "bounded_work_plan",
+    "replay_plan_publication_atomic", "local_reorg_is_not_authority", "owned_batch_stages",
+    "owned_block_stage", "closure_publication_atomic", "next_height_after_closure",
+    "ack_after_durable_input", "interrupted_append_rolled_back", "finalization_without_volatile_cache",
+    "original_and_one_augmentation", "reopen_verified",
+}
+
+
+def verify_certified_history(observations, link_set, root=ROOT):
+    result = observations.get('certified_history')
+    if link_set != 'k4-node':
+        if result is not None:
+            raise RuntimeError('legacy qualification cannot claim certified baseline coverage')
+        return
+    expected_keys = CERTIFIED_CHECKS | {'authenticated', 'closed', 'executor_definition',
+                                      'protocol', 'chain', 'manifest', 'era'}
+    if not isinstance(result, dict) or set(result) != expected_keys:
+        raise RuntimeError('certified history evidence missing or incomplete')
+    if any(result[key] is not True for key in CERTIFIED_CHECKS) or result['authenticated'] != 15 or result['closed'] != 15:
+        raise RuntimeError('certified history checks did not complete')
+    def hashed(domain, value):
+        return hashlib.sha256(domain + b'\0' + value).hexdigest()
+    try:
+        manifest = bytes.fromhex(result['manifest'])
+        chain = bytes.fromhex(result['chain'])
+        protocol = bytes.fromhex(result['protocol'])
+        executor = hashed(b'kontor/execution-definition/v1',
+                          (root / 'protocol-bundles/executor-observer/definition.bin').read_bytes())
+        # KPM1 baseline uses one transaction format and one host ABI.
+        valid = (len(manifest) == 272 and len(chain) == len(protocol) == 32
+                 and manifest[:4] == b'KPM1' and manifest[4:36] == chain
+                 and manifest[36:44] == (1).to_bytes(8, 'big')
+                 and manifest[44:76] == bytes(32)
+                 and manifest[76:108].hex() == result['executor_definition'] == executor
+                 and hashed(b'kontor/protocol-manifest/v1', manifest) == result['protocol']
+                 and hashed(b'kontor/genesis-era/v1', chain + protocol) == result['era'])
+    except (ValueError, TypeError):
+        valid = False
+    if not valid:
+        raise RuntimeError('certified baseline identity differs from the observer definition')
 
 
 def verify_storage_contracts(observations, link_set=None):
@@ -63,6 +108,7 @@ def execute_node(report_path, link_set=None):
     if observations.get('schema') != 1 or set(observations['cases']) != CASES or len(observations['cases']) != len(CASES):
         raise RuntimeError('node execution case set changed')
     verify_storage_contracts(observations, link_set)
+    verify_certified_history(observations, link_set)
     semantic_baseline = verify_semantics(observations, ROOT, expected_graphs)
     if digest(executable) != node['executable_sha256'] or digest(report_path) != report_hash:
         raise RuntimeError('node executable or build report changed during execution')

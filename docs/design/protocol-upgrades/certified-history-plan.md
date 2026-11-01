@@ -711,3 +711,23 @@ the rest include old hash-only value constructors, obsolete replay-queue asserti
 and an obsolete transaction-resolver test. These must be adapted, without restoring
 production fallbacks or weakening the behavioral assertions. No unit-suite pass or
 full K4 acceptance is claimed by the focused regression result.
+
+
+### Retained and certified harness split, 1 November 2026
+
+The sole reviewer agreed against 8d59b615 to preserve per-graph execution, storage,
+root ownership, lifecycle, failure atomicity, journal rollback and replay checks
+separately from current certified-baseline checks. Original first remains selectable
+for its exact definition and cannot acquire the observer capability. The old
+execution-only fixture no longer attempts to start K4 consensus from uncertified
+state. Its synthetic batch records establish adapter/journal behavior; the existing
+certified fixture establishes actual current caller behavior.
+
+The k4-node executable now invokes the fifteen-decision certified fixture once
+through the linked observer factory. Its result sits outside per-graph outcome
+equality, and both local and cross-platform evidence gates require the complete
+result with observer definition and baseline identity bindings. The historical
+semantic fixture is restored unchanged; the new issuance helper is separate.
+Local adapter, certified integration and gate regressions pass, as recorded in the
+ledger. The combined independently linked executable has not yet been rebuilt or
+run at this checkpoint, and this is not full K4 acceptance.

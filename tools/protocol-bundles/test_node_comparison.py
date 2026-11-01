@@ -13,6 +13,7 @@ from qualify_node import CASES
 from recipes import EXECUTOR_GRAPHS, executor_graphs, graph_root, identity
 from semantic_baseline import verify as verify_semantics
 from test_semantic_baseline import sample_observation
+from test_node_execution import certified_sample
 from symbol_tool import TOOLCHAIN
 from type_boundary import PROBES, inputs_for
 
@@ -117,6 +118,8 @@ class NodeComparison(unittest.TestCase):
         observations['storage_contracts'] = {'rejected_before_construction': [
             f'{graph}:{mutation}' for graph in recipes
             for mutation in ('missing', 'unknown', 'changed', 'multiple')]}
+        if link_set == 'k4-node':
+            observations['certified_history'] = certified_sample()
         write_json(directory / 'node-execution.stdout.json', observations)
         (directory / 'node-execution.stderr.log').write_text('synthetic execution log')
         execution = {'schema': 1, 'matching_observations': True, 'target': target, 'profile': profile, 'link_set': link_set,
@@ -125,6 +128,21 @@ class NodeComparison(unittest.TestCase):
         write_json(directory / 'node-execution.json', execution)
         self.bind(directory)
         return directory
+
+    def test_k4_comparator_rejects_missing_certified_result(self):
+        for cell in self.cells:
+            shutil.rmtree(cell)
+        for target in sorted(TARGETS):
+            self.cell(target, link_set='k4-node')
+        compare(self.root, ROOT, 'release', 'success', 'k4-node')
+        directory = self.cells[0]
+        path = directory / 'node-execution.stdout.json'
+        observations = json.loads(path.read_text())
+        observations.pop('certified_history')
+        write_json(path, observations)
+        self.bind(directory)
+        with self.assertRaisesRegex(RuntimeError, 'certified history evidence'):
+            compare(self.root, ROOT, 'release', 'success', 'k4-node')
 
     def test_retained_link_set_is_explicit_and_validates_both_source_roots(self):
         for cell in self.cells:
