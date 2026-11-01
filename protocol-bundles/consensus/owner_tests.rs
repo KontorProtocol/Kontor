@@ -23,7 +23,7 @@ use crate::replies::{Delivery, ReplyError};
 
 // Lifecycle tests do not exercise signature acceptance. Refuse everything and
 // construct a follower with no consensus signer or private consensus key.
-struct RejectVerifier;
+pub(crate) struct RejectVerifier;
 
 #[async_trait]
 impl Verifier<Ctx> for RejectVerifier {
@@ -143,9 +143,9 @@ impl NodeConfig for Config {
     }
 }
 
-struct Directory(PathBuf);
+pub(crate) struct Directory(pub(crate) PathBuf);
 impl Directory {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let path = std::env::temp_dir().join(format!(
             "kontor-consensus-owner-{}-{}",

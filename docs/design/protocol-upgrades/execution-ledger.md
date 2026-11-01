@@ -2594,3 +2594,48 @@ by these library tests. In particular, the real-node readiness deadline must sti
 cover a listener that never produces ConsensusReady, and signing revocation must
 remain callable independently of blocking join. The final grouped implementation
 review and required CI remain outstanding.
+
+### K5/K6 typed factory and readiness ownership, 1 November 2026
+
+Added typed engine configuration and a concrete non-Send engine facade. Public
+operations return bundle-owned errors and standard-library data. The internal
+factory maps settings to the private Malachite configuration, derives a separate
+network peer identity and preserves follower mode without a consensus signer.
+Invalid settings fail before engine construction or WAL creation. No consensus
+private key is accepted by the configuration.
+
+The facade distinguishes starting, initializing, running, stopping and joined.
+Private channel availability is insufficient for running: the actual ConsensusReady
+event and successful initialization reply are both required. Polling and replies
+check a bounded readiness deadline; expiry retires pending callbacks and requests
+stop while retaining the owner. Publication requires the current running
+generation. Public stateful operations contain unwinding panics, retain a sticky
+failure and request stop without giving up join ownership. A failed joined engine
+still reports its failure, separately from the joined state.
+
+Both independently locked graphs passed 50 library tests, zero failed or ignored.
+New real-engine cases establish follower settings, readiness acknowledgement,
+occupied-listener failure without false readiness, initialization timeout,
+panic containment with joined cleanup and configuration refusal before WAL
+creation. These run alongside the existing timeout, WAL/port reopen and typed
+reply tests. Raw logs and source/lock bindings are recorded in
+`.build-cache/k5-consensus-factory.json`. Formatting and whitespace checks pass.
+No CI or publication was launched.
+
+The internal start function still accepts the graph-private consensus context.
+Its public authority-based entry point awaits the bounded durable-signer callback
+integration; the node control thread and reactor wiring also remain unfinished.
+The lifecycle tests continue to use a reject-all verifier, so they establish no
+signature acceptance claim. Actual independently linked type controls, durable
+node transitions, signing fences and combined group acceptance remain required.
+
+The operator-designated Daybreak implementer confirmed availability and accepted
+an explicitly bounded security-sensitive durable-signing assignment. It owns new
+authority API/adapter and node durable-signer files in its isolated worktree. The
+lead retains ordinary factory/coordinator work and final integration. The agreed
+callback carries typed roles and canonical preimages, never the consensus key;
+node signing state validates and persists before returning signatures. Proposal
+and proposal-part signatures share a value commitment, and generation fencing
+remains independently callable during control-thread joins. The single Cargo
+slot was released after both local suites exited successfully. Delegated work
+still requires lead review and the one consolidated independent group review.

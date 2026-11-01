@@ -4,19 +4,7 @@ use tokio::sync::oneshot::Sender;
 
 use crate::api::{ReplyKind, ReplyToken, Response};
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ReplyError {
-    StaleGeneration,
-    UnknownToken,
-    WrongOperation,
-    Malformed(String),
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Delivery {
-    Delivered,
-    Expired,
-}
+pub(crate) use crate::api::{Delivery, ReplyError};
 
 trait PendingReply: Send {
     fn is_closed(&self) -> bool;

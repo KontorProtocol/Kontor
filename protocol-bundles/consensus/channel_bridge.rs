@@ -18,12 +18,7 @@ pub(crate) enum Poll {
     Event(Event),
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Publish {
-    Sent,
-    Full,
-    Closed,
-}
+pub(crate) use crate::api::Publish;
 
 // Called only by the engine's control thread. Tokio channel objects stay inside
 // the independently linked graph; polling never enters or blocks a node runtime.

@@ -1,5 +1,8 @@
 //! Same-compiler, in-process facade. Each independently linked bundle owns its
 //! own types; node adapters translate explicitly rather than sharing dependencies.
+use std::error::Error;
+use std::fmt;
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,3 +165,98 @@ impl Response {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bootstrap {
+    Kademlia,
+    Full,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PeerSelection {
+    Kademlia,
+    Random,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Discovery {
+    pub enabled: bool,
+    pub bootstrap: Bootstrap,
+    pub selection: PeerSelection,
+}
+
+// Deliberately no Debug implementation: this contains the network-only secret.
+pub struct EngineConfig {
+    pub generation: u64,
+    pub channel_capacity: usize,
+    pub moniker: String,
+    pub network_key: [u8; 32],
+    pub listen_address: String,
+    pub persistent_peers: Vec<String>,
+    pub wal_path: PathBuf,
+    pub discovery: Discovery,
+    pub readiness_timeout: Duration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EngineState {
+    Starting,
+    Initializing,
+    Running,
+    Stopping,
+    Joined,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum EnginePoll {
+    Idle,
+    Handled,
+    Event(Event),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReplyError {
+    StaleGeneration,
+    UnknownToken,
+    WrongOperation,
+    Malformed(String),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    Delivered,
+    Expired,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Publish {
+    Sent,
+    Full,
+    Closed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EngineError {
+    InvalidConfiguration(String),
+    NotRunning,
+    Stopping,
+    ReadinessTimeout,
+    StaleGeneration,
+    Reply(ReplyError),
+    Failed(String),
+    Panicked,
+}
+
+impl fmt::Display for EngineError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidConfiguration(reason) => {
+                write!(f, "invalid engine configuration: {reason}")
+            }
+            Self::NotRunning => f.write_str("engine is not running"),
+            Self::Stopping => f.write_str("engine is stopping or joined"),
+            Self::ReadinessTimeout => f.write_str("engine readiness timed out"),
+            Self::StaleGeneration => f.write_str("stale engine generation"),
+            Self::Reply(error) => write!(f, "engine reply rejected: {error:?}"),
+            Self::Failed(reason) => write!(f, "engine failed: {reason}"),
+            Self::Panicked => f.write_str("engine operation panicked"),
+        }
+    }
+}
+impl Error for EngineError {}

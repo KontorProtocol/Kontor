@@ -295,4 +295,4 @@ impl Drop for Owner {
 
 #[cfg(test)]
 #[path = "owner_tests.rs"]
-mod tests;
+pub(crate) mod tests;
