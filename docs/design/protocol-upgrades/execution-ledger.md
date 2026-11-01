@@ -2559,3 +2559,38 @@ revoke signing independently of this owner's potentially blocking join. The
 operator's discussion clarified that linking does not require IPC or a generic
 serialized internal RPC layer; typed per-bundle adapters are possible. Keep the
 interface narrow and do not infer a requirement to serialize every operation.
+
+### K5/K6 typed consensus facade refinement, 1 November 2026
+
+The sole independent reviewer explicitly agreed the interface refinement against
+`de7a03d35c4afe07dc2c38232495726791ee606b`, before implementation. Each consensus
+bundle owns public Rust DTOs composed only of standard-library types. The node
+will translate between their distinct types without casts or a shared semantic
+crate. This replaces the unmerged generic operation-code and outer-byte encoding;
+it does not change network codecs, signing bytes or the merged executor API.
+
+Events now carry named request variants and an optional generation-bound reply
+token whose fields are private to the bundle. Responses carry named variants;
+the private registry checks the response kind before consuming a token. Canonical
+value, proposal, proposal-part, certificate and sync payloads retain their existing
+codecs in distinct byte wrapper types. Heights, rounds, timeouts, roles and committee
+parameters pass directly as typed data. Parameter conversion still validates
+committee order, membership uniqueness and voting-power arithmetic. Existing
+u32 collection/byte ceilings remain checked, with bounded queues and pending replies.
+
+Both independent locked consensus implementations pass 45 library tests, zero
+failed or ignored. These retain the real managed-engine lifecycle cases and add
+coverage for malformed inner payload retirement, history range/order checks and
+synced verdict height/round/proposer checks. Formatting and diff checks pass.
+Source/lock/log hashes are in `.build-cache/k5-consensus-typed.json`; no remote CI
+or publication was triggered. Lead inspection traced all ten application event
+variants, internal disabled-extension handling, one-use response ownership,
+receiver expiry, stale-generation rejection, malformed-response retirement and
+owner shutdown. No material regression was found in this intermediate scope.
+
+Public factory configuration, typed public errors/callbacks, node integration and
+actual independently linked facade type controls remain part of K5/K6, not proven
+by these library tests. In particular, the real-node readiness deadline must still
+cover a listener that never produces ConsensusReady, and signing revocation must
+remain callable independently of blocking join. The final grouped implementation
+review and required CI remain outstanding.

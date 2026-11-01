@@ -4,7 +4,9 @@ use malachitebft_app_channel::{AppMsg, NetworkMsg};
 use malachitebft_codec::Codec;
 use tokio::sync::mpsc::{Receiver, Sender, error::TryRecvError, error::TrySendError};
 
+use crate::api::{Event, ProposalPartBytes, ReplyToken, Response};
 use crate::bridge::Bridge;
+use crate::bridge_types::check_length;
 use crate::consensus::Ctx;
 use crate::consensus::codec::ProtobufCodec;
 use crate::replies::{Delivery, ReplyError};
@@ -13,7 +15,7 @@ pub(crate) enum Poll {
     Idle,
     Closed,
     Handled,
-    Event(u64, u8, u64, Vec<u8>),
+    Event(Event),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -53,9 +55,7 @@ impl ChannelBridge {
         ensure!(!self.retired, "engine channels retired");
         match self.incoming.try_recv() {
             Ok(message) => match self.bridge.event(message) {
-                Ok(Some((generation, operation, token, payload))) => {
-                    Ok(Poll::Event(generation, operation, token, payload))
-                }
+                Ok(Some(event)) => Ok(Poll::Event(event)),
                 Ok(None) => Ok(Poll::Handled),
                 Err(error) => {
                     self.retire();
@@ -72,25 +72,28 @@ impl ChannelBridge {
 
     pub(crate) fn respond(
         &mut self,
-        generation: u64,
-        operation: u8,
-        token: u64,
-        payload: &[u8],
+        token: ReplyToken,
+        response: Response,
     ) -> Result<Delivery, ReplyError> {
-        let result = self.bridge.respond(generation, operation, token, payload);
+        let result = self.bridge.respond(token, response);
         if matches!(result, Err(ReplyError::Malformed(_))) {
             self.retire();
         }
         result
     }
 
-    pub(crate) fn publish(&mut self, generation: u64, payload: &[u8]) -> Result<Publish> {
+    pub(crate) fn publish(
+        &mut self,
+        generation: u64,
+        payload: &ProposalPartBytes,
+    ) -> Result<Publish> {
         ensure!(
             !self.retired && generation == self.generation,
             "stale proposal publication"
         );
+        check_length(payload.0.len())?;
         let part = ProtobufCodec
-            .decode(Bytes::copy_from_slice(payload))
+            .decode(Bytes::copy_from_slice(&payload.0))
             .map_err(Error::from)?;
         Ok(
             match self
@@ -120,7 +123,7 @@ mod tests {
     use tokio::sync::{mpsc, oneshot};
 
     use super::*;
-    use crate::bridge_codec::MIN_HEIGHT;
+    use crate::api::Request;
     use crate::consensus::ProposalPart;
 
     #[test]
@@ -133,10 +136,13 @@ mod tests {
         events
             .try_send(AppMsg::GetHistoryMinHeight { reply: first })
             .unwrap();
-        let Poll::Event(generation, operation, token, payload) = bridge.poll().unwrap() else {
+        let Poll::Event(event) = bridge.poll().unwrap() else {
             panic!("missing event")
         };
-        assert_eq!((generation, operation, payload), (7, MIN_HEIGHT, vec![]));
+        assert_eq!(
+            (event.generation, event.request),
+            (7, Request::HistoryMinHeight)
+        );
         let (second, mut second_reply) = oneshot::channel();
         events
             .try_send(AppMsg::GetHistoryMinHeight { reply: second })
@@ -153,7 +159,7 @@ mod tests {
         assert!(events.is_closed());
         assert!(bridge.poll().is_err());
         assert_eq!(
-            bridge.respond(7, MIN_HEIGHT, token, &1u64.to_be_bytes()),
+            bridge.respond(event.reply.unwrap(), Response::HistoryMinHeight(1)),
             Err(ReplyError::StaleGeneration)
         );
     }
@@ -168,12 +174,15 @@ mod tests {
             1,
             StreamContent::Fin,
         );
-        let bytes = ProtobufCodec.encode(&part).unwrap();
+        let bytes = ProposalPartBytes(ProtobufCodec.encode(&part).unwrap().to_vec());
         assert!(bridge.publish(6, &bytes).is_err());
         assert_eq!(bridge.publish(7, &bytes).unwrap(), Publish::Sent);
         assert_eq!(bridge.publish(7, &bytes).unwrap(), Publish::Full);
         let NetworkMsg::PublishProposalPart(actual) = network.try_recv().unwrap();
-        assert_eq!(ProtobufCodec.encode(&actual).unwrap(), bytes);
+        assert_eq!(
+            ProtobufCodec.encode(&actual).unwrap().as_ref(),
+            bytes.0.as_slice()
+        );
         assert!(network.try_recv().is_err());
         assert_eq!(bridge.publish(7, &bytes).unwrap(), Publish::Sent);
         bridge.retire();

@@ -1,5 +1,6 @@
+pub mod api;
 mod bridge;
-mod bridge_codec;
+mod bridge_types;
 mod channel_bridge;
 #[path = "types.rs"]
 mod consensus;

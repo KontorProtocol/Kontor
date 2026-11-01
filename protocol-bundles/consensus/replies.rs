@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use tokio::sync::oneshot::Sender;
 
+use crate::api::{ReplyKind, ReplyToken, Response};
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ReplyError {
     StaleGeneration,
@@ -18,7 +20,7 @@ pub(crate) enum Delivery {
 
 trait PendingReply: Send {
     fn is_closed(&self) -> bool;
-    fn send(self: Box<Self>, payload: &[u8]) -> Result<Delivery, ReplyError>;
+    fn send(self: Box<Self>, response: Response) -> Result<Delivery, ReplyError>;
 }
 
 struct Pending<T, F> {
@@ -29,14 +31,14 @@ struct Pending<T, F> {
 impl<T, F> PendingReply for Pending<T, F>
 where
     T: Send,
-    F: FnOnce(&[u8]) -> Result<T, String> + Send,
+    F: FnOnce(Response) -> Result<T, String> + Send,
 {
     fn is_closed(&self) -> bool {
         self.sender.is_closed()
     }
 
-    fn send(self: Box<Self>, payload: &[u8]) -> Result<Delivery, ReplyError> {
-        let value = (self.decode)(payload).map_err(ReplyError::Malformed)?;
+    fn send(self: Box<Self>, response: Response) -> Result<Delivery, ReplyError> {
+        let value = (self.decode)(response).map_err(ReplyError::Malformed)?;
         // In particular, a GetValue receiver may expire between lookup and send.
         // Normal round progress must not fault the engine in that race.
         Ok(match self.sender.send(value) {
@@ -47,7 +49,7 @@ where
 }
 
 struct Entry {
-    operation: u8,
+    operation: ReplyKind,
     reply: Box<dyn PendingReply>,
 }
 
@@ -75,13 +77,13 @@ impl Replies {
 
     pub(crate) fn insert<T, F>(
         &mut self,
-        operation: u8,
+        operation: ReplyKind,
         sender: Sender<T>,
         decode: F,
-    ) -> Result<u64, String>
+    ) -> Result<ReplyToken, String>
     where
         T: Send + 'static,
-        F: FnOnce(&[u8]) -> Result<T, String> + Send + 'static,
+        F: FnOnce(Response) -> Result<T, String> + Send + 'static,
     {
         if self.retired {
             return Err("engine generation retired".into());
@@ -105,30 +107,34 @@ impl Replies {
                 reply: Box::new(Pending { sender, decode }),
             },
         );
-        Ok(token)
+        Ok(ReplyToken {
+            generation: self.generation,
+            id: token,
+        })
     }
 
     pub(crate) fn respond(
         &mut self,
-        generation: u64,
-        token: u64,
-        operation: u8,
-        payload: &[u8],
+        token: ReplyToken,
+        response: Response,
     ) -> Result<Delivery, ReplyError> {
-        if self.retired || generation != self.generation {
+        if self.retired || token.generation != self.generation {
             return Err(ReplyError::StaleGeneration);
         }
-        let entry = self.pending.get(&token).ok_or(ReplyError::UnknownToken)?;
-        if entry.operation != operation {
+        let entry = self
+            .pending
+            .get(&token.id)
+            .ok_or(ReplyError::UnknownToken)?;
+        if entry.operation != response.kind() {
             return Err(ReplyError::WrongOperation);
         }
         // Once dispatched, even a malformed payload consumes the capability.
         // The caller must fault the engine on error, never retry a different reply.
         self.pending
-            .remove(&token)
+            .remove(&token.id)
             .expect("entry exists")
             .reply
-            .send(payload)
+            .send(response)
     }
 
     pub(crate) fn retire(&mut self) {
@@ -141,84 +147,146 @@ impl Replies {
 mod tests {
     use tokio::sync::oneshot;
 
-    use super::{Delivery, Replies};
+    use super::*;
 
-    fn ack(payload: &[u8]) -> Result<(), String> {
-        if payload.is_empty() {
-            Ok(())
-        } else {
-            Err("invalid acknowledgement".into())
+    fn height(response: Response) -> Result<u64, String> {
+        match response {
+            Response::HistoryMinHeight(value) if value > 0 => Ok(value),
+            _ => Err("invalid height".into()),
         }
     }
 
     #[test]
-    fn stale_or_wrong_operation_does_not_consume_current_reply() {
+    fn stale_or_wrong_kind_does_not_consume_current_reply() {
         let mut replies = Replies::new(7, 1).unwrap();
         let (sender, mut receiver) = oneshot::channel();
-        let token = replies.insert(3, sender, ack).unwrap();
-        assert!(replies.respond(6, token, 3, &[]).is_err());
-        assert!(replies.respond(7, token, 4, &[]).is_err());
+        let token = replies
+            .insert(ReplyKind::HistoryMinHeight, sender, height)
+            .unwrap();
+        assert_eq!(
+            replies.respond(
+                ReplyToken {
+                    generation: 6,
+                    ..token
+                },
+                Response::HistoryMinHeight(1)
+            ),
+            Err(ReplyError::StaleGeneration)
+        );
+        assert_eq!(
+            replies.respond(token, Response::Decided),
+            Err(ReplyError::WrongOperation)
+        );
         assert!(receiver.try_recv().is_err());
-        replies.respond(7, token, 3, &[]).unwrap();
-        assert_eq!(receiver.try_recv(), Ok(()));
-        assert!(replies.respond(7, token, 3, &[]).is_err());
+        replies
+            .respond(token, Response::HistoryMinHeight(1))
+            .unwrap();
+        assert_eq!(receiver.try_recv(), Ok(1));
+        assert_eq!(
+            replies.respond(token, Response::HistoryMinHeight(1)),
+            Err(ReplyError::UnknownToken)
+        );
     }
 
     #[test]
     fn retired_generation_cannot_reply_or_admit_more_work() {
         let mut old = Replies::new(7, 1).unwrap();
         let (sender, mut receiver) = oneshot::channel();
-        let token = old.insert(3, sender, ack).unwrap();
+        let token = old
+            .insert(ReplyKind::HistoryMinHeight, sender, height)
+            .unwrap();
         old.retire();
         assert!(receiver.try_recv().is_err());
-        assert!(old.respond(7, token, 3, &[]).is_err());
+        assert_eq!(
+            old.respond(token, Response::HistoryMinHeight(1)),
+            Err(ReplyError::StaleGeneration)
+        );
         let (sender, _receiver) = oneshot::channel();
-        assert!(old.insert(3, sender, ack).is_err());
+        assert!(
+            old.insert(ReplyKind::HistoryMinHeight, sender, height)
+                .is_err()
+        );
         let mut new = Replies::new(8, 1).unwrap();
         let (sender, mut receiver) = oneshot::channel();
-        assert_eq!(new.insert(3, sender, ack).unwrap(), token);
-        assert!(new.respond(7, token, 3, &[]).is_err());
-        new.respond(8, token, 3, &[]).unwrap();
-        assert_eq!(receiver.try_recv(), Ok(()));
+        let next = new
+            .insert(ReplyKind::HistoryMinHeight, sender, height)
+            .unwrap();
+        assert_eq!(next.id, token.id);
+        assert_eq!(
+            new.respond(token, Response::HistoryMinHeight(1)),
+            Err(ReplyError::StaleGeneration)
+        );
+        new.respond(next, Response::HistoryMinHeight(1)).unwrap();
+        assert_eq!(receiver.try_recv(), Ok(1));
     }
 
     #[test]
     fn abandoned_calls_release_capacity_without_reusing_tokens() {
         let mut replies = Replies::new(1, 1).unwrap();
         let (sender, receiver) = oneshot::channel();
-        let first = replies.insert(1, sender, ack).unwrap();
+        let first = replies
+            .insert(ReplyKind::HistoryMinHeight, sender, height)
+            .unwrap();
         let (sender, _other) = oneshot::channel();
-        assert!(replies.insert(1, sender, ack).is_err());
+        assert!(
+            replies
+                .insert(ReplyKind::HistoryMinHeight, sender, height)
+                .is_err()
+        );
         drop(receiver);
         let (sender, mut receiver) = oneshot::channel();
-        let second = replies.insert(1, sender, ack).unwrap();
+        let second = replies
+            .insert(ReplyKind::HistoryMinHeight, sender, height)
+            .unwrap();
         assert_ne!(first, second);
-        assert!(replies.respond(1, first, 1, &[]).is_err());
-        replies.respond(1, second, 1, &[]).unwrap();
-        assert_eq!(receiver.try_recv(), Ok(()));
+        assert_eq!(
+            replies.respond(first, Response::HistoryMinHeight(1)),
+            Err(ReplyError::UnknownToken)
+        );
+        replies
+            .respond(second, Response::HistoryMinHeight(1))
+            .unwrap();
+        assert_eq!(receiver.try_recv(), Ok(1));
     }
 
     #[test]
     fn receiver_expiration_after_registration_is_not_malformed_input() {
         let mut replies = Replies::new(1, 1).unwrap();
         let (sender, receiver) = oneshot::channel();
-        let token = replies.insert(1, sender, ack).unwrap();
+        let token = replies
+            .insert(ReplyKind::HistoryMinHeight, sender, height)
+            .unwrap();
         drop(receiver);
-        assert_eq!(replies.respond(1, token, 1, &[]), Ok(Delivery::Expired));
+        assert_eq!(
+            replies.respond(token, Response::HistoryMinHeight(1)),
+            Ok(Delivery::Expired)
+        );
         assert!(replies.pending.is_empty());
     }
 
     #[test]
-    fn malformed_reply_is_consumed_and_token_overflow_never_wraps() {
+    fn invalid_response_is_consumed_and_token_overflow_never_wraps() {
         let mut replies = Replies::new(1, 1).unwrap();
         let (sender, mut receiver) = oneshot::channel();
-        let token = replies.insert(1, sender, ack).unwrap();
-        assert!(replies.respond(1, token, 1, &[1]).is_err());
+        let token = replies
+            .insert(ReplyKind::HistoryMinHeight, sender, height)
+            .unwrap();
+        assert!(matches!(
+            replies.respond(token, Response::HistoryMinHeight(0)),
+            Err(ReplyError::Malformed(_))
+        ));
         assert!(receiver.try_recv().is_err());
-        assert!(replies.respond(1, token, 1, &[]).is_err());
+        assert_eq!(
+            replies.respond(token, Response::HistoryMinHeight(1)),
+            Err(ReplyError::UnknownToken)
+        );
         replies.next = u64::MAX;
         let (sender, _receiver) = oneshot::channel();
-        assert!(replies.insert(1, sender, ack).is_err());
+        assert!(
+            replies
+                .insert(ReplyKind::HistoryMinHeight, sender, height)
+                .is_err()
+        );
         assert_eq!(replies.next, u64::MAX);
         assert!(replies.pending.is_empty());
     }

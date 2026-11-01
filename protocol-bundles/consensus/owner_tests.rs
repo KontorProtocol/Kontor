@@ -10,16 +10,15 @@ use bytes::Bytes;
 use malachitebft_app::config::{ConsensusConfig, NodeConfig, ValueSyncConfig};
 use malachitebft_app::types::Keypair;
 use malachitebft_app_channel::{ConsensusContext, NetworkIdentity};
-use malachitebft_core_types::{HeightParams, LinearTimeouts, ValidatorProof, VoteExtensionScope};
+use malachitebft_core_types::{ValidatorProof, VoteExtensionScope};
 use malachitebft_signing::{Error as SigningError, VerificationResult, Verifier};
 use malachitebft_signing_ed25519::{PublicKey, Signature};
 
 use super::{Owner, State};
-use crate::bridge_codec::{READY, put_height_params};
+use crate::api::{Event, Request, Response};
+use crate::bridge_types::test_params;
 use crate::channel_bridge::Poll;
-use crate::consensus::signing::PrivateKey;
-use crate::consensus::{Address, Ctx, Height, Proposal, Validator, ValidatorSet, Vote};
-use crate::protocol::canonical_codec::Encoder;
+use crate::consensus::{Address, Ctx, Proposal, Vote};
 use crate::replies::{Delivery, ReplyError};
 
 // Lifecycle tests do not exercise signature acceptance. Refuse everything and
@@ -176,15 +175,15 @@ fn start(config: Config, directory: &Directory, generation: u64) -> Owner {
     .unwrap()
 }
 
-fn ready(owner: &mut Owner) -> (u64, u8, u64, Vec<u8>) {
+fn ready(owner: &mut Owner) -> Event {
     assert!(owner.wait_channels(Duration::from_secs(10)).unwrap());
     assert_eq!(owner.state(), State::ChannelsReady);
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match owner.poll().unwrap() {
-            Poll::Event(generation, operation, token, payload) => {
-                assert_eq!(operation, READY);
-                return (generation, operation, token, payload);
+            Poll::Event(event) => {
+                assert_eq!(event.request, Request::Ready);
+                return event;
             }
             Poll::Idle | Poll::Handled => {}
             Poll::Closed => panic!("engine closed before ready"),
@@ -213,16 +212,8 @@ fn real_engine_ready_reply_stop_and_reopen_same_wal_and_port() {
     let event = ready(&mut owner);
     let address = listen_address(&mut owner);
     assert!(!address.ends_with("/0"));
-    let key = PrivateKey::from([9; 32]).public_key();
-    let params = HeightParams::new(
-        ValidatorSet::new([Validator::new(key, 1)]),
-        LinearTimeouts::default(),
-        None,
-    );
-    let mut bytes = Encoder::default();
-    put_height_params(&mut bytes, Height::new(1), &params).unwrap();
     assert_eq!(
-        owner.respond(event.0, event.1, event.2, &bytes.finish()),
+        owner.respond(event.reply.unwrap(), Response::Ready(test_params(1))),
         Ok(Delivery::Delivered)
     );
     owner.request_stop();
@@ -231,7 +222,7 @@ fn real_engine_ready_reply_stop_and_reopen_same_wal_and_port() {
     assert_eq!(owner.state(), State::Joined);
     assert!(owner.wait_stopped(Duration::ZERO).unwrap());
     assert_eq!(
-        owner.respond(1, READY, event.2, &[]),
+        owner.respond(event.reply.unwrap(), Response::Ready(test_params(1))),
         Err(ReplyError::StaleGeneration)
     );
     let mut next = start(Config::new(&address), &directory, 2);
@@ -270,7 +261,7 @@ fn startup_and_shutdown_timeouts_keep_owner_and_callbacks_retired() {
     assert_eq!(owner.state(), State::Stopping);
     assert!(owner.poll().is_err());
     assert_eq!(
-        owner.respond(5, READY, event.2, &[]),
+        owner.respond(event.reply.unwrap(), Response::Ready(test_params(1))),
         Err(ReplyError::StaleGeneration)
     );
     drop(release);
@@ -293,7 +284,10 @@ fn partial_start_failure_is_joined_and_never_becomes_ready() {
         if owner.state() == State::ChannelsReady {
             match owner.poll() {
                 Err(_) | Ok(Poll::Closed) => break,
-                Ok(Poll::Event(_, READY, _, _)) => panic!("started with invalid WAL"),
+                Ok(Poll::Event(Event {
+                    request: Request::Ready,
+                    ..
+                })) => panic!("started with invalid WAL"),
                 _ => {}
             }
         }

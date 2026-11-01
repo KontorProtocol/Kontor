@@ -13,6 +13,7 @@ use malachitebft_engine::network::NetworkStateDump;
 use malachitebft_engine::util::events::TxEvent;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::api::{ProposalPartBytes, ReplyToken, Response};
 use crate::channel_bridge::{ChannelBridge, Poll, Publish};
 use crate::consensus::Ctx;
 use crate::replies::{Delivery, ReplyError};
@@ -143,10 +144,8 @@ impl Owner {
 
     pub(crate) fn respond(
         &mut self,
-        generation: u64,
-        operation: u8,
-        token: u64,
-        payload: &[u8],
+        token: ReplyToken,
+        response: Response,
     ) -> Result<Delivery, ReplyError> {
         if self.state != State::ChannelsReady {
             return Err(ReplyError::StaleGeneration);
@@ -155,14 +154,18 @@ impl Owner {
             .bridge
             .as_mut()
             .expect("ready bridge")
-            .respond(generation, operation, token, payload);
+            .respond(token, response);
         if let Err(ReplyError::Malformed(error)) = &result {
             self.fail(error.clone());
         }
         result
     }
 
-    pub(crate) fn publish(&mut self, generation: u64, payload: &[u8]) -> Result<Publish> {
+    pub(crate) fn publish(
+        &mut self,
+        generation: u64,
+        payload: &ProposalPartBytes,
+    ) -> Result<Publish> {
         ensure!(
             self.state == State::ChannelsReady && generation == self.generation,
             "stale proposal publication"

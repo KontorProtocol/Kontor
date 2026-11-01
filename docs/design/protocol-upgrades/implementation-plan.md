@@ -661,7 +661,7 @@ and integration refinement, revision 2, before production implementation:
   the second has a deliberately incompatible wire codec. Preserve historical
   certificate verification. Consensus graphs do not need a Wasmtime dependency.
 - Keep each graph's Tokio, ractor, Malachite types and runtime private. The node
-  boundary uses owned bytes, opaque handles and generation-bound one-use reply
+  boundary uses bundle-owned typed Rust data and generation-bound one-use reply
   tokens. Composite protocol dispatch selects engine, coordinator rules and
   certificate/control codecs together. Freeze the first final managed protocol
   before constructing its successor; retain runnable historical managed protocols.
@@ -682,6 +682,20 @@ and integration refinement, revision 2, before production implementation:
 - Rehearsal uses an isolated consistent copy with independent storage authority
   and no live signer or engine capability. Report source, target, lineage and work
   accounting even on failure. No automatic rehearsal service is added.
+
+The sole reviewer agreed the typed-facade refinement at `de7a03d3` on
+1 November 2026. This supersedes revision 2's generic opaque-handle/byte-message
+boundary for production consensus. Each bundle exports its own Rust structs,
+enums and concrete owner, using only standard-library types in public fields and
+signatures. Node adapters translate explicitly between distinct bundle types.
+This is a same-compiler interface, not a stable ABI. Never use layout casts to
+bridge dependency identities. Keep Tokio, Malachite, configuration implementations
+and dependency error types private. Retain existing canonical payload encodings,
+reply-kind and generation validation, count/byte admission bounds, bounded queues,
+independent signing revocation and control-thread ownership through timeout/join.
+The final linked integration must demonstrate usable public DTOs and rejection of
+private cross-graph dependency types. This does not rewrite merged executor APIs
+or require a new qualification matrix.
 
 This refinement preserves the grouped scope and representative acceptance checks.
 No additional fork change, performance campaign or broad review round is implied.
