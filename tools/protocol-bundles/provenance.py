@@ -55,7 +55,27 @@ def node_sources(root):
     return sources
 
 
+def consensus_sources(root):
+    sources = {}
+    # Both manifests share their crate and protobuf generator outside the
+    # package root. The shared crate also imports these production types.
+    for relative in ("protocol-bundles/consensus", "core/indexer/src/consensus",
+                     "core/indexer/proto"):
+        for path in local_source_files(root / relative, root.resolve()):
+            sources[str(path.relative_to(root))] = sha(path)
+    for name in ("identity.rs", "canonical_codec.rs", "migration_work.rs",
+                 "coordinator/certified_input.rs"):
+        relative = "core/indexer/src/protocol/" + name
+        sources[relative] = sha(root / relative)
+    return sources
+
+
 def repository_sources(root, kind):
+    if kind == "consensus":
+        sources = consensus_sources(root)
+        for path in local_source_files(root / "tools/protocol-bundles", root.resolve()):
+            sources[str(path.relative_to(root))] = sha(path)
+        return sources
     sources = {}
     for relative in ("core/indexer/src/runtime/mod.rs",
                      "core/indexer/src/protocol/v1/engine.rs",
@@ -111,7 +131,7 @@ def package_sources(directory, *, root=None):
 
 
 def source_inputs(root, data, *, kind="proof", tool_root=None):
-    if kind not in ("proof", "executor", "node"):
+    if kind not in ("proof", "executor", "node", "consensus"):
         raise RuntimeError(f"unknown graph source kind: {kind}")
     root = root.resolve()
     tool_root = root if tool_root is None else tool_root.resolve()

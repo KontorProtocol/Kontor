@@ -2639,3 +2639,37 @@ and proposal-part signatures share a value commitment, and generation fencing
 remains independently callable during control-thread joins. The single Cargo
 slot was released after both local suites exited successfully. Delegated work
 still requires lead review and the one consolidated independent group review.
+
+### K5 consensus build integration, tooling checkpoint
+
+The builder now has an explicit `--build-consensus` mode for the independently
+locked `consensus-first` and `consensus-second` production graphs. Their identity
+binds the managed Malachite revision, manifest, lock and source root without
+inventing a Wasmtime identity or execution settings. Resolved consensus graphs
+reject Wasmtime and node storage dependencies, require the pinned Malachite
+closure and patched native crypto, and inventory the shared crate, imported
+production types and protobuf sources outside each manifest directory.
+
+The native input audit accepts explicitly identified VM-free graphs while still
+rejecting shared namespaces, colliding definitions, unowned native symbols and
+process allocators. Mixed final-link attribution retains each Wasmtime helper's
+actual graph owner. The source ownership tripwire distinguishes certified-input
+`Command::Block`/`Batch` variants and read-only PID access from process control.
+
+Consensus staging also compiles interface controls against its actual libraries:
+explicit typed DTO conversion and engine operations must compile; implicit
+cross-bundle DTO/engine conversion, private consensus/owner access, private Tokio
+type exchange and moving the engine owner across threads must be rejected for
+their expected compiler errors. Missing dependencies cannot count as successful
+negative controls. Report bindings preserve the library hashes and diagnostics.
+
+Local tooling validation passed 74 focused tests covering consensus recipes,
+sources, ownership and interface inputs together with existing executor recipes,
+dependency checks and node build/ownership controls. The log is
+`.build-cache/k5-consensus-build-tooling-tests.log`. The initial native fixture
+run could not write the default compiler cache; rerunning with `CCACHE_DISABLE=1`
+passed. No Rust bundle build, actual consensus interface compilation, node link,
+CI or handoff qualification ran in this checkpoint. The durable-signing agent
+has the reserved Cargo/runtime slot in its isolated worktree; source-only
+tooling tests do not establish production integration. Actual staged builds,
+linked node adapters, signer integration and grouped acceptance remain open.

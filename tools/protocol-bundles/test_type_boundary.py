@@ -1,7 +1,10 @@
 import json
+from pathlib import Path
+import tempfile
 import unittest
 
-from type_boundary import check_diagnostics
+from provenance import sha
+from type_boundary import CONSENSUS_PROBES, check_diagnostics, inputs_for, probes_for
 
 
 class Diagnostics(unittest.TestCase):
@@ -22,6 +25,33 @@ class Diagnostics(unittest.TestCase):
         for status, text in ((0, ''), (-9, ''), (0, self.error('E0308'))):
             with self.assertRaises(RuntimeError):
                 check_diagnostics(status, text, 'E0308')
+
+
+class ConsensusLibraries(unittest.TestCase):
+    def test_actual_staged_hashes_and_private_tokio_are_required_without_wasmtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            graphs = []
+            for label in ('first', 'second'):
+                inputs = root / label
+                inputs.mkdir()
+                facade = inputs / f'libconsensus_{label}.rlib'
+                tokio = inputs / 'libtokio-123.rlib'
+                for path in (facade, tokio):
+                    path.write_bytes(label.encode())
+                graphs.append({'graph': label, 'identity': {'kind': 'consensus'},
+                               'facade': str(facade), 'link_inputs': str(inputs),
+                               'artifacts': [{'path': str(path), 'sha256': sha(path)} for path in (facade, tokio)]})
+            self.assertEqual(probes_for(graphs), CONSENSUS_PROBES)
+            arguments, libraries = inputs_for(graphs, True)
+            self.assertEqual(set(libraries), {'first', 'second', 'first_tokio', 'second_tokio'})
+            self.assertIn('dependency=' + graphs[0]['link_inputs'], arguments)
+            facade.write_bytes(b'replaced')
+            with self.assertRaisesRegex(RuntimeError, 'library changed'):
+                inputs_for(graphs, True)
+            del graphs[0]['identity']
+            with self.assertRaisesRegex(RuntimeError, 'both consensus graphs'):
+                inputs_for(graphs, False)
 
 
 if __name__ == '__main__':
