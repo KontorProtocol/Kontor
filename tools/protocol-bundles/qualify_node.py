@@ -22,7 +22,7 @@ CASES = {"native-genesis", "genesis-resume", "read-only-views", "committee",
          "host-callback-failure-panic", "held-cursor-cancellation", "node-wide-capacity-shutdown",
          "export-panic-classification", "required-storage-contract-before-construction",
          "atomic-migration-and-retry", "migration-input-snapshot-and-work",
-         "production-migration-registry-isolation"}
+         "production-migration-registry-isolation", "reactor-canonical-history"}
 
 
 def verify_storage_contracts(observations):

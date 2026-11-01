@@ -1096,6 +1096,24 @@ advisory-exception change is included.
 
 ## K3 local acceptance candidate, 1 November 2026
 
+The consolidated independent review of `766ffa454640a47dcc754635363fa2cdfdc7a03d`
+found no confirmed material code regression. It identified a caller-coverage gap:
+the historical reactor oracle intentionally has unavailable lineage, while the
+migration fixture constructs its journal directly. A new bounded scenario starts
+from fresh genesis and calls the real reactor block, batch and rollback paths.
+It checks empty and fully excluded batches, block/lifecycle ordering, persistent
+atomicity when the lifecycle journal append fails, preservation of anchor-height
+entries, and exact lineage on replay. The focused in-tree test passed in 29.73
+seconds. The reviewer inspected this addition and found no material issue,
+preserving the original consolidated review. Feature-enabled library/test Clippy
+passed with warnings denied. The rebuilt linked executable passed all 23 scenarios
+through both real graphs in 101.42 seconds, including the unchanged historical
+semantic oracle. Its SHA-256 is
+`12e02b534496b318bc13313cd6d49c296258d2e2e509e937fcb028e56d11bf4d`;
+raw evidence is retained in `.build-cache/k3-linked-v4-evidence/`.
+The historical oracle and its fixture remain unchanged, and this adds no new CI
+matrix or job. The v3 evidence below remains the record for the earlier candidate.
+
 Base: `aad23bccdaa300ed207bb328abc8c124e68efbe9` (PR 618), also verified as
 GitHub's current main during candidate preparation. This is unmerged K3 work,
 not completion of the protocol-upgrade system. The operator's latest delivery
@@ -1148,5 +1166,5 @@ audited dev node. Its first local attempt could not create sockets in the sandbo
 The successful rerun used local networking and preserved the failure log. The
 test now reports the actual WIT error when it fails; this is diagnostic detail,
 not a claimed fix for an unestablished cause. No new CI campaign has run for K3.
-Final release-platform checks, independent review and merge verification remain
+Final release-platform checks and merge verification remain
 required. Local dev samples do not establish all-platform or all-input correctness.

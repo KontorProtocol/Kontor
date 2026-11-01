@@ -23,7 +23,7 @@ use crate::protocol::coordinator::linked::{
 };
 use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
 use crate::protocol::operations::{AddressEnvelope, SessionOwner};
-use crate::reactor::qualification;
+use crate::reactor::{history_qualification, qualification};
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::{LinkedSession, new_linked};
@@ -40,6 +40,21 @@ mod transactions;
 use fixture::{NETWORK, genesis, state};
 
 type Factories = (&'static str, SessionFactory, SessionFactory);
+
+#[cfg(all(test, not(kontor_linked)))]
+#[tokio::test]
+async fn reactor_canonical_history_callers() -> Result<()> {
+    let service = OwnerService::new();
+    let result = history_qualification::run(
+        session_factory(NETWORK, None)?,
+        &service,
+        genesis(),
+        fixture::transaction()?,
+    )
+    .await;
+    service.shutdown();
+    result.map(|_| ())
+}
 
 fn factories() -> Result<Vec<Factories>> {
     #[cfg(kontor_linked)]
@@ -291,10 +306,18 @@ pub async fn run() -> Result<Value> {
             eprintln!("Qualifying actual executor: {name}");
             let migration =
                 migration::qualify_graph(name, migration_seed.path(), canonical.clone()).await?;
+            let history = history_qualification::run(
+                canonical.clone(),
+                &service,
+                genesis(),
+                fixture::transaction()?,
+            )
+            .await?;
             let mut observations = exercise(name, &service, canonical, read)
                 .await
                 .with_context(|| name)?;
             observations["migration"] = migration;
+            observations["reactor_history"] = history;
             if let Some(previous) = outputs.first() {
                 ensure!(
                     observations == previous["observations"],
@@ -312,6 +335,7 @@ pub async fn run() -> Result<Value> {
         #[cfg(not(kontor_linked))]
         let export_panics = json!({});
         let cases = vec![
+            "reactor-canonical-history",
             "atomic-migration-and-retry",
             "migration-input-snapshot-and-work",
             "production-migration-registry-isolation",

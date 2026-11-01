@@ -10,6 +10,8 @@ pub mod executor;
 mod handlers;
 #[cfg(test)]
 mod handoff_tests;
+#[cfg(feature = "protocol-qualification")]
+pub(crate) mod history_qualification;
 #[cfg(test)]
 pub(crate) mod lite_executor;
 mod mempool;
