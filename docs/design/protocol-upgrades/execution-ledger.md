@@ -2718,3 +2718,51 @@ The node module is gated by `kontor_managed`; the production builder does not
 enable it yet. Production reactor wiring, control-thread implementation, managed
 baseline activation and a successful linked handoff remain part of this grouped
 implementation, followed by the consolidated review and required CI.
+
+### K5 durable signer and public authority startup
+
+Integrated delegated signer commit `55df953b` after lead inspection of its six
+files and the canonical codecs and ownership paths they depend on. The journal
+records bounded message commitments and signatures, preserves exact retries and
+cross-generation conflict history, and serializes durable signing and fencing.
+Proposal and proposal-part Fin share a value commitment. The node retains the
+validator key; each bundle receives only typed signing callbacks. The network key
+is separate. The journal lives outside reversible canonical state.
+
+The inspected delegated node log records 12 passing signer tests. Both integrated
+consensus graphs now pass 54 tests each through the public authority-based startup
+path, including actual follower/validator startup, invalid configuration before
+signing, signing failure and panic before WAL creation, readiness and stop/join.
+Local evidence is `.build-cache/k5-authority-factory.json` and its two raw logs.
+The older sandbox owner/readiness timeouts remain recorded; these complete runs
+succeeded with localhost networking available. No new CI campaign was started.
+
+The lead review is recorded in `.build-cache/k5-durable-lead-review.md`. Torn
+journal frames fail closed; deleting or rolling back the entire signing directory
+cannot be detected without an external monotonic anchor. Journal history grows.
+These are limitations, not claims of automatic repair or bounded total history.
+The node must still connect generation selection, independent revocation,
+control-thread lifetime and reactor replies. The new public startup entry point
+and component tests do not establish a working protocol activation yet.
+
+The node now has explicit startup adapters for each bundle's configuration and
+signing request/error enums. The actual node library and test executable were
+compiled with both independently staged consensus libraries. Eight focused tests
+passed, including startup through the real node durable signer for both bundles,
+Ready delivery, independent node fencing, stop/join, releasing the old signing
+owner, and reopening the same journal under the next generation. Seven existing
+adapter conversion/backpressure tests also passed in that executable.
+
+The first local test build failed because `testlib`, a reverse dependency of the
+node, lacked the separate library search paths. Correcting the local compiler
+wrapper resolved E0463; the retry reused verified staged artifacts instead of
+rebuilding or reauditing unchanged dependencies. Raw successful evidence and
+source/library-wrapper/binary/log bindings are in
+`.build-cache/k5-node-authority-test-rerun.json`. This check uses the real node
+sources with `kontor_managed` enabled, but does not enable the production builder,
+change the preserved K4 baseline, execute a consensus decision, or establish the
+remaining live reactor handoff. No PR or CI run has been launched for this group.
+The same linked test executable also passed all 12 durable-signer tests locally,
+including conflicting retries after reopen, fencing races and failed writes.
+This reused the compiled binary without another Cargo build; its hash and raw log
+are recorded alongside the adapter result.

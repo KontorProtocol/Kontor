@@ -1,17 +1,18 @@
 use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use malachitebft_app::config::NodeConfig;
-use malachitebft_app_channel::ConsensusContext;
 
 use super::*;
 use crate::api::{Bootstrap, Discovery, EngineConfig, PeerSelection};
+use crate::authority_api::{Authority, SigningError, SigningRequest, SigningService};
 use crate::bridge_types::test_params;
 use crate::config::Config;
-use crate::consensus::Address;
-use crate::factory::{network_peer_id, start_with_context};
-use crate::owner::tests::{Directory, RejectVerifier};
+use crate::consensus::signing::PrivateKey;
+use crate::factory::{network_peer_id, start};
+use crate::owner::tests::Directory;
 
 fn config(directory: &Directory) -> EngineConfig {
     EngineConfig {
@@ -32,11 +33,7 @@ fn config(directory: &Directory) -> EngineConfig {
 }
 
 fn follower(config: EngineConfig) -> Result<Engine, EngineError> {
-    start_with_context(
-        config,
-        ConsensusContext::new_full_node(Address::new([0; 20]), Box::new(RejectVerifier)),
-        None,
-    )
+    start(config, Authority::Follower)
 }
 
 fn ready(engine: &mut Engine) -> ReplyToken {
@@ -172,4 +169,94 @@ fn invalid_configuration_is_rejected_before_wal_creation() {
         ));
         assert!(!directory.0.join("consensus.wal").exists());
     }
+}
+
+struct ProofService {
+    requests: Mutex<Vec<SigningRequest>>,
+    deny: bool,
+    panic: bool,
+}
+
+impl SigningService for ProofService {
+    fn sign(&self, request: SigningRequest) -> Result<[u8; 64], SigningError> {
+        assert!(!self.panic, "signing callback panic injection");
+        let SigningRequest::ValidatorProof { ref preimage, .. } = request else {
+            return Err(SigningError::Fenced);
+        };
+        let signature = PrivateKey::from([11; 32]).sign(preimage).to_bytes();
+        self.requests.lock().unwrap().push(request);
+        if self.deny {
+            Err(SigningError::Fenced)
+        } else {
+            Ok(signature)
+        }
+    }
+}
+
+fn authority(service: &Arc<ProofService>) -> Authority {
+    Authority::Validator {
+        public_key: *PrivateKey::from([11; 32]).public_key().as_bytes(),
+        signer: service.clone(),
+    }
+}
+
+#[test]
+fn public_start_validates_before_signing_and_contains_callback_failures() {
+    let directory = Directory::new();
+    let service = Arc::new(ProofService {
+        requests: Mutex::new(vec![]),
+        deny: true,
+        panic: false,
+    });
+    let mut input = config(&directory);
+    input.listen_address = "invalid".into();
+    assert!(matches!(
+        start(input, authority(&service)),
+        Err(EngineError::InvalidConfiguration(_))
+    ));
+    assert!(service.requests.lock().unwrap().is_empty());
+    assert!(matches!(
+        start(config(&directory), authority(&service)),
+        Err(EngineError::Failed(_))
+    ));
+    assert_eq!(service.requests.lock().unwrap().len(), 1);
+    assert!(!directory.0.join("consensus.wal").exists());
+    let panicking = Arc::new(ProofService {
+        requests: Mutex::new(vec![]),
+        deny: false,
+        panic: true,
+    });
+    assert!(matches!(
+        start(config(&directory), authority(&panicking)),
+        Err(EngineError::Panicked)
+    ));
+    assert!(!directory.0.join("consensus.wal").exists());
+}
+
+#[test]
+fn public_validator_start_binds_proof_to_actual_network_key_and_joins() {
+    let directory = Directory::new();
+    let service = Arc::new(ProofService {
+        requests: Mutex::new(vec![]),
+        deny: false,
+        panic: false,
+    });
+    let input = config(&directory);
+    let expected_peer = network_peer_id(&input.network_key).unwrap();
+    let mut engine = start(input, authority(&service)).unwrap();
+    let token = ready(&mut engine);
+    {
+        let requests = service.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(matches!(&requests[0], SigningRequest::ValidatorProof {
+            generation: 1, public_key, network_peer_id, ..
+        } if *public_key == *PrivateKey::from([11; 32]).public_key().as_bytes()
+            && *network_peer_id == expected_peer));
+    }
+    engine
+        .respond(token, Response::Ready(test_params(1)))
+        .unwrap();
+    engine.request_stop().unwrap();
+    assert!(engine.wait_stopped(Duration::from_secs(10)).unwrap());
+    assert_eq!(engine.state(), EngineState::Joined);
 }

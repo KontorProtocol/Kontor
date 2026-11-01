@@ -12,7 +12,7 @@ use super::types::{
 // matches make a changed protocol interface an explicit adapter change.
 macro_rules! bundle_adapter {
     ($module:ident, $bundle:ident, $token:ident) => {
-        mod $module {
+        pub(super) mod $module {
             use $bundle::api as bundle;
 
             use super::super::types::{
@@ -197,7 +197,7 @@ macro_rules! bundle_adapter {
                 }
             }
 
-            pub(super) fn error(value: bundle::EngineError) -> EngineError {
+            pub(crate) fn error(value: bundle::EngineError) -> EngineError {
                 match value {
                     bundle::EngineError::InvalidConfiguration(value) => {
                         EngineError::InvalidConfiguration(value)

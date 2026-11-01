@@ -8,7 +8,7 @@ mod config;
 mod engine;
 mod factory;
 pub use engine::Engine;
-pub use factory::network_peer_id;
+pub use factory::{network_peer_id, start};
 #[path = "types.rs"]
 mod consensus;
 mod owner;
