@@ -17,6 +17,7 @@ use crate::consensus::finality_types::{
     DecidedBatch, FINALITY_WINDOW, StateEvent, UnfinalizedBatch, deadline_for,
 };
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, ProposalData, Value};
+use crate::database::certified_history::branch;
 use crate::database::queries::{
     delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids,
     insert_excluded_batch_txids, insert_transaction, insert_unconfirmed_batch_tx,
@@ -628,6 +629,20 @@ impl<E: Executor> Reactor<E> {
             let _ = reply.send(None);
             return Ok(());
         }
+        if let Err(error) = branch::validate(
+            &conn,
+            self.consensus.protocol_context,
+            data.value().command(),
+        )
+        .await
+        {
+            if error.downcast_ref::<branch::Rejected>().is_none() {
+                return Err(error);
+            }
+            warn!(%error, "Rejecting proposal outside certified Bitcoin branch");
+            let _ = reply.send(None);
+            return Ok(());
+        }
         let value = match data.value().command() {
             Command::Block {
                 height: bh, hash, ..
@@ -783,6 +798,10 @@ impl<E: Executor> Reactor<E> {
             return Ok(true);
         }
 
+        if branch::tip(&self.db_conn()).await?.is_none() {
+            return Ok(false);
+        }
+
         // A candidate set already validated for THIS anchor — banked when the
         // deadline consumed the proposal it was meant for. Judged at use:
         // anchor and exact witness must still match the pool,
@@ -877,6 +896,12 @@ impl<E: Executor> Reactor<E> {
     /// stream the parts, release the engine's reply. No-op if nothing is held
     /// (the deadline or a competing path already answered).
     async fn fulfill_pending_with(&mut self, value: Value) -> Result<()> {
+        branch::validate(
+            &self.db_conn(),
+            self.consensus.protocol_context,
+            value.command(),
+        )
+        .await?;
         let Some(pending) = self.consensus.pending_proposal.take() else {
             return Ok(());
         };
@@ -1014,6 +1039,19 @@ impl<E: Executor> Reactor<E> {
                 if value.descriptor().context != self.consensus.protocol_context
                     || !selection.can_reuse_preparation(&self.preparation_selection().await?)
                 {
+                    let _ = reply.send(None);
+                    return Ok(());
+                }
+                if let Err(error) = branch::validate(
+                    &self.db_conn(),
+                    self.consensus.protocol_context,
+                    value.command(),
+                )
+                .await
+                {
+                    if error.downcast_ref::<branch::Rejected>().is_none() {
+                        return Err(error);
+                    }
                     let _ = reply.send(None);
                     return Ok(());
                 }
@@ -1188,13 +1226,13 @@ impl<E: Executor> Reactor<E> {
                 .await
                 .context("drain_deferred_decisions failed")?;
             if !self.settle_finality().await? {
-                self.resume_next_height()?;
+                self.resume_next_height().await?;
                 return Ok(());
             }
         }
     }
 
-    fn resume_next_height(&mut self) -> Result<()> {
+    async fn resume_next_height(&mut self) -> Result<()> {
         let Some((height, _)) = &self.consensus.pending_next_height else {
             return Ok(());
         };
@@ -1206,12 +1244,21 @@ impl<E: Executor> Reactor<E> {
         {
             return Ok(());
         }
-        let (_, reply) = self.consensus.pending_next_height.take().unwrap();
+        let height = *height;
+        let Some(next) = self
+            .consensus
+            .closed_next_height(&self.db_conn(), height)
+            .await?
+        else {
+            return Ok(());
+        };
+        let (_, reply) = self
+            .consensus
+            .pending_next_height
+            .take()
+            .context("next-height callback disappeared")?;
         reply
-            .send(Next::Start(
-                self.consensus.current_height,
-                self.consensus.height_params(),
-            ))
+            .send(next)
             .map_err(|_| anyhow::anyhow!("Failed to send Finalized reply"))
     }
 
@@ -1666,34 +1713,22 @@ impl<E: Executor> Reactor<E> {
         let last_height = self.last_height;
         let mut result = consensus_state::ConsensusResult::None;
 
-        // Take every proposal we held for this height (all rounds) and pick the
-        // one matching the decided value. We match on value_id, not round: a node
-        // can decide a round it locally advanced past, so the value is often filed
-        // under a different round than the one in the certificate.
-        let decided = self
-            .consensus
-            .undecided
-            .remove(&certificate.height)
-            .and_then(|rounds| {
-                rounds
-                    .into_values()
-                    .find(|p| p.value.id() == certificate.value_id)
-            });
-
-        if let Some(proposal) = decided {
+        let value = self.consensus.finalized_value(&conn, &certificate).await?;
+        self.consensus.undecided.remove(&certificate.height);
+        {
             if let Some(obs) = &self.consensus.observation {
                 let _ = obs.decided_tx.try_send(DecidedBatch {
                     validator_index: self.consensus.validator_index,
                     consensus_height: certificate.height,
-                    value: proposal.value.clone(),
+                    value: value.clone(),
                 });
             }
-            match proposal.value.command() {
+            match value.command() {
                 Command::Batch {
                     anchor_height,
                     anchor_hash,
                 } => {
-                    let full_txs = proposal.value.batch_raw_txs();
+                    let full_txs = value.batch_raw_txs();
 
                     for tx in &full_txs {
                         self.consensus.mempool.suppress(&tx.compute_txid());
@@ -1713,7 +1748,7 @@ impl<E: Executor> Reactor<E> {
                         self.consensus.deferred_decisions.push_back(
                             consensus_state::DeferredDecision {
                                 consensus_height: certificate.height,
-                                value: proposal.value.clone(),
+                                value: value.clone(),
                                 certificate: cert_bytes,
                                 execution_txs: None,
                             },
@@ -1780,7 +1815,7 @@ impl<E: Executor> Reactor<E> {
                     // cloning it per arm is pure waste.
                     let decision = consensus_state::DeferredDecision {
                         consensus_height: certificate.height,
-                        value: proposal.value.clone(),
+                        value: value.clone(),
                         certificate: cert_bytes,
                         execution_txs: None,
                     };
@@ -1863,24 +1898,6 @@ impl<E: Executor> Reactor<E> {
                     }
                 }
             }
-        } else {
-            // We finalized a value we never assembled locally — a batch decided at
-            // a round whose proposal we never saw, whose txs are not in our pool.
-            // We have the certificate but not the content, so there is no row to
-            // write. Falling through to advance `current_height` past this height
-            // would make it a PERMANENT hole (I3): Malachite never re-delivers a
-            // height it considers decided, and the startup cleanup only trims a
-            // suffix. Fail-stop instead (I5) — restart resumes at this height and
-            // value-sync re-delivers the decided value into `undecided`, where the
-            // arm above records it. A node that keeps hitting this is persistently
-            // unable to follow consensus, which is exactly the loud stop an
-            // operator needs, not a quiet divergence.
-            bail!(
-                "Finalized value {} at height {} is not among our undecided proposals — \
-                 cannot record it; stopping so a restart re-syncs the decided value",
-                certificate.value_id,
-                certificate.height,
-            );
         }
 
         // An OOM backstop, not a policy knob. A node that genuinely cannot catch
@@ -1900,7 +1917,6 @@ impl<E: Executor> Reactor<E> {
             );
         }
 
-        self.consensus.current_height = certificate.height.increment();
         self.consensus.current_round = Round::Nil;
         self.consensus.pending_proposal = None;
 

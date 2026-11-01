@@ -242,12 +242,30 @@ pub(crate) fn verify_certificate(
     proof: &[u8],
     authority: &CommitteeRecord,
 ) -> Result<()> {
-    let total = authority.validate()?;
     ensure!(
         decision.height == authority.height
             && decision.committee == authority.id()?
             && decision.descriptor.context == authority.context,
         "certificate authority context differs"
+    );
+    verify_proof(
+        decision.height,
+        ValueId::new(decision.descriptor.id()?),
+        proof,
+        authority,
+    )
+}
+
+pub(crate) fn verify_proof(
+    height: u64,
+    value_id: ValueId,
+    proof: &[u8],
+    authority: &CommitteeRecord,
+) -> Result<()> {
+    let total = authority.validate()?;
+    ensure!(
+        height == authority.height,
+        "certificate authority height differs"
     );
     ensure!(
         proof.len() <= authority.maximum_proof_bytes()?,
@@ -255,10 +273,7 @@ pub(crate) fn verify_certificate(
     );
     let mut input = CertificateReader(proof);
     input.tag(8)?;
-    ensure!(
-        input.varint()? == decision.height,
-        "certificate height differs"
-    );
+    ensure!(input.varint()? == height, "certificate height differs");
     let round = if input.0.first() == Some(&16) {
         input.tag(16)?;
         let round = u32::try_from(input.varint()?)?;
@@ -272,7 +287,6 @@ pub(crate) fn verify_certificate(
         value.len() == 34 && value[..2] == [10, 32],
         "invalid certificate value encoding"
     );
-    let value_id = ValueId::new(decision.descriptor.id()?);
     ensure!(value[2..] == value_id.0, "certificate value differs");
     let members = authority
         .members
@@ -307,7 +321,7 @@ pub(crate) fn verify_certificate(
         ensure!(signed.insert(address), "duplicate certificate signer");
         let signature = decode_signature(signature.signature.context("missing signature")?)?;
         let vote = Vote::new_precommit(
-            Height::new(decision.height),
+            Height::new(height),
             Round::new(round),
             NilOrVal::Val(value_id),
             Address::new(address),

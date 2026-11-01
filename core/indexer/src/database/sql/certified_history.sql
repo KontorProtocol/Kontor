@@ -40,6 +40,25 @@ CREATE TABLE IF NOT EXISTS certified_decisions (
     proof_augmentation BLOB
 );
 
+CREATE TABLE IF NOT EXISTS certified_bitcoin_boundary (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    context BLOB NOT NULL,
+    first_height BLOB NOT NULL CHECK (length(first_height) = 8),
+    parent BLOB CHECK (parent IS NULL OR length(parent) = 32)
+);
+
+CREATE TABLE IF NOT EXISTS certified_bitcoin_branch (
+    bitcoin_height BLOB NOT NULL CHECK (length(bitcoin_height) = 8),
+    since_decision BLOB NOT NULL REFERENCES certified_decisions(height),
+    until_decision BLOB REFERENCES certified_decisions(height),
+    block_hash BLOB NOT NULL CHECK (length(block_hash) = 32),
+    PRIMARY KEY (bitcoin_height, since_decision),
+    CHECK (until_decision IS NULL OR until_decision > since_decision)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS certified_bitcoin_current
+ON certified_bitcoin_branch (bitcoin_height) WHERE until_decision IS NULL;
+
 CREATE TABLE IF NOT EXISTS registration_observations (
     height BLOB NOT NULL CHECK (length(height) = 8),
     stage BLOB NOT NULL CHECK (length(stage) = 8),

@@ -28,9 +28,10 @@ The stage runner uses the actual retained-runtime ownership and observation path
 Focused local checks cover transaction interruption, reopen/retry, stale admission,
 input substitution, omitted block lifecycle, rollback/replay and missing/corrupt
 records. These checks do not establish complete reactor behavior or cross-platform
-qualification. The live Decided/Finalized and next-height gates, final closure and
-committee publication, certified-branch rules, post-genesis startup recovery
-and oversized-proof transport remain to be connected and qualified.
+qualification. The durable Decided/Finalized callbacks and next-height gate are now
+connected, as are certified-branch admission rules. Final closure and committee
+publication, owned live execution, post-genesis startup recovery and oversized-proof
+transport still need complete integration and qualification.
 The Bitcoin poller now retains the complete decoded Bitcoin block, including its
 header and transaction witnesses. Its checked history conversion validates the
 requested hash, parent, size and Bitcoin commitments, and replay reconstructs the
@@ -74,9 +75,26 @@ The production library compiles. The broader test compile currently reports 32
 errors in old constructors/fields/imports and the removed transaction resolver test.
 Migrate these fixtures to real inputs and certified genesis; do not restore a
 production hash-only fallback just to preserve old fixtures.
-The ordinary Decided/Finalized execution path is not yet journal-integrated, and
-post-genesis closure recovery, certified branch rules and proof paging remain
-unfinished. This checkpoint is deliberately not a merge candidate.
+Decided now retains the exact input and verified original proof in a FULL-WAL
+transaction before acknowledging. A missing body leaves the callback pending;
+failed persistence cannot acknowledge it. Finalized reads the durable input even
+if the volatile proposal cache has been lost and retains at most one verified proof
+augmentation. Next remains withheld until the entire closure and next authority
+are durable. Per-block and per-rollback committee refreshes have been removed.
+The new branch index records the certified Bitcoin prefix in the same transaction
+as decision persistence. Replacements close historical intervals rather than erase
+them, preserving a batch's original anchor during later replay. Proposal admission,
+post-I/O validation and native value sync reject invalid branch structure. Typed
+structural rejection remains distinct from a database or integrity failure.
+Two focused local checks passed: actual executor-session/Malachite callback methods
+(including interrupted append and reopen), and isolated branch-index transitions.
+The latter supplies persistence fixtures and does not establish certificate or
+closure validation. The callback check includes a validly signed pre-anchor batch
+that durable admission rejects, and an initial Bitcoin height of 100.
+Live canonical effects still use the old application path, so no post-genesis
+closure can yet complete. Full event-loop execution/recovery, replacement candidate
+caches, obsolete unit-fixture migration and proof paging remain unfinished. This
+checkpoint is deliberately not a merge candidate.
 Both explicit link sets still need their complete integration acceptance evidence.
 
 ## Result and boundaries
@@ -173,6 +191,19 @@ committed-entry snapshot requirement.
 Derive canonical branch D from ordered certified Block commands. A command extends
 the tip or replaces the first differing block after a common ancestor. Check parent
 D[h-1], reject gaps/repeats and support same-height replacement in candidate caches.
+The baseline reservation persists the configured first Bitcoin height H0 >= 1,
+which is already committed by ChainId. Reopening with another height fails.
+Native storage block 0 and the scheduling cursor H0-1 are not Bitcoin anchors.
+Before the first certified Block at exactly H0, reject every Batch, including empty
+batches. That first block fixes parent P0. Replacement at H0 must retain P0;
+replacement below H0 or a reorg changing P0 stops progression and requires explicit
+recovery outside this baseline, never automatic boundary reset.
+Finality recovery can roll execution back to H0-1 and replay H0 without requiring
+a Bitcoin SQL row at H0-1. Native genesis, the immutable parent, certified journal
+and historical committees must survive. An empty applied prefix does not reset the
+authenticated branch. The sole planning reviewer explicitly agreed this clarification
+against cf1cc01bc4efc88b286175bd4bd58f49f44eb53a before implementation; complete
+live finality-replay acceptance remains pending.
 Live voting also checks the locally validated Bitcoin best chain. Local reorg
 notifications invalidate candidates; they do not directly rewrite committed state
 or authority.

@@ -111,8 +111,6 @@ impl<E: Executor> Reactor<E> {
             }
         }
 
-        // Refresh cached validator set — rolled-back state may have different active set
-        self.refresh_validator_set_owned().await?;
 
         if let Some(tx) = &self.event_tx
             && tx.send(Event::Rolledback { height }).await.is_err()
@@ -495,7 +493,6 @@ impl<E: Executor> Reactor<E> {
 
         // Update cached validator set after block execution
         // (process_pending_validators may have activated/deactivated validators)
-        self.refresh_validator_set_owned().await?;
 
         let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;
         self.consensus.emit_state_event(StateEvent::BlockProcessed {

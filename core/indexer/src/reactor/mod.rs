@@ -2,6 +2,7 @@
 mod aggregate_error_tests;
 mod batches;
 mod blocks;
+pub(crate) mod certified;
 #[cfg(test)]
 mod confirmation_position_tests;
 pub mod consensus_state;
@@ -313,23 +314,6 @@ impl<E: Executor> Reactor<E> {
     // Ordering writes and executor callbacks share the unit's physical transaction.
     fn db_conn(&self) -> libsql::Connection {
         self.session.conn.clone()
-    }
-
-    /// Check unconfirmed_batch_txs for a raw transaction (DB-level resolution).
-    async fn refresh_validator_set_owned(&mut self) -> Result<()> {
-        let selection = self.select_executor(ApplicationPosition::Committee).await?;
-        let lease = self.begin_unit(&selection, false).await?;
-        let result = linked::derive_committee(&self.session, &selection, self.network).await;
-        let vs = self
-            .finish_unit(lease, result, false)
-            .await
-            .context("Failed to refresh validator set")?;
-        self.consensus.validator_index = vs
-            .validators
-            .iter()
-            .position(|v| v.address == self.consensus.address);
-        self.consensus.current_validator_set = vs;
-        Ok(())
     }
 
     async fn send_proposal_parts(
@@ -654,6 +638,7 @@ impl<E: Executor> Reactor<E> {
                     let consensus_result = self.handle_consensus_msg(msg)
                         .await
                         .context("handle_consensus_msg failed")?;
+                    self.consensus.try_acknowledge_decision(&self.db_conn()).await?;
                     if let consensus_state::ConsensusResult::BatchProcessed { txids } = &consensus_result
                         && let Some(tx) = &self.event_tx
                         && tx
@@ -697,6 +682,7 @@ impl<E: Executor> Reactor<E> {
                     self.apply_io_verdicts(job.apply, verdicts)
                         .await
                         .context("apply_io_verdicts failed")?;
+                    self.consensus.try_acknowledge_decision(&self.db_conn()).await?;
                 }
                 _ = fee_publish_ticker.tick() => {
                     // Project OFF the loop: at mainnet mempool sizes the

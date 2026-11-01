@@ -1,5 +1,6 @@
 //! Bounded execution checks using the same adapters as the production node.
 
+use crate::database::certified_history::branch;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -26,7 +27,7 @@ use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy
 use crate::protocol::identity::DefinitionReference;
 use crate::protocol::identity::ExecutionDefinitionId;
 use crate::protocol::operations::{AddressEnvelope, SessionOwner};
-use crate::reactor::{history_qualification, qualification};
+use crate::reactor::{certified, history_qualification, qualification};
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::{LinkedSession, new_linked};
@@ -83,6 +84,19 @@ async fn reactor_canonical_history_callers() -> Result<()> {
     .await;
     service.shutdown();
     result.map(|_| ())
+}
+
+#[cfg(any(not(kontor_linked), kontor_observer))]
+pub async fn certified_decision_callbacks() -> Result<Value> {
+    let service = OwnerService::new();
+    let result =
+        certified::qualification::run(session_factory(NETWORK, None)?, &service, genesis()).await;
+    service.shutdown();
+    result
+}
+
+pub async fn certified_branch_index_transitions() -> Result<()> {
+    branch::qualification::run().await
 }
 
 fn factories() -> Result<Vec<Factories>> {

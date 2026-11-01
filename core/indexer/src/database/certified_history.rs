@@ -12,6 +12,7 @@ use crate::protocol::coordinator::manifest::ProtocolManifest;
 use crate::protocol::coordinator::registration_history::RegistrationSnapshot;
 use crate::protocol::identity::{ProtocolId, domain_digest};
 
+pub(crate) mod branch;
 pub(crate) mod closure;
 pub(crate) mod registrations;
 
@@ -124,17 +125,28 @@ pub(crate) async fn frontier(conn: &Connection) -> Result<Frontier> {
     Ok(result)
 }
 
+#[cfg(test)]
 pub(crate) async fn begin_genesis(conn: &Connection, context: EraContext) -> Result<()> {
-    reserve_genesis(conn, context, None).await
+    reserve_genesis(conn, context, None, 1).await
 }
 
-pub(crate) async fn begin_baseline(conn: &Connection, baseline: &Baseline) -> Result<()> {
+pub(crate) async fn begin_baseline(
+    conn: &Connection,
+    baseline: &Baseline,
+    first_bitcoin_height: u64,
+) -> Result<()> {
     ensure!(
         baseline.manifest.chain == baseline.context.chain
             && baseline.manifest.id()? == baseline.context.protocol,
         "baseline manifest/context binding differs"
     );
-    reserve_genesis(conn, baseline.context, Some(&baseline.manifest)).await
+    reserve_genesis(
+        conn,
+        baseline.context,
+        Some(&baseline.manifest),
+        first_bitcoin_height,
+    )
+    .await
 }
 
 pub(crate) async fn protocol(conn: &Connection, id: ProtocolId) -> Result<ProtocolManifest> {
@@ -159,8 +171,13 @@ async fn reserve_genesis(
     conn: &Connection,
     context: EraContext,
     manifest: Option<&ProtocolManifest>,
+    first_bitcoin_height: u64,
 ) -> Result<()> {
     ensure!(context.codec == 1, "unsupported genesis history codec");
+    ensure!(
+        first_bitcoin_height > 0,
+        "Bitcoin start height must be positive"
+    );
     durable_writer(conn).await?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -223,6 +240,13 @@ async fn reserve_genesis(
             );
         }
     }
+    branch::reserve(
+        &tx,
+        context,
+        first_bitcoin_height,
+        state.status == Status::Pending,
+    )
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -377,6 +401,7 @@ pub(crate) async fn append(conn: &Connection, certified: &AuthenticatedDecision)
         tx.execute("INSERT INTO certified_decisions (height, decision_id, record, body_digest, committee_id, original_proof)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![decision.height.to_be_bytes().to_vec(), decision.id()?.to_vec(),
                 decision.encode()?, decision.descriptor.body_digest.to_vec(), decision.committee.to_vec(), certified.proof()]).await?;
+        branch::record(&tx, decision).await?;
         tx.execute("UPDATE certified_history_state SET authenticated_height = ?1, authenticated_id = ?2 WHERE singleton = 1",
             params![decision.height.to_be_bytes().to_vec(), decision.id()?.to_vec()]).await?;
     }

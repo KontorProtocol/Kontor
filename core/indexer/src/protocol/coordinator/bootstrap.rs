@@ -32,7 +32,7 @@ pub(crate) async fn prepare(
     }
     let chain = bind_identity(conn, network, starting_block_height, genesis).await?;
     let baseline = Baseline::current(chain)?;
-    certified_history::begin_baseline(conn, &baseline).await?;
+    certified_history::begin_baseline(conn, &baseline, starting_block_height).await?;
     let initialize = state.status != Status::Ready;
     if !initialize {
         ensure!(

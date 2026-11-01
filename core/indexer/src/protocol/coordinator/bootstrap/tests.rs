@@ -208,7 +208,7 @@ async fn baseline_manifest_and_genesis_reservation_commit_atomically() -> Result
     let baseline = Baseline::current(ChainId([3; 32]))?;
     conn.execute_batch("CREATE TRIGGER reject_manifest BEFORE INSERT ON certified_protocols BEGIN SELECT RAISE(ABORT, 'injected manifest interruption'); END;").await?;
     assert!(
-        certified_history::begin_baseline(&conn, &baseline)
+        certified_history::begin_baseline(&conn, &baseline, 1)
             .await
             .is_err()
     );
@@ -218,9 +218,9 @@ async fn baseline_manifest_and_genesis_reservation_commit_atomically() -> Result
     );
     assert!(conn.is_autocommit());
     conn.execute_batch("DROP TRIGGER reject_manifest;").await?;
-    certified_history::begin_baseline(&conn, &baseline).await?;
+    certified_history::begin_baseline(&conn, &baseline, 1).await?;
     let reserved = certified_history::frontier(&conn).await?;
-    certified_history::begin_baseline(&conn, &baseline).await?;
+    certified_history::begin_baseline(&conn, &baseline, 1).await?;
     assert_eq!(certified_history::frontier(&conn).await?, reserved);
     assert_eq!(
         certified_history::protocol(&conn, baseline.context.protocol).await?,
@@ -228,7 +228,7 @@ async fn baseline_manifest_and_genesis_reservation_commit_atomically() -> Result
     );
     let different = Baseline::current(ChainId([4; 32]))?;
     assert!(
-        certified_history::begin_baseline(&conn, &different)
+        certified_history::begin_baseline(&conn, &different, 1)
             .await
             .is_err()
     );

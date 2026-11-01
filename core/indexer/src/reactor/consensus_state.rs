@@ -59,6 +59,7 @@ pub struct PendingProposal {
 
 /// All consensus-related state for the reactor.
 pub struct ConsensusState {
+    pub(super) pending_decision: Option<super::certified::PendingDecision>,
     pub(crate) protocol_context: EraContext,
     pub signing_provider: Ed25519Provider,
     pub address: Address,
@@ -454,6 +455,7 @@ impl ConsensusState {
         }
 
         Ok(Self {
+            pending_decision: None,
             protocol_context,
             signing_provider,
             address,
