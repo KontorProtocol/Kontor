@@ -13,14 +13,14 @@ pub(crate) struct CanonicalPosition {
 }
 
 impl CanonicalPosition {
-    fn encode(self, output: &mut Encoder) -> Result<()> {
+    pub(super) fn encode(self, output: &mut Encoder) -> Result<()> {
         output.u64(self.ordinal)?;
         output.fixed(&self.lineage)?;
         output.u64(self.storage_height)?;
         Ok(())
     }
 
-    fn decode(input: &mut Decoder<'_>) -> Result<Self> {
+    pub(super) fn decode(input: &mut Decoder<'_>) -> Result<Self> {
         Ok(Self {
             ordinal: input.u64()?,
             lineage: input.fixed()?,

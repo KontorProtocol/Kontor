@@ -14,6 +14,7 @@ use crate::protocol::identity::{ProtocolId, domain_digest};
 
 pub(crate) mod branch;
 pub(crate) mod closure;
+pub(crate) mod completion;
 pub(crate) mod registrations;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

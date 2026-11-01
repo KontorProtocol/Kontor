@@ -27,6 +27,10 @@ impl OwnedClosureStage {
         self.ticket.action()
     }
 
+    pub(crate) fn remaining_after(&self) -> Vec<WorkItem> {
+        self.ticket.remaining_after()
+    }
+
     pub(crate) async fn finish<T>(
         self,
         result: Result<(T, StageOutcome, Vec<WorkItem>)>,

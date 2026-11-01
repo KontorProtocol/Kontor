@@ -17,7 +17,7 @@ use crate::consensus::finality_types::{
     DecidedBatch, FINALITY_WINDOW, StateEvent, UnfinalizedBatch, deadline_for,
 };
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, ProposalData, Value};
-use crate::database::certified_history::branch;
+use crate::database::certified_history::{self, branch};
 use crate::database::queries::{
     delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids,
     insert_excluded_batch_txids, insert_transaction, insert_unconfirmed_batch_tx,
@@ -27,7 +27,9 @@ use crate::database::queries::{
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
 use crate::protocol::canonical_application::{ApplicationSource, DecisionExclusions};
 use crate::protocol::canonical_input::CanonicalInput;
-use crate::protocol::coordinator::certified_input::{Command, MAX_BATCH_BYTES};
+use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
+use crate::protocol::coordinator::certified_input::{Command, ExactInput, MAX_BATCH_BYTES};
+use crate::protocol::coordinator::closure_execution::begin_stage;
 use crate::protocol::coordinator::linked::PreparedTransaction;
 pub(super) use crate::protocol::coordinator::v1::batch_is_ordered;
 use crate::protocol::coordinator::v1::{build_replay_queue, dependency_sort};
@@ -38,7 +40,7 @@ use super::consensus_state;
 use super::executor::{Executor, TxPolicy};
 use super::mempool_fee_index::MempoolFeeIndex;
 use super::{MAX_DEFERRED_DECISIONS, Reactor};
-use crate::protocol::coordinator::selection::{ApplicationPosition, ExecutionSelection};
+use crate::protocol::coordinator::selection::ExecutionSelection;
 
 /// Multiplier applied to `MempoolFeeIndex::fastest_fee()` to derive the
 /// per-batch acceptance threshold, as an integer ratio: 9/10 means we accept
@@ -271,89 +273,57 @@ impl<E: Executor> Reactor<E> {
     ) -> Result<BatchOutcome> {
         let started_at = Instant::now();
         let conn = self.db_conn();
-
-        info!(
-            %consensus_height,
-            anchor_height,
-            %anchor_hash,
-            num_txs = batch_txs.len(),
-            "Processing decided batch"
-        );
-
-        // A decided batch may only EXECUTE against the exact chain state it was
-        // anchored to: the local tip must sit at `anchor_height` with
-        // `anchor_hash`. Anything else — a deferred drain whose anchor fell
-        // behind, or a replay whose anchor block was reorged away — is recorded
-        // for sync/bookkeeping but NOT executed: executing against a different
-        // tip writes state (and a checkpoint) at a height the chain disagrees
-        // about, i.e. silent divergence. A skipped batch's txids then simply
-        // never confirm here and the finality window resolves it.
-        // `None` ⇔ all-zeros is the pre-genesis convention `make_value` and
-        // proposal validation anchor with.
-        let local_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
-        if anchor_height != self.last_height || anchor_hash != local_hash {
-            warn!(
-                anchor_height,
-                %anchor_hash,
-                last_height = self.last_height,
-                %local_hash,
-                consensus_height = %consensus_height,
-                "Skipping decided batch — anchor does not match local tip; recording only"
+        let closure_height = certified_history::frontier(&conn)
+            .await?
+            .authenticated_height;
+        let stage = begin_stage(
+            &self.owner_service,
+            &self.session,
+            self.network,
+            closure_height,
+        )
+        .await?
+        .context("batch application has no pending closure stage")?;
+        let remaining = stage.remaining_after();
+        let result = async {
+            ensure!(
+                stage.action()
+                    == (WorkItem::Execute {
+                        decision: consensus_height.as_u64()
+                    }),
+                "batch application differs from closure work item"
             );
-            return self
-                .record_batch_for_sync(
-                    &conn,
-                    consensus_height,
-                    anchor_height,
-                    anchor_hash,
-                    certificate,
-                    batch_txs,
-                    certified,
-                )
-                .await;
-        }
-
-        // Execute in decided order. `validate_batch` enforces dependency
-        // order at propose/accept time, so a decided batch — carrying 2/3+
-        // signatures — is already ordered; no re-sort or re-check here.
-        //
-        // A parse failure here is a DETERMINISTIC content fact — parsing decided
-        // bytes reads no chain state, so every node fails identically — which per
-        // I5 must be handled the same everywhere and must NOT be node-fatal: a
-        // `?` here halts the whole chain (each node exits, re-syncs the same value,
-        // exits again). Proposal validation normally rejects unparseable txs before
-        // they are decided; if one is decided anyway, record the batch for sync and
-        // skip execution uniformly, rather than crash-looping the network.
-        let selection = self
-            .select_executor(ApplicationPosition::Batch {
+            let retained = certified_history::load(&conn, consensus_height.as_u64()).await?;
+            let expected = ExactInput::batch(
+                self.consensus.protocol_context,
                 anchor_height,
                 anchor_hash,
-                consensus_height: consensus_height.as_u64(),
-            })
-            .await?;
-        let parsed_txs: Vec<PreparedTransaction> = {
-            let mut parsed = Vec::with_capacity(batch_txs.len());
-            let mut bad: Option<Txid> = None;
-            for btx in batch_txs {
-                match self
-                    .executor
-                    .prepare_transaction(&self.recognizer, &selection, btx)?
-                {
-                    Some(p) => parsed.push(p),
-                    None => {
-                        bad = Some(btx.compute_txid());
-                        break;
-                    }
-                }
-            }
-            if let Some(txid) = bad {
-                error!(
-                    %txid,
+                certified.unwrap_or(batch_txs),
+            )?;
+            ensure!(
+                *retained.input() == expected,
+                "batch application differs from retained certified bytes"
+            );
+            let selection = stage.selection();
+            // A decided batch may only EXECUTE against the exact chain state it was
+            // anchored to: the local tip must sit at `anchor_height` with
+            // `anchor_hash`. Anything else — a deferred drain whose anchor fell
+            // behind, or a replay whose anchor block was reorged away — is recorded
+            // for sync/bookkeeping but NOT executed: executing against a different
+            // tip writes state (and a checkpoint) at a height the chain disagrees
+            // about, i.e. silent divergence. A skipped batch's txids then simply
+            // never confirm here and the finality window resolves it.
+            let local_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
+            if anchor_height != self.last_height || anchor_hash != local_hash {
+                warn!(
+                    anchor_height,
+                    %anchor_hash,
+                    last_height = self.last_height,
+                    %local_hash,
                     consensus_height = %consensus_height,
-                    "Decided batch contains an unparseable transaction — recording for sync \
-                     and skipping execution (deterministic; every node does the same)"
+                    "Skipping decided batch — anchor does not match local tip; recording only"
                 );
-                return self
+                let outcome = self
                     .record_batch_for_sync(
                         &conn,
                         consensus_height,
@@ -363,14 +333,60 @@ impl<E: Executor> Reactor<E> {
                         batch_txs,
                         certified,
                     )
-                    .await;
+                    .await?;
+                return Ok((outcome, StageOutcome::ReplacedAnchorBatch, 0usize, 0u64));
             }
-            parsed
-        };
 
-        let input = CanonicalInput::bitcoin(certified.unwrap_or(batch_txs))?;
-        let lease = self.begin_unit(&selection, false).await?;
-        let result = async {
+            // Execute in decided order. `validate_batch` enforces dependency
+            // order at propose/accept time, so a decided batch — carrying 2/3+
+            // signatures — is already ordered; no re-sort or re-check here.
+            //
+            // A parse failure here is a DETERMINISTIC content fact — parsing decided
+            // bytes reads no chain state, so every node fails identically — which per
+            // I5 must be handled the same everywhere and must NOT be node-fatal: a
+            // `?` here halts the whole chain (each node exits, re-syncs the same value,
+            // exits again). Proposal validation normally rejects unparseable txs before
+            // they are decided; if one is decided anyway, record the batch for sync and
+            // skip execution uniformly, rather than crash-looping the network.
+            let parsed_txs: Vec<PreparedTransaction> = {
+                let mut parsed = Vec::with_capacity(batch_txs.len());
+                let mut bad: Option<Txid> = None;
+                for btx in batch_txs {
+                    match self
+                        .executor
+                        .prepare_transaction(&self.recognizer, selection, btx)?
+                    {
+                        Some(p) => parsed.push(p),
+                        None => {
+                            bad = Some(btx.compute_txid());
+                            break;
+                        }
+                    }
+                }
+                if let Some(txid) = bad {
+                    error!(
+                        %txid,
+                        consensus_height = %consensus_height,
+                        "Decided batch contains an unparseable transaction — recording for sync \
+                         and skipping execution (deterministic; every node does the same)"
+                    );
+                    let outcome = self
+                        .record_batch_for_sync(
+                            &conn,
+                            consensus_height,
+                            anchor_height,
+                            anchor_hash,
+                            certificate,
+                            batch_txs,
+                            certified,
+                        )
+                        .await?;
+                    return Ok((outcome, StageOutcome::UnrecognizedBatch, 0usize, 0u64));
+                }
+                parsed
+            };
+
+            let input = CanonicalInput::bitcoin(certified.unwrap_or(batch_txs))?;
             let mut applicable = select_decision_exclusions(&conn, consensus_height.as_u64())
                 .await?
                 .iter()
@@ -416,7 +432,7 @@ impl<E: Executor> Reactor<E> {
                 let _failures = self
                     .executor
                     .execute_prepared(
-                        &selection,
+                        selection,
                         &self.session,
                         self.network,
                         anchor_height,
@@ -437,10 +453,26 @@ impl<E: Executor> Reactor<E> {
                 Some(input),
             )
             .await?;
-            Ok(())
+            let executed_ops = parsed_txs
+                .iter()
+                .flat_map(|tx| tx.inputs.iter())
+                .map(|(_, count)| *count)
+                .sum::<u64>();
+            Ok((
+                BatchOutcome::Executed,
+                StageOutcome::Applied,
+                parsed_txs.len(),
+                executed_ops,
+            ))
         }
         .await;
-        self.finish_unit(lease, result, true).await?;
+        let result = result.map(|(outcome, stage_outcome, count, ops)| {
+            ((outcome, count, ops), stage_outcome, remaining)
+        });
+        let ((outcome, parsed_count, executed_ops), _) = stage.finish(result).await?;
+        if outcome == BatchOutcome::RecordedOnly {
+            return Ok(outcome);
+        }
         // The in-memory finality obligation must match a persisted batch.
         let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
         if !txids.is_empty() {
@@ -456,11 +488,6 @@ impl<E: Executor> Reactor<E> {
         // Counter increments only after commit so we count ops persisted,
         // not ops attempted (mirrors the block path; simulation can't reach
         // here so it never inflates the metric).
-        let executed_ops: u64 = parsed_txs
-            .iter()
-            .flat_map(|t| t.inputs.iter())
-            .map(|(_, operations)| *operations)
-            .sum();
         if executed_ops > 0 {
             counter!(ITEMS_INDEXED).increment(executed_ops);
         }
@@ -469,7 +496,7 @@ impl<E: Executor> Reactor<E> {
         self.consensus.emit_state_event(StateEvent::BatchApplied {
             consensus_height,
             anchor_height,
-            txid_count: parsed_txs.len(),
+            txid_count: parsed_count,
             checkpoint,
         });
 
@@ -1257,6 +1284,7 @@ impl<E: Executor> Reactor<E> {
             .pending_next_height
             .take()
             .context("next-height callback disappeared")?;
+        self.maybe_prune_state().await;
         reply
             .send(next)
             .map_err(|_| anyhow::anyhow!("Failed to send Finalized reply"))

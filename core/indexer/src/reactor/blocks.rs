@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use bitcoin::hashes::Hash;
 use indexer_types::{BlockRow, Event, OpWithResult};
 use metrics::{counter, gauge};
@@ -10,6 +10,7 @@ use tracing::{debug, info, warn};
 use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_helpers::new_mock_block_hash;
 use crate::consensus::finality_types::StateEvent;
+use crate::database::certified_history;
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
@@ -17,6 +18,8 @@ use crate::database::queries::{
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::protocol::canonical_application::ApplicationSource;
+use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
+use crate::protocol::coordinator::closure_execution::begin_stage;
 use crate::protocol::coordinator::linked::{self, PreparedBlock, PreparedTransaction};
 use crate::protocol::coordinator::minimum_prune_retention_blocks;
 use crate::protocol::coordinator::selection::{
@@ -110,7 +113,6 @@ impl<E: Executor> Reactor<E> {
                 self.last_hash = None;
             }
         }
-
 
         if let Some(tx) = &self.event_tx
             && tx.send(Event::Rolledback { height }).await.is_err()
@@ -457,24 +459,47 @@ impl<E: Executor> Reactor<E> {
             );
         }
 
-        let selection = self
-            .select_executor(ApplicationPosition::Block {
-                height,
-                hash,
-                consensus_height: decision.consensus_height.as_u64(),
-            })
-            .await?;
-        let lease = self.begin_unit(&selection, false).await?;
-        let prepared = self
-            .executor
-            .prepare_block(&self.recognizer, &selection, block)
-            .await;
-        let block = match prepared {
-            Ok(block) => block,
-            Err(error) => return self.finish_unit(lease, Err(error), false).await,
-        };
-        let txn = self.block_txn(&selection, &block, decision).await;
-        let (unbatched_count, executed_ops) = self.finish_unit(lease, txn, true).await?;
+        let closure_height = certified_history::frontier(&self.db_conn())
+            .await?
+            .authenticated_height;
+        let stage = begin_stage(
+            &self.owner_service,
+            &self.session,
+            self.network,
+            closure_height,
+        )
+        .await?
+        .context("block application has no pending closure stage")?;
+        let remaining = stage.remaining_after();
+        let result = async {
+            ensure!(
+                stage.action()
+                    == (WorkItem::Execute {
+                        decision: decision.consensus_height.as_u64()
+                    }),
+                "block application differs from closure work item"
+            );
+            let retained =
+                certified_history::load(&self.db_conn(), decision.consensus_height.as_u64())
+                    .await?;
+            ensure!(
+                *retained.input() == block.exact_input(self.consensus.protocol_context)?,
+                "block application differs from retained certified bytes"
+            );
+            let block = self
+                .executor
+                .prepare_block(&self.recognizer, stage.selection(), block)
+                .await?;
+            let (unbatched_count, executed_ops) =
+                self.block_txn(stage.selection(), &block, decision).await?;
+            Ok((
+                (block, unbatched_count, executed_ops),
+                StageOutcome::Applied,
+                remaining,
+            ))
+        }
+        .await;
+        let ((block, unbatched_count, executed_ops), _) = stage.finish(result).await?;
 
         self.last_height = height;
         self.last_hash = Some(hash);
@@ -490,9 +515,6 @@ impl<E: Executor> Reactor<E> {
         if executed_ops > 0 {
             counter!(ITEMS_INDEXED).increment(executed_ops);
         }
-
-        // Update cached validator set after block execution
-        // (process_pending_validators may have activated/deactivated validators)
 
         let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;
         self.consensus.emit_state_event(StateEvent::BlockProcessed {
@@ -531,12 +553,6 @@ impl<E: Executor> Reactor<E> {
             "Block processed"
         );
 
-        // GC finalized superseded contract_state versions LAST — after the block's
-        // own commit and after both BlockProcessed / Processed events — so this
-        // opportunistic, best-effort maintenance (a separate transaction) never
-        // delays block durability or subscriber notification.
-        self.maybe_prune_state().await;
-
         Ok(())
     }
 
@@ -555,9 +571,17 @@ impl<E: Executor> Reactor<E> {
     /// "committed but not yet pruned" window is benign — the prune only removes old,
     /// finalized, superseded rows and reads only want the latest. Crash between the
     /// two commits just leaves the watermark un-advanced and the band retries.
-    async fn maybe_prune_state(&mut self) {
+    pub(super) async fn maybe_prune_state(&mut self) {
         if !self.prune.enabled {
             return;
+        }
+        match certified_history::frontier(&self.db_conn()).await {
+            Ok(state) if state.authenticated_height == state.closed_height => {}
+            Ok(_) => return,
+            Err(error) => {
+                warn!(%error, "cannot establish completed closure before pruning");
+                return;
+            }
         }
         let retain = self
             .prune

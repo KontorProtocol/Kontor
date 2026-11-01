@@ -73,6 +73,28 @@ pub(crate) async fn tip(conn: &Connection) -> Result<Option<(u64, BlockHash)>> {
     .transpose()
 }
 
+pub(crate) async fn tip_at(
+    conn: &Connection,
+    decision_height: u64,
+) -> Result<Option<(u64, BlockHash)>> {
+    ensure!(
+        decision_height <= frontier(conn).await?.authenticated_height,
+        "branch query exceeds authenticated history"
+    );
+    let row = conn.query(
+        "SELECT bitcoin_height, block_hash FROM certified_bitcoin_branch WHERE since_decision <= ?1
+         AND (until_decision IS NULL OR until_decision > ?1) ORDER BY bitcoin_height DESC LIMIT 1",
+        [decision_height.to_be_bytes().to_vec()],
+    ).await?.next().await?;
+    row.map(|row| {
+        Ok((
+            u64::from_be_bytes(fixed(row.get(0)?)?),
+            BlockHash::from_byte_array(fixed(row.get(1)?)?),
+        ))
+    })
+    .transpose()
+}
+
 async fn current(conn: &Connection, height: u64) -> Result<Option<BlockHash>> {
     let row = conn.query(
         "SELECT block_hash FROM certified_bitcoin_branch WHERE bitcoin_height = ?1 AND until_decision IS NULL",

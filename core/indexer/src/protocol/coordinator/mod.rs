@@ -4,6 +4,7 @@ pub(crate) mod bootstrap;
 pub(crate) mod certified_decision;
 pub(crate) mod certified_input;
 pub(crate) mod closure_execution;
+pub(crate) mod closure_record;
 pub(crate) mod committee;
 pub(crate) mod decision;
 pub(crate) mod genesis;

@@ -31,6 +31,10 @@ impl StageTicket {
         self.0.remaining[0]
     }
 
+    pub(crate) fn remaining_after(&self) -> Vec<WorkItem> {
+        self.0.remaining[1..].to_vec()
+    }
+
     pub(crate) fn observation_position(&self, lineage: [u8; 32]) -> Result<ObservationPosition> {
         Ok(ObservationPosition {
             context: self.0.plan.context,

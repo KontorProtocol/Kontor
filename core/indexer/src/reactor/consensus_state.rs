@@ -381,6 +381,24 @@ pub(super) async fn certified_startup(
     let protocol_context = frontier
         .context
         .context("missing certified protocol context")?;
+    if frontier.closed_height > 0 {
+        let recovered = certified_history::closure::recover(conn, frontier.closed_height).await?;
+        let completed =
+            certified_history::completion::completed(conn, frontier.closed_height).await?;
+        ensure!(
+            Some(completed.id()?) == frontier.closure_id && completed.context == protocol_context,
+            "startup closure frontier differs"
+        );
+        ensure!(
+            recovered.head == completed.stage_head && recovered.remaining.is_empty(),
+            "startup stage chain differs from completed closure"
+        );
+        ensure!(
+            certified_history::closure::canonical_position(conn, protocol_context.chain).await?
+                == completed.output,
+            "startup canonical state differs from completed closure"
+        );
+    }
     let next = frontier
         .closed_height
         .checked_add(1)

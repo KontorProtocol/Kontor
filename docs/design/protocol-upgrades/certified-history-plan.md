@@ -29,9 +29,11 @@ Focused local checks cover transaction interruption, reopen/retry, stale admissi
 input substitution, omitted block lifecycle, rollback/replay and missing/corrupt
 records. These checks do not establish complete reactor behavior or cross-platform
 qualification. The durable Decided/Finalized callbacks and next-height gate are now
-connected, as are certified-branch admission rules. Final closure and committee
-publication, owned live execution, post-genesis startup recovery and oversized-proof
-transport still need complete integration and qualification.
+connected, as are certified-branch admission rules. Live block and batch handlers
+now commit through owned stages, and completed-closure/committee publication has a
+validated persistence API. The reactor finality/replay driver, rollback stages,
+post-genesis startup recovery and oversized-proof transport still need complete
+integration and qualification.
 The Bitcoin poller now retains the complete decoded Bitcoin block, including its
 header and transaction witnesses. Its checked history conversion validates the
 requested hash, parent, size and Bitcoin commitments, and replay reconstructs the
@@ -91,10 +93,28 @@ Two focused local checks passed: actual executor-session/Malachite callback meth
 The latter supplies persistence fixtures and does not establish certificate or
 closure validation. The callback check includes a validly signed pre-anchor batch
 that durable admission rejects, and an initial Bitcoin height of 100.
-Live canonical effects still use the old application path, so no post-genesis
-closure can yet complete. Full event-loop execution/recovery, replacement candidate
-caches, obsolete unit-fixture migration and proof paging remain unfinished. This
-checkpoint is deliberately not a merge candidate.
+Live block and batch handlers now bind their retained certified input and commit
+effects, original K3 application records, registration observation and stage progress
+under one owned transaction. Deterministically skipped batches also commit through
+that stage transaction. Batch obligations, metrics and notifications update only
+after commit. Pruning waits until the closure is complete.
+The KCC1 completed-closure record commits the decision, preceding closure, plan,
+complete stage chain, resulting canonical position, certified Bitcoin tip,
+registration observation and next committee. Publishing the record, committee and
+closed frontier is one FULL-WAL transaction. Publication requires no remaining work
+and an applied Bitcoin tip matching the certified branch. Exact retries return the
+retained record. Startup verifies the completed stage chain and canonical position
+before selecting its next committee.
+The focused callback qualification now runs actual block/batch handlers through
+three certified decisions: a block at Bitcoin height 100, an empty executed batch,
+and an unrecognized batch recorded without application. It injects stage-write and
+closure-publication failures, checks rollback and retry, reopens the database,
+verifies historical records and releases the next-height gate only after completion.
+For this qualification, the no-obligation finality stage is driven explicitly using
+the real finality check and owned stage APIs. The production event loop does not yet
+drive finality stages or publish completion automatically. Full event-loop recovery,
+owned rollback/replay, replacement candidate caches, obsolete unit-fixture migration
+and proof paging remain unfinished. This checkpoint is not a merge candidate.
 Both explicit link sets still need their complete integration acceptance evidence.
 
 ## Result and boundaries

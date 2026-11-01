@@ -82,6 +82,13 @@ CREATE TABLE IF NOT EXISTS closure_stages (
     PRIMARY KEY (height, stage)
 );
 
+CREATE TABLE IF NOT EXISTS decision_closures (
+    height BLOB PRIMARY KEY REFERENCES certified_decisions(height),
+    closure_id BLOB NOT NULL UNIQUE CHECK (length(closure_id) = 32),
+    record BLOB NOT NULL,
+    next_committee BLOB NOT NULL REFERENCES historical_committees(committee_id)
+);
+
 INSERT OR IGNORE INTO certified_history_state
     (singleton, status, authenticated_height, closed_height)
 SELECT 1, CASE WHEN EXISTS(SELECT 1 FROM blocks)
