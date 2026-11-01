@@ -82,6 +82,22 @@ def verify_storage_contracts(observations, link_set=None):
     if observations.get('storage_contracts') != {'rejected_before_construction': expected}:
         raise RuntimeError('storage contract construction checks missing or incomplete')
 
+
+def verify_managed_startup(observations, link_set):
+    result = observations.get('managed_startup')
+    if link_set != 'managed-node':
+        if result is not None:
+            raise RuntimeError('unmanaged qualification cannot claim managed startup')
+        return
+    history = observations['certified_history']
+    expected = {name: history[name] for name in ('chain', 'protocol', 'era', 'executor_definition')}
+    expected.update(rounds_started=2, engines_joined=2, next_generation=3,
+                    same_listener=True, same_era_wal=True, database_remained_available=True,
+                    competing_writer_rejected=True)
+    if result != expected:
+        raise RuntimeError('managed startup evidence missing, incomplete or bound to another protocol')
+
+
 def execute_node(report_path, link_set=None):
     directory = report_path.parent
     success = directory / "node-execution.json"
@@ -117,6 +133,7 @@ def execute_node(report_path, link_set=None):
         raise RuntimeError('node execution case set changed')
     verify_storage_contracts(observations, link_set)
     verify_certified_history(observations, link_set)
+    verify_managed_startup(observations, link_set)
     semantic_baseline = verify_semantics(observations, ROOT, expected_graphs)
     if digest(executable) != node['executable_sha256'] or digest(report_path) != report_hash:
         raise RuntimeError('node executable or build report changed during execution')

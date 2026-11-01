@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from build import ROOT, digest
-from qualify_node import CASES, CERTIFIED_CHECKS, execute_node, verify_certified_history
+from qualify_node import CASES, CERTIFIED_CHECKS, execute_node, verify_certified_history, verify_managed_startup
 from test_semantic_baseline import sample_observation
 
 
@@ -27,6 +27,13 @@ def certified_sample(link_set="k4-node"):
     return {**{key: True for key in CERTIFIED_CHECKS}, 'authenticated': 15, 'closed': 15,
             'executor_definition': executor, 'manifest': manifest.hex(), 'chain': chain.hex(),
             'protocol': protocol, 'era': hashed(b'kontor/genesis-era/v1', chain + bytes.fromhex(protocol))}
+
+
+def managed_sample(history):
+    return {**{name: history[name] for name in ('chain', 'protocol', 'era', 'executor_definition')},
+            'rounds_started': 2, 'engines_joined': 2, 'next_generation': 3,
+            'same_listener': True, 'same_era_wal': True, 'database_remained_available': True,
+            'competing_writer_rejected': True}
 
 
 class NodeExecution(unittest.TestCase):
@@ -78,6 +85,21 @@ class NodeExecution(unittest.TestCase):
             verify_certified_history({'certified_history': certified_sample(selected)}, selected)
             with self.assertRaisesRegex(RuntimeError, 'baseline identity'):
                 verify_certified_history({'certified_history': certified_sample(other)}, selected)
+
+    def test_managed_startup_requires_actual_results_for_the_selected_protocol(self):
+        history = certified_sample('managed-node')
+        original = managed_sample(history)
+        observations = {'certified_history': history, 'managed_startup': original}
+        verify_managed_startup(observations, 'managed-node')
+        for field, replacement in (('protocol', 'another protocol'), ('engines_joined', 1),
+                                   ('same_listener', False), ('next_generation', 2),
+                                   ('competing_writer_rejected', False)):
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'managed startup evidence'):
+                verify_managed_startup(dict(observations, managed_startup={**original, field: replacement}), 'managed-node')
+        with self.assertRaisesRegex(RuntimeError, 'managed startup evidence'):
+            verify_managed_startup({'certified_history': history}, 'managed-node')
+        with self.assertRaisesRegex(RuntimeError, 'unmanaged qualification'):
+            verify_managed_startup(observations, 'k4-node')
 
     def test_k4_execution_rejects_missing_certified_evidence(self):
         self.observations['executors'][1]['graph'] = 'observer'

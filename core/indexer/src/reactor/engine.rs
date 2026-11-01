@@ -18,6 +18,8 @@ use crate::consensus::{Address, Ctx};
 mod managed;
 #[cfg(kontor_managed)]
 pub use managed::NodeCoordinator;
+#[cfg(all(kontor_managed, feature = "protocol-qualification"))]
+pub(crate) use managed::qualification::run as qualify_managed_startup;
 
 pub struct EngineConfig {
     pub private_key: PrivateKey,

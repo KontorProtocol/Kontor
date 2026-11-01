@@ -161,3 +161,6 @@ impl NodeCoordinator {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(any(test, feature = "protocol-qualification"))]
+pub(crate) mod qualification;

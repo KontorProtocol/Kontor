@@ -3028,3 +3028,37 @@ path. This result does not turn that fixture into managed-engine startup evidenc
 the prior managed startup tests cover that separately. Integrated managed runtime
 acceptance in the final independently linked daemon, K6 authorization/rehearsal,
 and grouped review/CI/merge remain outstanding. No PR or CI campaign was launched.
+
+### K5 managed startup in the independently linked daemon
+
+From base `64ae83c24ff28b8b69d8e476b13f9a824afaa130`, the existing
+managed startup test now shares its implementation with the node qualification
+entry point. The installed daemon starts the actual managed first consensus
+bundle, answers readiness and round-start requests, stops and joins it, then
+starts and joins a second generation using the exact same listener and era WAL.
+The test also rejects concurrent generation ownership and a competing database
+writer before that writer can create its database. Certified history stays
+available and unchanged through the restart. The runner and comparator require
+these results to match the selected chain, protocol, era and executor definition.
+
+The local Linux ARM dev run passed. Combined independent builds, ownership audits,
+interface checks and typed-adapter checks took 284.24 seconds; the installed
+daemon completed the retained 25 executor cases, certified-history checks and
+managed startup/restart in 205.62 seconds. Its SHA-256 is
+`1cfc3185c7006ce01c5d1ba170b6771d5df608cb09f10d02a15f91832fd3e0da`.
+The result is `.build-cache/k5-managed-runtime.json`, with raw build and runtime
+logs and the actual comparator result bound to that binary and the tested source
+hashes. Thirty-seven focused Python node tests passed, including rejection of
+missing startup evidence, changed protocol identity, incomplete joins, listener
+changes and incorrect generation counts. `git diff --check` passes.
+
+Lead inspection traced the shared helper through the actual linked runtime,
+confirmed that the comparator requires its output, and verified all ten recorded
+source hashes after the run. The ordinary Rust test wrapper was not rerun for
+this checkpoint; the same helper was compiled and executed in the linked daemon.
+The previous builder checkpoint's raw files and executable are preserved under
+`.build-cache/k5-combined-builder-checkpoint-64ae83c2` before reuse of the build
+output directory. This is one local dev cell and same-era restart evidence, not
+cross-platform acceptance or the incompatible-protocol activation handoff.
+K6 control integration, K7 activation, and the grouped review/CI/merge remain
+outstanding. No CI campaign or fork change was needed for this checkpoint.

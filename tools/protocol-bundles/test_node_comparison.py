@@ -13,7 +13,7 @@ from qualify_node import CASES
 from recipes import CONSENSUS_GRAPHS, EXECUTOR_GRAPHS, executor_graphs, graph_root, identity
 from semantic_baseline import verify as verify_semantics
 from test_semantic_baseline import sample_observation
-from test_node_execution import certified_sample
+from test_node_execution import certified_sample, managed_sample
 from symbol_tool import TOOLCHAIN
 from type_boundary import ADAPTER_TESTS, PROBES, inputs_for, probes_for
 
@@ -145,6 +145,8 @@ class NodeComparison(unittest.TestCase):
             for mutation in ('missing', 'unknown', 'changed', 'multiple')]}
         if link_set in ('k4-node', 'managed-node'):
             observations['certified_history'] = certified_sample(link_set)
+        if link_set == 'managed-node':
+            observations['managed_startup'] = managed_sample(observations['certified_history'])
         write_json(directory / 'node-execution.stdout.json', observations)
         (directory / 'node-execution.stderr.log').write_text('synthetic execution log')
         execution = {'schema': 1, 'matching_observations': True, 'target': target, 'profile': profile, 'link_set': link_set,

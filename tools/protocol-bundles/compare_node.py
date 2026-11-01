@@ -7,7 +7,7 @@ from pathlib import Path
 
 from build import ROOT, digest, write_json
 from provenance import fingerprint, package_sources, repository_sources
-from qualify_node import CASES, verify_storage_contracts, verify_certified_history
+from qualify_node import CASES, verify_storage_contracts, verify_certified_history, verify_managed_startup
 from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, executor_graphs, graph_root, identity
 from semantic_baseline import verify as verify_semantics
 from symbol_tool import TOOLCHAIN
@@ -113,6 +113,7 @@ def load_cell(path, root, link_set=None):
     require(observations['cases'] == execution['cases'], 'case record differs from raw output')
     verify_storage_contracts(observations, link_set)
     verify_certified_history(observations, link_set, root)
+    verify_managed_startup(observations, link_set)
     graphs = list(recipes)
     require(execution['graphs'] == graphs and [item['graph'] for item in observations['executors']] == graphs,
             'missing or duplicate execution graph')
