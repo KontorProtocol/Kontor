@@ -26,7 +26,7 @@ use super::types::{
 };
 use crate::consensus::codec::{ProtobufCodec, decode_commit_certificate, encode_synced_value};
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, ValueId, proto};
-use crate::protocol::coordinator::durable_signer::DurableSigner;
+use crate::protocol::coordinator::durable_signer::{DurableSigner, OwnedGeneration};
 use crate::reactor::message::Message;
 
 type Reply =
@@ -44,6 +44,7 @@ pub(crate) struct ReactorEngine {
 }
 
 impl ReactorEngine {
+    #[cfg(test)]
     pub(crate) fn start(
         slot: &EngineSlot,
         bundle: Bundle,
@@ -53,7 +54,24 @@ impl ReactorEngine {
         let generation = config.generation;
         let capacity = config.channel_capacity;
         let control = slot.start(bundle, config, signer)?;
-        Ok(Self {
+        Ok(Self::from_control(generation, capacity, control))
+    }
+
+    pub(crate) fn start_owned(
+        slot: &EngineSlot,
+        bundle: Bundle,
+        config: Configuration,
+        signer: Option<Arc<DurableSigner>>,
+        ownership: OwnedGeneration,
+    ) -> Result<Self, EngineError> {
+        let generation = config.generation;
+        let capacity = config.channel_capacity;
+        let control = slot.start_owned(bundle, config, signer, ownership)?;
+        Ok(Self::from_control(generation, capacity, control))
+    }
+
+    fn from_control(generation: u64, capacity: usize, control: Control) -> Self {
+        Self {
             generation,
             capacity,
             retired: false,
@@ -61,7 +79,7 @@ impl ReactorEngine {
             control,
             replies: FuturesUnordered::new(),
             outgoing: None,
-        })
+        }
     }
 
     pub(crate) fn signer(&self) -> Option<Arc<DurableSigner>> {

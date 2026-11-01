@@ -8,7 +8,7 @@ use tokio::time::timeout;
 use super::*;
 use crate::consensus::{Address, Height, Vote, test_fixtures};
 use crate::protocol::coordinator::durable_signer::{
-    SignerIdentity, SigningError, SigningRequest, VoteStep,
+    GenerationOwner, SigningError, SigningRequest, VoteStep,
 };
 use crate::protocol::coordinator::managed::startup::{Bootstrap, PeerSelection};
 use crate::protocol::coordinator::managed::types::{
@@ -66,10 +66,29 @@ async fn ready(control: &mut Control) -> ReplyToken {
 async fn control_thread_drives_real_bundles_and_releases_slot_only_after_join() {
     let directory = TempDir::new().unwrap();
     let slot = EngineSlot::default();
+    let owner = GenerationOwner::open(
+        &directory.path().join("authority"),
+        test_fixtures::context().chain,
+    )
+    .unwrap();
     for (bundle, generation) in [(Bundle::First, 1), (Bundle::Second, 2)] {
-        let mut control = slot
-            .start(bundle, config(&directory, generation), None)
-            .unwrap();
+        let ownership = owner.reserve(None).unwrap();
+        assert_eq!(ownership.generation(), generation);
+        let mut wrong = config(&directory, generation + 1);
+        wrong.network_key = ownership.network_key();
+        assert!(matches!(
+            slot.start_owned(bundle, wrong, None, ownership.clone()),
+            Err(EngineError::InvalidConfiguration(_))
+        ));
+        let wrong_network = config(&directory, generation);
+        assert!(matches!(
+            slot.start_owned(bundle, wrong_network, None, ownership.clone()),
+            Err(EngineError::InvalidConfiguration(_))
+        ));
+        let mut input = config(&directory, generation);
+        input.network_key = ownership.network_key();
+        let mut control = slot.start_owned(bundle, input, None, ownership).unwrap();
+        assert!(owner.reserve(None).is_err());
         let token = ready(&mut control).await;
         assert_eq!(
             control
@@ -117,19 +136,18 @@ async fn control_thread_drives_real_bundles_and_releases_slot_only_after_join() 
 async fn blocked_control_thread_does_not_block_node_revocation_or_allow_competing_engine() {
     let directory = TempDir::new().unwrap();
     let slot = EngineSlot::default();
-    let input = config(&directory, 1);
+    let mut input = config(&directory, 1);
     let key = PrivateKey::from([11; 32]);
+    let owner = GenerationOwner::open(
+        &directory.path().join("authority"),
+        test_fixtures::context().chain,
+    )
+    .unwrap();
+    let ownership = owner.reserve(Some(*key.public_key().as_bytes())).unwrap();
+    input.network_key = ownership.network_key();
     let signer = Arc::new(
-        DurableSigner::open(
-            &directory.path().join("signer"),
-            SignerIdentity {
-                context: test_fixtures::context(),
-                generation: 1,
-                network_peer_id: Bundle::First.network_peer_id(&input.network_key).unwrap(),
-            },
-            key.clone(),
-        )
-        .unwrap(),
+        DurableSigner::open_owned(ownership.clone(), test_fixtures::context(), key.clone())
+            .unwrap(),
     );
     let address = Address::from_public_key(&key.public_key());
     let vote = Vote::new_prevote(Height::new(1), Round::new(0), NilOrVal::Nil, address);
@@ -152,6 +170,7 @@ async fn blocked_control_thread_does_not_block_node_revocation_or_allow_competin
             2,
             Duration::from_secs(10),
             Some(signer.clone()),
+            Some(ownership),
             move || {
                 let engine = Bundle::First.start(input, Some(authority))?;
                 let _ = entered.send(());
@@ -178,6 +197,7 @@ async fn blocked_control_thread_does_not_block_node_revocation_or_allow_competin
             .unwrap()
     );
     assert!(!control.has_joined());
+    assert!(owner.reserve(None).is_err());
     assert!(
         slot.start(Bundle::Second, config(&directory, 2), None)
             .is_err()
@@ -185,8 +205,12 @@ async fn blocked_control_thread_does_not_block_node_revocation_or_allow_competin
     release.send(()).unwrap();
     assert!(control.wait_stopped(Duration::from_secs(10)).await.unwrap());
     assert!(control.has_joined());
+    let next_ownership = owner.reserve(None).unwrap();
+    assert_eq!(next_ownership.generation(), 2);
+    let mut input = config(&directory, 2);
+    input.network_key = next_ownership.network_key();
     let mut next = slot
-        .start(Bundle::Second, config(&directory, 2), None)
+        .start_owned(Bundle::Second, input, None, next_ownership)
         .unwrap();
     ready(&mut next).await;
     next.request_stop();
@@ -262,4 +286,57 @@ async fn unacknowledged_ready_expires_and_stopped_publication_returns_buffer() {
         panic!("missing rejected publication")
     };
     assert_eq!(part.0.as_ptr(), allocation);
+}
+
+#[tokio::test]
+async fn dropped_follower_handle_keeps_os_ownership_until_blocked_worker_finishes() {
+    let directory = TempDir::new().unwrap();
+    let authority_path = directory.path().join("authority");
+    let chain = test_fixtures::context().chain;
+    let owner = GenerationOwner::open(&authority_path, chain).unwrap();
+    let ownership = owner.reserve(None).unwrap();
+    let mut input = config(&directory, ownership.generation());
+    input.network_key = ownership.network_key();
+    let slot = EngineSlot::default();
+    let (entered, waiting) = oneshot::channel();
+    let (release, gate) = blocking::sync_channel(1);
+    let control = slot
+        .spawn(
+            1,
+            2,
+            Duration::from_secs(10),
+            None,
+            Some(ownership),
+            move || {
+                let engine = Bundle::First.start(input, None)?;
+                let _ = entered.send(());
+                gate.recv_timeout(Duration::from_secs(10))
+                    .expect("test releases worker");
+                Ok(engine)
+            },
+        )
+        .unwrap();
+    timeout(Duration::from_secs(10), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(control);
+    drop(owner);
+    assert!(GenerationOwner::open(&authority_path, chain).is_err());
+    release.send(()).unwrap();
+    let reopened = timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(owner) = GenerationOwner::open(&authority_path, chain) {
+                break owner;
+            }
+            sleep(POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(reopened.reserve(None).unwrap().generation(), 2);
+    assert!(
+        slot.start(Bundle::Second, config(&directory, 2), None)
+            .is_err()
+    );
 }

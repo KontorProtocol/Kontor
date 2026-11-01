@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail, ensure};
 use malachitebft_app_channel::AppMsg;
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
+use malachitebft_app_channel::app::types::Keypair;
 use malachitebft_core_consensus::{LocallyProposedValue, ProposedValue};
 use malachitebft_core_types::{HeightParams, LinearTimeouts, NilOrVal, Round, Validity};
 use tempfile::TempDir;
@@ -17,7 +18,7 @@ use crate::consensus::{
     Address, Height, PartStreamsMap, ProposalData, ProposalFin, ProposalInit, ProposalPart,
     Validator, ValidatorSet, Vote, test_fixtures,
 };
-use crate::protocol::coordinator::durable_signer::{DurableSigner, SignerIdentity};
+use crate::protocol::coordinator::durable_signer::{DurableSigner, GenerationOwner};
 use crate::protocol::coordinator::managed::control::EngineSlot;
 use crate::protocol::coordinator::managed::reactor::ReactorEngine;
 use crate::protocol::coordinator::managed::startup::{
@@ -31,12 +32,24 @@ async fn managed_transport_signs_publishes_and_decides_through_both_bundles() ->
     let key = PrivateKey::from([11; 32]);
     let address = Address::from_public_key(&key.public_key());
     let value = test_fixtures::block();
+    let owner = GenerationOwner::open(
+        &directory.path().join("authority"),
+        test_fixtures::context().chain,
+    )?;
     for (bundle, generation) in [(Bundle::First, 1), (Bundle::Second, 2)] {
+        let ownership = owner.reserve(Some(*key.public_key().as_bytes()))?;
+        ensure!(ownership.generation() == generation);
+        let peer = Keypair::ed25519_from_bytes(ownership.network_key())?
+            .public()
+            .to_peer_id()
+            .to_bytes();
+        ensure!(Bundle::First.network_peer_id(&ownership.network_key())? == peer);
+        ensure!(Bundle::Second.network_peer_id(&ownership.network_key())? == peer);
         let config = Configuration {
             generation,
             channel_capacity: 16,
             moniker: "transport-test".into(),
-            network_key: [7; 32],
+            network_key: ownership.network_key(),
             listen_address: "/ip4/127.0.0.1/tcp/0".into(),
             persistent_peers: vec![],
             wal_path: directory.path().join(format!("{generation}.wal")),
@@ -45,16 +58,13 @@ async fn managed_transport_signs_publishes_and_decides_through_both_bundles() ->
             peer_selection: PeerSelection::Random,
             readiness_timeout: Duration::from_secs(10),
         };
-        let signer = Arc::new(DurableSigner::open(
-            &directory.path().join("signer"),
-            SignerIdentity {
-                context: test_fixtures::context(),
-                generation,
-                network_peer_id: bundle.network_peer_id(&config.network_key)?,
-            },
+        let signer = Arc::new(DurableSigner::open_owned(
+            ownership.clone(),
+            test_fixtures::context(),
             key.clone(),
         )?);
-        let managed = ReactorEngine::start(&slot, bundle, config, Some(signer.clone()))?;
+        let managed =
+            ReactorEngine::start_owned(&slot, bundle, config, Some(signer.clone()), ownership)?;
         let mut engine = Engine::managed(managed);
         drop(signer);
         let height = Height::new(generation);

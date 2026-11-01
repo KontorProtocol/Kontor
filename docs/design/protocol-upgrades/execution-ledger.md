@@ -2851,3 +2851,45 @@ This does not establish full managed database application or activation. Managed
 startup/identity, persistent generation ownership, production build wiring, K6
 authorization and operator dry run remain unfinished. No CI or independent
 microreview was requested; consolidated grouped review is still required.
+
+### K5 persistent ownership and managed lifecycle checkpoint
+
+The node now has an exclusive persistent generation owner, separate network
+identity, and per-validator signing history. Reserving a generation appends and
+syncs its identity before use. Restart advances the generation; within a process,
+only successful engine join releases the active reservation. Follower mode retains
+the same ownership lease without receiving a signing capability. Managed startup
+checks the reserved generation, network seed, validator/follower mode and exact
+signer ownership. Unowned control/reactor startup helpers are test-only.
+
+Both the control handle and worker retain the lease. Dropping the public handle
+while construction or teardown is blocked does not release the OS lock. A timeout
+does not permit another reservation or engine. The real two-bundle transport test
+now uses this persistent owner and verifies that node and both bundle graphs
+derive the same network peer identity from its seed.
+
+Lead review found that opening an existing journal with a missing lock could
+create a replacement lock before rejecting the inconsistent state. Both the
+generation owner and signer journal now check presence before lock creation.
+Regressions remove each lock while its original owner remains live and verify
+that repeated attempts fail without recreating it. These fixes were integrated
+from the delegated ownership work and reviewed by the lead.
+
+The combined actual-node suite passed 39 tests, zero failed or ignored, in
+2.45 seconds after a 1m28s build. Coverage includes signer conflicts and retries,
+crash/reopen generation advance, stale tokens, exact owner admission, missing and
+truncated state, independent revocation during blocked engine startup, dropped
+follower-handle lock retention, reply cancellation, and real proposal/decision
+signatures through both bundles. `.build-cache/k5-owned-control-test.json` records
+source, binary, wrapper, link specification and log hashes, plus lead review.
+The prior 37-test result is retained separately as evidence before the lock fixes.
+The delegated ordinary non-managed signer target also passed 20 tests before
+those two fixes; it is not represented as final-source coverage.
+
+Limitations: wholesale deletion or complete-prefix rollback of local authority
+history requires an external monotonic anchor to detect. Missing/truncated state,
+including a header-only journal after interrupted first initialization, fails
+closed rather than being automatically repaired. Production managed baseline
+admission, coordinator startup, builder wiring, K6 controls and dry run remain
+unfinished. This is not final handoff/activation evidence. Consolidated independent
+K5/K6 review and final scoped CI remain required; neither was launched here.

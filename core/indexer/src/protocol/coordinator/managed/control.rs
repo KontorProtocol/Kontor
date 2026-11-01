@@ -14,7 +14,7 @@ use super::types::{
     Delivery, EngineError, EnginePoll, EngineState, Event, ProposalPartBytes, PublishError,
     ReplyToken, Response,
 };
-use crate::protocol::coordinator::durable_signer::DurableSigner;
+use crate::protocol::coordinator::durable_signer::{DurableSigner, OwnedGeneration};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
 
@@ -47,6 +47,7 @@ enum Command {
 pub(crate) struct Control {
     generation: u64,
     signer: Option<Arc<DurableSigner>>,
+    ownership: Option<OwnedGeneration>,
     stop: Arc<AtomicBool>,
     occupied: Arc<AtomicBool>,
     worker: Option<JoinHandle<Result<(), EngineError>>>,
@@ -57,6 +58,7 @@ pub(crate) struct Control {
 }
 
 impl EngineSlot {
+    #[cfg(test)]
     pub(crate) fn start(
         &self,
         bundle: Bundle,
@@ -67,17 +69,52 @@ impl EngineSlot {
         let capacity = config.channel_capacity;
         let readiness_timeout = config.readiness_timeout;
         let authority = signer.clone();
-        self.spawn(generation, capacity, readiness_timeout, signer, move || {
-            bundle.start(config, authority)
-        })
+        self.spawn(
+            generation,
+            capacity,
+            readiness_timeout,
+            signer,
+            None,
+            move || bundle.start(config, authority),
+        )
     }
 
+    pub(crate) fn start_owned(
+        &self,
+        bundle: Bundle,
+        config: Configuration,
+        signer: Option<Arc<DurableSigner>>,
+        ownership: OwnedGeneration,
+    ) -> Result<Control, EngineError> {
+        if config.generation != ownership.generation()
+            || config.network_key != ownership.network_key()
+        {
+            return Err(EngineError::InvalidConfiguration(
+                "engine configuration differs from reserved ownership".into(),
+            ));
+        }
+        ownership
+            .validate_signer(signer.as_deref())
+            .map_err(|error| EngineError::InvalidConfiguration(error.to_string()))?;
+        let authority = signer.clone();
+        self.spawn(
+            config.generation,
+            config.channel_capacity,
+            config.readiness_timeout,
+            signer,
+            Some(ownership),
+            move || bundle.start(config, authority),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn spawn<F>(
         &self,
         generation: u64,
         capacity: usize,
         readiness_timeout: Duration,
         signer: Option<Arc<DurableSigner>>,
+        ownership: Option<OwnedGeneration>,
         factory: F,
     ) -> Result<Control, EngineError>
     where
@@ -110,10 +147,11 @@ impl EngineSlot {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = stop.clone();
         let thread_signer = signer.clone();
+        let worker_ownership = ownership.clone();
         let worker = match thread::Builder::new()
             .name(format!("consensus-control-{generation}"))
             .spawn(move || {
-                run(
+                let result = run(
                     factory,
                     command_rx,
                     event_tx,
@@ -123,7 +161,11 @@ impl EngineSlot {
                     generation,
                     capacity,
                     deadline,
-                )
+                );
+                // Retain the OS ownership lease even if the public handle is dropped
+                // while engine construction or teardown is still blocked.
+                drop(worker_ownership);
+                result
             }) {
             Ok(worker) => worker,
             Err(error) => {
@@ -134,6 +176,7 @@ impl EngineSlot {
         Ok(Control {
             generation,
             signer,
+            ownership,
             stop,
             occupied: self.occupied.clone(),
             worker: Some(worker),
@@ -297,9 +340,15 @@ impl Control {
                     .expect("owned worker")
                     .join()
                     .unwrap_or(Err(EngineError::Panicked));
-                if result.is_ok() {
+                let result = result.and_then(|()| {
+                    if let Some(ownership) = &self.ownership {
+                        ownership
+                            .joined()
+                            .map_err(|error| EngineError::Failed(error.to_string()))?;
+                    }
                     self.occupied.store(false, Ordering::Release);
-                }
+                    Ok(())
+                });
                 self.terminal = Some(result.clone());
                 return result.map(|()| true);
             }
