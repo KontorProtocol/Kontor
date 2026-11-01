@@ -1,3 +1,4 @@
+mod ownership;
 mod store;
 
 use std::fmt;
@@ -11,6 +12,7 @@ use crate::consensus::{Address, Ctx, Proposal, ValueId, Vote};
 use crate::protocol::coordinator::certified_input::{Descriptor, EraContext};
 
 use self::store::{EntryRole, Store, ValidatedRequest};
+pub(crate) use ownership::{GenerationOwner, OwnedGeneration};
 
 const MAX_SIGNING_PREIMAGE_BYTES: usize = 4_200_000;
 
@@ -92,6 +94,7 @@ pub(crate) struct DurableSigner {
     public_key: [u8; 32],
     address: [u8; 20],
     store: Store,
+    owned_generation: Option<OwnedGeneration>,
 }
 
 impl DurableSigner {
@@ -117,6 +120,21 @@ impl DurableSigner {
             public_key: key_bytes,
             address,
             store,
+            owned_generation: None,
+        })
+    }
+
+    pub(crate) fn open_owned(
+        generation: OwnedGeneration,
+        context: EraContext,
+        private_key: PrivateKey,
+    ) -> Result<Self, SigningError> {
+        generation.with_active(|| {
+            let identity = generation.signer_identity(context, &private_key)?;
+            let directory = generation.signer_directory(private_key.public_key().as_bytes())?;
+            let mut signer = Self::open(&directory, identity, private_key)?;
+            signer.owned_generation = Some(generation.clone());
+            Ok(signer)
         })
     }
 
@@ -125,8 +143,14 @@ impl DurableSigner {
     }
 
     pub(crate) fn sign(&self, request: SigningRequest) -> Result<[u8; 64], SigningError> {
-        let validated = self.validate(request)?;
-        self.store.sign(validated)
+        let sign = || {
+            let validated = self.validate(request)?;
+            self.store.sign(validated)
+        };
+        match &self.owned_generation {
+            Some(generation) => generation.with_active(sign),
+            None => sign(),
+        }
     }
 
     pub(crate) fn sign_proposal_fin(
