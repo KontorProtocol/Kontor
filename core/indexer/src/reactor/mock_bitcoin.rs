@@ -130,7 +130,7 @@ pub struct MockBitcoin {
     /// and no test can produce the stale-decision paths a real reorg produces.
     fork: u32,
     #[cfg(test)]
-    pub(crate) replay_gate: Option<Arc<AsyncGate>>,
+    pub(crate) rollback_stage_gate: Option<Arc<AsyncGate>>,
 }
 
 impl MockBitcoin {
@@ -150,7 +150,7 @@ impl MockBitcoin {
             mined_blocks: Vec::new(),
             fork: 0,
             #[cfg(test)]
-            replay_gate: None,
+            rollback_stage_gate: None,
         }
     }
 

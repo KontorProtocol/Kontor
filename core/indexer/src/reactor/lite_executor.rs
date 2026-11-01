@@ -33,7 +33,7 @@ pub async fn shared_session_factory() -> SessionFactory {
     .clone()
 }
 
-/// Only Bitcoin I/O and its artificial latency differ from the production executor.
+/// Uses the production executor with mock Bitcoin I/O and explicit test pauses.
 pub struct LiteExecutor {
     data_dir: PathBuf,
     mock_bitcoin: Arc<Mutex<MockBitcoin>>,
@@ -76,7 +76,24 @@ impl LiteExecutor {
         let (baseline, initialize) =
             bootstrap::prepare(&writer.connection(), Network::Regtest, 1, &genesis).await?;
         let (height, hash) = prepare_executor_startup(1, &writer).await?;
-        let session = LinkedSession::new(writer.connection(), factory(writer.connection()).await?);
+        let mut executor = factory(writer.connection()).await?;
+        let maintenance = executor.operations.maintenance.clone();
+        let pauses = mock_bitcoin.clone();
+        executor.operations.maintenance = Arc::new(move |owner, selection| {
+            let maintenance = maintenance.clone();
+            let pauses = pauses.clone();
+            Box::pin(async move {
+                maintenance(owner, selection).await?;
+                // Pause before the coordinator settles the owned rollback stage,
+                // so shutdown must retain both the root and its SQL transaction.
+                let gate = { pauses.lock().unwrap().rollback_stage_gate.clone() };
+                if let Some(gate) = gate {
+                    gate.wait().await;
+                }
+                Ok(())
+            })
+        });
+        let session = LinkedSession::new(writer.connection(), executor);
         if initialize {
             linked::initialize(service, &session, Network::Regtest, 1, genesis).await?;
         }
@@ -133,10 +150,6 @@ impl Executor for LiteExecutor {
     }
 
     async fn replay_blocks_after(&mut self, after_height: u64) -> Result<()> {
-        let replay_gate = { self.mock_bitcoin.lock().unwrap().replay_gate.clone() };
-        if let Some(gate) = replay_gate {
-            gate.wait().await;
-        }
         let events = self.mock_bitcoin.lock().unwrap().get_all_block_events();
         for event in events {
             if let BlockEvent::BlockInsert { block, .. } = &event

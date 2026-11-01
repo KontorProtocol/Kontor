@@ -27,6 +27,7 @@ use crate::database::certified_history;
 use crate::database::receipt_stream::{recovery_boundary, stream_state};
 use crate::keygen;
 use crate::logging;
+use crate::protocol::coordinator::application_closure::WorkItem;
 use crate::protocol::coordinator::linked;
 use crate::reactor::certified_fixture;
 use crate::reactor::consensus_state::{ConsensusState, ObservationChannels, certified_startup};
@@ -1462,9 +1463,25 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
     for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
-    cluster.wait_for_batch(1, Duration::from_secs(60)).await;
-
-    cluster.mine_and_send(&[]);
+    let preserved = cluster.wait_for_batch(1, Duration::from_secs(60)).await;
+    let checkpoint = preserved
+        .state_events
+        .iter()
+        .find_map(|event| match event {
+            StateEvent::BatchApplied {
+                consensus_height,
+                checkpoint,
+                ..
+            } if *consensus_height == preserved.consensus_height => *checkpoint,
+            _ => None,
+        })
+        .expect("preserved batch checkpoint");
+    let txids = preserved
+        .txids
+        .iter()
+        .map(|txid| txid.parse().unwrap())
+        .collect::<Vec<_>>();
+    cluster.mine_and_send(&txids);
     cluster.wait_for_block(2, Duration::from_secs(60)).await;
 
     for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
@@ -1483,7 +1500,7 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
         )
         .await;
 
-    // Verify rollback preserves checkpoint from pre-anchor state
+    // The confirmed batch must survive rollback of the later missing batch.
     let rollback_events = cluster
         .wait_for_state_event_matching(
             |e| {
@@ -1491,9 +1508,9 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
                     e,
                     StateEvent::RollbackExecuted {
                         to_anchor: 2,
-                        checkpoint: Some(_),
+                        checkpoint: Some(restored),
                         ..
-                    }
+                    } if *restored == checkpoint
                 )
             },
             Duration::from_secs(60),
@@ -1504,9 +1521,9 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
             e,
             StateEvent::RollbackExecuted {
                 to_anchor: 2,
-                checkpoint: Some(_),
+                checkpoint: Some(restored),
                 ..
-            }
+            } if *restored == checkpoint
         )),
         "Expected RollbackExecuted to anchor 2 with checkpoint, got: {rollback_events:?}"
     );
@@ -1800,7 +1817,7 @@ async fn shutdown_during_finality_replay_waits_for_active_replay() -> Result<()>
     })
     .await??;
     let gate = Arc::new(AsyncGate::default());
-    cluster.mock_bitcoin().replay_gate = Some(gate.clone());
+    cluster.mock_bitcoin().rollback_stage_gate = Some(gate.clone());
     for _ in 0..8 {
         cluster.mine_empty_and_send();
     }
@@ -1823,6 +1840,19 @@ async fn shutdown_during_finality_replay_waits_for_active_replay() -> Result<()>
         .flatten()
         .cloned()
         .collect();
+    assert_eq!(gate.entries.load(Ordering::SeqCst), 3);
+    for (conn, owner) in conns.iter().zip(&owners) {
+        assert_eq!(owner.active_roots().await, 1);
+        assert!(!conn.is_autocommit());
+        let frontier = certified_history::frontier(conn).await?;
+        assert!(frontier.authenticated_height > frontier.closed_height);
+        let progress =
+            certified_history::closure::progress(conn, frontier.authenticated_height).await?;
+        assert_eq!(
+            progress.next.map(|(action, _)| action),
+            Some(WorkItem::Rollback { height: 0 })
+        );
+    }
     let reactor_errors = cluster.reactor_errors.clone();
     let mut shutdown = tokio::spawn(async move { cluster.shutdown_with_owners().await });
     let retained = timeout(Duration::from_millis(150), &mut shutdown)

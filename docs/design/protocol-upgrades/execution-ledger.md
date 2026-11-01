@@ -1711,3 +1711,35 @@ it to an active owned closure stage and retain the shutdown/drain assertions.
 Remaining cluster cases, bounded proof paging/admission, real-graph integration,
 lead and consolidated independent review, and final CI remain incomplete. No PR,
 push or remote CI campaign was launched.
+
+
+### K4 active rollback ownership and remaining finality regressions
+
+Continuing from `7811b2ff`, moved the cluster's obsolete replay pause from the
+unused poller replay method onto the real executor maintenance call. The fixture
+pauses after rollback work but before the owned closure stage settles. Before
+shutdown it verifies all three nodes have one active root, a non-autocommit SQL
+connection, and a pending certified Rollback(0) stage. Shutdown must remain pending
+until release; afterward the drivers join, transactions settle, batch rows are
+removed, and no active, quarantined or fatal roots remain. The expected subsequent
+root-admission-closed errors are retained rather than hidden.
+
+`k4-cluster-shutdown26.log`: session 24082 exit 0, one passed in 56.65s.
+SHA-256 `5ee6f4e8451ee142c43c9c149b1349ae1e1b7b7cae2d27a505f7d9cd892e1c67`.
+Draft definition `362d47fb6fa8368c6dab27a1e23ba66b4efee06bd25b7cd062c501fcb448af73`.
+
+Fixed the pre-anchor preservation setup to confirm the earlier batch in Block(2),
+so only the later batch is missing. Its rollback assertion now compares the exact
+checkpoint captured after the earlier batch, rather than merely requiring some
+checkpoint. Five local regressions passed in one subsequent group: delayed
+validation with mempool removal, cascade invalidation, cross-block cascade,
+restart inside the finality window with receipt recovery, and exact preservation
+of the earlier checkpoint.
+
+`k4-cluster-finality27.log`: session 22034 exit 0, five passed in 307.68s.
+Draft definition `7080540f26ea843de0f9cbd5c48c54b5b24d3246274fa4344139f5b58fa664c2`.
+These scoped results preserve the prior source bindings; only the pre-anchor test
+changed between runs 26 and 27. Formatting and diff checks passed. Remaining
+cluster/old unit fixtures, obsolete executor capabilities, bounded proof paging
+and admission, real-graph integration, consolidated review and CI remain pending.
+No remote CI run or PR was created.
