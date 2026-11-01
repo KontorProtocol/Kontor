@@ -1,4 +1,6 @@
-use bitcoin::{BlockHash, hashes::Hash};
+use bitcoin::absolute::LockTime;
+use bitcoin::transaction::Version;
+use bitcoin::{Amount, BlockHash, ScriptBuf, Transaction, TxIn, TxOut, Witness, hashes::Hash};
 use indexer_types::BlockRow;
 use tempfile::TempDir;
 
@@ -74,6 +76,76 @@ pub(super) async fn prepared() -> Result<(
     decision.committee = authority.id()?;
     finish_genesis(&conn, &observation).await?;
     Ok((directory, conn, authority, input, decision, keys))
+}
+
+#[tokio::test]
+async fn unexecuted_decision_retains_exact_witnesses_across_restart() -> Result<()> {
+    let (directory, conn, authority, _, mut decision, keys) = prepared().await?;
+    let mut transaction = Transaction {
+        version: Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::from_sat(1),
+            script_pubkey: ScriptBuf::new(),
+        }],
+    };
+    transaction.input[0].witness = Witness::from_slice(&[b"decided witness"]);
+    let input = ExactInput::batch(
+        authority.context,
+        0,
+        BlockHash::all_zeros(),
+        &[transaction.clone()],
+    )?;
+    decision.descriptor = input.descriptor().clone();
+    let certified = AuthenticatedDecision::verify(
+        decision.clone(),
+        input,
+        proof(&decision, &keys, &[0, 1, 2], 0),
+        &authority,
+    )?;
+    append(&conn, &certified).await?;
+    let saved = frontier(&conn).await?;
+    assert_eq!(saved.authenticated_height, 1);
+    assert_eq!(saved.closed_height, 0);
+    drop(conn);
+
+    let reopened = new_connection(directory.path(), "certified.db").await?;
+    initialize(&reopened).await?;
+    let loaded = load(&reopened, 1).await?;
+    assert_eq!(loaded.input().transactions()?, vec![transaction.clone()]);
+    assert_eq!(loaded.input(), certified.input());
+    // No canonical batch has run. Durable input retention must not depend on its rows.
+    let count: i64 = reopened
+        .query("SELECT COUNT(*) FROM batches", ())
+        .await?
+        .next()
+        .await?
+        .unwrap()
+        .get(0)?;
+    assert_eq!(count, 0);
+
+    let mut alternative = transaction.clone();
+    alternative.input[0].witness = Witness::from_slice(&[b"different witness"]);
+    assert_eq!(alternative.compute_txid(), transaction.compute_txid());
+    assert_ne!(alternative.compute_wtxid(), transaction.compute_wtxid());
+    let alternative_input =
+        ExactInput::batch(authority.context, 0, BlockHash::all_zeros(), &[alternative])?;
+    let mut alternative_decision = decision;
+    alternative_decision.descriptor = alternative_input.descriptor().clone();
+    let conflicting = AuthenticatedDecision::verify(
+        alternative_decision.clone(),
+        alternative_input,
+        proof(&alternative_decision, &keys, &[0, 1, 2], 0),
+        &authority,
+    )?;
+    assert!(append(&reopened, &conflicting).await.is_err());
+    assert_eq!(frontier(&reopened).await?, saved);
+    assert_eq!(
+        load(&reopened, 1).await?.input().transactions()?,
+        vec![transaction]
+    );
+    Ok(())
 }
 
 #[tokio::test]

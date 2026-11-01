@@ -1,6 +1,4 @@
 use std::collections::BTreeMap;
-#[cfg(test)]
-use std::collections::VecDeque;
 use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
@@ -35,8 +33,6 @@ use crate::database::queries::{
     get_checkpoint_latest, get_transaction_by_txid, min_unsettled_batch_tx_height,
     select_block_at_height, select_existing_txids, select_unfinalized_batches,
 };
-#[cfg(test)]
-use crate::database::queries::{insert_batch, insert_batch_txids, insert_unconfirmed_batch_tx};
 use crate::protocol::coordinator::certified_input::EraContext;
 pub use crate::protocol::coordinator::decision::DeferredDecision;
 use crate::protocol::coordinator::v1::build_finality_events;
@@ -211,86 +207,6 @@ async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> R
         }
     }
     Ok(missing)
-}
-
-/// Write the decided record for every decision still sitting in the queue, so
-/// discarding the queue does not discard consensus history.
-///
-/// Best-effort, matching `record_declined_block`. Propagating would take the node
-/// down on a reorg for a transient DB error, and since the queue lives only in memory
-/// the decisions would be lost on restart anyway — strictly worse than a loud warning.
-///
-/// Writes all three: the `batches` row, the DECIDED txid list (I4), and the raw
-/// bodies the value was carrying. That last one is easy to talk yourself out of —
-/// the batch was never executed, so it is tempting to say this node "held nothing" —
-/// but a queued batch is normally `BatchTx::Raw`, and for a transaction that never
-/// confirms this node's copy is the only one a syncing peer can obtain: not its
-/// mempool, not bitcoind. Dropping them reopens the sync hole this change closes
-/// elsewhere by removing the finality-window gate on serving raw txs.
-#[cfg(test)]
-async fn record_undrained_decisions(
-    conn: &libsql::Connection,
-    decisions: &VecDeque<DeferredDecision>,
-) {
-    for decision in decisions {
-        let consensus_height = decision.consensus_height.as_u64();
-        if let Err(e) = insert_batch(
-            conn,
-            consensus_height,
-            decision.value.block_height(),
-            &decision.value.block_hash().to_string(),
-            &decision.certificate,
-            decision.value.is_block(),
-        )
-        .await
-        {
-            warn!(
-                error = %e,
-                consensus_height,
-                "Failed to record an undrained decision — consensus history now has a gap"
-            );
-            continue;
-        }
-
-        if decision.value.is_block() {
-            continue;
-        }
-        // The DECIDED list, which is the full one even if a replay had narrowed what
-        // this node would have executed.
-        let txids: Vec<String> = decision
-            .decided_txids()
-            .iter()
-            .map(|t| t.to_string())
-            .collect();
-        if !txids.is_empty()
-            && let Err(e) = insert_batch_txids(conn, consensus_height, &txids).await
-        {
-            warn!(
-                error = %e,
-                consensus_height,
-                "Failed to record an undrained batch's decided txids"
-            );
-        }
-
-        for raw in decision.decided_txs() {
-            let serialized = bitcoin::consensus::serialize(&raw);
-            if let Err(e) = insert_unconfirmed_batch_tx(
-                conn,
-                &raw.compute_txid().to_string(),
-                consensus_height,
-                &serialized,
-            )
-            .await
-            {
-                warn!(
-                    error = %e,
-                    consensus_height,
-                    "Failed to record an undrained batch's raw transaction — a peer may \
-                     be unable to resolve it"
-                );
-            }
-        }
-    }
 }
 
 /// Probe every batch whose deadline has passed, in the caller's evaluation order.
@@ -883,16 +799,14 @@ impl ConsensusState {
 #[cfg(test)]
 mod tests {
     use super::{
-        DeferredDecision, UnfinalizedBatch, VecDeque, build_finality_events,
-        load_unfinalized_batches, missing_txids, probe_at_deadline, record_undrained_decisions,
+        UnfinalizedBatch, build_finality_events, load_unfinalized_batches, missing_txids,
+        probe_at_deadline,
     };
     use crate::consensus::Height;
-    use crate::consensus::Value;
     use crate::consensus::finality_types::FinalityEvent;
-    use crate::database::queries::select_unconfirmed_batch_txs;
     use crate::database::queries::{confirm_transaction, insert_block, insert_transaction};
-    use crate::reactor::mock_bitcoin::make_tx;
     use crate::test_utils::{new_mock_block_hash, new_test_db};
+    use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, Txid};
 
     fn txid(n: u8) -> Txid {
@@ -1198,73 +1112,6 @@ mod tests {
         );
     }
 
-    /// A reorg discards the deferred queue, and every entry in it is there precisely
-    /// BECAUSE it could not be applied — so none of them has a `batches` row yet.
-    /// Dropping them silently erases those consensus heights: nothing re-decides them
-    /// (`current_height` is already past), and the startup cleanup only trims a
-    /// SUFFIX, so a middle hole is permanent and this node can never serve those
-    /// heights to a syncing peer. That is I3, violated on the one discard path the
-    /// rest of this PR did not cover.
-    #[tokio::test]
-    async fn undrained_decisions_are_recorded_before_the_queue_is_discarded() {
-        let (_reader, writer, _dir) = new_test_db().await.unwrap();
-        let conn = writer.connection();
-
-        let mut queued: VecDeque<DeferredDecision> = VecDeque::new();
-        queued.push_back(DeferredDecision {
-            consensus_height: Height::new(41),
-            value: Value::new_block(300, BlockHash::all_zeros()),
-            certificate: vec![1, 2, 3],
-            execution_txs: None,
-        });
-        queued.push_back(DeferredDecision {
-            consensus_height: Height::new(42),
-            value: Value::new_batch_raw(301, BlockHash::all_zeros(), vec![make_tx(1), make_tx(2)]),
-            certificate: vec![4, 5, 6],
-            // A replay had already narrowed this one — the DECIDED list is what a
-            // syncing peer needs, not the empty set we would have executed.
-            execution_txs: Some(vec![make_tx(1), make_tx(2)]),
-        });
-
-        record_undrained_decisions(&conn, &queued).await;
-
-        // The raw bodies the value was carrying must survive too. A queued batch is
-        // usually `BatchTx::Raw` (the proposer builds it that way, and `upgrade`
-        // promotes what it can), and for a tx that never confirms this node's copy is
-        // the ONLY one a syncing peer can get — not its mempool, not bitcoind.
-        // Recording txids alone reopens the sync hole this PR closes elsewhere.
-        assert_eq!(
-            select_unconfirmed_batch_txs(&conn, 42).await.unwrap().len(),
-            2,
-            "the raw transactions the decision carried must be recorded, not dropped"
-        );
-
-        for h in [41u64, 42] {
-            let mut rows = conn
-                .query(
-                    "SELECT COUNT(*) FROM batches WHERE consensus_height = ?",
-                    [h],
-                )
-                .await
-                .unwrap();
-            let n: u64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
-            assert_eq!(n, 1, "consensus height {h} must leave a row in `batches`");
-        }
-
-        let mut rows = conn
-            .query(
-                "SELECT COUNT(*) FROM batch_txids WHERE batch_height = ?",
-                [42u64],
-            )
-            .await
-            .unwrap();
-        let n: u64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
-        assert_eq!(
-            n, 2,
-            "the batch's DECIDED txid list must be recorded, not the narrowed one"
-        );
-    }
-
     /// `check_finality` sorts the tracking set IN PLACE once and both the probe and
     /// the partition then walk that same order — so they agree by construction rather
     /// than by a second sort that has to match. This pins the two properties that
@@ -1314,12 +1161,15 @@ mod tests {
     // Data part could never satisfy.
     mod proposal_auth {
         use super::super::{authenticate_proposal, proposal_sign_hash};
+        use crate::consensus::Value;
         use crate::consensus::signing::PrivateKey;
+        use crate::consensus::test_fixtures::context;
         use crate::consensus::{
             Address, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart, ProposalParts,
             Validator, ValidatorSet,
         };
         use bitcoin::BlockHash;
+        use bitcoin::hashes::Hash;
         use malachitebft_core_types::Round;
 
         fn key(seed: u8) -> PrivateKey {
@@ -1337,7 +1187,9 @@ mod tests {
         }
 
         fn data() -> ProposalData {
-            ProposalData::new_batch(5, BlockHash::all_zeros(), vec![])
+            ProposalData::new(
+                Value::new_batch_raw(context(), 5, BlockHash::all_zeros(), vec![]).unwrap(),
+            )
         }
 
         fn parts(
@@ -1400,8 +1252,9 @@ mod tests {
             // Sign over the honest data, then swap the Data part for a different
             // anchor — the witness-carrying batch a malleator would substitute.
             let mut p = parts(height, round, addr(&keys[0]), &keys[0], data());
-            p.parts[1] =
-                ProposalPart::Data(ProposalData::new_batch(99, BlockHash::all_zeros(), vec![]));
+            p.parts[1] = ProposalPart::Data(ProposalData::new(
+                Value::new_batch_raw(context(), 99, BlockHash::all_zeros(), vec![]).unwrap(),
+            ));
             let err = authenticate_proposal(&vs, addr(&keys[0]), &p).unwrap_err();
             assert!(err.contains("invalid proposal signature"), "{err}");
         }

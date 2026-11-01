@@ -25,6 +25,7 @@ use super::{Action, Event, Schedule};
 use crate::block::filter_map;
 use crate::consensus::Height;
 use crate::consensus::finality_types::FINALITY_WINDOW;
+use crate::database::certified_history;
 use crate::database::confirmation::get_confirmation_position;
 use crate::database::queries::{
     get_transaction_by_txid, select_latest_consensus_height, select_unconfirmed_batch_txs,
@@ -313,10 +314,9 @@ impl<'a> TimedWork<'a> {
                 .get::<u64>(0)?
                 == 0
         );
-        ensure!(
-            self.reactor.consensus.deferred_decisions.is_empty()
-                && self.reactor.consensus.pending_next_height.is_none()
-        );
+        let frontier = certified_history::frontier(&self.reactor.db_conn()).await?;
+        ensure!(frontier.closed_height == frontier.authenticated_height);
+        ensure!(self.reactor.consensus.pending_next_height.is_none());
         Ok(())
     }
 
@@ -377,7 +377,8 @@ impl Work for TimedWork<'_> {
             } => {
                 ensure!(
                     *anchor_height == self.reactor.execution.last_height
-                        && self.reactor.execution.last_hash == Some(self.plan.blocks[*block].block.prev_hash)
+                        && self.reactor.execution.last_hash
+                            == Some(self.plan.blocks[*block].block.prev_hash)
                 );
                 self.range(*block, transactions)?;
             }
@@ -407,13 +408,29 @@ impl Work for TimedWork<'_> {
                         && *request == self.api_results.len()
                 );
                 ensure!(self.plan.api.instructions(*request)?.len() == *operations);
-                ensure!(!self.reactor.execution.test_runtime().await.simulating && self.simulation.is_none());
+                ensure!(
+                    !self.reactor.execution.test_runtime().await.simulating
+                        && self.simulation.is_none()
+                );
             }
         }
         self.storage_height = self.reactor.execution.test_runtime().await.storage.height;
-        self.transaction_context = self.reactor.execution.test_runtime().await.storage.tx_context.clone();
+        self.transaction_context = self
+            .reactor
+            .execution
+            .test_runtime()
+            .await
+            .storage
+            .tx_context
+            .clone();
         self.previous_output = self.reactor.execution.test_runtime().await.previous_output;
-        self.op_return_data = self.reactor.execution.test_runtime().await.op_return_data.clone();
+        self.op_return_data = self
+            .reactor
+            .execution
+            .test_runtime()
+            .await
+            .op_return_data
+            .clone();
         self.operation_counters = {
             let runtime = self.reactor.execution.test_runtime().await;
             (
@@ -421,7 +438,10 @@ impl Work for TimedWork<'_> {
                 runtime.result_id_counter.get().await,
             )
         };
-        self.tip = (self.reactor.execution.last_height, self.reactor.execution.last_hash);
+        self.tip = (
+            self.reactor.execution.last_height,
+            self.reactor.execution.last_hash,
+        );
         Checkpoint::capture(
             self.directory,
             &database_projection(&self.reactor.db_conn()).await?,
@@ -491,7 +511,9 @@ impl Work for TimedWork<'_> {
         let result = self.check_observed(event).await;
         self.reactor.execution.test_runtime().await.component_cache = execution_cache;
         ensure!(
-            self.reactor.execution.test_runtime()
+            self.reactor
+                .execution
+                .test_runtime()
                 .await
                 .component_cache
                 .workload_metrics()
@@ -577,8 +599,10 @@ impl TimedWork<'_> {
             Action::Block { block } => {
                 let input = &self.plan.blocks[*block];
                 ensure!(
-                    (self.reactor.execution.last_height, self.reactor.execution.last_hash)
-                        == (input.block.height, Some(input.block.hash))
+                    (
+                        self.reactor.execution.last_height,
+                        self.reactor.execution.last_hash
+                    ) == (input.block.height, Some(input.block.hash))
                 );
                 let range = self.range(*block, &self.plan.schedule.blocks[*block].fresh)?;
                 pending.check_block(self.reactor, &input.block).await?;
@@ -665,7 +689,10 @@ impl TimedWork<'_> {
                 {
                     let runtime = self.reactor.execution.test_runtime().await;
                     ensure!(
-                        (self.reactor.execution.last_height, self.reactor.execution.last_hash) == self.tip
+                        (
+                            self.reactor.execution.last_height,
+                            self.reactor.execution.last_hash
+                        ) == self.tip
                             && !runtime.simulating
                             && runtime.storage.height == self.storage_height
                             && runtime.storage.tx_context == self.transaction_context

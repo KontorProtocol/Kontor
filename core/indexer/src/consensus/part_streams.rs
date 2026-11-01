@@ -216,7 +216,9 @@ mod tests {
     use malachitebft_app_channel::app::streaming::StreamContent;
     use malachitebft_app_channel::app::types::PeerId;
 
+    use crate::consensus::Address;
     use crate::consensus::signing::PrivateKey;
+    use crate::consensus::test_fixtures;
     use crate::consensus::{ProposalData, ProposalFin, ProposalInit};
 
     fn dummy_signature() -> malachitebft_signing_ed25519::Signature {
@@ -240,12 +242,9 @@ mod tests {
             Height::new(4),
             Round::new(1),
             Round::Nil,
-            crate::consensus::Address::from_public_key(&PrivateKey::from([1u8; 32]).public_key()),
+            Address::from_public_key(&PrivateKey::from([1u8; 32]).public_key()),
         ));
-        let data = ProposalPart::Data(ProposalData::new_block(
-            7,
-            bitcoin::BlockHash::from_raw_hash(bitcoin::hashes::Hash::all_zeros()),
-        ));
+        let data = ProposalPart::Data(ProposalData::new(test_fixtures::block()));
         let fin = ProposalPart::Fin(ProposalFin::new(dummy_signature()));
         vec![
             StreamMessage::new(stream_id.clone(), 0, StreamContent::Data(init)),
@@ -339,7 +338,7 @@ mod tests {
             Height::new(4),
             Round::new(1),
             Round::Nil,
-            crate::consensus::Address::from_public_key(&PrivateKey::from([1u8; 32]).public_key()),
+            Address::from_public_key(&PrivateKey::from([1u8; 32]).public_key()),
         ));
         StreamMessage::new(
             StreamId::new(stream_seed.to_be_bytes().to_vec().into()),
@@ -351,10 +350,7 @@ mod tests {
     /// A part with an arbitrary sequence under stream id `stream_seed`, so a
     /// single stream can be fed many distinct sequences.
     fn part_at(stream_seed: u32, sequence: u64) -> StreamMessage<ProposalPart> {
-        let data = ProposalPart::Data(ProposalData::new_block(
-            7,
-            bitcoin::BlockHash::from_raw_hash(bitcoin::hashes::Hash::all_zeros()),
-        ));
+        let data = ProposalPart::Data(ProposalData::new(test_fixtures::block()));
         StreamMessage::new(
             StreamId::new(stream_seed.to_be_bytes().to_vec().into()),
             sequence,

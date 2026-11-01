@@ -1400,3 +1400,32 @@ Separate broader unit compile (`.build-cache/k4-unit-fixtures-build.log`) failed
 with 136 errors in old fixtures and moved test accessors. This is an outstanding
 integration task, not a skipped acceptance gate. No CI campaign or review round
 was started for this intermediate checkpoint.
+
+### K4 existing fixture migration (in progress)
+
+Routed existing test access through the shared execution context. Updated isolated
+stream, proposal-signature and replay-model fixtures to construct exact values
+with explicit era context. The mempool verdict fixture now carries its original
+value. Retained-row witness tests use the database API after removal of the old
+reactor resolver.
+
+Removed the obsolete test-only volatile-queue persistence implementation and its
+self-test. Added a certified-journal regression that persists an unexecuted
+witness-bearing decision, reopens the database, checks exact input retention
+without canonical batch rows, and rejects a different witness at the same
+consensus height. This new regression has not yet executed.
+
+The broad unit compile progressed from 136 to 30 errors, then to 12 errors
+(terminal exit 101, `.build-cache/k4-unit-fixtures-build3.log`). Remaining errors
+were old synthetic block constructors, an obsolete rollback-cache method and
+volatile-queue assertions. After that compile, the archived deadline fixture was
+updated to expect completed durable replay without Bitcoin redelivery, and the
+frozen block fixture was changed to use its retained raw Bitcoin body. Those last
+edits have formatting/diff validation only. No passing broad-suite claim is made.
+
+Next: migrate real Reactor setup to authenticated genesis and signed exact-input
+decisions, including the mock Bitcoin chain and handoff/fault/storage fixtures.
+Do not restore synthetic-input acceptance or fabricate certified history for
+legacy runtime snapshots. Then compile and run the affected regressions before
+consolidated K4 review. No remote CI, performance workload or new review round
+was launched for these intermediate edits.

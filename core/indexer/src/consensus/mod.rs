@@ -8,6 +8,8 @@ mod part_streams;
 mod proposal;
 mod proposal_part;
 pub mod signing;
+#[cfg(test)]
+pub(crate) mod test_fixtures;
 mod validator_set;
 mod value;
 mod vote;

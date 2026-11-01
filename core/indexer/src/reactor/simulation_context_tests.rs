@@ -51,6 +51,7 @@ async fn restores_context(
         vout: 4,
     };
     trial
+        .execution
         .test_runtime()
         .await
         .set_context(
@@ -60,9 +61,19 @@ async fn restores_context(
             Some(vec![8, 7, 6]),
         )
         .await;
-    trial.test_runtime().await.simulating = was_simulating;
-    let ids = trial.test_runtime().await.id_generation_counter.clone();
-    let results = trial.test_runtime().await.result_id_counter.clone();
+    trial.execution.test_runtime().await.simulating = was_simulating;
+    let ids = trial
+        .execution
+        .test_runtime()
+        .await
+        .id_generation_counter
+        .clone();
+    let results = trial
+        .execution
+        .test_runtime()
+        .await
+        .result_id_counter
+        .clone();
     for _ in 0..2 {
         ids.increment().await;
     }
@@ -114,21 +125,49 @@ async fn restores_context(
     }
     let outcome = trial.simulate(tx).await;
     conn.authorizer(None)?;
-    ensure!(trial.test_runtime().await.storage.height == 1);
-    ensure!(trial.test_runtime().await.storage.tx_context == Some(prior));
-    ensure!(trial.test_runtime().await.previous_output == Some(prior_output));
-    ensure!(trial.test_runtime().await.op_return_data.as_deref() == Some([8, 7, 6].as_slice()));
-    ensure!(trial.test_runtime().await.simulating == was_simulating);
+    ensure!(trial.execution.test_runtime().await.storage.height == 1);
+    ensure!(trial.execution.test_runtime().await.storage.tx_context == Some(prior));
+    ensure!(trial.execution.test_runtime().await.previous_output == Some(prior_output));
+    ensure!(
+        trial
+            .execution
+            .test_runtime()
+            .await
+            .op_return_data
+            .as_deref()
+            == Some([8, 7, 6].as_slice())
+    );
+    ensure!(trial.execution.test_runtime().await.simulating == was_simulating);
     ensure!(ids.get().await == 2 && results.get().await == 3);
-    ensure!(trial.test_runtime().await.id_generation_counter.get().await == 2);
-    ensure!(trial.test_runtime().await.result_id_counter.get().await == 3);
+    ensure!(
+        trial
+            .execution
+            .test_runtime()
+            .await
+            .id_generation_counter
+            .get()
+            .await
+            == 2
+    );
+    ensure!(
+        trial
+            .execution
+            .test_runtime()
+            .await
+            .result_id_counter
+            .get()
+            .await
+            == 3
+    );
     trial
+        .execution
         .test_runtime()
         .await
         .id_generation_counter
         .increment()
         .await;
     trial
+        .execution
         .test_runtime()
         .await
         .result_id_counter
@@ -144,6 +183,7 @@ async fn restores_context(
         );
         ensure!(
             trial
+                .execution
                 .test_runtime()
                 .await
                 .storage
@@ -162,9 +202,10 @@ async fn restores_context(
                 OpStatus::Ok
             }));
         ensure!(snapshot(&conn).await? == before);
-        ensure!(trial.test_runtime().await.stack.is_empty().await);
+        ensure!(trial.execution.test_runtime().await.stack.is_empty().await);
         ensure!(
             trial
+                .execution
                 .test_runtime()
                 .await
                 .storage

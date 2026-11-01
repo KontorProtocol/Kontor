@@ -227,13 +227,13 @@ async fn workload_timed_mixed_event_replay() -> Result<()> {
         .await?;
         if let Some(population) = &retained_history {
             population
-                .seed_height(&mut *history.test_runtime().await, height)
+                .seed_height(&mut *history.execution.test_runtime().await, height)
                 .await?;
         }
         if height == 90 {
             ensure!(
                 validators
-                    .schedule(&mut *history.test_runtime().await)
+                    .schedule(&mut *history.execution.test_runtime().await)
                     .await?
                     .due
                     == ANCHOR_HEIGHT + 1
@@ -241,7 +241,7 @@ async fn workload_timed_mixed_event_replay() -> Result<()> {
         }
     }
     StoragePopulation::prepare(
-        &mut *history.test_runtime().await,
+        &mut *history.execution.test_runtime().await,
         settings.population.agreements,
         settings.population.members_per_agreement,
         [81; 32],
@@ -257,16 +257,19 @@ async fn workload_timed_mixed_event_replay() -> Result<()> {
         .signer_id();
     ensure!(
         payer != api_payer
-            && staking::get_stake(&mut *history.test_runtime().await, &api_payer.to_string())
-                .await?
-                .is_none()
+            && staking::get_stake(
+                &mut *history.execution.test_runtime().await,
+                &api_payer.to_string()
+            )
+            .await?
+            .is_none()
     );
     let layout = MixedLayout::Single {
         payer,
         operations_per_transaction: 2,
     };
     let first_recipe = {
-        let mut runtime = history.test_runtime().await;
+        let mut runtime = history.execution.test_runtime().await;
         MixedWorkload::prepare_timed(&mut runtime, payer, schedule.blocks[0].transactions().len())
             .await?
             .with_pagination(
@@ -306,7 +309,7 @@ async fn workload_timed_mixed_event_replay() -> Result<()> {
     )?;
     let projection = database_projection(&history.db_conn()).await?;
     let model = Before::capture(
-        &mut *history.test_runtime().await,
+        &mut *history.execution.test_runtime().await,
         &validators,
         &public.to_string(),
         settings.population,

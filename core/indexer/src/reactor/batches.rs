@@ -1344,19 +1344,22 @@ impl<E: Executor> Reactor<E> {
 #[cfg(test)]
 mod tests {
     use super::{batch_is_ordered, dependency_sort};
+    use crate::consensus::test_fixtures::context;
     use crate::consensus::{Height, Value};
     use crate::database::queries::{
         delete_unconfirmed_batch_txs_below, insert_batch, insert_unconfirmed_batch_tx,
+        select_unconfirmed_batch_tx,
     };
     use crate::protocol::coordinator::v1::build_replay_queue;
     use crate::reactor::consensus_state::DeferredDecision;
-    use crate::reactor::{Reactor, lite_executor::LiteExecutor};
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use bitcoin::absolute::LockTime;
-    use bitcoin::consensus::serialize;
+    use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::hashes::Hash;
     use bitcoin::transaction::Version;
-    use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness};
+    use bitcoin::{
+        Amount, BlockHash, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
+    };
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::collections::VecDeque;
@@ -1430,17 +1433,26 @@ mod tests {
         }
         for (height, expected) in [(10, Some(first)), (11, Some(second.clone())), (12, None)] {
             assert_eq!(
-                Reactor::<LiteExecutor>::resolve_tx_from_db(&conn, &txid, height).await,
+                select_unconfirmed_batch_tx(&conn, &txid.to_string(), height)
+                    .await
+                    .unwrap()
+                    .map(|bytes| deserialize::<Transaction>(&bytes).unwrap()),
                 expected
             );
         }
         delete_unconfirmed_batch_txs_below(&conn, 11).await.unwrap();
         assert_eq!(
-            Reactor::<LiteExecutor>::resolve_tx_from_db(&conn, &txid, 10).await,
+            select_unconfirmed_batch_tx(&conn, &txid.to_string(), 10)
+                .await
+                .unwrap()
+                .map(|bytes| deserialize::<Transaction>(&bytes).unwrap()),
             None
         );
         assert_eq!(
-            Reactor::<LiteExecutor>::resolve_tx_from_db(&conn, &txid, 11).await,
+            select_unconfirmed_batch_tx(&conn, &txid.to_string(), 11)
+                .await
+                .unwrap()
+                .map(|bytes| deserialize::<Transaction>(&bytes).unwrap()),
             Some(second)
         );
     }
@@ -1497,7 +1509,7 @@ mod tests {
     fn decision(consensus_height: u64) -> DeferredDecision {
         DeferredDecision {
             consensus_height: Height::new(consensus_height),
-            value: Value::new_batch_raw(0, bitcoin::BlockHash::all_zeros(), vec![]),
+            value: Value::new_batch_raw(context(), 0, BlockHash::all_zeros(), vec![]).unwrap(),
             certificate: Vec::new(),
             execution_txs: None,
         }
@@ -1514,7 +1526,7 @@ mod tests {
         txs: Vec<Transaction>,
     ) -> (DeferredDecision, Vec<Transaction>) {
         let mut d = decision(consensus_height);
-        d.value = Value::new_batch_raw(0, bitcoin::BlockHash::all_zeros(), txs.clone());
+        d.value = Value::new_batch_raw(context(), 0, BlockHash::all_zeros(), txs.clone()).unwrap();
         (d, txs)
     }
 
@@ -1530,7 +1542,13 @@ mod tests {
         txs: Vec<Transaction>,
     ) -> (DeferredDecision, Vec<Transaction>) {
         let mut d = decision(consensus_height);
-        d.value = Value::new_batch_raw(anchor_height, bitcoin::BlockHash::all_zeros(), txs.clone());
+        d.value = Value::new_batch_raw(
+            context(),
+            anchor_height,
+            BlockHash::all_zeros(),
+            txs.clone(),
+        )
+        .unwrap();
         (d, txs)
     }
 

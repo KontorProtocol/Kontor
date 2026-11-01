@@ -22,7 +22,7 @@ use super::mempool::MempoolPreparation;
 use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::signing::PrivateKey;
-use crate::consensus::{Address, Height, ProposalData};
+use crate::consensus::{Address, Height, ProposalData, Value};
 use crate::database::queries::rollback_to_height;
 use crate::protocol::coordinator::linked::{PreparedTransaction, TransactionRecognizer};
 use crate::protocol::coordinator::selection::{
@@ -233,6 +233,12 @@ async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Resu
         trial
             .apply_io_verdicts(
                 IoApply::ValidateProposal {
+                    value: Value::new_batch_raw(
+                        trial.consensus.protocol_context,
+                        1,
+                        new_mock_block_hash(1),
+                        vec![raw.clone()],
+                    )?,
                     selection,
                     height: Height::new(1),
                     round: Round::new(0),
@@ -311,7 +317,7 @@ async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -
     let record = seen.clone();
     // This deliberately recognizes bytes that P1 rejects, so a node-side P1
     // fallback cannot pass the dispatch assertions below.
-    trial.recognizer = TransactionRecognizer::new(
+    trial.execution.recognizer = TransactionRecognizer::new(
         ExecutorVersion::LegacyP1,
         Network::Regtest,
         Arc::new(move |_, bytes| {
@@ -327,9 +333,10 @@ async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -
     );
     let selection = trial.preparation_selection().await?;
     let prepared = trial
+        .execution
         .executor
         .parse_mempool(
-            &trial.recognizer,
+            &trial.execution.recognizer,
             &selection,
             vec![raw.clone(), replacement.clone()],
         )
@@ -361,8 +368,9 @@ async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -
     ensure!(!prepared[0].parsed.as_ref().unwrap().eligible_for(&foreign));
     ensure!(
         trial
+            .execution
             .executor
-            .parse_mempool(&trial.recognizer, &foreign, vec![raw.clone()])
+            .parse_mempool(&trial.execution.recognizer, &foreign, vec![raw.clone()])
             .await
             .is_err()
     );
@@ -377,7 +385,12 @@ async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -
     let (reply, receive) = oneshot::channel();
     trial
         .validate_and_accept_proposal(
-            &ProposalData::new_batch(1, new_mock_block_hash(1), vec![replacement.clone()]),
+            &ProposalData::new(Value::new_batch_raw(
+                trial.consensus.protocol_context,
+                1,
+                new_mock_block_hash(1),
+                vec![replacement.clone()],
+            )?),
             trial.consensus.address,
             Height::new(2),
             Round::new(0),
@@ -396,15 +409,16 @@ async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -
     ensure!(seen.lock().unwrap().last() == Some(&serialize(&replacement)));
 
     // Infrastructure failures must not become successful empty preparations.
-    trial.recognizer = TransactionRecognizer::new(
+    trial.execution.recognizer = TransactionRecognizer::new(
         ExecutorVersion::LegacyP1,
         Network::Regtest,
         Arc::new(|_, _| Err((0, "recognizer unavailable".into()))),
     );
     ensure!(
         trial
+            .execution
             .executor
-            .parse_mempool(&trial.recognizer, &selection, vec![raw])
+            .parse_mempool(&trial.execution.recognizer, &selection, vec![raw])
             .await
             .is_err()
     );

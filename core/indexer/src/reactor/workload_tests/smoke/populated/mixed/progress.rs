@@ -84,13 +84,13 @@ impl<'a> Progress<'a> {
         }
         self.workload
             .check_slice(
-                &mut *trial.test_runtime().await,
+                &mut *trial.execution.test_runtime().await,
                 &all,
                 &roots,
                 &ExecutionSlice {
                     operations: operations.clone(),
                     layout: self.layout,
-                    height: trial.last_height,
+                    height: trial.execution.last_height,
                     confirmed: false,
                 },
             )
@@ -100,7 +100,7 @@ impl<'a> Progress<'a> {
                 .filter(|index| self.workload.file_index(index / 20, index % 20).is_some())
                 .count();
             files
-                .check_pending(&mut *trial.test_runtime().await, created)
+                .check_pending(&mut *trial.execution.test_runtime().await, created)
                 .await?;
         }
         let effects = self
@@ -141,7 +141,7 @@ impl<'a> Progress<'a> {
             let operations = first * 2..(first + chunk.len()) * 2;
             self.validate_next(&operations)?;
             let proof = BatchProof::execute_many(trial, chunk, first, checkpoint_directory).await?;
-            let rows = receipts(&trial.db_conn(), trial.last_height).await?;
+            let rows = receipts(&trial.db_conn(), trial.execution.last_height).await?;
             let mut wrong_rows = rows.clone();
             let wrong = wrong_rows
                 .iter_mut()
@@ -182,7 +182,7 @@ impl<'a> Progress<'a> {
             eprintln!(
                 "workload_mixed_batch_checked={}",
                 serde_json::json!({
-                    "height": trial.last_height, "operations_start": operations.start,
+                    "height": trial.execution.last_height, "operations_start": operations.start,
                     "operations_end": operations.end, "transactions": chunk.len(),
                 })
             );

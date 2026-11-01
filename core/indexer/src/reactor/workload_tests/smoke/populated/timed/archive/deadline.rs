@@ -19,9 +19,9 @@ use super::super::super::checkpoint::Checkpoint;
 use super::super::super::replay_identity::ReplayIdentity;
 use super::format::Saved;
 use crate::bitcoin_client::client::RegtestRpc;
-use crate::bitcoin_follower::event::BlockEvent;
 use crate::consensus::finality_types::{FINALITY_WINDOW, FinalityEvent, StateEvent};
 use crate::database::Writer;
+use crate::database::certified_history;
 use crate::database::queries::{
     get_transaction_by_txid, get_transaction_execution_usage, select_applicable_exclusions,
     select_latest_consensus_height,
@@ -130,7 +130,7 @@ async fn workload_saved_timed_missing_confirmation_rolls_back_at_deadline() -> R
     )
     .await?;
     let (replay_tx, mut replay_rx) = mpsc::channel(1);
-    trial.executor = RuntimeExecutor::new(client.clone()).with_replay_tx(replay_tx);
+    trial.execution.executor = RuntimeExecutor::new(client.clone()).with_replay_tx(replay_tx);
     let (decided_tx, _decided_rx) = mpsc::channel(64);
     let (finality_tx, mut finality_rx) = mpsc::channel(64);
     let (state_tx, mut state_rx) = mpsc::channel(64);
@@ -192,20 +192,10 @@ async fn workload_saved_timed_missing_confirmation_rolls_back_at_deadline() -> R
             trial.advance().await?;
         }
     }
-    // Finality requests asynchronous block redelivery. Drive the poller's input
-    // path with the same blocks, preserving the original queued decisions.
-    ensure!(replay_rx.try_recv()? == anchor_height - 1);
-    ensure!(trial.last_height == anchor_height - 1);
-    ensure!(!trial.consensus.deferred_decisions.is_empty());
-    for block in &blocks {
-        trial
-            .process_block_event(BlockEvent::BlockInsert {
-                target_height: deadline,
-                block: block.clone().into(),
-            })
-            .await?;
-    }
+    // Replay consumes certified bodies before advance returns, without poller redelivery.
     ensure!(replay_rx.try_recv().is_err());
+    let frontier = certified_history::frontier(&trial.db_conn()).await?;
+    ensure!(frontier.closed_height == frontier.authenticated_height);
     let events: Vec<_> = std::iter::from_fn(|| finality_rx.try_recv().ok()).collect();
     let [
         FinalityEvent::Rollback {
@@ -235,7 +225,7 @@ async fn workload_saved_timed_missing_confirmation_rolls_back_at_deadline() -> R
     ensure!(states.iter().any(|event| matches!(event,
         StateEvent::BatchApplied { consensus_height, txid_count: 0, .. }
             if consensus_height.as_u64() == consensus)));
-    ensure!((trial.last_height, trial.last_hash) == (deadline, Some(parent)));
+    ensure!((trial.execution.last_height, trial.execution.last_hash) == (deadline, Some(parent)));
     let exclusions = select_applicable_exclusions(&trial.db_conn()).await?;
     ensure!(exclusions.len() == 1 && exclusions.get(&consensus) == Some(&txids));
     for txid in &txids {
@@ -259,7 +249,6 @@ async fn workload_saved_timed_missing_confirmation_rolls_back_at_deadline() -> R
             .all(|row| row.txid.as_ref().is_none_or(|txid| !txids.contains(txid)))
     );
     ensure!(trial.consensus.unfinalized_batches.is_empty());
-    ensure!(trial.consensus.deferred_decisions.is_empty());
     let settled = database_projection(&trial.db_conn()).await?;
     trial.advance().await?;
     ensure!(database_projection(&trial.db_conn()).await? == settled);
@@ -272,7 +261,7 @@ async fn workload_saved_timed_missing_confirmation_rolls_back_at_deadline() -> R
         "workload_missing_confirmation_control={}",
         json!({
             "anchor":anchor_height,"deadline":deadline,"transactions":txids.len(),
-            "consensus_height":consensus,"rollback_count":1,"replay_tip":trial.last_height
+            "consensus_height":consensus,"rollback_count":1,"replay_tip":trial.execution.last_height
         })
     );
     Ok(())

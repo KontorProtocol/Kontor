@@ -18,9 +18,9 @@ impl SimulationProof {
     ) -> Result<Self> {
         let tx = filter_map((0, reveal.clone())).context("simulation input did not decode")?;
         let before = database_projection(&trial.db_conn()).await?;
-        let storage_height = trial.test_runtime().await.storage.height;
-        let tip = (trial.last_height, trial.last_hash);
-        ensure!(!trial.test_runtime().await.simulating);
+        let storage_height = trial.execution.test_runtime().await.storage.height;
+        let tip = (trial.execution.last_height, trial.execution.last_hash);
+        ensure!(!trial.execution.test_runtime().await.simulating);
         let mut previous = None;
         let mut paid = Vec::new();
         for _ in 0..2 {
@@ -30,11 +30,11 @@ impl SimulationProof {
                 "simulation persisted fees, receipts, state or lifecycle work"
             );
             {
-                let runtime = trial.test_runtime().await;
+                let runtime = trial.execution.test_runtime().await;
                 ensure!(
                     !runtime.simulating
                         && runtime.storage.height == storage_height
-                        && (trial.last_height, trial.last_hash) == tip,
+                        && (trial.execution.last_height, trial.execution.last_hash) == tip,
                     "simulation left the reactor in a speculative context"
                 );
             }
