@@ -2043,3 +2043,25 @@ engine; it is not multi-validator networking evidence. The combined independent
 build/run, manual historical-fixture reconciliation, final K4 review and scoped
 CI remain. No PR, push or remote CI was started for this checkpoint. Oversized
 certificate paging remains deferred; K5 lifecycle work remains in K5/K6.
+
+
+### Operator-approved proportional scope, 1 November 2026
+
+Updated the original goal file in place and the active implementation plan after
+the operator agreed to reducing/postponing all four identified areas. K6 retains
+manual isolated migration rehearsal instead of six-height automation/readiness
+expiry. K9 retains verified sequential bounded catch-up without advanced download
+machinery. K10 defers a new user transaction format while retaining existing
+format discovery and required control codecs. K11 retains distinct correctness
+and recovery boundaries under scoped release3/bounded-dev CI, not exhaustive
+combinations or stress/performance campaigns. The full core upgrade implementation,
+lead plus one independent review and verified green merges remain required.
+The private Site will be reconciled at final publication as already instructed.
+
+Before the independent K4 build, inspected the shared Cargo cache with no active
+Cargo/runtime and removed only incremental directories whose newest content
+predated 1 November. The deletion manifest is `.build-cache/k4-incremental-cleanup.json`;
+228 directories, 21.65 GiB logical bytes. Filesystem free space rose from25 to35 GiB
+(the filesystem shares extents). Sources, binaries and qualification evidence
+were preserved. The observer's immutable execution definition verified unchanged:
+cc6739c0387a9a5cf2eda7b82c668598ebc7d16c8b6d644d90683f231939d194.

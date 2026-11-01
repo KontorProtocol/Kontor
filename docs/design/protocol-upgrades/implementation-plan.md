@@ -208,6 +208,30 @@ successfully on PR 619's final candidate before its verified merge.
 - Rust 1.99.1 is installed and used for generated artifacts, but node CI currently
   follows stable. The whole-node compiler and final-link recipe need explicit pins.
 
+## Operator scope reductions, 1 November 2026
+
+The operator approved simplifying all four areas below. These supersede earlier
+plan, Site and checkpoint requirements, without changing the core upgrade safety
+invariants or grouped PR delivery:
+
+- K6 keeps an operator-invoked migration rehearsal on an isolated snapshot,
+  reporting target, tested lineage, outcome and work budget. Automatic six-height
+  rehearsal and periodically refreshed/expiring readiness reports are deferred.
+  Installation and rehearsal diagnostics remain advisory, never authorization or
+  a guarantee about future state.
+- K9 uses sequential bounded historical range retrieval, verification, durable
+  progress, retries and resumption. Reuse existing networking where practical.
+  Parallel scheduling, elaborate peer scoring, prefetching and generalized staging
+  are deferred, alongside oversized-certificate paging.
+- K10 exposes existing supported formats and ABI descriptors. A new user transaction
+  format, including proposed format-1, is deferred. Upgrade-control codecs and
+  deliberately different P2 execution semantics remain required.
+- K11 tests distinct correctness boundaries and meaningful durable transitions.
+  Representative event orderings replace exhaustive combinations. Preserve actual
+  multi-bundle integration, authorization, activation, handoff, migration, crash,
+  reorg and cold-catch-up coverage. Keep scoped release3/bounded-dev CI and reuse
+  valid unchanged evidence. No new performance or stress campaign is required.
+
 ## Preserved decisions
 
 One immutable coordinated protocol selects execution and consensus. Formats and
@@ -242,13 +266,12 @@ is explicit and separate from binary installation or ordinary consensus voting.
    revive old consent. No contract-state counter is introduced into frozen P1.
 2. Notice is 1,008 Bitcoin heights from certified monotonic high-water. One pending
    plan, compare-and-swap expected plan and monotonic nonce serialize actions.
-   Readiness is advisory, refreshed every six heights with 24-height expiry and an
-   H-144 checkpoint. Supported nodes also dry-run the target migration in an isolated
-   snapshot at least every six newly applied Bitcoin heights throughout notice,
-   under the manifest work budget. Readiness reports carry last input lineage,
-   outcome and work-used/budget. Deterministic failure or budget excess withdraws
-   readiness and triggers the documented operator Cancel/Postpone procedure; it
-   does not itself authorize a control action. No expedited upgrade or emergency
+   Readiness is advisory. Operators can dry-run the target migration against an
+   isolated consistent snapshot under its work budget before approving it and
+   repeat the rehearsal near activation. Report the exact target, tested lineage,
+   outcome and work consumed. A failure prompts the documented Cancel/Postpone
+   procedure but never authorizes that action. Automatic periodic rehearsal and
+   readiness refresh/expiry are deferred. No expedited upgrade or emergency
    maintainer authority.
    Consume a plan when its transition Block H is authenticated and recorded in
    consensus decision order, even if execution lags. Cancellation must precede it. UpgradeControl validity bypasses pending/deferred
@@ -344,7 +367,7 @@ A zero-power or unavailable committee can also prevent progress. Old-quorum targ
 support does not guarantee successor-quorum readiness. Missing history or locally
 pruned undo data gates signing until authenticated reconstruction. These are explicit
 limits, included in operator docs and final handoff, not promises of automatic repair.
-Continuous migration rehearsal reduces target risk without proving future success.
+Operator-invoked migration rehearsal reduces target risk without proving future success.
 
 ### Deterministic migration-failure incident procedure
 
@@ -640,15 +663,15 @@ This F3 follow-up was identified in Interlink receipt
 ### K6. Validator-authorized upgrade control
 
 Dependencies: K4/K5. Modules: protocol registry/control state, proposal validation,
-approval CLI/API/SDK, continuous snapshot migration dry-runs and readiness diagnostics. Result: immutable hash-bound manifests,
+approval CLI/API/SDK, operator-invoked snapshot migration dry-runs and support diagnostics. Result: immutable hash-bound manifests,
 signed schedule/cancel/postpone, committee references, nonce/replay guards, notice,
 expiry and telemetry per agreed policy. Unsupported targets remain opaque schedules;
 installation/readiness does not authorize activation. Golden cross-language codecs,
 threshold boundaries, duplicate/unknown signers, overflow, weight drift across thresholds, per-signer A-B-A registration reuse, unrelated churn, conflicting
 actions, expiry, cancellation cutoff and superseded plans are tested. Include exit/rejoin
 inside one replay span, same-height replacement registration, and valid control
-ordering despite pending/deferred blocks. Test dry-run isolation, six-height
-refresh, work-budget reporting and readiness withdrawal on failure before H. Existing plans
+ordering despite pending/deferred blocks. Test dry-run isolation, exact input/target
+binding, work-budget reporting and honest failure diagnostics. Existing plans
 retain their original authorization as certified history changes.
 
 ### K7. After-H activation and deterministic migration
@@ -679,17 +702,19 @@ activated H boundaries; below latest H gate new batches. Test earlier/later loca
 notifications around decision/application/resume, including orphan X never seen by
 local bitcoind, shorter higher-work branches, second reorg, finality exclusions,
 expired batches and same H hash/different pre-lineage. Independent state/receipt/
-committee comparisons must match for all event permutations. Test pruned-node archive
+committee comparisons must match across representative distinct event orderings. Test pruned-node archive
 rebuild, zero validators, missing history and unavailable quorum. Do not mutate
 committee authority merely because a local Bitcoin notification arrived.
 
 ### K9. Stable history transport and cold catch-up
 
-Dependencies: K4/K7/K8. Modules: node history service, bounded peer synchronization,
+Dependencies: K4/K7/K8. Modules: node history service, sequential bounded peer synchronization,
 archive storage and startup. Result: current-era peers serve exact historical input
 and certificate envelopes independent of live Malachite codecs. Fresh nodes verify
 from original genesis through all eras and recovery before signing. Limit chunks,
-total decoded sizes, inflight ranges and peer work. Test entirely new-era peers,
+total decoded sizes and peer work; retain progress across retries and restart.
+Defer parallel scheduling, peer scoring, speculative prefetching and generalized
+staging. Test entirely new-era peers,
 missing middle records, tampered values/certificates/input/committee claims, unsupported
 codecs and restored snapshots. Keep separate received/verified/applied/era/signer
 frontiers. Re-execute committee-changing prefixes before trusting successor
@@ -705,8 +730,9 @@ supported formats, execution position, lineage/checkpoint/build identity (not ce
 missing support/history and handoff/recovery status. Simulation uses selected state
 and protocol; future assumptions are explicit. Cache keys bind all semantic/build
 inputs. Test rollback/activation contamination, old receipts, API handoff continuity,
-unsupported/recovery admission failures and SDK format discovery. Implement format
-and ABI descriptors, including the bounded disjoint format-1 specified by the Site; legacy parsing/signatures remain exact. Publish maintenance rules
+unsupported/recovery admission failures and SDK format discovery. Expose existing format
+and ABI descriptors; legacy parsing/signatures remain exact. Defer a new user
+transaction format, including the proposed disjoint format-1. Publish maintenance rules
 for historical backports, compiler changes, migrations and retained artifacts.
 
 ### K11. Integrated qualification and release evidence
@@ -714,10 +740,11 @@ for historical backports, compiler changes, migrations and retained artifacts.
 Dependencies: all above. Modules: real multi-validator integration harness, CI
 qualification matrix, artifact release checks, docs and private Site. Result: full
 goal acceptance suite runs against actual embedded bundles/engines and real state,
-including deliberate P2 divergence, two successive upgrades, all crash/recovery
-boundaries, unsupported validators and cold sync. Shadow/differential cases include
+including deliberate P2 divergence, two successive upgrades, meaningful durable
+crash/recovery transitions, unsupported validators and cold sync. Shadow/differential cases include
 new malformed inputs beyond historical transactions. Qualify compiler, platform,
-profile/native symbols and realistic maximum migration work. Explicitly rehearse RBF near H, old quorum/new committee support
+profile/native symbols under the existing scoped qualification policy, and migration
+work-budget enforcement with bounded fixtures. Explicitly rehearse RBF near H, old quorum/new committee support
 mismatch, no-quorum stalls and repeated local reorg notification permutations.
 Record actual merged
 PR/head/check evidence and run operator rehearsals. The Site describes implemented
