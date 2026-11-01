@@ -12,6 +12,7 @@ use tempfile::TempDir;
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
 use crate::database::connection::new_connection;
 use crate::database::queries::insert_block;
+use crate::protocol::coordinator::genesis::bind_identity;
 #[cfg(kontor_linked)]
 use crate::protocol::coordinator::linked::retained_session_factory;
 #[cfg(not(kontor_linked))]
@@ -27,9 +28,13 @@ use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::{LinkedSession, new_linked};
 
-mod fixture;
+pub(crate) mod fixture;
+mod migration;
 #[cfg(kontor_linked)]
 mod ownership;
+pub(crate) mod snapshot;
+#[cfg(kontor_linked)]
+mod storage_contract;
 mod transactions;
 
 use fixture::{NETWORK, genesis, state};
@@ -42,20 +47,32 @@ fn factories() -> Result<Vec<Factories>> {
         Ok(vec![
             (
                 "first",
-                retained_session_factory(NETWORK, None, kontor_executor_first::factory)?,
+                retained_session_factory(
+                    NETWORK,
+                    None,
+                    kontor_executor_first::factory,
+                    kontor_executor_first::execution_definition(),
+                )?,
                 retained_session_factory(
                     NETWORK,
                     Some(DEFAULT_VIEW_GAS_LIMIT),
                     kontor_executor_first::factory,
+                    kontor_executor_first::execution_definition(),
                 )?,
             ),
             (
                 "second",
-                retained_session_factory(NETWORK, None, kontor_executor_second::factory)?,
+                retained_session_factory(
+                    NETWORK,
+                    None,
+                    kontor_executor_second::factory,
+                    kontor_executor_second::execution_definition(),
+                )?,
                 retained_session_factory(
                     NETWORK,
                     Some(DEFAULT_VIEW_GAS_LIMIT),
                     kontor_executor_second::factory,
+                    kontor_executor_second::execution_definition(),
                 )?,
             ),
         ])
@@ -78,6 +95,7 @@ async fn exercise(
 ) -> Result<Value> {
     let dir = TempDir::new()?;
     let conn = new_connection(dir.path(), "qualification.db").await?;
+    bind_identity(&conn, NETWORK, 1, &genesis()).await?;
     for height in 0..=1 {
         insert_block(
             &conn,
@@ -90,7 +108,7 @@ async fn exercise(
         .await?;
     }
     let session = LinkedSession::new(conn.clone(), canonical(conn.clone()).await?);
-    initialize(service, &session, NETWORK, genesis()).await?;
+    initialize(service, &session, NETWORK, 1, genesis()).await?;
     let initialized = state(&conn).await?;
     ensure!(
         initialized["contracts"].0 == 5,
@@ -100,7 +118,7 @@ async fn exercise(
         initialized["contract_provenance"].0 == 5,
         "native provenance missing"
     );
-    initialize(service, &session, NETWORK, genesis()).await?;
+    initialize(service, &session, NETWORK, 1, genesis()).await?;
     ensure!(
         state(&conn).await? == initialized,
         "resumed genesis changed persisted state"
@@ -260,15 +278,23 @@ async fn exercise(
 }
 
 pub async fn run() -> Result<Value> {
+    #[cfg(kontor_linked)]
+    let storage_contracts = storage_contract::qualify()?;
+    #[cfg(not(kontor_linked))]
+    let storage_contracts = json!({});
     let factories = factories()?;
     let service = OwnerService::new();
     let mut outputs: Vec<Value> = Vec::new();
     let result = async {
+        let migration_seed = migration::seed().await?;
         for (name, canonical, read) in factories {
             eprintln!("Qualifying actual executor: {name}");
-            let observations = exercise(name, &service, canonical, read)
+            let migration =
+                migration::qualify_graph(name, migration_seed.path(), canonical.clone()).await?;
+            let mut observations = exercise(name, &service, canonical, read)
                 .await
                 .with_context(|| name)?;
+            observations["migration"] = migration;
             if let Some(previous) = outputs.first() {
                 ensure!(
                     observations == previous["observations"],
@@ -286,6 +312,9 @@ pub async fn run() -> Result<Value> {
         #[cfg(not(kontor_linked))]
         let export_panics = json!({});
         let cases = vec![
+            "atomic-migration-and-retry",
+            "migration-input-snapshot-and-work",
+            "production-migration-registry-isolation",
             "native-genesis",
             "genesis-resume",
             "read-only-views",
@@ -309,11 +338,13 @@ pub async fn run() -> Result<Value> {
                 "held-cursor-cancellation",
                 "node-wide-capacity-shutdown",
                 "export-panic-classification",
+                "required-storage-contract-before-construction",
             ]);
             cases
         };
         Ok(json!({"schema": 1, "cases": cases, "executors": outputs,
-            "node_capacity": node_capacity, "export_panics": export_panics}))
+            "node_capacity": node_capacity, "export_panics": export_panics,
+            "storage_contracts": storage_contracts}))
     }
     .await;
     service.shutdown();

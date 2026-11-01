@@ -1,9 +1,12 @@
 use anyhow::Result;
+#[cfg(test)]
+use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Transaction as BitcoinTransaction, Txid};
 #[cfg(test)]
 use indexer_types::{Block, Transaction};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
+use crate::protocol::canonical_input::CanonicalInput;
 use crate::protocol::coordinator::linked::{PreparedBlock, PreparedTransaction};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -53,6 +56,16 @@ impl BlockInput {
         self,
         recognize: impl Fn(&BitcoinTransaction) -> Result<Option<PreparedTransaction>> + Sync + Send,
     ) -> Result<PreparedBlock> {
+        let input = match &self.transactions {
+            Transactions::Raw(transactions) => CanonicalInput::bitcoin(transactions)?,
+            #[cfg(test)]
+            Transactions::Recognized(transactions) => CanonicalInput::synthetic(
+                &transactions
+                    .iter()
+                    .map(|tx| tx.txid.to_byte_array())
+                    .collect::<Vec<_>>(),
+            )?,
+        };
         let transactions = match self.transactions {
             Transactions::Raw(transactions) => transactions
                 .par_iter()
@@ -77,6 +90,7 @@ impl BlockInput {
             height: self.height,
             hash: self.hash,
             prev_hash: self.prev_hash,
+            input: Some(input),
             transactions,
         })
     }
@@ -93,5 +107,48 @@ impl From<Block> for BlockInput {
             prev_hash: block.prev_hash,
             transactions: Transactions::Recognized(block.transactions),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::slice::from_ref;
+
+    use bitcoin::absolute::LockTime;
+    use bitcoin::hashes::Hash;
+    use bitcoin::transaction::Version;
+    use bitcoin::{BlockHash, Transaction, TxIn, Witness};
+
+    use super::BlockInput;
+    use crate::protocol::canonical_input::CanonicalInput;
+
+    #[test]
+    fn preparation_commits_unrecognized_transactions_before_filtering() {
+        let transaction = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn::default()],
+            output: vec![],
+        };
+        let prepare = |transactions| {
+            BlockInput::new(
+                1,
+                BlockHash::all_zeros(),
+                BlockHash::all_zeros(),
+                transactions,
+            )
+            .prepare(|_| Ok(None))
+            .unwrap()
+        };
+        let block = prepare(vec![transaction.clone()]);
+        assert!(block.transactions.is_empty());
+        assert_eq!(
+            block.input,
+            Some(CanonicalInput::bitcoin(from_ref(&transaction)).unwrap())
+        );
+        assert_ne!(block.input, prepare(vec![]).input);
+        let mut changed = transaction;
+        changed.input[0].witness = Witness::from_slice(&[b"different witness"]);
+        assert_ne!(block.input, prepare(vec![changed]).input);
     }
 }

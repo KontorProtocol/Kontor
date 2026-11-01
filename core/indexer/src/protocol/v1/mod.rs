@@ -1,5 +1,6 @@
 #[cfg(not(kontor_node))]
 pub(crate) mod committee;
+pub(crate) mod definition;
 #[cfg(not(kontor_node))]
 pub(crate) mod deposit;
 #[cfg(not(kontor_node))]
@@ -16,6 +17,9 @@ pub(crate) mod gas;
 pub(crate) mod inspection;
 #[cfg(not(kontor_node))]
 pub(crate) mod lifecycle;
+#[cfg(not(kontor_node))]
+pub(crate) mod migration;
+pub(crate) mod migration_definition;
 pub(crate) mod native;
 pub(crate) mod native_bootstrap;
 pub(crate) mod pricing;

@@ -11,4 +11,5 @@ pub(crate) type SessionCallbacks = (
     SavepointAction,
     TransactionAction,
     SavepointAction,
+    TransactionAction,
 );

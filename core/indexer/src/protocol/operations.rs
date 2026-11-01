@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use super::committee::Committee;
 use super::execution::SelectionEnvelope;
+use super::migration_input::InputCallbacks;
 
 pub(crate) type SessionOwner = Arc<dyn Any + Send + Sync>;
 pub(crate) type OperationFuture<T> = Pin<Box<dyn Future<Output = Result<T, (u8, String)>> + Send>>;
@@ -73,6 +74,20 @@ pub(crate) type InitializationStep = (
 );
 pub(crate) type InitializeCall = Arc<
     dyn Fn(SessionOwner, GenesisEnvelope) -> Result<Vec<InitializationStep>, (u8, String)>
+        + Send
+        + Sync,
+>;
+
+// Deterministic rejection: 0 = unknown definition, 1 = exhausted budget,
+// 2 = invalid routine operation. Host failures remain the outer error channel.
+pub(crate) type MigrationOutcome = Result<[u64; 5], u8>;
+pub(crate) type MigrationCall = Arc<
+    dyn Fn(
+            SessionOwner,
+            SelectionEnvelope,
+            Vec<u8>,
+            InputCallbacks,
+        ) -> OperationFuture<MigrationOutcome>
         + Send
         + Sync,
 >;

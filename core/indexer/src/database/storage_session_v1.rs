@@ -38,5 +38,6 @@ pub(crate) fn session_callbacks(conn: &Connection) -> SessionCallbacks {
         savepoint_action(conn, "RELEASE"),
         transaction_action(conn, "ROLLBACK"),
         savepoint_action(conn, "ROLLBACK TO"),
+        transaction_action(conn, "BEGIN IMMEDIATE"),
     )
 }

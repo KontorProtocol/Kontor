@@ -11,7 +11,9 @@ pub use data::{GenesisParameters, GenesisValidator, hash_bytes};
 
 mod bundle_exports;
 mod bundle_initialization;
-mod bundle_ownership;
+#[cfg(not(kontor_node))]
+mod bundle_migration;
+pub(crate) mod bundle_ownership;
 pub(crate) mod bundle_session;
 mod component_cache;
 mod component_policy;

@@ -1093,3 +1093,60 @@ no production workaround was added. The complete rerun passed.
 Full-workspace release Clippy with tests and warnings denied passed in 69 seconds.
 Committed-head and CI confirmation are pending. No dependency, schema or
 advisory-exception change is included.
+
+## K3 local acceptance candidate, 1 November 2026
+
+Base: `aad23bccdaa300ed207bb328abc8c124e68efbe9` (PR 618), also verified as
+GitHub's current main during candidate preparation. This is unmerged K3 work,
+not completion of the protocol-upgrade system. The operator's latest delivery
+policy requires lead review plus one combined independent Codex review per
+grouped PR. No routine Daybreak assignment or additional review round is involved.
+
+The candidate records witness-inclusive ordered input commitments, reversible
+application lineage, exact migration retry keys/results, and genesis stages.
+Migration effects, marker, work and cursor share the owned writer transaction.
+The dedicated read-only input snapshot remains pinned while same-height writes
+occur; cleanup revokes its capabilities before settlement and quarantines failures.
+Populated legacy databases preserve ordinary operation with unavailable authentic
+lineage. They cannot migrate by inventing history. Live authorization and activation
+remain K6/K7, including the real P2 migration and engine handoff.
+
+Execution references bind retained sources, independent locks, resolved features,
+effective inherited package properties and an immutable StorageV1 requirement.
+Node-only coordinator/ownership/pool changes remain artifact provenance rather
+than redefining retained execution. Missing, unknown, changed or duplicate storage
+requirements are rejected before executor construction. The current SQL adapter
+and shared database dependencies require compatibility with the retained contract;
+the requirement is not regenerated from whatever implementation ships next.
+
+Local Linux ARM64 dev build and native ownership audit passed. Executable SHA-256:
+`6af6134e32a43390bbea9b53ca91b53c2276589a63a01e9218f9d4c23f6b1a26`.
+Both real graphs passed all 22 linked qualification cases in 54.65 seconds,
+including migration rollback/retry, immutable input, production registry isolation
+and storage-requirement rejection. The unchanged historical semantic oracle and
+preserved full SQL-state/receipt/checkpoint comparison passed for both graphs;
+the latter took 27.11 seconds. The four new journal tables are checked separately
+before exclusion from the old-table comparison. The original semantic fixture and
+oracle remain byte-for-byte unchanged. A new module supplies complete typed SQL
+snapshots. Raw logs and build/source/audit records are retained locally under
+`.build-cache/k3-linked-v3-evidence/`.
+
+The final focused in-tree run passed 62 tests in 0.38 seconds. Its one ignored
+helper is explicitly launched by the passing process-crash test, which kills child
+processes after effects and after commit, reopens the database and verifies retry.
+The pool-saturation addition postdates the linked binary and changes only a test
+module excluded from retained semantic identity. It is not claimed as linked-binary
+coverage. The node/build/comparator controls passed 26 tests, execution-reference
+controls passed nine, and ordinary CI-scope controls passed 38. Default indexer
+library/test Clippy with warnings denied passed after the pool-test extension.
+Clippy required explicitly dropping the view object acquired at the end of that
+test; this changes no production behavior or tested assertion.
+
+The previously observed main CI cluster/WIT failure did not reproduce locally:
+the focused cluster lifecycle test passed in 129.29 seconds with the earlier
+audited dev node. Its first local attempt could not create sockets in the sandbox.
+The successful rerun used local networking and preserved the failure log. The
+test now reports the actual WIT error when it fails; this is diagnostic detail,
+not a claimed fix for an unestablished cause. No new CI campaign has run for K3.
+Final release-platform checks, independent review and merge verification remain
+required. Local dev samples do not establish all-platform or all-input correctness.

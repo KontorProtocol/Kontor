@@ -10,6 +10,14 @@ use libsql::Connection;
 pub(crate) enum ApplicationPosition {
     View,
     Committee,
+    #[cfg_attr(
+        not(any(test, feature = "protocol-qualification")),
+        allow(dead_code, reason = "K3 position; live activation is wired in K7")
+    )]
+    Migration {
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+    },
     Initialization {
         step: u64,
     },
@@ -64,6 +72,10 @@ impl ExecutionSelection {
         let position = match self.position {
             ApplicationPosition::View => (0, 0, None, 0),
             ApplicationPosition::Committee => (1, 0, None, 0),
+            ApplicationPosition::Migration {
+                anchor_height,
+                anchor_hash,
+            } => (8, anchor_height, Some(anchor_hash.to_byte_array()), 0),
             ApplicationPosition::Initialization { step } => (7, 0, None, step),
             ApplicationPosition::Maintenance { rollback_height } => (
                 6,
@@ -117,6 +129,10 @@ impl ExecutionSelection {
         self.version
     }
 
+    pub(crate) fn is_migration(&self) -> bool {
+        matches!(self.position, ApplicationPosition::Migration { .. })
+    }
+
     pub(crate) fn is_public_view(&self) -> bool {
         matches!(self.position, ApplicationPosition::View)
     }
@@ -130,7 +146,8 @@ impl ExecutionSelection {
                         | ApplicationPosition::Batch { .. }
                         | ApplicationPosition::Committee
                         | ApplicationPosition::Maintenance { .. }
-                        | ApplicationPosition::Initialization { .. },
+                        | ApplicationPosition::Initialization { .. }
+                        | ApplicationPosition::Migration { .. },
                     false,
                 )
         );
@@ -229,6 +246,7 @@ impl ExecutionSelection {
                 bail!("view selection cannot execute canonical transactions")
             }
             ApplicationPosition::Maintenance { .. }
+            | ApplicationPosition::Migration { .. }
             | ApplicationPosition::Initialization { .. } => {
                 bail!("maintenance selection cannot execute canonical transactions")
             }

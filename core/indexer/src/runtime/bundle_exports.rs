@@ -89,14 +89,22 @@ impl BundleSession {
                 runtime
                     .verify_bundle_operation(&selection, selection.3.0)
                     .map_err(infrastructure)?;
-                if !matches!(selection.3.0, 1 | 3 | 4 | 5 | 6 | 7) {
+                if !matches!(selection.3.0, 1 | 3 | 4 | 5 | 6 | 7 | 8) {
                     return Err((2, "executor unit requires a canonical selection".into()));
                 }
                 let runtime = runtime.bind_selection(&selection).map_err(infrastructure)?;
                 if !runtime.storage.savepoint_stack.is_empty().await {
                     return Err((2, "executor unit transaction is already open".into()));
                 }
-                runtime.storage.savepoint().await.map_err(infrastructure)
+                if selection.3.0 == 8 {
+                    runtime
+                        .storage
+                        .begin_migration()
+                        .await
+                        .map_err(infrastructure)
+                } else {
+                    runtime.storage.savepoint().await.map_err(infrastructure)
+                }
             })
         })
     }

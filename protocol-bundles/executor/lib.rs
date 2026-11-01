@@ -33,7 +33,21 @@ use std::sync::Arc;
 pub type Factory =
     Arc<dyn Fn(StorageCallbacks, [u8; 4], Option<u64>) -> HostFuture<SessionExports> + Send + Sync>;
 
+pub fn execution_definition() -> &'static [u8] {
+    protocol::v1::definition::REFERENCE
+}
+
 pub fn factory() -> Result<Factory, HostError> {
+    make_factory(false)
+}
+
+// Test tooling opts into its own fixed registry without adding test migrations
+// to the production factory or making them selectable through node configuration.
+pub fn qualification_factory() -> Result<Factory, HostError> {
+    make_factory(true)
+}
+
+fn make_factory(qualification: bool) -> Result<Factory, HostError> {
     let engine = Runtime::new_engine().map_err(|e| (0, format!("{e:#}")))?;
     let linkers = Runtime::new_linkers(&engine).map_err(|e| (0, format!("{e:#}")))?;
     let cache = ComponentCache::new();
@@ -55,7 +69,11 @@ pub fn factory() -> Result<Factory, HostError> {
             if let Some(limit) = view_limit {
                 runtime.view_gas_limit = limit;
             }
-            Ok(BundleSession::export(runtime))
+            Ok(if qualification {
+                BundleSession::export_qualification(runtime)
+            } else {
+                BundleSession::export(runtime)
+            })
         })
     }))
 }

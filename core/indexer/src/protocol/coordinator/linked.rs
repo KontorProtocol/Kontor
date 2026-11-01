@@ -11,18 +11,27 @@ use indexer_types::Block;
 #[cfg(test)]
 use indexer_types::Transaction;
 #[cfg(kontor_linked)]
-use kontor_executor_first::factory as retained_factory;
+use kontor_executor_first::{
+    execution_definition as retained_definition, factory as retained_factory,
+};
 use libsql::Connection;
 #[cfg(kontor_linked)]
 use std::panic::AssertUnwindSafe;
 
 use super::committee::materialize_committee;
+use super::genesis::bind_identity;
 use super::selection::{
     ApplicationPosition, ExecutionSelection, ExecutorVersion, select_legacy_p1,
 };
 use crate::consensus::ValidatorSet;
+use crate::database::canonical_history::{self, HistoryState};
 use crate::database::queries::{insert_block_execution_usage, insert_transaction_execution_usage};
-use crate::database::storage_callbacks_v1::storage_callbacks;
+use crate::database::storage_contract::StorageContract;
+use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
+use crate::protocol::canonical_codec::CodecError;
+use crate::protocol::canonical_input::CanonicalInput;
+use crate::protocol::identity::DefinitionReference;
+use crate::protocol::identity::{ExecutionDefinitionId, ExecutionIdentity};
 #[cfg(any(test, feature = "protocol-qualification"))]
 use crate::protocol::operations::{AddressEnvelope, ViewOutcome};
 use crate::protocol::operations::{GenesisEnvelope, RecognitionCall, SessionOwner};
@@ -31,6 +40,8 @@ use crate::protocol::session::{HostError, HostFuture};
 use crate::protocol::session::{SelectionSource, SessionExports};
 #[cfg(kontor_linked)]
 use crate::protocol::storage_callbacks::StorageCallbacks;
+use crate::protocol::v1::definition::REFERENCE;
+use crate::protocol::v1::definition::execution_definition;
 #[cfg(not(kontor_node))]
 use crate::runtime::bundle_session::BundleSession;
 use crate::runtime::fuel::ExecutionUsage;
@@ -49,11 +60,19 @@ pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession
     let network = runtime.network;
     let conn = runtime.storage.conn.clone();
     let exports = BundleSession::export(runtime);
-    adapt_session(origin, network, conn, canonical, exports)
+    adapt_session(
+        origin,
+        execution_definition(),
+        network,
+        conn,
+        canonical,
+        exports,
+    )
 }
 
 fn adapt_session(
     origin: ExecutorVersion,
+    execution_definition: Result<ExecutionDefinitionId, CodecError>,
     network: Network,
     conn: Connection,
     canonical: bool,
@@ -71,6 +90,7 @@ fn adapt_session(
         contract_wit,
         view,
         committee,
+        migration,
     ) = operations;
     let operations = ExecutorOperations {
         initialize,
@@ -83,6 +103,7 @@ fn adapt_session(
         contract_wit,
         view,
         committee,
+        migration,
     };
     let make_root = Arc::new(
         move |selection: ExecutionSelection, adapter: OwnerAdapter| {
@@ -131,6 +152,7 @@ fn adapt_session(
         },
     );
     ExecutorSession {
+        execution_definition,
         origin,
         operations,
         owner,
@@ -144,6 +166,7 @@ pub(crate) fn session_factory(
     network: Network,
     view_gas_limit: Option<u64>,
 ) -> Result<SessionFactory> {
+    let storage_contract = StorageContract::resolve(&DefinitionReference::decode(REFERENCE)?)?;
     let engine = Runtime::new_engine()?;
     let linkers = Runtime::new_linkers(&engine)?;
     let cache = ComponentCache::new();
@@ -152,7 +175,7 @@ pub(crate) fn session_factory(
         let linkers = linkers.clone();
         let cache = cache.clone();
         Box::pin(async move {
-            let callbacks = storage_callbacks(&conn);
+            let callbacks = storage_contract.callbacks(&conn);
             let storage = Storage::builder()
                 .host(callbacks.into())
                 .conn(conn)
@@ -173,7 +196,17 @@ pub(crate) fn session_factory(
     network: Network,
     view_gas_limit: Option<u64>,
 ) -> Result<SessionFactory> {
-    retained_session_factory(network, view_gas_limit, retained_factory)
+    if retained_definition() != REFERENCE {
+        return Err(anyhow!(
+            "linked executor does not match its registered definition"
+        ));
+    }
+    retained_session_factory(
+        network,
+        view_gas_limit,
+        retained_factory,
+        retained_definition(),
+    )
 }
 
 #[cfg(kontor_linked)]
@@ -185,14 +218,18 @@ pub(crate) fn retained_session_factory(
     network: Network,
     view_gas_limit: Option<u64>,
     constructor: fn() -> Result<RetainedFactory, HostError>,
+    definition: &[u8],
 ) -> Result<SessionFactory> {
+    let reference = DefinitionReference::decode(definition)?;
+    let storage_contract = StorageContract::resolve(&reference)?;
+    let definition = reference.id()?;
     let factory = std::panic::catch_unwind(constructor)
         .map_err(|_| HostFailure::from((1, "executor factory export panicked".into())))?
         .map_err(HostFailure::from)?;
     Ok(Arc::new(move |conn| {
         let factory = factory.clone();
         Box::pin(async move {
-            let callbacks = storage_callbacks(&conn);
+            let callbacks = storage_contract.callbacks(&conn);
             // Catch both construction and polling panics at the graph boundary.
             // Neither may be interpreted as a deterministic guest rejection.
             let exports = AssertUnwindSafe(async move {
@@ -204,6 +241,7 @@ pub(crate) fn retained_session_factory(
             .map_err(HostFailure::from)?;
             Ok(adapt_session(
                 ExecutorVersion::LegacyP1,
+                Ok(definition),
                 network,
                 conn,
                 view_gas_limit.is_none(),
@@ -218,8 +256,12 @@ pub(crate) fn retained_session_factory_with_callbacks(
     network: Network,
     view_gas_limit: Option<u64>,
     constructor: fn() -> Result<RetainedFactory, HostError>,
+    definition: &[u8],
     decorate: Arc<dyn Fn(StorageCallbacks) -> StorageCallbacks + Send + Sync>,
 ) -> Result<SessionFactory> {
+    let reference = DefinitionReference::decode(definition)?;
+    let storage_contract = StorageContract::resolve(&reference)?;
+    let definition = reference.id()?;
     let factory = std::panic::catch_unwind(constructor)
         .map_err(|_| HostFailure::from((1, "executor factory export panicked".into())))?
         .map_err(HostFailure::from)?;
@@ -227,7 +269,7 @@ pub(crate) fn retained_session_factory_with_callbacks(
         let factory = factory.clone();
         let decorate = decorate.clone();
         Box::pin(async move {
-            let callbacks = decorate(storage_callbacks(&conn));
+            let callbacks = decorate(storage_contract.callbacks(&conn));
             // Catch both construction and polling panics at the graph boundary.
             // Neither may be interpreted as a deterministic guest rejection.
             let exports = AssertUnwindSafe(async move {
@@ -239,6 +281,7 @@ pub(crate) fn retained_session_factory_with_callbacks(
             .map_err(HostFailure::from)?;
             Ok(adapt_session(
                 ExecutorVersion::LegacyP1,
+                Ok(definition),
                 network,
                 conn,
                 view_gas_limit.is_none(),
@@ -387,8 +430,10 @@ pub(crate) async fn initialize(
     service: &OwnerService,
     session: &LinkedSession,
     network: Network,
+    starting_block_height: u64,
     genesis: GenesisEnvelope,
 ) -> Result<()> {
+    bind_identity(&session.conn, network, starting_block_height, &genesis).await?;
     let steps = (session.executor.operations.initialize)(session.executor.owner.clone(), genesis)
         .map_err(HostFailure::from)?;
     for (index, (commit, step)) in steps.into_iter().enumerate() {
@@ -399,10 +444,41 @@ pub(crate) async fn initialize(
         )
         .await?;
         let lease = begin_canonical_unit(service, session, &selection, network, false).await?;
-        let result = step(session.executor.owner.clone(), selection.envelope())
-            .await
-            .map_err(HostFailure::from)
-            .map_err(Into::into);
+        let result = async {
+            let stage = u32::try_from(index)?;
+            let history = canonical_history::state(&session.conn).await?;
+            let record_stage = commit
+                && matches!(history, HistoryState::Ready(_))
+                && !canonical_history::genesis_stage_applied(&session.conn, stage).await?;
+            step(session.executor.owner.clone(), selection.envelope())
+                .await
+                .map_err(HostFailure::from)?;
+            if record_stage {
+                let HistoryState::Ready(cursor) = history else {
+                    unreachable!()
+                };
+                canonical_history::append(
+                    &session.conn,
+                    &CanonicalApplication {
+                        chain: cursor.chain,
+                        ordinal: cursor
+                            .ordinal
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow!("genesis application ordinal overflow"))?,
+                        parent_lineage: cursor.lineage,
+                        execution: ExecutionIdentity::Baseline(
+                            session.executor.execution_definition?,
+                        ),
+                        storage_height: 0,
+                        source: ApplicationSource::Genesis { stage },
+                        input: None,
+                    },
+                )
+                .await?;
+            }
+            Ok(())
+        }
+        .await;
         finish_canonical_unit(lease, result, commit).await?;
     }
     Ok(())
@@ -465,6 +541,7 @@ pub(crate) struct PreparedBlock {
     pub(crate) height: u64,
     pub(crate) hash: BlockHash,
     pub(crate) prev_hash: BlockHash,
+    pub(crate) input: Option<CanonicalInput>,
     pub(crate) transactions: Vec<PreparedTransaction>,
 }
 

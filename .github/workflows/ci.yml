@@ -17,7 +17,29 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  scope:
+    name: CI change scope
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.select.outputs.rust }}
+      sdk: ${{ steps.select.outputs.sdk }}
+      reproducible: ${{ steps.select.outputs.reproducible }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Test CI controls
+        run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
+      - name: Select checks from complete change set
+        id: select
+        run: python3 tools/ci/pr_scope.py
+
   quality-checks:
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
     name: Lint & Security Audit
     runs-on: ubuntu-latest
     steps:
@@ -86,6 +108,8 @@ jobs:
         working-directory: ./core
 
   test:
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
     name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -138,8 +162,6 @@ jobs:
       # is still required by the stdlib macro-expansion tests.
       - name: Install cargo expand
         run: cargo binstall cargo-expand --version 1.0.127 --no-confirm
-      - name: Test CI diagnostics collector
-        run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
       - name: Prepare macOS crash diagnostics
         if: runner.os == 'macOS'
         run: python3 tools/ci/macos_diagnostics.py prepare "$RUNNER_TEMP/macos-crash-diagnostics"
@@ -168,6 +190,8 @@ jobs:
 
   # Match the canonical platform used by both local generation and CI.
   reproducible-build-setup:
+    needs: scope
+    if: needs.scope.outputs.reproducible == 'true'
     name: Reproducible Build (resolve runner)
     runs-on: ubuntu-latest
     outputs:
@@ -224,6 +248,8 @@ jobs:
           if-no-files-found: error
 
   sdk:
+    needs: scope
+    if: needs.scope.outputs.sdk == 'true'
     name: SDK
     runs-on: ubuntu-latest
     steps:
@@ -327,6 +353,32 @@ jobs:
           path: ${{ runner.temp }}/linux-crash-diagnostics/*.txt
           if-no-files-found: warn
           retention-days: 7
+
+  required-checks:
+    name: CI required checks
+    if: always()
+    needs: [scope, quality-checks, test, reproducible-build-setup, reproducible-build, sdk]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all selected checks
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY_CHECK'
+          import json
+          import os
+          needs = json.loads(os.environ["NEEDS"])
+          assert needs["scope"]["result"] == "success", "CI scope did not succeed"
+          for job, flag in {
+              "quality-checks": "rust", "test": "rust",
+              "reproducible-build-setup": "reproducible",
+              "reproducible-build": "reproducible", "sdk": "sdk",
+          }.items():
+              selected = needs["scope"]["outputs"][flag]
+              assert selected in {"true", "false"}, f"invalid selection: {flag}"
+              expected = "success" if selected == "true" else "skipped"
+              assert needs[job]["result"] == expected, f"{job}: expected {expected}, got {needs[job]['result']}"
+          PY_CHECK
 
   docker-cache-deps:
     name: Docker - Cache Dependencies (${{ matrix.arch }})

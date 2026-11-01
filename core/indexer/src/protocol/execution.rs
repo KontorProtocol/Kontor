@@ -24,6 +24,6 @@ pub(crate) type CanonicalBase = (
 );
 
 // Purpose tags: view=0, committee=1, preparation=2, block=3, batch=4,
-// simulation=5. Unused fields must be zero/None so equality is unambiguous.
+// simulation=5, maintenance=6, initialization=7, migration=8. Unused fields must be zero/None so equality is unambiguous.
 pub(crate) type Position = (u8, u64, Option<[u8; 32]>, u64);
 pub(crate) type SelectionEnvelope = (u32, [u8; 4], CanonicalBase, Position);

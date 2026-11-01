@@ -20,7 +20,16 @@ CASES = {"native-genesis", "genesis-resume", "read-only-views", "committee",
          "transaction-recognition", "publication", "fees-and-deposits", "deterministic-failures",
          "simulation-inspection", "transaction-rollback-replay", "pending-host-callback-cancellation",
          "host-callback-failure-panic", "held-cursor-cancellation", "node-wide-capacity-shutdown",
-         "export-panic-classification"}
+         "export-panic-classification", "required-storage-contract-before-construction",
+         "atomic-migration-and-retry", "migration-input-snapshot-and-work",
+         "production-migration-registry-isolation"}
+
+
+def verify_storage_contracts(observations):
+    expected = [f'{graph}:{mutation}' for graph in EXECUTOR_GRAPHS
+                for mutation in ('missing', 'unknown', 'changed', 'multiple')]
+    if observations.get('storage_contracts') != {'rejected_before_construction': expected}:
+        raise RuntimeError('storage contract construction checks missing or incomplete')
 
 def execute_node(report_path):
     directory = report_path.parent
@@ -50,6 +59,7 @@ def execute_node(report_path):
         raise RuntimeError('retained executor observations disagree')
     if observations.get('schema') != 1 or set(observations['cases']) != CASES or len(observations['cases']) != len(CASES):
         raise RuntimeError('node execution case set changed')
+    verify_storage_contracts(observations)
     semantic_baseline = verify_semantics(observations, ROOT)
     if digest(executable) != node['executable_sha256'] or digest(report_path) != report_hash:
         raise RuntimeError('node executable or build report changed during execution')

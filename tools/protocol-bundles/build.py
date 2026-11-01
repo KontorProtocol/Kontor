@@ -14,6 +14,7 @@ import tomllib
 
 from audit import audit_final, audit_inputs
 from common_ownership import verify as verify_common_ownership
+from execution_definition import verify_reference
 from metadata_control import proc_macro_hashes
 from provenance import fingerprint, locked_packages, runtime_libraries, source_inputs
 from provenance import tools as toolchain_inputs
@@ -46,8 +47,10 @@ def run(args, cwd, env, log):
 
 
 def metadata(manifest, target, env, offline, features=()):
-    command = ["cargo", "metadata", "--locked", "--format-version=1", "--filter-platform", target,
+    command = ["cargo", "metadata", "--locked", "--format-version=1",
                "--manifest-path", str(manifest)]
+    if target is not None:
+        command.extend(["--filter-platform", target])
     if features:
         command.extend(["--features", ",".join(features)])
     if offline:
@@ -158,6 +161,11 @@ def build_graph(graph, args, base_env, output, graphs=None):
                RUSTC_WRAPPER=str(wrapper),
                RUSTFLAGS=f"-Cmetadata={namespace} -Cpanic=unwind")
     data = metadata(manifest, args.target, env, args.offline)
+    definition = None
+    if selected_recipe.kind == "executor":
+        # Network identity covers all target dependencies, independently of the
+        # platform-filtered artifact inventory used below.
+        definition = verify_reference(ROOT, manifest, metadata(manifest, None, env, args.offline))
     packages = identities(graph, data, graphs)
     sources = source_inputs(ROOT, data, kind=selected_recipe.kind)
     source_policy = check_source_policy(ROOT, data, kind=selected_recipe.kind)
@@ -176,6 +184,10 @@ def build_graph(graph, args, base_env, output, graphs=None):
         raise RuntimeError("source inputs changed while the graph was compiling")
     if metadata(manifest, args.target, env, args.offline) != data:
         raise RuntimeError("resolved metadata changed while the graph was compiling")
+    if definition is not None and verify_reference(
+        ROOT, manifest, metadata(manifest, None, env, args.offline)
+    ) != definition:
+        raise RuntimeError("execution definition changed while the graph was compiling")
     archives, facade, native_outputs, proc_macros = current_artifacts(log, target_dir, args.target, recipe["package"]["name"])
     # Supply rustc only this invocation's rlibs, never stale target-directory glob matches.
     inputs = graph_output / "link-inputs"
@@ -212,6 +224,8 @@ def build_graph(graph, args, base_env, output, graphs=None):
               "wrapper_sha256": digest(wrapper), "injected_metadata": namespace,
               "rustflags": env["RUSTFLAGS"],
               "native_outputs": native_outputs}
+    if definition is not None:
+        result["execution_definition"] = definition
     write_json(graph_output / "build-inputs.json", result)
     return result
 

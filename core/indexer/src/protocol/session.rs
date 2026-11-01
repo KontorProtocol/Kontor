@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::execution::SelectionEnvelope;
 use super::operations::{
     BeginUnitCall, CommitteeCall, ContractWitCall, InitializeCall, InspectCall, LifecycleCall,
-    MaintenanceCall, RecognitionCall, TransactionCall, ViewCall,
+    MaintenanceCall, MigrationCall, RecognitionCall, TransactionCall, ViewCall,
 };
 
 pub(crate) type SharedOwner = Arc<dyn Any + Send + Sync>;
@@ -49,6 +49,7 @@ pub(crate) type Operations = (
     ContractWitCall,
     ViewCall,
     CommitteeCall,
+    MigrationCall,
 );
 
 // Only structural standard-library types cross the independently built graphs.

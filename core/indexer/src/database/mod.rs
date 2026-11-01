@@ -1,8 +1,10 @@
+pub(crate) mod canonical_history;
 pub mod confirmation;
 pub mod connection;
 mod genesis;
 pub mod init;
 pub(crate) mod maintenance;
+pub(crate) mod migration_input;
 pub(crate) mod native_bootstrap;
 pub mod native_contracts;
 mod pool;
@@ -11,6 +13,7 @@ pub mod reader;
 pub mod receipt_stream;
 pub(crate) mod storage_aux_v1;
 pub(crate) mod storage_callbacks_v1;
+pub(crate) mod storage_contract;
 pub(crate) mod storage_contracts_v1;
 pub(crate) mod storage_inspection_v1;
 pub(crate) mod storage_session_v1;

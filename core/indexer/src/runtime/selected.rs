@@ -88,6 +88,7 @@ impl Runtime {
                 | (6, _, None, 1)
                 | (6, 0, None, 0)
                 | (7, 0, None, _)
+                | (8, _, Some(_), 0)
         );
         ensure!(
             valid_position,

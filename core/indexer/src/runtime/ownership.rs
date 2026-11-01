@@ -39,10 +39,13 @@ use super::pool::Manager;
 use super::pool::{LinkedManager, LinkedSession};
 #[cfg(test)]
 use super::storage::BlockingGate;
+use crate::database::migration_input::MigrationInput;
 use crate::protocol::coordinator::selection::ExecutionSelection;
 use adapter::{OwnerAdapter, Payload, RootHooks, SharedOwner};
 
 pub(crate) mod adapter;
+#[cfg(test)]
+mod migration_tests;
 
 const API_DRAIN_LIMIT: Duration = Duration::from_secs(5);
 const NODE_ADMISSION_CAPACITY: usize = 64;
@@ -702,6 +705,7 @@ impl LinkedStatefulSession {
 
 struct RootKeeper {
     id: RootId,
+    migration_input: Option<Arc<MigrationInput>>,
     linked_hooks: Mutex<Option<RootHooks>>,
     authority: Mutex<Option<RootAuthority>>,
     state: Arc<AtomicU8>,
@@ -746,6 +750,7 @@ impl RootKeeper {
     ) -> Self {
         Self {
             id,
+            migration_input: None,
             linked_hooks: Mutex::new(None),
             authority: Mutex::new(Some(authority)),
             state: Arc::new(AtomicU8::new(RootState::Running as u8)),
@@ -1483,6 +1488,33 @@ impl OwnerService {
         selection: ExecutionSelection,
         simulation: bool,
     ) -> Result<LinkedCanonicalRootLease> {
+        self.begin_linked_canonical_with_input(session, capacity, selection, simulation, None)
+            .await
+    }
+
+    pub(crate) async fn begin_linked_migration_reserved(
+        &self,
+        session: &LinkedSession,
+        capacity: OwnedSemaphorePermit,
+        selection: ExecutionSelection,
+        input: Arc<MigrationInput>,
+    ) -> Result<LinkedCanonicalRootLease> {
+        self.begin_linked_canonical_with_input(session, capacity, selection, false, Some(input))
+            .await
+    }
+
+    async fn begin_linked_canonical_with_input(
+        &self,
+        session: &LinkedSession,
+        capacity: OwnedSemaphorePermit,
+        selection: ExecutionSelection,
+        simulation: bool,
+        input: Option<Arc<MigrationInput>>,
+    ) -> Result<LinkedCanonicalRootLease> {
+        ensure!(
+            selection.is_migration() == input.is_some(),
+            "migration root requires its dedicated input"
+        );
         ensure!(
             session.origin() == selection.version(),
             "executor session does not match selection"
@@ -1492,6 +1524,9 @@ impl OwnerService {
             session.conn.is_autocommit(),
             "canonical root cannot start inside a transaction"
         );
+        if let Some(input) = &input {
+            input.verify_writer(&session.conn).await?;
+        }
         let permit = self
             .admission
             .reserve()
@@ -1499,6 +1534,9 @@ impl OwnerService {
             .context("operation-owner node admission closed")?;
         ensure!(!self.is_fatal(), "operation-owner service is unavailable");
         let mut roots = self.registry.roots.lock().await;
+        if let Some(input) = &input {
+            input.claim()?;
+        }
         ensure!(
             session
                 .canonical_busy
@@ -1507,11 +1545,9 @@ impl OwnerService {
             "canonical executor session is still owned by a prior root"
         );
         let id = RootId(self.registry.next_root.fetch_add(1, Ordering::SeqCst));
-        let keeper = Arc::new(RootKeeper::new_linked_stateful(
-            id,
-            session.clone(),
-            capacity,
-        ));
+        let mut keeper = RootKeeper::new_linked_stateful(id, session.clone(), capacity);
+        keeper.migration_input = input;
+        let keeper = Arc::new(keeper);
         roots.insert(id, keeper.clone());
         drop(roots);
         let (sender, receiver) = mpsc::channel(1);
@@ -1606,6 +1642,12 @@ impl OwnerService {
                     if let Err(error) = drain {
                         let _ = drained_sender.send(Err(anyhow!(error.to_string())));
                         return Err(error);
+                    }
+                    if let Some(input) = &supervised.migration_input {
+                        input
+                            .close()
+                            .await
+                            .context("migration input cleanup failed")?;
                     }
                     let must_settle = !task_session.conn.is_autocommit();
                     if drained_sender.send(Ok(must_settle)).is_err() {
@@ -2691,6 +2733,7 @@ mod tests {
     };
     use crate::protocol::session::GuestFactory;
     use crate::protocol::v1::committee::derive_committee;
+    use crate::protocol::v1::definition::execution_definition;
     use crate::reg_tester::random_x_only_pubkey;
     use crate::runtime::call::CallOutcome;
     use crate::runtime::fuel::ExecutionUsage;
@@ -5630,6 +5673,7 @@ mod tests {
                     })
                 });
                 Ok(ExecutorSession {
+                    execution_definition: execution_definition(),
                     origin: ExecutorVersion::LegacyP1,
                     operations: Default::default(),
                     owner: Arc::new(()),
@@ -5729,6 +5773,7 @@ mod tests {
             })
         });
         let executor = ExecutorSession {
+            execution_definition: execution_definition(),
             origin: ExecutorVersion::LegacyP1,
             operations: Default::default(),
             owner: Arc::new(()),
@@ -5783,6 +5828,7 @@ mod tests {
         let gate = Arc::new(AsyncGate::default());
         let make_root_gate = gate.clone();
         let executor = ExecutorSession {
+            execution_definition: execution_definition(),
             origin: ExecutorVersion::LegacyP1,
             operations: Default::default(),
             owner: Arc::new(()),
@@ -5854,6 +5900,7 @@ mod tests {
         let settlements = Arc::new(AtomicUsize::new(0));
         let root_settlements = settlements.clone();
         let executor = ExecutorSession {
+            execution_definition: execution_definition(),
             origin: ExecutorVersion::LegacyP1,
             operations: Default::default(),
             owner: Arc::new(()),
@@ -5930,6 +5977,7 @@ mod tests {
         let conn = runtime.storage.conn.clone();
         let action: SessionAction = Arc::new(|_| Box::pin(async { Ok(()) }));
         let executor = ExecutorSession {
+            execution_definition: execution_definition(),
             origin: ExecutorVersion::LegacyP1,
             operations: Default::default(),
             owner: Arc::new(()),
