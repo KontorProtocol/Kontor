@@ -180,3 +180,5 @@ impl ConsensusState {
 
 #[cfg(feature = "protocol-qualification")]
 pub(crate) mod qualification;
+
+mod closure;

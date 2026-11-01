@@ -1291,3 +1291,36 @@ or final independent-graph qualification. The test supplies its own replay verdi
 automatic bounded verdict generation, full live driver, startup recovery and old
 unit-fixture adaptation remain. Consolidated independent review remains at the
 complete K4 group, with no additional microreview, push or CI campaign here.
+
+## K4 automatic finality checkpoint
+
+From checkpoint `a6f4ba1d9bbcc5409df30a738b5993afb802ed34`, bounded planning now
+captures overdue direct seeds, freezes branch-specific replay subsets with indexed
+availability, seals the verdict into the work identity, and publishes seeds and
+work atomically with the owned finality stage. A new driver consumes those saved
+items and reevaluates finality before closure completion. The lead traced staging
+rollback, publication atomicity, pre-state binding, historical interval selection,
+exact-subset consumption, descendant attribution and completion ordering.
+
+The actual parent/child fixture, including injected seed-write and publication
+failures and reopened-connection planning, passed with the existing branch check:
+2 passed, 0 failed, 75.36 seconds, 29.83-second build. Raw log:
+`.build-cache/k4-finality-final.log`, SHA-256
+`eb7a5ce6bb39920c2dcdeeae00f7bef0ece32a96db8ae192553dd6a95d0d053c`.
+The unreleased coordinator definition is
+`a01ccde289e4df99d46654136f252b19a921292a0bba7b56b04cdaf3339168cc`.
+Retained executor sources and definitions are unchanged.
+
+An oversized async qualification poll frame caused a debug host-stack overflow.
+Local GDB evidence is in `.build-cache/k4-finality-gdb.log` and
+`.build-cache/k4-finality-frames.log`. Splitting the test into sequential phase
+helpers resolved the failure without raising thread or guest stack limits. The
+first split was insufficient; the final split passed twice, with the second run
+also covering transactional planner-write failure. These are correctness checks,
+not a renewed Pulley performance or stack qualification campaign.
+
+Live consensus still uses the old volatile finality driver, and startup still
+rejects an unfinished closure. Both require integration before K4 is complete.
+Broader replay cases, proof transport, old unit-fixture adaptation, independent
+graph qualification and the one consolidated review remain. No push, PR, remote
+CI run or new Daybreak assignment accompanies this intermediate checkpoint.

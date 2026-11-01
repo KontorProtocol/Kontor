@@ -104,10 +104,22 @@ pub(crate) fn item_digest(previous: [u8; 32], index: u64, item: WorkItem) -> Res
     Ok(domain_digest(b"kontor/closure-work-item/v1", &out.finish()))
 }
 
-pub(crate) fn plan_id(origin: WorkOrigin, count: u64, digest: [u8; 32]) -> Result<[u8; 32]> {
+pub(crate) fn plan_id(
+    origin: WorkOrigin,
+    count: u64,
+    digest: [u8; 32],
+    verdict: Option<[u8; 32]>,
+) -> Result<[u8; 32]> {
     let mut out = Encoder::default();
     out.bytes(&origin.encode()?)?;
     out.u64(count)?;
     out.fixed(&digest)?;
+    match verdict {
+        None => out.tag(0)?,
+        Some(verdict) => {
+            out.tag(1)?;
+            out.fixed(&verdict)?;
+        }
+    }
     Ok(domain_digest(b"kontor/closure-work-plan/v1", &out.finish()))
 }

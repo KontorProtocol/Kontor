@@ -508,3 +508,42 @@ freeze each selected batch and publish the complete verdict/work plan atomically
 The volatile live replay driver and pre-engine recovery still need replacement,
 followed by complete K4 acceptance and the grouped review. No PR or CI run has been
 started for these intermediate checkpoints.
+
+### Automatic finality planner checkpoint
+
+The planner now scans executed overdue transactions and applicable historical
+exclusions in bounded pages. Each step commits only staging data. It freezes the
+rollback boundary and direct seeds before deriving replay subsets, using indexed
+attempt-scoped availability to propagate descendant drops and restore availability
+when a later retained transaction is kept. Each selected batch binds its exact
+dropped positions and original branch interval. A sealed verdict commits the seed
+count and ordered digest; the work-plan identity includes that verdict.
+
+Plan publication and insertion of direct exclusions occur in the owned finality
+stage transaction, before rollback. Descendant exclusions remain in the attempt's
+frozen inputs. The new closure driver executes saved work from retained certified
+bodies, reevaluates finality after replay, and publishes the completed closure.
+It is exercised directly by qualification; live consensus callbacks and pre-engine
+startup recovery have not yet been switched to this driver.
+
+The focused test now reaches twelve certified decisions. A parent issued in a batch
+at Bitcoin height 100 misses its deadline at 106. Its child, batched at 101, is not
+yet due. Automatic planning rolls back and replays the selected history, excludes
+both from this attempt, and persists only the parent's direct exclusion. The test
+interrupts a planner seed write and finality-stage publication, verifies rollback
+of partial writes, resumes planning through a reopened connection, checks the
+frozen child subset, and completes replay through actual block and batch handlers.
+
+Both focused tests passed in 75.36 seconds after a 29.83-second build. Evidence:
+`.build-cache/k4-finality-final.log`, SHA-256
+`eb7a5ce6bb39920c2dcdeeae00f7bef0ece32a96db8ae192553dd6a95d0d053c`.
+The expanded debug fixture initially exhausted the Rust test thread's native stack.
+GDB identified a roughly 1.5 MiB poll frame in its large async body. Separating the
+fixture into sequential phase helpers resolved it with the default thread stack.
+Pulley stack limits, production runtime limits and execution semantics were unchanged.
+
+This is local planner/driver integration evidence, not full K4 acceptance. Remaining
+work includes replacing the volatile live driver, recovery before engine startup,
+bounded proof transport, adapting the old unit fixtures, broader replay-policy
+cases, independent graph acceptance and the consolidated K4 review. No new PR,
+remote CI campaign, or performance investigation was started for this checkpoint.

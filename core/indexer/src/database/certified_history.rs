@@ -16,6 +16,7 @@ use crate::protocol::identity::{ProtocolId, domain_digest};
 pub(crate) mod branch;
 pub(crate) mod closure;
 pub(crate) mod completion;
+pub(crate) mod finality;
 pub(crate) mod registrations;
 pub(crate) mod replay;
 pub(crate) mod replay_input;

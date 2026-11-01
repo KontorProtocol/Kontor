@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS closure_work_plans (
     origin BLOB NOT NULL,
     item_count BLOB NOT NULL CHECK (length(item_count) = 8),
     digest BLOB NOT NULL CHECK (length(digest) = 32),
-    plan_id BLOB UNIQUE CHECK (plan_id IS NULL OR length(plan_id) = 32)
+    plan_id BLOB UNIQUE CHECK (plan_id IS NULL OR length(plan_id) = 32),
+    verdict BLOB CHECK (verdict IS NULL OR length(verdict) = 32)
 );
 
 CREATE TABLE IF NOT EXISTS closure_work_items (
@@ -103,6 +104,35 @@ CREATE TABLE IF NOT EXISTS closure_replay_inputs (
     decision BLOB NOT NULL REFERENCES certified_decisions(height),
     record BLOB NOT NULL,
     UNIQUE (plan_key, decision)
+);
+
+CREATE TABLE IF NOT EXISTS closure_finality_plans (
+    plan_key BLOB PRIMARY KEY REFERENCES closure_work_plans(plan_key),
+    phase INTEGER NOT NULL CHECK (phase BETWEEN 0 AND 3),
+    probe_after INTEGER NOT NULL DEFAULT 0 CHECK (probe_after >= 0),
+    seed_after_decision BLOB CHECK (seed_after_decision IS NULL OR length(seed_after_decision) = 8),
+    seed_after_txid TEXT,
+    replay_height BLOB CHECK (replay_height IS NULL OR length(replay_height) = 8),
+    replay_decision BLOB CHECK (replay_decision IS NULL OR length(replay_decision) = 8),
+    from_height BLOB CHECK (from_height IS NULL OR length(from_height) = 8),
+    record BLOB,
+    CHECK ((seed_after_decision IS NULL) = (seed_after_txid IS NULL)),
+    CHECK ((replay_height IS NULL) = (replay_decision IS NULL)),
+    CHECK ((phase = 3) = (record IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS closure_finality_seeds (
+    plan_key BLOB NOT NULL REFERENCES closure_finality_plans(plan_key),
+    decision BLOB NOT NULL REFERENCES certified_decisions(height),
+    txid BLOB NOT NULL CHECK (length(txid) = 32),
+    deadline BLOB NOT NULL CHECK (length(deadline) = 8),
+    PRIMARY KEY (plan_key, decision, txid)
+);
+
+CREATE TABLE IF NOT EXISTS closure_replay_unavailable (
+    plan_key BLOB NOT NULL REFERENCES closure_finality_plans(plan_key),
+    txid BLOB NOT NULL CHECK (length(txid) = 32),
+    PRIMARY KEY (plan_key, txid)
 );
 
 CREATE TABLE IF NOT EXISTS closure_stages (

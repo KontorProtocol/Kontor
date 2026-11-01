@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use libsql::{Connection, params};
 
-use super::{fixed, replay_input};
+use super::{finality, fixed, replay_input};
 use crate::protocol::coordinator::application_closure::WorkItem;
 use crate::protocol::coordinator::closure_work::{
     WorkCursor, WorkOrigin, decode_item, item_bytes, item_digest, plan_id,
@@ -15,13 +15,14 @@ pub(crate) struct Draft {
     pub(crate) count: u64,
     pub(crate) digest: [u8; 32],
     published: Option<[u8; 32]>,
+    pub(super) verdict: Option<[u8; 32]>,
 }
 
 impl Draft {
     pub(crate) fn cursor(self) -> Result<WorkCursor> {
         let id = self.published.context("work plan is unpublished")?;
         ensure!(
-            id == plan_id(self.origin, self.count, self.digest)?,
+            id == plan_id(self.origin, self.count, self.digest, self.verdict)?,
             "work plan identity differs"
         );
         Ok(WorkCursor {
@@ -34,7 +35,7 @@ impl Draft {
 }
 
 async fn load(conn: &Connection, key: [u8; 32]) -> Result<Draft> {
-    let row = conn.query("SELECT height, origin, item_count, digest, plan_id FROM closure_work_plans WHERE plan_key = ?1",
+    let row = conn.query("SELECT height, origin, item_count, digest, plan_id, verdict FROM closure_work_plans WHERE plan_key = ?1",
         [key.to_vec()]).await?.next().await?.context("work plan unavailable")?;
     let origin = WorkOrigin::decode(&row.get::<Vec<u8>>(1)?)?;
     ensure!(
@@ -46,6 +47,7 @@ async fn load(conn: &Connection, key: [u8; 32]) -> Result<Draft> {
         count: u64::from_be_bytes(fixed(row.get(2)?)?),
         digest: fixed(row.get(3)?)?,
         published: row.get::<Option<Vec<u8>>>(4)?.map(fixed).transpose()?,
+        verdict: row.get::<Option<Vec<u8>>>(5)?.map(fixed).transpose()?,
     };
     if draft.published.is_some() {
         draft.cursor()?;
@@ -133,7 +135,7 @@ pub(crate) async fn append(
     let key = expected.origin.key()?;
     let mut draft = load(conn, key).await?;
     ensure!(
-        draft == expected && draft.published.is_none(),
+        draft == expected && draft.published.is_none() && draft.verdict.is_none(),
         "work draft is stale or published"
     );
     for &item in items {
@@ -150,6 +152,9 @@ pub(crate) async fn append(
 }
 
 pub(crate) async fn verify(conn: &Connection, draft: Draft) -> Result<()> {
+    if let Some(verdict) = draft.verdict {
+        finality::verify(conn, draft.origin, verdict).await?;
+    }
     let mut rows = conn.query("SELECT ordinal, item, previous, digest FROM closure_work_items WHERE plan_key = ?1 ORDER BY ordinal",
         [draft.origin.key()?.to_vec()]).await?;
     let mut count = 0u64;
@@ -175,6 +180,29 @@ pub(crate) async fn verify(conn: &Connection, draft: Draft) -> Result<()> {
     Ok(())
 }
 
+pub(super) async fn bind_verdict(
+    conn: &Connection,
+    expected: Draft,
+    verdict: [u8; 32],
+) -> Result<Draft> {
+    ensure!(
+        !conn.is_autocommit(),
+        "verdict binding requires transaction"
+    );
+    let draft = load(conn, expected.origin.key()?).await?;
+    ensure!(
+        draft == expected && draft.published.is_none() && draft.verdict.is_none(),
+        "verdict draft changed or was sealed"
+    );
+    finality::verify(conn, draft.origin, verdict).await?;
+    conn.execute(
+        "UPDATE closure_work_plans SET verdict = ?2 WHERE plan_key = ?1",
+        params![draft.origin.key()?.to_vec(), verdict.to_vec()],
+    )
+    .await?;
+    for_origin(conn, draft.origin).await
+}
+
 pub(crate) async fn publish(conn: &Connection, expected: Draft) -> Result<WorkCursor> {
     ensure!(
         !conn.is_autocommit(),
@@ -184,7 +212,10 @@ pub(crate) async fn publish(conn: &Connection, expected: Draft) -> Result<WorkCu
     ensure!(draft == expected, "work draft changed before publication");
     verify(conn, draft).await?;
     if draft.published.is_none() {
-        let id = plan_id(draft.origin, draft.count, draft.digest)?;
+        if let Some(verdict) = draft.verdict {
+            finality::publish_seeds(conn, draft.origin, verdict).await?;
+        }
+        let id = plan_id(draft.origin, draft.count, draft.digest, draft.verdict)?;
         conn.execute(
             "UPDATE closure_work_plans SET plan_id = ?2 WHERE plan_key = ?1 AND plan_id IS NULL",
             params![draft.origin.key()?.to_vec(), id.to_vec()],

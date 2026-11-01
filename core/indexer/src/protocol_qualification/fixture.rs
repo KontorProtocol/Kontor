@@ -106,6 +106,17 @@ pub(super) fn transaction() -> Result<Transaction> {
         proxy_call("missing-function()"),
         call("increment()", 100_000),
     ]);
+    raw_transaction(instructions)
+}
+
+pub(crate) fn issuance_transaction() -> Result<Transaction> {
+    raw_transaction(Insts::direct(vec![Inst {
+        gas_limit: 100_000,
+        kind: InstKind::Issuance,
+    }]))
+}
+
+fn raw_transaction(instructions: Insts) -> Result<Transaction> {
     let secp = Secp256k1::new();
     let key = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[38; 32])?);
     let public = key.x_only_public_key().0;
