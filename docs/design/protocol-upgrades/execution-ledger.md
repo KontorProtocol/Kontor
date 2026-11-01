@@ -62,6 +62,26 @@ controls pass with compiler caching disabled. The release image above predates
 this builder-only correction; final candidate qualification must use the corrected
 wrapper rather than relabel the earlier image evidence.
 
+The consolidated integration review found a gap in that native ownership audit:
+the node's dependency archives were added to the common reference inventory.
+An unnamespaced retained reference could therefore resolve against a node native
+library and pass the check. The preserved graph references do not show an actual
+blst, secp256k1 or ring fallback, but the audit did not enforce the required
+isolation. Its correction must separate final node-symbol attribution from the
+restricted common reference inventory and reject node-copy fallback through a
+negative control. Earlier successful audits are not evidence that this gap is fixed.
+
+The focused guest decoder test passes with the exact root-cause payload
+`host panic: deliberate host panic for testing` and infrastructure classification.
+An attempted linked observation after the view returned failed: pooled-root
+quarantine prevents that return. The failed probe was removed. Decoder behavior
+is checked through the existing in-tree test path; the actual linked scenarios
+check quarantine, session discard and separate export-unwind classification.
+These are distinct observations, not a claim that a quarantined pooled call
+returns its decoder payload. The new provenance test also passes, preserving
+prior writes until rollback after missing-context misuse. Final test integration
+and the audit correction are pending at this checkpoint.
+
 No K2b broad CI campaign has been launched. Comparator-only changes select focused
 controls; execution/build changes retain the required platform matrix. Before
 launching CI, inspect prior runs and preserve equivalent merge-tree evidence to

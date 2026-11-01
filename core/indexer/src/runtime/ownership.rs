@@ -703,14 +703,6 @@ impl RootKeeper {
         Self::with_authority(id, RootAuthority::Stateful(authority), capacity)
     }
 
-    fn new_linked_pooled(
-        id: RootId,
-        authority: Object<LinkedManager>,
-        capacity: OwnedSemaphorePermit,
-    ) -> Self {
-        Self::with_authority(id, RootAuthority::LinkedPooled(authority), capacity)
-    }
-
     fn new_linked_stateful(
         id: RootId,
         authority: LinkedSession,
