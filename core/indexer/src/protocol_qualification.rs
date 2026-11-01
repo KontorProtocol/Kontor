@@ -6,7 +6,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result, ensure};
 use bitcoin::{BlockHash, hashes::Hash};
 use indexer_types::{Block, BlockRow};
-use libsql::Connection;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -286,7 +285,7 @@ pub async fn run() -> Result<Value> {
         let export_panics = ownership::qualify_export_panics().await?;
         #[cfg(not(kontor_linked))]
         let export_panics = json!({});
-        let mut cases = vec![
+        let cases = vec![
             "native-genesis",
             "genesis-resume",
             "read-only-views",
@@ -302,13 +301,17 @@ pub async fn run() -> Result<Value> {
             "transaction-rollback-replay",
         ];
         #[cfg(kontor_linked)]
-        cases.extend([
-            "pending-host-callback-cancellation",
-            "host-callback-failure-panic",
-            "held-cursor-cancellation",
-            "node-wide-capacity-shutdown",
-            "export-panic-classification",
-        ]);
+        let cases = {
+            let mut cases = cases;
+            cases.extend([
+                "pending-host-callback-cancellation",
+                "host-callback-failure-panic",
+                "held-cursor-cancellation",
+                "node-wide-capacity-shutdown",
+                "export-panic-classification",
+            ]);
+            cases
+        };
         Ok(json!({"schema": 1, "cases": cases, "executors": outputs,
             "node_capacity": node_capacity, "export_panics": export_panics}))
     }

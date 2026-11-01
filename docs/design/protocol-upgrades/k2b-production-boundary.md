@@ -1,16 +1,17 @@
 # Production executor extraction
 
-Status: implementation planning for the already agreed K2b phase. This is not
-phase acceptance, a frozen P1 artifact, or permission to skip S2 and OWNERSHIP-1.
-Source inspected: `protocol-selected-executor` at
-`6bf63360bcc5684ef2c595ba499374937c96d4e6`.
+Status: K2b implementation and local integrated checks are complete, with final
+PR CI and release-platform qualification still required. S2, OWNERSHIP-1 and K2a
+are merged prerequisites. The original planning analysis below records the
+pre-extraction boundaries; those boundaries are now implemented. K3 through K11,
+including activation and consensus handoff, remain later required phases.
 
 K2a's selected in-tree API and logical storage callbacks are preparation. K1's
 separate builds link a proof executable. Neither currently makes the production
 node independent of its historical execution dependencies. K2b must close both
 gaps in one coherent phase after prerequisite integration.
 
-## Source boundaries that still need implementation
+## Source boundaries implemented by K2b
 
 | Current source | Required production boundary |
 | --- | --- |
