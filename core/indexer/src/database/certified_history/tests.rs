@@ -14,7 +14,7 @@ use crate::protocol::coordinator::registration_history::{
 use crate::protocol::identity::{ExecutionDefinitionId, ExecutionIdentity};
 use crate::protocol::registration::RegistrationObservation;
 
-fn observed(snapshot: &RegistrationSnapshot) -> RegistrationObservation {
+pub(super) fn observed(snapshot: &RegistrationSnapshot) -> RegistrationObservation {
     (
         snapshot.committee.clone(),
         snapshot
@@ -52,7 +52,7 @@ fn genesis_observation(authority: &CommitteeRecord) -> Result<RegistrationSnapsh
     )
 }
 
-async fn prepared() -> Result<(
+pub(super) async fn prepared() -> Result<(
     TempDir,
     Connection,
     CommitteeRecord,

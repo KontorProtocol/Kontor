@@ -10,6 +10,7 @@ use crate::protocol::coordinator::certified_input::{EraContext, ExactInput};
 use crate::protocol::coordinator::registration_history::RegistrationSnapshot;
 use crate::protocol::identity::domain_digest;
 
+pub(crate) mod closure;
 pub(crate) mod registrations;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

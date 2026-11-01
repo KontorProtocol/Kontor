@@ -43,6 +43,21 @@ CREATE TABLE IF NOT EXISTS registration_observations (
     PRIMARY KEY (height, stage)
 );
 
+CREATE TABLE IF NOT EXISTS closure_plans (
+    height BLOB PRIMARY KEY REFERENCES certified_decisions(height),
+    plan_id BLOB NOT NULL UNIQUE CHECK (length(plan_id) = 32),
+    record BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS closure_stages (
+    height BLOB NOT NULL REFERENCES closure_plans(height),
+    stage BLOB NOT NULL CHECK (length(stage) = 8),
+    stage_id BLOB NOT NULL UNIQUE CHECK (length(stage_id) = 32),
+    observation_id BLOB NOT NULL UNIQUE REFERENCES registration_observations(observation_id),
+    record BLOB NOT NULL,
+    PRIMARY KEY (height, stage)
+);
+
 INSERT OR IGNORE INTO certified_history_state
     (singleton, status, authenticated_height, closed_height)
 SELECT 1, CASE WHEN EXISTS(SELECT 1 FROM blocks)

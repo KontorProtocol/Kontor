@@ -12,6 +12,27 @@ authority together. K5/K6 add signing coordination and authorized upgrade contro
 K7/K8 add activation and cross-upgrade recovery; K9 extends history transport to
 cross-era cold catch-up. None of those capabilities is claimed complete by K4.
 
+### Local implementation checkpoint
+
+K4 is not yet integrated into the production reactor or ready for a PR. The local
+implementation has canonical manifest/input/decision codecs, checked historical
+authority, durable certificate/input append, registration-generation observations,
+and restartable application-stage records. A stage retains its original K3
+application records even when canonical rollback removes those applications.
+Its effects, observation and remaining work commit together. Normal stages consume
+one work item; finality processing may replace the remaining work with rollback
+and replay. Startup recovery verifies the stage chain and rejects unjournaled
+canonical effects rather than repeating a committed stage.
+
+The stage runner uses the actual retained-runtime ownership and observation paths.
+Focused local checks cover transaction interruption, reopen/retry, stale admission,
+input substitution, omitted block lifecycle, rollback/replay and missing/corrupt
+records. These checks do not establish complete reactor behavior or cross-platform
+qualification. The live Decided/Finalized and next-height gates, final closure and
+committee publication, baseline composition, certified-branch rules, startup
+integration and oversized-proof transport remain to be connected and qualified.
+Both explicit link sets still need their complete integration acceptance evidence.
+
 ## Result and boundaries
 
 A fresh baseline node records a contiguous authenticated consensus history with
