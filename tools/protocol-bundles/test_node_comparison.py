@@ -4,9 +4,10 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from build import ROOT, digest, write_json
-from compare_node import OWNERSHIP, TARGETS, compare
+from compare_node import OWNERSHIP, TARGETS, compare, sources as validate_sources
 from provenance import fingerprint, package_sources, repository_sources
 from qualify_node import CASES
 from recipes import EXECUTOR_GRAPHS, identity
@@ -21,6 +22,7 @@ class NodeComparison(unittest.TestCase):
                                            'files': package_sources(ROOT / 'core/numerics')}],
                              'inherited_manifests_and_configuration': {
                                  '/fixture/core/Cargo.toml': digest(ROOT / 'core/Cargo.toml'),
+                                 '/fixture/core/numerics/Cargo.toml': digest(ROOT / 'core/numerics/Cargo.toml'),
                                  '/cargo/git/checkouts/wasmtime/crates/core/Cargo.toml': 'external workspace',
                                  **{f'/fixture/protocol-bundles/{name}/Cargo.toml':
                                     digest(ROOT / f'protocol-bundles/{name}/Cargo.toml')
@@ -209,6 +211,25 @@ class NodeComparison(unittest.TestCase):
         self.bind(directory)
         with self.assertRaisesRegex(ValueError, 'inherited core workspace changed'):
             compare(self.root, ROOT, 'release', 'success')
+
+    def test_new_inherited_configuration_invalidates_old_artifact(self):
+        checkout = self.root / 'checkout'
+        source = self.sources['node']
+        for recorded in source['inherited_manifests_and_configuration']:
+            if recorded.startswith('/fixture/'):
+                relative = recorded.removeprefix('/fixture/')
+                destination = checkout / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / relative, destination)
+        shutil.copytree(ROOT / 'core/numerics', checkout / 'core/numerics', dirs_exist_ok=True)
+        report = {'source_inputs_sha256': fingerprint(source)}
+        with patch('compare_node.repository_sources', return_value=source['qualification_sources']):
+            validate_sources(self.cells[0] / 'node', report, checkout, 'node')
+            config = checkout / 'core/.cargo/config.toml'
+            config.parent.mkdir()
+            config.write_text('[build]\nrustflags = ["-C", "opt-level=1"]\n')
+            with self.assertRaisesRegex(ValueError, 'inherited repository input changed: core/.cargo/config.toml'):
+                validate_sources(self.cells[0] / 'node', report, checkout, 'node')
 
 
 if __name__ == '__main__':

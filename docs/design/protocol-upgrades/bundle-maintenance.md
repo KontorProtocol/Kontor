@@ -215,6 +215,13 @@ This bounded linked-node check complements the existing stack qualification and
 dev smoke checks. It does not replace their coverage or establish all executions
 from the sampled scenarios.
 
+The workflow selects changes from the complete Git diff, including deleted and
+renamed inputs. Comparator and Python test changes run the builder/evidence
+controls on one Linux runner without repeating the platform builds. Changes to
+node execution or build inputs still require the selected matrix; missing Git
+history requires qualification. Unrelated changes skip both groups. Builder
+checks run once before the matrix rather than once per platform.
+
 Production audit checks the graph-private native symbols that survive linking.
 Proof mode additionally requires the specific helpers exercised by its fixture.
 An unused proof operation, or a dependency absent from the real executor, is not

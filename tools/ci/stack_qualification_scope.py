@@ -38,11 +38,20 @@ SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
 def relevant(path):
+    if evidence_only(path):
+        return False
     parts = PurePosixPath(path).parts
     return (
         path in FILES or path.startswith(PREFIXES)
         or PurePosixPath(path).name in BUILD_NAMES
         or (".cargo" in parts and PurePosixPath(path).name in {"config", "config.toml"})
+    )
+
+
+def evidence_only(path):
+    name = PurePosixPath(path).name
+    return path.startswith('tools/protocol-bundles/') and (
+        name == 'compare_node.py' or (name.startswith('test_') and name.endswith('.py'))
     )
 
 

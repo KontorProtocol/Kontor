@@ -61,6 +61,21 @@ def sources(directory, report, root, kind):
     # to this graph's recorded checkout, which can differ between CI platforms.
     workspace = manifests[0].parents[2] / 'core/Cargo.toml'
     require(inherited.get(str(workspace)) == digest(root / 'core/Cargo.toml'), 'inherited core workspace changed')
+    recorded_root = manifests[0].parents[2]
+    recorded = {str(Path(name).relative_to(recorded_root)): value
+                for name, value in inherited.items() if Path(name).is_relative_to(recorded_root)}
+    for relative, expected in recorded.items():
+        file_hash(root / relative, expected)
+    # Also reject newly added configuration that the old build never saw.
+    directories = {Path(manifest).parent}
+    directories.update(Path(package['package'].removeprefix('path+file://<repository>/').split('#', 1)[0])
+                       for package in local)
+    ancestors = {parent for directory in directories for parent in (directory, *directory.parents)}
+    for parent in ancestors:
+        for name in ('Cargo.toml', '.cargo/config', '.cargo/config.toml'):
+            path = parent / name
+            if (root / path).is_file():
+                require(recorded.get(str(path)) == digest(root / path), f'inherited repository input changed: {path}')
 
 
 def load_cell(path, root):
