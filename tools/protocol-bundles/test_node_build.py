@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from build import digest, node_codegen_objects, node_dependencies, node_executable
+from build import digest, install_node, node_codegen_objects, node_dependencies, node_executable
 from provenance import node_sources
 
 spec = importlib.util.spec_from_file_location('node_wrapper', Path(__file__).with_name('node-rustc-wrapper.py'))
@@ -106,6 +106,22 @@ class NodeBuild(unittest.TestCase):
         (self.root / 'core/indexer/proto').rmdir()
         with self.assertRaisesRegex(RuntimeError, 'missing node source tree'):
             node_sources(self.root)
+
+    def test_installation_preserves_audited_bytes_and_rejects_changed_binary(self):
+        source = self.root / 'built-kontor'
+        source.write_bytes(b'audited executable')
+        record = {'executable': str(source), 'executable_sha256': digest(source)}
+        destination = self.root / 'bin/kontor'
+        installed = install_node(record, destination)
+        self.assertEqual(installed['sha256'], digest(destination))
+        self.assertEqual(destination.stat().st_mode & 0o777, 0o755)
+        source.write_bytes(b'changed after audit')
+        with self.assertRaisesRegex(RuntimeError, 'changed after'):
+            install_node(record, destination)
+        self.assertEqual(destination.read_bytes(), b'audited executable')
+        self.assertEqual(list(destination.parent.iterdir()), [destination])
+        with self.assertRaisesRegex(RuntimeError, 'overwrite the audited'):
+            install_node(record, source)
 
 
 if __name__ == '__main__':

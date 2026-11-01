@@ -421,6 +421,26 @@ def build_node(graphs, args, base_env, output):
     return result
 
 
+def install_node(node, destination):
+    source = Path(node["executable"])
+    destination = destination.absolute()
+    if source.resolve() == destination.resolve():
+        raise RuntimeError("installation must not overwrite the audited build output")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Verify the copied bytes before replacing an existing installed executable.
+    with tempfile.NamedTemporaryFile(dir=destination.parent, prefix=".kontor-", delete=False) as file:
+        temporary = Path(file.name)
+    try:
+        shutil.copyfile(source, temporary)
+        if digest(temporary) != node["executable_sha256"]:
+            raise RuntimeError("node executable changed after its ownership audit")
+        temporary.chmod(0o755)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {"path": str(destination), "sha256": node["executable_sha256"]}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / ".build-cache/protocol-bundles")
@@ -435,9 +455,13 @@ def main():
                       help="build the production node with retained executors and audit native ownership")
     parser.add_argument("--node-qualification", action="store_true",
                         help="include the isolated executor integration command; requires --build-node")
+    parser.add_argument("--install-node", type=Path,
+                        help="copy the audited executable to this path; requires --build-node")
     args = parser.parse_args()
     if args.node_qualification and not args.build_node:
         parser.error("--node-qualification requires --build-node")
+    if args.install_node and not args.build_node:
+        parser.error("--install-node requires --build-node")
     production = args.build_executors or args.build_node
     if not 1 <= args.jobs <= 2:
         parser.error("protocol qualification uses one or two compiler jobs")
@@ -495,6 +519,8 @@ def main():
                    "target": args.target, "profile": args.profile, "graphs": reports,
                    "status": "staged libraries; final node link and execution qualification required"})
         if node is not None:
+            if args.install_node:
+                node["installed"] = install_node(node, args.install_node)
             write_json(output / "node-build.json", {"compiler": compiler, "toolchain_inputs": toolchain,
                        "target": args.target, "profile": args.profile, "graphs": reports, "node": node})
             print(f"Node built at {node['executable']}; execution qualification has not run.", flush=True)

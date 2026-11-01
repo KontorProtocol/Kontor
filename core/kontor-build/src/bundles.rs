@@ -16,6 +16,9 @@ pub struct ProtocolBundlesArgs {
     /// Include the isolated executor integration command in the node.
     #[arg(long, requires = "build_node")]
     pub node_qualification: bool,
+    /// Copy the audited node executable to this path, relative to the checkout root.
+    #[arg(long, requires = "build_node")]
+    pub install_node: Option<PathBuf>,
     /// Require all dependencies to be present in the local Cargo cache.
     #[arg(long)]
     pub offline: bool,
@@ -55,6 +58,9 @@ pub fn protocol_bundles(args: ProtocolBundlesArgs) -> Result<()> {
     }
     if args.node_qualification {
         command.arg("--node-qualification");
+    }
+    if let Some(destination) = args.install_node {
+        command.arg("--install-node").arg(destination);
     }
     if let Some(target) = args.target {
         command.args(["--target", &target]);

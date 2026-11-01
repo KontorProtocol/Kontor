@@ -174,8 +174,31 @@ Production evidence is under `OUTPUT/TARGET/PROFILE/executors`. Its
 successful node build and ownership audit. Neither is execution qualification.
 Failure removes the corresponding old success marker and preserves logs.
 Actual multi-executor behavior, cleanup, baseline compatibility and platform
-qualification remain K2b acceptance requirements. The default Docker and release
-routes still require integration before this phase is complete.
+qualification remain K2b acceptance requirements.
+
+For a production release executable, use:
+
+```sh
+./tools/kontor protocol-bundles --build-node --profile release \
+  --output target/protocol-evidence --install-node target/bin/kontor
+```
+
+Installation checks the copied bytes against the audited executable hash before
+atomically replacing the destination. It does not strip or otherwise transform
+the binary. `node-build.json` records the installed path and hash. A plain
+`cargo build` in the core workspace remains an in-tree development/test build;
+it does not establish retained dependency isolation.
+
+The Docker `builder` stage invokes the same Python builder and installs that
+audited output into the runtime image. Its `cacher` stage fetches the three locked
+graphs; it no longer compiles a unified workspace whose artifacts the isolated
+graphs cannot reuse. The opt-in `protocol-bundle-qualification` image uses
+`tools/protocol-bundles/qualify_node.py` to build and execute both real graphs.
+The runner rejects stale or changed binaries, missing graphs/cases, mismatched
+observations and subprocess failures, and records raw output hashes with the
+node build report hash in `executors/node-execution.json`. Its 300-second timeout
+is a test timeout, not a Kontor execution cutoff. Full release-image and platform
+qualification is still required before the phase can merge.
 
 Production audit checks the graph-private native symbols that survive linking.
 Proof mode additionally requires the specific helpers exercised by its fixture.
