@@ -2172,3 +2172,26 @@ workspace formatting and diff whitespace checks passed. Raw evidence SHA-256:
 - `k4-gossip50.log`: `24a00863e09f187cb0f4bdc99384a9e90e55b346e2449131e268142a756334b3`.
 - `k4-clippy53.log`: `c49257ed31e9632265ab9ff69b1e1ccfe86f95f97b189e21947c623d14d09ebd`.
 - `k4-build-tools54.log`: `5c64aa92104b4181fcfe809af823004f10eb651068548acf863e9de67860fc83`.
+
+
+### K4 normal workspace configuration, 1 November 2026
+
+The CI-default `cargo clippy --locked --workspace --tests -- -D warnings` exposed
+helpers that qualification-feature builds legitimately use but normal builds do
+not. Scoped those committee adapters and reactor fixture wrappers to their actual
+test/qualification configurations. Definition-specific session dispatch remains
+compiled for real linked nodes. The historical committee operation stays in the
+export ABI; its local adapter field has an explicit dead-code allowance only in
+builds that do not exercise historical qualification. Live authority still comes
+from trusted registration observations.
+
+Clippy55 identified eight unused items; Clippy56 identified two wrappers used only
+by qualification, rather than ordinary unit tests. After the corresponding cfg
+corrections, the complete default workspace Clippy57 passed (session27614, exit0,
+25.95s). No execution rule or retained bundle definition changed in this follow-up.
+The draft coordinator reference is now
+`a49ebd6b121d1cdc40d9cf264dbbd537db13357e6c339dc51abf15ee4680b3d7`.
+The source-only correction will be included in the consolidated review, not sent
+through a separate independent review campaign.
+
+Raw `k4-default-clippy57.log` SHA-256: `0a8f51e7cd08db8e6e474c64fcc36b46becfb5015f74f413932cbddf8bf3bfbd`.

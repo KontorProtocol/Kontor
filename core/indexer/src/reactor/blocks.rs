@@ -388,6 +388,7 @@ impl<E: Executor> ExecutionContext<E> {
 }
 
 impl<E: Executor> Reactor<E> {
+    #[cfg(feature = "protocol-qualification")]
     pub(super) async fn rollback(&mut self, height: u64) -> Result<()> {
         self.execution.rollback(height).await?;
         self.observe_rollback(height).await;
@@ -410,6 +411,7 @@ impl<E: Executor> Reactor<E> {
         }
     }
 
+    #[cfg(any(test, feature = "protocol-qualification"))]
     pub(super) async fn handle_block(
         &mut self,
         block: impl Into<BlockInput>,

@@ -20,11 +20,13 @@ use libsql::Connection;
 #[cfg(kontor_linked)]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+#[cfg(any(test, feature = "protocol-qualification"))]
 use super::committee::materialize_committee;
 use super::genesis::bind_identity;
 use super::selection::{
     ApplicationPosition, ExecutionSelection, ExecutorVersion, select_legacy_p1,
 };
+#[cfg(any(test, feature = "protocol-qualification"))]
 use crate::consensus::ValidatorSet;
 use crate::database::canonical_history::{self, HistoryState};
 use crate::database::queries::{insert_block_execution_usage, insert_transaction_execution_usage};
@@ -214,10 +216,12 @@ pub(crate) fn session_factory(
     session_factory_for_definition(network, execution_definition()?, view_gas_limit)
 }
 
+#[cfg(any(kontor_linked, test, feature = "protocol-qualification"))]
 #[derive(Debug, thiserror::Error)]
 #[error("execution definition {0:?} is not linked for production")]
 pub(crate) struct UnavailableExecutionDefinition(pub(crate) ExecutionDefinitionId);
 
+#[cfg(any(kontor_linked, test, feature = "protocol-qualification"))]
 pub(crate) fn session_factory_for_definition(
     network: Network,
     definition: ExecutionDefinitionId,
@@ -735,6 +739,7 @@ pub(crate) async fn run_block_lifecycle(
     .await
 }
 
+#[cfg(any(test, feature = "protocol-qualification"))]
 pub(crate) async fn derive_committee(
     session: &LinkedSession,
     selection: &ExecutionSelection,

@@ -14,7 +14,7 @@ use crate::protocol::identity::ExecutionIdentity;
 use crate::runtime::ownership::LinkedCanonicalRootLease;
 use crate::runtime::ownership::adapter::HostFailure;
 
-#[cfg(any(test, feature = "protocol-qualification"))]
+#[cfg(feature = "protocol-qualification")]
 use crate::protocol::coordinator::linked::PreparedBlock;
 #[cfg(test)]
 use crate::protocol::coordinator::linked::TransactionRecognizer;
@@ -170,7 +170,7 @@ impl<E: Executor> ExecutionContext<E> {
         );
     }
 
-    #[cfg(any(test, feature = "protocol-qualification"))]
+    #[cfg(feature = "protocol-qualification")]
     pub(super) async fn execute_block_unit(
         &mut self,
         selection: &ExecutionSelection,

@@ -69,6 +69,8 @@ pub(crate) struct ExecutorOperations {
     pub(crate) lifecycle: LifecycleCall,
     pub(crate) contract_wit: ContractWitCall,
     pub(crate) view: ViewCall,
+    // Retained exports keep this operation; K4 derives live authority from registration observations.
+    #[cfg_attr(not(any(test, feature = "protocol-qualification")), allow(dead_code))]
     pub(crate) committee: CommitteeCall,
     pub(crate) migration: MigrationCall,
     pub(crate) registrations: Option<RegistrationCall>,

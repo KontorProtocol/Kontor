@@ -561,6 +561,7 @@ impl<E: Executor> ExecutionContext<E> {
 }
 
 impl<E: Executor> Reactor<E> {
+    #[cfg(any(test, feature = "protocol-qualification"))]
     pub(super) async fn process_decided_batch(
         &mut self,
         anchor_height: u64,

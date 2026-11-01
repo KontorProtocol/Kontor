@@ -6,6 +6,7 @@ pub(crate) mod certified_input;
 pub(crate) mod closure_execution;
 pub(crate) mod closure_record;
 pub(crate) mod closure_work;
+#[cfg(any(test, feature = "protocol-qualification"))]
 pub(crate) mod committee;
 pub(crate) mod decision;
 pub(crate) mod genesis;

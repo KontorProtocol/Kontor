@@ -188,6 +188,7 @@ impl ExecutionSelection {
         self.verify_base(conn).await
     }
 
+    #[cfg(any(test, feature = "protocol-qualification"))]
     pub(crate) async fn verify_committee(
         &self,
         conn: &Connection,
