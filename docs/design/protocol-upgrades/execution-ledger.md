@@ -25,7 +25,7 @@ Recent local implementation checkpoints:
 The compile controls accept the shared structural factory signatures and reject
 cross-graph Wasmtime Engine and Tokio Handle values and private Runtime imports.
 All five controls passed against actual staged libraries. The builder/comparator
-test suite passes 93 tests; the CI helper suite passes 24 tests. Missing dependencies
+test suite passes 94 tests; the CI helper suite passes 24 tests. Missing dependencies
 and unrelated compiler failures cannot satisfy a negative compile control.
 
 The linked-ownership task was integrated after lead source review and validation
@@ -53,6 +53,14 @@ OCI image omits Docker healthcheck metadata; the Dockerfile healthcheck is
 unchanged. These packaging checks do not qualify execution across platforms.
 Final platform qualification, consolidated lead/two independent reviews, PR CI
 and merge remain pending.
+
+The node compiler wrapper now preserves Cargo's inherited jobserver descriptors.
+The original wrapper closed them when spawning `rustc`, producing a bad-descriptor
+warning and losing access to Cargo's shared compilation budget. A real inherited
+pipe regression fails before the fix and passes after it. All 94 builder/evidence
+controls pass with compiler caching disabled. The release image above predates
+this builder-only correction; final candidate qualification must use the corrected
+wrapper rather than relabel the earlier image evidence.
 
 No K2b broad CI campaign has been launched. Comparator-only changes select focused
 controls; execution/build changes retain the required platform matrix. Before

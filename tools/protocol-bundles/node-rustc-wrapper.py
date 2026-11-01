@@ -53,7 +53,9 @@ def main():
         directory, pattern = capture
         for path in directory.glob(pattern):
             path.unlink()
-    result = subprocess.run([compiler, *arguments])
+    # Cargo passes inheritable jobserver descriptors to its compiler. Closing
+    # them here loses rustc's access to the shared compilation budget.
+    result = subprocess.run([compiler, *arguments], close_fds=False)
     if result.returncode:
         raise SystemExit(result.returncode)
     if capture is not None:

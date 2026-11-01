@@ -1,7 +1,10 @@
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -45,6 +48,32 @@ class NodeBuild(unittest.TestCase):
         self.facade.write_bytes(b'changed')
         with self.assertRaisesRegex(RuntimeError, 'facade changed'):
             wrapper.prepare('/pinned/rustc', ['--crate-name', 'indexer'], self.spec)
+
+    @unittest.skipUnless(os.name == 'posix', 'Cargo pipe jobserver uses POSIX descriptors')
+    def test_wrapper_preserves_cargo_jobserver_descriptors(self):
+        read_fd, write_fd = os.pipe()
+        self.addCleanup(os.close, read_fd)
+        self.addCleanup(os.close, write_fd)
+        os.write(write_fd, b'+')
+        compiler = self.root / 'compiler.py'
+        compiler.write_text(
+            'import os\n'
+            'auth = os.environ["CARGO_MAKEFLAGS"].split("--jobserver-auth=", 1)[1].split()[0]\n'
+            'read_fd, write_fd = map(int, auth.split(","))\n'
+            'token = os.read(read_fd, 1)\n'
+            'assert token == b"+"\n'
+            'os.write(write_fd, token)\n'
+        )
+        spec_path = self.root / 'link-spec.json'
+        spec_path.write_text(json.dumps({'compiler': sys.executable, 'graphs': []}))
+        result = subprocess.run(
+            [sys.executable, str(Path(wrapper.__file__)), sys.executable, str(compiler)],
+            env=dict(os.environ, KONTOR_NODE_LINK_SPEC=str(spec_path),
+                     CARGO_MAKEFLAGS=f'-j --jobserver-auth={read_fd},{write_fd}'),
+            pass_fds=(read_fd, write_fd), capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(os.read(read_fd, 1), b'+')
 
     def test_node_graph_rejects_hidden_executor_dependency(self):
         node_dependencies({'packages': [{'name': 'libsql'}]})
