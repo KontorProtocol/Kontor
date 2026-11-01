@@ -6,10 +6,10 @@ use malachitebft_app_channel::app::config::*;
 use malachitebft_app_channel::app::net::Multiaddr;
 use malachitebft_app_channel::app::types::Keypair;
 use malachitebft_app_channel::{
-    Channels, ConsensusContext, EngineHandle, NetworkContext, NetworkIdentity, RequestContext,
-    SyncContext, WalContext,
+    ConsensusContext, NetworkContext, NetworkIdentity, RequestContext, SyncContext, WalContext,
 };
 
+use super::transport::Engine;
 use crate::consensus::codec::ProtobufCodec;
 use crate::consensus::signing::{Ed25519Provider, PrivateKey};
 use crate::consensus::{Address, Ctx};
@@ -50,10 +50,8 @@ impl NodeConfig for MalachiteNodeConfig {
 }
 
 pub struct EngineOutput {
-    pub channels: Channels<Ctx>,
-    pub signing_provider: Ed25519Provider,
+    pub(super) engine: Engine,
     pub address: Address,
-    pub _handle: EngineHandle,
 }
 
 /// Start the Malachite consensus engine and return channels + metadata.
@@ -126,9 +124,7 @@ pub async fn start(config: EngineConfig) -> Result<EngineOutput> {
     .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     Ok(EngineOutput {
-        channels,
-        signing_provider: app_provider,
+        engine: Engine::legacy(channels, handle, app_provider),
         address,
-        _handle: handle,
     })
 }

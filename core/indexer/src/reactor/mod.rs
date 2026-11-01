@@ -14,7 +14,6 @@ mod execution;
 mod execution_fixture;
 pub mod executor;
 mod handlers;
-pub(crate) mod message;
 #[cfg(test)]
 mod handoff_tests;
 #[cfg(feature = "protocol-qualification")]
@@ -25,6 +24,7 @@ mod mempool;
 pub mod mempool_fee_index;
 #[cfg(test)]
 mod mempool_tests;
+pub(crate) mod message;
 #[cfg(test)]
 pub mod mock_bitcoin;
 #[cfg(test)]
@@ -40,13 +40,16 @@ mod simulation_context_tests;
 mod startup_tests;
 #[cfg(test)]
 mod storage_penalty_tests;
+mod transport;
+#[cfg(all(test, kontor_managed))]
+mod transport_tests;
 pub mod types;
 #[cfg(test)]
 mod workload_tests;
 
 use std::collections::VecDeque;
 use std::future::Future;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use futures_util::future::{self, pending};
@@ -61,7 +64,6 @@ use tokio::{
 };
 
 use bitcoin::{BlockHash, Network};
-use malachitebft_app_channel::NetworkMsg;
 use malachitebft_app_channel::app::types::LocallyProposedValue;
 use malachitebft_core_types::{LinearTimeouts, Round};
 use metrics::gauge;
@@ -323,13 +325,12 @@ impl<E: Executor> Reactor<E> {
         proposal: &LocallyProposedValue<Ctx>,
         valid_round: Round,
     ) -> Result<()> {
-        for stream_msg in self.consensus.stream_proposal(proposal, valid_round) {
-            self.consensus
-                .channels
-                .network
-                .send(NetworkMsg::PublishProposalPart(stream_msg))
-                .await
-                .context("Failed to send proposal part to network")?;
+        for stream_msg in self
+            .consensus
+            .stream_proposal(proposal, valid_round)
+            .await?
+        {
+            self.consensus.engine.publish(stream_msg).await?;
         }
         Ok(())
     }
@@ -448,7 +449,7 @@ impl<E: Executor> Reactor<E> {
                 }
             };
 
-            let consensus_rx = self.consensus.channels.consensus.recv();
+            let consensus_rx = self.consensus.engine.next();
 
             // EVERY in-flight I/O job's verdict future, raced — or never.
             // All of them, not just the front: a stalled BuildProposal against
@@ -586,7 +587,7 @@ impl<E: Executor> Reactor<E> {
                     // surfaces through the supervisor's `first_exit`, while the
                     // in-process Malachite actor has no handle of its own and
                     // this channel is the only way its death reaches anyone.
-                    let Some(msg) = msg else {
+                    let Some(msg) = msg? else {
                         return if self.shutdown.is_cancelled() {
                             Ok(())
                         } else {
@@ -692,24 +693,12 @@ impl<E: Executor> Reactor<E> {
             self.run_event_loop().await
         };
 
-        // Gracefully stop the Malachite consensus engine — BOUNDED. This wait
-        // sits between a reactor fatal and the exit status that reports it, so
-        // an engine that never acknowledges the stop must not stand there
-        // indefinitely: that is the immortal green-probed node again, one layer
-        // down. On timeout, say so and go — the process is exiting either way,
-        // and the loop result, not the engine's teardown, is the story.
-        if let Err(e) = self
-            .consensus
-            .engine_handle
-            .actor
-            .get_cell()
-            .stop_and_wait(
-                Some("Reactor shutting down".to_string()),
-                Some(std::time::Duration::from_secs(5)),
-            )
-            .await
-        {
-            warn!(error = %e, "Malachite engine did not stop cleanly within 5s; exiting without it");
+        match self.consensus.engine.stop(Duration::from_secs(5)).await {
+            Ok(true) => {}
+            Ok(false) => warn!(
+                "Malachite engine did not join within 5s; retaining ownership until process exit"
+            ),
+            Err(error) => warn!(%error, "Malachite engine shutdown failed"),
         }
 
         result
@@ -969,12 +958,10 @@ async fn start_consensus_with_genesis(
 
     let mut state = consensus_state::ConsensusState::new(
         conn.clone(),
-        engine_output.signing_provider,
         genesis,
         engine_output.address,
         last_block_height,
-        engine_output.channels,
-        engine_output._handle,
+        engine_output.engine,
         validator_index,
         mempool_fee_index,
     )

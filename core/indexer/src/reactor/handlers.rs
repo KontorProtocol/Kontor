@@ -1,12 +1,12 @@
 use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
+use malachitebft_app_channel::AppMsg;
 use malachitebft_app_channel::app::engine::host::SyncedValueOutcome;
 use malachitebft_app_channel::app::streaming::StreamMessage;
 use malachitebft_app_channel::app::types::codec::Codec;
 use malachitebft_app_channel::app::types::sync::RawDecidedValue;
 use malachitebft_app_channel::app::types::{LocallyProposedValue, PeerId, ProposedValue};
-use malachitebft_app_channel::{AppMsg, NetworkRequest};
 use malachitebft_core_consensus::Role;
 use malachitebft_core_types::{ExtendedCommitCertificate, Round, Validity, VoteExtensions};
 use tracing::{info, warn};
@@ -306,11 +306,9 @@ impl<E: Executor> Reactor<E> {
                 // unexpected failure paths we just warn and leave it unset rather
                 // than block or crash — a genuinely dead swarm surfaces through
                 // consensus liveness, not here.
-                match NetworkRequest::dump_state(&self.consensus.channels.net_requests).await {
-                    Ok(Some(dump)) => {
-                        let _ = self
-                            .consensus_listen_addr
-                            .send(Some(dump.local_node.listen_addr.to_string()));
+                match self.consensus.engine.listen_address().await {
+                    Ok(Some(address)) => {
+                        let _ = self.consensus_listen_addr.send(Some(address));
                     }
                     Ok(None) => {
                         warn!("Network state dump empty; consensus listen address left unset");

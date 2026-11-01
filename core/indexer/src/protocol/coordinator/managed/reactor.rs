@@ -1,9 +1,9 @@
-use std::future::pending;
+use std::future::{Future, pending};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures_util::future::BoxFuture;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use malachitebft_app_channel::AppMsg;
 use malachitebft_app_channel::app::types::PeerId;
@@ -29,8 +29,9 @@ use crate::consensus::{Address, CommitCertificate, Ctx, Height, ValueId, proto};
 use crate::protocol::coordinator::durable_signer::DurableSigner;
 use crate::reactor::message::Message;
 
-type Reply = BoxFuture<'static, Result<(ReplyToken, Response), EngineError>>;
-type Outgoing = BoxFuture<'static, Result<Delivery, EngineError>>;
+type Reply =
+    Pin<Box<dyn Future<Output = Result<(ReplyToken, Response), EngineError>> + Send + Sync>>;
+type Outgoing = Pin<Box<dyn Future<Output = Result<Delivery, EngineError>> + Send + Sync>>;
 
 pub(crate) struct ReactorEngine {
     generation: u64,
@@ -61,6 +62,10 @@ impl ReactorEngine {
             replies: FuturesUnordered::new(),
             outgoing: None,
         })
+    }
+
+    pub(crate) fn signer(&self) -> Option<Arc<DurableSigner>> {
+        self.control.signer()
     }
 
     pub(crate) async fn next(&mut self) -> Result<Option<Message>, EngineError> {
@@ -115,15 +120,15 @@ impl ReactorEngine {
         }
     }
 
-    pub(crate) async fn publish(&self, part: ProposalPartBytes) -> Result<(), PublishError> {
+    pub(crate) async fn publish(&mut self, part: ProposalPartBytes) -> Result<(), PublishError> {
         self.control.publish(self.generation, part).await
     }
 
-    pub(crate) async fn request_listen_address(&self) -> Result<bool, EngineError> {
+    pub(crate) async fn request_listen_address(&mut self) -> Result<bool, EngineError> {
         self.control.request_listen_address().await
     }
 
-    pub(crate) async fn poll_listen_address(&self) -> Result<Option<String>, EngineError> {
+    pub(crate) async fn poll_listen_address(&mut self) -> Result<Option<String>, EngineError> {
         self.control.poll_listen_address().await
     }
 
@@ -136,7 +141,7 @@ impl ReactorEngine {
         self.outgoing = None;
     }
 
-    pub(crate) async fn revoke_signing(&self) -> Result<(), EngineError> {
+    pub(crate) async fn revoke_signing(&mut self) -> Result<(), EngineError> {
         self.control.revoke_signing().await
     }
 
@@ -152,7 +157,7 @@ fn reply<T, F>(
 ) -> (oneshot::Sender<T>, Reply)
 where
     T: Send + 'static,
-    F: FnOnce(T) -> Result<Response, EngineError> + Send + 'static,
+    F: FnOnce(T) -> Result<Response, EngineError> + Send + Sync + 'static,
 {
     let (send, receive) = oneshot::channel();
     let deadline = deadline.map(|duration| Instant::now() + duration);

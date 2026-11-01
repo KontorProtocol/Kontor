@@ -84,10 +84,10 @@ impl Drop for EngineCleanup {
 }
 
 async fn stop_engine(reactor: &mut Reactor<RuntimeExecutor>) -> Result<()> {
-    reactor.consensus.engine_handle.actor.stop(None);
+    reactor.consensus.engine.legacy_handle().actor.stop(None);
     timeout(
         Duration::from_secs(30),
-        &mut reactor.consensus.engine_handle.handle,
+        &mut reactor.consensus.engine.legacy_handle_mut().handle,
     )
     .await
     .context("test consensus teardown timed out")??;
@@ -177,7 +177,9 @@ async fn reactor(
         MempoolFeeIndex::new(None),
     )
     .await?;
-    cleanup.0.push(consensus.engine_handle.actor.clone());
+    cleanup
+        .0
+        .push(consensus.engine.legacy_handle().actor.clone());
     let (_, blocks) = mpsc::channel(1);
     let (_, mempool) = mpsc::channel(1);
     let (address, _) = watch::channel(None);

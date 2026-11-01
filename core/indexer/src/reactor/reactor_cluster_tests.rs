@@ -608,12 +608,10 @@ impl ReactorCluster {
 
             let mut state = ConsensusState::new(
                 conn.clone(),
-                engine_output.signing_provider,
                 genesis,
                 engine_output.address,
                 resume_height,
-                engine_output.channels,
-                engine_output._handle,
+                engine_output.engine,
                 validator_index,
                 crate::reactor::mempool_fee_index::MempoolFeeIndex::new(None),
             )
@@ -621,7 +619,7 @@ impl ReactorCluster {
             .expect("ConsensusState::new failed");
             let _fault_tasks = startup_faults.map(|faults| {
                 state.timeouts.propose = Duration::from_secs(10);
-                faults.install(&mut state.channels)
+                faults.install(state.engine.legacy_channels_mut())
             });
             state.observation = Some(ObservationChannels {
                 decided_tx: dtx,

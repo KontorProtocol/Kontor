@@ -2825,3 +2825,29 @@ This checkpoint does not switch production startup or complete K5/K6. The live
 reactor loop, durable generation selection, proposal signing, managed baseline
 identity, production build wiring, authorization and final grouped review remain.
 No PR or CI campaign was launched for this checkpoint.
+
+### K5 live reactor transport checkpoint
+
+The reactor now receives consensus events, publishes proposal parts, discovers
+the listener, signs proposal Fin messages and stops the engine through a
+node-owned transport. Managed engines use the same durable signer for Fin and
+engine signatures. Publication backpressure retains the original buffer;
+shutdown retires callbacks, independently fences signing and awaits the worker.
+Construction failure also requests engine shutdown. Legacy startup remains
+selected until managed protocol identity and durable ownership are integrated.
+
+The actual node linked with both independent consensus bundles passed 18 selected
+tests (zero failures or ignored tests, 72.09 seconds): 15 managed component tests,
+a new real signing/publication/decision test through each bundle, existing
+validator agreement, and the delayed-proposal deadline regression. The new test
+authenticates reassembled proposal parts and verifies the decided precommit
+signature. Evidence and lead review are in
+`.build-cache/k5-live-transport-test.json` with its raw log. Subsequent formatting
+only changed whitespace in three fixture files, verified and recorded there.
+This local driver did not record the test binary checksum; final grouped
+acceptance must retain complete candidate provenance.
+
+This does not establish full managed database application or activation. Managed
+startup/identity, persistent generation ownership, production build wiring, K6
+authorization and operator dry run remain unfinished. No CI or independent
+microreview was requested; consolidated grouped review is still required.

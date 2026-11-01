@@ -10,8 +10,8 @@ use tracing::{debug, warn};
 use super::batches::batch_is_ordered;
 use super::mempool::Mempool;
 use super::mempool_fee_index::MempoolFeeIndex;
+use super::transport::Engine;
 
-use malachitebft_app_channel::Channels;
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
 use malachitebft_app_channel::app::types::core::Round;
 use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
@@ -23,7 +23,7 @@ use prost::Message;
 use crate::bitcoin_follower::block::BlockInput;
 use crate::consensus::codec::decode_commit_certificate;
 use crate::consensus::finality_types::*;
-use crate::consensus::signing::{Ed25519Provider, PublicKey};
+use crate::consensus::signing::PublicKey;
 use crate::consensus::{
     Address, CommitCertificate, Ctx, Genesis, Height, PartStreamsMap, ProposalData, ProposalFin,
     ProposalInit, ProposalPart, ProposalParts, Validator, ValidatorSet, Value, proto,
@@ -61,7 +61,6 @@ pub struct PendingProposal {
 pub struct ConsensusState {
     pub(super) pending_decision: Option<super::certified::PendingDecision>,
     pub(crate) protocol_context: EraContext,
-    pub signing_provider: Ed25519Provider,
     pub address: Address,
     pub mempool: Mempool,
     /// Mempool-based fee estimator. Owned by ConsensusState; the reactor's
@@ -112,9 +111,7 @@ pub struct ConsensusState {
     pub pending_next_height: Option<(Height, tokio::sync::oneshot::Sender<Next<Ctx>>)>,
     pub early_proposals: Vec<(ProposalParts, usize)>,
 
-    // Malachite engine channels and handle.
-    pub channels: Channels<Ctx>,
-    pub engine_handle: malachitebft_app_channel::EngineHandle,
+    pub(super) engine: Engine,
     pub validator_index: Option<usize>,
 }
 
@@ -341,14 +338,12 @@ pub(super) async fn certified_startup(
 }
 
 impl ConsensusState {
-    pub async fn new(
+    pub(super) async fn new(
         conn: libsql::Connection,
-        signing_provider: Ed25519Provider,
         genesis: Genesis,
         address: Address,
         last_block_height: u64,
-        channels: Channels<Ctx>,
-        engine_handle: malachitebft_app_channel::EngineHandle,
+        engine: Engine,
         validator_index: Option<usize>,
         mempool_fee_index: MempoolFeeIndex,
     ) -> Result<Self> {
@@ -380,7 +375,6 @@ impl ConsensusState {
         Ok(Self {
             pending_decision: None,
             protocol_context,
-            signing_provider,
             address,
             mempool: Mempool::default(),
             mempool_fee_index,
@@ -398,8 +392,7 @@ impl ConsensusState {
             pending_proposal: None,
             pending_next_height: None,
             early_proposals: Vec::new(),
-            channels,
-            engine_handle,
+            engine,
             validator_index,
         })
     }
@@ -438,18 +431,27 @@ impl ConsensusState {
         StreamId::new(bytes.into())
     }
 
-    pub(super) fn stream_proposal(
-        &self,
+    pub(super) async fn stream_proposal(
+        &mut self,
         value: &LocallyProposedValue<Ctx>,
         pol_round: Round,
-    ) -> Vec<StreamMessage<ProposalPart>> {
+    ) -> Result<Vec<StreamMessage<ProposalPart>>> {
         let data_part = ProposalData::new(value.value.clone());
 
         // The Fin signature covers Init(height,round) + Data. `verify_proposal_parts`
         // recomputes the same preimage — keep both on `proposal_sign_hash` so they
         // cannot drift.
         let hash = proposal_sign_hash(value.height, value.round, &data_part);
-        let signature = self.signing_provider.sign(&hash);
+        let round = value.round.as_u32().context("proposal round is nil")?;
+        let signature = self
+            .engine
+            .sign_proposal_fin(
+                value.height.as_u64(),
+                round,
+                value.value.descriptor().encode()?,
+                hash,
+            )
+            .await?;
 
         let parts = vec![
             ProposalPart::Init(ProposalInit::new(
@@ -478,7 +480,7 @@ impl ConsensusState {
             StreamContent::Fin,
         ));
 
-        msgs
+        Ok(msgs)
     }
 
     /// Authenticate a reassembled proposal before any of it is trusted:

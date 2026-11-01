@@ -140,7 +140,7 @@ pub(crate) async fn run(
         MempoolFeeIndex::new(None),
     )
     .await?;
-    let engine = state.engine_handle.actor.clone();
+    let engine = state.engine.legacy_handle().actor.clone();
     let result = async {
         ensure!(state.current_height == Height::new(1));
         ensure!(conn.query("SELECT 1 FROM batches WHERE consensus_height = 99", ()).await?.next().await?.is_some());

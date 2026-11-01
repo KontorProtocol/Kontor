@@ -245,7 +245,7 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
         let mut tick = interval(Duration::from_millis(10));
         loop {
             tokio::select! {
-                msg = reactor.consensus.channels.consensus.recv() => {
+                msg = reactor.consensus.engine.legacy_channels_mut().consensus.recv() => {
                     let msg = msg.ok_or_else(|| anyhow!("consensus channel closed"))?;
                     match &msg {
                         AppMsg::GetValue { height, round, .. } if *height == target_height && *round == Round::new(0) => {
@@ -275,7 +275,8 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
     .await;
     reactor
         .consensus
-        .engine_handle
+        .engine
+        .legacy_handle()
         .actor
         .get_cell()
         .stop_and_wait(None, Some(Duration::from_secs(5)))

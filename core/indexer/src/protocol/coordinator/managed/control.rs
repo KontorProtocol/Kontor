@@ -146,6 +146,10 @@ impl EngineSlot {
 }
 
 impl Control {
+    pub(crate) fn signer(&self) -> Option<Arc<DurableSigner>> {
+        self.signer.clone()
+    }
+
     pub(crate) fn subscribe(&self) -> watch::Receiver<Status> {
         self.status.clone()
     }
@@ -180,7 +184,7 @@ impl Control {
         &self,
         token: ReplyToken,
         response: Response,
-    ) -> impl Future<Output = Result<Delivery, EngineError>> + Send + 'static {
+    ) -> impl Future<Output = Result<Delivery, EngineError>> + Send + Sync + 'static {
         let commands = self.commands.clone();
         let stop = self.stop.clone();
         let wake = self.worker.as_ref().map(|worker| worker.thread().clone());
