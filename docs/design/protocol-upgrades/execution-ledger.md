@@ -2518,3 +2518,44 @@ or the node reactor. Managed owner/start/join, node adapter, linked graph
 provenance, the new baseline/preflight, durable signing and upgrade authorization
 remain unfinished. This is progress within the agreed K5/K6 group, not its
 acceptance or a production integration claim. Consolidated review remains pending.
+
+### K5/K6 managed owner lifecycle, 1 November 2026
+
+Added a graph-private owner around the fork's actual `ManagedEngine<Ctx>`, using
+Kontor's real context and each graph's wire codec. The owner is non-Send so it
+stays on the calling control thread. It retains the managed engine on startup or
+shutdown timeout, retires reply/publication channels before shutdown, preserves
+faults through join and makes repeated join queries stable. Drop retires pending
+application replies before the managed engine's blocking destructor runs.
+
+Channel availability is explicitly `ChannelsReady`, not consensus readiness.
+The node adapter must separately await the actual `ConsensusReady` event before
+exposing a running engine, with a bounded deadline that keeps ownership on timeout.
+An initial occupied-port test incorrectly expected all listener failures to
+surface as immediate managed-start errors. The fork can instead leave channels
+available without that readiness event. This is a required case for the node's
+readiness deadline, not evidence of successful startup and not a reason to start
+a competing engine. A separate invalid-WAL-path test establishes actual partial
+startup failure after network construction, joined cleanup and sticky fault state.
+
+Both independently locked graphs pass 42 library tests, zero failed or ignored.
+The new lifecycle cases exercise real follower engines, the real Kontor codec,
+WAL reopening, the same TCP listening port, deterministic startup/shutdown gates,
+retired callbacks and partial-start failure. A test-only verifier rejects all
+signatures and followers have no consensus signer; these are lifecycle tests,
+not cryptographic acceptance or multi-validator consensus evidence.
+
+The first sandboxed run could not bind localhost and failed the three lifecycle
+tests. Running with local socket permission passed the ordinary lifecycle and
+timeout cases; the occupied-port assertion above was then investigated and
+corrected. Raw failed attempts are retained. Final-source logs and hashes are in
+`.build-cache/k5-consensus-owner.json`. Formatting and whitespace checks pass.
+No CI, PR or publication was triggered.
+
+The owner is not yet connected to the node reactor or a public linked factory.
+Node-side durable signing/generation revocation, authorization, immutable managed
+definitions and build/link integration remain pending. The node coordinator must
+revoke signing independently of this owner's potentially blocking join. The
+operator's discussion clarified that linking does not require IPC or a generic
+serialized internal RPC layer; typed per-bundle adapters are possible. Keep the
+interface narrow and do not infer a requirement to serialize every operation.

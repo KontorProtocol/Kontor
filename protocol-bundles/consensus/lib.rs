@@ -3,6 +3,7 @@ mod bridge_codec;
 mod channel_bridge;
 #[path = "types.rs"]
 mod consensus;
+mod owner;
 mod protocol;
 mod replies;
 mod wire;
