@@ -2197,17 +2197,10 @@ async fn prod_reactor_pending_blocks_bounded_under_stalled_consensus() -> Result
     let producer = cluster.block_txs[0].clone();
     let flood = 1200u64;
     let mut accepted = 0u64;
-    for height in 1..=flood {
-        let event = BlockEvent::BlockInsert {
-            target_height: height,
-            block: indexer_types::Block {
-                height,
-                hash: crate::test_utils::new_mock_block_hash(height as u32),
-                prev_hash: crate::test_utils::new_mock_block_hash(height.saturating_sub(1) as u32),
-                transactions: Vec::new(),
-            }
-            .into(),
-        };
+    let mut bitcoin = MockBitcoin::new(0);
+    for _ in 1..=flood {
+        let (mut events, _) = bitcoin.mine_empty_block();
+        let event = events.pop().expect("mined block event");
         match tokio::time::timeout(Duration::from_secs(5), producer.send(event)).await {
             Ok(Ok(())) => accepted += 1,
             _ => break,

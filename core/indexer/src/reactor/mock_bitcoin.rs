@@ -3,11 +3,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bitcoin::blockdata::locktime::absolute::LockTime;
+use bitcoin::hashes::Hash;
 use bitcoin::transaction::Version;
-use bitcoin::{BlockHash, Txid};
+use bitcoin::{Amount, BlockHash, OutPoint, ScriptBuf, TxIn, TxOut, Txid};
 
+use super::certified_fixture;
 use crate::bitcoin_client::types::{MempoolEntry, MempoolEntryFees};
-use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::bitcoin_helpers::new_mock_block_hash;
 #[cfg(test)]
@@ -18,12 +19,99 @@ pub fn make_tx(nonce: u32) -> bitcoin::Transaction {
     bitcoin::Transaction {
         version: Version::ONE,
         lock_time: LockTime::from_consensus(nonce),
-        input: vec![],
-        output: vec![],
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: Txid::from_byte_array([1; 32]),
+                vout: nonce,
+            },
+            ..TxIn::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(1),
+            script_pubkey: ScriptBuf::new(),
+        }],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use bitcoin::{BlockHash, Witness, hashes::Hash};
+
+    use super::MockBitcoin;
+    use crate::bitcoin_follower::block::BlockInput;
+    use crate::bitcoin_follower::event::BlockEvent;
+    use crate::consensus::test_fixtures::context;
+
+    fn inserted(events: &[BlockEvent]) -> &BlockInput {
+        let BlockEvent::BlockInsert { block, .. } = &events[0] else {
+            panic!("expected mined block");
+        };
+        block
+    }
+
+    #[test]
+    fn mined_blocks_retain_exact_witnesses_and_checked_commitments() -> Result<()> {
+        let mut bitcoin = MockBitcoin::new(0);
+        bitcoin.generate_mempool_txs(2);
+        bitcoin.mempool[0].input[0].witness = Witness::from_slice(&[b"retained witness"]);
+        let transaction = bitcoin.mempool[0].clone();
+        let txid = transaction.compute_txid();
+        let (events, removed) = bitcoin.mine_block(&[txid]);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(bitcoin.mempool.len(), 1);
+        let block = inserted(&events);
+        let input = block.exact_input(context())?;
+        let transactions = input.transactions()?;
+        assert_eq!(transactions.len(), 2);
+        assert!(transactions[0].is_coinbase());
+        assert_eq!(transactions[1], transaction);
+        assert_eq!(bitcoin.get_raw_transaction(&txid), Some(transaction));
+        assert_eq!(BlockInput::from_exact(&input)?, *block);
+        assert_eq!(
+            inserted(&bitcoin.get_all_block_events()).exact_input(context())?,
+            input
+        );
+        let mut wrong_hash = block.clone();
+        wrong_hash.hash = BlockHash::all_zeros();
+        assert!(wrong_hash.exact_input(context()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn reorg_preserves_surviving_header_and_replaces_removed_bodies() -> Result<()> {
+        let mut bitcoin = MockBitcoin::new(17);
+        let (events, _) = bitcoin.mine_empty_block();
+        let first = inserted(&events).clone();
+        bitcoin.generate_mempool_txs(1);
+        let removed_txid = bitcoin.mempool_txids()[0];
+        let (events, _) = bitcoin.mine_block_all();
+        let removed = inserted(&events).clone();
+        assert_eq!(removed.prev_hash, first.hash);
+        bitcoin.reset_to(18);
+        assert_eq!(bitcoin.get_all_block_events().len(), 1);
+        assert_eq!(inserted(&bitcoin.get_all_block_events()), &first);
+        assert!(bitcoin.get_raw_transaction(&removed_txid).is_none());
+        let (events, _) = bitcoin.mine_empty_block();
+        let replacement = inserted(&events);
+        assert_eq!(replacement.height, removed.height);
+        assert_eq!(replacement.prev_hash, first.hash);
+        assert_ne!(replacement.hash, removed.hash);
+        replacement.exact_input(context())?;
+        first.exact_input(context())?;
+        bitcoin.reset_to(17);
+        let (events, _) = bitcoin.mine_empty_block();
+        let new_first = inserted(&events);
+        assert_eq!(new_first.prev_hash, first.prev_hash);
+        assert_ne!(new_first.hash, first.hash);
+        new_first.exact_input(context())?;
+        Ok(())
     }
 }
 
 pub struct MockBitcoin {
+    base_height: u64,
+    base_hash: BlockHash,
     tip_height: u64,
     prev_hash: BlockHash,
     mempool: Vec<bitcoin::Transaction>,
@@ -43,17 +131,14 @@ pub struct MockBitcoin {
     pub(crate) replay_gate: Option<Arc<AsyncGate>>,
 }
 
-/// Distinct hashes per (height, fork). The stride keeps the two inputs from
-/// colliding for any test-sized height.
-fn fork_block_hash(height: u64, fork: u32) -> BlockHash {
-    new_mock_block_hash(fork * 1_000_000 + height as u32)
-}
-
 impl MockBitcoin {
     pub fn new(start_height: u64) -> Self {
+        let base_hash = new_mock_block_hash(start_height as u32);
         Self {
+            base_height: start_height,
+            base_hash,
             tip_height: start_height,
-            prev_hash: new_mock_block_hash(start_height as u32),
+            prev_hash: base_hash,
             mempool: Vec::new(),
             tx_counter: 0,
             mined_txs: HashMap::new(),
@@ -106,10 +191,6 @@ impl MockBitcoin {
         self.tip_height += 1;
         let height = self.tip_height;
 
-        let hash = fork_block_hash(height, self.fork);
-        let prev_hash = self.prev_hash;
-        self.prev_hash = hash;
-
         let mut confirmed_raw = Vec::new();
         let mut remove_events = Vec::new();
 
@@ -134,7 +215,10 @@ impl MockBitcoin {
         }
         self.block_txids.insert(height, height_txids);
 
-        let block = BlockInput::new(height, hash, prev_hash, confirmed_raw);
+        // Complete headers and commitments are required by the production
+        // certified-input codec. This fixture still does not model PoW or UTXOs.
+        let block = certified_fixture::block(height, self.prev_hash, self.fork, confirmed_raw);
+        self.prev_hash = block.hash;
 
         let block_event = BlockEvent::BlockInsert {
             target_height: height,
@@ -155,6 +239,7 @@ impl MockBitcoin {
     }
 
     pub fn reset_to(&mut self, height: u64) {
+        assert!((self.base_height..=self.tip_height).contains(&height));
         // Remove txs from blocks above the reset height
         let heights_to_remove: Vec<u64> = self
             .block_txids
@@ -184,8 +269,14 @@ impl MockBitcoin {
                 BlockEvent::BlockInsert { block, .. } if block.height == height => Some(block.hash),
                 _ => None,
             })
-            .unwrap_or_else(|| new_mock_block_hash(height as u32));
-        self.fork += 1;
+            .unwrap_or_else(|| {
+                assert_eq!(height, self.base_height, "missing surviving mock block");
+                self.base_hash
+            });
+        self.fork = self
+            .fork
+            .checked_add(1)
+            .expect("mock fork counter exhausted");
     }
 
     /// Get all block events for late joiners that missed earlier blocks.

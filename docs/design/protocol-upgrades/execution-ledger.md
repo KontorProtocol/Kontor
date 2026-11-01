@@ -1536,3 +1536,37 @@ Remaining K4 work includes migration of older reactor/mock-cluster/archive
 fixtures, further finality replay cases (kept batches, parent redeclaration,
 reorg healing and many small batches), proof paging and resource admission,
 consolidated review, scoped CI and merge. The full unit suite has not passed.
+
+### K4 mock Bitcoin retains complete blocks
+
+The cluster's mock Bitcoin source now emits complete Bitcoin bodies through the
+shared certified fixture builder, with actual header-derived hashes, transaction
+Merkle roots, unique coinbases and witness commitments. Its generated stub
+transactions have non-coinbase inputs and outputs so Bitcoin consensus decoding
+is unambiguous. Reorgs preserve the surviving block's actual hash, discard removed
+transaction lookup entries, and use a new fork nonce for replacement bodies.
+Reset cannot invent a height outside the generated chain. The configured starting
+parent remains a fixture boundary, not a claimed certified Bitcoin block.
+
+The lightweight executor ignores coinbases instead of counting the newly retained
+coinbase as a counter-contract call. The pending-buffer flood fixture now obtains
+complete blocks from MockBitcoin rather than constructing synthetic hash-only
+inputs. The mock does not validate proof-of-work, UTXOs or Bitcoin scripts.
+
+Two focused tests passed in 0.02 seconds, build 66 seconds, session 33395, exit 0,
+`.build-cache/k4-mock-bitcoin13.log`, SHA-256
+`13dd4c14de0fcff506e3f8df8f1b179c3f0ba14c5759f6c91e8cb7eaa2a0f10e`.
+They establish exact witness/body round trips through the production certified
+codec, rejection of a changed expected block hash, retained late-join events,
+surviving-parent consistency, removed transaction lookup cleanup and replacement
+at both an interior height and the configured starting boundary. The compiled
+draft coordinator definition is
+`a760f4715bc4a520bcc9bc809cf8f99d6e49db018776656e9888311cee76a3d4`.
+Formatting and diff checks passed.
+
+This does not establish passing cluster integration. LiteExecutor's direct native
+and counter-contract seeding still produces unavailable history, and the cluster
+readiness barrier still assumes a pre-first-block batch. Both need migration to
+authenticated genesis and appropriately ordered real setup inputs. Other reactor
+fixtures and the remaining K4 replay/transport/review/CI work are still pending.
+No remote CI or new independent review cycle was started.

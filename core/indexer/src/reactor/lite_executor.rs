@@ -384,6 +384,9 @@ impl Executor for LiteExecutor {
         _selection: &ExecutionSelection,
         tx: &bitcoin::Transaction,
     ) -> Option<indexer_types::Transaction> {
+        if tx.is_coinbase() {
+            return None;
+        }
         Some(indexer_types::Transaction {
             txid: tx.compute_txid(),
             index: 0,
