@@ -12,6 +12,8 @@ use crate::protocol::v1::migration_definition;
 use crate::protocol::v1::native::{NATIVE_GENESIS_ID, native_provenance};
 
 const CONSENSUS_REFERENCE: &[u8] = include_bytes!("baseline/consensus.json");
+#[cfg(kontor_managed)]
+const MANAGED_REFERENCE: &[u8] = include_bytes!("managed/definitions/first.json");
 const PARAMETERS: &[&str] = &[
     "core/indexer/src/protocol/v1/engine.rs",
     "core/indexer/src/protocol/v1/gas.rs",
@@ -28,6 +30,21 @@ pub(crate) struct Baseline {
 }
 
 impl Baseline {
+    pub(crate) fn for_node(chain: ChainId) -> Result<Self> {
+        #[cfg(kontor_managed)]
+        {
+            native_provenance()?;
+            let reference = DefinitionReference::decode(REFERENCE)?;
+            ensure!(
+                reference.id()? == execution_definition()?,
+                "managed executor reference differs"
+            );
+            Self::compose_consensus(chain, &reference, MANAGED_REFERENCE)
+        }
+        #[cfg(not(kontor_managed))]
+        Self::current(chain)
+    }
+
     pub(crate) fn current(chain: ChainId) -> Result<Self> {
         native_provenance()?;
         let reference = DefinitionReference::decode(REFERENCE)?;
@@ -39,6 +56,14 @@ impl Baseline {
     }
 
     fn compose(chain: ChainId, reference: &DefinitionReference) -> Result<Self> {
+        Self::compose_consensus(chain, reference, CONSENSUS_REFERENCE)
+    }
+
+    fn compose_consensus(
+        chain: ChainId,
+        reference: &DefinitionReference,
+        consensus: &[u8],
+    ) -> Result<Self> {
         let executor = reference.id()?;
         let mut native = [0; 32];
         hex::decode_to_slice(NATIVE_GENESIS_ID, &mut native)?;
@@ -75,7 +100,7 @@ impl Baseline {
             protocol_number: 1,
             predecessor: ProtocolId([0; 32]),
             executor,
-            consensus: domain_digest(b"kontor/consensus-definition/v1", CONSENSUS_REFERENCE),
+            consensus: domain_digest(b"kontor/consensus-definition/v1", consensus),
             // ID 1 names the existing retained payload and synchronous host ABI.
             transaction_formats: vec![1],
             host_abis: vec![1],
@@ -125,6 +150,23 @@ fn source(reference: &DefinitionReference, path: &str) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(kontor_managed)]
+    #[test]
+    fn managed_identity_changes_consensus_without_relabeling_the_executor() -> Result<()> {
+        let chain = ChainId([7; 32]);
+        let old = Baseline::current(chain)?;
+        let managed = Baseline::for_node(chain)?;
+        assert_ne!(old.manifest.consensus, managed.manifest.consensus);
+        assert_ne!(old.context.protocol, managed.context.protocol);
+        assert_ne!(old.context.era, managed.context.era);
+        let mut expected = old.manifest;
+        expected.consensus = managed.manifest.consensus;
+        assert_eq!(expected, managed.manifest);
+        assert_eq!(managed.context.protocol, managed.manifest.id()?);
+        assert!(managed.require_context(old.context).is_err());
+        Ok(())
+    }
 
     #[test]
     fn baseline_binds_real_executor_native_artifacts_and_noop() -> Result<()> {

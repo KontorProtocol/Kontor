@@ -646,6 +646,17 @@ changes are explicitly prelaunch; no claim of compatibility with older dev netwo
 ### K5. Durable signer and engine coordinator
 
 K4 merged as `0a2cbd89e8ebdd8acc74b514e6d5e85e4c9466dd` (PR 620).
+The operator clarified on 1 November 2026 that nothing is in production and
+intermediate pre-release implementations do not need compatibility support.
+K4 is such an intermediate baseline, not a required supported predecessor.
+Do not add legacy K4 extraction, live resumption or migration work merely to
+preserve this milestone. Existing development data must not be silently relabeled
+or deleted. Preserve existing references and useful evidence without treating
+them as a commitment to support an intermediate database in the final binary.
+For released protocols, startup selects the implementation required by validated
+persisted history, not whichever protocol is newest in the binary. Retain the
+goal's managed P1/P2 upgrade, restart and historical replay acceptance coverage.
+
 The sole independent reviewer explicitly agreed the following K5/K6 packaging
 and integration refinement, revision 2, before production implementation:
 

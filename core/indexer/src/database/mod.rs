@@ -22,5 +22,6 @@ pub mod types;
 pub mod writer;
 
 pub use genesis::open_node_database;
+pub use genesis::open_node_database_for_genesis;
 pub use reader::Reader;
 pub use writer::Writer;

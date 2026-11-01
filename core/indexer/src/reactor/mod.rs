@@ -76,6 +76,7 @@ use crate::database::canonical_history;
 use crate::database::certified_history;
 use crate::metrics::PENDING_BLOCKS;
 use crate::protocol::coordinator::bootstrap;
+use crate::protocol::coordinator::genesis::envelope;
 #[cfg(test)]
 use crate::protocol::coordinator::committee::build_validator_set;
 use crate::protocol::coordinator::linked;
@@ -84,7 +85,6 @@ use crate::protocol::coordinator::selection::{
 };
 #[cfg(test)]
 use crate::protocol::v1::committee::stake_to_voting_power;
-use crate::runtime::numerics::decimal_to_string;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::pool::LinkedSession;
 #[cfg(test)]
@@ -843,20 +843,7 @@ pub(crate) async fn create_executor_session(
     u64,
     Option<BlockHash>,
 )> {
-    let genesis = (
-        decimal_to_string(genesis.sigma_min),
-        genesis
-            .validators
-            .iter()
-            .map(|v| {
-                (
-                    v.x_only_pubkey.clone(),
-                    decimal_to_string(v.stake),
-                    v.ed25519_pubkey.clone(),
-                )
-            })
-            .collect(),
-    );
+    let genesis = envelope(genesis);
     let (baseline, initialize) = bootstrap::prepare(
         &writer.connection(),
         network,

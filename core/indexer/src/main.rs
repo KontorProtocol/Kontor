@@ -20,6 +20,7 @@ use indexer::keygen::{self, KeygenArgs};
 #[cfg(feature = "protocol-qualification")]
 use indexer::protocol_qualification;
 use indexer::receipt_stream_rotation::{self, ReceiptStreamRotationArgs};
+use indexer::runtime::GenesisParameters;
 use indexer::stopper::{self, Shutdown};
 use indexer::{api, built_info, reactor, reg_tester, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging};
@@ -264,8 +265,15 @@ async fn run_daemon(config: Config) -> Result<()> {
         let _ = panic_tx.send(format!("panic at {location}: {message}"));
     }));
     let filename = "state.db";
-    let (reader, writer) =
-        database::open_node_database(&config.data_dir, filename, config.network).await?;
+    let genesis: GenesisParameters = GenesisConfig::load(&config.genesis_file)?.try_into()?;
+    let (reader, writer) = database::open_node_database_for_genesis(
+        &config.data_dir,
+        filename,
+        config.network,
+        config.starting_block_height,
+        &genesis,
+    )
+    .await?;
     let reactor_ready = Arc::new(AtomicBool::new(false));
     // Whether we are stopping because something died — see `Env::failed`.
     let failed = Arc::new(AtomicBool::new(false));
@@ -370,7 +378,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         Some(simulate_rx),
         engine_config,
         bitcoin.clone(),
-        GenesisConfig::load(&config.genesis_file)?.try_into()?,
+        genesis,
         None,
         config.consensus_propose_timeout_ms,
         Some(fees_tx),

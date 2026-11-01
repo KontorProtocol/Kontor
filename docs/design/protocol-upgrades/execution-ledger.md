@@ -2893,3 +2893,43 @@ closed rather than being automatically repaired. Production managed baseline
 admission, coordinator startup, builder wiring, K6 controls and dry run remain
 unfinished. This is not final handoff/activation evidence. Consolidated independent
 K5/K6 review and final scoped CI remain required; neither was launched here.
+
+### K5 managed identity and database admission checkpoint
+
+The operator clarified that intermediate pre-release implementations do not need
+compatibility support. The goal and plan now exclude a K4 live compatibility or
+migration project while retaining the final managed P1/P2 historical guarantees.
+
+The managed definition now binds the actual coordinator sources and independently
+locked consensus-first graph, including transitive dependencies, resolved features,
+dependency aliases/target conditions, local sources and build inputs. Generated
+references are excluded from their own source closure. The existing K4 reference
+is unchanged. The managed reference is still unreleased and will be finalized
+with the complete K5/K6 implementation, before registering its successor.
+
+Daemon startup reads configured genesis once and checks existing protocol state
+through a read-only database snapshot before opening the schema-initializing
+writer. Supported initialization and restart retain their identity. Unsupported
+contexts, changed manifests and populated state without protocol history are
+refused without database initialization or relabeling. Pure genesis conversion
+and chain derivation are shared with actual bootstrap to avoid divergent startup
+identities.
+
+Eighteen focused Python definition tests passed. Generation using the real
+locked, unfiltered metadata covered 468 consensus and 493 coordinator packages.
+Nine actual-node Rust tests passed, zero failed or ignored, in 17.60 seconds
+after a 1m17s build. These cover identity separation, read-only admission,
+interrupted genesis, unsupported/malformed state, atomic genesis reservation and
+reopening a fully published native genesis through the daemon's admission API
+without replaying publication. `.build-cache/k5-protocol-admission-test.json`
+binds the source, binary, runner, wrapper, link specification and raw log. The
+first run also passed nine tests, but its evidence driver incorrectly expected
+ten and exited nonzero. That result is preserved separately; the final rerun
+adds the ready-database admission path and uses the correct expected count.
+
+This remains single-managed-protocol K5 startup. K7 must separate original genesis
+verification from persisted current-era selection and interrupted activation
+recovery. Production engine ownership before canonical mutation, managed engine
+startup, final independent-graph node builder, K6 and grouped acceptance/review
+remain unfinished. The local library tests do not establish final production
+binary or cross-platform qualification. No CI was launched.

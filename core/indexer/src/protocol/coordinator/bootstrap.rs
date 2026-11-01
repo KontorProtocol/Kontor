@@ -31,7 +31,7 @@ pub(crate) async fn prepare(
         return Err(HistoryUnavailable.into());
     }
     let chain = bind_identity(conn, network, starting_block_height, genesis).await?;
-    let baseline = Baseline::current(chain)?;
+    let baseline = Baseline::for_node(chain)?;
     certified_history::begin_baseline(conn, &baseline, starting_block_height).await?;
     let initialize = state.status != Status::Ready;
     if !initialize {

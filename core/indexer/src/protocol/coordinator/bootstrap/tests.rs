@@ -4,8 +4,8 @@ use indexer_types::BlockRow;
 use super::*;
 use crate::bitcoin_client::Client;
 use crate::consensus::signing::PrivateKey;
-use crate::database::Writer;
 use crate::database::canonical_history;
+use crate::database::open_node_database_for_genesis;
 use crate::database::queries::insert_block;
 use crate::protocol::identity::ChainId;
 use crate::reactor::create_executor_session;
@@ -37,7 +37,7 @@ async fn live_bootstrap_persists_genesis_and_reopens_without_reapplying_it() -> 
     let state = certified_history::frontier(&conn).await?;
     assert_eq!(state.status, Status::Ready);
     let context = state.context.context("genesis context")?;
-    let baseline = Baseline::current(context.chain)?;
+    let baseline = Baseline::for_node(context.chain)?;
     assert_eq!(context, baseline.context);
     assert_eq!(
         certified_history::protocol(&conn, context.protocol).await?,
@@ -49,7 +49,8 @@ async fn live_bootstrap_persists_genesis_and_reopens_without_reapplying_it() -> 
     let canonical = canonical_history::state(&conn).await?;
     let observation = registrations::at(&conn, 0, 0).await?;
     drop(session);
-    let writer = Writer::new(dir.path(), &name).await?;
+    let (_, writer) =
+        open_node_database_for_genesis(dir.path(), &name, Network::Regtest, 1, &genesis).await?;
     let conn = writer.connection();
     let (_, session, _, _) = create_executor_session(
         1,
