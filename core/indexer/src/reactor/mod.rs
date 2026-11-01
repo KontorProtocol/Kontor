@@ -19,8 +19,11 @@ mod mempool_tests;
 pub mod mock_bitcoin;
 #[cfg(test)]
 mod pruning_tests;
+#[cfg(feature = "protocol-qualification")]
+pub(crate) mod qualification;
 #[cfg(test)]
 mod reactor_cluster_tests;
+mod session;
 #[cfg(test)]
 mod simulation_context_tests;
 #[cfg(test)]
@@ -47,7 +50,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use bitcoin::{BlockHash, Txid};
+use bitcoin::{BlockHash, Network, Txid};
 use malachitebft_app_channel::NetworkMsg;
 use malachitebft_app_channel::app::types::LocallyProposedValue;
 use malachitebft_core_types::{LinearTimeouts, Round};
@@ -58,16 +61,23 @@ use crate::bitcoin_client::Client;
 use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
+#[cfg(test)]
 use crate::protocol::coordinator::committee::build_validator_set;
+use crate::protocol::coordinator::linked::{self, TransactionRecognizer};
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
 };
 #[cfg(test)]
 use crate::protocol::v1::committee::stake_to_voting_power;
+use crate::runtime::numerics::decimal_to_string;
 use crate::runtime::ownership::OwnerService;
+use crate::runtime::pool::LinkedSession;
+#[cfg(test)]
+use crate::runtime::{ComponentCache, Runtime, Storage};
 use crate::stopper::ShutdownSignal;
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
+    bitcoin_helpers::new_mock_block_hash,
     consensus::Genesis,
     database::{
         self,
@@ -76,9 +86,9 @@ use crate::{
             select_block_latest, select_unconfirmed_batch_tx,
         },
     },
-    runtime::{ComponentCache, GenesisParameters, Runtime, Storage},
-    test_utils::new_mock_block_hash,
+    runtime::GenesisParameters,
 };
+use libsql::Connection;
 
 use executor::Executor;
 use mempool::MempoolPreparation;
@@ -133,7 +143,10 @@ pub struct PruneConfig {
 
 pub(crate) struct Reactor<E: Executor> {
     executor: E,
-    runtime: Runtime,
+    recognizer: TransactionRecognizer,
+    session: LinkedSession,
+    network: Network,
+    node_label: String,
     owner_service: OwnerService,
     shutdown: ShutdownSignal,
     block_rx: Receiver<BlockEvent>,
@@ -177,6 +190,7 @@ pub(crate) struct Reactor<E: Executor> {
 
 impl<E: Executor> Reactor<E> {
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub(crate) fn new(
         executor: E,
         runtime: Runtime,
@@ -193,14 +207,63 @@ impl<E: Executor> Reactor<E> {
         last_hash: Option<BlockHash>,
         consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     ) -> Self {
-        let mut runtime = runtime;
-        runtime.node_label = consensus
+        let network = runtime.network;
+        let session = LinkedSession::new(
+            runtime.get_storage_conn(),
+            linked::link_runtime(runtime, true),
+        );
+        Self::from_session(
+            executor,
+            session,
+            network,
+            owner_service,
+            block_rx,
+            mempool_rx,
+            shutdown,
+            ready_tx,
+            event_tx,
+            simulate_rx,
+            consensus,
+            prune,
+            last_height,
+            last_hash,
+            consensus_listen_addr,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_session(
+        executor: E,
+        session: LinkedSession,
+        network: Network,
+        owner_service: OwnerService,
+        block_rx: Receiver<BlockEvent>,
+        mempool_rx: Receiver<MempoolEvent>,
+        shutdown: ShutdownSignal,
+        ready_tx: Option<oneshot::Sender<bool>>,
+        event_tx: Option<mpsc::Sender<Event>>,
+        simulate_rx: Option<Receiver<Simulation>>,
+        consensus: consensus_state::ConsensusState,
+        prune: PruneConfig,
+        last_height: u64,
+        last_hash: Option<BlockHash>,
+        consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
+    ) -> Self {
+        let node_label = consensus
             .validator_index
             .map(|i| format!("node_{i}"))
             .unwrap_or_else(|| "follower".to_string());
+        let recognizer = TransactionRecognizer::new(
+            session.origin(),
+            network,
+            session.executor.operations.recognize.clone(),
+        );
         Self {
             executor,
-            runtime,
+            recognizer,
+            session,
+            network,
+            node_label,
             owner_service,
             shutdown,
             block_rx,
@@ -228,7 +291,7 @@ impl<E: Executor> Reactor<E> {
         position: ApplicationPosition,
     ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
         let conn = self.db_conn();
-        let network = self.runtime.network;
+        let network = self.network;
         async move { select_legacy_p1(&conn, network, position).await }
     }
 
@@ -241,11 +304,9 @@ impl<E: Executor> Reactor<E> {
         })
     }
 
-    /// Clone of the shared write connection from Runtime.storage.
-    /// All DB connections in the reactor (Reactor, ConsensusState, Storage)
-    /// share the same underlying connection via Arc.
+    // Ordering writes and executor callbacks share the unit's physical transaction.
     fn db_conn(&self) -> libsql::Connection {
-        self.runtime.storage.conn.clone()
+        self.session.conn.clone()
     }
 
     /// Check unconfirmed_batch_txs for a raw transaction (DB-level resolution).
@@ -263,8 +324,12 @@ impl<E: Executor> Reactor<E> {
         None
     }
 
-    async fn refresh_validator_set(&mut self) -> Result<()> {
-        let vs = build_validator_set(&mut self.runtime)
+    async fn refresh_validator_set_owned(&mut self) -> Result<()> {
+        let selection = self.select_executor(ApplicationPosition::Committee).await?;
+        let lease = self.begin_unit(&selection, false).await?;
+        let result = linked::derive_committee(&self.session, &selection, self.network).await;
+        let vs = self
+            .finish_unit(lease, result, false)
             .await
             .context("Failed to refresh validator set")?;
         self.consensus.validator_index = vs
@@ -273,19 +338,6 @@ impl<E: Executor> Reactor<E> {
             .position(|v| v.address == self.consensus.address);
         self.consensus.current_validator_set = vs;
         Ok(())
-    }
-
-    async fn refresh_validator_set_owned(&mut self) -> Result<()> {
-        let mut lease = self
-            .owner_service
-            .begin_canonical(&mut self.runtime, false)
-            .await?;
-        self.runtime.storage.savepoint().await?;
-        let result = self.refresh_validator_set().await;
-        lease.drain(&self.runtime).await?;
-        self.runtime.storage.rollback().await?;
-        lease.complete(&mut self.runtime).await?;
-        result
     }
 
     async fn send_proposal_parts(
@@ -577,7 +629,7 @@ impl<E: Executor> Reactor<E> {
                             self.consensus.mempool.stage_snapshot(&transactions);
                             let selection = self.preparation_selection().await?;
                             self.mempool_preparation = Some(MempoolPreparation {
-                                result: self.executor.parse_mempool(&selection, transactions), selection,
+                                result: self.executor.parse_mempool(&self.recognizer, &selection, transactions), selection,
                             });
                             self.consensus.mempool_fee_index.replace(fees, mempool_min_fee_sat_per_vb);
                             self.consensus.mempool_fee_index.recompute();
@@ -590,7 +642,7 @@ impl<E: Executor> Reactor<E> {
                             self.consensus.mempool.stage(&tx);
                             let selection = self.preparation_selection().await?;
                             self.mempool_preparation = Some(MempoolPreparation {
-                                result: self.executor.parse_mempool(&selection, vec![tx]), selection,
+                                result: self.executor.parse_mempool(&self.recognizer, &selection, vec![tx]), selection,
                             });
                             self.consensus.mempool_fee_index.insert(txid, fee);
                         },
@@ -612,7 +664,7 @@ impl<E: Executor> Reactor<E> {
                     let selection = self.preparation_selection().await?;
                     if !previous.selection.same_recognition_rules(&selection) {
                         self.mempool_preparation = Some(MempoolPreparation {
-                            result: self.executor.parse_mempool(&selection, self.consensus.mempool.raw_inputs()),
+                            result: self.executor.parse_mempool(&self.recognizer, &selection, self.consensus.mempool.raw_inputs()),
                             selection,
                         });
                         continue;
@@ -735,11 +787,11 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
-    #[tracing::instrument(skip_all, fields(node = %self.runtime.node_label))]
+    #[tracing::instrument(skip_all, fields(node = %self.node_label))]
     pub(crate) async fn run(&mut self) -> Result<()> {
         // A startup mutation is part of the reactor's owned durable unit. It
         // must finish before shutdown can release the writer or runtime.
-        self.runtime.storage.footprint().reconstruct().await?;
+        self.maintain_executor(None).await?;
         self.advance()
             .await
             .context("advance failed during startup finality settle")?;
@@ -775,20 +827,16 @@ impl<E: Executor> Reactor<E> {
 }
 
 /// Build a Genesis from the staking contract's active validator set.
+#[cfg(test)]
 async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
     let validator_set = build_validator_set(runtime).await?;
     Ok(Genesis { validator_set })
 }
 
-pub(crate) async fn create_runtime_executor(
+async fn prepare_executor_startup(
     starting_block_height: u64,
     writer: &database::Writer,
-    owner_service: &OwnerService,
-    bitcoin_client: Client,
-    replay_tx: Option<mpsc::Sender<u64>>,
-    genesis: &GenesisParameters,
-    network: bitcoin::Network,
-) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
+) -> Result<(u64, Option<BlockHash>)> {
     let conn = writer.connection();
     let (last_height, last_hash) = match select_block_latest(&conn)
         .await
@@ -849,33 +897,117 @@ pub(crate) async fn create_runtime_executor(
         .await
         .context("Failed to insert native block at height 0")?;
     }
+    Ok((last_height, last_hash))
+}
+
+fn new_runtime_executor(
+    bitcoin_client: Client,
+    replay_tx: Option<mpsc::Sender<u64>>,
+) -> executor::RuntimeExecutor {
+    let exec = executor::RuntimeExecutor::new(bitcoin_client);
+    if let Some(tx) = replay_tx {
+        exec.with_replay_tx(tx)
+    } else {
+        exec
+    }
+}
+
+#[cfg(test)]
+async fn create_uninitialized_runtime_executor(
+    starting_block_height: u64,
+    writer: &database::Writer,
+    owner_service: &OwnerService,
+    bitcoin_client: Client,
+    replay_tx: Option<mpsc::Sender<u64>>,
+    network: Network,
+) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
+    let (last_height, last_hash) = prepare_executor_startup(starting_block_height, writer).await?;
     let storage = Storage::builder()
         .height(0)
         .conn(writer.connection())
         .build();
-
     let mut runtime = Runtime::new(ComponentCache::new(), storage)
         .await
         .context("Failed to initialize runtime")?;
-    #[cfg(test)]
     owner_service.apply_startup_compile_gate(&mut runtime);
-    // Set the chain network *before* publishing — native-contract `init` reads
-    // it via the `network()` built-in to self-condition per-network defaults
-    // (e.g. token's dev mint is off at mainnet genesis).
     runtime.network = network;
-    runtime
-        .publish_native_contracts_owned(genesis, owner_service)
-        .await
-        .context("Failed to publish native contracts")?;
-
-    let mut exec = executor::RuntimeExecutor::new(bitcoin_client);
-    if let Some(tx) = replay_tx {
-        exec = exec.with_replay_tx(tx);
-    }
-
-    Ok((exec, runtime, last_height, last_hash))
+    Ok((
+        new_runtime_executor(bitcoin_client, replay_tx),
+        runtime,
+        last_height,
+        last_hash,
+    ))
 }
 
+#[cfg(test)]
+pub(crate) async fn create_runtime_executor(
+    starting_block_height: u64,
+    writer: &database::Writer,
+    owner_service: &OwnerService,
+    bitcoin_client: Client,
+    replay_tx: Option<mpsc::Sender<u64>>,
+    genesis: &GenesisParameters,
+    network: Network,
+) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
+    let (exec, mut runtime, height, hash) = create_uninitialized_runtime_executor(
+        starting_block_height,
+        writer,
+        owner_service,
+        bitcoin_client,
+        replay_tx,
+        network,
+    )
+    .await?;
+    runtime
+        .publish_native_contracts_owned(genesis, owner_service)
+        .await?;
+    Ok((exec, runtime, height, hash))
+}
+
+pub(crate) async fn create_executor_session(
+    starting_block_height: u64,
+    writer: &database::Writer,
+    owner_service: &OwnerService,
+    bitcoin_client: Client,
+    replay_tx: Option<mpsc::Sender<u64>>,
+    genesis: &GenesisParameters,
+    network: Network,
+) -> Result<(
+    executor::RuntimeExecutor,
+    LinkedSession,
+    u64,
+    Option<BlockHash>,
+)> {
+    let (height, hash) = prepare_executor_startup(starting_block_height, writer).await?;
+    let exec = new_runtime_executor(bitcoin_client, replay_tx);
+    let session = linked::canonical_session(writer.connection(), network)
+        .await
+        .context("Failed to initialize retained executor session")?;
+    #[cfg(test)]
+    owner_service
+        .apply_linked_startup_compile_gate(&session)
+        .await?;
+    let genesis = (
+        decimal_to_string(genesis.sigma_min),
+        genesis
+            .validators
+            .iter()
+            .map(|v| {
+                (
+                    v.x_only_pubkey.clone(),
+                    decimal_to_string(v.stake),
+                    v.ed25519_pubkey.clone(),
+                )
+            })
+            .collect(),
+    );
+    linked::initialize(owner_service, &session, network, genesis)
+        .await
+        .context("Failed to publish native contracts")?;
+    Ok((exec, session, height, hash))
+}
+
+#[cfg(test)]
 pub(crate) async fn start_consensus(
     engine_config: engine::EngineConfig,
     runtime: &mut Runtime,
@@ -888,6 +1020,56 @@ pub(crate) async fn start_consensus(
         .await
         .context("Failed to build genesis from staking contract")?;
 
+    start_consensus_with_genesis(
+        engine_config,
+        runtime.get_storage_conn(),
+        genesis,
+        observation_channels,
+        timeouts,
+        last_block_height,
+        mempool_fee_index,
+    )
+    .await
+}
+
+async fn start_linked_consensus(
+    engine_config: engine::EngineConfig,
+    session: &LinkedSession,
+    service: &OwnerService,
+    network: Network,
+    observation_channels: Option<consensus_state::ObservationChannels>,
+    timeouts: Option<LinearTimeouts>,
+    last_block_height: u64,
+    mempool_fee_index: mempool_fee_index::MempoolFeeIndex,
+) -> Result<consensus_state::ConsensusState> {
+    let selection =
+        select_legacy_p1(&session.conn, network, ApplicationPosition::Committee).await?;
+    let lease = linked::begin_canonical_unit(service, session, &selection, network, false).await?;
+    let result = linked::derive_committee(session, &selection, network).await;
+    let validator_set = linked::finish_canonical_unit(lease, result, false)
+        .await
+        .context("Failed to build genesis from staking contract")?;
+    start_consensus_with_genesis(
+        engine_config,
+        session.conn.clone(),
+        Genesis { validator_set },
+        observation_channels,
+        timeouts,
+        last_block_height,
+        mempool_fee_index,
+    )
+    .await
+}
+
+async fn start_consensus_with_genesis(
+    engine_config: engine::EngineConfig,
+    conn: Connection,
+    genesis: Genesis,
+    observation_channels: Option<consensus_state::ObservationChannels>,
+    timeouts: Option<LinearTimeouts>,
+    last_block_height: u64,
+    mempool_fee_index: mempool_fee_index::MempoolFeeIndex,
+) -> Result<consensus_state::ConsensusState> {
     let engine_output = engine::start(engine_config)
         .await
         .context("Failed to start Malachite consensus engine")?;
@@ -900,7 +1082,7 @@ pub(crate) async fn start_consensus(
         .position(|v| v.address == engine_output.address);
 
     let mut state = consensus_state::ConsensusState::new(
-        runtime.get_storage_conn(),
+        conn,
         engine_output.signing_provider,
         genesis,
         engine_output.address,
@@ -947,7 +1129,7 @@ pub fn run(
             let result: Result<()> = async {
                 // Native publication and its guest work finish before this task
                 // releases the writer, even when shutdown arrives during setup.
-                let (exec, mut runtime, last_height, last_hash) = create_runtime_executor(
+                let (exec, session, last_height, last_hash) = create_executor_session(
                     starting_block_height,
                     &writer,
                     &owner_service,
@@ -961,7 +1143,7 @@ pub fn run(
 
                 // Existing databases need a one-time conversion before pruning.
                 if prune.enabled {
-                    database::init::ensure_incremental_auto_vacuum(&runtime.storage.conn)
+                    database::init::ensure_incremental_auto_vacuum(&session.conn)
                         .await
                         .context("ensure_incremental_auto_vacuum failed")?;
                 }
@@ -1037,28 +1219,19 @@ pub fn run(
                 // placeholder).
                 fee_index.recompute();
 
-                let selection = select_legacy_p1(&runtime.get_storage_conn(), runtime.network,
+                let selection = select_legacy_p1(&session.conn, network,
                     ApplicationPosition::Preparation { anchor_height: last_height, anchor_hash: last_hash }).await?;
-                let initial_mempool = exec.parse_mempool(&selection, initial_raw_txs).await?;
-                let mut startup_lease = owner_service.begin_canonical(&mut runtime, false).await?;
-                let consensus_result = start_consensus(
-                    engine_config,
-                    &mut runtime,
-                    observation_channels,
-                    timeouts,
-                    last_height,
-                    fee_index,
-                )
-                .await;
-                startup_lease.drain(&runtime).await?;
-                startup_lease.complete(&mut runtime).await?;
-                let mut consensus = consensus_result.context("start_consensus failed")?;
+                let recognizer = TransactionRecognizer::new(session.origin(), network, session.executor.operations.recognize.clone());
+                let initial_mempool = exec.parse_mempool(&recognizer, &selection, initial_raw_txs).await?;
+                let mut consensus = start_linked_consensus(engine_config, &session, &owner_service, network,
+                    observation_channels, timeouts, last_height, fee_index).await.context("start_consensus failed")?;
 
                 consensus.mempool.replace(initial_mempool);
 
-                let mut reactor = Reactor::new(
+                let mut reactor = Reactor::from_session(
                     exec,
-                    runtime,
+                    session,
+                    network,
                     owner_service,
                     block_rx,
                     mempool_rx,

@@ -9,9 +9,9 @@ use bitcoin::{BlockHash, Txid};
 use crate::bitcoin_client::types::{MempoolEntry, MempoolEntryFees};
 use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
+use crate::bitcoin_helpers::new_mock_block_hash;
 #[cfg(test)]
 use crate::runtime::ownership::AsyncGate;
-use crate::test_utils::new_mock_block_hash;
 
 /// Create a minimal bitcoin::Transaction with a unique txid derived from the nonce.
 pub fn make_tx(nonce: u32) -> bitcoin::Transaction {

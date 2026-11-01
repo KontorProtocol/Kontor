@@ -2,48 +2,48 @@ name: Protocol bundle qualification
 
 on:
   pull_request:
-    paths:
-      - "protocol-bundles/**"
-      - "tools/protocol-bundles/**"
-      - "tools/native-crypto/**"
-      - "tools/kontor"
-      - "core/kontor-build/**"
-      - "core/vendor/**"
-      - "core/Cargo.toml"
-      - "core/Cargo.lock"
-      - "core/indexer/src/runtime/mod.rs"
-      - "Dockerfile"
-      - ".dockerignore"
-      - ".github/workflows/protocol-bundles.yml"
   push:
     branches: [main]
-    paths:
-      - "protocol-bundles/**"
-      - "tools/protocol-bundles/**"
-      - "tools/native-crypto/**"
-      - "tools/kontor"
-      - "core/kontor-build/**"
-      - "core/vendor/**"
-      - "core/Cargo.toml"
-      - "core/Cargo.lock"
-      - "core/indexer/src/runtime/mod.rs"
-      - "Dockerfile"
-      - ".dockerignore"
-      - ".github/workflows/protocol-bundles.yml"
   workflow_dispatch:
+    inputs:
+      profiles:
+        description: Explicit profile coverage (full dev/release is manual only)
+        type: choice
+        options: [release, full]
+        default: release
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  qualification:
-    name: Protocol bundles (${{ matrix.os }}, release)
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+  scope:
+    name: Linked-node qualification change scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      required: ${{ steps.select.outputs.required }}
+      controls: ${{ steps.select.outputs.controls }}
+      profile_policy: ${{ steps.select.outputs.profile_policy }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Test qualification selection
+        run: python3 -m unittest discover -s tools/ci -p 'test_*qualification_scope.py'
+      - name: Select linked-node builds
+        id: select
+        run: python3 tools/ci/bundle_qualification_scope.py
+
+  controls:
+    name: Linked-node build and evidence controls
+    needs: scope
+    if: needs.scope.outputs.controls == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       RUSTUP_TOOLCHAIN: "1.99.1"
       RUSTC_WRAPPER: ""
@@ -67,6 +67,37 @@ jobs:
           cargo clippy --locked --manifest-path core/Cargo.toml -p kontor-build --all-targets -j2 -- -D warnings
           cargo test --locked --manifest-path core/Cargo.toml -p kontor-build -j2
           ./tools/kontor protocol-bundles --help
+
+  qualification:
+    name: Protocol bundles (${{ matrix.os }}, ${{ matrix.profile }})
+    needs: [scope, controls]
+    if: needs.scope.outputs.required == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        profile: ${{ fromJSON(needs.scope.outputs.profile_policy == 'full' && '["release", "dev"]' || '["release"]') }}
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.1"
+      RUSTC_WRAPPER: ""
+      CCACHE_DISABLE: "1"
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Check native ownership controls on the target platform
+        if: matrix.profile == 'release' && matrix.os != 'ubuntu-latest'
+        run: python3 -m unittest discover -s tools/protocol-bundles -p 'test_audit.py'
+      - name: Install node dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install boost libevent zeromq
       - name: Build node qualification image
         if: runner.os == 'Linux'
         run: docker build --target protocol-bundle-qualification -t kontor-protocol-qualification .
@@ -74,21 +105,50 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p target/protocol-evidence
-          docker run --rm --mount type=bind,src="$PWD/target/protocol-evidence",dst=/evidence kontor-protocol-qualification
+          docker run --rm --mount type=bind,src="$PWD/target/protocol-evidence",dst=/evidence kontor-protocol-qualification python3 tools/protocol-bundles/qualify_node.py --output /evidence --profile "${{ matrix.profile }}" --offline
       - name: Qualify both real bundles with the macOS node test profile
         if: runner.os == 'macOS'
         run: |
-          ./tools/kontor protocol-bundles --profile release --output target/protocol-evidence
-          test -f target/protocol-evidence/aarch64-apple-darwin/release/qualification.json
+          python3 tools/protocol-bundles/qualify_node.py --profile "${{ matrix.profile }}" --output target/protocol-evidence
+          test -f target/protocol-evidence/aarch64-apple-darwin/${{ matrix.profile }}/executors/node-execution.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: protocol-bundle-evidence-${{ matrix.os }}
+          name: protocol-bundle-evidence-${{ matrix.os }}-${{ matrix.profile }}
           path: |
-            target/protocol-evidence/*/*/*.json
-            target/protocol-evidence/*/*/*.log
-            target/protocol-evidence/*/*/first/*.json
-            target/protocol-evidence/*/*/first/*.log
-            target/protocol-evidence/*/*/second/*.json
-            target/protocol-evidence/*/*/second/*.log
+            target/protocol-evidence/*/*/executors/*.json
+            target/protocol-evidence/*/*/executors/*.log
+            target/protocol-evidence/*/*/executors/first/*.json
+            target/protocol-evidence/*/*/executors/first/*.log
+            target/protocol-evidence/*/*/executors/second/*.json
+            target/protocol-evidence/*/*/executors/second/*.log
+            target/protocol-evidence/*/*/executors/node/*.json
+            target/protocol-evidence/*/*/executors/node/*.log
+            target/protocol-evidence/*/*/executors/node/type-boundary/*.json
+            target/protocol-evidence/*/*/executors/node/type-boundary/*.log
+            target/protocol-evidence/*/*/executors/node/type-boundary/*.rs
+          if-no-files-found: error
+
+  compare:
+    name: Compare linked executor outcomes
+    needs: [scope, controls, qualification]
+    if: always() && (needs.scope.result != 'success' || needs.scope.outputs.required == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: protocol-bundle-evidence-*
+          path: target/protocol-comparison-inputs
+      - name: Compare explicitly required platforms and profiles
+        run: |
+          python3 tools/protocol-bundles/compare_node.py --directory target/protocol-comparison-inputs --output target/protocol-node-comparison.json --profiles "${{ needs.scope.outputs.profile_policy }}" --upstream-status "${{ needs.qualification.result }}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: protocol-node-comparison
+          path: target/protocol-node-comparison.json
           if-no-files-found: error

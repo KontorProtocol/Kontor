@@ -1774,9 +1774,10 @@ async fn shutdown_during_finality_replay_waits_for_active_replay() -> Result<()>
     timeout(Duration::from_secs(30), shutdown).await???;
     let errors = reactor_errors.lock().unwrap().clone();
     assert!(
-        errors
-            .iter()
-            .all(|(_, error)| error.contains("operation-owner node admission closed")),
+        errors.iter().all(|(_, error)| {
+            error.contains("operation-owner node admission closed")
+                || error.contains("operation-owner root capacity closed")
+        }),
         "unexpected reactor errors during shutdown: {errors:?}"
     );
     for owner in owners {

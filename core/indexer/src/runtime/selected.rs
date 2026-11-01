@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Result, ensure};
 
 use super::{Runtime, pricing::Pricing};
-use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
+use crate::protocol::execution::{ExecutorVersion, SelectionEnvelope};
 use crate::protocol::v1::gas::{
     DEFAULT_NON_PROC_GAS_LIMIT, GAS_TO_FUEL_MULTIPLIER, MAX_UNTRUSTED_GAS_LIMIT,
     SYSTEM_FUEL_CEILING,
@@ -35,7 +35,7 @@ impl SelectedGasPolicy {
 }
 
 pub(super) struct SelectedContext {
-    selection: ExecutionSelection,
+    selection: SelectionEnvelope,
     gas: SelectedGasPolicy,
     pricing: Pricing,
     memory: GuestMemoryLimits,
@@ -70,12 +70,35 @@ impl Drop for SelectedRuntime<'_> {
 }
 
 impl Runtime {
-    pub(crate) fn bind_selection(
-        &mut self,
-        selection: &ExecutionSelection,
-    ) -> Result<SelectedRuntime<'_>> {
-        selection.ensure_runtime(self.network, self.executor_version())?;
-        let context = match &self.selected_context {
+    fn verify_selection_envelope(&self, selection: &SelectionEnvelope) -> Result<()> {
+        ensure!(
+            selection.1 == self.network.magic().to_bytes(),
+            "executor selection network mismatch"
+        );
+        ensure!(
+            selection.0 == self.executor_version().tag(),
+            "runtime does not match selected executor"
+        );
+        let valid_position = matches!(
+            selection.3,
+            (0 | 1, 0, None, 0)
+                | (2, _, _, 0)
+                | (5, _, None, 0)
+                | (3 | 4, _, Some(_), _)
+                | (6, _, None, 1)
+                | (6, 0, None, 0)
+                | (7, 0, None, _)
+        );
+        ensure!(
+            valid_position,
+            "invalid executor selection position envelope"
+        );
+        Ok(())
+    }
+
+    fn resolve_selection(&self, selection: &SelectionEnvelope) -> Result<Arc<SelectedContext>> {
+        self.verify_selection_envelope(selection)?;
+        Ok(match &self.selected_context {
             Some(context) => {
                 ensure!(
                     context.selection == *selection,
@@ -86,17 +109,33 @@ impl Runtime {
             None => Arc::new(SelectedContext {
                 selection: selection.clone(),
                 gas: SelectedGasPolicy::resolve(
-                    selection.version(),
-                    selection.is_public_view().then_some(self.view_gas_limit),
+                    self.executor_version(),
+                    (selection.3.0 == 0).then_some(self.view_gas_limit),
                 ),
-                memory: match selection.version() {
+                memory: match self.executor_version() {
                     ExecutorVersion::LegacyP1 => GuestMemoryLimits::default(),
                 },
-                pricing: match selection.version() {
+                pricing: match self.executor_version() {
                     ExecutorVersion::LegacyP1 => Pricing::default(),
                 },
             }),
-        };
+        })
+    }
+
+    pub(super) fn install_root_selection(&mut self, selection: &SelectionEnvelope) -> Result<()> {
+        ensure!(
+            self.selected_context.is_none(),
+            "executor root already has a selection"
+        );
+        self.selected_context = Some(self.resolve_selection(selection)?);
+        Ok(())
+    }
+
+    pub(crate) fn bind_selection(
+        &mut self,
+        selection: &SelectionEnvelope,
+    ) -> Result<SelectedRuntime<'_>> {
+        let context = self.resolve_selection(selection)?;
         let previous = self.selected_context.replace(context);
         Ok(SelectedRuntime {
             runtime: self,
@@ -106,9 +145,7 @@ impl Runtime {
 
     pub(super) fn verify_selected_runtime(&self) -> Result<()> {
         if let Some(context) = &self.selected_context {
-            context
-                .selection
-                .ensure_runtime(self.network, self.executor_version())?;
+            self.verify_selection_envelope(&context.selection)?;
         }
         Ok(())
     }
@@ -150,8 +187,8 @@ mod tests {
     use wasmtime::{Memory, MemoryType};
 
     use super::*;
-    use crate::database::types::Identity;
     use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
+    use crate::protocol::v1::types::Identity;
     use crate::runtime::Decimal;
     use crate::runtime::wit::Signer;
     use crate::test_utils::test_runtime;
@@ -167,7 +204,7 @@ mod tests {
         )
         .await?;
         let mut child = {
-            let mut selected = runtime.bind_selection(&selection)?;
+            let mut selected = runtime.bind_selection(&selection.envelope())?;
             selected.gas_to_fuel_multiplier = 1;
             selected.gas_limit_for_non_procs = 1;
             selected.view_gas_limit = 1;
@@ -224,7 +261,7 @@ mod tests {
         )
         .await?;
         let mut root = {
-            let mut selected = runtime.bind_selection(&selection)?;
+            let mut selected = runtime.bind_selection(&selection.envelope())?;
             selected.guest_memory_limits = None;
             selected.make_store(100)?
         };
@@ -248,6 +285,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn selection_envelope_rejects_foreign_or_ambiguous_context() -> Result<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let envelope = select_legacy_p1(
+            &runtime.get_storage_conn(),
+            runtime.network,
+            ApplicationPosition::View,
+        )
+        .await?
+        .envelope();
+        let mut foreign = envelope.clone();
+        foreign.0 = u32::MAX;
+        ensure!(runtime.bind_selection(&foreign).is_err());
+        foreign = envelope.clone();
+        foreign.1 = Network::Bitcoin.magic().to_bytes();
+        ensure!(runtime.bind_selection(&foreign).is_err());
+        for position in [
+            (0, 1, None, 0),
+            (1, 0, Some([0; 32]), 0),
+            (2, 0, None, 1),
+            (3, 1, None, 1),
+            (4, 1, None, 1),
+            (5, 1, Some([0; 32]), 0),
+            (u8::MAX, 0, None, 0),
+        ] {
+            let mut malformed = envelope.clone();
+            malformed.3 = position;
+            ensure!(runtime.bind_selection(&malformed).is_err());
+        }
+        let mut selected = runtime.bind_selection(&envelope)?;
+        for field in 0..7 {
+            let mut changed = envelope.clone();
+            match field {
+                0 => changed.2.0.push('x'),
+                1 => changed.2.1 += 1,
+                2 => changed.2.2 = Some(u64::MAX),
+                3 => changed.2.3 = Some("different block".into()),
+                4 => changed.2.4 += 1,
+                5 => changed.2.5 = Some(u64::MAX),
+                6 => changed.2.6 = Some("different checkpoint".into()),
+                _ => unreachable!(),
+            }
+            ensure!(selected.bind_selection(&changed).is_err());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn cancelled_scope_restores_context_and_nested_reselection_is_rejected() -> Result<()> {
         let (mut runtime, _dir, _name) = test_runtime().await?;
         let selection = select_legacy_p1(
@@ -263,10 +347,10 @@ mod tests {
         )
         .await?;
         let future = async {
-            let mut selected = runtime.bind_selection(&selection)?;
-            ensure!(selected.bind_selection(&other).is_err());
+            let mut selected = runtime.bind_selection(&selection.envelope())?;
+            ensure!(selected.bind_selection(&other.envelope()).is_err());
             {
-                let nested = selected.bind_selection(&selection)?;
+                let nested = selected.bind_selection(&selection.envelope())?;
                 ensure!(nested.selected_context.is_some());
             }
             ensure!(selected.selected_context.is_some());
@@ -276,7 +360,7 @@ mod tests {
         ensure!(future.now_or_never().is_none());
         ensure!(runtime.selected_context.is_none());
         runtime.view_gas_limit = 0;
-        let selected = runtime.bind_selection(&other)?;
+        let selected = runtime.bind_selection(&other.envelope())?;
         ensure!(
             selected.fuel_limit_for_view()? == MAX_UNTRUSTED_GAS_LIMIT * GAS_TO_FUEL_MULTIPLIER
         );

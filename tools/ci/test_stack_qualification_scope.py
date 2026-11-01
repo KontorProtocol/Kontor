@@ -39,6 +39,7 @@ class ScopeTests(unittest.TestCase):
             "core/indexer/src/api/handlers/info.rs", "core/indexer/src/api/handlers/receipt_stream.rs",
             "core/indexer/src/logging.rs", "core/indexer/src/metrics.rs",
             ".github/workflows/mobile.yml", "core/.cargo/audit.toml",
+            "tools/protocol-bundles/compare_node.py", "tools/protocol-bundles/test_node_comparison.py",
         ):
             with self.subTest(path=path):
                 self.assertFalse(scope.relevant(path))

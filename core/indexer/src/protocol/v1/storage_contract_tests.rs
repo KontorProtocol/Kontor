@@ -277,6 +277,36 @@ async fn contract_adapter_preserves_partial_signer_on_panic_or_insert_failure() 
 }
 
 #[tokio::test]
+async fn contract_adapter_provenance_context_panic_preserves_prior_write_until_rollback()
+-> Result<()> {
+    let (_reader, writer, _temp) = new_test_db().await?;
+    let conn = writer.connection();
+    initialize(&conn).await?;
+    let mut storage = Storage::builder()
+        .conn(conn.clone())
+        .tx_context(TransactionContext::builder().tx_index(3).build())
+        .build();
+    let saved = snapshot(&conn).await?;
+    storage.savepoint().await?;
+    let contract_id = storage.insert_contract("prior-write", &[]).await?;
+    let staged = snapshot(&conn).await?;
+    assert_ne!(staged, saved);
+
+    storage.tx_context = None;
+    let panic = AssertUnwindSafe(storage.insert_contract_provenance(contract_id, 1, &[1, 2]))
+        .catch_unwind()
+        .await;
+    assert_eq!(
+        panic_message(panic.unwrap_err()),
+        "Transaction index is required when inserting provenance"
+    );
+    assert_eq!(snapshot(&conn).await?, staged);
+    storage.rollback().await?;
+    assert_eq!(snapshot(&conn).await?, saved);
+    Ok(())
+}
+
+#[tokio::test]
 async fn contract_adapter_retains_address_deserialization_errors() -> Result<()> {
     let (_r, writer, _temp) = new_test_db().await?;
     let conn = writer.connection();

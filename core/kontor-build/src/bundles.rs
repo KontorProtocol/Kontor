@@ -7,6 +7,18 @@ use clap::Args;
 
 #[derive(Debug, Args)]
 pub struct ProtocolBundlesArgs {
+    /// Stage production executors without linking or qualifying a node.
+    #[arg(long, conflicts_with = "build_node")]
+    pub build_executors: bool,
+    /// Link the production node and audit native ownership.
+    #[arg(long, conflicts_with = "build_executors")]
+    pub build_node: bool,
+    /// Include the isolated executor integration command in the node.
+    #[arg(long, requires = "build_node")]
+    pub node_qualification: bool,
+    /// Copy the audited node executable to this path, relative to the checkout root.
+    #[arg(long, requires = "build_node")]
+    pub install_node: Option<PathBuf>,
     /// Require all dependencies to be present in the local Cargo cache.
     #[arg(long)]
     pub offline: bool,
@@ -37,6 +49,18 @@ pub fn protocol_bundles(args: ProtocolBundlesArgs) -> Result<()> {
         .args(["--profile", &args.profile, "--jobs", &args.jobs.to_string()]);
     if args.offline {
         command.arg("--offline");
+    }
+    if args.build_executors {
+        command.arg("--build-executors");
+    }
+    if args.build_node {
+        command.arg("--build-node");
+    }
+    if args.node_qualification {
+        command.arg("--node-qualification");
+    }
+    if let Some(destination) = args.install_node {
+        command.arg("--install-node").arg(destination);
     }
     if let Some(target) = args.target {
         command.args(["--target", &target]);

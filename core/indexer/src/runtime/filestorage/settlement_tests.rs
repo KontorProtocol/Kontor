@@ -4,7 +4,7 @@ use kontor_crypto::api::prepare_file;
 
 use super::api::{self, ChallengeStatus};
 use crate::database::queries::insert_block;
-use crate::database::types::field_element_to_bytes;
+use crate::protocol::v1::types::field_element_to_bytes;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::numerics::{add_decimal, div_decimal, mul_decimal, sub_decimal};
 use crate::runtime::staking::api as staking;

@@ -51,7 +51,8 @@ async fn restores_context(
         vout: 4,
     };
     trial
-        .runtime
+        .test_runtime()
+        .await
         .set_context(
             1,
             Some(prior.clone()),
@@ -59,9 +60,9 @@ async fn restores_context(
             Some(vec![8, 7, 6]),
         )
         .await;
-    trial.runtime.simulating = was_simulating;
-    let ids = trial.runtime.id_generation_counter.clone();
-    let results = trial.runtime.result_id_counter.clone();
+    trial.test_runtime().await.simulating = was_simulating;
+    let ids = trial.test_runtime().await.id_generation_counter.clone();
+    let results = trial.test_runtime().await.result_id_counter.clone();
     for _ in 0..2 {
         ids.increment().await;
     }
@@ -113,16 +114,26 @@ async fn restores_context(
     }
     let outcome = trial.simulate(tx).await;
     conn.authorizer(None)?;
-    ensure!(trial.runtime.storage.height == 1);
-    ensure!(trial.runtime.storage.tx_context == Some(prior));
-    ensure!(trial.runtime.previous_output == Some(prior_output));
-    ensure!(trial.runtime.op_return_data.as_deref() == Some([8, 7, 6].as_slice()));
-    ensure!(trial.runtime.simulating == was_simulating);
+    ensure!(trial.test_runtime().await.storage.height == 1);
+    ensure!(trial.test_runtime().await.storage.tx_context == Some(prior));
+    ensure!(trial.test_runtime().await.previous_output == Some(prior_output));
+    ensure!(trial.test_runtime().await.op_return_data.as_deref() == Some([8, 7, 6].as_slice()));
+    ensure!(trial.test_runtime().await.simulating == was_simulating);
     ensure!(ids.get().await == 2 && results.get().await == 3);
-    ensure!(trial.runtime.id_generation_counter.get().await == 2);
-    ensure!(trial.runtime.result_id_counter.get().await == 3);
-    trial.runtime.id_generation_counter.increment().await;
-    trial.runtime.result_id_counter.increment().await;
+    ensure!(trial.test_runtime().await.id_generation_counter.get().await == 2);
+    ensure!(trial.test_runtime().await.result_id_counter.get().await == 3);
+    trial
+        .test_runtime()
+        .await
+        .id_generation_counter
+        .increment()
+        .await;
+    trial
+        .test_runtime()
+        .await
+        .result_id_counter
+        .increment()
+        .await;
     ensure!(ids.get().await == 3 && results.get().await == 4);
     if outer_error {
         ensure!(denials.load(Ordering::SeqCst) > 0);
@@ -131,7 +142,15 @@ async fn restores_context(
             conn.is_autocommit(),
             "simulation error left a transaction open"
         );
-        ensure!(trial.runtime.storage.savepoint_stack.is_empty().await);
+        ensure!(
+            trial
+                .test_runtime()
+                .await
+                .storage
+                .savepoint_stack
+                .is_empty()
+                .await
+        );
         ensure!(snapshot(&conn).await? == before);
     } else {
         let outcome = outcome?;
@@ -143,8 +162,16 @@ async fn restores_context(
                 OpStatus::Ok
             }));
         ensure!(snapshot(&conn).await? == before);
-        ensure!(trial.runtime.stack.is_empty().await);
-        ensure!(trial.runtime.storage.savepoint_stack.is_empty().await);
+        ensure!(trial.test_runtime().await.stack.is_empty().await);
+        ensure!(
+            trial
+                .test_runtime()
+                .await
+                .storage
+                .savepoint_stack
+                .is_empty()
+                .await
+        );
     }
     trial.consensus.engine_handle.actor.stop(None);
     timeout(

@@ -5,7 +5,7 @@ use moka::future::Cache;
 use sha2::{Digest, Sha256};
 use wasmtime::{Engine, EngineWeak, component::Component};
 
-use crate::protocol::coordinator::selection::ExecutorVersion;
+use crate::protocol::execution::ExecutorVersion;
 
 /// Total-weight bound for the cache, where each entry weighs its encoded
 /// component binary size (the best cheap proxy for the compiled machine

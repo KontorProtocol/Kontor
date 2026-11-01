@@ -1,5 +1,94 @@
 # Protocol upgrade implementation ledger
 
+## K2b local checkpoint, 31 October 2026
+
+K2b remains unmerged. The current implementation and outstanding phase gates are
+summarized in [the implementation plan](implementation-plan.md) and
+[the agreed production boundary](k2b-production-boundary.md). Earlier entries below
+are historical evidence, not the current phase status.
+
+The local production worktree now builds both real independently locked executor
+graphs and links them into the node. The bounded ARM64 dev run matches eighteen
+scenario groups across both graphs. The separate preserved-input comparison
+matches all eleven pre-extraction logical-state stages. No cross-platform result
+is inferred from that local run.
+
+Recent local implementation checkpoints:
+
+- `697a2410`: real transaction publication, fees/deposits, failure and replay cases.
+- `0044003d`: preserved pre-extraction baseline through the linked node.
+- `7850ead2`: audited production node installation and Docker build route.
+- `deef86aa` and `f0f09445`: explicit release3/full6 comparison and CI scope selection.
+- `aeaa83cf` and `53bb95a0`: actual-library compile controls and their evidence bindings.
+- `a7807439`: actual linked-node callback, cursor, admission and panic ownership cases.
+
+The compile controls accept the shared structural factory signatures and reject
+cross-graph Wasmtime Engine and Tokio Handle values and private Runtime imports.
+All five controls passed against actual staged libraries. The builder/comparator
+test suite passes 94 tests; the CI helper suite passes 24 tests. Missing dependencies
+and unrelated compiler failures cannot satisfy a negative compile control.
+
+The linked-ownership task was integrated after lead source review and validation
+of its actual node report against the integrated source. Its ARM64 dev executable
+hash is `53db1247acffef7e01983a2aeceb7d7e4ae1ac58fb070ea53c15e3ed131524d2`.
+The five added groups check pending callback cancellation, ordinary callback
+failure versus panic quarantine, a guest-held cursor during cancellation, shared
+capacity/shutdown with both graphs, and direct export panic classification.
+The run also passed the five actual-library compile controls. Evidence is retained
+under `.build-cache/linked-ownership-qualification/aarch64-unknown-linux-gnu/dev/executors`
+in the parent workspace. This does not establish the remaining raw guest panic
+payload or missing-context publication/provenance behavior.
+
+The Daybreak implementer is addressing that remaining clause under bounded task
+`kontor-k2b-panic-parity`. A source patch or running build is not a passing result.
+The production release container built successfully from runtime source
+`a7807439`. Image `a1da95362b4735bb8a9dbb3ad894852e4fe042ce942aaac4a2a60f2301421e96`
+contains the exact audited executable with SHA-256
+`1fc5d8b0a0cf5168e428b07ec9bd44d6caed6ebffbcdb6c76f22724ff24795ef`.
+Non-root CLI help passed and the qualification-only command was rejected.
+Preserved ownership reports, build log and linker-input inventory match their
+recorded hashes. Evidence is in the production worktree's
+`.build-cache/production-release-image-v1-evidence` directory. This local Podman
+OCI image omits Docker healthcheck metadata; the Dockerfile healthcheck is
+unchanged. These packaging checks do not qualify execution across platforms.
+Final platform qualification, consolidated lead/two independent reviews, PR CI
+and merge remain pending.
+
+The node compiler wrapper now preserves Cargo's inherited jobserver descriptors.
+The original wrapper closed them when spawning `rustc`, producing a bad-descriptor
+warning and losing access to Cargo's shared compilation budget. A real inherited
+pipe regression fails before the fix and passes after it. All 94 builder/evidence
+controls pass with compiler caching disabled. The release image above predates
+this builder-only correction; final candidate qualification must use the corrected
+wrapper rather than relabel the earlier image evidence.
+
+The consolidated integration review found a gap in that native ownership audit:
+the node's dependency archives were added to the common reference inventory.
+An unnamespaced retained reference could therefore resolve against a node native
+library and pass the check. The preserved graph references do not show an actual
+blst, secp256k1 or ring fallback, but the audit did not enforce the required
+isolation. Its correction must separate final node-symbol attribution from the
+restricted common reference inventory and reject node-copy fallback through a
+negative control. Earlier successful audits are not evidence that this gap is fixed.
+
+The focused guest decoder test passes with the exact root-cause payload
+`host panic: deliberate host panic for testing` and infrastructure classification.
+An attempted linked observation after the view returned failed: pooled-root
+quarantine prevents that return. The failed probe was removed. Decoder behavior
+is checked through the existing in-tree test path; the actual linked scenarios
+check quarantine, session discard and separate export-unwind classification.
+These are distinct observations, not a claim that a quarantined pooled call
+returns its decoder payload. The new provenance test also passes, preserving
+prior writes until rollback after missing-context misuse. Final test integration
+and the audit correction are pending at this checkpoint.
+
+No K2b broad CI campaign has been launched. Comparator-only changes select focused
+controls; execution/build changes retain the required platform matrix. Before
+launching CI, inspect prior runs and preserve equivalent merge-tree evidence to
+avoid unnecessary post-merge qualification. The operational performance gate was
+superseded by the operator's explicit prelaunch acceptance, not by relabeling the
+earlier extreme-workload failures as passes.
+
 ## Plan approval
 
 PLAN-1 records the explicit two-party approval of DRAFT-4 content hash

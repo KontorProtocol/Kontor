@@ -11,19 +11,22 @@ use tokio::time::{interval, sleep, timeout};
 use super::engine::EngineConfig;
 use super::executor::NoopExecutor;
 use super::mempool_fee_index::MempoolFeeIndex;
-use super::{PruneConfig, Reactor, create_runtime_executor, run, start_consensus};
+use super::{PruneConfig, Reactor, create_executor_session, run, start_linked_consensus};
 use crate::bitcoin_client::Client;
 use crate::consensus::signing::PrivateKey;
 use crate::database::Writer;
 use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::logging;
+use crate::protocol::coordinator::linked;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::ownership::OwnerService;
+use crate::runtime::pool::LinkedSession;
 use crate::runtime::{BlockingGate, Decimal, GenesisValidator};
 use crate::stopper::Shutdown;
 use crate::test_utils::{
     new_mock_block_hash, new_test_db, test_genesis, test_runtime_with_genesis,
 };
+use bitcoin::Network;
 
 #[tokio::test]
 async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() -> Result<()> {
@@ -90,7 +93,8 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
     let outcome = timeout(Duration::from_secs(60), reactor).await??;
     if let Err(error) = &outcome {
         assert!(
-            format!("{error:#}").contains("operation-owner node admission closed"),
+            format!("{error:#}").contains("operation-owner node admission closed")
+                || format!("{error:#}").contains("operation-owner root capacity closed"),
             "unexpected startup failure: {error:#}"
         );
     }
@@ -141,7 +145,7 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
     let mut resumed_driver = resumed_owner
         .take_driver()
         .expect("resumed owner has a driver");
-    let (_, resumed_runtime, _, _) = create_runtime_executor(
+    let (_, resumed_runtime, _, _) = create_executor_session(
         1,
         &resumed_writer,
         &resumed_owner,
@@ -151,7 +155,7 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
         bitcoin::Network::Regtest,
     )
     .await?;
-    assert!(resumed_runtime.storage.conn.is_autocommit());
+    assert!(resumed_runtime.conn.is_autocommit());
     let reader_conn = reader.connection().await?;
     let mut rows = reader_conn
         .query("SELECT COUNT(*) FROM contracts", ())
@@ -170,13 +174,18 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
 async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()> {
     logging::setup();
     let key = PrivateKey::from([19; 32]);
-    let (mut runtime, dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
+    let (runtime, dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
         x_only_pubkey: random_x_only_pubkey(),
         ed25519_pubkey: key.public_key().as_bytes().to_vec(),
         stake: Decimal::from("100"),
     }])
     .await?;
-    let mut consensus = start_consensus(
+    let session = LinkedSession::new(
+        runtime.get_storage_conn(),
+        linked::link_runtime(runtime, true),
+    );
+    let owner = OwnerService::new();
+    let mut consensus = start_linked_consensus(
         EngineConfig {
             private_key: key,
             listen_addr: "/ip4/127.0.0.1/tcp/0".to_string(),
@@ -185,7 +194,9 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
             consensus_enabled: true,
             discovery: Default::default(),
         },
-        &mut runtime,
+        &session,
+        &owner,
+        Network::Regtest,
         None,
         None,
         1,
@@ -197,10 +208,11 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
     let (_block_tx, block_rx) = mpsc::channel(1);
     let (_mempool_tx, mempool_rx) = mpsc::channel(1);
     let (addr_tx, _addr_rx) = watch::channel(None);
-    let mut reactor = Reactor::new(
+    let mut reactor = Reactor::from_session(
         NoopExecutor,
-        runtime,
-        OwnerService::new(),
+        session,
+        Network::Regtest,
+        owner,
         block_rx,
         mempool_rx,
         shutdown.signal(),

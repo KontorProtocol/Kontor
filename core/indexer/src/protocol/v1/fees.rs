@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use indexer_types::Payment;
 
-use crate::database::types::Identity;
+use crate::protocol::v1::types::Identity;
 use crate::runtime::wit::Signer;
 use crate::runtime::{CallOutcome, ExecutionError, Runtime, token};
 

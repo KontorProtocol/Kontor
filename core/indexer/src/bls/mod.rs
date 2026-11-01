@@ -7,8 +7,10 @@
 //! aggregate-verification flow, which needs `Runtime` for signer
 //! lookups and so stays indexer-local.
 
+#[cfg(not(kontor_node))]
 mod aggregate;
 
+#[cfg(not(kontor_node))]
 pub use aggregate::*;
 pub use bls_crypto::*;
 

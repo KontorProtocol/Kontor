@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from capabilities import DISABLED, settings, verify
-from recipes import EXECUTION, GRAPHS, identity, verify_engine_observations, verify_identity, verify_reservations
+from recipes import EXECUTION, EXECUTOR_GRAPHS, GRAPHS, identity, verify_engine_observations, verify_identity, verify_reservations
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +48,15 @@ class Recipes(unittest.TestCase):
         verify(ROOT)
         for label in GRAPHS:
             verify_identity(ROOT, {"graph": label, "identity": identity(ROOT, label)})
+
+    def test_executor_and_proof_are_distinct_link_sets(self):
+        verify_reservations(ROOT, EXECUTOR_GRAPHS)
+        report = {"graph": "first", "identity": identity(ROOT, "first", EXECUTOR_GRAPHS)}
+        verify_identity(ROOT, report, EXECUTOR_GRAPHS)
+        with self.assertRaisesRegex(RuntimeError, "attestation"):
+            verify_identity(ROOT, report)
+        with self.assertRaisesRegex(RuntimeError, "reserved Wasmtime"):
+            verify_reservations(ROOT, dict(GRAPHS, executor=EXECUTOR_GRAPHS["first"]))
 
     def test_reserved_historical_and_active_versions(self):
         for version in ("51.0.0-dev", "51.0.0+dev", "51.0.0-kontor.1",

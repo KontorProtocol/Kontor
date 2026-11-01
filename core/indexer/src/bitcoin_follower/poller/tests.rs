@@ -1,5 +1,6 @@
 use super::*;
 use crate::bitcoin_client::mock::MockBitcoinRpc;
+use crate::protocol::coordinator::linked::PreparedTransaction;
 use crate::stopper::Shutdown;
 use crate::test_utils::new_numbered_blockchain;
 use bitcoin::blockdata::constants::genesis_block;
@@ -301,17 +302,28 @@ fn delivery_preserves_unknown_transactions_and_witnesses_until_recognition() {
         block.txids(),
         raw.iter().map(|tx| tx.compute_txid()).collect::<Vec<_>>()
     );
-    assert!(block.clone().recognize(|_| None).transactions.is_empty());
+    assert!(
+        block
+            .clone()
+            .prepare(|_| Ok(None))
+            .unwrap()
+            .transactions
+            .is_empty()
+    );
     let seen = Mutex::new(Vec::new());
-    let parsed = block.recognize(|tx| {
-        seen.lock().unwrap().push(tx.clone());
-        (tx.input[0].witness == raw[1].input[0].witness).then(|| Transaction {
-            txid: tx.compute_txid(),
-            index: 0,
-            inputs: vec![],
-            op_return_raw: None,
+    let parsed = block
+        .prepare(|tx| {
+            seen.lock().unwrap().push(tx.clone());
+            Ok((tx.input[0].witness == raw[1].input[0].witness).then(|| {
+                PreparedTransaction::fixture(Transaction {
+                    txid: tx.compute_txid(),
+                    index: 0,
+                    inputs: vec![],
+                    op_return_raw: None,
+                })
+            }))
         })
-    });
+        .unwrap();
     let seen = seen.into_inner().unwrap();
     assert_eq!(seen.len(), raw.len());
     assert!(raw.iter().all(|tx| seen.contains(tx)));

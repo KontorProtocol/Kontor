@@ -1,4 +1,4 @@
-"""Bind proof labels to immutable sources and explicit execution settings."""
+"""Bind separately linked graphs to immutable sources and execution settings."""
 
 from dataclasses import dataclass
 import hashlib
@@ -13,13 +13,26 @@ class Graph:
     directory: str
     revision: str
     version: str
-    itoa: str
+    itoa: str | None
     lift_rate: int
+    kind: str = "proof"
+    native_patches: tuple[str, ...] = ("blst", "ring", "secp256k1-sys")
+    malachite_engine: bool = True
 
 
 GRAPHS = {
     "first": Graph("pulley-first", "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7", "51.0.0-kontor.2", "1.0.14", 512),
     "second": Graph("pulley-second", "0dbc68b31c0bcf1a05c93122f1939fb8784e4e48", "51.0.0-kontor.3", "1.0.15", 513),
+}
+# These are separate link sets. A proof and an executor using the same Wasmtime
+# version must never be combined into one executable.
+EXECUTOR_GRAPHS = {
+    "first": Graph("executor-first", "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
+                   "51.0.0-kontor.2", None, 512, kind="executor",
+                   native_patches=("blst", "secp256k1-sys", "psm", "wit-bindgen"), malachite_engine=False),
+    "second": Graph("executor-second", "0dbc68b31c0bcf1a05c93122f1939fb8784e4e48",
+                    "51.0.0-kontor.3", None, 512, kind="executor",
+                    native_patches=("blst", "secp256k1-sys", "psm", "wit-bindgen"), malachite_engine=False),
 }
 HISTORICAL = {
     "first": ("75a06735d294f3fc04a4ffff54492d3bf80e4121faa2e2aae64434e5b252db6b",
@@ -59,8 +72,8 @@ def verify_reservations(root, graphs=None):
             raise RuntimeError(f"proof manifest has the wrong immutable identity: {label}")
 
 
-def identity(root, label):
-    graph = GRAPHS[label]
+def identity(root, label, graphs=None):
+    graph = (GRAPHS if graphs is None else graphs)[label]
     base = root / "protocol-bundles" / graph.directory
     return {"directory": graph.directory, "wasmtime_revision": graph.revision,
             "wasmtime_version": graph.version, "manifest_sha256": sha(base / "Cargo.toml"),
@@ -68,10 +81,11 @@ def identity(root, label):
             "lift_rate": graph.lift_rate}
 
 
-def verify_identity(root, report):
+def verify_identity(root, report, graphs=None):
+    graphs = GRAPHS if graphs is None else graphs
     label = report.get("graph")
-    if label not in GRAPHS or report.get("identity") != identity(root, label):
-        raise RuntimeError("proof graph identity or execution attestation changed")
+    if label not in graphs or report.get("identity") != identity(root, label, graphs):
+        raise RuntimeError("graph identity or execution attestation changed")
 
 
 def verify_engine_observations(log):

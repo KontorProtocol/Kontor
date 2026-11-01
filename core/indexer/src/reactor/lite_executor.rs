@@ -2,14 +2,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::runtime::bundle_session::BundleSession;
+use crate::runtime::pool::LinkedSession;
 use anyhow::Result;
-use bitcoin::Txid;
+use bitcoin::{Network, Transaction as BitcoinTransaction, Txid};
 
 use crate::database::queries::{
     contract_has_state, get_transaction_by_txid, insert_block, insert_contract, insert_transaction,
 };
 use crate::database::types::ContractRow;
+use crate::protocol::coordinator::linked::{PreparedTransaction, TransactionRecognizer};
 use crate::protocol::coordinator::selection::ExecutionSelection;
+use crate::protocol::v1::transactions::decode_simulation;
 use crate::reactor::executor::{Executor, TxPolicy};
 use crate::reactor::mock_bitcoin::MockBitcoin;
 use crate::runtime::wit::Signer;
@@ -228,6 +232,62 @@ impl LiteExecutor {
 }
 
 impl Executor for LiteExecutor {
+    fn prepare_simulation(
+        &self,
+        recognizer: &TransactionRecognizer,
+        selection: &ExecutionSelection,
+        raw: Vec<u8>,
+    ) -> Result<Result<Option<PreparedTransaction>, String>> {
+        match decode_simulation(&raw) {
+            Ok(raw) => Ok(Ok(self.prepare_transaction(recognizer, selection, &raw)?)),
+            Err(error) => Ok(Err(error)),
+        }
+    }
+
+    async fn execute_prepared(
+        &self,
+        selection: &ExecutionSelection,
+        session: &LinkedSession,
+        network: Network,
+        height: u64,
+        tx_id: u64,
+        transaction: &PreparedTransaction,
+    ) -> Result<Vec<Vec<Option<String>>>> {
+        let retained = session
+            .executor
+            .owner
+            .downcast_ref::<BundleSession>()
+            .expect("test runtime session");
+        let mut runtime = retained.test_runtime().await;
+        let parsed = runtime.transaction_fixture(
+            &selection.envelope(),
+            transaction.payload(selection, network)?,
+            transaction.index,
+        )?;
+        Ok(self
+            .execute_transaction(selection, &mut runtime, height, tx_id, &parsed)
+            .await?
+            .into_iter()
+            .map(|input| {
+                input
+                    .into_iter()
+                    .map(|error| error.map(|error| format!("{error:#}")))
+                    .collect()
+            })
+            .collect())
+    }
+
+    fn prepare_transaction(
+        &self,
+        _recognizer: &TransactionRecognizer,
+        selection: &ExecutionSelection,
+        raw: &BitcoinTransaction,
+    ) -> Result<Option<PreparedTransaction>> {
+        Ok(self
+            .parse_transaction(selection, raw)
+            .map(PreparedTransaction::fixture))
+    }
+
     fn validate_txs(
         &self,
         txs: Vec<bitcoin::Transaction>,

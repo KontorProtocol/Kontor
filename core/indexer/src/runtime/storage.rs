@@ -5,6 +5,7 @@ use bon::Builder;
 use futures_util::Stream;
 #[cfg(test)]
 use futures_util::TryStreamExt;
+#[cfg(not(kontor_retained))]
 use libsql::Connection;
 use regex::bytes::RegexBuilder;
 use std::io::Read;
@@ -16,16 +17,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex as StdMutex};
 use wit_component::{ComponentEncoder, WitPrinter};
 
+use super::bundle_ownership::{BundleOwner, HostFailure};
+#[cfg(not(kontor_retained))]
+use super::ownership::ChildContext;
 #[cfg(test)]
 use super::resource_diagnostics;
-use crate::database::native_bootstrap::bootstrap_reader;
-use crate::database::queries::{core_callbacks, identity_callbacks, nonce_callbacks};
-use crate::database::storage_contracts_v1::contract_callbacks;
-use crate::database::storage_session_v1::session_callbacks;
+use super::storage_host::StorageHost;
+#[cfg(not(kontor_retained))]
+use crate::database::storage_callbacks_v1::storage_callbacks;
 use crate::protocol::storage_identity::SignerRecord;
 use crate::protocol::v1::native_bootstrap::{self, BootstrapProgress};
 use crate::protocol::v1::storage_contracts;
-use crate::protocol::v1::storage_error::ReadError;
+use crate::protocol::v1::storage_error::{ReadError, host_failure};
 use crate::protocol::v1::storage_footprint::FootprintCache;
 use crate::protocol::v1::storage_identity::{self, IdentityError};
 use crate::protocol::v1::storage_keys::keys;
@@ -35,15 +38,7 @@ use crate::protocol::v1::storage_session;
 use crate::protocol::v1::storage_state::{
     LiveRow, exists, live_subtree, tombstone_rows, write_value,
 };
-use crate::{
-    database::queries::{
-        depositors_affected_by_reorg, footprint_callbacks, key_callbacks, point_callbacks,
-        prune_contract_state, rollback_to_height, row_callbacks, select_block_at_height,
-        state_callbacks,
-    },
-    runtime::{ContractAddress, counter::Counter, ownership::ChildContext, stack::Stack},
-    test_utils::new_mock_transaction,
-};
+use crate::runtime::{ContractAddress, counter::Counter, stack::Stack};
 
 #[cfg(test)]
 mod variant_tests;
@@ -115,15 +110,22 @@ pub struct TransactionContext {
     pub input_index: u32,
     #[builder(default = 0)]
     pub op_index: u32,
-    #[builder(default = new_mock_transaction(0).txid)]
+    #[builder(default = Txid::from_byte_array([0; 32]))]
     pub txid: Txid,
 }
 
 #[derive(Builder, Clone)]
 pub struct Storage {
+    #[cfg(not(kontor_retained))]
     pub conn: Connection,
+    #[cfg_attr(not(kontor_retained), builder(default = StorageHost::from(storage_callbacks(&conn))))]
+    #[builder(setters(vis = "pub(crate)"))]
+    pub(crate) host: StorageHost,
+    #[cfg(not(kontor_retained))]
     #[builder(skip)]
     pub(super) ownership: Option<ChildContext>,
+    #[builder(skip)]
+    pub(super) bundle_owner: Option<BundleOwner>,
     #[builder(default = Counter::builder().build())]
     pub savepoint_counter: Counter,
     #[builder(default = Stack::builder().build())]
@@ -147,47 +149,47 @@ pub struct Storage {
 
 impl Storage {
     pub(crate) async fn native_bootstrap_progress(&self) -> Result<BootstrapProgress> {
-        native_bootstrap::read_progress(bootstrap_reader(&self.conn)).await
+        native_bootstrap::read_progress(self.host.bootstrap.clone()).await
     }
 
     pub(crate) async fn lookup_identity(&self, pubkey: &str) -> Result<Option<u64>> {
-        identity_callbacks(&self.conn).0(pubkey.to_owned())
+        self.host.identity.clone().0(pubkey.to_owned())
             .await
             .map_err(|error| anyhow!(error))
     }
 
     pub(crate) async fn ensure_identity(&self, pubkey: &str) -> Result<u64, IdentityError> {
-        storage_identity::ensure_identity(identity_callbacks(&self.conn), pubkey, self.height).await
+        storage_identity::ensure_identity(self.host.identity.clone(), pubkey, self.height).await
     }
 
     pub(crate) async fn create_core_signer(&self) -> Result<u64, IdentityError> {
-        storage_identity::create_core_signer(core_callbacks(&self.conn)).await
+        storage_identity::create_core_signer(self.host.core.clone()).await
     }
 
     pub(crate) async fn identity_pubkey(&self, signer_id: u64) -> Result<String, IdentityError> {
-        storage_identity::x_only_pubkey(identity_callbacks(&self.conn), signer_id).await
+        storage_identity::x_only_pubkey(self.host.identity.clone(), signer_id).await
     }
 
     pub(crate) async fn identity_bls_key(&self, signer_id: u64) -> Result<Option<Vec<u8>>> {
-        identity_callbacks(&self.conn).5(signer_id)
+        self.host.identity.clone().5(signer_id)
             .await
             .map_err(|error| anyhow!(error))
     }
 
     pub(crate) async fn write_identity_bls_key(&self, signer_id: u64, pubkey: &[u8]) -> Result<()> {
-        identity_callbacks(&self.conn).6(signer_id, pubkey.to_vec(), self.height)
+        self.host.identity.clone().6(signer_id, pubkey.to_vec(), self.height)
             .await
             .map_err(|error| anyhow!(error))
     }
 
     pub(crate) async fn contract_signer(&self, contract_id: u64) -> Result<Option<u64>> {
-        identity_callbacks(&self.conn).7(contract_id)
+        self.host.identity.clone().7(contract_id)
             .await
             .map_err(|error| anyhow!(error))
     }
 
     pub(crate) async fn signer_entry(&self, signer_id: u64) -> Result<Option<SignerRecord>> {
-        identity_callbacks(&self.conn).8(signer_id)
+        self.host.identity.clone().8(signer_id)
             .await
             .map_err(|error| anyhow!(error))
     }
@@ -198,7 +200,7 @@ impl Storage {
         nonce: u64,
         height: u64,
     ) -> Result<u64, IdentityError> {
-        storage_identity::advance_nonce(nonce_callbacks(&self.conn), signer_id, nonce, height).await
+        storage_identity::advance_nonce(self.host.nonce.clone(), signer_id, nonce, height).await
     }
 
     pub async fn get(
@@ -207,13 +209,7 @@ impl Storage {
         contract_id: u64,
         path: &[u8],
     ) -> Result<Option<Vec<u8>>> {
-        Ok(read_value(
-            point_callbacks(&self.conn),
-            max_value_bytes,
-            contract_id,
-            path,
-        )
-        .await?)
+        Ok(read_value(self.host.point.clone(), max_value_bytes, contract_id, path).await?)
     }
 
     /// Write a live value. `depositor` is the signer who collateralizes this row via
@@ -229,7 +225,7 @@ impl Storage {
         deposited_gas: Option<u64>,
     ) -> Result<()> {
         write_value(
-            state_callbacks(&self.conn).0,
+            self.host.state.clone().0,
             (contract_id, self.height, self.effective_tx_id()),
             path,
             value,
@@ -248,7 +244,7 @@ impl Storage {
         contract_id: u64,
         path: &[u8],
     ) -> Result<impl Stream<Item = Result<LiveRow, ReadError>> + Send + 'static> {
-        Ok(live_subtree(state_callbacks(&self.conn), contract_id, path))
+        Ok(live_subtree(self.host.state.clone(), contract_id, path))
     }
 
     /// The write half of a delete: value-less-tombstone the given (already-metered)
@@ -256,7 +252,7 @@ impl Storage {
     /// the freed bytes.
     pub async fn tombstone_rows(&self, contract_id: u64, rows: &[LiveRow]) -> Result<(bool, u64)> {
         Ok(tombstone_rows(
-            state_callbacks(&self.conn).0,
+            self.host.state.clone().0,
             (contract_id, self.height, self.effective_tx_id()),
             rows,
         )
@@ -265,7 +261,7 @@ impl Storage {
 
     /// The eager per-depositor storage-deposit FLOOR cache (see [`FootprintCache`]).
     pub fn footprint(&self) -> FootprintCache {
-        FootprintCache::new(footprint_callbacks(&self.conn))
+        FootprintCache::new(self.host.footprint.clone())
     }
 
     /// Reorg rollback that keeps the off-checkpoint footprint cache coherent
@@ -288,8 +284,12 @@ impl Storage {
         // The band's upper bound (tip) is derived inside the query from the DB's own
         // MAX(height), NOT `self.height` — the in-memory height is 0 until the first block
         // executes, so a reorg right after startup would otherwise capture no depositors.
-        let affected = depositors_affected_by_reorg(&self.conn, target_height).await?;
-        rollback_to_height(&self.conn, target_height).await?;
+        let affected = (self.host.history.0)(target_height)
+            .await
+            .map_err(host_failure)?;
+        (self.host.history.1)(target_height)
+            .await
+            .map_err(host_failure)?;
         self.footprint().recompute(&affected).await?;
         Ok(())
     }
@@ -301,7 +301,7 @@ impl Storage {
         provenance: &[u8],
     ) -> Result<()> {
         Ok(storage_contracts::insert_provenance(
-            contract_callbacks(&self.conn),
+            self.host.contracts.clone(),
             contract_id,
             author_signer_id,
             self.height,
@@ -312,17 +312,17 @@ impl Storage {
     }
 
     pub async fn contract_provenance_publisher(&self, contract_id: u64) -> Result<Option<u64>> {
-        contract_callbacks(&self.conn).6(contract_id)
+        self.host.contracts.clone().6(contract_id)
             .await
             .map_err(|error| anyhow!(error))
     }
 
     pub async fn exists(&self, contract_id: u64, path: &[u8]) -> Result<bool> {
-        Ok(exists(state_callbacks(&self.conn), contract_id, path).await?)
+        Ok(exists(self.host.state.clone(), contract_id, path).await?)
     }
 
     pub async fn contract_id(&self, contract_address: &ContractAddress) -> Result<Option<u64>> {
-        contract_callbacks(&self.conn).2((
+        self.host.contracts.clone().2((
             contract_address.name.clone(),
             contract_address.height,
             contract_address.tx_index,
@@ -332,7 +332,7 @@ impl Storage {
     }
 
     pub async fn contract_address(&self, contract_id: u64) -> Result<Option<ContractAddress>> {
-        Ok(contract_callbacks(&self.conn).3(contract_id)
+        Ok(self.host.contracts.clone().3(contract_id)
             .await
             .map_err(|error| anyhow!(error))?
             .map(|(name, height, tx_index)| ContractAddress {
@@ -343,7 +343,7 @@ impl Storage {
     }
 
     pub async fn contract_bytes(&self, contract_id: u64) -> Result<Option<Vec<u8>>> {
-        contract_callbacks(&self.conn).4(contract_id)
+        self.host.contracts.clone().4(contract_id)
             .await
             .map_err(|error| anyhow!(error))
     }
@@ -424,14 +424,33 @@ impl Storage {
                 .validate(true)
                 .encode()
         };
-        let encoded = match &self.ownership {
-            Some(owner) => owner.run_blocking(encode).await,
-            None => tokio::task::spawn_blocking(encode)
+        #[cfg(kontor_retained)]
+        let encoding = self
+            .bundle_owner
+            .as_ref()
+            .ok_or_else(|| {
+                ComponentDecodeError::Infrastructure(anyhow!(
+                    "executor decoding requires an admitted root"
+                ))
+            })?
+            .run_blocking(encode)
+            .await
+            .map_err(|error| anyhow!(HostFailure::from(error)));
+        #[cfg(not(kontor_retained))]
+        let encoding = match (&self.ownership, &self.bundle_owner) {
+            (Some(_), Some(_)) => Err(anyhow!("storage has conflicting ownership contexts")),
+            (None, Some(owner)) => owner
+                .run_blocking(encode)
+                .await
+                .map_err(|error| anyhow!(HostFailure::from(error))),
+            (Some(owner), None) => owner.run_blocking(encode).await,
+            (None, None) => tokio::task::spawn_blocking(encode)
                 .await
                 .map_err(anyhow::Error::from),
-        }
-        .map_err(ComponentDecodeError::Infrastructure)?
-        .map_err(ComponentDecodeError::Content)?;
+        };
+        let encoded = encoding
+            .map_err(ComponentDecodeError::Infrastructure)?
+            .map_err(ComponentDecodeError::Content)?;
 
         Ok(encoded)
     }
@@ -449,7 +468,7 @@ impl Storage {
 
     pub async fn insert_contract(&self, name: &str, bytes: &[u8]) -> Result<u64> {
         Ok(storage_contracts::insert_contract(
-            contract_callbacks(&self.conn),
+            self.host.contracts.clone(),
             self.height,
             self.tx_context.as_ref().map(|context| context.tx_index),
             name,
@@ -489,7 +508,7 @@ impl Storage {
             payer_signer_id,
             status.as_str(),
         );
-        contract_callbacks(&self.conn).7(row)
+        self.host.contracts.clone().7(row)
             .await
             .map_err(|error| anyhow!(error))
     }
@@ -503,7 +522,7 @@ impl Storage {
         descending: bool,
     ) -> Result<impl Stream<Item = Result<Vec<u8>, ReadError>> + Send + 'static> {
         Ok(keys(
-            key_callbacks(&self.conn),
+            self.host.keys.clone(),
             contract_id,
             path,
             lo,
@@ -521,7 +540,7 @@ impl Storage {
         descending: bool,
     ) -> StorageRowCursor {
         StorageRowCursor::new(
-            row_callbacks(&self.conn),
+            self.host.rows.clone(),
             contract_id,
             path,
             lo,
@@ -538,25 +557,23 @@ impl Storage {
         if height > self.height || height + BLOCK_ENTROPY_WINDOW < self.height {
             return Ok(None);
         }
-        Ok(select_block_at_height(&self.conn, height)
-            .await?
-            .map(|b| b.hash.to_byte_array().to_vec()))
+        (self.host.history.2)(height).await.map_err(host_failure)
     }
 
-    /// Incrementally prune the finalized band `(w_prev, w]` (see
-    /// [`prune_contract_state`]) inside a savepoint, so the two DELETEs and the
+    /// Incrementally prune the finalized band `(w_prev, w]` through the node's
+    /// pruning callback inside a savepoint, so the two DELETEs and the
     /// watermark upsert commit (or roll back) atomically through the same
     /// transaction bookkeeping as every other write. Returns rows deleted.
     pub async fn prune(&self, w_prev: u64, w: u64) -> Result<u64> {
         self.savepoint().await?;
-        match prune_contract_state(&self.conn, w_prev, w).await {
+        match (self.host.maintenance.0)(w_prev, w).await {
             Ok(deleted) => {
                 self.commit().await?;
                 Ok(deleted)
             }
             Err(e) => {
                 self.rollback().await?;
-                Err(e.into())
+                Err(host_failure(e))
             }
         }
     }
@@ -564,24 +581,17 @@ impl Storage {
     /// Free pages currently on the SQLite freelist (the prune-vacuum throttle reads
     /// this to decide whether returning pages to the OS is worth it).
     pub async fn freelist_count(&self) -> Result<i64> {
-        let mut rows = self.conn.query("PRAGMA freelist_count;", ()).await?;
-        Ok(match rows.next().await? {
-            Some(row) => row.get(0)?,
-            None => 0,
-        })
+        (self.host.maintenance.1)().await.map_err(host_failure)
     }
 
     /// Return up to `pages` freelist pages to the OS via `PRAGMA incremental_vacuum`.
     pub async fn incremental_vacuum(&self, pages: i64) -> Result<()> {
-        self.conn
-            .query(&format!("PRAGMA incremental_vacuum({pages});"), ())
-            .await?;
-        Ok(())
+        (self.host.maintenance.2)(pages).await.map_err(host_failure)
     }
 
     pub async fn savepoint(&self) -> Result<()> {
         storage_session::savepoint(
-            session_callbacks(&self.conn),
+            self.host.session.clone(),
             &self.savepoint_stack,
             &self.savepoint_counter,
         )
@@ -589,6 +599,22 @@ impl Storage {
     }
 
     pub async fn commit(&self) -> Result<()> {
+        if let Some(owner) = &self.bundle_owner {
+            #[cfg(not(kontor_retained))]
+            anyhow::ensure!(
+                self.ownership.is_none(),
+                "storage has conflicting ownership contexts"
+            );
+            owner
+                .ensure_commit_authorized()
+                .map_err(|error| anyhow!(HostFailure::from(error)))?;
+        }
+        #[cfg(kontor_retained)]
+        anyhow::ensure!(
+            self.bundle_owner.is_some(),
+            "executor commit requires an admitted root"
+        );
+        #[cfg(not(kontor_retained))]
         if let Some(owner) = &self.ownership {
             owner.ensure_commit_authorized()?;
         }
@@ -602,7 +628,7 @@ impl Storage {
         {
             return Err(anyhow!("injected failure before outer commit"));
         }
-        storage_session::commit(session_callbacks(&self.conn), &self.savepoint_stack).await?;
+        storage_session::commit(self.host.session.clone(), &self.savepoint_stack).await?;
         #[cfg(test)]
         if outer
             && self
@@ -619,12 +645,12 @@ impl Storage {
         if self.fail_rollback_once.swap(false, Ordering::SeqCst) {
             return Err(anyhow!("injected rollback transaction failure"));
         }
-        storage_session::rollback_transaction(session_callbacks(&self.conn), &self.savepoint_stack)
+        storage_session::rollback_transaction(self.host.session.clone(), &self.savepoint_stack)
             .await
     }
 
     pub async fn rollback(&self) -> Result<()> {
-        storage_session::rollback(session_callbacks(&self.conn), &self.savepoint_stack).await
+        storage_session::rollback(self.host.session.clone(), &self.savepoint_stack).await
     }
 }
 
@@ -634,12 +660,53 @@ mod tests {
     use crate::database::connection::new_connection;
     use crate::database::queries::{
         create_contract_signer, footprint_cache_get, get_meta_u64, insert_block,
-        live_deposit_gas_sum, max_block_height, set_meta_u64,
+        live_deposit_gas_sum, max_block_height, prune_contract_state, select_block_at_height,
+        set_meta_u64,
     };
     use crate::protocol::v1::storage_error::ReadError;
+    use crate::runtime::ExecutionError;
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use indexer_types::BlockRow;
+    use libsql::Builder as DatabaseBuilder;
     use stdlib::KeyElement;
+
+    #[tokio::test]
+    async fn callback_failures_preserve_causes_and_release_savepoints() -> Result<()> {
+        let database = DatabaseBuilder::new_local(":memory:").build().await?;
+        let conn = database.connect()?;
+        let storage = Storage::builder().conn(conn.clone()).build();
+
+        // An uninitialized database forces real query failures with driver causes.
+        let direct = anyhow::Error::from(select_block_at_height(&conn, 1).await.unwrap_err());
+        let callback = storage.block_entropy(1).await.unwrap_err();
+        assert_eq!(direct.to_string(), callback.to_string());
+        assert_eq!(format!("{direct:#}"), format!("{callback:#}"));
+        assert!(matches!(
+            ExecutionError::from(callback),
+            ExecutionError::NonDeterministic(_)
+        ));
+
+        let direct = anyhow::Error::from(prune_contract_state(&conn, 0, 1).await.unwrap_err());
+        let callback = storage.prune(0, 1).await.unwrap_err();
+        assert_eq!(format!("{direct:#}"), format!("{callback:#}"));
+        assert!(matches!(
+            ExecutionError::from(callback),
+            ExecutionError::NonDeterministic(_)
+        ));
+        assert!(conn.is_autocommit());
+        assert!(storage.savepoint_stack.is_empty().await);
+
+        let error = storage.rollback_with_footprint(0).await.unwrap_err();
+        assert!(matches!(
+            ExecutionError::from(error),
+            ExecutionError::NonDeterministic(_)
+        ));
+        assert!(conn.is_autocommit());
+        assert!(storage.savepoint_stack.is_empty().await);
+        assert!(storage.freelist_count().await? >= 0);
+        storage.incremental_vacuum(0).await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn row_cursor_preserves_versions_and_releases_its_snapshot() -> Result<()> {

@@ -6,6 +6,13 @@ mod costs;
 mod genesis_parity;
 extern crate alloc;
 
+mod data;
+pub use data::{GenesisParameters, GenesisValidator, hash_bytes};
+
+mod bundle_exports;
+mod bundle_initialization;
+mod bundle_ownership;
+pub(crate) mod bundle_session;
 mod component_cache;
 mod component_policy;
 pub mod counter;
@@ -14,6 +21,7 @@ pub mod filestorage;
 pub mod fuel;
 pub mod nft;
 pub mod numerics;
+#[cfg(not(kontor_retained))]
 pub mod pool;
 pub mod pricing;
 #[cfg(test)]
@@ -23,6 +31,7 @@ mod sequential_tests;
 pub(crate) mod stack;
 pub mod staking;
 mod storage;
+mod storage_host;
 pub mod system;
 pub mod token;
 mod types;
@@ -30,6 +39,7 @@ pub mod wit;
 #[cfg(test)]
 pub(crate) mod workload_telemetry;
 
+mod bundle_transactions;
 mod call;
 mod guest_memory;
 mod host_context;
@@ -39,11 +49,16 @@ mod host_storage;
 mod host_system;
 mod invocation;
 mod lowering;
+#[cfg(not(kontor_retained))]
 pub mod ownership;
 mod selected;
 
-use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
+use crate::protocol::execution::ExecutorVersion;
+#[cfg(kontor_retained)]
+use anyhow::Context;
 use bitcoin::XOnlyPublicKey;
+use bundle_ownership::BundleOwner;
+use bundle_ownership::HostFailure;
 pub(crate) use call::CallOutcome;
 pub use component_cache::ComponentCache;
 pub(crate) use component_cache::ComponentSource;
@@ -52,12 +67,14 @@ use guest_memory::{GuestMemoryLimiter, GuestMemoryLimits};
 use invocation::{InvocationBudget, InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS};
 #[cfg(test)]
 use invocation::{ResourceProbePhase, ResourceProbeRole};
+#[cfg(not(kontor_retained))]
 use libsql::Connection;
 use lowering::Linker;
 #[cfg(test)]
 use ownership::AsyncGate;
+#[cfg(not(kontor_retained))]
 use ownership::{ChildContext, OwnerService};
-use sha2::{Digest, Sha256};
+#[cfg(not(kontor_retained))]
 use staking::api::wave::{get_sigma_min_call_expr, get_sigma_min_parse_return_expr};
 pub use stdlib::{
     CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,
@@ -95,13 +112,15 @@ use indexer_types::{BuildProvenance, Payment};
 use wit_validator::Validator as WitValidator;
 
 use crate::bls::RegistrationProof;
-use crate::config::DEFAULT_VIEW_GAS_LIMIT;
-use crate::database::types::{CORE_SIGNER_ID, Identity};
+
 use crate::protocol::v1::engine;
 pub use crate::protocol::v1::errors::ExecutionError;
 pub(crate) use crate::protocol::v1::gas::MAX_UNTRUSTED_GAS_LIMIT;
 use crate::protocol::v1::gas::{DEFAULT_NON_PROC_GAS_LIMIT, GAS_TO_FUEL_MULTIPLIER};
-use crate::protocol::v1::native::{NATIVE_CONTRACTS, is_native_contract_id, native_provenance};
+use crate::protocol::v1::native::is_native_contract_id;
+#[cfg(not(kontor_retained))]
+use crate::protocol::v1::native::{NATIVE_CONTRACTS, native_provenance};
+use crate::protocol::v1::types::{CORE_SIGNER_ID, Identity};
 use crate::runtime::{
     counter::Counter,
     deposit::DepositMeter,
@@ -111,19 +130,6 @@ use crate::runtime::{
     wit::Signer,
 };
 
-#[derive(Clone, Debug)]
-pub struct GenesisParameters {
-    pub sigma_min: Decimal,
-    pub validators: Vec<GenesisValidator>,
-}
-
-#[derive(Clone, Debug)]
-pub struct GenesisValidator {
-    pub x_only_pubkey: String,
-    pub stake: Decimal,
-    pub ed25519_pubkey: Vec<u8>,
-}
-
 impl From<GenesisValidator> for staking::api::ActiveValidatorInfo {
     fn from(v: GenesisValidator) -> Self {
         Self {
@@ -132,13 +138,6 @@ impl From<GenesisValidator> for staking::api::ActiveValidatorInfo {
             ed25519_pubkey: v.ed25519_pubkey,
         }
     }
-}
-
-pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let result = hasher.finalize();
-    result.into()
 }
 
 // RawFileDescriptor's PartialEq/Eq moved to `built-in-types` (the crate that
@@ -213,7 +212,9 @@ pub struct Runtime {
     invocation_budget: Option<Arc<InvocationBudget>>,
     store_table_owners: Option<StoreTableOwners>,
     invocation_depth: u32,
+    #[cfg(not(kontor_retained))]
     ownership: Option<ChildContext>,
+    bundle_owner: Option<BundleOwner>,
     #[cfg(test)]
     pub(crate) workload_telemetry: Option<Arc<WorkloadTelemetry>>,
     #[cfg(test)]
@@ -250,6 +251,7 @@ pub struct Runtime {
     // Host wrappers clone Runtime before their charge; copy payload bytes only
     // in the metered transaction accessor.
     pub(crate) op_return_data: Option<Arc<[u8]>>,
+    #[cfg(test)]
     pub(crate) node_label: String,
     /// The chain's Bitcoin network — a genesis-fixed constant exposed to
     /// contracts via the `network()` built-in. Defaults to `Regtest` (tests /
@@ -312,6 +314,7 @@ impl Runtime {
         Ok(Arc::new(Linkers { user, native }))
     }
 
+    #[cfg(test)]
     pub(crate) async fn new(component_cache: ComponentCache, storage: Storage) -> Result<Self> {
         let engine = Self::new_engine()?;
         let linkers = Self::new_linkers(&engine)?;
@@ -342,7 +345,9 @@ impl Runtime {
             invocation_budget: None,
             store_table_owners: None,
             invocation_depth: 0,
+            #[cfg(not(kontor_retained))]
             ownership: None,
+            bundle_owner: None,
             #[cfg(test)]
             workload_telemetry: None,
             #[cfg(test)]
@@ -361,17 +366,19 @@ impl Runtime {
             gas_limit_for_non_procs: DEFAULT_NON_PROC_GAS_LIMIT,
             // The pool overrides this from node config; trusted internal views
             // select the system budget independently.
-            view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
+            view_gas_limit: MAX_UNTRUSTED_GAS_LIMIT,
             gas_to_fuel_multiplier: GAS_TO_FUEL_MULTIPLIER,
             pricing: Pricing::default(),
             previous_output: None,
             op_return_data: None,
+            #[cfg(test)]
             node_label: String::new(),
             network: bitcoin::Network::Regtest,
             simulating: false,
         })
     }
 
+    #[cfg(not(kontor_retained))]
     pub(crate) async fn new_read_only(
         engine: Engine,
         linkers: Arc<Linkers>,
@@ -417,6 +424,7 @@ impl Runtime {
         self.storage.tx_context.as_mut()
     }
 
+    #[cfg(not(kontor_retained))]
     pub(crate) fn get_storage_conn(&self) -> Connection {
         self.storage.conn.clone()
     }
@@ -449,6 +457,7 @@ impl Runtime {
         (starting_fuel - ending_fuel).div_ceil(self.selected_gas_policy().fuel_multiplier)
     }
 
+    #[cfg(not(kontor_retained))]
     pub(crate) async fn publish_native_contracts(
         &mut self,
         genesis: &GenesisParameters,
@@ -456,6 +465,7 @@ impl Runtime {
         self.publish_native_contracts_inner(genesis, None).await
     }
 
+    #[cfg(not(kontor_retained))]
     pub(crate) async fn publish_native_contracts_owned(
         &mut self,
         genesis: &GenesisParameters,
@@ -465,6 +475,7 @@ impl Runtime {
             .await
     }
 
+    #[cfg(not(kontor_retained))]
     async fn publish_native_contracts_inner(
         &mut self,
         genesis: &GenesisParameters,
@@ -1063,26 +1074,6 @@ impl Runtime {
         self.execute(signer, payment, contract_address, expr).await
     }
 
-    pub(crate) async fn execute_selected_view(
-        &mut self,
-        selection: &ExecutionSelection,
-        contract_address: &ContractAddress,
-        expr: &str,
-    ) -> Result<String, ExecutionError> {
-        selection
-            .verify_view(&self.storage.conn, self.network, self.executor_version)
-            .await
-            .map_err(ExecutionError::NonDeterministic)?;
-        match selection.version() {
-            ExecutorVersion::LegacyP1 => {
-                self.bind_selection(selection)
-                    .map_err(ExecutionError::NonDeterministic)?
-                    .execute(None, None, contract_address, expr)
-                    .await
-            }
-        }
-    }
-
     pub(crate) async fn execute(
         &mut self,
         signer: Option<&Signer>,
@@ -1122,13 +1113,31 @@ impl Runtime {
             resource_diagnostics::record("compiler_exit");
             (bytes, compiled)
         };
-        let (bytes, compiled) = match &self.ownership {
-            Some(owner) => owner.run_blocking(compile).await,
-            None => tokio::task::spawn_blocking(compile)
+        #[cfg(kontor_retained)]
+        let compilation = self
+            .bundle_owner
+            .as_ref()
+            .ok_or_else(|| {
+                ComponentDecodeError::Infrastructure(anyhow!(
+                    "executor compilation requires an admitted root"
+                ))
+            })?
+            .run_blocking(compile)
+            .await
+            .map_err(|error| anyhow!(HostFailure::from(error)));
+        #[cfg(not(kontor_retained))]
+        let compilation = match (&self.ownership, &self.bundle_owner) {
+            (Some(_), Some(_)) => Err(anyhow!("runtime has conflicting ownership contexts")),
+            (None, Some(owner)) => owner
+                .run_blocking(compile)
+                .await
+                .map_err(|error| anyhow!(HostFailure::from(error))),
+            (Some(owner), None) => owner.run_blocking(compile).await,
+            (None, None) => tokio::task::spawn_blocking(compile)
                 .await
                 .map_err(anyhow::Error::from),
-        }
-        .map_err(ComponentDecodeError::Infrastructure)?;
+        };
+        let (bytes, compiled) = compilation.map_err(ComponentDecodeError::Infrastructure)?;
         Ok((
             bytes,
             compiled.map_err(|e| ComponentDecodeError::Content(e.into()))?,
@@ -1304,10 +1313,22 @@ impl Runtime {
             s.record_initialization_failure();
             return Err(error.into());
         }
-        if let Some(interval) = self
-            .ownership
+        #[cfg(kontor_retained)]
+        let yield_interval = self
+            .bundle_owner
             .as_ref()
-            .and_then(ChildContext::fuel_yield_interval)
+            .context("executor invocation requires an admitted root")?
+            .fuel_yield_interval();
+        #[cfg(not(kontor_retained))]
+        let yield_interval = match (&self.ownership, &self.bundle_owner) {
+            (Some(_), Some(_)) => {
+                return Err(anyhow!("runtime has conflicting ownership contexts"));
+            }
+            (Some(owner), None) => owner.fuel_yield_interval(),
+            (None, Some(owner)) => owner.fuel_yield_interval(),
+            (None, None) => None,
+        };
+        if let Some(interval) = yield_interval
             && let Err(error) = s.fuel_async_yield_interval(Some(interval))
         {
             #[cfg(test)]

@@ -1,0 +1,247 @@
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Weak};
+
+use anyhow::Result;
+use libsql::Connection;
+
+use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
+use crate::protocol::operations::{
+    BeginUnitCall, CommitteeCall, ContractWitCall, InitializeCall, InspectCall, LifecycleCall,
+    MaintenanceCall, RecognitionCall, TransactionCall, ViewCall,
+};
+
+use super::{ChildContext, RootKeeper, RootState, TaskCompletion};
+
+pub(crate) use crate::protocol::session::{
+    CheckCommit, HostError, HostFuture, Payload, ReportFailure, RootReset, RootSettle,
+    SessionAction, SharedOwner, SubmitBlocking, SubmitGuest,
+};
+
+#[derive(Clone, Debug, thiserror::Error)]
+#[error("host failure {tag}: {message}")]
+pub(crate) struct HostFailure {
+    pub(crate) tag: u8,
+    pub(crate) message: String,
+}
+
+impl From<HostError> for HostFailure {
+    fn from((tag, message): HostError) -> Self {
+        if tag <= 2 {
+            Self { tag, message }
+        } else {
+            Self {
+                tag: 0,
+                message: format!("unknown host failure tag {tag}: {message}"),
+            }
+        }
+    }
+}
+pub(crate) type SessionFuture = Pin<Box<dyn Future<Output = Result<ExecutorSession>> + Send>>;
+pub(crate) type SessionFactory = Arc<dyn Fn(Connection) -> SessionFuture + Send + Sync>;
+pub(crate) type RootHookFactory = Arc<
+    dyn Fn(ExecutionSelection, OwnerAdapter) -> std::result::Result<RootHooks, HostError>
+        + Send
+        + Sync,
+>;
+pub(crate) type RecycleHook = SessionAction;
+
+#[derive(Clone)]
+pub(crate) struct RootHooks {
+    pub(crate) prepare: SessionAction,
+    pub(crate) inspect_canonical_drain: SessionAction,
+    pub(crate) settle: RootSettle,
+    pub(crate) reset: RootReset,
+}
+
+#[derive(Clone)]
+pub(crate) struct ExecutorOperations {
+    pub(crate) initialize: InitializeCall,
+    pub(crate) inspect: InspectCall,
+    pub(crate) maintenance: MaintenanceCall,
+    pub(crate) recognize: RecognitionCall,
+    pub(crate) transaction: TransactionCall,
+    pub(crate) begin_unit: BeginUnitCall,
+    pub(crate) lifecycle: LifecycleCall,
+    pub(crate) contract_wit: ContractWitCall,
+    pub(crate) view: ViewCall,
+    pub(crate) committee: CommitteeCall,
+}
+
+#[cfg(test)]
+impl Default for ExecutorOperations {
+    fn default() -> Self {
+        Self {
+            initialize: Arc::new(|_, _| Err((2, "mock has no initializer".into()))),
+            inspect: Arc::new(|_, _, _, _| {
+                Box::pin(async { Err((2, "mock has no inspection operation".into())) })
+            }),
+            maintenance: Arc::new(|_, _| {
+                Box::pin(async { Err((2, "mock has no maintenance operation".into())) })
+            }),
+            recognize: Arc::new(|_, _| Err((2, "mock has no recognizer".into()))),
+            transaction: Arc::new(|_, _, _, _, _| {
+                Box::pin(async { Err((2, "mock has no transaction operation".into())) })
+            }),
+            lifecycle: Arc::new(|_, _| {
+                Box::pin(async { Err((2, "mock has no lifecycle operation".into())) })
+            }),
+            contract_wit: Arc::new(|_, _, _| {
+                Box::pin(async { Err((2, "mock has no WIT operation".into())) })
+            }),
+            begin_unit: Arc::new(|_, _| {
+                Box::pin(async { Err((2, "mock has no unit operation".into())) })
+            }),
+            view: Arc::new(|_, _, _, _| {
+                Box::pin(async { Err((2, "mock has no view operation".into())) })
+            }),
+            committee: Arc::new(|_, _| {
+                Box::pin(async { Err((2, "mock has no committee operation".into())) })
+            }),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ExecutorSession {
+    pub(crate) origin: ExecutorVersion,
+    pub(crate) operations: ExecutorOperations,
+    pub(crate) owner: SharedOwner,
+    pub(crate) make_root: RootHookFactory,
+    pub(crate) recycle: RecycleHook,
+}
+
+struct OwnerToken {
+    keeper: Weak<RootKeeper>,
+    context: ChildContext,
+}
+
+#[derive(Clone)]
+pub(crate) struct OwnerAdapter {
+    pub(crate) root: SharedOwner,
+    pub(crate) submit_guest: SubmitGuest,
+    pub(crate) submit_blocking: SubmitBlocking,
+    pub(crate) check_commit: CheckCommit,
+    pub(crate) report_failure: ReportFailure,
+    pub(crate) fuel_yield_interval: Option<u64>,
+}
+
+impl OwnerAdapter {
+    pub(super) fn new(keeper: &Arc<RootKeeper>, context: ChildContext) -> Self {
+        let fuel_yield_interval = context.fuel_yield_interval();
+        let root = token(keeper, context);
+        let expected = Arc::downgrade(keeper);
+        let guest_keeper = expected.clone();
+        let submit_guest: SubmitGuest = Arc::new(move |parent, factory| {
+            let guest_keeper = guest_keeper.clone();
+            Box::pin(async move {
+                let parent = validate(&guest_keeper, parent, false)?;
+                let keeper = guest_keeper
+                    .upgrade()
+                    .ok_or_else(|| infrastructure("operation root expired"))?;
+                parent
+                    .run_linked_guest(move |child| {
+                        let child_token = token(&keeper, child);
+                        Box::pin(async move {
+                            let (panicked, payload) = factory(child_token).await;
+                            TaskCompletion::Linked(panicked, payload)
+                        })
+                    })
+                    .await
+                    .map_err(|error| infrastructure(error.to_string()))
+            })
+        });
+
+        let blocking_keeper = expected.clone();
+        let submit_blocking: SubmitBlocking = Arc::new(move |parent, work| {
+            let blocking_keeper = blocking_keeper.clone();
+            Box::pin(async move {
+                let parent = validate(&blocking_keeper, parent, false)?;
+                parent
+                    .run_blocking(work)
+                    .await
+                    .map_err(|error| infrastructure(error.to_string()))
+            })
+        });
+
+        let commit_keeper = expected.clone();
+        let check_commit: CheckCommit = Arc::new(move |parent| {
+            let parent = validate(&commit_keeper, parent, true)?;
+            parent
+                .ensure_commit_authorized()
+                .map_err(|error| infrastructure(error.to_string()))
+        });
+
+        let report_failure: ReportFailure = Arc::new(move |parent, tag| {
+            let _ = validate(&expected, parent, false)?;
+            let keeper = expected
+                .upgrade()
+                .ok_or_else(|| infrastructure("operation root expired"))?;
+            if !keeper.quarantine_before_commit() {
+                return Err(infrastructure("operation root already committed"));
+            }
+            match tag {
+                0..=2 => Ok(()),
+                _ => Err(infrastructure("unknown host failure tag")),
+            }
+        });
+
+        Self {
+            root,
+            submit_guest,
+            submit_blocking,
+            check_commit,
+            report_failure,
+            fuel_yield_interval,
+        }
+    }
+}
+
+fn token(keeper: &Arc<RootKeeper>, context: ChildContext) -> SharedOwner {
+    Arc::new(OwnerToken {
+        keeper: Arc::downgrade(keeper),
+        context,
+    })
+}
+
+fn validate(
+    expected: &Weak<RootKeeper>,
+    owner: SharedOwner,
+    allow_settling_root: bool,
+) -> std::result::Result<ChildContext, HostError> {
+    let keeper = expected
+        .upgrade()
+        .ok_or_else(|| infrastructure("operation root expired"))?;
+    let token = owner.downcast::<OwnerToken>().map_err(|_| {
+        keeper.quarantine_before_commit();
+        misuse("owner capability has the wrong type")
+    })?;
+    let issued = token.keeper.upgrade();
+    // The supervisor joins the root task before physical settlement. Only its
+    // token may cross that liveness boundary, and only after the commit CAS.
+    let settling_root = allow_settling_root
+        && token.context.task.local == 0
+        && RootState::load(&keeper.state) == RootState::Committing;
+    if !issued
+        .as_ref()
+        .is_some_and(|issued| Arc::ptr_eq(issued, &keeper))
+        || token.context.task.root != keeper.id
+        || (!token.context.alive.load(Ordering::SeqCst) && !settling_root)
+    {
+        keeper.quarantine_before_commit();
+        return Err(misuse("owner capability is foreign or expired"));
+    }
+    if RootState::load(&keeper.state) == RootState::Complete {
+        return Err(infrastructure("operation root already completed"));
+    }
+    Ok(token.context.clone())
+}
+
+fn infrastructure(message: impl Into<String>) -> HostError {
+    (0, message.into())
+}
+
+fn misuse(message: impl Into<String>) -> HostError {
+    (2, message.into())
+}

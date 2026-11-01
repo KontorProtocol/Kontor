@@ -1,6 +1,7 @@
 pub(crate) mod committee;
 pub(crate) mod decision;
 pub(crate) mod genesis;
+pub(crate) mod linked;
 pub(crate) mod selection;
 pub(crate) mod v1;
 
@@ -10,3 +11,5 @@ pub(crate) mod v1;
 pub(crate) const fn minimum_prune_retention_blocks() -> u64 {
     v1::FINALITY_ROLLBACK_DEPTH
 }
+#[cfg(all(test, not(kontor_node)))]
+pub(crate) mod view;

@@ -1,6 +1,4 @@
 use anyhow::{Context, Result};
-use bitcoin::hashes::Hash;
-use indexer_types::Block;
 use tracing::info;
 
 use crate::runtime::{
@@ -20,10 +18,10 @@ use crate::runtime::{
     wit::Signer,
 };
 
-pub async fn run_block_lifecycle(runtime: &mut Runtime, block: &Block) -> Result<()> {
+pub async fn run_block_lifecycle(runtime: &mut Runtime, height: u64, hash: [u8; 32]) -> Result<()> {
     let core_signer = Signer::Core(Box::new(Signer::Nobody));
-    let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
-    runtime.set_context(block.height, None, None, None).await;
+    let block_hash = hash.to_vec();
+    runtime.set_context(height, None, None, None).await;
     let result = runtime
         .execute_system_view(&staking_address(), &has_reward_recipients_call_expr())
         .await?;
@@ -41,22 +39,22 @@ pub async fn run_block_lifecycle(runtime: &mut Runtime, block: &Block) -> Result
         .context("Failed to record block root")?
         .map_err(|e| anyhow::anyhow!("{e:?}"))
         .context("record_block_root returned error")?;
-    expire_challenges(runtime, &core_signer, block.height)
+    expire_challenges(runtime, &core_signer, height)
         .await
         .context("Failed to expire challenges")?;
     settle_expired_challenges(runtime, &core_signer).await??;
-    let challenges = generate_challenges_for_block(runtime, &core_signer, block.height, block_hash)
+    let challenges = generate_challenges_for_block(runtime, &core_signer, height, block_hash)
         .await
         .context("Failed to generate challenges")?;
     if !challenges.is_empty() {
         info!(
             "Generated {} challenges at block height {}",
             challenges.len(),
-            block.height
+            height
         );
     }
 
-    let change = process_pending_validators(runtime, &core_signer, block.height)
+    let change = process_pending_validators(runtime, &core_signer, height)
         .await
         .context("Failed to call process_pending_validators")?
         .map_err(|e| anyhow::anyhow!("{e:?}"))
@@ -64,7 +62,7 @@ pub async fn run_block_lifecycle(runtime: &mut Runtime, block: &Block) -> Result
     if change.activated > 0 || change.deactivated > 0 {
         info!(
             "Validator set change at height {}: {} activated, {} deactivated",
-            block.height, change.activated, change.deactivated
+            height, change.activated, change.deactivated
         );
     }
     Ok(())

@@ -1,0 +1,127 @@
+[package]
+name = "kontor-node"
+version = "0.2.0"
+edition = "2024"
+publish = false
+build = "../../core/indexer/build.rs"
+
+[workspace]
+
+[lib]
+name = "indexer"
+path = "../../core/indexer/src/lib.rs"
+
+[[bin]]
+name = "kontor"
+path = "../../core/indexer/src/main.rs"
+
+[features]
+protocol-qualification = []
+testing = []
+
+[dependencies]
+kontor-build = { "path" = "../../core/kontor-build" }
+stdlib = { "path" = "../../core/stdlib" }
+built-in-types = { "path" = "../../core/built-in-types", "features" = ["serde"] }
+macros = { "path" = "../../core/macros" }
+numerics = { "path" = "../../core/numerics" }
+indexer-types = { "path" = "../../core/indexer-types" }
+wit-validator = { "path" = "../../core/wit-validator" }
+anyhow = { "version" = "=1.0.104", "default-features" = false }
+axum = { "version" = "=0.8.9", "features" = ["http2"] }
+tokio = { "version" = "=1.53.3", "features" = ["full"] }
+tower-http = { "version" = "=0.7.1", "features" = ["fs", "trace", "compression-full", "request-id", "timeout", "catch-panic", "cors"] }
+tower = { "version" = "=0.5.3" }
+wasm-wave = { "version" = "=0.262.0", "default-features" = false }
+wit-component = { "version" = "=0.262.0" }
+wasmparser = { "version" = "=0.262.0", "default-features" = false, "features" = ["std", "component-model"] }
+libsql = { "version" = "=0.10.0", "default-features" = false, "features" = ["core", "serde", "stream"] }
+tracing = { "version" = "=0.1.44" }
+bon = { "version" = "=3.10.2", "default-features" = false, "features" = ["alloc"] }
+tempfile = { "version" = "=3.27.0" }
+serde = { "version" = "=1.0.229", "default-features" = false, "features" = ["alloc", "derive"] }
+serde_json = { "version" = "=1.0.154", "default-features" = false, "features" = ["alloc"] }
+serde_with = { "version" = "=3.24.0", "default-features" = false, "features" = ["alloc", "macros"] }
+ts-rs = { "version" = "=12.0.1", "features" = ["format"] }
+indexmap = { "version" = "=2.14.2", "features" = ["serde"] }
+bitcoin = { "version" = "=0.32.102", "default-features" = false, "features" = ["std", "secp-recovery", "serde", "rand", "rand-std"] }
+backon = { "version" = "=1.6.0", "features" = ["tokio-sleep"] }
+base64 = "=0.23.1"
+deadpool = "=0.13.1"
+reqwest = { "version" = "=0.13.5", "default-features" = false, "features" = ["http2", "json", "rustls"] }
+thiserror = "=2.0.21"
+tokio-util = { "version" = "=0.7.20" }
+tracing-subscriber = { "version" = "=0.3.23", "features" = ["env-filter", "json"] }
+zmq = "=0.10.0"
+scopeguard = "=1.2.0"
+rayon = "=1.12.0"
+priority-queue = "=2.7.0"
+clap = { "version" = "=4.6.7", "features" = ["derive", "env"] }
+axum-server = "=0.8.0"
+futures-util = "=0.3.34"
+hex = "=0.4.3"
+hkdf = "=0.13.0"
+rand = "=0.10.3"
+rand_chacha = "=0.10.0"
+brotli = "=9.1.0"
+postcard = { "version" = "1.1.3", "default-features" = false, "features" = ["alloc"] }
+sha2 = "=0.11.1"
+num = { "version" = "=0.4.3" }
+fastnum = { "version" = "=0.7.5" }
+strum = { "version" = "=0.28.0", "features" = ["derive"] }
+tracing-stackdriver = "=0.10.0"
+regex = "=1.13.1"
+kontor-crypto = "0.3.0"
+ff = "=0.13.1"
+moka = { "version" = "0.12.16", "features" = ["future"] }
+blst = { "version" = "=0.3.17" }
+bls-crypto = { "path" = "../../core/bls-crypto" }
+metrics = "=0.24.6"
+metrics-exporter-prometheus = "=0.18.3"
+malachitebft-app-channel = { "version" = "=0.8.2", "package" = "arc-malachitebft-app-channel" }
+malachitebft-app = { "version" = "=0.8.2", "package" = "arc-malachitebft-app" }
+malachitebft-core-types = { "version" = "=0.8.2", "package" = "arc-malachitebft-core-types", "features" = ["serde"] }
+malachitebft-engine = { "version" = "=0.8.2", "package" = "arc-malachitebft-engine" }
+malachitebft-config = { "version" = "=0.8.2", "package" = "arc-malachitebft-config" }
+malachitebft-signing = { "version" = "=0.8.2", "package" = "arc-malachitebft-signing" }
+malachitebft-signing-ed25519 = { "version" = "=0.8.2", "package" = "arc-malachitebft-signing-ed25519", "features" = ["rand", "serde"] }
+malachitebft-codec = { "version" = "=0.8.2", "package" = "arc-malachitebft-codec" }
+malachitebft-core-consensus = { "version" = "=0.8.2", "package" = "arc-malachitebft-core-consensus" }
+malachitebft-proto = { "version" = "=0.8.2", "package" = "arc-malachitebft-proto" }
+malachitebft-sync = { "version" = "=0.8.2", "package" = "arc-malachitebft-sync" }
+async-trait = { "version" = "=0.1.92" }
+bytes = { "version" = "=1.12.1" }
+prost = { "version" = "=0.13.5" }
+sha3 = { "version" = "=0.12.0" }
+
+[build-dependencies]
+built = { "version" = "=0.8.1", "features" = ["git2"] }
+prost-build = "0.13.5"
+protox = "0.8.0"
+
+[patch."crates-io"]
+psm = { path = "../../core/vendor/psm" }
+wit-bindgen = { path = "../../core/vendor/wit-bindgen" }
+"blst" = { "path" = "../../core/vendor/blst" }
+"ring" = { "path" = "../../core/vendor/ring" }
+"secp256k1-sys" = { "path" = "../../core/vendor/secp256k1-sys" }
+"arc-malachitebft-network" = { "path" = "../../core/vendor/arc-malachitebft-network" }
+"zmq-sys" = { "git" = "https://github.com/erickt/rust-zmq", "rev" = "d96de8f5e964e9096e1575a38cde5472c53bde6e" }
+
+[profile.dev]
+panic = "unwind"
+"package" = { "kontor-crypto" = { "opt-level" = 3 }, "kontor-crypto-core" = { "opt-level" = 3 }, "nova-snark" = { "opt-level" = 3 }, "halo2curves" = { "opt-level" = 3 }, "ff" = { "opt-level" = 3 }, "group" = { "opt-level" = 3 }, "generic-array" = { "opt-level" = 3 } }
+
+[profile."mobile"]
+"inherits" = "release"
+"lto" = "thin"
+"codegen-units" = 1
+"strip" = "symbols"
+
+[profile.release]
+panic = "unwind"
+
+[lints.clippy]
+new_without_default = "allow"
+uninlined_format_args = "allow"
+too_many_arguments = "allow"

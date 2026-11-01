@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 
 use super::ExecutionError;
+use super::bundle_ownership::HostFailure;
 #[cfg(test)]
 use super::resource_diagnostics;
 use futures_util::FutureExt;
@@ -28,7 +29,6 @@ use super::{
     invocation::{
         InvocationCapacityExhausted, InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS,
     },
-    ownership::GuestCompletion,
     stack::CallFrame,
     wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
@@ -38,6 +38,13 @@ mod result;
 
 #[cfg(test)]
 mod tests;
+
+pub(super) struct GuestCompletion {
+    pub result: std::result::Result<std::result::Result<(), wasmtime::Error>, String>,
+    pub results: Vec<Val>,
+    pub store: InvocationStore,
+    pub host_panicked: bool,
+}
 
 /// Derive the payer's `Holder` for a top-level proc context. The payer's
 /// signer_id comes from `Payment.signer_id` — the post-override value
@@ -603,7 +610,7 @@ impl Runtime {
         mut results: Vec<Val>,
         is_fallback: bool,
     ) -> Result<(Result<String, ExecutionError>, InvocationStore)> {
-        let execute = |mut store: InvocationStore| async move {
+        let execute = move |mut store: InvocationStore| async move {
             match std::panic::AssertUnwindSafe(func.call_async(&mut store, &params, &mut results))
                 .catch_unwind()
                 .await
@@ -636,18 +643,47 @@ impl Runtime {
             results,
             mut store,
             host_panicked: _,
-        } = if let Some(parent) = self.ownership.as_ref() {
-            parent
+        } = if let Some(parent) = self.bundle_owner.as_ref() {
+            #[cfg(not(kontor_retained))]
+            anyhow::ensure!(
+                self.ownership.is_none(),
+                "runtime has conflicting ownership contexts"
+            );
+            let (panicked, completion) = parent
                 .run_guest(|child| {
-                    store.data_mut().storage.ownership = Some(child.clone());
-                    store.data_mut().ownership = Some(child);
-                    execute(store)
+                    store.data_mut().storage.bundle_owner = Some(child.clone());
+                    store.data_mut().bundle_owner = Some(child);
+                    async move {
+                        let completion = execute(store).await;
+                        (completion.host_panicked, completion)
+                    }
                 })
-                .await?
-        } else {
-            tokio::spawn(execute(store))
                 .await
-                .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?
+                .map_err(|error| anyhow!(HostFailure::from(error)))?;
+            if panicked != completion.host_panicked {
+                parent
+                    .report_failure(2)
+                    .map_err(|error| anyhow!(HostFailure::from(error)))?;
+                return Err(anyhow!("guest completion panic status mismatch"));
+            }
+            completion
+        } else {
+            #[cfg(kontor_retained)]
+            return Err(anyhow!("executor guest call requires an admitted root"));
+            #[cfg(not(kontor_retained))]
+            if let Some(parent) = self.ownership.as_ref() {
+                parent
+                    .run_guest(|child| {
+                        store.data_mut().storage.ownership = Some(child.clone());
+                        store.data_mut().ownership = Some(child);
+                        execute(store)
+                    })
+                    .await?
+            } else {
+                tokio::spawn(execute(store))
+                    .await
+                    .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?
+            }
         };
 
         let result = Self::decode_result(is_fallback, result, results, &mut store).await;

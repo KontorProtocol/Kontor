@@ -1,5 +1,13 @@
 # Protocol upgrades implementation plan
 
+> Operator scope correction, 29 October 2026: external Explorer and Explorer
+> Indexer redesign is excluded from this goal. Leave the existing local consumer
+> work untouched. It is neither a prerequisite nor a completion gate. Resume core
+> runtime qualification, production executor extraction (K2a/K2b), and the
+> remaining protocol-upgrade phases. The referenced goal file contains the full
+> correction and supersedes conflicting consumer-phase notes. The goal resumed on
+> 29 October 2026.
+
 Revision: PLAN-1, 2026-10-27. Approved for phased implementation.
 
 Approved content was DRAFT-4, SHA256
@@ -19,7 +27,96 @@ Each phase below is one PR. Fork PRs receive the same two reviews and CI gates a
 node PRs. Production changes begin only after both implementer and reviewer
 explicitly approve the same revision. Material revisions require renewed agreement.
 
-## Current evidence
+## Implementation checkpoint, 31 October 2026
+
+S2 merged in [PR 613](https://github.com/KontorProtocol/Kontor/pull/613) as
+`a94587744cd7bce30d6662fb4b32a7c65ce67912`. The lead verified the actual merge
+tree against the reviewed and tested source. Its final six-cell comparison and
+required current-head CI passed. The operator accepted ordinary Pulley performance
+for continuing prelaunch implementation; the preserved slow extreme-workload
+measurements are not throughput passes or production-readiness guarantees.
+
+OWNERSHIP-1 merged in [PR 614](https://github.com/KontorProtocol/Kontor/pull/614)
+as `dfacbefdac22b898c5bad5b2cae5e2513e147afd`. Its actual merge tree
+`c553f315f4fc400f6f3d900f7c93029b6abd3540` matches the reviewed head and CI
+checkout. All current-head checks passed. The lead and both independent reviewers
+accepted the implementation and focused corrections for blocking-task panic
+handling, actual owned-path qualification, and canonical supervisor release order.
+The release regression fails with the former order and passes with the fix.
+
+Owned qualification run `41202697348` passed all six platform/profile cells and
+the aggregate comparison. The lead validated raw evidence, source, lockfile and
+contract hashes, and reproduced the GitHub comparison byte-for-byte (SHA-256
+`4065b5f5f5d2594951790e410e262ac734264ce2b43130c04fbc4af7d82e2dcd`).
+The preserved-input comparison matches all eleven logical-state stages against
+merged S2. Linux and macOS ordinary CI each passed all 129 integration tests.
+These are bounded correctness results, not a throughput qualification.
+
+Qualification scope selection merged in [PR 615](https://github.com/KontorProtocol/Kontor/pull/615).
+The release-plus-dev-smoke policy merged in [PR 617](https://github.com/KontorProtocol/Kontor/pull/617)
+as `e7361411fcf812602a736370577267db81a1ceb0`. Relevant changes require full
+release qualification on three platforms and eight bounded dev smoke tests on
+those platforms. Exhaustive dev/release qualification is available manually.
+The exact candidate's release comparison, smoke evidence and ordinary CI passed.
+The post-merge qualification was cancelled only after verifying that the merge
+and qualified PR test commit have identical tree `44c74d28f1eeec754f5d7003a90609e061e377a6`.
+Batch changes before CI, retain valid evidence, and investigate failures before
+rerunning only the affected jobs. Cost control does not waive acceptance checks.
+
+K2a merged in [PR 616](https://github.com/KontorProtocol/Kontor/pull/616) as
+`a41ffce532005723b4b4784a03300064bfdcb9ca`, with its final six-configuration
+comparison and required CI passing. It provides selected in-tree P1 execution,
+retained policy and native artifact/provenance inputs, and logical storage
+callbacks. It does not establish independent production dependency graphs.
+
+K2b production extraction is implemented locally and remains unmerged. The
+[agreed extraction design](k2b-production-boundary.md) defines its boundary and
+acceptance criteria. Two independently locked production graphs contain the
+actual retained Runtime and Wasmtime `.2`/`.3`, including conflicting features.
+The node links their structural factories without depending on Wasmtime itself.
+Node-owned scheduling and physical SQL sessions drive retained operations and
+cleanup through the typed facade. Recognition, canonical transactions, lifecycle,
+committee derivation, views and simulation now use that facade.
+
+The actual linked ARM64 dev executable passes eighteen bounded scenario groups
+through both graphs: genesis/resume, views, committee, malformed recognition,
+lifecycle rollback/replay, opaque-session rejection, transaction recognition,
+publication, fees/deposits, deterministic failures, simulation inspection and
+transaction rollback/replay, pending callback cancellation, callback failure/panic,
+guest-held cursor cancellation, shared admission/shutdown and export panic
+classification. The preserved pre-extraction comparison also passes
+all eleven recorded logical-state stages, including confirmation without
+reexecution and rollback/reconfirmation. Five compile controls against the actual
+libraries accept the structural factory interface and reject graph-owned engine
+and scheduler types and private runtime access. These results are samples, not a
+proof for every transaction or platform.
+
+The maintained node builder records source, lock, compiler, native ownership,
+link and execution evidence. Docker's production build route now installs its
+audited executable. The local ARM64 release image builds successfully, contains
+that exact executable, and passes non-root CLI smoke checks with qualification
+commands absent. This does not replace platform execution qualification. Platform
+comparison explicitly requires release results from all three supported platforms,
+with exhaustive dev/release comparison available only manually. Comparator-only
+changes run focused evidence controls instead of rebuilding all platforms.
+
+Before K2b can merge, finish the remaining guest panic payload and missing-context
+publication/provenance checks and required platform checks; consolidate the lead
+and two independent phase reviews;
+and pass final-candidate CI. The Daybreak implementer has the bounded panic-parity
+assignment. The integrated ownership checks establish one local dev cell, not
+release-platform qualification. No delegated result is accepted solely from its status
+message. No K2b PR or broad CI campaign has been started at this checkpoint.
+The remaining activation, authorization, consensus handoff, migration, historical
+verification and recovery phases below are still required for goal completion.
+
+The operator replaced the unavailable external reviewer with a second independent
+Codex reviewer using a complementary brief. Preserve valid reviews and consolidate
+focused follow-up on material corrections. Publication of the Site and SDK remains
+deferred until the end of the goal and review of the complete work. Current evidence
+and exact revision records are tracked in [the execution ledger](execution-ledger.md).
+
+## Planning baseline evidence, 27 October 2026
 
 - `core/Cargo.toml` pins Wasmtime fork `bfdee9ba` and Malachite 0.8.2; the network
   override is vendored. The research Site's older Malachite baseline is stale.
@@ -299,6 +396,13 @@ Cargo resolution of historical semantics. Include vendored-path panic-location s
 parity checks: vendoring changes embedded Rust source paths, and host-side error
 rendering must not silently change consensus behavior. Keep one node database owner
 and explicit runtime ownership.
+The export-level panic guard must map a direct executor unwind to an
+infrastructure or halt outcome, never a deterministic receipt. Keep that export
+failure distinct from the existing guest-call decoder's `host panic: {payload}`
+text. Qualify both catch scopes, including missing-context publication/provenance
+panics and their prior writes. This clarification is agreed in Interlink receipt
+`5e92b3b31ecde8846f2b543ad8f94c61`; it does not authorize changing P1 panic
+payloads or manufacturing a successful/rejected transaction after an unwind.
 When the node graph joins the link, do not add its dependency definitions to the
 common-runtime inventory. Add a negative control proving a bundle's unnamespaced
 blst, secp256k1 or ring reference cannot resolve to the node's native copy. The
@@ -314,6 +418,89 @@ Merkle subsystem or certified-root claim. Test duplicate/tombstone ordering, nes
 rollback, I/O failure, crash atomicity, changed exclusions with same H hash, marker
 rollback/reapplication, and byte-for-byte SQL/checkpoint equality. Independent full
 state/receipt comparisons validate equivalent replay beyond checkpoint coverage.
+
+The following concrete K3 decisions were agreed by the lead and the system
+planning reviewer on 1 November 2026 (plan revision 2, SHA-256
+`ed4b9805db24d250621b098ff33b516995b5612d8f058130d57e53e1ee6e85c2`).
+They describe planned work, not implemented capabilities. Implementation starts
+from the verified K2b merge; authorization and live activation remain K6/K7.
+
+Use distinct chain, execution-definition, migration-definition, protocol and
+plan identifiers. Canonical encodings use explicit field order, fixed-width
+integers, checked lengths and domain-separated SHA-256. Definition identity
+commits target-independent semantic sources, locks, features and build policy;
+platform artifacts remain separate mappings. Existing applications receive an
+explicit baseline-execution identity variant. K4 adds the accepted KPM1 manifest
+identity without reinterpreting that variant or the existing numeric P1 tag.
+
+Canonical application lineage records reversible application order, source and
+storage positions, branch, execution identity, complete ordered witness-inclusive
+raw inputs, prior lineage and decision-scoped exclusions. Compute input identity
+before recognition or filtering, including ordinary Bitcoin transactions. A
+valid-anchor empty or all-excluded batch still records its canonical application.
+Stale-anchor or unparseable record-only decisions belong to K4's separate durable
+history. The application cursor is not a maximum consensus height, authenticated
+prefix closure, local receipt epoch or rollback generation.
+
+Migration routines are trusted compiled code registered in each retained graph,
+with a restricted context and no SQL, commit or scheduling authority. Charge
+checked logical computation steps, read/write operations and read/write bytes
+before work or allocation. Count visited scan rows and attempted duplicate or
+tombstone writes, and never refund work on nested rollback. Bound value chunks,
+use indexed ordered traversal, and audit variable-length computation. This is
+logical work accounting, not an instruction sandbox, block budget or gas-number
+change. Exhaustion aborts the entire migration without partial continuation.
+
+Immutable migration input is committed state at migration-unit entry. A rowid or
+height cutoff is insufficient: same-height `INSERT OR REPLACE` destroys earlier
+values. Pre-open one dedicated node-owned connection after database initialization
+and outside writer transactions, with `query_only=ON`. Do not borrow an API pool
+connection or reserve a second ownership root. Admit migration only at the existing
+writer autocommit boundary and attach the reader to that root before cancellable
+preparation. Use migration-only `BEGIN IMMEDIATE` through the existing transaction
+callback, preserving savepoint accounting. Reserve the writer, begin the reader,
+step a real main-database lineage/cursor/anchor query, validate the snapshot against
+writer prestate, then mutate. `BEGIN` or `SELECT 1` alone does not pin the snapshot.
+Ordinary execution keeps its existing transaction mode.
+
+Input metadata and bounded value chunks come from that same pinned reader.
+Multiple routines in one atomic migration share the original input; explicitly
+named current-state reads provide read-your-writes. Never silently commit preceding
+block or batch effects to manufacture a snapshot. Track input callbacks and cursors
+as root-owned resources, without caching a live snapshot in a reusable executor.
+After tasks and callbacks drain, destroy statements, end the read transaction,
+verify autocommit and revoke the input capability before writer settlement/reuse.
+Failure to establish quiescence or cleanup quarantines the owner. Caller-side drop
+alone does not establish cleanup.
+
+Effects, application entry, migration marker and cursor commit in one owned unit.
+The migration key binds chain, plan, H/hash, pre-lineage, optional legacy checkpoint
+and migration definition. An exact surviving committed retry returns its recorded
+result without repeating effects. Rollback restores a contiguous application
+prefix and its markers with state and footprint repair. Keep every surviving
+anchor-H entry in order when rolling back to H; never delete arbitrary middle
+entries by height. Genesis records durable identity and stage progress so crash
+resume does not duplicate applications or substitute configuration midway.
+
+Preserve populated legacy databases whose original witness-inclusive history is
+unavailable. Ordinary legacy execution continues with explicit lineage-unavailable
+status; migration and upgrade readiness fail closed. K4/K9 must provide authentic
+history replay into a separate database, full state/receipt comparison and controlled
+installation. Do not fabricate lineage from checkpoints or silently delete old data.
+
+Acceptance includes both real retained graphs, full typed state/receipt comparison,
+same-txid/different-witness inputs, reordered and empty batches, scoped exclusions,
+same H with different pre-lineage, genesis restart, and preserved legacy data.
+Exercise zero/exact/overflow budgets, oversized reads, duplicate/tombstone writes,
+nonrefunded nested rollback, failure around effects/marker/cursor/commit, reopened
+database atomicity, cancellation and idempotent retry. For snapshots, replace or
+delete/reinsert visited and unvisited same-height keys, insert before and after the
+scan position, and open the first scan after mutation. Input stays original while
+current-state reads reflect writes. Cover cancellation during pinning, callbacks,
+held cursors and cleanup, rejected uncommitted entry, cleanup quarantine, root
+capacity one and saturated API pools. A defined no-op production migration plus
+bounded qualification routines proves the substrate; K7 must still demonstrate a
+real deliberately different P2 migration and activation.
 
 ### K4. Certified history and baseline consensus envelope
 

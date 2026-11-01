@@ -1,18 +1,21 @@
 #[cfg(test)]
 use crate::database::queries::select_block_at_height;
+pub(crate) use crate::protocol::execution::ExecutorVersion;
+use crate::protocol::execution::SelectionEnvelope;
 use anyhow::{Context, Result, bail, ensure};
-use bitcoin::{BlockHash, Network};
+use bitcoin::{BlockHash, Network, hashes::Hash};
 use libsql::Connection;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ExecutorVersion {
-    LegacyP1,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApplicationPosition {
     View,
     Committee,
+    Initialization {
+        step: u64,
+    },
+    Maintenance {
+        rollback_height: Option<u64>,
+    },
     Preparation {
         anchor_height: u64,
         anchor_hash: Option<BlockHash>,
@@ -57,12 +60,85 @@ pub(crate) struct ExecutionSelection {
 }
 
 impl ExecutionSelection {
+    pub(crate) fn envelope(&self) -> SelectionEnvelope {
+        let position = match self.position {
+            ApplicationPosition::View => (0, 0, None, 0),
+            ApplicationPosition::Committee => (1, 0, None, 0),
+            ApplicationPosition::Initialization { step } => (7, 0, None, step),
+            ApplicationPosition::Maintenance { rollback_height } => (
+                6,
+                rollback_height.unwrap_or(0),
+                None,
+                u64::from(rollback_height.is_some()),
+            ),
+            ApplicationPosition::Preparation {
+                anchor_height,
+                anchor_hash,
+            } => (
+                2,
+                anchor_height,
+                anchor_hash.map(|hash| hash.to_byte_array()),
+                0,
+            ),
+            ApplicationPosition::Block {
+                height,
+                hash,
+                consensus_height,
+            } => (3, height, Some(hash.to_byte_array()), consensus_height),
+            ApplicationPosition::Batch {
+                anchor_height,
+                anchor_hash,
+                consensus_height,
+            } => (
+                4,
+                anchor_height,
+                Some(anchor_hash.to_byte_array()),
+                consensus_height,
+            ),
+            ApplicationPosition::Simulation { height } => (5, height, None, 0),
+        };
+        (
+            self.version.tag(),
+            self.network.magic().to_bytes(),
+            (
+                self.base.receipt_epoch.clone(),
+                self.base.rollback_generation,
+                self.base.block_height,
+                self.base.block_hash.clone(),
+                self.base.latest_transaction,
+                self.base.checkpoint_height,
+                self.base.checkpoint_hash.clone(),
+            ),
+            position,
+        )
+    }
+
     pub(crate) fn version(&self) -> ExecutorVersion {
         self.version
     }
 
     pub(crate) fn is_public_view(&self) -> bool {
         matches!(self.position, ApplicationPosition::View)
+    }
+
+    pub(crate) fn ensure_canonical_root(&self, simulation: bool) -> Result<()> {
+        let valid = matches!(
+            (&self.position, simulation),
+            (ApplicationPosition::Simulation { .. }, true)
+                | (
+                    ApplicationPosition::Block { .. }
+                        | ApplicationPosition::Batch { .. }
+                        | ApplicationPosition::Committee
+                        | ApplicationPosition::Maintenance { .. }
+                        | ApplicationPosition::Initialization { .. },
+                    false,
+                )
+        );
+        ensure!(
+            valid,
+            "executor selection purpose does not match canonical root"
+        );
+        Ok(())
     }
 
     pub(crate) fn ensure_runtime(&self, network: Network, version: ExecutorVersion) -> Result<()> {
@@ -151,6 +227,10 @@ impl ExecutionSelection {
             }
             ApplicationPosition::View => {
                 bail!("view selection cannot execute canonical transactions")
+            }
+            ApplicationPosition::Maintenance { .. }
+            | ApplicationPosition::Initialization { .. } => {
+                bail!("maintenance selection cannot execute canonical transactions")
             }
             ApplicationPosition::Committee => {
                 bail!("committee selection cannot execute canonical transactions")
@@ -354,6 +434,26 @@ mod tests {
         let view = select_legacy_p1(&conn, Network::Regtest, ApplicationPosition::View).await?;
         let committee =
             select_legacy_p1(&conn, Network::Regtest, ApplicationPosition::Committee).await?;
+        for rollback_height in [None, Some(0), Some(1)] {
+            let maintenance = select_legacy_p1(
+                &conn,
+                Network::Regtest,
+                ApplicationPosition::Maintenance { rollback_height },
+            )
+            .await?;
+            maintenance.ensure_canonical_root(false)?;
+            ensure!(maintenance.ensure_canonical_root(true).is_err());
+            ensure!(maintenance.ensure_execution(Network::Regtest, 1).is_err());
+            ensure!(
+                maintenance.envelope().3
+                    == (
+                        6,
+                        rollback_height.unwrap_or(0),
+                        None,
+                        u64::from(rollback_height.is_some())
+                    )
+            );
+        }
         ensure!(committee.ensure_execution(Network::Regtest, 1).is_err());
         ensure!(
             committee

@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 use wasmtime::component::{Access, Resource};
 use wasmtime::{AsContext, Trap};
 
-use crate::database::native_contracts::is_deposit_exempt;
-use crate::database::types::CORE_SIGNER_ID;
+use crate::protocol::v1::native::is_deposit_exempt;
 use crate::protocol::v1::storage_error::ReadError;
 use crate::protocol::v1::storage_state::LiveRow;
+use crate::protocol::v1::types::CORE_SIGNER_ID;
 
 use super::{
     ExecutionError, Runtime,

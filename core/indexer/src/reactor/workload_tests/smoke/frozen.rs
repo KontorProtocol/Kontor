@@ -428,12 +428,17 @@ async fn workload_frozen_replay() -> Result<()> {
         .await?;
         ensure!(
             reporter
-                .capture(&mut trial.runtime, anchor_height, anchor_hash, &[])
+                .capture(
+                    &mut *trial.test_runtime().await,
+                    anchor_height,
+                    anchor_hash,
+                    &[]
+                )
                 .await?
                 == frozen.documents["before"],
             "restored report differs from frozen report"
         );
-        let balances = Balances::capture(&mut trial.runtime, &reporter.payer).await?;
+        let balances = Balances::capture(&mut *trial.test_runtime().await, &reporter.payer).await?;
         ensure!(
             database_projection(&conn).await? == before,
             "restore validation mutated state"
@@ -457,13 +462,13 @@ async fn workload_frozen_replay() -> Result<()> {
             certificate: hex::decode(text(&decision["certificate_hex"])?)?,
             certified_txs: None,
         };
-        trial.runtime.component_cache.clear();
+        trial.test_runtime().await.component_cache.clear();
         trial.handle_block(block.clone(), &decision).await?;
         let rows = receipts(&conn, block.height).await?;
         numeric.compare(&conn, &rows).await?;
         let projection = database_projection(&conn).await?;
         accounting::check(
-            &mut trial.runtime,
+            &mut *trial.test_runtime().await,
             &balances,
             &reporter.payer,
             &block.transactions[0].txid.to_string(),
@@ -471,7 +476,12 @@ async fn workload_frozen_replay() -> Result<()> {
         )
         .await?;
         let report = reporter
-            .capture(&mut trial.runtime, block.height, block.hash, &raw_positions)
+            .capture(
+                &mut *trial.test_runtime().await,
+                block.height,
+                block.hash,
+                &raw_positions,
+            )
             .await?;
         ensure!(
             report == frozen.documents["after"],

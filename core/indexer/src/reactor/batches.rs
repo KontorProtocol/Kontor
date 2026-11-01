@@ -24,6 +24,7 @@ use crate::database::queries::{
     select_existing_txids,
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
+use crate::protocol::coordinator::linked::PreparedTransaction;
 pub(super) use crate::protocol::coordinator::v1::batch_is_ordered;
 use crate::protocol::coordinator::v1::{build_replay_queue, dependency_sort};
 
@@ -83,7 +84,7 @@ pub(super) enum IoApply {
         anchor_height: u64,
         anchor_hash: BlockHash,
         /// Parses aligned with the future's pairs — same source order.
-        parsed: Vec<indexer_types::Transaction>,
+        parsed: Vec<PreparedTransaction>,
         reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>,
     },
 }
@@ -371,11 +372,14 @@ impl<E: Executor> Reactor<E> {
                 consensus_height: consensus_height.as_u64(),
             })
             .await?;
-        let parsed_txs: Vec<indexer_types::Transaction> = {
+        let parsed_txs: Vec<PreparedTransaction> = {
             let mut parsed = Vec::with_capacity(batch_txs.len());
             let mut bad: Option<Txid> = None;
             for btx in batch_txs {
-                match self.executor.parse_transaction(&selection, btx) {
+                match self
+                    .executor
+                    .prepare_transaction(&self.recognizer, &selection, btx)?
+                {
                     Some(p) => parsed.push(p),
                     None => {
                         bad = Some(btx.compute_txid());
@@ -405,61 +409,56 @@ impl<E: Executor> Reactor<E> {
             parsed
         };
 
-        let mut lease = self
-            .owner_service
-            .begin_canonical(&mut self.runtime, false)
-            .await?;
-        self.runtime
-            .storage
-            .savepoint()
-            .await
-            .context("Failed to begin batch transaction")?;
-        selection.verify_base(&conn).await?;
-
-        insert_batch(
-            &conn,
-            consensus_height.as_u64(),
-            anchor_height,
-            &anchor_hash.to_string(),
-            certificate,
-            false,
-        )
-        .await
-        .context("Failed to insert batch")?;
-
-        // Store the certified txid list + raw txs for replay/sync recovery
-        self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
-            .await?;
-
-        for t in &parsed_txs {
-            let tx_id = insert_transaction(
+        let lease = self.begin_unit(&selection, false).await?;
+        let result = async {
+            insert_batch(
                 &conn,
-                indexer_types::TransactionRow::builder()
-                    .height(anchor_height)
-                    .batch_height(consensus_height.as_u64())
-                    .txid(t.txid.to_string())
-                    .build(),
+                consensus_height.as_u64(),
+                anchor_height,
+                &anchor_hash.to_string(),
+                certificate,
+                false,
             )
             .await
-            .context("Failed to insert transaction")?;
+            .context("Failed to insert batch")?;
 
-            // Canonical batch processing discards the per-op failure vec —
-            // deterministic op failures are already telemetered via warn! in
-            // execute_op. Only non-deterministic errors (Result::Err) abort.
-            let _failures = self
-                .executor
-                .execute_transaction(&selection, &mut self.runtime, anchor_height, tx_id, t)
+            // Store the certified txid list + raw txs for replay/sync recovery
+            self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
+                .await?;
+
+            for t in &parsed_txs {
+                let tx_id = insert_transaction(
+                    &conn,
+                    indexer_types::TransactionRow::builder()
+                        .height(anchor_height)
+                        .batch_height(consensus_height.as_u64())
+                        .txid(t.txid.to_string())
+                        .build(),
+                )
                 .await
-                .context("execute_transaction failed")?;
-        }
+                .context("Failed to insert transaction")?;
 
-        lease.drain(&self.runtime).await?;
-        self.runtime
-            .storage
-            .commit()
-            .await
-            .context("Failed to commit batch transaction")?;
-        lease.complete(&mut self.runtime).await?;
+                // Canonical batch processing discards the per-op failure vec —
+                // deterministic op failures are already telemetered via warn! in
+                // execute_op. Only non-deterministic errors (Result::Err) abort.
+                let _failures = self
+                    .executor
+                    .execute_prepared(
+                        &selection,
+                        &self.session,
+                        self.network,
+                        anchor_height,
+                        tx_id,
+                        t,
+                    )
+                    .await
+                    .context("execute_transaction failed")?;
+            }
+
+            Ok(())
+        }
+        .await;
+        self.finish_unit(lease, result, true).await?;
         // The in-memory finality obligation must match a persisted batch.
         let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
         self.consensus.unfinalized_batches.push(UnfinalizedBatch {
@@ -476,7 +475,7 @@ impl<E: Executor> Reactor<E> {
         let executed_ops: u64 = parsed_txs
             .iter()
             .flat_map(|t| t.inputs.iter())
-            .map(|input| input.insts.ops.len() as u64)
+            .map(|(_, operations)| *operations)
             .sum();
         if executed_ops > 0 {
             counter!(ITEMS_INDEXED).increment(executed_ops);
@@ -555,7 +554,7 @@ impl<E: Executor> Reactor<E> {
             if !unbatched_set.contains(txid) {
                 continue;
             }
-            if self.executor.is_batchable(&selection, parsed) {
+            if parsed.eligible_for(&selection) {
                 txs.push(raw_tx.clone());
             } else {
                 invalid_txids.push(*txid);
@@ -696,14 +695,17 @@ impl<E: Executor> Reactor<E> {
                     // not commit to, so a same-txid variant sitting in this node's
                     // mempool would otherwise be judged (and later voted on) in
                     // place of the witness the proposer actually streamed.
-                    let parsed = if let Some(p) = self.executor.parse_transaction(&selection, tx) {
+                    let parsed = if let Some(p) =
+                        self.executor
+                            .prepare_transaction(&self.recognizer, &selection, tx)?
+                    {
                         p
                     } else {
                         warn!(%txid, "Rejecting proposal: transaction failed to parse");
                         let _ = reply.send(None);
                         return Ok(());
                     };
-                    if !self.executor.is_batchable(&selection, &parsed) {
+                    if !parsed.eligible_for(&selection) {
                         warn!(%txid, "Rejecting proposal: transaction not batchable");
                         let _ = reply.send(None);
                         return Ok(());

@@ -1,81 +1,34 @@
 # syntax=docker/dockerfile:1
 
-# Pinned Rust + cargo-chef base image. Used for every Rust stage so
-# cargo-chef is preinstalled and all builder stages share one image.
-# Bumping is deliberate: chef version must match recipe.json format,
-# rust version matches the reproducible build toolchain.
 ARG CHEF_IMAGE=docker.io/lukemathwalker/cargo-chef:0.1.78-rust-1.99.1-slim-trixie
 
-# ---------------------------------------------------------------------
-# Planner — generates recipe.json from Cargo.toml / Cargo.lock.
-# Cheapest stage; its output drives the cacher.
-# ---------------------------------------------------------------------
-FROM ${CHEF_IMAGE} AS planner
-WORKDIR /build
-COPY core core
-WORKDIR /build/core
-RUN cargo chef prepare --recipe-path recipe.json
-
-# ---------------------------------------------------------------------
-# Builder base — apt deps shared across every Rust build stage below.
-# No wasm32 target or Binaryen: test-contracts compilation was moved
-# to testlib's build.rs, and testlib is a dev-dependency that never
-# gets pulled in by a `cargo build --release -p indexer` production
-# build.
-# ---------------------------------------------------------------------
 FROM ${CHEF_IMAGE} AS builder-base
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config \
-    cmake \
-    make \
-    g++ \
-    libzmq3-dev \
-    libboost-system-dev \
-    libboost-thread-dev \
-    libboost-chrono-dev \
-    ca-certificates \
+    pkg-config cmake make g++ libzmq3-dev \
+    libboost-system-dev libboost-thread-dev libboost-chrono-dev \
+    ca-certificates python3 binutils git \
     && rm -rf /var/lib/apt/lists/*
-
-FROM builder-base AS protocol-bundle-qualification
 RUN rustup component add --toolchain 1.99.1 llvm-tools-preview
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 binutils git \
-    && rm -rf /var/lib/apt/lists/*
-WORKDIR /build
-COPY . .
 ENV RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER="" CCACHE_DISABLE=1 CARGO_BUILD_JOBS=2
-CMD ["python3", "tools/protocol-bundles/build.py", "--output", "/evidence", "--profile", "release"]
-
-# ---------------------------------------------------------------------
-# Cacher: builds the full dependency tree once from recipe.json. When
-# the recipe and vendored sources are unchanged, this layer is a cache
-# hit and the stage is skipped entirely in subsequent builds. This is the
-# mechanism doing the real caching work — sccache would add overhead
-# here without contributing; BuildKit cache mounts don't persist
-# across CI runs, so per-rustc-call caching has nothing to hit.
-# ---------------------------------------------------------------------
-FROM builder-base AS cacher
-WORKDIR /build/core
-COPY --from=planner /build/core/recipe.json recipe.json
-# Cargo Chef omits path patches outside the workspace from its recipe.
-COPY core/vendor vendor
-RUN cargo chef cook --release --recipe-path recipe.json
-
-# ---------------------------------------------------------------------
-# Builder — copies real source, builds the indexer binary. Inherits
-# pre-compiled deps from the cacher stage.
-# ---------------------------------------------------------------------
-FROM builder-base AS builder
 WORKDIR /build
 
-COPY --from=cacher /build/core/target /build/core/target
-COPY --from=cacher /usr/local/cargo /usr/local/cargo
+# Cache fetched sources, not unified-workspace compilation. Each retained graph
+# must compile with its own metadata, features and native symbol namespace.
+FROM builder-base AS cacher
+COPY core core
+COPY protocol-bundles protocol-bundles
+RUN cargo fetch --locked --manifest-path protocol-bundles/executor-first/Cargo.toml && \
+    cargo fetch --locked --manifest-path protocol-bundles/executor-second/Cargo.toml && \
+    cargo fetch --locked --manifest-path protocol-bundles/node/Cargo.toml
 
+FROM cacher AS protocol-bundle-qualification
 COPY . .
+CMD ["python3", "tools/protocol-bundles/qualify_node.py", "--output", "/evidence", "--profile", "release", "--offline"]
 
-WORKDIR /build/core
-RUN cargo build --release --package indexer
+FROM cacher AS builder
+COPY . .
+RUN python3 tools/protocol-bundles/build.py --build-node --offline \
+    --profile release --output /build/protocol-output --install-node /build/bin/kontor
 
 # ---------------------------------------------------------------------
 # Runtime — minimal Debian slim with only the runtime .so deps and
@@ -98,7 +51,7 @@ RUN groupadd --system --gid 1000 kontor && \
     useradd --system --uid 1000 --gid kontor --create-home --home-dir /home/kontor kontor && \
     mkdir -p /data && chown -R kontor:kontor /data
 
-COPY --from=builder /build/core/target/release/kontor /usr/local/bin/kontor
+COPY --from=builder /build/bin/kontor /usr/local/bin/kontor
 
 USER kontor
 WORKDIR /home/kontor

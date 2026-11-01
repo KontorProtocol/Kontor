@@ -1,129 +1,14 @@
-use indexer_types::{Input, OpWithResult};
+use indexer_types::{OpWithResult, Transaction};
 use libsql::Connection;
 
-use crate::database::{queries::get_op_result, types::OpResultId};
+use crate::database::storage_inspection_v1::inspection_callbacks;
+use crate::protocol::v1::inspection;
 pub use crate::protocol::v1::transactions::{
     OpMetadataBase, TransactionFilterMap, TxWalker, filter_map, materialize_op,
 };
 
-pub async fn inspect(
-    conn: &Connection,
-    tx: &indexer_types::Transaction,
-) -> anyhow::Result<Vec<OpWithResult>> {
-    let mut ops = Vec::new();
-    let mut walker = TxWalker::new();
-    for input in &tx.inputs {
-        // Per-op signer_ids: aggregates resolve each `SignerRef` (Id is
-        // already-resolved; PubKey is looked up against the registry — by
-        // the time inspect runs, any PubKey claim on a successfully
-        // executed aggregate must have a corresponding signers row).
-        // Direct inputs broadcast the witness signer to every op.
-        let signer_ids = resolve_input_signer_ids_via_db(conn, input).await?;
-        // For aggregate inputs, the publisher's signer_id is the payer
-        // for any op whose `AggregateSigner.sponsored = true`. `None` for
-        // direct inputs.
-        let publisher_signer_id = resolve_publisher_signer_id_via_db(conn, input).await?;
-
-        for (op_index, inst) in input.insts.ops.iter().enumerate() {
-            let signer_id = signer_ids.get(op_index).copied().unwrap_or(0);
-            let op = match walker.materialize(input, op_index, signer_id, publisher_signer_id, inst)
-            {
-                Ok(op) => op,
-                Err(e) => {
-                    tracing::warn!("inspect: op {op_index} rejected at materialize: {e:#}");
-                    ops.push(OpWithResult::Rejected {
-                        input_index: input.input_index,
-                        op_index: op_index as u32,
-                        error_message: None,
-                    });
-                    continue;
-                }
-            };
-            let id = OpResultId::builder()
-                .txid(tx.txid.to_string())
-                .input_index(input.input_index)
-                .op_index(op_index as u32)
-                .build();
-            let result = get_op_result(conn, &id)
-                .await?
-                .map(indexer_types::ResultRow::from);
-            // `result: None` is preserved (pre-refactor semantics) for ops the
-            // executor skipped post-validation via `should_skip_result` or that
-            // hit a non-deterministic failure — callers learn "this op was in
-            // the tx but didn't produce a result row."
-            //
-            // `error_message: None` because inspect reads from chain state and
-            // error strings aren't persisted. The simulate handler overwrites
-            // this with live error detail captured during execution.
-            ops.push(OpWithResult::Materialized {
-                op,
-                result,
-                error_message: None,
-            });
-        }
-        walker.next_input();
-    }
-    Ok(ops)
-}
-
-/// DB-backed signer resolution for `block::inspect`. Aggregate inputs:
-/// per-AggregateSigner; `SignerId(id)` is already resolved, `XOnlyPubkey`
-/// is looked up. Direct inputs: the witness signer broadcast across every
-/// op. Missing entries become `0` (preserves pre-refactor inspect
-/// semantics — inspect is best-effort over historical state).
-async fn resolve_input_signer_ids_via_db(
-    conn: &Connection,
-    input: &Input,
-) -> anyhow::Result<Vec<u64>> {
-    match &input.insts.aggregate {
-        Some(agg) => {
-            let mut ids = Vec::with_capacity(agg.signers.len());
-            for s in &agg.signers {
-                let id = match &s.identity {
-                    indexer_types::SignerRef::SignerId(id) => *id,
-                    indexer_types::SignerRef::XOnlyPubkey(pk) => {
-                        crate::database::queries::get_signer_entry_by_x_only_pubkey(
-                            conn,
-                            &pk.to_string(),
-                        )
-                        .await?
-                        .map(|e| e.signer_id)
-                        .unwrap_or(0)
-                    }
-                };
-                ids.push(id);
-            }
-            Ok(ids)
-        }
-        None => {
-            let id = crate::database::queries::get_signer_entry_by_x_only_pubkey(
-                conn,
-                &input.x_only_pubkey.to_string(),
-            )
-            .await?
-            .map(|e| e.signer_id)
-            .unwrap_or(0);
-            Ok(vec![id; input.insts.ops.len()])
-        }
-    }
-}
-
-/// DB-backed publisher signer_id resolution for `block::inspect`. Returns
-/// `Some` for aggregate inputs (the input's x_only_pubkey, looked up in
-/// the signers table), `None` for direct inputs.
-async fn resolve_publisher_signer_id_via_db(
-    conn: &Connection,
-    input: &Input,
-) -> anyhow::Result<Option<u64>> {
-    if input.insts.aggregate.is_none() {
-        return Ok(None);
-    }
-    Ok(crate::database::queries::get_signer_entry_by_x_only_pubkey(
-        conn,
-        &input.x_only_pubkey.to_string(),
-    )
-    .await?
-    .map(|e| e.signer_id))
+pub async fn inspect(conn: &Connection, tx: &Transaction) -> anyhow::Result<Vec<OpWithResult>> {
+    inspection::inspect(&inspection_callbacks(conn), tx).await
 }
 
 #[cfg(test)]

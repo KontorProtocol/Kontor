@@ -17,6 +17,7 @@ use crate::{
     bitcoin_client::{
         self, Client as BitcoinClient, client::RegtestRpc, types::TestMempoolAcceptResult,
     },
+    bitcoin_helpers as test_utils,
     bls::{
         RegistrationProof, bls_derivation_path, derive_bls_secret_key_eip2333,
         taproot_derivation_path,
@@ -27,7 +28,6 @@ use crate::{
     keygen,
     retry::retry_extended,
     runtime::ContractAddress,
-    test_utils,
 };
 use anyhow::{Result, anyhow, bail};
 use bitcoin::{

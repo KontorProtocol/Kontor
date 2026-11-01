@@ -2,10 +2,12 @@ use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::slice;
 
+use crate::protocol::coordinator::linked::PreparedTransaction;
 use crate::protocol::coordinator::selection::ExecutionSelection;
 use anyhow::Result;
 use bitcoin::{Transaction as BitcoinTransaction, Txid};
 use futures_util::future::BoxFuture;
+#[cfg(test)]
 use indexer_types::Transaction;
 
 use super::executor::RecognizedTransaction;
@@ -19,7 +21,7 @@ pub(super) struct MempoolPreparation {
 pub struct Mempool {
     raw: HashMap<Txid, BitcoinTransaction>,
     suppressed: HashSet<Txid>,
-    pub candidates: HashMap<Txid, (BitcoinTransaction, Transaction)>,
+    pub(crate) candidates: HashMap<Txid, (BitcoinTransaction, PreparedTransaction)>,
 }
 
 impl Mempool {
@@ -92,7 +94,7 @@ impl Mempool {
         }
     }
 
-    pub fn cache_proposal(&mut self, raw: &BitcoinTransaction, parsed: Transaction) {
+    pub(crate) fn cache_proposal(&mut self, raw: &BitcoinTransaction, parsed: PreparedTransaction) {
         let txid = raw.compute_txid();
         if self.suppressed.contains(&txid) {
             return;
@@ -122,11 +124,13 @@ mod tests {
     use super::*;
 
     fn prepared(raw: BitcoinTransaction, recognized: bool) -> RecognizedTransaction {
-        let parsed = recognized.then(|| Transaction {
-            txid: raw.compute_txid(),
-            index: 0,
-            inputs: Vec::new(),
-            op_return_raw: None,
+        let parsed = recognized.then(|| {
+            PreparedTransaction::fixture(Transaction {
+                txid: raw.compute_txid(),
+                index: 0,
+                inputs: Vec::new(),
+                op_return_raw: None,
+            })
         });
         RecognizedTransaction { raw, parsed }
     }

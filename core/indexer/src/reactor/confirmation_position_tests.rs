@@ -1,3 +1,4 @@
+use crate::protocol::coordinator::linked::{PreparedBlock, PreparedTransaction};
 use crate::protocol::coordinator::selection::ApplicationPosition;
 use std::{slice, time::Duration};
 
@@ -7,7 +8,6 @@ use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::{deserialize, serialize as serialize_bitcoin};
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use bitcoin::{Block as BitcoinBlock, Network, Transaction, Witness};
-use indexer_types::Block;
 use libsql::{Connection, Value, params};
 use malachitebft_engine::node::NodeRef;
 use tempfile::TempDir;
@@ -42,8 +42,9 @@ impl Drop for StopEngine {
 
 // Synthetic raw blocks exercise parsing and coordinator behavior. Constructed
 // prevouts and headers do not establish Bitcoin consensus or mempool acceptance.
-fn confirmation_block(tx: &Transaction, position: usize) -> Result<Block> {
-    let block = raw_confirmation_block(tx, position)?.recognize(|tx| filter_map((0, tx.clone())));
+fn confirmation_block(tx: &Transaction, position: usize) -> Result<PreparedBlock> {
+    let block = raw_confirmation_block(tx, position)?
+        .prepare(|tx| Ok(filter_map((0, tx.clone())).map(PreparedTransaction::fixture)))?;
     assert_eq!(block.transactions.len(), 1);
     assert_eq!(block.transactions[0].index, position as u32);
     Ok(block)
@@ -199,12 +200,12 @@ async fn run_case(batched: bool) -> Result<()> {
             assert_eq!(row.batch_height, Some(1));
             assert_eq!(row.confirmed_height, None);
             assert_eq!(get_confirmation_position(&conn, &txid).await?, None);
-            assert_successful_write(&mut reactor.runtime, &txid, &address).await?;
+            assert_successful_write(&mut *reactor.test_runtime().await, &txid, &address).await?;
         }
         let before_confirmation = effects(&conn).await?;
         let block = confirmation_block(&raw, 2)?;
         let (count, ops, failures) = reactor
-            .execute_block(
+            .execute_block_unit(
                 &reactor
                     .select_executor(ApplicationPosition::Block {
                         height: block.height,
@@ -224,7 +225,7 @@ async fn run_case(batched: bool) -> Result<()> {
         assert_eq!(row.confirmed_height, Some(2));
         assert_eq!(row.tx_index, Some(0));
         assert_eq!(get_confirmation_position(&conn, &txid).await?, Some(2));
-        assert_successful_write(&mut reactor.runtime, &txid, &address).await?;
+        assert_successful_write(&mut *reactor.test_runtime().await, &txid, &address).await?;
         let applied = effects(&conn).await?;
         assert_ne!(applied, original);
         if batched {
@@ -257,7 +258,7 @@ async fn run_case(batched: bool) -> Result<()> {
             let replacement = confirmation_block(&raw, 4)?;
             assert_ne!(replacement.hash, block.hash);
             let (count, ops, _) = reactor
-                .execute_block(
+                .execute_block_unit(
                     &reactor
                         .select_executor(ApplicationPosition::Block {
                             height: replacement.height,

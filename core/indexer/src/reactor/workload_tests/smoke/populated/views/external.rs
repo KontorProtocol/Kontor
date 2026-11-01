@@ -25,7 +25,10 @@ use crate::api::Env;
 use crate::api::handlers::post_contract;
 use crate::api::result::Result as ApiResult;
 use crate::database::Reader;
-use crate::runtime::pool::Manager;
+use crate::protocol::coordinator::linked::link_runtime;
+use crate::runtime::Runtime;
+use crate::runtime::ownership::adapter::SessionFactory;
+use crate::runtime::pool::{Manager, new_linked};
 
 #[derive(Clone)]
 struct ViewState {
@@ -96,14 +99,36 @@ pub(super) async fn run<T>(
     let socket = socket
         .to_str()
         .context("external view socket path is not UTF-8")?;
-    let cache = pool.get().await?.component_cache.clone();
+    let template = pool.get().await?;
+    let cache = template.component_cache.clone();
+    let engine = template.engine.clone();
+    let linkers = template.linkers.clone();
+    let network = template.network;
+    let view_gas_limit = template.view_gas_limit;
+    let telemetry = template.workload_telemetry.clone();
+    let retained_cache = cache.clone();
+    let factory: SessionFactory = Arc::new(move |conn| {
+        let engine = engine.clone();
+        let linkers = linkers.clone();
+        let cache = retained_cache.clone();
+        let telemetry = telemetry.clone();
+        Box::pin(async move {
+            let mut runtime = Runtime::new_read_only(engine, linkers, cache, conn).await?;
+            runtime.network = network;
+            runtime.view_gas_limit = view_gas_limit;
+            runtime.workload_telemetry = telemetry;
+            Ok(link_runtime(runtime, false))
+        })
+    });
+    drop(template);
+    drop(pool);
     let mut env = Env::new_test(
         Reader::new(directory, filename).await?,
         directory,
         filename.into(),
     )
     .await?;
-    env.runtime_pool = pool;
+    env.runtime_pool = new_linked(directory.to_path_buf(), filename.into(), factory, CLIENTS)?;
     let state = ViewState {
         env,
         pages: pages.to_string(),

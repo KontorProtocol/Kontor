@@ -7,8 +7,8 @@ use wasmtime::Trap;
 
 use super::{CallOutcome, InvocationStore};
 
-use crate::database::types::Identity;
 use crate::protocol::coordinator::selection::select_test_block;
+use crate::protocol::v1::types::Identity;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::fuel::UsageKind;
 use crate::runtime::numerics::sub_decimal;
@@ -142,7 +142,7 @@ async fn nested_outcomes_preserve_state_refunds_and_cleanup() -> Result<()> {
             runtime.storage.savepoint().await?;
             let selection =
                 select_test_block(&conn, runtime.network, runtime.storage.height).await?;
-            let mut runtime = runtime.bind_selection(&selection)?;
+            let mut runtime = runtime.bind_selection(&selection.envelope())?;
             conn.execute("DELETE FROM contract_results", ()).await?;
             let savepoint = runtime.storage.savepoint_stack.peek().await;
             let actor_before = balance(&mut runtime, HolderRef::from(&actor)).await?;

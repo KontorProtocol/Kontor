@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use libsql::{Connection, params};
 
-use crate::protocol::native_bootstrap::{BootstrapRead, BootstrapReceipt, BootstrapSnapshot};
+use crate::protocol::native_bootstrap::{BootstrapRead, BootstrapSnapshot};
 
 async fn stored_field(conn: &Connection, id: u64, path: Vec<u8>) -> Result<Option<Vec<u8>>> {
     let row = conn.query(
@@ -49,22 +49,22 @@ async fn read_snapshot(
     ).await?;
     let mut receipts = Vec::new();
     while let Some(row) = rows.next().await? {
-        receipts.push(BootstrapReceipt {
-            contract_id: row.get(0)?,
-            function: row.get(1)?,
-            tx_id: row.get(2)?,
-            input_index: row.get(3)?,
-            op_index: row.get(4)?,
-            result_index: row.get(5)?,
-            signer_id: row.get(6)?,
-            payer_signer_id: row.get(7)?,
-            status: row.get(8)?,
-        });
+        receipts.push((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+            row.get(7)?,
+            row.get(8)?,
+        ));
     }
-    Ok(BootstrapSnapshot {
+    Ok((
         published_count,
         receipts,
-        admission_floor: stored_field(conn, staking_id, floor_path).await?,
-        validators_initialized: stored_field(conn, staking_id, validators_path).await?,
-    })
+        stored_field(conn, staking_id, floor_path).await?,
+        stored_field(conn, staking_id, validators_path).await?,
+    ))
 }

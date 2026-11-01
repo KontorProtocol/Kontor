@@ -1,5 +1,7 @@
 use std::io::Write;
 use std::panic;
+#[cfg(feature = "protocol-qualification")]
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread::available_parallelism;
@@ -15,6 +17,8 @@ use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
 use indexer::info::{compute_info_core, run_info_publisher};
 use indexer::keygen::{self, KeygenArgs};
+#[cfg(feature = "protocol-qualification")]
+use indexer::protocol_qualification;
 use indexer::receipt_stream_rotation::{self, ReceiptStreamRotationArgs};
 use indexer::stopper::{self, Shutdown};
 use indexer::{api, built_info, reactor, reg_tester, runtime};
@@ -41,6 +45,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[cfg(feature = "protocol-qualification")]
+    /// Exercise retained executors against isolated temporary databases.
+    QualifyExecutors,
+    #[cfg(feature = "protocol-qualification")]
+    /// Compare linked execution with a preserved pre-extraction oracle.
+    QualifyExecutorBaseline { archive: PathBuf },
     /// Build reproducible contracts and SDK bindings in the pinned container.
     Build(BuildArgs),
     /// Run the indexer daemon.
@@ -61,6 +71,18 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        #[cfg(feature = "protocol-qualification")]
+        Command::QualifyExecutors => {
+            let result = protocol_qualification::run().await?;
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
+        #[cfg(feature = "protocol-qualification")]
+        Command::QualifyExecutorBaseline { archive } => {
+            let result = protocol_qualification::compare_baseline(&archive).await?;
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
         Command::Build(args) => build(args),
         Command::Run(config) => run_daemon(*config).await,
         Command::Keygen(args) => keygen::run(args),

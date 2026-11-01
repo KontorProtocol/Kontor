@@ -5,7 +5,7 @@ use kontor_crypto::{
     poseidon::calculate_root_commitment, verify_stateless,
 };
 
-use crate::database::types::{
+use crate::protocol::v1::types::{
     bytes_to_field_element, field_element_to_bytes, validate_padded_len, validate_root,
 };
 use sha2::Sha256;

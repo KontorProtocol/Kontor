@@ -150,3 +150,22 @@ async fn abi_hooks_preserve_host_failure_and_guest_trap_classification() -> Resu
     }
     Ok(())
 }
+
+#[cfg(feature = "testing")]
+#[tokio::test]
+async fn host_panic_decoder_preserves_exact_payload_text() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let actor = funded(&mut runtime).await?;
+    let target = call_chain(&mut runtime, &actor).await?.remove(0);
+    let core = Signer::Core(Box::new(actor));
+    let (result, _) = call(&runtime, &target, &core, "host-panic()", BUDGET).await?;
+    let error = match result {
+        Err(ExecutionError::NonDeterministic(error)) => error,
+        other => panic!("host panic lost its infrastructure classification: {other:?}"),
+    };
+    assert_eq!(
+        error.root_cause().to_string(),
+        "host panic: deliberate host panic for testing"
+    );
+    Ok(())
+}

@@ -105,6 +105,148 @@ byte-identical executables.
 
 ## Isolation and common ownership
 
+### Production node build under development
+
+K2b adds `--build-executors` and `--build-node` to the same builder. These modes
+use production recipes independently of the proof recipes. The executor contains
+the actual retained runtime, host bindings, semantic policy and dependencies.
+The separate `protocol-bundles/node` workspace owns node services and physical
+storage, and its resolved graph must not contain Wasmtime or an executor crate.
+
+The production recipes `executor-first` and `executor-second` build the actual
+P1 implementation against Wasmtime `51.0.0-kontor.2` and `51.0.0-kontor.3`,
+respectively. The second enables `addr2line` to exercise independent feature
+resolution. Both retain the P1 lifting rate of 512. These build labels do not
+assign a network protocol version or activate an upgrade.
+
+Shared built-in host types express a compatible Wasmtime dependency, while each
+embedding workspace patches it to its exact retained fork. This prevents those
+types from silently pulling core's older VM into a newer executor. The builder
+still requires exactly one expected Wasmtime identity per executor. Guest builds
+leave that optional host dependency disabled.
+
+`--build-executors` only stages libraries. `--build-node` additionally builds the
+Kontor binary, injects the staged facade into the node library, supplies its
+dependency search paths to both node compiler invocations, and checks native
+ownership in the final executable. A content-keyed workspace compiler wrapper
+makes Cargo rebuild the node when externally staged executor inputs change,
+without invalidating every node dependency. The wrapper captures the binary's
+codegen objects, which join the current Cargo archive inventory as concrete
+node-owned inputs to the audit.
+
+For the bounded integration harness, build with `--build-node
+--node-qualification`, then run the recorded executable with `qualify-executors`.
+The opt-in Cargo feature keeps that command out of ordinary node builds. It uses
+fresh temporary databases and one node owner service to exercise both actual
+factories, comparing genesis and resumed genesis, real views and their error
+classification, committee derivation, malformed recognition, and lifecycle
+rollback/replay. Its raw transaction fixture publishes the committed counter
+contract, exercises fee and deposit accounting, distinguishes contract-result
+errors from outer execution failures, and compares simulation/inspection,
+rollback/replay and commit. Final views check successful calls after failures and
+that failed writes did not persist. Synthetic publication provenance tests the
+stored claim, not reproducibility of that claim; the pinned contract workflow
+checks the committed fixture bytes. Bitcoin signature validation is outside this
+execution harness. It emits JSON observations only after every assertion succeeds.
+The same feature on the in-tree indexer supplies a comparison route; using it
+alone does not establish compatibility with the qualified pre-extraction source.
+This harness is part of K2b acceptance, not its entire transaction and ownership
+coverage. Native ownership is checked by the builder before running it.
+
+The same opt-in executable provides `kontor qualify-executor-baseline ARCHIVE`.
+Supply the preserved pre-extraction directory containing `inputs.json`,
+`baseline.json`, `seed.db` and `transaction.bin`. The command verifies the input
+checksums and source agreement, copies the seed into temporary databases, and
+replays both unbatched and batched scenarios through each linked executor and
+the real node coordinator. It compares complete logical database snapshots and
+simulation results, including confirmation, rollback and reconfirmation without
+duplicate execution or charges. Recognition compares the exported transaction
+ID, index and operation positions; parsed instructions remain graph-private and
+their materialized inspection is checked by simulation. This is an explicit
+projection of the old recognition record, not byte equality of that record.
+The command stops and awaits its local consensus engine after each scenario,
+rejects any stage mismatch, and leaves the supplied archive unchanged. Its
+successful JSON output binds the baseline, seed and transaction hashes to the
+observations. Retain that output with the builder's source and binary evidence.
+
+Production evidence is under `OUTPUT/TARGET/PROFILE/executors`. Its
+`executor-build.json` records staged libraries, and `node-build.json` records a
+successful node build and ownership audit. Neither is execution qualification.
+Failure removes the corresponding old success marker and preserves logs.
+Actual multi-executor behavior, cleanup, baseline compatibility and platform
+qualification remain K2b acceptance requirements.
+
+For a production release executable, use:
+
+```sh
+./tools/kontor protocol-bundles --build-node --profile release \
+  --output target/protocol-evidence --install-node target/bin/kontor
+```
+
+Installation checks the copied bytes against the audited executable hash before
+atomically replacing the destination. It does not strip or otherwise transform
+the binary. `node-build.json` records the installed path and hash. A plain
+`cargo build` in the core workspace remains an in-tree development/test build;
+it does not establish retained dependency isolation.
+
+The Docker `builder` stage invokes the same Python builder and installs that
+audited output into the runtime image. Its `cacher` stage fetches the three locked
+graphs; it no longer compiles a unified workspace whose artifacts the isolated
+graphs cannot reuse. The opt-in `protocol-bundle-qualification` image uses
+`tools/protocol-bundles/qualify_node.py` to build and execute both real graphs.
+The runner rejects stale or changed binaries, missing graphs/cases, mismatched
+observations and subprocess failures, and records raw output hashes with the
+node build report hash in `executors/node-execution.json`. Its 300-second timeout
+is a test timeout, not a Kontor execution cutoff. Full release-image and platform
+qualification is still required before the phase can merge.
+
+`tools/protocol-bundles/compare_node.py` verifies the downloaded linked-node
+results against an explicit policy: `release` requires Linux x86-64, Linux ARM64
+and macOS ARM64 release results; `full` requires both dev and release on all three.
+The workflow uses release automatically and exposes full comparison only through
+manual dispatch. Missing, duplicate or unexpected cells and failed upstream jobs
+are errors. The comparator verifies raw logs, source inventories, local package
+files, workspace/graph identities, linker inputs and ownership-report hashes,
+then requires identical execution observations across the required cells.
+Package documentation and Git ignore files omitted by Docker are excluded from
+source equality. Python comparator and test edits do not invalidate unchanged
+runtime/build sources; the original source-inventory hashes remain verified.
+This bounded linked-node check complements the existing stack qualification and
+dev smoke checks. It does not replace their coverage or establish all executions
+from the sampled scenarios.
+
+The workflow selects changes from the complete Git diff, including deleted and
+renamed inputs. Comparator and Python test changes run the builder/evidence
+controls on one Linux runner without repeating the platform builds. Changes to
+node execution or build inputs still require the selected matrix; missing Git
+history requires qualification. Unrelated changes skip both groups. Builder
+checks run once before the matrix rather than once per platform.
+The small native-object negative controls also run on ARM Linux and macOS during
+release qualification, since those exercise the target object format and native
+symbol reader. They do not rebuild the Rust dependency graphs.
+
+Qualification also compiles five interface controls against the exact staged
+production libraries, without linking or running another node. The public
+factory signatures must be interchangeable structural standard-library types.
+Wasmtime engines and Tokio handles from different graphs must fail with Rust's
+type-mismatch diagnostic, and direct access to each graph's private runtime must
+fail with a privacy diagnostic. Missing dependencies or unrelated compilation
+errors do not count as successful negative controls. The node build report binds
+these controls, their source, diagnostics and library hashes; the platform
+comparator validates those bindings before accepting execution results.
+
+Production audit checks the graph-private native symbols that survive linking.
+Proof mode additionally requires the specific helpers exercised by its fixture.
+An unused proof operation, or a dependency absent from the real executor, is not
+a reason to add that dependency to production. Both modes retain input ownership,
+reference ownership and final-definition checks.
+The production node also declares the platform C++ runtime used by its ZeroMQ
+dependency: `libstdc++.so.6` on Linux or `/usr/lib/libc++.1.dylib` on macOS.
+Its actual loaded path, library hash and resolved exports are recorded like the
+other shared platform libraries. Proof mode does not gain this allowance.
+
+### Shared compiler and graph-private inputs
+
 Each graph has its own Cargo workspace, lock, feature resolution, output path
 and compiler metadata. A rustc wrapper adds the graph identity to both target
 and host units, including proc macros, while retaining Cargo's unit metadata.
