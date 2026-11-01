@@ -13,8 +13,9 @@ use crate::stopper::{Shutdown, ShutdownSignal};
 use anyhow::{Result, anyhow};
 use bitcoin::Transaction as BitcoinTransaction;
 use bitcoin::consensus::serialize;
+use tokio::runtime::Handle;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
-use tokio::task::JoinSet;
+use tokio::task::{JoinSet, spawn_blocking};
 use tokio::time::timeout;
 use tracing::{Instrument, info, info_span};
 
@@ -663,22 +664,33 @@ impl ReactorCluster {
 
     async fn counter_value(&self, node: usize) -> Result<String> {
         let (dir, name) = &self.node_dirs[node];
-        let pool = linked::new_read_pool(
-            dir.path().to_path_buf(),
-            name.clone(),
-            Network::Regtest,
-            DEFAULT_VIEW_GAS_LIMIT,
-        )?;
-        let address = counter_address();
-        linked::execute_view(
-            &OwnerService::new(),
-            pool.get().await?,
-            Network::Regtest,
-            (address.name, address.height, address.tx_index),
-            "get()".into(),
-        )
+        let data_dir = dir.path().to_path_buf();
+        let name = name.clone();
+        let handle = Handle::current();
+        // Opening a pool connection initializes SQLite with a blocking busy
+        // handler. Keep the test's single node-driving thread free to commit
+        // any write transaction that initialization is waiting for.
+        spawn_blocking(move || {
+            handle.block_on(async move {
+                let pool = linked::new_read_pool(
+                    data_dir,
+                    name,
+                    Network::Regtest,
+                    DEFAULT_VIEW_GAS_LIMIT,
+                )?;
+                let address = counter_address();
+                linked::execute_view(
+                    &OwnerService::new(),
+                    pool.get().await?,
+                    Network::Regtest,
+                    (address.name, address.height, address.tx_index),
+                    "get()".into(),
+                )
+                .await?
+                .map_err(|(_, message)| anyhow!(message))
+            })
+        })
         .await?
-        .map_err(|(_, message)| anyhow!(message))
     }
 
     async fn add_node(&mut self) -> Result<usize> {
@@ -1616,41 +1628,48 @@ async fn prod_reactor_bitcoin_rollback_across_decided_batch() -> Result<()> {
     cluster.wait_for_block(2, Duration::from_secs(60)).await;
 
     let mempool_events = cluster.mock_bitcoin().generate_mempool_txs(2);
+    let mut original_batches = Vec::new();
+    // A proposal may race the second transaction's recognition. Observe each
+    // submission independently instead of assuming both share one batch.
     for event in mempool_events.clone() {
         cluster.send_mempool_event(event);
+        let batch = cluster.wait_for_batch(2, Duration::from_secs(60)).await;
+        assert_eq!(batch.txids.len(), 1);
+        original_batches.push(batch);
     }
-    let first = cluster.wait_for_batch(2, Duration::from_secs(60)).await;
-    assert_eq!(first.txids.len(), 2, "setup batch must carry both txs");
 
     for node in 0..3 {
         assert_eq!(cluster.counter_value(node).await?, "2");
     }
     let conn = cluster.node_conn(0).await.clone();
-    let original = certified_history::load(&conn, first.consensus_height.as_u64()).await?;
-    let original_id = original.decision().id()?;
+    let mut original_ids = Vec::new();
+    for batch in &original_batches {
+        let original = certified_history::load(&conn, batch.consensus_height.as_u64()).await?;
+        original_ids.push(original.decision().id()?);
+    }
     cluster.replace_after(1).await;
     for node in 0..3 {
         assert_eq!(cluster.counter_value(node).await?, "0");
     }
-    assert_eq!(
-        certified_history::load(&conn, first.consensus_height.as_u64())
-            .await?
-            .decision()
-            .id()?,
-        original_id
-    );
-
-    for event in mempool_events {
-        cluster.send_mempool_event(event);
+    for (batch, original_id) in original_batches.iter().zip(original_ids) {
+        assert_eq!(
+            certified_history::load(&conn, batch.consensus_height.as_u64())
+                .await?
+                .decision()
+                .id()?,
+            original_id
+        );
     }
-    let replayed = cluster.wait_for_batch(2, Duration::from_secs(60)).await;
-    assert_eq!(
-        replayed.txids.len(),
-        2,
-        "rolled-back batch txs must re-execute in a fresh batch"
-    );
 
-    assert!(replayed.consensus_height > first.consensus_height);
+    for (event, original_batch) in mempool_events.into_iter().zip(&original_batches) {
+        cluster.send_mempool_event(event);
+        let replayed = cluster.wait_for_batch(2, Duration::from_secs(60)).await;
+        assert_eq!(
+            replayed.txids, original_batch.txids,
+            "the rolled-back transaction must re-execute in a fresh batch"
+        );
+        assert!(replayed.consensus_height > original_batches.last().unwrap().consensus_height);
+    }
     for node in 0..3 {
         assert_eq!(cluster.counter_value(node).await?, "2");
     }

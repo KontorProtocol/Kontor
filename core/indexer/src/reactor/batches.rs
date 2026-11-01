@@ -1672,7 +1672,7 @@ mod tests {
             closure.contains(&child.compute_txid()),
             "the closure must reach a descendant carried by a survivor"
         );
-        let survivor_txs = queue[1].value.batch_raw_txs();
+        let survivor_txs = queue[1].execution_txs();
         assert_eq!(
             survivor_txs.len(),
             1,
@@ -1703,7 +1703,7 @@ mod tests {
 
         let survivor = &queue[1];
         assert_eq!(
-            survivor.value.batch_raw_txs().len(),
+            survivor.execution_txs().len(),
             1,
             "the descendant must not execute"
         );
@@ -1736,7 +1736,7 @@ mod tests {
 
         let survivor = &queue[1];
         assert!(
-            survivor.value.batch_raw_txs().is_empty(),
+            survivor.execution_txs().is_empty(),
             "every tx descends from the excluded parent, so nothing may execute"
         );
         assert_eq!(
@@ -1764,12 +1764,11 @@ mod tests {
         );
 
         assert!(
-            queue[0].value.batch_raw_txs().is_empty(),
+            queue[0].execution_txs().is_empty(),
             "the decision it was excluded from must drop it"
         );
         let later: Vec<Txid> = queue[1]
-            .value
-            .batch_raw_txs()
+            .execution_txs()
             .iter()
             .map(|x| x.compute_txid())
             .collect();
@@ -1798,7 +1797,7 @@ mod tests {
         );
 
         assert!(
-            !queue[2].value.batch_raw_txs().is_empty(),
+            !queue[2].execution_txs().is_empty(),
             "the child must survive — its parent executes at another height"
         );
     }
@@ -1823,13 +1822,13 @@ mod tests {
         );
 
         assert!(
-            queue[1].value.batch_raw_txs().is_empty(),
+            queue[1].execution_txs().is_empty(),
             "the child executes before the parent's re-decide rebuilds its output, \
              so it must drop"
         );
         assert!(dropped.contains(&child.compute_txid()));
         assert_eq!(
-            queue[2].value.batch_raw_txs().len(),
+            queue[2].execution_txs().len(),
             1,
             "the re-decided parent itself still executes at its own height"
         );
@@ -1855,7 +1854,7 @@ mod tests {
         );
 
         assert_eq!(
-            queue[0].value.batch_raw_txs().len(),
+            queue[0].execution_txs().len(),
             1,
             "the child ran before the parent in the original sequence, so the \
              parent's exclusion cannot retroactively orphan it"
@@ -1879,7 +1878,7 @@ mod tests {
         );
 
         assert!(
-            queue[0].value.batch_raw_txs().is_empty(),
+            queue[0].execution_txs().is_empty(),
             "the parent's exclusion below the replay window still orphans the child"
         );
         assert!(dropped.contains(&child.compute_txid()));
@@ -1909,8 +1908,7 @@ mod tests {
         );
 
         let kept: Vec<Txid> = queue[0]
-            .value
-            .batch_raw_txs()
+            .execution_txs()
             .iter()
             .map(|t| t.compute_txid())
             .collect();
@@ -1941,7 +1939,7 @@ mod tests {
         );
 
         assert!(
-            queue[1].value.batch_raw_txs().is_empty(),
+            queue[1].execution_txs().is_empty(),
             "a descendant of an excluded, otherwise-absent parent must not execute"
         );
         assert!(dropped.contains(&child.compute_txid()));
@@ -2015,7 +2013,7 @@ mod tests {
             Vec::new(),
             &HashMap::new(),
         );
-        assert_eq!(queue[0].value.batch_raw_txs().len(), 2);
+        assert_eq!(queue[0].execution_txs().len(), 2);
         assert!(excluded.is_empty());
     }
 
@@ -2044,7 +2042,7 @@ mod tests {
 
         let survivor = &queue[1];
         assert_eq!(
-            survivor.value.batch_raw_txs().len(),
+            survivor.execution_txs().len(),
             1,
             "only the kept tx may EXECUTE"
         );
@@ -2076,8 +2074,8 @@ mod tests {
 
         // Pass one already ran: `first` was excluded, and the decision carries the
         // full decided list alongside the narrowed transactions.
-        let (mut decision, _) = carrying(14, vec![second.clone(), survivor_tx.clone()]);
-        decision.execution_txs = Some(decided_all.clone());
+        let (mut decision, _) = carrying(14, decided_all.clone());
+        decision.execution_txs = Some(vec![second.clone(), survivor_tx.clone()]);
 
         // Pass two excludes `second`.
         let excluded = excl(&[(14, second.compute_txid())]);
@@ -2088,7 +2086,7 @@ mod tests {
         );
 
         assert_eq!(
-            queue[0].value.batch_raw_txs().len(),
+            queue[0].execution_txs().len(),
             1,
             "only the untouched tx should remain executable"
         );
@@ -2099,17 +2097,17 @@ mod tests {
         );
     }
 
-    /// Nothing excluded means nothing to preserve — the value is already the
-    /// decided content and a redundant copy would just be a second answer.
+    /// Without exclusions, execution and certified history retain the same body.
     #[test]
-    fn build_replay_queue_leaves_certified_txs_unset_when_nothing_is_filtered() {
+    fn build_replay_queue_preserves_execution_and_certified_txs_without_exclusions() {
         let a = tx(&[OutPoint::null()], 1);
         let (queue, _) = build_replay_queue(
             vec![carrying(10, vec![a.clone()])],
             Vec::new(),
             &HashMap::new(),
         );
-        assert!(queue[0].execution_txs.is_none());
+        assert_eq!(queue[0].execution_txs(), vec![a.clone()]);
+        assert_eq!(queue[0].decided_txs(), vec![a]);
     }
 
     /// A queued decision BELOW the replay set's max must SURVIVE. Anchors go

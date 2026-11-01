@@ -8,24 +8,22 @@ use malachitebft_core_types::Round;
 use tokio::sync::{mpsc, watch};
 use tokio::time::{interval, sleep, timeout};
 
+use super::certified_fixture;
 use super::engine::EngineConfig;
 use super::executor::NoopExecutor;
 use super::mempool_fee_index::MempoolFeeIndex;
 use super::{PruneConfig, Reactor, create_executor_session, run, start_linked_consensus};
 use crate::bitcoin_client::Client;
+use crate::consensus::Height;
 use crate::consensus::signing::PrivateKey;
 use crate::database::Writer;
 use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::logging;
-use crate::protocol::coordinator::linked;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::ownership::OwnerService;
-use crate::runtime::pool::LinkedSession;
 use crate::runtime::{BlockingGate, Decimal, GenesisValidator};
 use crate::stopper::Shutdown;
-use crate::test_utils::{
-    new_mock_block_hash, new_test_db, test_genesis, test_runtime_with_genesis,
-};
+use crate::test_utils::{new_test_db, test_genesis};
 use bitcoin::Network;
 
 #[tokio::test]
@@ -177,17 +175,22 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
 async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()> {
     logging::setup();
     let key = PrivateKey::from([19; 32]);
-    let (runtime, dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
+    let (_, writer, (dir, _name)) = new_test_db().await?;
+    let genesis = test_genesis(&[GenesisValidator {
         x_only_pubkey: random_x_only_pubkey(),
         ed25519_pubkey: key.public_key().as_bytes().to_vec(),
         stake: Decimal::from("100"),
-    }])
-    .await?;
-    let session = LinkedSession::new(
-        runtime.get_storage_conn(),
-        linked::link_runtime(runtime, true),
-    );
+    }]);
     let owner = OwnerService::new();
+    let (_, session, last_height, last_hash) = create_executor_session(
+        1,
+        &writer,
+        &owner,
+        Client::new(String::new(), String::new(), String::new())?,
+        &genesis,
+        Network::Regtest,
+    )
+    .await?;
     let mut consensus = start_linked_consensus(
         EngineConfig {
             private_key: key,
@@ -202,7 +205,7 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
         Network::Regtest,
         None,
         None,
-        1,
+        last_height,
         MempoolFeeIndex::new(None),
     )
     .await?;
@@ -227,10 +230,17 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
             enabled: false,
             retain_blocks: 144,
         },
-        1,
-        Some(new_mock_block_hash(1)),
+        last_height,
+        last_hash,
         addr_tx,
     );
+    // Certify and apply the first block before testing the empty-batch deadline.
+    // A batch before this block is no longer a legal startup proposal.
+    reactor
+        .consensus
+        .pending_blocks
+        .insert(1, certified_fixture::empty_block(1));
+    let target_height = Height::new(2);
     let result = timeout(Duration::from_secs(30), async {
         let mut tick = interval(Duration::from_millis(10));
         loop {
@@ -238,15 +248,15 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
                 msg = reactor.consensus.channels.consensus.recv() => {
                     let msg = msg.ok_or_else(|| anyhow!("consensus channel closed"))?;
                     match &msg {
-                        AppMsg::GetValue { round, .. } if *round == Round::new(0) => {
+                        AppMsg::GetValue { height, round, .. } if *height == target_height && *round == Round::new(0) => {
                             // The engine's propose timer keeps running while the
                             // application is busy and has not handled this request.
                             sleep(Duration::from_secs(5)).await;
                         }
-                        AppMsg::StartedRound { round, .. } if *round != Round::new(0) => {
+                        AppMsg::StartedRound { height, round, .. } if *height == target_height && *round != Round::new(0) => {
                             return Err(anyhow!("delayed proposal missed round zero"));
                         }
-                        AppMsg::Decided { certificate, .. } => {
+                        AppMsg::Decided { certificate, .. } if certificate.height == target_height => {
                             assert_eq!(certificate.round, Round::new(0));
                             reactor.handle_consensus_msg(msg).await?;
                             return Ok(());
@@ -254,6 +264,7 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
                         _ => {}
                     }
                     reactor.handle_consensus_msg(msg).await?;
+                    reactor.advance().await?;
                 }
                 _ = tick.tick() => {
                     reactor.try_fulfill_pending_proposal().await?;

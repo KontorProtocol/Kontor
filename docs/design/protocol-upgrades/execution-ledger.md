@@ -2350,3 +2350,43 @@ envelope; correcting the checker to read `result.height` produced the recorded
 pass. This focused startup check is not a claim that the complete SDK suite ran
 locally. The corrected candidate still requires CI. No executor definition or
 coordinator reference binds this harness file, and none was regenerated.
+
+### K4 ordinary-CI test representation and startup corrections
+
+Both ordinary release CI jobs at `bd3b3b78` reported the same twelve failures:
+eleven replay tests still inspected the certified value as if it were the filtered
+execution body, and the delayed-proposal test bypassed certified genesis setup.
+Correct the assertions to inspect `execution_txs()` while retaining the original
+certified-body assertions. Correct the repeated-filter fixture to keep its full
+original body in `value`. The startup fixture now uses the real executor session,
+certifies and applies block 1, then delays the height-2 GetValue callback by five
+seconds and still requires a round-zero decision within the original proposal
+deadline. No production execution or consensus rule changed.
+
+The initial replay check passed 21 tests. The sandboxed startup attempt could not
+listen on its local socket and timed out; with socket access it passed. A broader
+local dev reactor run was deliberately stopped after a SQLite lock failure in
+the rollback cluster test. Isolating that test also exposed its unsupported
+assumption that two separately recognized transactions enter one batch. The
+fixture now submits and observes each transaction separately, checks preservation
+of both certified decision IDs across branch replacement, and verifies fresh
+higher-height execution plus counter state `2 -> 0 -> 2` on all three nodes.
+Its read helper opens and uses the pool in a blocking task so SQLite's synchronous
+busy handler cannot freeze the current-thread test runtime driving writer commits.
+The failed and stopped attempts remain recorded, not counted as passes.
+
+Final bounded local regression: 24 passed, zero failed or ignored, 1031 filtered,
+61.75 seconds, exit zero (`k4-ci-regressions69.log`). This covers the 21 replay
+cases, both startup tests and the rollback cluster case. Lead review and the sole
+independent review accepted the corrections and retained the prior consolidated
+K4 approval. The unreleased coordinator reference changes exactly the hashes of
+these three test source files; dependency fields, retained executor definitions
+and the observer definition are unchanged. Current-head CI remains required.
+
+Evidence record: `.build-cache/k4-ci-test-correction.json`. Raw log hashes:
+- `k4-replay-ci-correction64.log`: `6c423fcb76977f79ef798077fd9e9ca446ff72c8ed34730611e216b4dc3ab700`.
+- `k4-startup-deadline65.log`: `1407fd4cccde43488fe04cf669ab84345ff026d469031b6ea8c5d6e91028dc53`.
+- `k4-startup-deadline66.log`: `8ec0532d8a0b6e459837e9e692cce147b33b93c46b2315443d309d286a865e06`.
+- `k4-reactor-ci-correction67.log`: `e56ec29d76fca026edc4002185f35acece29dd42d8e32ef9a8f3fd846a37e5e3`.
+- `k4-rollback-lock-isolation68.log`: `543cced63e12dd26ca246c218ce17e8f8ff4c7604b6e881071adf08c83f6576d`.
+- `k4-ci-regressions69.log`: `a6c48471f9b9f6bfc5a0402209fd2829a40d5148b8ccc14e4fd3253c7b8e8960`.
