@@ -1,0 +1,186 @@
+   Compiling kontor-native-build v0.1.0 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/vendor/kontor-native-build)
+   Compiling psm v0.1.32
+   Compiling stacker v0.1.25
+   Compiling ring v0.17.14 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/vendor/ring)
+   Compiling swc_ecma_parser v27.0.7
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/ring/src/polyfill/slice/as_chunks.rs:19:44
+   |
+19 | pub fn as_chunks<T, const N: usize>(slice: &[T]) -> (AsChunks<T, N>, &[T]) {
+   |                                            ^^^^      ^^^^^^^^^^^^^^  ^^^^ the same lifetime is elided here
+   |                                            |         |
+   |                                            |         the same lifetime is hidden here
+   |                                            the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+   = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+   |
+19 | pub fn as_chunks<T, const N: usize>(slice: &[T]) -> (AsChunks<'_, T, N>, &[T]) {
+   |                                                               +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/ring/src/polyfill/slice/as_chunks_mut.rs:18:48
+   |
+18 | pub fn as_chunks_mut<T, const N: usize>(slice: &mut [T]) -> (AsChunksMut<T, N>, &mut [T]) {
+   |                                                ^^^^^^^^      ^^^^^^^^^^^^^^^^^  ^^^^^^^^ the same lifetime is elided here
+   |                                                |             |
+   |                                                |             the same lifetime is hidden here
+   |                                                the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+18 | pub fn as_chunks_mut<T, const N: usize>(slice: &mut [T]) -> (AsChunksMut<'_, T, N>, &mut [T]) {
+   |                                                                          +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/ring/src/polyfill/slice/as_chunks_mut.rs:60:19
+   |
+60 |     pub fn as_ref(&self) -> AsChunks<T, N> {
+   |                   ^^^^^     ^^^^^^^^^^^^^^ the same lifetime is hidden here
+   |                   |
+   |                   the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+60 |     pub fn as_ref(&self) -> AsChunks<'_, T, N> {
+   |                                      +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/ring/src/polyfill/slice/as_chunks_mut.rs:67:47
+   |
+67 |     pub fn chunks_mut<const CHUNK_LEN: usize>(&mut self) -> AsChunksMutChunksMutIter<T, N> {
+   |                                               ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+   |                                               |
+   |                                               the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+67 |     pub fn chunks_mut<const CHUNK_LEN: usize>(&mut self) -> AsChunksMutChunksMutIter<'_, T, N> {
+   |                                                                                      +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/ring/src/arithmetic/bigint/modulus.rs:116:27
+    |
+116 |     pub(crate) fn modulus(&self, cpu_features: cpu::Features) -> Modulus<M> {
+    |                           ^^^^^ the lifetime is elided here      ^^^^^^^^^^ the same lifetime is hidden here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+116 |     pub(crate) fn modulus(&self, cpu_features: cpu::Features) -> Modulus<'_, M> {
+    |                                                                          +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/ring/src/arithmetic/limbs512/storage.rs:45:9
+   |
+45 |         &mut self,
+   |         ^^^^^^^^^ the lifetime is elided here
+...
+48 |     ) -> Result<AsChunksMut<Limb, LIMBS_PER_CHUNK>, LenMismatchError> {
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+48 |     ) -> Result<AsChunksMut<'_, Limb, LIMBS_PER_CHUNK>, LenMismatchError> {
+   |                             +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/ring/src/pkcs8.rs:56:21
+   |
+56 |     fn alg_id_value(&self) -> untrusted::Input {
+   |                     ^^^^^     ^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+   |                     |
+   |                     the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+56 |     fn alg_id_value(&self) -> untrusted::Input<'_> {
+   |                                               ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/ring/src/pkcs8.rs:65:22
+   |
+65 |     pub fn curve_oid(&self) -> untrusted::Input {
+   |                      ^^^^^     ^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+   |                      |
+   |                      the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+65 |     pub fn curve_oid(&self) -> untrusted::Input<'_> {
+   |                                                ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> vendor/ring/src/rsa/public_modulus.rs:91:25
+   |
+91 |     pub(super) fn value(&self, cpu_features: cpu::Features) -> bigint::Modulus<N> {
+   |                         ^^^^^ the lifetime is elided here      ^^^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+91 |     pub(super) fn value(&self, cpu_features: cpu::Features) -> bigint::Modulus<'_, N> {
+   |                                                                                +++
+
+warning: `ring` (lib) generated 9 warnings (run `cargo fix --lib -p ring` to apply 9 suggestions)
+   Compiling rustls-webpki v0.103.16
+   Compiling rustls v0.23.46
+   Compiling rcgen v0.13.2
+   Compiling snow v0.9.6
+   Compiling libp2p-noise v0.46.1
+   Compiling futures-rustls v0.26.0
+   Compiling quinn-proto v0.11.19
+   Compiling quinn v0.11.12
+   Compiling libp2p-tls v0.6.2
+   Compiling libp2p-quic v0.13.1
+   Compiling secp256k1-sys v0.10.1 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/vendor/secp256k1-sys)
+   Compiling libp2p v0.56.0
+   Compiling swc_ecma_lexer v26.0.0
+warning: secp256k1-sys@0.10.1: In file included from depend/secp256k1/src/secp256k1.c:766:
+warning: secp256k1-sys@0.10.1: depend/secp256k1/src/modules/schnorrsig/main_impl.h:48:46: warning: initializer-string for array of 'unsigned char' truncates NUL terminator but destination lacks 'nonstring' attribute (14 chars into 13 available) [-Wunterminated-string-initialization]
+warning: secp256k1-sys@0.10.1:    48 | static const unsigned char bip340_algo[13] = "BIP0340/nonce";
+warning: secp256k1-sys@0.10.1:       |                                              ^~~~~~~~~~~~~~~
+   Compiling libp2p-scatter v0.3.0
+   Compiling arc-malachitebft-sync v0.8.2
+   Compiling dprint-swc-ext v0.26.1
+   Compiling arc-malachitebft-discovery v0.8.2
+   Compiling blst v0.3.17 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/vendor/blst)
+   Compiling wit-validator v0.1.0 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/wit-validator)
+   Compiling arc-malachitebft-network v0.8.2 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/vendor/arc-malachitebft-network)
+   Compiling macros v0.1.0 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/macros)
+   Compiling deno_ast v0.53.3
+   Compiling secp256k1 v0.29.1
+   Compiling tokio-rustls v0.26.6
+   Compiling bitcoin v0.32.102
+   Compiling arc-malachitebft-engine v0.8.2
+   Compiling dprint-plugin-typescript v0.95.15
+   Compiling hyper-rustls v0.27.10
+   Compiling stdlib v0.1.0 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/stdlib)
+   Compiling numerics v0.1.0 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/numerics)
+   Compiling ts-rs v12.0.1
+   Compiling indexer v0.2.0 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/indexer)
+   Compiling arc-malachitebft-app v0.8.2
+   Compiling rustls-platform-verifier v0.7.1
+   Compiling reqwest v0.13.5
+   Compiling kontor-build v0.1.0 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/kontor-build)
+   Compiling built-in-types v0.1.0 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/built-in-types)
+   Compiling indexer-types v0.1.0 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/indexer-types)
+   Compiling bls-crypto v0.1.0 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/bls-crypto)
+   Compiling arc-malachitebft-app-channel v0.8.2
+   Compiling metrics-exporter-prometheus v0.18.3
+   Compiling testlib v0.1.0 (/home/wilfred/Documents/Kontor/protocol-k2b-historical-oracle/core/testlib)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 15s
+     Running unittests src/lib.rs (/home/wilfred/Documents/Kontor/protocol-selected-executor/core/target/debug/deps/indexer-acfa944917f335d4)
+
+running 1 test
+test historical_semantics::historical_semantic_supplement ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 923 filtered out; finished in 19.37s
+

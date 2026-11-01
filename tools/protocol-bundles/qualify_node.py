@@ -11,6 +11,7 @@ import time
 
 from build import ROOT, digest, write_json
 from recipes import EXECUTOR_GRAPHS
+from semantic_baseline import verify as verify_semantics
 from symbol_tool import TOOLCHAIN
 
 
@@ -49,13 +50,15 @@ def execute_node(report_path):
         raise RuntimeError('retained executor observations disagree')
     if observations.get('schema') != 1 or set(observations['cases']) != CASES or len(observations['cases']) != len(CASES):
         raise RuntimeError('node execution case set changed')
+    semantic_baseline = verify_semantics(observations, ROOT)
     if digest(executable) != node['executable_sha256'] or digest(report_path) != report_hash:
         raise RuntimeError('node executable or build report changed during execution')
     evidence = {'schema': 1, 'target': report['target'], 'profile': report['profile'],
                 'node_build_sha256': digest(report_path), 'executable_sha256': digest(executable),
                 'stdout_sha256': digest(stdout), 'stderr_sha256': digest(stderr),
                 'cases': observations['cases'], 'graphs': expected_graphs,
-                'seconds': time.monotonic() - started, 'matching_observations': True}
+                'seconds': time.monotonic() - started, 'matching_observations': True,
+                'semantic_baseline': semantic_baseline}
     write_json(success, evidence)
     return evidence
 

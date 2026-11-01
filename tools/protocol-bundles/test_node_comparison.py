@@ -11,6 +11,8 @@ from compare_node import OWNERSHIP, TARGETS, compare, sources as validate_source
 from provenance import fingerprint, package_sources, repository_sources
 from qualify_node import CASES
 from recipes import EXECUTOR_GRAPHS, identity
+from semantic_baseline import verify as verify_semantics
+from test_semantic_baseline import sample_observation
 from symbol_tool import TOOLCHAIN
 from type_boundary import PROBES, inputs_for
 
@@ -96,12 +98,12 @@ class NodeComparison(unittest.TestCase):
                  'toolchain_inputs': {'compiler': compiler}, 'node': node, 'graphs': graphs}
         write_json(directory / 'node-build.json', build)
         observations = {'schema': 1, 'cases': sorted(CASES), 'executors': [
-            {'graph': name, 'observations': {'gas': 17, 'state': 'same'}} for name in EXECUTOR_GRAPHS]}
+            {'graph': name, 'observations': sample_observation()} for name in EXECUTOR_GRAPHS]}
         write_json(directory / 'node-execution.stdout.json', observations)
         (directory / 'node-execution.stderr.log').write_text('synthetic execution log')
         execution = {'schema': 1, 'matching_observations': True, 'target': target, 'profile': profile,
                      'executable_sha256': node['executable_sha256'], 'cases': observations['cases'],
-                     'graphs': list(EXECUTOR_GRAPHS)}
+                     'graphs': list(EXECUTOR_GRAPHS), 'semantic_baseline': verify_semantics(observations, ROOT)}
         write_json(directory / 'node-execution.json', execution)
         self.bind(directory)
         return directory
@@ -147,7 +149,7 @@ class NodeComparison(unittest.TestCase):
 
     def test_raw_logs_and_ownership_are_bound(self):
         for relative in ['node-execution.stderr.log', 'node/build.log', 'first/build.log',
-                         'node/final-ownership.json', 'node/root-objects.json']:
+                         'node/final-ownership.json', 'node/node-input-ownership.json', 'node/root-objects.json']:
             with self.subTest(relative=relative):
                 path = self.cells[0] / relative
                 original = path.read_bytes()
@@ -155,6 +157,17 @@ class NodeComparison(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'hash mismatch'):
                     compare(self.root, ROOT, 'release', 'success')
                 path.write_bytes(original)
+
+    def test_rehashed_shared_historical_regression_rejects(self):
+        for directory in self.cells:
+            path = directory / 'node-execution.stdout.json'
+            observations = json.loads(path.read_text())
+            for graph in observations['executors']:
+                graph['observations']['malformed_transaction'] = 'changed error'
+            write_json(path, observations)
+            self.bind(directory)
+        with self.assertRaisesRegex(ValueError, 'historical semantic comparison differs'):
+            compare(self.root, ROOT, 'release', 'success')
 
     def test_rehashed_unrelated_compile_error_is_not_type_isolation(self):
         directory = self.cells[0]

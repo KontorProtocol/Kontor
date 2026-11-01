@@ -1,19 +1,16 @@
 //! Bounded execution checks using the same adapters as the production node.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
-use bitcoin::{BlockHash, Network, hashes::Hash};
+use bitcoin::{BlockHash, hashes::Hash};
 use indexer_types::{Block, BlockRow};
-use libsql::{Connection, Value as SqlValue};
+use libsql::Connection;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
-use crate::consensus::signing::PrivateKey;
 use crate::database::connection::new_connection;
 use crate::database::queries::insert_block;
 #[cfg(kontor_linked)]
@@ -25,17 +22,19 @@ use crate::protocol::coordinator::linked::{
     run_block_lifecycle,
 };
 use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
-use crate::protocol::operations::{AddressEnvelope, GenesisEnvelope, SessionOwner};
+use crate::protocol::operations::{AddressEnvelope, SessionOwner};
 use crate::reactor::qualification;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::{LinkedSession, new_linked};
 
+mod fixture;
 #[cfg(kontor_linked)]
 mod ownership;
 mod transactions;
 
-const NETWORK: Network = Network::Regtest;
+use fixture::{NETWORK, genesis, state};
+
 type Factories = (&'static str, SessionFactory, SessionFactory);
 
 fn factories() -> Result<Vec<Factories>> {
@@ -70,68 +69,6 @@ fn factories() -> Result<Vec<Factories>> {
             session_factory(NETWORK, Some(DEFAULT_VIEW_GAS_LIMIT))?,
         )])
     }
-}
-
-fn genesis() -> GenesisEnvelope {
-    (
-        "1".into(),
-        vec![(
-            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".into(),
-            "100.9999999".into(),
-            PrivateKey::from([7; 32]).public_key().as_bytes().to_vec(),
-        )],
-    )
-}
-
-// Hash typed, length-delimited values rather than database file bytes, which
-// include SQLite allocation and WAL details unrelated to execution semantics.
-async fn state(conn: &Connection) -> Result<BTreeMap<String, (u64, String)>> {
-    let mut state = BTreeMap::new();
-    for table in [
-        "blocks",
-        "contracts",
-        "contract_provenance",
-        "contract_state",
-        "current_contract_state",
-        "transactions",
-        "contract_results",
-        "depositor_footprint",
-        "block_execution_usage",
-        "transaction_execution_usage",
-        "signers",
-        "x_only_pubkeys",
-        "bls_keys",
-        "nonces",
-    ] {
-        let order = if table == "current_contract_state" {
-            "contract_id, path"
-        } else {
-            "rowid"
-        };
-        let mut rows = conn
-            .query(&format!("SELECT * FROM {table} ORDER BY {order}"), ())
-            .await?;
-        let mut digest = Sha256::new();
-        let mut count = 0;
-        while let Some(row) = rows.next().await? {
-            digest.update(rows.column_count().to_le_bytes());
-            for i in 0..rows.column_count() {
-                let (tag, bytes) = match row.get_value(i)? {
-                    SqlValue::Null => (0u8, Vec::new()),
-                    SqlValue::Integer(n) => (1, n.to_le_bytes().to_vec()),
-                    SqlValue::Real(n) => (2, n.to_bits().to_le_bytes().to_vec()),
-                    SqlValue::Text(s) => (3, s.into_bytes()),
-                    SqlValue::Blob(b) => (4, b),
-                };
-                digest.update([tag]);
-                digest.update((bytes.len() as u64).to_le_bytes());
-                digest.update(bytes);
-            }
-            count += 1;
-        }
-        state.insert(table.into(), (count, hex::encode(digest.finalize())));
-    }
-    Ok(state)
 }
 
 async fn exercise(

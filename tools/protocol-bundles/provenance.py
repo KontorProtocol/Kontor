@@ -48,9 +48,10 @@ def node_sources(root):
             if path.is_file() and "__pycache__" not in path.parts:
                 sources[str(path.relative_to(root))] = sha(path)
     # The opt-in node qualification embeds the committed publication fixture.
-    fixture = root / "test-contracts/binaries/counter.wasm.br"
-    if fixture.is_file():
-        sources[str(fixture.relative_to(root))] = sha(fixture)
+    for name in ("counter", "proxy"):
+        fixture = root / f"test-contracts/binaries/{name}.wasm.br"
+        if fixture.is_file():
+            sources[str(fixture.relative_to(root))] = sha(fixture)
     sources["core/indexer/build.rs"] = sha(root / "core/indexer/build.rs")
     return sources
 

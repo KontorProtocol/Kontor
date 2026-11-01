@@ -9,11 +9,12 @@ from build import ROOT, digest, write_json
 from provenance import fingerprint, package_sources, repository_sources
 from qualify_node import CASES
 from recipes import EXECUTOR_GRAPHS, identity
+from semantic_baseline import verify as verify_semantics
 from symbol_tool import TOOLCHAIN
 from type_boundary import verify_report as verify_interface_report
 
 TARGETS = {'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu', 'aarch64-apple-darwin'}
-OWNERSHIP = {'common-reference-ownership.json', 'input-ownership.json',
+OWNERSHIP = {'common-reference-ownership.json', 'node-input-ownership.json', 'input-ownership.json',
              'input-local-ownership.json', 'final-ownership.json'}
 
 
@@ -105,6 +106,8 @@ def load_cell(path, root):
     require([item['graph'] for item in build['graphs']] == graphs, 'missing or duplicate build graph')
     require(observations['executors'][0]['observations'] == observations['executors'][1]['observations'],
             'within-node observations disagree')
+    require(execution['semantic_baseline'] == verify_semantics(observations, root),
+            'historical semantic comparison record differs')
     compiler = dict(line.split(': ', 1) for line in build['compiler'].splitlines() if ': ' in line)
     require(compiler['release'] == TOOLCHAIN and compiler['host'] == cell[0], 'wrong compiler or host')
     require(build['toolchain_inputs']['compiler'] == build['compiler'], 'compiler records disagree')

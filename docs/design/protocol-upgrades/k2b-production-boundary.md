@@ -250,3 +250,44 @@ post-rollback restoration checks. The lead accepts that same contract.
 This agreement closes the consequential interface-planning question. It does
 not waive prerequisite integration, implementation tests or consolidated phase
 reviews, and does not establish production graph isolation or phase acceptance.
+
+
+## Historical semantic supplement
+
+`tools/protocol-bundles/semantic-baseline.json` preserves observations from the
+qualified pre-extraction base `e7361411fcf812602a736370577267db81a1ceb0`.
+Its test-only source revision is recorded in the report. No production semantic
+code changed to generate it. The transcript, compiler identity, original lock
+hash, test executable hash and shared fixture hashes accompany the observations.
+
+The supplement covers fresh native genesis and provenance, idempotent genesis
+resume, successful and failing views, committee derivation, malformed input,
+block lifecycle, and a twelve-operation raw Bitcoin transaction. That transaction
+includes publication, successful writes, direct and nested contract errors, a
+nested missing-function trap and out-of-gas. Exact error strings, failure
+positions, gas categories and typed SQL state digests are preserved. The linked
+node must match these historical results in both retained graphs. Its simulation,
+rollback replay and committed execution must also agree. This supplements the
+existing eleven-stage historical confirmation/reorg comparison, which remains
+separate evidence. These finite fixtures do not prove parity for every input.
+
+To reproduce the historical observations, make a clean worktree at the recorded
+historical base. Copy `tools/protocol-bundles/historical_semantics.rs` to
+`core/indexer/src/historical_semantics.rs`, copy
+`core/indexer/src/protocol_qualification/fixture.rs` to the same relative path,
+and add `#[cfg(test)] mod historical_semantics;` to `core/indexer/src/lib.rs`.
+Commit only those test additions. With the pinned Rust 1.99.1 compiler, run from
+`core`, using the shared build-slot procedure:
+
+```sh
+KONTOR_SEMANTIC_ORACLE=/absolute/path/to/new-oracle.json \
+  cargo test --locked --offline --jobs 2 -p indexer --lib \
+  historical_semantic_supplement -- --ignored --nocapture
+```
+
+The output must not already exist. Review any difference against the preserved
+observations instead of regenerating expected values from the extracted runtime.
+The production qualification runner and cross-platform comparator both perform
+the historical comparison; agreement between two regressed graphs cannot pass.
+The synthetic Python comparator fixtures are controls for that verifier, not
+additional execution evidence.

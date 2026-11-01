@@ -6,6 +6,7 @@ import unittest
 
 from build import digest
 from qualify_node import CASES, execute_node
+from test_semantic_baseline import sample_observation
 
 
 class NodeExecution(unittest.TestCase):
@@ -17,8 +18,8 @@ class NodeExecution(unittest.TestCase):
         self.report = self.root / 'node-build.json'
         self.success = self.root / 'node-execution.json'
         self.observations = {'schema': 1, 'cases': sorted(CASES), 'executors': [
-            {'graph': 'first', 'observations': {'state': 'same'}},
-            {'graph': 'second', 'observations': {'state': 'same'}}]}
+            {'graph': 'first', 'observations': sample_observation()},
+            {'graph': 'second', 'observations': sample_observation()}]}
 
     def prepare(self, status=0):
         self.binary.write_text(f'#!{sys.executable}\nimport sys\nprint({json.dumps(self.observations)!r})\nsys.exit({status})\n')
@@ -47,6 +48,14 @@ class NodeExecution(unittest.TestCase):
     def test_failed_process_cannot_pass_with_valid_json(self):
         self.prepare(status=1)
         with self.assertRaisesRegex(RuntimeError, 'execution failed'):
+            execute_node(self.report)
+        self.assertFalse(self.success.exists())
+
+    def test_agreeing_graphs_cannot_replace_historical_behavior(self):
+        for graph in self.observations['executors']:
+            graph['observations']['malformed_transaction'] = 'changed error'
+        self.prepare()
+        with self.assertRaisesRegex(ValueError, 'historical semantic comparison differs'):
             execute_node(self.report)
         self.assertFalse(self.success.exists())
 
