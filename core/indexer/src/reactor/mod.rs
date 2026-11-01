@@ -1,5 +1,3 @@
-#[cfg(feature = "protocol-qualification")]
-pub(crate) mod qualification;
 #[cfg(test)]
 mod aggregate_error_tests;
 mod batches;
@@ -21,6 +19,8 @@ mod mempool_tests;
 pub mod mock_bitcoin;
 #[cfg(test)]
 mod pruning_tests;
+#[cfg(feature = "protocol-qualification")]
+pub(crate) mod qualification;
 #[cfg(test)]
 mod reactor_cluster_tests;
 mod session;

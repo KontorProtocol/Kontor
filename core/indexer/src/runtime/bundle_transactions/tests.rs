@@ -43,7 +43,7 @@ fn raw_transaction(public: XOnlyPublicKey) -> Result<BitcoinTransaction> {
             gas_limit: 100_000,
             kind: InstKind::Call {
                 contract: token_address(),
-                expr: expr.into(),
+                expr,
             },
         })
         .collect(),

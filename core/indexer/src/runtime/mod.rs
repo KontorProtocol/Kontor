@@ -314,6 +314,7 @@ impl Runtime {
         Ok(Arc::new(Linkers { user, native }))
     }
 
+    #[cfg(test)]
     pub(crate) async fn new(component_cache: ComponentCache, storage: Storage) -> Result<Self> {
         let engine = Self::new_engine()?;
         let linkers = Self::new_linkers(&engine)?;

@@ -79,11 +79,16 @@ impl Runtime {
             selection.0 == self.executor_version().tag(),
             "runtime does not match selected executor"
         );
-        let valid_position = match selection.3 {
-            (0 | 1, 0, None, 0) | (2, _, _, 0) | (5, _, None, 0) => true,
-            (3 | 4, _, Some(_), _) | (6, _, None, 1) | (6, 0, None, 0) | (7, 0, None, _) => true,
-            _ => false,
-        };
+        let valid_position = matches!(
+            selection.3,
+            (0 | 1, 0, None, 0)
+                | (2, _, _, 0)
+                | (5, _, None, 0)
+                | (3 | 4, _, Some(_), _)
+                | (6, _, None, 1)
+                | (6, 0, None, 0)
+                | (7, 0, None, _)
+        );
         ensure!(
             valid_position,
             "invalid executor selection position envelope"

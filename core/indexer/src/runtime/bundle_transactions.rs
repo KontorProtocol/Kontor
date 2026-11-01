@@ -78,7 +78,7 @@ impl Runtime {
     ) -> Result<TransactionOutcome> {
         let transaction = self.prepared_transaction(selection, parsed, tx_index)?;
         ensure!(
-            matches!(selection.3.0, 3 | 4 | 5),
+            matches!(selection.3.0, 3..=5),
             "transaction requires a block, batch or simulation selection"
         );
         let mut runtime = self.bind_selection(selection)?;
@@ -203,7 +203,7 @@ impl BundleSession {
                 runtime
                     .verify_bundle_operation(&selection, selection.3.0)
                     .map_err(infrastructure)?;
-                if !matches!(selection.3.0, 3 | 4 | 5) {
+                if !matches!(selection.3.0, 3..=5) {
                     return Err((
                         2,
                         "transaction requires a block, batch or simulation selection".into(),

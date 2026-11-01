@@ -106,9 +106,9 @@ async fn resolve_publisher_signer_id(
     if input.insts.aggregate.is_none() {
         return Ok(None);
     }
-    Ok((callbacks.0)(input.x_only_pubkey.to_string())
+    (callbacks.0)(input.x_only_pubkey.to_string())
         .await
-        .map_err(host_failure)?)
+        .map_err(host_failure)
 }
 
 fn materialize_result(row: ResultRecord) -> Result<ResultRow> {

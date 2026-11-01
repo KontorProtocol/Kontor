@@ -457,6 +457,13 @@ impl ChildContext {
 
 enum RootAuthority {
     #[cfg(not(kontor_node))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Exercised by in-tree ownership compatibility tests"
+        )
+    )]
     Pooled(Object<Manager>),
     #[cfg(not(kontor_node))]
     Stateful(Runtime),
@@ -615,6 +622,13 @@ struct LinkedStatefulSessionInner {
 #[derive(Clone)]
 pub(crate) struct LinkedStatefulSession(Arc<LinkedStatefulSessionInner>);
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Exercised by in-tree ownership compatibility tests"
+    )
+)]
 struct LinkedSessionCheckout {
     session: LinkedStatefulSession,
     value: Option<LinkedSession>,
@@ -628,6 +642,13 @@ impl Drop for LinkedSessionCheckout {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Exercised by in-tree ownership compatibility tests"
+    )
+)]
 impl LinkedStatefulSession {
     pub(crate) fn new(session: LinkedSession) -> Self {
         Self(Arc::new(LinkedStatefulSessionInner {
@@ -694,6 +715,13 @@ struct RootKeeper {
 
 impl RootKeeper {
     #[cfg(not(kontor_node))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Exercised by in-tree ownership compatibility tests"
+        )
+    )]
     fn new(id: RootId, authority: Object<Manager>, capacity: OwnedSemaphorePermit) -> Self {
         Self::with_authority(id, RootAuthority::Pooled(authority), capacity)
     }
@@ -934,6 +962,10 @@ pub(crate) struct CanonicalRootLease {
 pub(crate) struct LinkedCanonicalRootLease {
     keeper: Arc<RootKeeper>,
     registry: Arc<OwnerRegistry>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Retained for ownership inspection in unit tests")
+    )]
     adapter: OwnerAdapter,
     root_alive: Arc<AtomicBool>,
     finish: Option<oneshot::Sender<()>>,
@@ -950,6 +982,13 @@ pub(crate) struct LinkedCanonicalRootLease {
 }
 
 impl LinkedCanonicalRootLease {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Exercised by in-tree ownership compatibility tests"
+        )
+    )]
     pub(crate) fn adapter(&self) -> OwnerAdapter {
         self.adapter.clone()
     }
@@ -1149,6 +1188,13 @@ struct RunningChild {
 enum ReturnTo {
     #[cfg(not(kontor_node))]
     Legacy(StatefulSession),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Exercised by in-tree ownership compatibility tests"
+        )
+    )]
     Linked(LinkedStatefulSession),
 }
 
@@ -1640,6 +1686,13 @@ impl OwnerService {
     }
 
     #[cfg(not(kontor_node))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Exercised by in-tree ownership compatibility tests"
+        )
+    )]
     pub(crate) async fn start_pooled<T, F>(
         &self,
         object: Object<Manager>,
@@ -1657,6 +1710,13 @@ impl OwnerService {
     }
 
     #[cfg(not(kontor_node))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Exercised by in-tree ownership compatibility tests"
+        )
+    )]
     pub(crate) async fn start_pooled_reserved<T, F>(
         &self,
         object: Object<Manager>,
@@ -1822,6 +1882,13 @@ impl OwnerService {
         .await
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Exercised by in-tree ownership compatibility tests"
+        )
+    )]
     pub(crate) async fn start_linked_stateful_reserved(
         &self,
         session: &LinkedStatefulSession,

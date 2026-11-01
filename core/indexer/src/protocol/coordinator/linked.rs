@@ -23,9 +23,9 @@ use super::selection::{
 use crate::consensus::ValidatorSet;
 use crate::database::queries::{insert_block_execution_usage, insert_transaction_execution_usage};
 use crate::database::storage_callbacks_v1::storage_callbacks;
-use crate::protocol::operations::{
-    AddressEnvelope, GenesisEnvelope, RecognitionCall, SessionOwner, ViewOutcome,
-};
+#[cfg(any(test, feature = "protocol-qualification"))]
+use crate::protocol::operations::{AddressEnvelope, ViewOutcome};
+use crate::protocol::operations::{GenesisEnvelope, RecognitionCall, SessionOwner};
 #[cfg(kontor_linked)]
 use crate::protocol::session::{HostError, HostFuture};
 use crate::protocol::session::{SelectionSource, SessionExports};
@@ -316,6 +316,7 @@ where
         .map_err(|_| anyhow!("node read operation returned the wrong payload type"))?
 }
 
+#[cfg(any(test, feature = "protocol-qualification"))]
 pub(crate) async fn execute_view(
     service: &OwnerService,
     object: Object<LinkedManager>,
@@ -512,6 +513,7 @@ impl PreparedTransaction {
     }
 }
 
+#[cfg(any(test, feature = "protocol-qualification"))]
 pub(crate) fn recognize_transaction(
     executor: &ExecutorSession,
     selection: &ExecutionSelection,

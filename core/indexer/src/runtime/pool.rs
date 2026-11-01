@@ -134,6 +134,7 @@ impl managed::Manager for LinkedManager {
 
 #[cfg(not(kontor_node))]
 impl Manager {
+    #[cfg(test)]
     pub(crate) fn new(
         data_dir: PathBuf,
         filename: String,
@@ -219,7 +220,7 @@ impl managed::Manager for Manager {
     }
 }
 
-#[cfg(not(kontor_node))]
+#[cfg(all(test, not(kontor_node)))]
 pub(crate) async fn new(
     data_dir: PathBuf,
     filename: String,

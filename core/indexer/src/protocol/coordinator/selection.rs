@@ -122,18 +122,18 @@ impl ExecutionSelection {
     }
 
     pub(crate) fn ensure_canonical_root(&self, simulation: bool) -> Result<()> {
-        let valid = match (&self.position, simulation) {
-            (ApplicationPosition::Simulation { .. }, true) => true,
-            (
-                ApplicationPosition::Block { .. }
-                | ApplicationPosition::Batch { .. }
-                | ApplicationPosition::Committee
-                | ApplicationPosition::Maintenance { .. }
-                | ApplicationPosition::Initialization { .. },
-                false,
-            ) => true,
-            _ => false,
-        };
+        let valid = matches!(
+            (&self.position, simulation),
+            (ApplicationPosition::Simulation { .. }, true)
+                | (
+                    ApplicationPosition::Block { .. }
+                        | ApplicationPosition::Batch { .. }
+                        | ApplicationPosition::Committee
+                        | ApplicationPosition::Maintenance { .. }
+                        | ApplicationPosition::Initialization { .. },
+                    false,
+                )
+        );
         ensure!(
             valid,
             "executor selection purpose does not match canonical root"
