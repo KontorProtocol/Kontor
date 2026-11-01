@@ -2,39 +2,41 @@ use std::time::Duration;
 
 use anyhow::Result;
 use bitcoin::absolute::LockTime;
+use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use bitcoin::transaction::Version;
-use bitcoin::{Amount, ScriptBuf, Transaction, TxOut};
-use indexer_types::Block;
+use bitcoin::{Amount, Network, ScriptBuf, Transaction, TxIn, TxOut};
+use indexer_types::{Inst, InstKind, Insts};
 use malachitebft_app_channel::AppMsg;
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
-use malachitebft_app_channel::app::types::{PeerId, ProposedValue};
+use malachitebft_app_channel::app::types::PeerId;
 use malachitebft_core_consensus::Role;
 use malachitebft_core_types::{Round, Validity};
 use malachitebft_engine::host::Next;
-use tokio::sync::{mpsc, oneshot, watch};
+use tempfile::TempDir;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
+use super::certified_fixture;
 use super::consensus_state::proposal_sign_hash;
-use super::engine::EngineConfig;
-use super::executor::NoopExecutor;
-use super::mempool_fee_index::MempoolFeeIndex;
-use super::{PruneConfig, Reactor, start_consensus};
+use super::execution::ExecutionContext;
+use super::executor::RuntimeExecutor;
+use super::{PruneConfig, Reactor, create_executor_session};
+use crate::bitcoin_client::Client;
 use crate::bitcoin_follower::event::BlockEvent;
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{
-    CommitCertificate, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
-    ProposalParts, Validator, ValidatorSet, Value,
+    Height, ProposalData, ProposalFin, ProposalInit, ProposalPart, ProposalParts, Validator,
+    ValidatorSet, Value,
 };
+use crate::database::certified_history::{closure, completion, registrations};
 use crate::database::queries::select_block_latest;
-use crate::reg_tester::random_x_only_pubkey;
+use crate::database::{Writer, canonical_history, certified_history};
+use crate::protocol::coordinator::certified_input::EraContext;
 use crate::runtime::ownership::OwnerService;
-use crate::runtime::staking::api as staking;
-use crate::runtime::token::api as token;
-use crate::runtime::wit::Signer;
-use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{Decimal, GenesisValidator};
+use crate::runtime::staking::{self, api as staking_api};
+use crate::runtime::{Decimal, GenesisParameters, GenesisValidator};
 use crate::stopper::Shutdown;
-use crate::test_utils::{new_mock_block_hash, test_runtime_with_genesis};
+use crate::test_utils::test_genesis;
 
 #[tokio::test]
 async fn next_height_uses_executed_stake_and_preserves_early_proposals() -> Result<()> {
@@ -56,154 +58,140 @@ async fn last_validator_exit_halts_before_releasing_the_next_height() -> Result<
 
 async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) -> Result<()> {
     let key = PrivateKey::from([17; 32]);
-    let pubkey = random_x_only_pubkey();
-    let (mut runtime, dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
-        x_only_pubkey: pubkey.clone(),
+    let owner = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[31; 32])?);
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: owner.x_only_public_key().0.to_string(),
         ed25519_pubkey: key.public_key().as_bytes().to_vec(),
         stake: Decimal::from("100.9999999"),
-    }])
-    .await?;
-    if exiting {
-        runtime.set_context(1, None, None, None).await;
-        let signer = Signer::Id(runtime.get_or_create_identity(&pubkey).await?);
-        token::issue_to(
-            &mut runtime,
-            &Signer::Core(Box::new(Signer::Nobody)),
-            HolderRef::from(&signer),
-            Decimal::from("1000"),
-        )
-        .await??;
-        staking::leave_validation(&mut runtime, &signer).await??;
-    }
-    let consensus = start_consensus(
-        EngineConfig {
-            private_key: key,
-            listen_addr: "/ip4/127.0.0.1/tcp/0".to_string(),
-            persistent_peers: Vec::new(),
-            data_dir: dir.path().to_path_buf(),
-            consensus_enabled: false,
-            discovery: Default::default(),
-        },
-        &mut runtime,
-        None,
-        None,
-        1,
-        MempoolFeeIndex::new(None),
-    )
-    .await?;
-    let shutdown = Shutdown::new();
-    let (_block_tx, block_rx) = mpsc::channel(1);
-    let (_mempool_tx, mempool_rx) = mpsc::channel(1);
-    let (addr_tx, _addr_rx) = watch::channel(None);
-    let mut reactor = Reactor::new(
-        NoopExecutor,
-        runtime,
-        OwnerService::new(),
-        block_rx,
-        mempool_rx,
-        shutdown.signal(),
-        None,
-        None,
-        None,
-        consensus,
-        PruneConfig {
-            enabled: false,
-            retain_blocks: 144,
-        },
-        1,
-        Some(new_mock_block_hash(1)),
-        addr_tx,
-    );
-    for block_height in 2..=if exiting { 13 } else { 2 } {
-        let block = Block {
-            height: block_height,
-            hash: new_mock_block_hash(block_height as u32),
-            prev_hash: new_mock_block_hash((block_height - 1) as u32),
-            transactions: Vec::new(),
+    }]);
+    let dir = TempDir::new()?;
+    let mut reactor = certified_fixture::reactor(dir.path(), &genesis, key.clone(), 2).await?;
+    let mut parent = certified_fixture::empty_block(1).hash;
+    for block_height in 2..=if exiting { 14 } else { 2 } {
+        let transactions = if exiting && block_height == 2 {
+            vec![certified_fixture::transaction(
+                &owner,
+                Insts::direct(vec![
+                    Inst {
+                        gas_limit: 100_000,
+                        kind: InstKind::Issuance,
+                    },
+                    Inst {
+                        gas_limit: 100_000,
+                        kind: InstKind::Call {
+                            contract: staking::address(),
+                            expr: "leave-validation()".into(),
+                        },
+                    },
+                ]),
+                1,
+            )?]
+        } else {
+            Vec::new()
         };
+        let block = certified_fixture::block(block_height, parent, 0, transactions);
+        parent = block.hash;
         let height = Height::new(block_height - 1);
         let round = Round::new(0);
-        let value = Value::new_block(block.height, block.hash);
-        let certificate = CommitCertificate::new(height, round, value.id(), Vec::new());
+        let value = Value::from_input(block.exact_input(reactor.consensus.protocol_context)?)?;
+        let certificate = certified_fixture::certificate(&key, &value, height, round);
+        let (acknowledge, mut ack) = oneshot::channel();
+        if !deferred {
+            certified_fixture::proposal(&mut reactor, value.clone(), height, round);
+        }
         reactor
             .consensus
-            .undecided
-            .entry(height)
-            .or_default()
-            .insert(
-                round,
-                ProposedValue {
-                    height,
-                    round,
-                    valid_round: Round::Nil,
-                    proposer: reactor.consensus.address,
-                    value,
-                    validity: Validity::Valid,
-                },
+            .receive_decision(&reactor.db_conn(), certificate.clone(), acknowledge)
+            .await?;
+        if deferred {
+            assert!(matches!(
+                ack.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            assert_eq!(
+                certified_history::frontier(&reactor.db_conn())
+                    .await?
+                    .authenticated_height,
+                height.as_u64() - 1
             );
-        if !deferred {
+            certified_fixture::proposal(&mut reactor, value, height, round);
             reactor
                 .consensus
-                .pending_blocks
-                .insert(block.height, block.clone().into());
+                .try_acknowledge_decision(&reactor.db_conn())
+                .await?;
         }
+        ack.await?;
         if before_finalized {
             reactor.consensus.current_round = round;
             reactor.consensus.current_proposer = Some(reactor.consensus.address);
-            let parts = signed_block_proposal(&PrivateKey::from([17; 32]), 2, 0, 3);
+            let parts = signed_block_proposal(reactor.consensus.protocol_context, &key, 2, 0, 3);
             let (reply, received) = oneshot::channel();
             reactor.accept_proposal_parts(parts, reply).await?;
             assert!(received.await?.is_none());
             assert_eq!(reactor.consensus.early_proposals.len(), 1);
         }
         let (reply, mut next) = oneshot::channel();
-        // Certificate verification precedes this callback; this fixture exercises
-        // native lifecycle execution and the reply that authorizes the next height.
-        let finalized = reactor.handle_finalized(certificate, reply).await;
-        let execution = if deferred {
-            finalized?;
-            reactor.advance().await?;
+        reactor.handle_finalized(certificate, reply).await?;
+        assert!(matches!(
+            next.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        if exiting && deferred && block_height == 14 {
+            let conn = reactor.db_conn();
+            let before = canonical_history::state(&conn).await?;
+            conn.execute_batch("CREATE TRIGGER fail_exit_observation BEFORE INSERT ON registration_observations BEGIN SELECT RAISE(ABORT, 'injected observation persistence failure'); END").await?;
+            assert!(reactor.advance().await.is_err());
+            assert_eq!(canonical_history::state(&conn).await?, before);
+            assert_eq!(select_block_latest(&conn).await?.unwrap().height, 13);
+            assert_eq!(
+                staking_api::get_active_set(&mut *reactor.execution.test_runtime().await)
+                    .await?
+                    .len(),
+                1
+            );
             assert!(matches!(
                 next.try_recv(),
                 Err(oneshot::error::TryRecvError::Empty)
             ));
-            assert_eq!(reactor.execution.last_height, block_height - 1);
-            reactor
-                .process_block_event(BlockEvent::BlockInsert {
-                    target_height: block_height,
-                    block: block.into(),
-                })
-                .await
-        } else {
-            match finalized {
-                Ok(_) => reactor.advance().await,
-                Err(error) => Err(error),
-            }
-        };
-        if exiting && block_height == 13 {
-            let error = execution.expect_err("removing the last validator must halt");
-            assert!(format!("{error:#}").contains("validator set is empty"));
+            assert!(conn.is_autocommit());
+            conn.execute_batch("DROP TRIGGER fail_exit_observation")
+                .await?;
+        }
+        // No pending Bitcoin block or RPC is supplied after the durable acknowledgement.
+        let execution = reactor.advance().await;
+        if exiting && execution.is_err() {
+            assert_eq!(
+                block_height, 14,
+                "validator exited before its scheduled epoch"
+            );
+            let error = execution.unwrap_err();
+            assert!(
+                error
+                    .downcast_ref::<completion::InvalidNextAuthority>()
+                    .is_some(),
+                "{error:#}"
+            );
             assert!(
                 next.try_recv().is_err(),
                 "must not authorize a new consensus height"
             );
             assert!(
-                staking::get_active_set(&mut *reactor.execution.test_runtime().await)
+                staking_api::get_active_set(&mut *reactor.execution.test_runtime().await)
                     .await?
                     .is_empty()
             );
-        } else {
-            execution?;
-            let Next::Start(next_height, params) = timeout(Duration::from_secs(5), next).await??
-            else {
-                panic!("expected the next consensus height");
-            };
-            assert_eq!(next_height, Height::new(block_height));
-            assert_eq!(
-                params.validator_set.total_voting_power(),
-                if exiting { 100 } else { 101 }
-            );
+            assert_eq!(reactor.execution.last_height, block_height);
+            return check_exit_recovery(reactor, &dir, &genesis).await;
         }
+        execution?;
+        let Next::Start(next_height, params) = timeout(Duration::from_secs(5), next).await?? else {
+            panic!("expected the next consensus height");
+        };
+        assert_eq!(next_height, Height::new(block_height));
+        assert_eq!(
+            params.validator_set.total_voting_power(),
+            if exiting { 100 } else { 101 }
+        );
         assert_eq!(reactor.execution.last_height, block_height);
         assert_eq!(
             select_block_latest(&reactor.db_conn())
@@ -212,6 +200,7 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
                 .height,
             block_height
         );
+        assert!(!exiting || block_height < 14, "last validator never exited");
     }
     if !exiting {
         check_early_proposal(&mut reactor, 0).await?;
@@ -228,25 +217,113 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
     Ok(())
 }
 
+async fn check_exit_recovery(
+    reactor: Reactor<RuntimeExecutor>,
+    directory: &TempDir,
+    genesis: &GenesisParameters,
+) -> Result<()> {
+    let conn = reactor.db_conn();
+    let frontier = certified_history::frontier(&conn).await?;
+    let height = frontier.authenticated_height;
+    assert_eq!(height, 13);
+    assert_eq!(frontier.closed_height, 12);
+    let progress = closure::recover(&conn, height).await?;
+    assert!(progress.remaining.is_empty());
+    let observation = registrations::latest(&conn).await?.unwrap();
+    assert!(observation.committee.is_empty());
+    assert_eq!(observation.entries.len(), 1);
+    assert_eq!(observation.entries[0].value.as_ref().unwrap().1, 0);
+    assert!(observation.entries[0].generation.is_none());
+    assert!(
+        certified_history::committee(&conn, height + 1)
+            .await
+            .is_err()
+    );
+    assert!(completion::completed(&conn, height).await.is_err());
+    let canonical = canonical_history::state(&conn).await?;
+    let context = reactor.execution.protocol_context;
+    reactor
+        .consensus
+        .engine_handle
+        .actor
+        .get_cell()
+        .stop_and_wait(None, Some(Duration::from_secs(5)))
+        .await?;
+    drop(conn);
+    drop(reactor);
+
+    // Recovery must encounter the authority gate without replaying the committed exit.
+    let writer = Writer::new(directory.path(), "certified-fixture.db").await?;
+    let service = OwnerService::new();
+    let (executor, session, tip, hash) = create_executor_session(
+        2,
+        &writer,
+        &service,
+        Client::new("http://127.0.0.1:1".into(), String::new(), String::new())?,
+        None,
+        genesis,
+        Network::Regtest,
+    )
+    .await?;
+    let mut execution = ExecutionContext::new(
+        executor,
+        session,
+        Network::Regtest,
+        service,
+        context,
+        PruneConfig {
+            enabled: false,
+            retain_blocks: 144,
+        },
+        tip,
+        hash,
+    );
+    let error = execution
+        .recover(&Shutdown::new().signal())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<completion::InvalidNextAuthority>()
+            .is_some(),
+        "{error:#}"
+    );
+    let conn = execution.db_conn();
+    assert!(conn.is_autocommit());
+    assert_eq!(execution.owner_service.active_roots().await, 0);
+    assert_eq!(canonical_history::state(&conn).await?, canonical);
+    assert_eq!(closure::recover(&conn, height).await?, progress);
+    assert_eq!(registrations::latest(&conn).await?, Some(observation));
+    let reopened = certified_history::frontier(&conn).await?;
+    assert_eq!(reopened.authenticated_height, height);
+    assert_eq!(reopened.closed_height, frontier.closed_height);
+    assert_eq!(reopened.closure_id, frontier.closure_id);
+    assert!(
+        certified_history::committee(&conn, height + 1)
+            .await
+            .is_err()
+    );
+    assert!(completion::completed(&conn, height).await.is_err());
+    assert_eq!(select_block_latest(&conn).await?.unwrap().height, 14);
+    assert!(
+        staking_api::get_active_set(&mut *execution.test_runtime().await)
+            .await?
+            .is_empty()
+    );
+    Ok(())
+}
+
 async fn check_early_proposal(
-    reactor: &mut Reactor<NoopExecutor>,
+    reactor: &mut Reactor<RuntimeExecutor>,
     target_round: u32,
 ) -> Result<()> {
     let height = Height::new(2);
     let round = Round::new(target_round);
     let proposer = reactor.consensus.address;
-    let hash = new_mock_block_hash(3);
-    let parts = signed_block_proposal(&PrivateKey::from([17; 32]), 2, target_round, 3);
-    reactor.consensus.pending_blocks.insert(
-        3,
-        Block {
-            height: 3,
-            hash,
-            prev_hash: new_mock_block_hash(2),
-            transactions: Vec::new(),
-        }
-        .into(),
-    );
+    let context = reactor.consensus.protocol_context;
+    let block = certified_fixture::empty_block(3);
+    let parts = signed_block_proposal(context, &PrivateKey::from([17; 32]), 2, target_round, 3);
+    reactor.consensus.pending_blocks.insert(3, block.clone());
     assert_eq!(
         reactor.consensus.current_round,
         if target_round == 0 {
@@ -316,7 +393,10 @@ async fn check_early_proposal(
         .await?;
     let proposals = timeout(Duration::from_secs(5), received).await??;
     assert_eq!(proposals.len(), 1);
-    assert_eq!(proposals[0].value, Value::new_block(3, hash));
+    assert_eq!(
+        proposals[0].value,
+        Value::from_input(block.exact_input(context)?)?
+    );
     assert_eq!(proposals[0].validity, Validity::Valid);
     assert!(reactor.consensus.early_proposals.is_empty());
     Ok(())
@@ -328,11 +408,24 @@ fn proposal_peer(seed: u8) -> PeerId {
     PeerId::from_bytes(&bytes).expect("valid sha256 multihash peer id")
 }
 
-fn signed_block_proposal(key: &PrivateKey, height: u64, round: u32, block: u64) -> ProposalParts {
+fn signed_block_proposal(
+    context: EraContext,
+    key: &PrivateKey,
+    height: u64,
+    round: u32,
+    block: u64,
+) -> ProposalParts {
     let height = Height::new(height);
     let round = Round::new(round);
     let proposer = Validator::new(key.public_key(), 1).address;
-    let data = ProposalData::new_block(block, new_mock_block_hash(block as u32));
+    let data = ProposalData::new(
+        Value::from_input(
+            certified_fixture::empty_block(block)
+                .exact_input(context)
+                .unwrap(),
+        )
+        .unwrap(),
+    );
     let signature = key.sign(&proposal_sign_hash(height, round, &data));
     ProposalParts {
         height,
@@ -346,8 +439,10 @@ fn signed_block_proposal(key: &PrivateKey, height: u64, round: u32, block: u64) 
     }
 }
 
-async fn check_buffer_authentication_and_limits(reactor: &mut Reactor<NoopExecutor>) -> Result<()> {
-    let conn = reactor.db_conn();
+async fn check_buffer_authentication_and_limits(
+    reactor: &mut Reactor<RuntimeExecutor>,
+) -> Result<()> {
+    let context = reactor.consensus.protocol_context;
     let state = &mut reactor.consensus;
     let key = PrivateKey::from([17; 32]);
     let newcomer = PrivateKey::from([18; 32]);
@@ -359,12 +454,12 @@ async fn check_buffer_authentication_and_limits(reactor: &mut Reactor<NoopExecut
     state.current_round = round;
 
     // A forged copy arriving first cannot hide a later valid newcomer proposal.
-    let genuine = signed_block_proposal(&newcomer, 3, 0, 4);
+    let genuine = signed_block_proposal(context, &newcomer, 3, 0, 4);
     let mut forged = genuine.clone();
     forged.parts[2] = ProposalPart::Fin(ProposalFin::new(key.sign(b"forged")));
     state.buffer_early_proposal(forged);
     state.buffer_early_proposal(genuine.clone());
-    state.buffer_early_proposal(signed_block_proposal(&key, 2, 1, 3));
+    state.buffer_early_proposal(signed_block_proposal(context, &key, 2, 1, 3));
     assert_eq!(state.early_proposals.len(), 3);
     assert!(state.take_early_proposal(height, round, proposer).is_none());
     assert_eq!(state.early_proposals.len(), 3);
@@ -383,7 +478,7 @@ async fn check_buffer_authentication_and_limits(reactor: &mut Reactor<NoopExecut
 
     // Recheck membership after a set change, even for previously verified entries.
     state.current_validator_set = old_set.clone();
-    state.buffer_early_proposal(signed_block_proposal(&key, 3, 0, 4));
+    state.buffer_early_proposal(signed_block_proposal(context, &key, 3, 0, 4));
     state.current_validator_set = ValidatorSet::new([Validator::new(newcomer.public_key(), 1)]);
     assert!(
         state
@@ -391,7 +486,7 @@ async fn check_buffer_authentication_and_limits(reactor: &mut Reactor<NoopExecut
             .is_none()
     );
     state.current_validator_set = old_set;
-    state.buffer_early_proposal(signed_block_proposal(&key, 2, 1, 3));
+    state.buffer_early_proposal(signed_block_proposal(context, &key, 2, 1, 3));
     assert!(
         state
             .take_early_proposal(height, Round::new(1), genuine.proposer)
@@ -400,7 +495,7 @@ async fn check_buffer_authentication_and_limits(reactor: &mut Reactor<NoopExecut
     assert!(state.early_proposals.is_empty());
 
     for (h, r) in [(1, 0), (2, 0), (2, 2), (3, 1), (4, 0)] {
-        state.buffer_early_proposal(signed_block_proposal(&key, h, r, 4));
+        state.buffer_early_proposal(signed_block_proposal(context, &key, h, r, 4));
     }
     let mut nil = genuine.clone();
     nil.round = Round::Nil;
@@ -408,17 +503,17 @@ async fn check_buffer_authentication_and_limits(reactor: &mut Reactor<NoopExecut
     assert!(state.early_proposals.is_empty());
     state.current_height = Height::new(u64::MAX);
     state.current_round = Round::new(u32::MAX);
-    state.buffer_early_proposal(signed_block_proposal(&key, 0, 0, 4));
-    state.buffer_early_proposal(signed_block_proposal(&key, u64::MAX, 0, 4));
+    state.buffer_early_proposal(signed_block_proposal(context, &key, 0, 0, 4));
+    state.buffer_early_proposal(signed_block_proposal(context, &key, u64::MAX, 0, 4));
     assert!(state.early_proposals.is_empty());
     state.current_height = height;
     state.current_round = round;
     for block in 4..24 {
-        state.buffer_early_proposal(signed_block_proposal(&newcomer, 3, 0, block));
+        state.buffer_early_proposal(signed_block_proposal(context, &newcomer, 3, 0, block));
     }
     assert_eq!(state.early_proposals.len(), 4);
     for block in 4..24 {
-        state.buffer_early_proposal(signed_block_proposal(&key, 3, 0, block));
+        state.buffer_early_proposal(signed_block_proposal(context, &key, 3, 0, block));
     }
     assert_eq!(state.early_proposals.len(), 16);
     assert!(
@@ -428,13 +523,13 @@ async fn check_buffer_authentication_and_limits(reactor: &mut Reactor<NoopExecut
     );
     assert!(state.early_proposals.is_empty());
 
-    let oversized_unknown = signed_large_proposal(&newcomer, 1024 * 1024, 4);
+    let oversized_unknown = signed_large_proposal(context, &newcomer, 1024 * 1024, 4)?;
     state.buffer_early_proposal(oversized_unknown);
     assert!(state.early_proposals.is_empty());
-    state.buffer_early_proposal(signed_large_proposal(&key, 8 * 1024 * 1024, 4));
+    assert!(signed_large_proposal(context, &key, 8 * 1024 * 1024, 4).is_err());
     assert!(state.early_proposals.is_empty());
     for block in 4..7 {
-        state.buffer_early_proposal(signed_large_proposal(&key, 4 * 1024 * 1024 - 1024, block));
+        state.buffer_early_proposal(signed_large_proposal(context, &key, 3_000_000, block)?);
     }
     assert_eq!(state.early_proposals.len(), 2);
     assert!(
@@ -447,28 +542,47 @@ async fn check_buffer_authentication_and_limits(reactor: &mut Reactor<NoopExecut
     );
 
     state.buffer_early_proposal(genuine);
-    state.clear_on_rollback(&conn, 2).await?;
-    assert!(state.early_proposals.is_empty());
+    let before = certified_history::frontier(&reactor.db_conn()).await?;
+    reactor
+        .process_block_event(BlockEvent::Rollback { to_height: 2 })
+        .await?;
+    assert_eq!(
+        certified_history::frontier(&reactor.db_conn()).await?,
+        before
+    );
+    assert!(
+        reactor
+            .consensus
+            .pending_blocks
+            .keys()
+            .all(|height| *height <= 2)
+    );
     Ok(())
 }
 
-fn signed_large_proposal(key: &PrivateKey, bytes: usize, block: u64) -> ProposalParts {
-    let mut parts = signed_block_proposal(key, 3, 0, block);
-    let data = ProposalData::new_batch(
+fn signed_large_proposal(
+    context: EraContext,
+    key: &PrivateKey,
+    bytes: usize,
+    block: u64,
+) -> Result<ProposalParts> {
+    let mut parts = signed_block_proposal(context, key, 3, 0, block);
+    let data = ProposalData::new(Value::new_batch_raw(
+        context,
         block,
-        new_mock_block_hash(block as u32),
+        certified_fixture::empty_block(block).hash,
         vec![Transaction {
             version: Version::TWO,
             lock_time: LockTime::ZERO,
-            input: Vec::new(),
+            input: vec![TxIn::default()],
             output: vec![TxOut {
                 value: Amount::ZERO,
                 script_pubkey: ScriptBuf::from_bytes(vec![0; bytes]),
             }],
         }],
-    );
+    )?);
     let signature = key.sign(&proposal_sign_hash(parts.height, parts.round, &data));
     parts.parts[1] = ProposalPart::Data(data);
     parts.parts[2] = ProposalPart::Fin(ProposalFin::new(signature));
-    parts
+    Ok(parts)
 }

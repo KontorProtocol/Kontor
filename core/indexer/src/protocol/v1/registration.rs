@@ -20,11 +20,17 @@ pub(crate) async fn observe(
     runtime: &mut Runtime,
     watched: Vec<String>,
 ) -> Result<RegistrationObservation> {
-    let committee = derive_committee(runtime).await?;
     let result = runtime
         .execute_system_view(&staking_address(), &get_active_set_call_expr())
         .await?;
     let active = get_active_set_parse_return_expr(&result);
+    // An exit can leave valid committed state with no successor authority.
+    // Record that state here; committee authorization still rejects emptiness.
+    let committee = if active.is_empty() {
+        Vec::new()
+    } else {
+        derive_committee(runtime).await?
+    };
     ensure!(
         active.len() == committee.len(),
         "registration committee length changed"

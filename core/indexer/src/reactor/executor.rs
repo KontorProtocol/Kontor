@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+#[cfg(test)]
+use bitcoin::BlockHash;
 use bitcoin::consensus::serialize;
 #[cfg(test)]
 use bitcoin::hashes::Hash;
@@ -341,6 +343,19 @@ impl RuntimeExecutor {
             bitcoin_client,
             replay_tx: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) async fn retained_test_block(
+        &self,
+        height: u64,
+        hash: BlockHash,
+    ) -> Result<BlockInput> {
+        Ok(BlockInput::from_bitcoin(
+            height,
+            hash,
+            self.bitcoin_client.get_block(&hash).await?,
+        ))
     }
 
     pub fn with_replay_tx(mut self, tx: tokio::sync::mpsc::Sender<u64>) -> Self {

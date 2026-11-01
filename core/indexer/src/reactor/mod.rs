@@ -4,10 +4,14 @@ mod batches;
 mod blocks;
 pub(crate) mod certified;
 #[cfg(test)]
+mod certified_fixture;
+#[cfg(test)]
 mod confirmation_position_tests;
 pub mod consensus_state;
 pub mod engine;
 mod execution;
+#[cfg(test)]
+mod execution_fixture;
 pub mod executor;
 mod handlers;
 #[cfg(test)]

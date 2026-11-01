@@ -47,6 +47,15 @@ binds implementation source, all-target resolved dependency features, aliases,
 target conditions and locked dependency checksums/revisions. The node build checks
 that reference before and after compilation. References are not refreshed implicitly;
 this baseline remains unreleased while K4 is under development.
+The unreleased registration observer can record an empty active set after the
+last validator exits. This does not authorize an empty committee: closure
+publication still rejects successor authority and withholds the next consensus
+height. The exit, registration observation and stage remain committed, so restart
+reaches the same authority gate without repeating or undoing the exit. Watched
+holders remain validated even when the active set is empty. The frozen K3
+committee derivation and executor definitions remain unchanged; correcting the
+draft observer explicitly changes its definition and the draft baseline identity.
+Existing database reservations cannot be rebound to that changed identity.
 Baseline composition and foreign-context rejection have focused local coverage.
 The production executor-session startup now reserves the manifest and genesis
 context before native initialization, then records the initial registration

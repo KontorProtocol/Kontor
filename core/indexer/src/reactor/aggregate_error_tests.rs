@@ -12,8 +12,8 @@ use stdlib::to_wave_expr;
 use tempfile::TempDir;
 use tokio::sync::{mpsc, watch};
 
-use super::consensus_state::DeferredDecision;
 use super::engine::EngineConfig;
+use super::execution_fixture::ExecutionFixture;
 use super::executor::{RuntimeExecutor, process_input};
 use super::mempool_fee_index::MempoolFeeIndex;
 use super::{PruneConfig, Reactor, start_consensus};
@@ -21,7 +21,6 @@ use crate::bitcoin_client::Client;
 use crate::block::TxWalker;
 use crate::bls::{KONTOR_BLS_DST, RegistrationProof};
 use crate::consensus::signing::PrivateKey;
-use crate::consensus::{Height, Value};
 use crate::database::queries::{ensure_identity, get_identity};
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::token::{address as token_address, api as token};
@@ -134,7 +133,7 @@ async fn fails_and_recovers(fault: Fault) -> Result<()> {
     let claimant = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[32; 32])?);
     let publisher_key = publisher.x_only_public_key().0;
     let claimant_key = claimant.x_only_public_key().0;
-    let (mut runtime, dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
+    let (mut runtime, _dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
         x_only_pubkey: publisher_key.to_string(),
         ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
         stake: Decimal::from("100"),
@@ -208,13 +207,17 @@ async fn fails_and_recovers(fault: Fault) -> Result<()> {
             }],
         }],
     };
-    let decision = DeferredDecision {
-        consensus_height: Height::new(1),
-        value: Value::new_block(2, block.hash),
-        certificate: Vec::new(),
-        execution_txs: None,
-    };
-    let mut reactor = reactor(runtime, &dir).await?;
+    let mut reactor = ExecutionFixture::new(
+        runtime,
+        RuntimeExecutor::new(Client::new(
+            "http://127.0.0.1:1".into(),
+            String::new(),
+            String::new(),
+        )?),
+        1,
+        Some(new_mock_block_hash(1)),
+    )
+    .await?;
     let saved = snapshot(&conn).await?;
     let denials = Arc::new(AtomicUsize::new(0));
     let observed = denials.clone();
@@ -269,7 +272,7 @@ async fn fails_and_recovers(fault: Fault) -> Result<()> {
             Authorization::Allow
         }
     })))?;
-    let result = reactor.handle_block(block.clone(), &decision).await;
+    let result = reactor.block(block.clone(), 1).await;
     conn.authorizer(None)?;
     assert!(
         denials.load(Ordering::SeqCst) > 0,
@@ -293,7 +296,7 @@ async fn fails_and_recovers(fault: Fault) -> Result<()> {
         saved,
         "block rollback did not restore {fault:?}"
     );
-    reactor.handle_block(block, &decision).await?;
+    reactor.block(block, 1).await?;
     assert_eq!(reactor.execution.last_height, 2);
     let identity = get_identity(&conn, &claimant_key.to_string())
         .await?

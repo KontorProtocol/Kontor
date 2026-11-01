@@ -1429,3 +1429,62 @@ Do not restore synthetic-input acceptance or fabricate certified history for
 legacy runtime snapshots. Then compile and run the affected regressions before
 consolidated K4 review. No remote CI, performance workload or new review round
 was launched for these intermediate edits.
+
+### K4 authenticated handoff fixtures and empty successor authority
+
+The full indexer unit-test executable now compiles. Handoff fixtures use the real
+native genesis/session setup, signed certificates and exact Bitcoin bodies,
+including witness commitments. They exercise immediate and delayed decided input,
+execution before Finalized, early proposals, publisher authentication and bounded
+buffer admission. The witness-retention regression now starts with a certified
+block, respecting the rule that a batch cannot precede the first Bitcoin block.
+
+Aggregate database faults and synthetic storage-penalty tests now use an explicit
+execution-only fixture. It requires unavailable canonical history, starts no
+consensus engine and fabricates no certified records. It exercises the shared
+block transaction and owned execution/rollback operations. Its coverage is
+accounting and failure behavior, not authenticated consensus or recovery.
+The production block transaction helper now receives the decision height and
+certificate explicitly; its live caller supplies the same validated decision.
+Archived workload setup still needs authentic history migration.
+
+Before the observer correction, the focused run in
+`.build-cache/k4-fixture-regressions7.log` passed all 11 tests in 274.26 seconds
+(build 56.13 seconds, session 16435, exit 0). It covers witness retention,
+aggregate failure/retry and positional errors, normal handoff/early proposals,
+and storage settlement, rollback, reopen and last-validator penalties.
+Log SHA-256: `4db9ac60cc7f8bbec26fcd20126d56d915c0e2d3fdcf52a11b6439a3a3c1eb17`.
+This result is bound to the source before the observer correction below.
+
+The real certified last-validator exit test exposed a regression: the observer
+called nonempty committee derivation inside the block transaction and rolled back
+the valid exit. The sole planning reviewer explicitly agreed that the existing
+unreleased K4 observer should accept an empty observed set while continuing to
+validate every watched holder. Frozen P1 committee derivation and frozen K3
+sources/references are unchanged. The existing authority constructor still
+rejects emptiness, so publication halts after execution commits. This was a
+targeted architectural agreement, not consolidated K4 implementation approval.
+
+The observer reference was explicitly refreshed to definition
+`cc6739c0387a9a5cf2eda7b82c668598ebc7d16c8b6d644d90683f231939d194`.
+The refreshed draft coordinator definition is
+`fc1ca26f92899f065d90effedcb6bb47aa4cd3f68f929ee4296142eea16e5b07`.
+No existing database identity was rewritten. The focused post-correction run in
+`.build-cache/k4-exit-recovery8.log` passed 2 tests in 82.17 seconds (build 67
+seconds, session 40950, exit 0). It verifies the unchanged nonempty projection
+with public view gas set to zero, and immediate/delayed certified exit flows:
+durable empty staking state and observation, absent successor committee/closure,
+withheld Next, reopen through executor startup and engine-free recovery,
+unchanged canonical lineage/stage/observation after retry, and zero live roots.
+An injected observation-persistence failure rolls back the exit before a
+successful retry. Authority failure is checked by its typed error.
+Log SHA-256: `8c4a04f5c2e091a03362288661589a2e9bc672af99e934ad24a190dc2357bddf`.
+Ten execution-definition tooling tests and three coordinator-definition tooling
+tests also passed locally. Formatting and diff checks passed for the changed files.
+
+K4 remains incomplete. Database/closure fixtures that still start with an
+uncertified batch need migration, as do the broader reactor/mock-cluster/archive
+fixtures. Broader replay cases, bounded proof transport, consolidated lead and
+independent review, and scoped final-candidate CI/merge remain required. This
+checkpoint does not establish a passing full unit suite or linked cross-platform
+qualification. No remote CI or additional review round was launched.

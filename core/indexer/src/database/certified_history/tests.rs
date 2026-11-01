@@ -1,6 +1,11 @@
 use bitcoin::absolute::LockTime;
+use bitcoin::blockdata::constants::genesis_block;
+use bitcoin::consensus::serialize;
 use bitcoin::transaction::Version;
-use bitcoin::{Amount, BlockHash, ScriptBuf, Transaction, TxIn, TxOut, Witness, hashes::Hash};
+use bitcoin::{
+    Amount, Block, BlockHash, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid,
+    Witness, hashes::Hash,
+};
 use indexer_types::BlockRow;
 use tempfile::TempDir;
 
@@ -78,25 +83,42 @@ pub(super) async fn prepared() -> Result<(
     Ok((directory, conn, authority, input, decision, keys))
 }
 
+fn witnessed_block(transaction: Transaction) -> Block {
+    let mut block = genesis_block(Network::Regtest);
+    block.txdata.push(transaction);
+    block.txdata[0].input[0].witness = Witness::from_slice(&[[0; 32]]);
+    let commitment = Block::compute_witness_commitment(&block.witness_root().unwrap(), &[0; 32]);
+    let mut script = vec![0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed];
+    script.extend_from_slice(&commitment.to_byte_array());
+    block.txdata[0].output.push(TxOut {
+        value: Amount::ZERO,
+        script_pubkey: ScriptBuf::from_bytes(script),
+    });
+    block.header.merkle_root = block.compute_merkle_root().unwrap();
+    block
+}
+
 #[tokio::test]
 async fn unexecuted_decision_retains_exact_witnesses_across_restart() -> Result<()> {
     let (directory, conn, authority, _, mut decision, keys) = prepared().await?;
     let mut transaction = Transaction {
         version: Version::TWO,
         lock_time: LockTime::ZERO,
-        input: vec![TxIn::default()],
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: Txid::from_byte_array([4; 32]),
+                vout: 0,
+            },
+            ..TxIn::default()
+        }],
         output: vec![TxOut {
             value: Amount::from_sat(1),
             script_pubkey: ScriptBuf::new(),
         }],
     };
     transaction.input[0].witness = Witness::from_slice(&[b"decided witness"]);
-    let input = ExactInput::batch(
-        authority.context,
-        0,
-        BlockHash::all_zeros(),
-        &[transaction.clone()],
-    )?;
+    let block = witnessed_block(transaction.clone());
+    let input = ExactInput::block(authority.context, 1, serialize(&block))?;
     decision.descriptor = input.descriptor().clone();
     let certified = AuthenticatedDecision::verify(
         decision.clone(),
@@ -113,7 +135,7 @@ async fn unexecuted_decision_retains_exact_witnesses_across_restart() -> Result<
     let reopened = new_connection(directory.path(), "certified.db").await?;
     initialize(&reopened).await?;
     let loaded = load(&reopened, 1).await?;
-    assert_eq!(loaded.input().transactions()?, vec![transaction.clone()]);
+    assert_eq!(loaded.input().transactions()?, block.txdata);
     assert_eq!(loaded.input(), certified.input());
     // No canonical batch has run. Durable input retention must not depend on its rows.
     let count: i64 = reopened
@@ -129,8 +151,11 @@ async fn unexecuted_decision_retains_exact_witnesses_across_restart() -> Result<
     alternative.input[0].witness = Witness::from_slice(&[b"different witness"]);
     assert_eq!(alternative.compute_txid(), transaction.compute_txid());
     assert_ne!(alternative.compute_wtxid(), transaction.compute_wtxid());
-    let alternative_input =
-        ExactInput::batch(authority.context, 0, BlockHash::all_zeros(), &[alternative])?;
+    let alternative_input = ExactInput::block(
+        authority.context,
+        1,
+        serialize(&witnessed_block(alternative)),
+    )?;
     let mut alternative_decision = decision;
     alternative_decision.descriptor = alternative_input.descriptor().clone();
     let conflicting = AuthenticatedDecision::verify(
@@ -143,7 +168,7 @@ async fn unexecuted_decision_retains_exact_witnesses_across_restart() -> Result<
     assert_eq!(frontier(&reopened).await?, saved);
     assert_eq!(
         load(&reopened, 1).await?.input().transactions()?,
-        vec![transaction]
+        block.txdata
     );
     Ok(())
 }

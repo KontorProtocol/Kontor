@@ -211,13 +211,18 @@ async fn apply(reactor: &mut Reactor<RuntimeExecutor>, block: Block) -> Result<(
         .unwrap_or(0)
         .checked_add(1)
         .context("consensus height overflow")?;
+    let input = reactor
+        .execution
+        .executor
+        .retained_test_block(block.height, block.hash)
+        .await?;
     let decision = DeferredDecision {
         consensus_height: Height::new(next),
-        value: Value::new_block(block.height, block.hash),
+        value: Value::from_input(input.exact_input(reactor.consensus.protocol_context)?)?,
         certificate: Vec::new(),
         execution_txs: None,
     };
-    reactor.handle_block(block, &decision).await
+    reactor.handle_block(input, &decision).await
 }
 
 async fn signed_smoke(

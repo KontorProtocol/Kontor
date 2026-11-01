@@ -137,11 +137,12 @@ impl<E: Executor> ExecutionContext<E> {
     /// The fallible body of `handle_block`'s transaction: the decision record
     /// (when the block arrives decided) plus the block's own writes. Split out
     /// so `handle_block` has a single place to roll back from.
-    async fn block_txn(
+    pub(super) async fn block_txn(
         &mut self,
         selection: &ExecutionSelection,
         block: &PreparedBlock,
-        decision: &consensus_state::DeferredDecision,
+        consensus_height: u64,
+        certificate: &[u8],
     ) -> Result<(usize, u64)> {
         selection.verify_base(&self.db_conn()).await?;
         if block.input.is_none() {
@@ -149,10 +150,10 @@ impl<E: Executor> ExecutionContext<E> {
         }
         insert_batch(
             &self.db_conn(),
-            decision.consensus_height.as_u64(),
+            consensus_height,
             block.height,
             &block.hash.to_string(),
-            &decision.certificate,
+            certificate,
             true,
         )
         .await
@@ -357,8 +358,14 @@ impl<E: Executor> ExecutionContext<E> {
                 .executor
                 .prepare_block(&self.recognizer, stage.selection(), block)
                 .await?;
-            let (unbatched_count, executed_ops) =
-                self.block_txn(stage.selection(), &block, decision).await?;
+            let (unbatched_count, executed_ops) = self
+                .block_txn(
+                    stage.selection(),
+                    &block,
+                    decision.consensus_height.as_u64(),
+                    &decision.certificate,
+                )
+                .await?;
             Ok((
                 (block, unbatched_count, executed_ops),
                 StageOutcome::Applied,
