@@ -52,6 +52,18 @@ pub(crate) enum Command {
     },
 }
 
+impl Command {
+    pub(crate) fn position(&self) -> (u64, BlockHash, bool) {
+        match self {
+            Self::Block { height, hash, .. } => (*height, *hash, true),
+            Self::Batch {
+                anchor_height,
+                anchor_hash,
+            } => (*anchor_height, *anchor_hash, false),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Descriptor {
     pub(crate) context: EraContext,

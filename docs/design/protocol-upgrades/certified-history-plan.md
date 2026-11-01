@@ -445,3 +445,29 @@ Remaining K4 integration includes plan-scoped branch-incarnation and exclusion
 commitments, bounded finality-plan construction, replacing the volatile live driver,
 pre-engine unfinished-closure recovery, proof transport bounds, and complete grouped
 acceptance/review. The existing replay policy above remains the agreed target.
+
+### Replay selection checkpoint
+
+Certified append now records an indexed Bitcoin height, hash and command kind
+alongside the immutable decision. Authenticated loads verify those index fields
+against the decoded decision. Replay selection reads metadata in bounded pages of
+64 decisions, ordered by Bitcoin anchor and original consensus height. It selects
+the branch interval at the specified verdict prefix and requires each batch to
+belong to that same interval. Returning to an earlier block hash does not revive
+its superseded batches. Older verdicts still resolve their original intervals.
+
+Exclusion scanning also uses bounded pages and the existing confirmation/deadline
+and execution-attribution predicate. It filters seeds using the same interval
+eligibility, including seeds below the replay start. Its continuation cursor follows
+scanned rows, so an entirely superseded page does not hide later surviving seeds.
+These APIs select replay inputs; the live finality planner has not yet been connected
+to them, and freezing their results across rollback remains pending.
+
+Two focused checks passed locally in 47.28 seconds after a 48.22-second build
+(`.build-cache/k4-replay-selection.log`). The isolated index fixtures cover returning
+blocks without batch resurrection, retained lower-anchor batches, anchor order when
+consensus order differs, more than one metadata page, historical-prefix stability,
+future-prefix rejection, a fully filtered exclusion page, confirmation attribution
+and reorg-healed applicability. The actual authenticated callback fixture rejects a
+changed execution index. Index fixtures do not prove that a finality verdict
+legitimately produced their synthetic exclusions or replace full reactor acceptance.

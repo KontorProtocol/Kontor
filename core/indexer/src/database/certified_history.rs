@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, ensure};
+use bitcoin::hashes::Hash;
 use libsql::{Connection, TransactionBehavior, params};
 
 use super::canonical_history::{self, HistoryState};
@@ -16,6 +17,7 @@ pub(crate) mod branch;
 pub(crate) mod closure;
 pub(crate) mod completion;
 pub(crate) mod registrations;
+pub(crate) mod replay;
 pub(crate) mod work;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -327,7 +329,7 @@ pub(crate) async fn committee(conn: &Connection, height: u64) -> Result<Committe
 
 pub(crate) async fn load(conn: &Connection, height: u64) -> Result<AuthenticatedDecision> {
     let row = conn.query("SELECT d.decision_id, d.record, i.body, d.original_proof, d.proof_augmentation,
-        d.committee_id, d.body_digest FROM certified_decisions d JOIN certified_inputs i ON d.body_digest = i.body_digest
+        d.committee_id, d.body_digest, d.bitcoin_height, d.bitcoin_hash, d.is_block FROM certified_decisions d JOIN certified_inputs i ON d.body_digest = i.body_digest
         WHERE d.height = ?1", [height.to_be_bytes().to_vec()]).await?.next().await?.context("certified decision unavailable")?;
     let decision = Decision::decode(&row.get::<Vec<u8>>(1)?)?;
     ensure!(
@@ -336,6 +338,13 @@ pub(crate) async fn load(conn: &Connection, height: u64) -> Result<Authenticated
             && decision.committee == fixed::<32>(row.get(5)?)?
             && decision.descriptor.body_digest == fixed::<32>(row.get(6)?)?,
         "certified decision binding differs"
+    );
+    let position = decision.descriptor.command.position();
+    ensure!(
+        u64::from_be_bytes(fixed(row.get(7)?)?) == position.0
+            && fixed::<32>(row.get(8)?)? == position.1.to_byte_array()
+            && row.get::<i64>(9)? == i64::from(position.2),
+        "certified execution index differs"
     );
     let input = ExactInput::validate(decision.descriptor.clone(), row.get(2)?)?;
     let authority = committee(conn, height).await?;
@@ -400,9 +409,10 @@ pub(crate) async fn append(conn: &Connection, certified: &AuthenticatedDecision)
             body == certified.input().body(),
             "retained input digest conflict"
         );
-        tx.execute("INSERT INTO certified_decisions (height, decision_id, record, body_digest, committee_id, original_proof)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![decision.height.to_be_bytes().to_vec(), decision.id()?.to_vec(),
-                decision.encode()?, decision.descriptor.body_digest.to_vec(), decision.committee.to_vec(), certified.proof()]).await?;
+        let position = decision.descriptor.command.position();
+        tx.execute("INSERT INTO certified_decisions (height, decision_id, record, body_digest, committee_id, original_proof, bitcoin_height, bitcoin_hash, is_block)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", params![decision.height.to_be_bytes().to_vec(), decision.id()?.to_vec(),
+                decision.encode()?, decision.descriptor.body_digest.to_vec(), decision.committee.to_vec(), certified.proof(), position.0.to_be_bytes().to_vec(), position.1.to_byte_array().to_vec(), position.2]).await?;
         branch::record(&tx, decision).await?;
         tx.execute("UPDATE certified_history_state SET authenticated_height = ?1, authenticated_id = ?2 WHERE singleton = 1",
             params![decision.height.to_be_bytes().to_vec(), decision.id()?.to_vec()]).await?;

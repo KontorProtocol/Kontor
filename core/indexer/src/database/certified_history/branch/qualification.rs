@@ -6,7 +6,7 @@ use libsql::{Connection, params};
 use tempfile::TempDir;
 
 use super::{at, boundary, record, reserve, tip, validate};
-use crate::database::certified_history::{context_bytes, initialize};
+use crate::database::certified_history::{context_bytes, initialize, replay};
 use crate::database::connection::new_connection;
 use crate::protocol::coordinator::certified_decision::Decision;
 use crate::protocol::coordinator::certified_input::{Command, EraContext, ExactInput};
@@ -35,9 +35,10 @@ async fn append_index(conn: &Connection, height: u64, input: &ExactInput) -> Res
         params![decision.descriptor.body_digest.to_vec(), input.body()],
     )
     .await?;
-    tx.execute("INSERT INTO certified_decisions (height, decision_id, record, body_digest, committee_id, original_proof) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    let position = decision.descriptor.command.position();
+    tx.execute("INSERT INTO certified_decisions (height, decision_id, record, body_digest, committee_id, original_proof, bitcoin_height, bitcoin_hash, is_block) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![height.to_be_bytes().to_vec(), decision.id()?.to_vec(), decision.encode()?,
-            decision.descriptor.body_digest.to_vec(), authority.to_vec(), Vec::<u8>::new()]).await?;
+            decision.descriptor.body_digest.to_vec(), authority.to_vec(), Vec::<u8>::new(), position.0.to_be_bytes().to_vec(), position.1.to_byte_array().to_vec(), position.2]).await?;
     record(&tx, &decision).await?;
     tx.execute(
         "UPDATE certified_history_state SET authenticated_height = ?1 WHERE singleton = 1",
@@ -170,6 +171,129 @@ pub(crate) async fn run() -> Result<()> {
         )
         .await
         .is_err()
+    );
+    // B returns at 101 with a new interval. Lower-anchor batches survive that
+    // replacement even when their consensus positions follow higher-anchor work.
+    let lower = ExactInput::batch(context, 100, a.block_hash(), &[])?;
+    append_index(&conn, 6, &lower).await?;
+    let higher = ExactInput::block(context, 101, serialize(&b))?;
+    append_index(&conn, 7, &higher).await?;
+    append_index(&conn, 8, &batch).await?;
+    append_index(&conn, 9, &lower).await?;
+    let before = replay::page(&conn, 9, 100, None).await?;
+    ensure!(
+        before
+            .iter()
+            .map(|entry| entry.position.decision)
+            .collect::<Vec<_>>()
+            == vec![5, 6, 9, 7, 8]
+    );
+    ensure!(replay::eligible(&conn, 9, 3).await?.is_none());
+    let c = block(a.block_hash(), 17);
+    append_index(&conn, 10, &ExactInput::block(context, 101, serialize(&c))?).await?;
+    append_index(&conn, 11, &higher).await?;
+    append_index(&conn, 12, &batch).await?;
+    for height in 13..=77 {
+        append_index(&conn, height, &lower).await?;
+    }
+    ensure!(replay::eligible(&reopened, 77, 3).await?.is_none());
+    ensure!(replay::eligible(&reopened, 77, 8).await?.is_none());
+    ensure!(
+        replay::eligible(&reopened, 77, 6)
+            .await?
+            .unwrap()
+            .interval_since
+            == 5
+    );
+    ensure!(
+        replay::eligible(&reopened, 77, 12)
+            .await?
+            .unwrap()
+            .interval_since
+            == 11
+    );
+    let first_page = replay::page(&reopened, 77, 100, None).await?;
+    ensure!(first_page.len() == replay::PAGE_DECISIONS);
+    let second_page = replay::page(
+        &reopened,
+        77,
+        100,
+        first_page.last().map(|entry| entry.position),
+    )
+    .await?;
+    let positions = first_page
+        .iter()
+        .chain(&second_page)
+        .map(|entry| entry.position.decision)
+        .collect::<Vec<_>>();
+    let expected = [vec![5, 6, 9], (13..=77).collect(), vec![11, 12]].concat();
+    ensure!(positions == expected);
+    ensure!(
+        replay::page(
+            &conn,
+            77,
+            100,
+            second_page.last().map(|entry| entry.position)
+        )
+        .await?
+        .is_empty()
+    );
+    ensure!(replay::page(&conn, 9, 100, None).await? == before);
+    ensure!(replay::page(&conn, 78, 100, None).await.is_err());
+    ensure!(
+        replay::page(&conn, 77, 101, None)
+            .await?
+            .iter()
+            .map(|entry| entry.position.decision)
+            .collect::<Vec<_>>()
+            == vec![11, 12]
+    );
+
+    // These isolated SQL fixtures test applicability and paging, not whether a
+    // finality verdict legitimately produced each exclusion in the first place.
+    for index in 0..64u8 {
+        conn.execute(
+            "INSERT INTO excluded_batch_txids (batch_height, txid, deadline) VALUES (3, ?1, 102)",
+            [hex::encode([index; 32])],
+        )
+        .await?;
+    }
+    let seed = hex::encode([90; 32]);
+    let healed = hex::encode([91; 32]);
+    for (height, txid) in [(6, &seed), (6, &healed), (9, &seed)] {
+        conn.execute(
+            "INSERT INTO excluded_batch_txids (batch_height, txid, deadline) VALUES (?1, ?2, 102)",
+            params![height, txid.clone()],
+        )
+        .await?;
+    }
+    let first = replay::exclusion_page(&conn, 77, None).await?;
+    ensure!(first.entries.is_empty() && first.next.is_some());
+    let second = replay::exclusion_page(&conn, 77, first.next.as_ref()).await?;
+    ensure!(second.entries.len() == 3 && second.next.is_none());
+    conn.execute(
+        "INSERT INTO blocks (height, hash, relevant) VALUES (100, ?1, 0)",
+        [a.block_hash().to_string()],
+    )
+    .await?;
+    conn.execute("INSERT INTO batches (consensus_height, anchor_height, anchor_hash, certificate, is_block) VALUES (9, 100, ?1, ?2, 0)", params![a.block_hash().to_string(), Vec::<u8>::new()]).await?;
+    conn.execute("INSERT INTO transactions (height, confirmed_height, batch_height, txid) VALUES (100, 101, 9, ?1), (100, 101, NULL, ?2)", params![seed.clone(), healed.clone()]).await?;
+    let applicable = replay::exclusion_page(&conn, 77, first.next.as_ref()).await?;
+    ensure!(
+        applicable.entries
+            == vec![replay::ExclusionCursor {
+                decision: 6,
+                txid: seed
+            }]
+    );
+    conn.execute("UPDATE transactions SET confirmed_height = NULL", ())
+        .await?;
+    ensure!(
+        replay::exclusion_page(&conn, 77, first.next.as_ref())
+            .await?
+            .entries
+            .len()
+            == 3
     );
     Ok(())
 }

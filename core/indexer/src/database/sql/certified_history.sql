@@ -37,8 +37,14 @@ CREATE TABLE IF NOT EXISTS certified_decisions (
     body_digest BLOB NOT NULL REFERENCES certified_inputs(body_digest),
     committee_id BLOB NOT NULL REFERENCES historical_committees(committee_id),
     original_proof BLOB NOT NULL,
+    bitcoin_height BLOB NOT NULL CHECK (length(bitcoin_height) = 8),
+    bitcoin_hash BLOB NOT NULL CHECK (length(bitcoin_hash) = 32),
+    is_block INTEGER NOT NULL CHECK (is_block IN (0, 1)),
     proof_augmentation BLOB
 );
+
+CREATE INDEX IF NOT EXISTS certified_decision_execution_order
+ON certified_decisions (bitcoin_height, height);
 
 CREATE TABLE IF NOT EXISTS certified_bitcoin_boundary (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),

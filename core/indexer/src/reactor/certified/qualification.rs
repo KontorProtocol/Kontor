@@ -5,6 +5,7 @@ use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::serialize;
 use bitcoin::{BlockHash, Network, hashes::Hash};
 use indexer_types::BlockRow;
+use libsql::params;
 use malachitebft_app_channel::app::types::ProposedValue;
 use malachitebft_core_types::{CommitSignature, NilOrVal, Round, Validity};
 use serde_json::{Value as Json, json};
@@ -142,6 +143,11 @@ pub(crate) async fn run(
         state.try_acknowledge_decision(&conn).await?;
         ack.await?;
         let original = certified_history::load(&conn, 1).await?;
+        conn.execute_batch("BEGIN IMMEDIATE").await?;
+        conn.execute("UPDATE certified_decisions SET bitcoin_height = ?1 WHERE height = ?2",
+            params![101u64.to_be_bytes().to_vec(), 1u64.to_be_bytes().to_vec()]).await?;
+        ensure!(certified_history::load(&conn, 1).await.is_err());
+        conn.execute_batch("ROLLBACK").await?;
         ensure!(original.input() == value.input());
         ensure!(certified_history::branch::tip(&conn).await? == Some((100, genesis_block(network).block_hash())));
         ensure!(state.closed_next_height(&conn, Height::new(1)).await?.is_none());
