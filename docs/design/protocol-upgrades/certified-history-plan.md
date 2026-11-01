@@ -37,6 +37,15 @@ requested hash, parent, size and Bitcoin commitments, and replay reconstructs th
 same block from the retained body. Synthetic transaction-only ingress is test-only.
 The poller-to-history round trip is covered locally, but proposal signing and
 ValueId still require integration with the canonical descriptor.
+Baseline composition now derives KPM1 and the genesis-era context from the selected
+executor reference, its committed parameter sources, the verified native manifest,
+and an explicit equal-schema no-op migration. The consensus/coordinator reference
+binds implementation source, all-target resolved dependency features, aliases,
+target conditions and locked dependency checksums/revisions. The node build checks
+that reference before and after compilation. References are not refreshed implicitly;
+this baseline remains unreleased while K4 is under development.
+Baseline composition and foreign-context rejection have focused local coverage.
+Startup and live proposal construction still need to select and persist this context.
 Both explicit link sets still need their complete integration acceptance evidence.
 
 ## Result and boundaries

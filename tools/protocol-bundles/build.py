@@ -15,6 +15,7 @@ import tomllib
 from audit import audit_final, audit_inputs
 from common_ownership import verify as verify_common_ownership
 from execution_definition import verify_reference
+from coordinator_definition import verify as verify_coordinator_reference
 from metadata_control import proc_macro_hashes
 from provenance import fingerprint, locked_packages, runtime_libraries, source_inputs
 from provenance import tools as toolchain_inputs
@@ -380,6 +381,9 @@ def build_node(graphs, args, base_env, output):
     features = ["protocol-qualification"] if args.node_qualification else []
     data = metadata(manifest, args.target, env, args.offline, features)
     node_dependencies(data)
+    coordinator_data = metadata(manifest, None, env, args.offline, features)
+    coordinator_lock = tomllib.loads(lock.read_text())
+    coordinator = verify_coordinator_reference(ROOT, coordinator_data, coordinator_lock)
     sources = source_inputs(ROOT, data, kind="node")
     lock_hash = digest(lock)
     write_json(directory / "metadata.json", data)
@@ -429,10 +433,12 @@ def build_node(graphs, args, base_env, output):
         raise RuntimeError("node source or lock changed during compilation")
     if metadata(manifest, args.target, env, args.offline, features) != data:
         raise RuntimeError("node dependency metadata changed during compilation")
+    if verify_coordinator_reference(ROOT, coordinator_data, coordinator_lock) != coordinator:
+        raise RuntimeError("coordinator definition changed during compilation")
     for graph in graphs:
         verify_identity(ROOT, graph, recipes)
         verify_staged_inputs(graph)
-    result = {"qualification_command": args.node_qualification, "executable": str(executable), "executable_sha256": digest(executable),
+    result = {"coordinator_definition": coordinator, "qualification_command": args.node_qualification, "executable": str(executable), "executable_sha256": digest(executable),
               "source_inputs_sha256": fingerprint(sources), "lock_sha256": lock_hash,
               "link_spec_sha256": digest(spec_path), "build_log_sha256": digest(log),
               "root_codegen_sha256": digest(Path(spec["root_objects"])), "wrapper_sha256": digest(wrapper),
