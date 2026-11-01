@@ -48,6 +48,7 @@ macro_rules! bundle_adapter {
 
             pub(super) fn response(value: Response) -> bundle::Response {
                 match value {
+                    Response::Abandon => bundle::Response::Abandon,
                     Response::Ready(value) => bundle::Response::Ready(parameters(value)),
                     Response::StartedRound(values) => bundle::Response::StartedRound(
                         values

@@ -109,11 +109,18 @@ impl Replies {
         if self.retired || token.generation != self.generation {
             return Err(ReplyError::StaleGeneration);
         }
+        if matches!(response, Response::Abandon) {
+            return Ok(if self.pending.remove(&token.id).is_some() {
+                Delivery::Delivered
+            } else {
+                Delivery::Expired
+            });
+        }
         let entry = self
             .pending
             .get(&token.id)
             .ok_or(ReplyError::UnknownToken)?;
-        if entry.operation != response.kind() {
+        if Some(entry.operation) != response.kind() {
             return Err(ReplyError::WrongOperation);
         }
         // Once dispatched, even a malformed payload consumes the capability.
@@ -174,6 +181,52 @@ mod tests {
             replies.respond(token, Response::HistoryMinHeight(1)),
             Err(ReplyError::UnknownToken)
         );
+    }
+
+    #[test]
+    fn explicit_abandon_closes_receiver_and_never_consumes_another_generation() {
+        let mut replies = Replies::new(7, 1).unwrap();
+        let (sender, mut receiver) = oneshot::channel();
+        let token = replies
+            .insert(ReplyKind::HistoryMinHeight, sender, height)
+            .unwrap();
+        let stale = ReplyToken {
+            generation: 6,
+            id: token.id,
+        };
+        assert_eq!(
+            replies.respond(stale, Response::Abandon),
+            Err(ReplyError::StaleGeneration)
+        );
+        assert_eq!(
+            receiver.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        );
+        assert_eq!(
+            replies.respond(token, Response::Abandon),
+            Ok(Delivery::Delivered)
+        );
+        assert_eq!(
+            receiver.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        );
+        assert_eq!(
+            replies.respond(token, Response::Abandon),
+            Ok(Delivery::Expired)
+        );
+        let (sender, mut receiver) = oneshot::channel();
+        let next = replies
+            .insert(ReplyKind::HistoryMinHeight, sender, height)
+            .unwrap();
+        assert_ne!(token, next);
+        assert_eq!(
+            replies.respond(token, Response::Abandon),
+            Ok(Delivery::Expired)
+        );
+        replies
+            .respond(next, Response::HistoryMinHeight(9))
+            .unwrap();
+        assert_eq!(receiver.try_recv(), Ok(9));
     }
 
     #[test]

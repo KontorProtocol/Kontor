@@ -260,3 +260,22 @@ fn public_validator_start_binds_proof_to_actual_network_key_and_joins() {
     assert!(engine.wait_stopped(Duration::from_secs(10)).unwrap());
     assert_eq!(engine.state(), EngineState::Joined);
 }
+
+#[test]
+fn abandoned_initialization_stops_without_becoming_running() {
+    let directory = Directory::new();
+    let mut engine = follower(config(&directory)).unwrap();
+    let token = ready(&mut engine);
+    assert!(matches!(
+        engine.respond(token, Response::Abandon),
+        Err(EngineError::Failed(_))
+    ));
+    assert_eq!(engine.state(), EngineState::Stopping);
+    assert!(
+        engine
+            .respond(token, Response::Ready(test_params(1)))
+            .is_err()
+    );
+    assert!(engine.wait_stopped(Duration::from_secs(10)).is_err());
+    assert_eq!(engine.state(), EngineState::Joined);
+}

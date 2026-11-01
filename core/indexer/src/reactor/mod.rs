@@ -14,6 +14,7 @@ mod execution;
 mod execution_fixture;
 pub mod executor;
 mod handlers;
+pub(crate) mod message;
 #[cfg(test)]
 mod handoff_tests;
 #[cfg(feature = "protocol-qualification")]

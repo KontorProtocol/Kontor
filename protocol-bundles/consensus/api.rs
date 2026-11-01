@@ -123,6 +123,7 @@ pub enum SyncOutcome {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Response {
+    Abandon,
     Ready(HeightParameters),
     StartedRound(Vec<ProposalBytes>),
     Value {
@@ -151,8 +152,9 @@ pub(crate) enum ReplyKind {
     SyncedValue,
 }
 impl Response {
-    pub(crate) fn kind(&self) -> ReplyKind {
-        match self {
+    pub(crate) fn kind(&self) -> Option<ReplyKind> {
+        Some(match self {
+            Self::Abandon => return None,
             Self::Ready(_) => ReplyKind::Ready,
             Self::StartedRound(_) => ReplyKind::StartedRound,
             Self::Value { .. } => ReplyKind::Value,
@@ -162,7 +164,7 @@ impl Response {
             Self::HistoryMinHeight(_) => ReplyKind::HistoryMinHeight,
             Self::DecidedValues(_) => ReplyKind::DecidedValues,
             Self::SyncedValue(_) => ReplyKind::SyncedValue,
-        }
+        })
     }
 }
 

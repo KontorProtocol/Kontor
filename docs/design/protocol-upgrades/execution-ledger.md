@@ -2799,3 +2799,29 @@ reject stale generations before applying work, persist the selected managed
 baseline/generation, and use the stop/revoke/join sequence for live handoff. The
 production builder and K6 control path remain unfinished. No new CI or independent
 microreview was requested; the grouped PR still needs its consolidated review.
+
+
+### K5 reactor reply bridge checkpoint
+
+A node-owned reactor bridge now converts managed bundle events into the existing
+handler types, retaining canonical payload codecs. Reply futures and any response
+already being submitted remain owned by the bridge across cancellation of a
+reactor poll. Pending replies are bounded. Dropping a handler reply explicitly
+abandons its private engine sender; abandoning startup fails the engine instead
+of acknowledging readiness. Stale-generation cancellation cannot consume another
+generation's reply. Finalized evidence remains diagnostic text and the existing
+certificate/finalization handler remains authoritative.
+
+The actual node test executable, linked with both independent consensus bundles,
+passed 15 managed tests. The three new tests cover delayed replies across canceled
+polls for both bundles, retained outgoing response futures, and dropped startup
+replies followed by engine join. Both bundle suites passed all 56 tests, including
+explicit cancellation, stale and repeated cancellation, and abandoned readiness.
+Evidence is `.build-cache/k5-reactor-test.json` and
+`.build-cache/k5-abandon-tests.json`, with their raw logs. The initial role-name
+compile mismatch is preserved in `.build-cache/k5-reactor-initial-compile.json`.
+
+This checkpoint does not switch production startup or complete K5/K6. The live
+reactor loop, durable generation selection, proposal signing, managed baseline
+identity, production build wiring, authorization and final grouped review remain.
+No PR or CI campaign was launched for this checkpoint.

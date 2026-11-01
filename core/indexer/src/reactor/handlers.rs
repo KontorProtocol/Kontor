@@ -20,6 +20,7 @@ use crate::database::certified_history::branch;
 use super::Reactor;
 use super::consensus_state;
 use super::executor::Executor;
+use super::message::Message;
 
 /// Answer a `ReceivedProposalPart` with "not a complete, accepted proposal".
 fn reply_none(reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>) -> Result<()> {
@@ -271,9 +272,21 @@ impl<E: Executor> Reactor<E> {
 
     pub(super) async fn handle_consensus_msg(
         &mut self,
-        msg: AppMsg<Ctx>,
+        msg: impl Into<Message>,
     ) -> Result<consensus_state::ConsensusResult> {
         let mut result = consensus_state::ConsensusResult::None;
+        let msg = match msg.into() {
+            Message::Application(msg) => msg,
+            Message::Finalized {
+                certificate,
+                evidence,
+                reply,
+            } => {
+                info!(height = %certificate.height, round = %certificate.round,
+                    value = %certificate.value_id, %evidence, "Finalized");
+                return self.handle_finalized(certificate, reply).await;
+            }
+        };
         match msg {
             AppMsg::ConsensusReady { reply } => {
                 let start_height = self.consensus.current_height;

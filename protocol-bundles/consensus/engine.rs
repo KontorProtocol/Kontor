@@ -126,6 +126,11 @@ impl Engine {
     ) -> Result<Delivery, EngineError> {
         self.guarded(|this| {
             this.check_deadline()?;
+            if matches!(response, Response::Abandon) && this.ready == Some(token) {
+                let error = EngineError::Failed("consensus initialization abandoned".into());
+                this.fail(error.clone());
+                return Err(error);
+            }
             match this.owner.respond(token, response) {
                 Ok(delivery) => {
                     if this.ready == Some(token) {

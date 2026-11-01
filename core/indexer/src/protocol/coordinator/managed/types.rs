@@ -124,6 +124,7 @@ pub(crate) enum SyncOutcome {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Response {
+    Abandon,
     Ready(HeightParameters),
     StartedRound(Vec<ProposalBytes>),
     Value {

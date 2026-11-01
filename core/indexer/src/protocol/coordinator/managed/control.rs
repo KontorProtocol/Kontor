@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -175,14 +176,44 @@ impl Control {
             .map_err(|error| EngineError::Failed(error.to_string()))
     }
 
+    pub(crate) fn begin_response(
+        &self,
+        token: ReplyToken,
+        response: Response,
+    ) -> impl Future<Output = Result<Delivery, EngineError>> + Send + 'static {
+        let commands = self.commands.clone();
+        let stop = self.stop.clone();
+        let wake = self.worker.as_ref().map(|worker| worker.thread().clone());
+        let status = self.status.clone();
+        async move {
+            let closed = || {
+                status
+                    .borrow()
+                    .failure
+                    .clone()
+                    .unwrap_or(EngineError::Stopping)
+            };
+            if stop.load(Ordering::Acquire) {
+                return Err(closed());
+            }
+            let (tx, rx) = oneshot::channel();
+            commands
+                .send(Command::Respond(token, response, tx))
+                .await
+                .map_err(|_| closed())?;
+            if let Some(wake) = wake {
+                wake.unpark();
+            }
+            rx.await.map_err(|_| closed())?
+        }
+    }
+
     pub(crate) async fn respond(
         &self,
         token: ReplyToken,
         response: Response,
     ) -> Result<Delivery, EngineError> {
-        let (tx, rx) = oneshot::channel();
-        self.send(Command::Respond(token, response, tx)).await?;
-        rx.await.map_err(|_| self.closed_error())?
+        self.begin_response(token, response).await
     }
 
     pub(crate) async fn publish(
