@@ -149,7 +149,8 @@ jobs:
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "macOS" ]]; then
-            RUST_BACKTRACE=1 REGTEST=1 python3 ../tools/ci/macos_diagnostics.py run "$RUNNER_TEMP/macos-crash-diagnostics/tests.log" cargo test --release --workspace -- --nocapture
+            # Keep panic diagnostics without adding call-path-specific traces to compared errors.
+            RUST_BACKTRACE=1 RUST_LIB_BACKTRACE=0 REGTEST=1 python3 ../tools/ci/macos_diagnostics.py run "$RUNNER_TEMP/macos-crash-diagnostics/tests.log" cargo test --release --workspace -- --nocapture
           else
             REGTEST=1 cargo test --release --workspace -- --nocapture
           fi
