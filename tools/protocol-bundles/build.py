@@ -199,6 +199,7 @@ def build_graph(graph, args, base_env, output, graphs=None):
         shutil.copyfile(artifact, staged)
         compiler_inputs.append({"path": str(artifact), "staged": str(staged), "sha256": digest(artifact)})
     result = {"graph": graph, "identity": graph_identity, "namespace": namespace, "lock_sha256": lock_hash,
+              "build_log_sha256": digest(log),
               "manifest_sha256": digest(manifest), "packages": packages,
               "artifacts": [{"path": str(inputs / p.name), "source_path": str(p),
                              "sha256": digest(inputs / p.name)} for p in archives],

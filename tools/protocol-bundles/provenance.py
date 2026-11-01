@@ -55,32 +55,7 @@ def node_sources(root):
     return sources
 
 
-def source_inputs(root, data, *, kind="proof"):
-    if kind not in ("proof", "executor", "node"):
-        raise RuntimeError(f"unknown graph source kind: {kind}")
-    verified = verify_sources(data)
-    packages = []
-    trees = {}
-    inherited = {}
-    for package in data["packages"]:
-        directory = Path(package["manifest_path"]).parent
-        for parent in (directory, *directory.parents):
-            for relative in ("Cargo.toml", ".cargo/config", ".cargo/config.toml"):
-                path = parent / relative
-                if path.is_file():
-                    inherited[str(path)] = sha(path)
-            if (parent / ".git").exists():
-                if package.get("source", "") and package["source"].startswith("git+"):
-                    trees[str(parent)] = parent
-                break
-        files = {}
-        for path in sorted(directory.rglob("*")):
-            relative = path.relative_to(directory)
-            if {".git", "target", "__pycache__"} & set(relative.parts) or not path.is_file():
-                continue
-            files[str(relative)] = sha(path)
-        identity = package["id"].replace(str(root), "<repository>")
-        packages.append({"package": identity, "files": files})
+def repository_sources(root, kind):
     sources = {}
     for relative in ("core/indexer/src/runtime/mod.rs",
                      "core/indexer/src/protocol/v1/engine.rs",
@@ -102,6 +77,40 @@ def source_inputs(root, data, *, kind="proof"):
         sources.update(retained_sources(root))
     if kind == "node":
         sources.update(node_sources(root))
+    return sources
+
+
+def package_sources(directory):
+    files = {}
+    for path in sorted(directory.rglob("*")):
+        relative = path.relative_to(directory)
+        if {".git", "target", "__pycache__"} & set(relative.parts) or not path.is_file():
+            continue
+        files[str(relative)] = sha(path)
+    return files
+
+
+def source_inputs(root, data, *, kind="proof"):
+    if kind not in ("proof", "executor", "node"):
+        raise RuntimeError(f"unknown graph source kind: {kind}")
+    verified = verify_sources(data)
+    packages = []
+    trees = {}
+    inherited = {}
+    for package in data["packages"]:
+        directory = Path(package["manifest_path"]).parent
+        for parent in (directory, *directory.parents):
+            for relative in ("Cargo.toml", ".cargo/config", ".cargo/config.toml"):
+                path = parent / relative
+                if path.is_file():
+                    inherited[str(path)] = sha(path)
+            if (parent / ".git").exists():
+                if package.get("source", "") and package["source"].startswith("git+"):
+                    trees[str(parent)] = parent
+                break
+        identity = package["id"].replace(str(root), "<repository>")
+        packages.append({"package": identity, "files": package_sources(directory)})
+    sources = repository_sources(root, kind)
     git_sources = {}
     for identity, directory in sorted(trees.items()):
         git_sources[identity] = {

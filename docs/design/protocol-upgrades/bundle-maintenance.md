@@ -200,6 +200,21 @@ node build report hash in `executors/node-execution.json`. Its 300-second timeou
 is a test timeout, not a Kontor execution cutoff. Full release-image and platform
 qualification is still required before the phase can merge.
 
+`tools/protocol-bundles/compare_node.py` verifies the downloaded linked-node
+results against an explicit policy: `release` requires Linux x86-64, Linux ARM64
+and macOS ARM64 release results; `full` requires both dev and release on all three.
+The workflow uses release automatically and exposes full comparison only through
+manual dispatch. Missing, duplicate or unexpected cells and failed upstream jobs
+are errors. The comparator verifies raw logs, source inventories, local package
+files, workspace/graph identities, linker inputs and ownership-report hashes,
+then requires identical execution observations across the required cells.
+Package documentation and Git ignore files omitted by Docker are excluded from
+source equality. Python comparator and test edits do not invalidate unchanged
+runtime/build sources; the original source-inventory hashes remain verified.
+This bounded linked-node check complements the existing stack qualification and
+dev smoke checks. It does not replace their coverage or establish all executions
+from the sampled scenarios.
+
 Production audit checks the graph-private native symbols that survive linking.
 Proof mode additionally requires the specific helpers exercised by its fixture.
 An unused proof operation, or a dependency absent from the real executor, is not
