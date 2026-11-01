@@ -6,7 +6,51 @@ use super::*;
 use crate::consensus::signing::PrivateKey;
 use crate::database::connection::new_connection;
 use crate::database::queries::insert_block;
+use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
 use crate::protocol::coordinator::certified_decision::tests::{fixture, proof};
+use crate::protocol::coordinator::registration_history::{
+    ObservationPosition, RegistrationSnapshot,
+};
+use crate::protocol::identity::{ExecutionDefinitionId, ExecutionIdentity};
+use crate::protocol::registration::RegistrationObservation;
+
+fn observed(snapshot: &RegistrationSnapshot) -> RegistrationObservation {
+    (
+        snapshot.committee.clone(),
+        snapshot
+            .entries
+            .iter()
+            .map(|entry| (entry.holder.clone(), entry.value.clone()))
+            .collect(),
+    )
+}
+
+fn genesis_observation(authority: &CommitteeRecord) -> Result<RegistrationSnapshot> {
+    let mut observed: Vec<_> = authority
+        .members
+        .iter()
+        .map(|member| (member.holder.clone(), Some((member.key.to_vec(), 1, 0, 0))))
+        .collect();
+    observed.sort();
+    RegistrationSnapshot::observe(
+        None,
+        ObservationPosition {
+            context: authority.context,
+            height: 0,
+            decision: genesis_predecessor(authority.context)?,
+            stage: 0,
+            lineage: authority.context.chain.0,
+        },
+        (
+            authority
+                .members
+                .iter()
+                .map(|member| (member.address, member.key, member.power))
+                .collect(),
+            observed,
+        ),
+    )
+}
 
 async fn prepared() -> Result<(
     TempDir,
@@ -24,11 +68,11 @@ async fn prepared() -> Result<(
     conn.execute_batch("BEGIN IMMEDIATE").await?;
     canonical_history::bind_genesis(&conn, authority.context.chain).await?;
     conn.execute_batch("COMMIT").await?;
-    authority.decision = genesis_predecessor(authority.context)?;
-    authority.lineage = authority.context.chain.0;
+    let observation = genesis_observation(&authority)?;
+    authority = observation.authority()?;
     decision.predecessor = authority.decision;
     decision.committee = authority.id()?;
-    finish_genesis(&conn, &authority).await?;
+    finish_genesis(&conn, &observation).await?;
     Ok((directory, conn, authority, input, decision, keys))
 }
 
@@ -192,7 +236,11 @@ async fn old_populated_database_is_preserved_without_invented_authority() -> Res
     assert_eq!(frontier(&conn).await?.status, Status::Unavailable);
     let (authority, _, _, _) = fixture();
     assert!(begin_genesis(&conn, authority.context).await.is_err());
-    assert!(finish_genesis(&conn, &authority).await.is_err());
+    assert!(
+        finish_genesis(&conn, &genesis_observation(&authority)?)
+            .await
+            .is_err()
+    );
     let count: i64 = conn
         .query("SELECT COUNT(*) FROM blocks", ())
         .await?
@@ -228,5 +276,180 @@ async fn reserved_genesis_resumes_but_cannot_substitute_context() -> Result<()> 
     different.era[0] ^= 1;
     assert!(begin_genesis(&reopened, different).await.is_err());
     assert_eq!(frontier(&reopened).await?.context, Some(authority.context));
+    Ok(())
+}
+
+#[tokio::test]
+async fn registration_stages_commit_with_effects_and_survive_canonical_rollback() -> Result<()> {
+    let (directory, conn, authority, input, decision, keys) = prepared().await?;
+    let certified = AuthenticatedDecision::verify(
+        decision.clone(),
+        input,
+        proof(&decision, &keys, &[0, 1, 2], 0),
+        &authority,
+    )?;
+    append(&conn, &certified).await?;
+    let genesis = registrations::at(&conn, 0, 0).await?;
+    let application = CanonicalApplication {
+        chain: authority.context.chain,
+        ordinal: 1,
+        parent_lineage: genesis.position.lineage,
+        execution: ExecutionIdentity::Baseline(ExecutionDefinitionId([17; 32])),
+        storage_height: 1,
+        source: ApplicationSource::BlockLifecycle {
+            height: 1,
+            hash: [8; 32],
+        },
+        input: None,
+    };
+    let position = ObservationPosition {
+        context: authority.context,
+        height: 1,
+        decision: decision.id()?,
+        stage: 1,
+        lineage: application.lineage()?,
+    };
+    let first = RegistrationSnapshot::observe(Some(&genesis), position, observed(&genesis))?;
+    conn.execute_batch("CREATE TABLE stage_effect (value INTEGER); CREATE TRIGGER fail_observation BEFORE INSERT ON registration_observations BEGIN SELECT RAISE(ABORT, 'stage observation failure'); END;").await?;
+    let unit = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    unit.execute("INSERT INTO stage_effect VALUES (1)", ())
+        .await?;
+    canonical_history::append(&unit, &application).await?;
+    assert!(registrations::record(&unit, &first).await.is_err());
+    unit.rollback().await?;
+    assert_eq!(registrations::latest(&conn).await?, Some(genesis.clone()));
+    assert_eq!(
+        conn.query("SELECT COUNT(*) FROM stage_effect", ())
+            .await?
+            .next()
+            .await?
+            .unwrap()
+            .get::<i64>(0)?,
+        0
+    );
+    let HistoryState::Ready(cursor) = canonical_history::state(&conn).await? else {
+        panic!()
+    };
+    assert_eq!(cursor.ordinal, 0);
+    conn.execute_batch("DROP TRIGGER fail_observation").await?;
+    let unit = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    unit.execute("INSERT INTO stage_effect VALUES (1)", ())
+        .await?;
+    canonical_history::append(&unit, &application).await?;
+    registrations::record(&unit, &first).await?;
+    unit.commit().await?;
+    drop(conn);
+    let conn = new_connection(directory.path(), "certified.db").await?;
+    initialize(&conn).await?;
+    assert_eq!(registrations::at(&conn, 1, 1).await?, first);
+    let unit = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    registrations::record(&unit, &first).await?;
+    unit.commit().await?;
+    assert_eq!(
+        conn.query("SELECT COUNT(*) FROM stage_effect", ())
+            .await?
+            .next()
+            .await?
+            .unwrap()
+            .get::<i64>(0)?,
+        1
+    );
+
+    let mut after_exit = observed(&first);
+    let key = after_exit.1[0].1.as_ref().unwrap().0.clone();
+    after_exit.1[0].1 = None;
+    after_exit.0.retain(|member| member.1.as_slice() != key);
+    let second = RegistrationSnapshot::observe(
+        Some(&first),
+        ObservationPosition {
+            stage: 2,
+            lineage: genesis.position.lineage,
+            ..position
+        },
+        after_exit,
+    )?;
+    let unit = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    canonical_history::rollback(&unit, 0).await?;
+    registrations::record(&unit, &second).await?;
+    unit.commit().await?;
+    assert_eq!(registrations::at(&conn, 1, 1).await?, first);
+    assert_eq!(load(&conn, 1).await?.decision(), &decision);
+    assert_eq!(committee(&conn, 1).await?, authority);
+    let third = RegistrationSnapshot::observe(
+        Some(&second),
+        ObservationPosition {
+            stage: 3,
+            ..position
+        },
+        observed(&genesis),
+    )?;
+    let unit = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    canonical_history::append(&unit, &application).await?;
+    registrations::record(&unit, &third).await?;
+    unit.commit().await?;
+    assert_eq!(third.position.lineage, first.position.lineage);
+    assert_ne!(third.entries[0].generation, first.entries[0].generation);
+    assert_eq!(third.entries[1..], first.entries[1..]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn registration_stage_rejects_wrong_decision_lineage_generation_and_writer() -> Result<()> {
+    let (_directory, conn, authority, input, decision, keys) = prepared().await?;
+    let genesis = registrations::at(&conn, 0, 0).await?;
+    let certified = AuthenticatedDecision::verify(
+        decision.clone(),
+        input,
+        proof(&decision, &keys, &[0, 1, 2], 0),
+        &authority,
+    )?;
+    let next = RegistrationSnapshot::observe(
+        Some(&genesis),
+        ObservationPosition {
+            height: 1,
+            decision: decision.id()?,
+            stage: 1,
+            ..genesis.position
+        },
+        observed(&genesis),
+    )?;
+    assert!(registrations::record(&conn, &next).await.is_err());
+    let unit = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    assert!(registrations::record(&unit, &next).await.is_err());
+    unit.rollback().await?;
+    append(&conn, &certified).await?;
+    for variant in 0..4 {
+        let mut wrong = next.clone();
+        match variant {
+            0 => wrong.position.decision[0] ^= 1,
+            1 => wrong.position.lineage[0] ^= 1,
+            2 => wrong.entries[0].generation = Some([99; 32]),
+            _ => wrong.position.stage = 2,
+        }
+        let unit = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await?;
+        assert!(registrations::record(&unit, &wrong).await.is_err());
+        unit.rollback().await?;
+    }
+    conn.execute_batch("PRAGMA synchronous = NORMAL").await?;
+    let unit = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    assert!(registrations::record(&unit, &next).await.is_err());
+    unit.rollback().await?;
+    assert_eq!(registrations::latest(&conn).await?, Some(genesis));
     Ok(())
 }

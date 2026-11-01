@@ -35,6 +35,14 @@ CREATE TABLE IF NOT EXISTS certified_decisions (
     proof_augmentation BLOB
 );
 
+CREATE TABLE IF NOT EXISTS registration_observations (
+    height BLOB NOT NULL CHECK (length(height) = 8),
+    stage BLOB NOT NULL CHECK (length(stage) = 8),
+    observation_id BLOB NOT NULL UNIQUE CHECK (length(observation_id) = 32),
+    record BLOB NOT NULL,
+    PRIMARY KEY (height, stage)
+);
+
 INSERT OR IGNORE INTO certified_history_state
     (singleton, status, authenticated_height, closed_height)
 SELECT 1, CASE WHEN EXISTS(SELECT 1 FROM blocks)

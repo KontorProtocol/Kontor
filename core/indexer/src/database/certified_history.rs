@@ -7,7 +7,10 @@ use crate::protocol::coordinator::certified_decision::{
     AuthenticatedDecision, CommitteeRecord, Decision, verify_certificate,
 };
 use crate::protocol::coordinator::certified_input::{EraContext, ExactInput};
+use crate::protocol::coordinator::registration_history::RegistrationSnapshot;
 use crate::protocol::identity::domain_digest;
+
+pub(crate) mod registrations;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Status {
@@ -172,7 +175,12 @@ pub(crate) async fn begin_genesis(conn: &Connection, context: EraContext) -> Res
     Ok(())
 }
 
-pub(crate) async fn finish_genesis(conn: &Connection, authority: &CommitteeRecord) -> Result<()> {
+pub(crate) async fn finish_genesis(
+    conn: &Connection,
+    observation: &RegistrationSnapshot,
+) -> Result<()> {
+    observation.verify_successor(None)?;
+    let authority = observation.authority()?;
     let record = authority.encode()?;
     let id = authority.id()?;
     durable_writer(conn).await?;
@@ -193,7 +201,8 @@ pub(crate) async fn finish_genesis(conn: &Connection, authority: &CommitteeRecor
     );
     if state.status == Status::Ready {
         ensure!(
-            committee(&tx, 1).await? == *authority,
+            committee(&tx, 1).await? == authority
+                && registrations::at(&tx, 0, 0).await? == *observation,
             "genesis authority changed on retry"
         );
     } else {
@@ -206,6 +215,7 @@ pub(crate) async fn finish_genesis(conn: &Connection, authority: &CommitteeRecor
                 && cursor.lineage == authority.lineage,
             "genesis authority lineage differs"
         );
+        registrations::record(&tx, observation).await?;
         tx.execute(
             "INSERT INTO historical_committees (height, committee_id, record) VALUES (?1, ?2, ?3)",
             params![1u64.to_be_bytes().to_vec(), id.to_vec(), record.clone()],

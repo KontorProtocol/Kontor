@@ -2,7 +2,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, ensure};
 use bitcoin::{BlockHash, Network, Txid, hashes::Hash};
 use deadpool::managed::{Object, Pool};
 #[cfg(kontor_linked)]
@@ -758,9 +758,15 @@ pub(crate) async fn observe_registrations(
     network: Network,
     watched: Vec<String>,
 ) -> Result<RegistrationObservation> {
-    selection
-        .verify_committee(&session.conn, network, session.origin())
-        .await?;
+    selection.ensure_runtime(network, session.origin())?;
+    selection.ensure_canonical_root(false)?;
+    ensure!(
+        !session.conn.is_autocommit(),
+        "registration observation requires a pinned stage"
+    );
+    // Observe the effects of this admitted stage, including rollback, before
+    // committing it. Rechecking its pre-state here would reject those effects.
+    // The bundle still checks exact equality with the live root's selection.
     let observer = session
         .executor
         .operations
@@ -1002,6 +1008,13 @@ mod tests {
                     .is_err()
             );
             begin_unit(&session, &selection, Network::Regtest).await?;
+            let registration_before = observe_registrations(
+                &session,
+                &selection,
+                Network::Regtest,
+                vec!["absent-holder".into()],
+            )
+            .await?;
             let mut changed_target = selection.envelope();
             changed_target.3.1 = 0;
             assert!(
@@ -1011,6 +1024,16 @@ mod tests {
             );
             let mut changed_purpose = selection.envelope();
             changed_purpose.3 = (1, 0, None, 0);
+            let observer = session.executor.operations.registrations.as_ref().unwrap();
+            assert!(
+                observer(
+                    session.executor.owner.clone(),
+                    changed_purpose.clone(),
+                    Vec::new()
+                )
+                .await
+                .is_err()
+            );
             assert!(
                 maintenance(session.executor.owner.clone(), changed_purpose)
                     .await
@@ -1021,6 +1044,16 @@ mod tests {
                 .await
                 .map_err(HostFailure::from)?;
             assert_eq!(lifecycle_state(&conn).await?, before);
+            assert_eq!(
+                observe_registrations(
+                    &session,
+                    &selection,
+                    Network::Regtest,
+                    vec!["absent-holder".into()],
+                )
+                .await?,
+                registration_before
+            );
             lease.drain().await?;
             lease.settle(commit).await?;
             lease.complete().await?;

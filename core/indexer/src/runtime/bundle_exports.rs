@@ -197,10 +197,22 @@ impl BundleSession {
             Box::pin(async move {
                 session.verify_operation_owner(opaque)?;
                 let mut runtime = session.runtime.lock().await;
+                if !matches!(selection.3.0, 1 | 3 | 4 | 6 | 7 | 8) {
+                    return Err((
+                        2,
+                        "registration observation requires a canonical stage".into(),
+                    ));
+                }
                 runtime
-                    .verify_bundle_operation(&selection, 1)
+                    .verify_bundle_operation(&selection, selection.3.0)
                     .map_err(infrastructure)?;
                 let mut runtime = runtime.bind_selection(&selection).map_err(infrastructure)?;
+                if runtime.storage.savepoint_stack.is_empty().await {
+                    return Err((
+                        2,
+                        "registration observation requires an open canonical unit".into(),
+                    ));
+                }
                 observe(&mut runtime, watched).await.map_err(infrastructure)
             })
         })
