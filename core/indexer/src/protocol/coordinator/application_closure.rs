@@ -1,6 +1,7 @@
 use anyhow::{Result, ensure};
 
 use super::certified_input::EraContext;
+use super::closure_work::WorkCursor;
 use crate::protocol::canonical_application::CanonicalApplication;
 use crate::protocol::canonical_codec::{Decoder, Encoder};
 use crate::protocol::identity::domain_digest;
@@ -38,7 +39,7 @@ pub(crate) enum WorkItem {
 }
 
 impl WorkItem {
-    fn encode(self, output: &mut Encoder) -> Result<()> {
+    pub(super) fn encode(self, output: &mut Encoder) -> Result<()> {
         match self {
             Self::Execute { decision } => {
                 output.tag(0)?;
@@ -54,7 +55,7 @@ impl WorkItem {
         Ok(())
     }
 
-    fn decode(input: &mut Decoder<'_>) -> Result<Self> {
+    pub(super) fn decode(input: &mut Decoder<'_>) -> Result<Self> {
         Ok(match input.tag()? {
             0 => Self::Execute {
                 decision: input.u64()?,
@@ -67,23 +68,6 @@ impl WorkItem {
             _ => anyhow::bail!("unknown closure work item"),
         })
     }
-}
-
-fn encode_work(output: &mut Encoder, work: &[WorkItem]) -> Result<()> {
-    output.count(work.len())?;
-    for item in work {
-        item.encode(output)?;
-    }
-    Ok(())
-}
-
-fn decode_work(input: &mut Decoder<'_>) -> Result<Vec<WorkItem>> {
-    let count = input.count(1)?;
-    let mut work = Vec::new();
-    for _ in 0..count {
-        work.push(WorkItem::decode(input)?);
-    }
-    Ok(work)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,7 +169,7 @@ pub(crate) struct StageRecord {
     pub(crate) outcome: StageOutcome,
     pub(crate) applications: Vec<CanonicalApplication>,
     pub(crate) observation: [u8; 32],
-    pub(crate) remaining: Vec<WorkItem>,
+    pub(crate) remaining: WorkCursor,
 }
 
 impl StageRecord {
@@ -208,14 +192,16 @@ impl StageRecord {
             ),
             "stage outcome does not match action"
         );
-        for item in std::iter::once(&self.action).chain(&self.remaining) {
-            if let WorkItem::Execute { decision } = item {
-                ensure!(
-                    *decision > 0 && *decision <= self.height,
-                    "closure work refers to future decision"
-                );
-            }
+        if let WorkItem::Execute { decision } = self.action {
+            ensure!(
+                decision > 0 && decision <= self.height,
+                "closure work refers to future decision"
+            );
         }
+        ensure!(
+            self.remaining.index <= self.remaining.count,
+            "work cursor exceeds plan"
+        );
         if self.outcome == StageOutcome::Applied {
             ensure!(
                 !self.applications.is_empty(),
@@ -289,7 +275,7 @@ impl StageRecord {
             output.bytes(&application.encode()?)?;
         }
         output.fixed(&self.observation)?;
-        encode_work(&mut output, &self.remaining)?;
+        self.remaining.encode(&mut output)?;
         Ok(output.finish())
     }
 
@@ -321,7 +307,7 @@ impl StageRecord {
             applications.push(CanonicalApplication::decode(input.bytes()?)?);
         }
         let observation = input.fixed()?;
-        let remaining = decode_work(&mut input)?;
+        let remaining = WorkCursor::decode(&mut input)?;
         input.finish()?;
         let record = Self {
             height,

@@ -73,6 +73,24 @@ CREATE TABLE IF NOT EXISTS closure_plans (
     record BLOB NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS closure_work_plans (
+    plan_key BLOB PRIMARY KEY CHECK (length(plan_key) = 32),
+    height BLOB NOT NULL REFERENCES closure_plans(height),
+    origin BLOB NOT NULL,
+    item_count BLOB NOT NULL CHECK (length(item_count) = 8),
+    digest BLOB NOT NULL CHECK (length(digest) = 32),
+    plan_id BLOB UNIQUE CHECK (plan_id IS NULL OR length(plan_id) = 32)
+);
+
+CREATE TABLE IF NOT EXISTS closure_work_items (
+    plan_key BLOB NOT NULL REFERENCES closure_work_plans(plan_key),
+    ordinal BLOB NOT NULL CHECK (length(ordinal) = 8),
+    item BLOB NOT NULL CHECK (length(item) <= 9),
+    previous BLOB NOT NULL CHECK (length(previous) = 32),
+    digest BLOB NOT NULL CHECK (length(digest) = 32),
+    PRIMARY KEY (plan_key, ordinal)
+);
+
 CREATE TABLE IF NOT EXISTS closure_stages (
     height BLOB NOT NULL REFERENCES closure_plans(height),
     stage BLOB NOT NULL CHECK (length(stage) = 8),

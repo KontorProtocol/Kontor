@@ -16,6 +16,7 @@ pub(crate) mod branch;
 pub(crate) mod closure;
 pub(crate) mod completion;
 pub(crate) mod registrations;
+pub(crate) mod work;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Status {

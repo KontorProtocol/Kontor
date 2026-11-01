@@ -17,6 +17,8 @@ async fn decision_ack_and_finalization_use_durable_exact_inputs() -> Result<()> 
     assert_eq!(evidence["closed"], 4);
     assert_eq!(evidence["owned_block_stage"], true);
     assert_eq!(evidence["owned_replacement_rollback"], true);
+    assert_eq!(evidence["bounded_work_plan"], true);
+    assert_eq!(evidence["replay_plan_publication_atomic"], true);
     assert_eq!(evidence["local_reorg_is_not_authority"], true);
     assert_eq!(evidence["closure_publication_atomic"], true);
     assert_eq!(evidence["next_height_after_closure"], true);

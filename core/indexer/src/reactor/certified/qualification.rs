@@ -18,7 +18,7 @@ use crate::bitcoin_follower::event::BlockEvent;
 use crate::consensus::codec::encode_commit_certificate;
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, Value, Vote};
-use crate::database::certified_history::{self, closure, completion};
+use crate::database::certified_history::{self, closure, completion, work};
 use crate::database::connection::new_connection;
 use crate::database::queries::{insert_batch, insert_block, select_block_at_height};
 use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
@@ -190,8 +190,45 @@ pub(crate) async fn run(
         conn.execute_batch("DROP TRIGGER interrupt_stage").await?;
         reactor.handle_block(block, &decision).await?;
         let applied = closure::recover(&reopened, 1).await?;
-        ensure!(applied.stage == 1 && applied.remaining == vec![WorkItem::Finality]);
+        ensure!(applied.stage == 1 && applied.next.map(|next| next.0) == Some(WorkItem::Finality));
         ensure!(applied.position.ordinal == initial.ordinal + 2);
+        let foreign_cursor = work::qualify(&conn, &reopened, applied.work_origin()?).await?;
+        let foreign_stage = begin_stage(service, &reactor.session, network, 1).await?.context("missing finality stage")?;
+        ensure!(foreign_stage.finish(Ok(((), StageOutcome::FinalityEvaluated, foreign_cursor))).await.is_err());
+        ensure!(closure::recover(&reopened, 1).await? == applied);
+
+        // Inject a replay plan to test the stage/cursor mechanism independently
+        // of the unfinished finality policy that will produce these plans.
+        for interrupt in [true, false] {
+            if interrupt {
+                conn.execute_batch("CREATE TRIGGER interrupt_replay_plan BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected replay plan publication failure'); END").await?;
+            }
+            let stage = begin_stage(service, &reactor.session, network, 1).await?.context("missing finality plan stage")?;
+            let result = async {
+                let draft = work::begin(&conn, applied.work_origin()?).await?;
+                let draft = work::append(&conn, draft, &[
+                    WorkItem::Rollback { height: 99 }, WorkItem::Execute { decision: 1 }, WorkItem::Finality,
+                ]).await?;
+                let cursor = work::publish(&conn, draft).await?;
+                Ok(((), StageOutcome::FinalityEvaluated, cursor))
+            }.await;
+            let finished = stage.finish(result).await;
+            if interrupt {
+                ensure!(finished.is_err());
+                ensure!(work::for_origin(&reopened, applied.work_origin()?).await.is_err());
+                ensure!(closure::recover(&reopened, 1).await? == applied);
+                conn.execute_batch("DROP TRIGGER interrupt_replay_plan").await?;
+            } else {
+                finished?;
+            }
+        }
+        let planned = closure::recover(&reopened, 1).await?;
+        ensure!(planned.stage == 2 && planned.next.map(|next| next.0) == Some(WorkItem::Rollback { height: 99 }));
+        reactor.rollback(99).await?;
+        ensure!(closure::recover(&reopened, 1).await?.next.map(|next| next.0) == Some(WorkItem::Execute { decision: 1 }));
+        reactor.handle_block(BlockInput::from_exact(value.input())?, &decision).await?;
+        ensure!(closure::canonical_position(&conn, baseline.context.chain).await? == applied.position);
+
         ensure!(completion::publish(&conn, 1).await.is_err());
         ensure!(reactor.consensus.closed_next_height(&conn, Height::new(1)).await?.is_none());
         // The first block has no batch obligations. Exercise the owned finality
@@ -211,7 +248,7 @@ pub(crate) async fn run(
         ensure!(closure::progress(&conn, 1).await?.remaining.is_empty());
         conn.execute_batch("DROP TRIGGER interrupt_closure").await?;
         let completed = completion::publish(&conn, 1).await?;
-        ensure!(completed.stages == 2 && completed.output == applied.position);
+        ensure!(completed.stages == 5 && completed.output == applied.position);
         ensure!(completion::publish(&conn, 1).await? == completed);
         ensure!(completion::completed(&reopened, 1).await? == completed);
         ensure!(certified_startup(&reopened).await?.1 == Height::new(2));
@@ -287,7 +324,7 @@ pub(crate) async fn run(
         reactor.consensus.receive_decision(&conn, proof, reply).await?;
         ack.await?;
         let plan = closure::begin(&conn, 4).await?;
-        ensure!(plan.remaining == vec![WorkItem::Rollback { height: 99 }, WorkItem::Execute { decision: 4 }, WorkItem::Finality]);
+        ensure!(plan.next.map(|next| next.0) == Some(WorkItem::Rollback { height: 99 }) && plan.remaining.count == 3);
         ensure!(reactor.rollback(98).await.is_err());
         conn.execute_batch("CREATE TRIGGER interrupt_rollback_stage BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected rollback stage failure'); END").await?;
         ensure!(reactor.rollback(99).await.is_err());
@@ -299,7 +336,7 @@ pub(crate) async fn run(
         conn.execute_batch("DROP TRIGGER interrupt_rollback_stage").await?;
         reactor.rollback(99).await?;
         let rolled_back = closure::recover(&reopened, 4).await?;
-        ensure!(rolled_back.stage == 1 && rolled_back.remaining == vec![WorkItem::Execute { decision: 4 }, WorkItem::Finality]);
+        ensure!(rolled_back.stage == 1 && rolled_back.next.map(|next| next.0) == Some(WorkItem::Execute { decision: 4 }) && rolled_back.remaining.count - rolled_back.remaining.index == 2);
         ensure!(reactor.last_height == 99 && reactor.last_hash.is_none());
         ensure!(select_block_at_height(&conn, 100).await?.is_none());
         ensure!(select_block_at_height(&conn, 0).await?.is_some());
@@ -323,7 +360,7 @@ pub(crate) async fn run(
         ensure!(certified_startup(&reopened).await?.1 == Height::new(5));
         ensure!(completion::completed(&reopened, 1).await? == completed);
         ensure!(service.active_roots().await == 0);
-        Ok(json!({"authenticated": 4, "closed": 4, "owned_replacement_rollback": true, "local_reorg_is_not_authority": true, "owned_batch_stages": true, "owned_block_stage": true,
+        Ok(json!({"authenticated": 4, "closed": 4, "owned_replacement_rollback": true, "bounded_work_plan": true, "replay_plan_publication_atomic": true, "local_reorg_is_not_authority": true, "owned_batch_stages": true, "owned_block_stage": true,
             "closure_publication_atomic": true, "next_height_after_closure": true, "ack_after_durable_input": true,
             "interrupted_append_rolled_back": true, "finalization_without_volatile_cache": true,
             "original_and_one_augmentation": true, "reopen_verified": true}))

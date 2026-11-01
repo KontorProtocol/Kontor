@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::hashes::Hash;
 use libsql::{Connection, TransactionBehavior, params};
 
-use super::{Status, durable_writer, fixed, frontier, load, registrations};
+use super::{Status, durable_writer, fixed, frontier, load, registrations, work};
 use crate::database::canonical_history::{self, HistoryState};
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
 use crate::protocol::canonical_input::CanonicalInput;
@@ -10,6 +10,7 @@ use crate::protocol::coordinator::application_closure::{
     CanonicalPosition, ClosurePlan, StageOutcome, StageRecord, WorkItem,
 };
 use crate::protocol::coordinator::certified_input::Command;
+use crate::protocol::coordinator::closure_work::{WorkCursor, WorkOrigin, item_digest};
 use crate::protocol::coordinator::registration_history::{
     ObservationPosition, RegistrationSnapshot,
 };
@@ -21,18 +22,19 @@ pub(crate) struct Progress {
     pub(crate) stage: u64,
     pub(crate) head: [u8; 32],
     pub(crate) position: CanonicalPosition,
-    pub(crate) remaining: Vec<WorkItem>,
+    pub(crate) remaining: WorkCursor,
+    pub(crate) next: Option<(WorkItem, WorkCursor)>,
 }
 
 pub(crate) struct StageTicket(Progress);
 
 impl StageTicket {
     pub(crate) fn action(&self) -> WorkItem {
-        self.0.remaining[0]
+        self.0.next.expect("admitted stage has work").0
     }
 
-    pub(crate) fn remaining_after(&self) -> Vec<WorkItem> {
-        self.0.remaining[1..].to_vec()
+    pub(crate) fn remaining_after(&self) -> WorkCursor {
+        self.0.next.expect("admitted stage has work").1
     }
 
     pub(crate) fn observation_position(&self, lineage: [u8; 32]) -> Result<ObservationPosition> {
@@ -107,30 +109,70 @@ pub(crate) async fn stage(conn: &Connection, height: u64, index: u64) -> Result<
     Ok(record)
 }
 
-fn initial_progress(plan: ClosurePlan) -> Result<Progress> {
+impl Progress {
+    pub(crate) fn work_origin(&self) -> Result<WorkOrigin> {
+        Ok(WorkOrigin {
+            height: self.plan.height,
+            closure: self.plan.id()?,
+            previous: self.head,
+            input: self.position,
+        })
+    }
+}
+
+fn initial_origin(plan: &ClosurePlan) -> Result<WorkOrigin> {
+    Ok(WorkOrigin {
+        height: plan.height,
+        closure: plan.id()?,
+        previous: plan.id()?,
+        input: plan.input,
+    })
+}
+
+async fn initial_progress(conn: &Connection, plan: ClosurePlan) -> Result<Progress> {
+    let origin = initial_origin(&plan)?;
+    let draft = work::for_origin(conn, origin).await?;
+    let initial = plan.initial_work();
+    let mut digest = origin.key()?;
+    for (index, item) in initial.iter().enumerate() {
+        digest = item_digest(digest, index as u64, *item)?;
+    }
+    ensure!(
+        draft.count == initial.len() as u64 && draft.digest == digest,
+        "initial work differs from closure plan"
+    );
+    let remaining = draft.cursor()?;
     Ok(Progress {
         stage: 0,
         head: plan.id()?,
         position: plan.input,
-        remaining: plan.initial_work(),
+        remaining,
+        next: work::next(conn, remaining).await?,
         plan,
     })
 }
 
-fn advance(previous: &Progress, record: &StageRecord) -> Result<Progress> {
+async fn advance(conn: &Connection, previous: &Progress, record: &StageRecord) -> Result<Progress> {
+    let (action, ordinary_next) = previous.next.context("stage follows completed work")?;
     ensure!(
         record.plan == previous.plan.id()?
             && record.height == previous.plan.height
             && previous.stage.checked_add(1) == Some(record.stage)
             && record.previous == previous.head
             && record.input == previous.position
-            && previous.remaining.first() == Some(&record.action),
+            && action == record.action,
         "closure stage does not extend its worklist and lineage"
     );
-    if record.action != WorkItem::Finality {
+    if record.remaining != ordinary_next {
         ensure!(
-            record.remaining == previous.remaining[1..],
-            "ordinary closure stage changed the remaining worklist"
+            record.action == WorkItem::Finality && ordinary_next.is_empty(),
+            "ordinary stage changed work plan or finality discarded pending work"
+        );
+        let replacement = work::published(conn, record.remaining.plan).await?;
+        ensure!(
+            replacement.origin == previous.work_origin()?
+                && replacement.cursor()? == record.remaining,
+            "replacement work plan has stale origin or skips items"
         );
     }
     ensure!(
@@ -145,12 +187,13 @@ fn advance(previous: &Progress, record: &StageRecord) -> Result<Progress> {
         stage: record.stage,
         head: record.id()?,
         position: record.output,
-        remaining: record.remaining.clone(),
+        remaining: record.remaining,
+        next: work::next(conn, record.remaining).await?,
     })
 }
 
 pub(crate) async fn progress(conn: &Connection, height: u64) -> Result<Progress> {
-    let initial = initial_progress(plan(conn, height).await?)?;
+    let initial = initial_progress(conn, plan(conn, height).await?).await?;
     let row = conn
         .query(
             "SELECT stage FROM closure_stages WHERE height = ?1 ORDER BY stage DESC LIMIT 1",
@@ -176,9 +219,10 @@ pub(crate) async fn progress(conn: &Connection, height: u64) -> Result<Progress>
             head: prior.id()?,
             position: prior.output,
             remaining: prior.remaining,
+            next: work::next(conn, prior.remaining).await?,
         }
     };
-    advance(&previous, &latest)
+    advance(conn, &previous, &latest).await
 }
 
 pub(crate) async fn begin(conn: &Connection, height: u64) -> Result<Progress> {
@@ -246,6 +290,9 @@ pub(crate) async fn begin(conn: &Connection, height: u64) -> Result<Progress> {
             ],
         )
         .await?;
+        let draft = work::begin(&tx, initial_origin(&plan)?).await?;
+        let draft = work::append(&tx, draft, &plan.initial_work()).await?;
+        work::publish(&tx, draft).await?;
     }
     let result = progress(&tx, height).await?;
     ensure!(
@@ -356,7 +403,7 @@ pub(crate) async fn commit_stage(
     conn: &Connection,
     ticket: StageTicket,
     outcome: StageOutcome,
-    remaining: Vec<WorkItem>,
+    remaining: WorkCursor,
     observation: &RegistrationSnapshot,
 ) -> Result<StageRecord> {
     ensure!(
@@ -369,7 +416,7 @@ pub(crate) async fn commit_stage(
         "closure stage ticket is stale"
     );
     let output = canonical_position(conn, previous.plan.context.chain).await?;
-    let action = previous.remaining[0];
+    let action = previous.next.context("stage lacks work")?.0;
     let mut applications = Vec::new();
     if outcome == StageOutcome::Applied {
         let mut rows = conn.query("SELECT record FROM canonical_applications WHERE ordinal > ?1 AND ordinal <= ?2 ORDER BY ordinal",
@@ -407,22 +454,8 @@ pub(crate) async fn commit_stage(
         remaining,
     };
     record.validate()?;
-    advance(&previous, &record)?;
+    advance(conn, &previous, &record).await?;
     validate_application_source(conn, &record).await?;
-    for work in &record.remaining {
-        if let WorkItem::Execute { decision } = work {
-            let exists = conn
-                .query(
-                    "SELECT 1 FROM certified_decisions WHERE height = ?1",
-                    [decision.to_be_bytes().to_vec()],
-                )
-                .await?
-                .next()
-                .await?
-                .is_some();
-            ensure!(exists, "closure work lacks a retained certified decision");
-        }
-    }
     registrations::record(conn, observation).await?;
     conn.execute("INSERT INTO closure_stages (height, stage, stage_id, observation_id, record) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![record.height.to_be_bytes().to_vec(), index.to_be_bytes().to_vec(), record.id()?.to_vec(),
@@ -433,7 +466,8 @@ pub(crate) async fn commit_stage(
 // Startup uses the full chain; normal stage commits only inspect the current
 // head and its predecessor, avoiding quadratic scans during a long replay.
 pub(crate) async fn recover(conn: &Connection, height: u64) -> Result<Progress> {
-    let mut progress = initial_progress(plan(conn, height).await?)?;
+    let mut progress = initial_progress(conn, plan(conn, height).await?).await?;
+    work::verify(conn, work::published(conn, progress.remaining.plan).await?).await?;
     let certified = load(conn, height).await?;
     ensure!(
         certified.decision().id()? == progress.plan.decision
@@ -468,7 +502,10 @@ pub(crate) async fn recover(conn: &Connection, height: u64) -> Result<Progress> 
         );
         observation.verify_successor(Some(&previous_observation))?;
         validate_application_source(conn, &record).await?;
-        progress = advance(&progress, &record)?;
+        if record.remaining.plan != progress.remaining.plan {
+            work::verify(conn, work::published(conn, record.remaining.plan).await?).await?;
+        }
+        progress = advance(conn, &progress, &record).await?;
         previous_observation = observation;
     }
     let state = frontier(conn).await?;

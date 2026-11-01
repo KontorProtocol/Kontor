@@ -410,3 +410,38 @@ Acceptance includes A-to-B-to-A without resurrection, retained lower-anchor batc
 superseded exclusion seeds, reorg-healed exclusions, parent re-decision between
 children, passing batches sharing a failed anchor, interrupted replay, and many
 batches at shallow Bitcoin depth with linear worklist storage and bounded iteration.
+
+
+### Bounded work-plan implementation checkpoint
+
+The intermediate remaining-work vectors have now been replaced in production stage
+records and progress by a fixed-size cursor: plan identity, ordinal, count and the
+consumed-prefix digest. Initial block/batch/replacement work uses this representation.
+Each work item is stored once in indexed rows. Plan identity commits the closure,
+originating stage head, input canonical position, item count and ordered digest.
+Ordinary stages consume exactly one item. Only a finality stage at the end of its
+plan may install a new plan, and that plan must start at zero and match that exact
+stage origin. A cursor cannot skip work or reuse a plan from another lineage.
+
+Builders append at most 128 items per transaction call, with stale-draft checks.
+This is a construction page size, not an accepted-work limit. Partial drafts remain
+unpublished and cannot authorize execution. Publication verifies the complete ordered
+plan and happens in the same owned transaction as finality stage completion. Normal
+stage processing loads one indexed item, without copying or scanning the suffix.
+Recovery verifies each installed plan once and then its stage/cursor chain.
+
+Focused local qualification passed two tests in 47.36 seconds after a 33.78-second
+build (`.build-cache/k4-work-cursor-replay.log`). It covers a 512-item paged plan,
+interrupted construction and reopen, stale/published append rejection, missing and
+changed item rejection, forged cursor rejection, linear encoded item storage, and
+foreign-origin plan rejection through an actual owned finality stage. An injected
+stage-write failure rolls back replay-plan publication. Retrying then uses actual
+rollback and block handlers to replay retained input and restores the same canonical
+lineage. This replay plan is deliberately supplied by the test, so it proves the
+stage/cursor machinery, not finality verdict selection or complete event-loop recovery.
+The broad old unit fixtures are still awaiting their certified-genesis adaptation.
+
+Remaining K4 integration includes plan-scoped branch-incarnation and exclusion
+commitments, bounded finality-plan construction, replacing the volatile live driver,
+pre-engine unfinished-closure recovery, proof transport bounds, and complete grouped
+acceptance/review. The existing replay policy above remains the agreed target.

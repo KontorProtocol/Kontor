@@ -3,6 +3,7 @@ use bitcoin::Network;
 
 use super::application_closure::{StageOutcome, StageRecord, WorkItem};
 use super::certified_input::Command;
+use super::closure_work::WorkCursor;
 use super::linked::{begin_canonical_unit, finish_canonical_unit, observe_registrations};
 use super::registration_history::RegistrationSnapshot;
 use super::selection::{ApplicationPosition, ExecutionSelection, select_legacy_p1};
@@ -27,13 +28,13 @@ impl OwnedClosureStage {
         self.ticket.action()
     }
 
-    pub(crate) fn remaining_after(&self) -> Vec<WorkItem> {
+    pub(crate) fn remaining_after(&self) -> WorkCursor {
         self.ticket.remaining_after()
     }
 
     pub(crate) async fn finish<T>(
         self,
-        result: Result<(T, StageOutcome, Vec<WorkItem>)>,
+        result: Result<(T, StageOutcome, WorkCursor)>,
     ) -> Result<(T, StageRecord)> {
         let Self {
             lease,
@@ -76,7 +77,7 @@ pub(crate) async fn begin_stage(
     height: u64,
 ) -> Result<Option<OwnedClosureStage>> {
     let progress = closure::begin(&session.conn, height).await?;
-    let Some(action) = progress.remaining.first().copied() else {
+    let Some((action, _)) = progress.next else {
         return Ok(None);
     };
     let position = match action {

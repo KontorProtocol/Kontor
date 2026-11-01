@@ -11,6 +11,30 @@ use crate::protocol::coordinator::certified_decision::tests::proof;
 use crate::protocol::coordinator::certified_input::ExactInput;
 use crate::protocol::identity::{ExecutionDefinitionId, ExecutionIdentity};
 
+async fn commit_stage(
+    conn: &Connection,
+    ticket: StageTicket,
+    outcome: StageOutcome,
+    items: Vec<WorkItem>,
+    observation: &RegistrationSnapshot,
+) -> Result<StageRecord> {
+    let ordinary = ticket.remaining_after();
+    let mut cursor = ordinary;
+    let mut expected = Vec::new();
+    while let Some((item, after)) = work::next(conn, cursor).await? {
+        expected.push(item);
+        cursor = after;
+    }
+    let remaining = if expected == items {
+        ordinary
+    } else {
+        let draft = work::begin(conn, ticket.0.work_origin()?).await?;
+        let draft = work::append(conn, draft, &items).await?;
+        work::publish(conn, draft).await?
+    };
+    super::commit_stage(conn, ticket, outcome, remaining, observation).await
+}
+
 async fn fixture() -> Result<(TempDir, Connection, CanonicalApplication)> {
     let (directory, conn, authority, input, decision, keys) = prepared().await?;
     let canonical_input = CanonicalInput::bitcoin(&input.transactions()?)?;
@@ -103,7 +127,7 @@ async fn closure_stage_effects_observation_and_worklist_commit_atomically() -> R
     assert_eq!(record.applications, vec![application]);
     let after = recover(&conn, 1).await?;
     assert_eq!(after.stage, 1);
-    assert_eq!(after.remaining, vec![WorkItem::Finality]);
+    assert_eq!(after.next.map(|next| next.0), Some(WorkItem::Finality));
     assert_eq!(begin(&conn, 1).await?, after);
     drop(conn);
     let reopened = new_connection(directory.path(), "certified.db").await?;

@@ -141,8 +141,9 @@ async fn owned_closure_stage_records_real_observation_and_rolls_back_failed_effe
     conn.execute("INSERT INTO owned_effect VALUES (1)", ())
         .await?;
     canonical_history::append(&conn, &application).await?;
+    let remaining = stage.remaining_after();
     let (_, record) = stage
-        .finish(Ok(((), StageOutcome::Applied, vec![WorkItem::Finality])))
+        .finish(Ok(((), StageOutcome::Applied, remaining)))
         .await?;
     assert_eq!(record.applications, vec![application]);
     assert!(conn.is_autocommit());
@@ -153,8 +154,9 @@ async fn owned_closure_stage_records_real_observation_and_rolls_back_failed_effe
         .await?
         .unwrap();
     assert_eq!(stage.action(), WorkItem::Finality);
+    let remaining = stage.remaining_after();
     stage
-        .finish(Ok(((), StageOutcome::FinalityEvaluated, vec![])))
+        .finish(Ok(((), StageOutcome::FinalityEvaluated, remaining)))
         .await?;
     assert!(
         begin_stage(&service, &session, Network::Regtest, 1)
