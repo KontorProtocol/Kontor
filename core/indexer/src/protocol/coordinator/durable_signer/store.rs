@@ -114,7 +114,11 @@ impl Store {
             }
         }
         let lock_path = directory.join("owner.lock");
+        let path = directory.join("signatures.log");
         let lock_existed = lock_path.exists();
+        if lock_existed != path.exists() {
+            return Err(corrupt("signer lock and journal presence differ"));
+        }
         let ownership = OpenOptions::new()
             .read(true)
             .write(true)
@@ -126,13 +130,6 @@ impl Store {
             .map_err(|error| SigningError::Storage(error.to_string()))?;
         if !lock_existed {
             sync_directory(directory)?;
-        }
-
-        let path = directory.join("signatures.log");
-        if lock_existed && !path.exists() {
-            return Err(corrupt(
-                "signer journal disappeared from an owned directory",
-            ));
         }
         let (mut journal, created) = match OpenOptions::new()
             .read(true)
@@ -613,6 +610,22 @@ mod tests {
             Store::open(directory.path(), &identity(), PrivateKey::from([11; 32])),
             Err(SigningError::Fault(_))
         ));
+    }
+
+    #[test]
+    fn deleted_lock_is_not_recreated_by_repeated_failed_opens() {
+        let directory = TempDir::new().unwrap();
+        let store = Store::open(directory.path(), &identity(), PrivateKey::from([11; 32])).unwrap();
+        let lock_path = directory.path().join("owner.lock");
+        fs::remove_file(&lock_path).unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                Store::open(directory.path(), &identity(), PrivateKey::from([11; 32])),
+                Err(SigningError::Fault(_))
+            ));
+            assert!(!lock_path.exists());
+        }
+        drop(store);
     }
 
     #[test]
