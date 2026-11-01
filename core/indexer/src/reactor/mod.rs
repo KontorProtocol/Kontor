@@ -219,6 +219,7 @@ impl<E: Executor> Reactor<E> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub(crate) fn from_session(
         executor: E,
         session: LinkedSession,

@@ -2,10 +2,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use bitcoin::absolute::LockTime;
-use bitcoin::blockdata::constants::genesis_block;
-use bitcoin::consensus::{deserialize, serialize as serialize_bitcoin};
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
-use bitcoin::{Block as BitcoinBlock, BlockHash, Network, Transaction, Witness};
+use bitcoin::{BlockHash, Transaction};
 use indexer_types::{Inst, InstKind, Insts};
 use libsql::{Connection, Value, params};
 use malachitebft_core_types::Round;
@@ -17,7 +15,6 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 use super::Reactor;
-use super::aggregate_error_tests::reactor;
 use super::certified_fixture;
 use super::execution::ExecutionStep;
 use super::executor::RuntimeExecutor;
@@ -28,16 +25,10 @@ use crate::database::certified_history;
 use crate::database::confirmation::get_confirmation_position;
 use crate::database::queries::get_transaction_by_txid;
 use crate::database::receipt_stream::{recovery_boundary, stream_state};
-use crate::runtime::token::api as token;
-use crate::runtime::wit::Signer;
-use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{
-    ContractAddress, Decimal, GenesisValidator, Runtime, TransactionContext, from_wave_expr,
-};
-use crate::test_utils::{
-    new_mock_block_hash, signed_confirmation_call, test_genesis, test_runtime_with_genesis,
-};
+use crate::runtime::{ContractAddress, Decimal, GenesisValidator, Runtime, from_wave_expr};
+use crate::test_utils::{signed_confirmation_call, test_genesis};
 
+#[cfg(feature = "protocol-qualification")]
 mod parity;
 
 struct StopEngine(NodeRef);
@@ -46,32 +37,6 @@ impl Drop for StopEngine {
     fn drop(&mut self) {
         self.0.stop(None);
     }
-}
-
-// Synthetic raw blocks exercise parsing and coordinator behavior. Constructed
-// prevouts and headers do not establish Bitcoin consensus or mempool acceptance.
-fn raw_confirmation_block(tx: &Transaction, position: usize) -> Result<BlockInput> {
-    assert!(position >= 2);
-    let mut raw = genesis_block(Network::Regtest);
-    raw.header.prev_blockhash = new_mock_block_hash(1);
-    for index in 1..position {
-        let mut unrelated = tx.clone();
-        unrelated.input[0].witness = Witness::new();
-        unrelated.lock_time = LockTime::from_consensus(index as u32);
-        raw.txdata.push(unrelated);
-    }
-    raw.txdata.push(tx.clone());
-    raw.header.merkle_root = raw.compute_merkle_root().context("fixture merkle root")?;
-    let raw: BitcoinBlock = deserialize(&serialize_bitcoin(&raw))?;
-    assert!(raw.txdata[0].is_coinbase());
-    assert!(raw.check_merkle_root());
-    let hash = raw.block_hash();
-    Ok(BlockInput::new(
-        2,
-        hash,
-        raw.header.prev_blockhash,
-        raw.txdata,
-    ))
 }
 
 async fn effects(conn: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
@@ -140,50 +105,6 @@ async fn assert_successful_write(
     );
     assert_eq!(state, [1, 0, 0, 1]);
     Ok(())
-}
-
-async fn fixture() -> Result<(Runtime, TempDir, ContractAddress, Transaction)> {
-    let secp = Secp256k1::new();
-    let key = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[71; 32])?);
-    let public_key = key.x_only_public_key().0.to_string();
-    let (mut runtime, dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
-        x_only_pubkey: public_key.clone(),
-        ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
-        stake: Decimal::from("100"),
-    }])
-    .await?;
-    let core = Signer::Core(Box::new(Signer::Nobody));
-    token::issue_to(
-        &mut runtime,
-        &core,
-        HolderRef::XOnlyPubkey(public_key),
-        Decimal::from("100"),
-    )
-    .await??;
-    runtime
-        .set_context(
-            1,
-            Some(TransactionContext::builder().tx_index(0).build()),
-            None,
-            None,
-        )
-        .await;
-    runtime
-        .publish(
-            &core,
-            runtime.core_payment(),
-            "confirmation-fixture",
-            include_bytes!("../../../../test-contracts/binaries/error_test.wasm.br"),
-            &sample_provenance(),
-        )
-        .await?;
-    let address = ContractAddress {
-        name: "confirmation-fixture".into(),
-        height: 1,
-        tx_index: 0,
-    };
-    let raw = signed_confirmation_call(&key, address.clone())?;
-    Ok((runtime, dir, address, raw))
 }
 
 async fn start_decision(

@@ -9,25 +9,18 @@ use indexer_types::{
 };
 use libsql::{AuthAction, AuthContext, Authorization, Connection, Value as SqlValue};
 use stdlib::to_wave_expr;
-use tempfile::TempDir;
-use tokio::sync::{mpsc, watch};
 
-use super::engine::EngineConfig;
 use super::execution_fixture::ExecutionFixture;
 use super::executor::{RuntimeExecutor, process_input};
-use super::mempool_fee_index::MempoolFeeIndex;
-use super::{PruneConfig, Reactor, start_consensus};
 use crate::bitcoin_client::Client;
 use crate::block::TxWalker;
 use crate::bls::{KONTOR_BLS_DST, RegistrationProof};
 use crate::consensus::signing::PrivateKey;
 use crate::database::queries::{ensure_identity, get_identity};
-use crate::runtime::ownership::OwnerService;
 use crate::runtime::token::{address as token_address, api as token};
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{Decimal, GenesisValidator, Runtime};
-use crate::stopper::Shutdown;
+use crate::runtime::{Decimal, GenesisValidator};
 use crate::test_utils::bls_test::derive_test_key;
 use crate::test_utils::{
     new_mock_block_hash, new_mock_transaction, test_runtime, test_runtime_with_genesis,
@@ -39,56 +32,6 @@ enum Fault {
     NonceInsert,
     CallSignerRead,
     RegisterSignerRead,
-}
-
-pub(super) async fn reactor(
-    mut runtime: Runtime,
-    dir: &TempDir,
-) -> Result<Reactor<RuntimeExecutor>> {
-    let consensus = start_consensus(
-        EngineConfig {
-            private_key: PrivateKey::from([17; 32]),
-            listen_addr: "/ip4/127.0.0.1/tcp/0".into(),
-            persistent_peers: Vec::new(),
-            data_dir: dir.path().to_path_buf(),
-            consensus_enabled: false,
-            discovery: Default::default(),
-        },
-        &mut runtime,
-        None,
-        None,
-        1,
-        MempoolFeeIndex::new(None),
-    )
-    .await?;
-    let shutdown = Shutdown::new();
-    let (_block_tx, block_rx) = mpsc::channel(1);
-    let (_mempool_tx, mempool_rx) = mpsc::channel(1);
-    let (addr_tx, _addr_rx) = watch::channel(None);
-    let client = Client::new(
-        "http://127.0.0.1:1".to_owned(),
-        String::new(),
-        String::new(),
-    )?;
-    Ok(Reactor::new(
-        RuntimeExecutor::new(client),
-        runtime,
-        OwnerService::new(),
-        block_rx,
-        mempool_rx,
-        shutdown.signal(),
-        None,
-        None,
-        None,
-        consensus,
-        PruneConfig {
-            enabled: false,
-            retain_blocks: 144,
-        },
-        1,
-        Some(new_mock_block_hash(1)),
-        addr_tx,
-    ))
 }
 
 pub(super) async fn snapshot(conn: &Connection) -> Result<Vec<Vec<Vec<SqlValue>>>> {

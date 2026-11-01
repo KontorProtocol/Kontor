@@ -2065,3 +2065,52 @@ predated 1 November. The deletion manifest is `.build-cache/k4-incremental-clean
 (the filesystem shares extents). Sources, binaries and qualification evidence
 were preserved. The observer's immutable execution definition verified unchanged:
 cc6739c0387a9a5cf2eda7b82c668598ebc7d16c8b6d644d90683f231939d194.
+
+
+### K4 linked-node success and preserved archive comparison, 1 November 2026
+
+The actual independent first/observer node at `17172bb7` passed ARM64 dev
+qualification (session95197, exit0, runtime192.32s): both graphs matched the
+retained semantic baseline, all25 named cases completed, and the separate
+observer-certified fixture authenticated and closed15 decisions. Its result binds
+the observer definition, manifest, protocol and era. Executable SHA-256:
+`18b67b474bab731a156b89e910b711fe13e706c287c8c4de2ed018cab308fe0a`.
+Raw reports remain under `.build-cache/k4-bundles/aarch64-unknown-linux-gnu/dev/executors/k4-node/`.
+The expected injected callback/constructor/export panics were contained and
+verified by the harness. This is one local platform/profile, not the final scoped
+platform campaign or multi-validator networking evidence.
+
+Reconciled the older pre-extraction archive comparator with certified history.
+It now uses ExecutionContext without starting consensus or fabricating committee
+history. Factored the unchanged batch transaction body out of the certified
+caller; production retains its exact retained-input, replay-subset, anchor and
+closure checks before invoking that private body. The feature-only legacy wrapper
+requires unavailable canonical history and owns the usual execution lease and
+transaction. Block execution, rollback and simulation use their existing owned
+paths. The manual test shares the comparator; baseline recording remains on the
+preserved historical source. Removed the duplicated recorder and unused old
+consensus fixture, and restricted the remaining test constructor to tests.
+
+The original archive at source `c7554ca8b7a104d28f41eb1e9a0c48200c34d5f1`
+was not regenerated. In-tree comparison passed all11 complete state/receipt
+stages, including simulation isolation and confirmation/reconfirmation without
+reexecution or additional charges (session9032, exit0,6.88s after88s build).
+Certified callback integration then passed both tests, including15-decision
+closure/recovery (session76987,exit0,115.21s after23.41s build).
+The first compile caught an omitted test import, which was fixed. An initial
+library test filter selected zero tests; it provides no acceptance evidence and
+was corrected to the actual certified_callbacks integration target.
+
+Lead inspection compared the extracted body ignoring indentation, traced its
+production/qualification callers and root lifecycle, and checked that original
+archive hashes and exact expected observations remain enforced. The in-tree
+archive result is not yet both-independent-graph evidence. The linked archive
+comparison, remaining ordinary framing acceptance, consolidated K4 independent
+review and scoped final-candidate CI remain. No PR, push or remote CI was started.
+
+Raw local evidence SHA-256:
+
+- `k4-linked-node42.log`: `637b8e24fd1bdcc33a3141beab32211b0e45f980254a248a893ac9f8b311e03a`.
+- `k4-historical-parity44.log`: `17d62e210fc2ccf1208c4d670fadd37b253402283d5db196b33522d89f862117`.
+- `k4-historical-parity44.json`: `323276dc7ea5bd56f71b0e860559863153004df005a06be31479bad5d08c62aa`.
+- `k4-certified-batch-regression46.log`: `45cbc8a765bfb7c009e3bf0fbc9c0b70ae3a931972ce2230cc8fe0641492086a`.

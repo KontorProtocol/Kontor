@@ -14,6 +14,8 @@ use crate::consensus::finality_types::{
     DecidedBatch, FINALITY_WINDOW, StateEvent, UnfinalizedBatch, deadline_for,
 };
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, ProposalData, Value};
+#[cfg(feature = "protocol-qualification")]
+use crate::database::canonical_history::{self, HistoryState};
 use crate::database::certified_history::{self, branch, replay_input, work};
 use crate::database::queries::{
     delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids, insert_transaction,
@@ -37,6 +39,8 @@ use super::consensus_state;
 use super::execution::ExecutionContext;
 use super::executor::{Executor, TxPolicy};
 use super::mempool_fee_index::MempoolFeeIndex;
+#[cfg(feature = "protocol-qualification")]
+use crate::protocol::coordinator::selection::ApplicationPosition;
 use crate::protocol::coordinator::selection::ExecutionSelection;
 
 /// Multiplier applied to `MempoolFeeIndex::fastest_fee()` to derive the
@@ -311,23 +315,109 @@ impl<E: Executor> ExecutionContext<E> {
                 );
             }
             let selection = stage.selection();
-            // A decided batch may only EXECUTE against the exact chain state it was
-            // anchored to: the local tip must sit at `anchor_height` with
-            // `anchor_hash`. Anything else — a deferred drain whose anchor fell
-            // behind, or a replay whose anchor block was reorged away — is recorded
-            // for sync/bookkeeping but NOT executed: executing against a different
-            // tip writes state (and a checkpoint) at a height the chain disagrees
-            // about, i.e. silent divergence. A skipped batch's txids then simply
-            // never confirm here and the finality window resolves it.
-            let local_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
-            if anchor_height != self.last_height || anchor_hash != local_hash {
-                warn!(
+            self.batch_txn(
+                selection,
+                anchor_height,
+                anchor_hash,
+                consensus_height,
+                certificate,
+                batch_txs,
+                certified,
+                frozen.map(|input| input.exclusions),
+            )
+            .await
+        }
+        .await;
+        let result = result.map(|(outcome, stage_outcome, count, ops)| {
+            ((outcome, count, ops), stage_outcome, remaining)
+        });
+        let ((outcome, parsed_count, executed_ops), _) = stage.finish(result).await?;
+        Ok(AppliedBatch {
+            outcome,
+            parsed_count,
+            executed_ops,
+        })
+    }
+
+    // The caller owns the canonical root and transaction. Production callers
+    // must verify the certified closure and exact retained input before entering.
+    #[allow(clippy::too_many_arguments)]
+    async fn batch_txn(
+        &mut self,
+        selection: &ExecutionSelection,
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        consensus_height: Height,
+        certificate: &[u8],
+        batch_txs: &[bitcoin::Transaction],
+        certified: Option<&[bitcoin::Transaction]>,
+        frozen_exclusions: Option<DecisionExclusions>,
+    ) -> Result<(BatchOutcome, StageOutcome, usize, u64)> {
+        let conn = self.db_conn();
+        // A decided batch may only EXECUTE against the exact chain state it was
+        // anchored to: the local tip must sit at `anchor_height` with
+        // `anchor_hash`. Anything else — a deferred drain whose anchor fell
+        // behind, or a replay whose anchor block was reorged away — is recorded
+        // for sync/bookkeeping but NOT executed: executing against a different
+        // tip writes state (and a checkpoint) at a height the chain disagrees
+        // about, i.e. silent divergence. A skipped batch's txids then simply
+        // never confirm here and the finality window resolves it.
+        let local_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
+        if anchor_height != self.last_height || anchor_hash != local_hash {
+            warn!(
+                anchor_height,
+                %anchor_hash,
+                last_height = self.last_height,
+                %local_hash,
+                consensus_height = %consensus_height,
+                "Skipping decided batch — anchor does not match local tip; recording only"
+            );
+            let outcome = self
+                .record_batch_for_sync(
+                    &conn,
+                    consensus_height,
                     anchor_height,
-                    %anchor_hash,
-                    last_height = self.last_height,
-                    %local_hash,
+                    anchor_hash,
+                    certificate,
+                    batch_txs,
+                    certified,
+                )
+                .await?;
+            return Ok((outcome, StageOutcome::ReplacedAnchorBatch, 0usize, 0u64));
+        }
+
+        // Execute in decided order. `validate_batch` enforces dependency
+        // order at propose/accept time, so a decided batch — carrying 2/3+
+        // signatures — is already ordered; no re-sort or re-check here.
+        //
+        // A parse failure here is a DETERMINISTIC content fact — parsing decided
+        // bytes reads no chain state, so every node fails identically — which per
+        // I5 must be handled the same everywhere and must NOT be node-fatal: a
+        // `?` here halts the whole chain (each node exits, re-syncs the same value,
+        // exits again). Proposal validation normally rejects unparseable txs before
+        // they are decided; if one is decided anyway, record the batch for sync and
+        // skip execution uniformly, rather than crash-looping the network.
+        let parsed_txs: Vec<PreparedTransaction> = {
+            let mut parsed = Vec::with_capacity(batch_txs.len());
+            let mut bad: Option<Txid> = None;
+            for btx in batch_txs {
+                match self
+                    .executor
+                    .prepare_transaction(&self.recognizer, selection, btx)?
+                {
+                    Some(p) => parsed.push(p),
+                    None => {
+                        bad = Some(btx.compute_txid());
+                        break;
+                    }
+                }
+            }
+            if let Some(txid) = bad {
+                error!(
+                    %txid,
                     consensus_height = %consensus_height,
-                    "Skipping decided batch — anchor does not match local tip; recording only"
+                    "Decided batch contains an unparseable transaction — recording for sync \
+                     and skipping execution (deterministic; every node does the same)"
                 );
                 let outcome = self
                     .record_batch_for_sync(
@@ -340,151 +430,133 @@ impl<E: Executor> ExecutionContext<E> {
                         certified,
                     )
                     .await?;
-                return Ok((outcome, StageOutcome::ReplacedAnchorBatch, 0usize, 0u64));
+                return Ok((outcome, StageOutcome::UnrecognizedBatch, 0usize, 0u64));
             }
+            parsed
+        };
 
-            // Execute in decided order. `validate_batch` enforces dependency
-            // order at propose/accept time, so a decided batch — carrying 2/3+
-            // signatures — is already ordered; no re-sort or re-check here.
-            //
-            // A parse failure here is a DETERMINISTIC content fact — parsing decided
-            // bytes reads no chain state, so every node fails identically — which per
-            // I5 must be handled the same everywhere and must NOT be node-fatal: a
-            // `?` here halts the whole chain (each node exits, re-syncs the same value,
-            // exits again). Proposal validation normally rejects unparseable txs before
-            // they are decided; if one is decided anyway, record the batch for sync and
-            // skip execution uniformly, rather than crash-looping the network.
-            let parsed_txs: Vec<PreparedTransaction> = {
-                let mut parsed = Vec::with_capacity(batch_txs.len());
-                let mut bad: Option<Txid> = None;
-                for btx in batch_txs {
-                    match self
-                        .executor
-                        .prepare_transaction(&self.recognizer, selection, btx)?
-                    {
-                        Some(p) => parsed.push(p),
-                        None => {
-                            bad = Some(btx.compute_txid());
-                            break;
-                        }
-                    }
-                }
-                if let Some(txid) = bad {
-                    error!(
-                        %txid,
-                        consensus_height = %consensus_height,
-                        "Decided batch contains an unparseable transaction — recording for sync \
-                         and skipping execution (deterministic; every node does the same)"
-                    );
-                    let outcome = self
-                        .record_batch_for_sync(
-                            &conn,
-                            consensus_height,
-                            anchor_height,
-                            anchor_hash,
-                            certificate,
-                            batch_txs,
-                            certified,
-                        )
-                        .await?;
-                    return Ok((outcome, StageOutcome::UnrecognizedBatch, 0usize, 0u64));
-                }
-                parsed
-            };
-
-            let input = CanonicalInput::bitcoin(certified.unwrap_or(batch_txs))?;
-            let exclusions = if let Some(frozen) = frozen {
-                frozen.exclusions
-            } else {
-                let mut applicable = select_decision_exclusions(&conn, consensus_height.as_u64())
-                    .await?
-                    .iter()
-                    .map(|value| value.parse::<Txid>().map(|id| id.to_byte_array()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                applicable.sort_unstable();
-                DecisionExclusions::for_batch(
-                    consensus_height.as_u64(),
-                    certified.unwrap_or(batch_txs),
-                    batch_txs,
-                    &applicable,
-                )?
-            };
-            insert_batch(
-                &conn,
+        let input = CanonicalInput::bitcoin(certified.unwrap_or(batch_txs))?;
+        let exclusions = if let Some(exclusions) = frozen_exclusions {
+            exclusions
+        } else {
+            let mut applicable = select_decision_exclusions(&conn, consensus_height.as_u64())
+                .await?
+                .iter()
+                .map(|value| value.parse::<Txid>().map(|id| id.to_byte_array()))
+                .collect::<Result<Vec<_>, _>>()?;
+            applicable.sort_unstable();
+            DecisionExclusions::for_batch(
                 consensus_height.as_u64(),
-                anchor_height,
-                &anchor_hash.to_string(),
-                certificate,
-                false,
+                certified.unwrap_or(batch_txs),
+                batch_txs,
+                &applicable,
+            )?
+        };
+        insert_batch(
+            &conn,
+            consensus_height.as_u64(),
+            anchor_height,
+            &anchor_hash.to_string(),
+            certificate,
+            false,
+        )
+        .await
+        .context("Failed to insert batch")?;
+
+        // Store the certified txid list + raw txs for replay/sync recovery
+        self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
+            .await?;
+
+        for t in &parsed_txs {
+            let tx_id = insert_transaction(
+                &conn,
+                indexer_types::TransactionRow::builder()
+                    .height(anchor_height)
+                    .batch_height(consensus_height.as_u64())
+                    .txid(t.txid.to_string())
+                    .build(),
             )
             .await
-            .context("Failed to insert batch")?;
+            .context("Failed to insert transaction")?;
 
-            // Store the certified txid list + raw txs for replay/sync recovery
-            self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
-                .await?;
-
-            for t in &parsed_txs {
-                let tx_id = insert_transaction(
-                    &conn,
-                    indexer_types::TransactionRow::builder()
-                        .height(anchor_height)
-                        .batch_height(consensus_height.as_u64())
-                        .txid(t.txid.to_string())
-                        .build(),
+            // Canonical batch processing discards the per-op failure vec —
+            // deterministic op failures are already telemetered via warn! in
+            // execute_op. Only non-deterministic errors (Result::Err) abort.
+            let _failures = self
+                .executor
+                .execute_prepared(
+                    selection,
+                    &self.session,
+                    self.network,
+                    anchor_height,
+                    tx_id,
+                    t,
                 )
                 .await
-                .context("Failed to insert transaction")?;
-
-                // Canonical batch processing discards the per-op failure vec —
-                // deterministic op failures are already telemetered via warn! in
-                // execute_op. Only non-deterministic errors (Result::Err) abort.
-                let _failures = self
-                    .executor
-                    .execute_prepared(
-                        selection,
-                        &self.session,
-                        self.network,
-                        anchor_height,
-                        tx_id,
-                        t,
-                    )
-                    .await
-                    .context("execute_transaction failed")?;
-            }
-
-            self.record_application(
-                anchor_height,
-                ApplicationSource::Batch {
-                    anchor_height,
-                    anchor_hash: anchor_hash.to_byte_array(),
-                    exclusions,
-                },
-                Some(input),
-            )
-            .await?;
-            let executed_ops = parsed_txs
-                .iter()
-                .flat_map(|tx| tx.inputs.iter())
-                .map(|(_, count)| *count)
-                .sum::<u64>();
-            Ok((
-                BatchOutcome::Executed,
-                StageOutcome::Applied,
-                parsed_txs.len(),
-                executed_ops,
-            ))
+                .context("execute_transaction failed")?;
         }
-        .await;
-        let result = result.map(|(outcome, stage_outcome, count, ops)| {
-            ((outcome, count, ops), stage_outcome, remaining)
-        });
-        let ((outcome, parsed_count, executed_ops), _) = stage.finish(result).await?;
-        Ok(AppliedBatch {
-            outcome,
-            parsed_count,
+
+        self.record_application(
+            anchor_height,
+            ApplicationSource::Batch {
+                anchor_height,
+                anchor_hash: anchor_hash.to_byte_array(),
+                exclusions,
+            },
+            Some(input),
+        )
+        .await?;
+        let executed_ops = parsed_txs
+            .iter()
+            .flat_map(|tx| tx.inputs.iter())
+            .map(|(_, count)| *count)
+            .sum::<u64>();
+        Ok((
+            BatchOutcome::Executed,
+            StageOutcome::Applied,
+            parsed_txs.len(),
             executed_ops,
-        })
+        ))
+    }
+
+    #[cfg(feature = "protocol-qualification")]
+    pub(super) async fn execute_legacy_batch_unit(
+        &mut self,
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        consensus_height: Height,
+        batch_txs: &[bitcoin::Transaction],
+    ) -> Result<()> {
+        ensure!(
+            canonical_history::state(&self.db_conn()).await? == HistoryState::Unavailable,
+            "legacy comparison requires a database without canonical authority"
+        );
+        let selection = self
+            .select_executor(ApplicationPosition::Batch {
+                anchor_height,
+                anchor_hash,
+                consensus_height: consensus_height.as_u64(),
+            })
+            .await?;
+        let lease = self.begin_unit(&selection, false).await?;
+        let result = self
+            .batch_txn(
+                &selection,
+                anchor_height,
+                anchor_hash,
+                consensus_height,
+                &[],
+                batch_txs,
+                None,
+                None,
+            )
+            .await;
+        let (outcome, stage, _, _) = self.finish_unit(lease, result, true).await?;
+        ensure!(
+            matches!(outcome, BatchOutcome::Executed) && stage == StageOutcome::Applied,
+            "legacy comparison batch was not executed"
+        );
+        Ok(())
     }
 }
 

@@ -1,10 +1,9 @@
-//! Replay a preserved pre-extraction oracle through the actual linked coordinator.
+//! Replay a preserved pre-extraction oracle through the linked execution adapters.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::slice;
-use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use bitcoin::absolute::LockTime;
@@ -12,31 +11,28 @@ use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::{Block as BitcoinBlock, Network, Transaction, Witness};
 use libsql::Connection;
-use malachitebft_engine::node::NodeRef;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
-use tokio::sync::{mpsc, watch};
-use tokio::time::timeout;
 
-use super::engine::EngineConfig;
+use super::PruneConfig;
+use super::execution::ExecutionContext;
 use super::executor::{Executor, RuntimeExecutor};
-use super::mempool_fee_index::MempoolFeeIndex;
-use super::{PruneConfig, Reactor, start_linked_consensus};
 use crate::bitcoin_client::Client;
 use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_helpers::new_mock_block_hash;
 use crate::consensus::Height;
-use crate::consensus::signing::PrivateKey;
 use crate::database::canonical_history::{self, HistoryState};
 use crate::database::connection::new_connection;
+use crate::protocol::coordinator::certified_input::EraContext;
+use crate::protocol::coordinator::linked::TransactionRecognizer;
 use crate::protocol::coordinator::selection::ApplicationPosition;
+use crate::protocol::identity::{ChainId, ProtocolId};
 use crate::protocol_qualification::snapshot::full_state;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::LinkedSession;
-use crate::stopper::Shutdown;
 
 #[derive(Deserialize)]
 struct Inputs {
@@ -49,13 +45,6 @@ struct Inputs {
 struct Report {
     source: String,
     states: BTreeMap<String, Json>,
-}
-
-struct StopEngine(NodeRef);
-impl Drop for StopEngine {
-    fn drop(&mut self) {
-        self.0.stop(None);
-    }
 }
 
 fn checksum(bytes: &[u8]) -> String {
@@ -123,69 +112,46 @@ async fn scenario(
     let conn = new_connection(dir.path(), "replay.db").await?;
     let session = LinkedSession::new(conn.clone(), factory(conn.clone()).await?);
     let raw: Transaction = deserialize(&fs::read(path.join("transaction.bin"))?)?;
-    let consensus = start_linked_consensus(
-        EngineConfig {
-            private_key: PrivateKey::from([17; 32]),
-            listen_addr: "/ip4/127.0.0.1/tcp/0".into(),
-            persistent_peers: Vec::new(),
-            data_dir: dir.path().to_path_buf(),
-            consensus_enabled: false,
-            discovery: Default::default(),
-        },
-        &session,
-        service,
-        Network::Regtest,
-        None,
-        None,
-        1,
-        MempoolFeeIndex::new(None),
-    )
-    .await?;
-    let shutdown = Shutdown::new();
-    let (_block_tx, block_rx) = mpsc::channel(1);
-    let (_mempool_tx, mempool_rx) = mpsc::channel(1);
-    let (addr_tx, _addr_rx) = watch::channel(None);
-    // These scenarios supply raw blocks directly and must not require Bitcoin RPC.
+    ensure!(canonical_history::state(&conn).await? == HistoryState::Unavailable);
     let client = Client::new("http://127.0.0.1:1".into(), String::new(), String::new())?;
-    let mut reactor = Reactor::from_session(
+    // This context is never persisted or used for certification. The archive has
+    // execution state only, so consensus and certified recovery must not start.
+    let mut execution = ExecutionContext::new(
         RuntimeExecutor::new(client),
         session,
         Network::Regtest,
         service.clone(),
-        block_rx,
-        mempool_rx,
-        shutdown.signal(),
-        None,
-        None,
-        None,
-        consensus,
+        EraContext {
+            chain: ChainId([0; 32]),
+            era: [0; 32],
+            protocol: ProtocolId([0; 32]),
+            codec: 1,
+        },
         PruneConfig {
             enabled: false,
             retain_blocks: 144,
         },
         1,
         Some(new_mock_block_hash(1)),
-        addr_tx,
     );
-    let cleanup = StopEngine(reactor.consensus.engine_handle.actor.clone());
     let result = async {
         let initial = state(&conn).await?;
         report
             .states
             .insert(format!("{label}/initial"), initial.clone());
-        let selection = reactor.preparation_selection().await?;
-        let recognized = reactor.execution.recognizer.recognize(&selection, serialize(&raw))?
+        let selection = execution.select_executor(ApplicationPosition::Preparation { anchor_height: 1, anchor_hash: Some(new_mock_block_hash(1)) }).await?;
+        let recognized = execution.recognizer.recognize(&selection, serialize(&raw))?
             .map_err(anyhow::Error::msg)?.context("recognized signed fixture")?;
         report.states.insert(format!("{label}/recognition"),
             json!({"index":recognized.index,"txid":recognized.txid.to_string(),"inputs":recognized.inputs}));
         let mut unrelated = raw.clone();
         unrelated.input[0].witness.clear();
-        ensure!(reactor.simulate_raw(serialize(&unrelated)).await?.is_err());
+        ensure!(execution.simulate_raw(serialize(&unrelated)).await?.is_err());
         ensure!(
             state(&conn).await? == initial,
             "unrecognized input changed persisted state"
         );
-        let simulated = reactor
+        let simulated = execution
             .simulate_raw(serialize(&raw))
             .await?
             .map_err(anyhow::Error::msg)
@@ -200,29 +166,27 @@ async fn scenario(
         );
 
         if batched {
-            reactor
-                .process_decided_batch(
+            execution
+                .execute_legacy_batch_unit(
                     1,
                     new_mock_block_hash(1),
                     Height::new(1),
-                    &[],
                     slice::from_ref(&raw),
-                    None,
                 )
                 .await?;
             report
                 .states
                 .insert(format!("{label}/executed"), state(&conn).await?);
         }
-        let block = reactor.execution.executor
+        let block = execution.executor
             .prepare_block(
-                &reactor.execution.recognizer,
-                &reactor.preparation_selection().await?,
+                &execution.recognizer,
+                &execution.select_executor(ApplicationPosition::Preparation { anchor_height: 1, anchor_hash: Some(new_mock_block_hash(1)) }).await?,
                 raw_confirmation_block(&raw, 2)?,
             )
             .await?;
-        let (count, ops, errors) = reactor.execution.execute_block_unit(
-                &reactor
+        let (count, ops, errors) = execution.execute_block_unit(
+                &execution
                     .select_executor(ApplicationPosition::Block {
                         height: block.height,
                         hash: block.hash,
@@ -239,19 +203,23 @@ async fn scenario(
             .insert(format!("{label}/confirmed"), state(&conn).await?);
 
         if batched {
-            reactor.rollback(1).await?;
+            execution.maintain_executor(Some(1)).await?;
+            execution.recognizer = TransactionRecognizer::new(
+                execution.session.origin(), execution.network,
+                execution.session.executor.operations.recognize.clone(),
+            );
             report
                 .states
                 .insert(format!("{label}/rollback"), state(&conn).await?);
-            let replacement = reactor.execution.executor
+            let replacement = execution.executor
                 .prepare_block(
-                    &reactor.execution.recognizer,
-                    &reactor.preparation_selection().await?,
+                    &execution.recognizer,
+                    &execution.select_executor(ApplicationPosition::Preparation { anchor_height: 1, anchor_hash: Some(new_mock_block_hash(1)) }).await?,
                     raw_confirmation_block(&raw, 4)?,
                 )
                 .await?;
-            let (count, ops, _) = reactor.execution.execute_block_unit(
-                    &reactor
+            let (count, ops, _) = execution.execute_block_unit(
+                    &execution
                         .select_executor(ApplicationPosition::Block {
                             height: replacement.height,
                             hash: replacement.hash,
@@ -272,12 +240,6 @@ async fn scenario(
         Ok(())
     }
     .await;
-    cleanup.0.stop(None);
-    timeout(
-        Duration::from_secs(30),
-        &mut reactor.consensus.engine_handle.handle,
-    )
-    .await??;
     ensure!(conn.is_autocommit(), "baseline retained SQL transaction");
     ensure!(
         service.active_roots().await == 0,
