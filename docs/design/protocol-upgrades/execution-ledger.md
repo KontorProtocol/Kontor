@@ -1908,3 +1908,55 @@ call sites and confirmed certified recovery is independent of local Bitcoin
 redelivery. No independent microreview, PR, push or remote CI was started. Remaining
 K4 work includes bounded proof transport/admission, required real-graph integration,
 historical fixture reconciliation, and consolidated review/CI/merge.
+
+
+### K4 incremental proof verification and bounded journal reads
+
+Continuing from `0de8855863af41a3965ad2be7fe7db4056b127e0`, replaced the
+whole-slice certificate parser with an incremental verifier. Existing contiguous
+verification uses the same verifier. It retains one fixed 107-byte wire-field
+buffer, the established committee lookup and duplicate-signer tracking. Declared
+length is checked against `1024 + 96*N`; field order, minimal varints, round,
+value identity, canonical signature records, known distinct signers, signatures
+and strict supermajority retain their previous rules. Finishing requires all
+declared bytes and a complete field, even after a quorum prefix. A failed stream
+cannot be reused to obtain a successful verdict.
+
+Added `load_verified_input` for journal consumers that need authenticated input
+and decision identities but not proof bytes. It checks both original and optional
+augmentation proofs using SQL slices of at most 1 MiB each, then exposes the
+input. Closure planning/recovery/completion, finality/replay validation and the
+block/batch retained-input checks now use it. The existing whole-proof load still
+serves callers that require proof bytes, with a committee-based length check
+before loading those blobs. This bounds the application's proof-read buffers, not
+SQLite's page cache or all memory proportional to the historical committee.
+
+Local validation, one Cargo/runtime operation at a time and at most two jobs:
+
+- `k4-proof-stream36.log`, session 32235, exit 0: 22 tests passed in 44.36s
+  after a 1m49s test build. This includes all certified-decision and journal tests,
+  splitting valid proofs at every byte boundary for rounds 0, 128 and u32::MAX,
+  malformed split prefixes, incomplete/failed stream rejection, original and
+  augmentation corruption checks, and actual certified A-to-B-to-A recovery.
+  SHA-256 `ad08760ab7978dfeb09eb726d8cb61a6032addf7415c7f1a4c01064b11f19d65`.
+- `k4-proof-stream-main37.log`, session 80876, exit 0: locked production
+  `kontor` binary check with protocol-qualification passed in 9.26s.
+  SHA-256 `4dc20531836ac02acc2f95f7d566579d2bdafcc681d872b0df98bf1a0704dd62`.
+- Draft coordinator definition for both checks:
+  `3c4b9097960fc32e319f0b3e1e2c2160bbc261fbc88331555db62b8b3991fab9`.
+
+Lead inspection compared all parser acceptance checks with the preceding parser,
+traced converted journal consumers, checked failure poisoning and bounded field
+arithmetic, and confirmed no proof verification is skipped when returning input.
+Formatting and diff checks passed. No independent microreview, PR, push or remote
+CI was started. The sole planning reviewer was asked to scrutinize the concrete
+network/engine integration because the current Malachite app-channel interface
+only transports complete native certificates. No engine adaptation was selected
+or implemented in this checkpoint.
+
+This is not complete proof paging or K4 acceptance. Network request/page binding,
+bounded disk staging and admission, large-proof journal publication and actual
+engine integration remain. The native-sync serving path and the execution path
+that populates the legacy batch certificate projection still load whole proofs.
+Required real-graph integration, historical fixture reconciliation and the
+consolidated K4 review/CI/merge also remain unfinished.

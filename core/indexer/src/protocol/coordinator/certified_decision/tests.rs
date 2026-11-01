@@ -1,10 +1,11 @@
 use bitcoin::{BlockHash, hashes::Hash};
-use malachitebft_core_types::CommitSignature;
+use malachitebft_core_types::{CommitSignature, NilOrVal, Round};
+use prost::Message;
 
 use super::*;
 use crate::consensus::codec::encode_commit_certificate;
 use crate::consensus::signing::PrivateKey;
-use crate::consensus::{CommitCertificate, Ctx};
+use crate::consensus::{CommitCertificate, Ctx, Height, Vote};
 use crate::protocol::identity::{ChainId, ProtocolId};
 
 pub(crate) fn fixture() -> (CommitteeRecord, ExactInput, Decision, Vec<PrivateKey>) {
@@ -195,4 +196,80 @@ fn authority_preserves_order_and_binds_registration_provenance() {
             .downcast_ref::<AuthorityError>(),
         Some(AuthorityError::NoActiveValidators)
     ));
+}
+
+#[test]
+fn proof_verification_is_independent_of_page_boundaries() -> Result<()> {
+    let (authority, _, decision, keys) = fixture();
+    for round in [0, 128, u32::MAX] {
+        let bytes = proof(&decision, &keys, &[0, 1, 2, 3], round);
+        for size in [1, 2, 3, 7, 31, 96, 107, 128, bytes.len()] {
+            let mut verifier = ProofVerifier::for_decision(&decision, bytes.len(), &authority)?;
+            verifier.push(&[])?;
+            for chunk in bytes.chunks(size) {
+                verifier.push(chunk)?;
+            }
+            verifier.finish()?;
+        }
+        for split in 0..bytes.len() {
+            let mut verifier = ProofVerifier::for_decision(&decision, bytes.len(), &authority)?;
+            verifier.push(&bytes[..split])?;
+            verifier.push(&bytes[split..])?;
+            verifier.finish()?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn incomplete_or_failed_proof_stream_never_becomes_authenticated() -> Result<()> {
+    let (authority, _, decision, keys) = fixture();
+    let bytes = proof(&decision, &keys, &[0, 1, 2, 3], 1);
+    // Even a valid quorum prefix cannot finish a declared larger proof.
+    let prefix = proof(&decision, &keys, &[0, 1, 2], 1);
+    let mut verifier = ProofVerifier::for_decision(&decision, bytes.len(), &authority)?;
+    verifier.push(&prefix)?;
+    assert!(verifier.finish().is_err());
+    let mut verifier = ProofVerifier::for_decision(&decision, bytes.len() - 1, &authority)?;
+    assert!(verifier.push(&bytes).is_err());
+    assert!(verifier.push(&[]).is_err());
+    assert!(verifier.finish().is_err());
+    let mut verifier = ProofVerifier::for_decision(&decision, prefix.len() + 1, &authority)?;
+    verifier.push(&prefix)?;
+    assert!(verifier.push(&[40]).is_err());
+    assert!(verifier.finish().is_err());
+
+    let mut invalid = bytes.clone();
+    *invalid.last_mut().unwrap() ^= 1;
+    let mut verifier = ProofVerifier::for_decision(&decision, bytes.len(), &authority)?;
+    assert!(verifier.push(&invalid).is_err());
+    assert!(verifier.push(&bytes).is_err());
+    assert!(verifier.finish().is_err());
+    Ok(())
+}
+
+#[test]
+fn malformed_fields_fail_even_when_their_prefixes_span_pages() -> Result<()> {
+    let (authority, _, decision, _) = fixture();
+    for bytes in [
+        vec![8, 0x81, 0],
+        vec![8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 2],
+        vec![8, 1, 16, 0],
+        vec![8, 1, 26, 35],
+        vec![
+            8, 1, 26, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        ],
+    ] {
+        let mut verifier = ProofVerifier::for_decision(&decision, bytes.len(), &authority)?;
+        let mut rejected = false;
+        for byte in bytes {
+            if verifier.push(&[byte]).is_err() {
+                rejected = true;
+                break;
+            }
+        }
+        assert!(rejected);
+        assert!(verifier.finish().is_err());
+    }
+    Ok(())
 }

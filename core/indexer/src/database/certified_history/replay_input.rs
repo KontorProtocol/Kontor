@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use libsql::{Connection, params};
 
-use super::{closure, fixed, load, replay, work};
+use super::{closure, fixed, load_verified_input, replay, work};
 use crate::protocol::coordinator::application_closure::WorkItem;
 use crate::protocol::coordinator::closure_work::WorkOrigin;
 use crate::protocol::coordinator::replay_input::ReplayInput;
@@ -16,7 +16,7 @@ async fn validate(conn: &Connection, input: &ReplayInput) -> Result<()> {
             && selected.interval_since == input.interval_since,
         "replay input branch or decision differs"
     );
-    let certified = load(conn, input.exclusions.consensus_height).await?;
+    let certified = load_verified_input(conn, input.exclusions.consensus_height).await?;
     input.transactions(&certified.input().transactions()?)?;
     Ok(())
 }

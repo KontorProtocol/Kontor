@@ -1,13 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, ensure};
-use malachitebft_core_types::{NilOrVal, Round};
-use prost::Message;
 
 use super::certified_input::{Descriptor, EraContext, ExactInput};
-use crate::consensus::codec::decode_signature;
 use crate::consensus::signing::PublicKey;
-use crate::consensus::{Address, Height, ValueId, Vote, proto};
+use crate::consensus::{Address, ValueId};
+
+use self::proof_stream::ProofVerifier;
 use crate::protocol::canonical_codec::{CodecError, Decoder, Encoder};
 use crate::protocol::identity::domain_digest;
 
@@ -242,18 +241,9 @@ pub(crate) fn verify_certificate(
     proof: &[u8],
     authority: &CommitteeRecord,
 ) -> Result<()> {
-    ensure!(
-        decision.height == authority.height
-            && decision.committee == authority.id()?
-            && decision.descriptor.context == authority.context,
-        "certificate authority context differs"
-    );
-    verify_proof(
-        decision.height,
-        ValueId::new(decision.descriptor.id()?),
-        proof,
-        authority,
-    )
+    let mut verifier = ProofVerifier::for_decision(decision, proof.len(), authority)?;
+    verifier.push(proof)?;
+    verifier.finish()
 }
 
 pub(crate) fn verify_proof(
@@ -262,120 +252,12 @@ pub(crate) fn verify_proof(
     proof: &[u8],
     authority: &CommitteeRecord,
 ) -> Result<()> {
-    let total = authority.validate()?;
-    ensure!(
-        height == authority.height,
-        "certificate authority height differs"
-    );
-    ensure!(
-        proof.len() <= authority.maximum_proof_bytes()?,
-        "certificate exceeds committee size bound"
-    );
-    let mut input = CertificateReader(proof);
-    input.tag(8)?;
-    ensure!(input.varint()? == height, "certificate height differs");
-    let round = if input.0.first() == Some(&16) {
-        input.tag(16)?;
-        let round = u32::try_from(input.varint()?)?;
-        ensure!(round != 0, "noncanonical zero round");
-        round
-    } else {
-        0
-    };
-    let value = input.message(26, 34)?;
-    ensure!(
-        value.len() == 34 && value[..2] == [10, 32],
-        "invalid certificate value encoding"
-    );
-    ensure!(value[2..] == value_id.0, "certificate value differs");
-    let members = authority
-        .members
-        .iter()
-        .map(|m| (m.address, m))
-        .collect::<BTreeMap<_, _>>();
-    let mut signed = BTreeSet::new();
-    let mut power = 0u64;
-    while !input.0.is_empty() {
-        ensure!(
-            signed.len() < members.len(),
-            "certificate has too many signers"
-        );
-        // Decode one bounded record at a time. A hostile repeated-field count
-        // cannot make Prost allocate a certificate-sized vector before validation.
-        let bytes = input.message(34, 96)?;
-        let signature = proto::CommitSignature::decode(bytes)?;
-        ensure!(
-            signature.encode_to_vec() == bytes && signature.extension.is_none(),
-            "noncanonical signature or unsupported extension"
-        );
-        let address: [u8; 20] = signature
-            .validator_address
-            .context("missing signer")?
-            .value
-            .as_ref()
-            .try_into()
-            .context("invalid signer address")?;
-        let member = members
-            .get(&address)
-            .context("unknown certificate signer")?;
-        ensure!(signed.insert(address), "duplicate certificate signer");
-        let signature = decode_signature(signature.signature.context("missing signature")?)?;
-        let vote = Vote::new_precommit(
-            Height::new(height),
-            Round::new(round),
-            NilOrVal::Val(value_id),
-            Address::new(address),
-        );
-        PublicKey::from_bytes(member.key)?
-            .verify(&vote.to_sign_bytes(), &signature)
-            .context("invalid certificate signature")?;
-        power = power
-            .checked_add(member.power)
-            .context("certificate voting power overflow")?;
-    }
-    ensure!(power * 3 > total * 2, "certificate lacks supermajority");
-    Ok(())
+    let mut verifier = ProofVerifier::new(height, value_id, proof.len(), authority)?;
+    verifier.push(proof)?;
+    verifier.finish()
 }
 
-struct CertificateReader<'a>(&'a [u8]);
-
-impl<'a> CertificateReader<'a> {
-    fn tag(&mut self, expected: u8) -> Result<()> {
-        ensure!(
-            self.0.first() == Some(&expected),
-            "unexpected certificate field"
-        );
-        self.0 = &self.0[1..];
-        Ok(())
-    }
-
-    fn varint(&mut self) -> Result<u64> {
-        let mut value = 0u64;
-        for index in 0..10 {
-            let byte = *self.0.first().context("truncated certificate integer")?;
-            self.0 = &self.0[1..];
-            ensure!(index < 9 || byte <= 1, "certificate integer overflow");
-            value |= u64::from(byte & 0x7f) << (7 * index);
-            if byte & 0x80 == 0 {
-                ensure!(index == 0 || byte != 0, "nonminimal certificate integer");
-                return Ok(value);
-            }
-        }
-        anyhow::bail!("certificate integer overflow")
-    }
-
-    fn message(&mut self, tag: u8, maximum: usize) -> Result<&'a [u8]> {
-        self.tag(tag)?;
-        let length = usize::try_from(self.varint()?)?;
-        ensure!(length <= maximum, "certificate field exceeds bound");
-        let (value, remaining) = self
-            .0
-            .split_at_checked(length)
-            .context("truncated certificate field")?;
-        self.0 = remaining;
-        Ok(value)
-    }
-}
+pub(crate) mod proof_stream;
 
 #[cfg(test)]
 pub(crate) mod tests;

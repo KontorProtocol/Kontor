@@ -288,7 +288,8 @@ impl<E: Executor> ExecutionContext<E> {
                 }
                 _ => bail!("batch application differs from closure work item"),
             };
-            let retained = certified_history::load(&conn, consensus_height.as_u64()).await?;
+            let retained =
+                certified_history::load_verified_input(&conn, consensus_height.as_u64()).await?;
             let expected = ExactInput::batch(
                 self.protocol_context,
                 anchor_height,

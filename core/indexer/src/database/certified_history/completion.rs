@@ -3,7 +3,8 @@ use bitcoin::hashes::Hash;
 use libsql::{Connection, TransactionBehavior, params};
 
 use super::{
-    Status, branch, closure, committee, durable_writer, fixed, frontier, load, registrations,
+    Status, branch, closure, committee, durable_writer, fixed, frontier, load_verified_input,
+    registrations,
 };
 use crate::database::queries::select_block_latest;
 use crate::protocol::coordinator::closure_record::ClosureRecord;
@@ -30,7 +31,7 @@ pub(crate) async fn completed(conn: &Connection, height: u64) -> Result<ClosureR
             && record.next_committee == fixed::<32>(row.get(2)?)?,
         "closure record binding differs"
     );
-    let certified = load(conn, height).await?;
+    let certified = load_verified_input(conn, height).await?;
     ensure!(
         certified.decision().id()? == record.decision
             && certified.decision().descriptor.context == record.context,

@@ -347,9 +347,11 @@ impl<E: Executor> ExecutionContext<E> {
                     }),
                 "block application differs from closure work item"
             );
-            let retained =
-                certified_history::load(&self.db_conn(), decision.consensus_height.as_u64())
-                    .await?;
+            let retained = certified_history::load_verified_input(
+                &self.db_conn(),
+                decision.consensus_height.as_u64(),
+            )
+            .await?;
             ensure!(
                 *retained.input() == block.exact_input(self.protocol_context)?,
                 "block application differs from retained certified bytes"

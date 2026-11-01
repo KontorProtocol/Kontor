@@ -2,7 +2,9 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::hashes::Hash;
 use libsql::{Connection, TransactionBehavior, params};
 
-use super::{Status, durable_writer, fixed, frontier, load, registrations, replay_input, work};
+use super::{
+    Status, durable_writer, fixed, frontier, load_verified_input, registrations, replay_input, work,
+};
 use crate::database::canonical_history::{self, HistoryState};
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
 use crate::protocol::canonical_input::CanonicalInput;
@@ -237,7 +239,7 @@ pub(crate) async fn begin(conn: &Connection, height: u64) -> Result<Progress> {
             && state.closed_height.checked_add(1) == Some(height),
         "decision is not awaiting closure"
     );
-    let certified = load(&tx, height).await?;
+    let certified = load_verified_input(&tx, height).await?;
     let context = state.context.context("missing closure context")?;
     let decision = certified.decision();
     ensure!(
@@ -342,7 +344,7 @@ async fn validate_application_source(conn: &Connection, record: &StageRecord) ->
         }
         _ => return Ok(()),
     };
-    let certified = load(conn, height).await?;
+    let certified = load_verified_input(conn, height).await?;
     let command = &certified.decision().descriptor.command;
     if matches!(
         record.outcome,
@@ -481,7 +483,7 @@ pub(crate) async fn commit_stage(
 pub(crate) async fn recover(conn: &Connection, height: u64) -> Result<Progress> {
     let mut progress = initial_progress(conn, plan(conn, height).await?).await?;
     work::verify(conn, work::published(conn, progress.remaining.plan).await?).await?;
-    let certified = load(conn, height).await?;
+    let certified = load_verified_input(conn, height).await?;
     ensure!(
         certified.decision().id()? == progress.plan.decision
             && certified.decision().descriptor.context == progress.plan.context,

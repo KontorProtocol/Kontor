@@ -17,6 +17,7 @@ pub(crate) mod branch;
 pub(crate) mod closure;
 pub(crate) mod completion;
 pub(crate) mod finality;
+mod proof_read;
 pub(crate) mod registrations;
 pub(crate) mod replay;
 pub(crate) mod replay_input;
@@ -329,8 +330,26 @@ pub(crate) async fn committee(conn: &Connection, height: u64) -> Result<Committe
     Ok(authority)
 }
 
-pub(crate) async fn load(conn: &Connection, height: u64) -> Result<AuthenticatedDecision> {
-    let row = conn.query("SELECT d.decision_id, d.record, i.body, d.original_proof, d.proof_augmentation,
+pub(crate) struct RetainedInput {
+    decision: Decision,
+    input: ExactInput,
+}
+
+impl RetainedInput {
+    pub(crate) fn decision(&self) -> &Decision {
+        &self.decision
+    }
+
+    pub(crate) fn input(&self) -> &ExactInput {
+        &self.input
+    }
+}
+
+async fn load_record(
+    conn: &Connection,
+    height: u64,
+) -> Result<(RetainedInput, usize, Option<usize>)> {
+    let row = conn.query("SELECT d.decision_id, d.record, i.body, length(d.original_proof), length(d.proof_augmentation),
         d.committee_id, d.body_digest, d.bitcoin_height, d.bitcoin_hash, d.is_block FROM certified_decisions d JOIN certified_inputs i ON d.body_digest = i.body_digest
         WHERE d.height = ?1", [height.to_be_bytes().to_vec()]).await?.next().await?.context("certified decision unavailable")?;
     let decision = Decision::decode(&row.get::<Vec<u8>>(1)?)?;
@@ -349,11 +368,49 @@ pub(crate) async fn load(conn: &Connection, height: u64) -> Result<Authenticated
         "certified execution index differs"
     );
     let input = ExactInput::validate(decision.descriptor.clone(), row.get(2)?)?;
+    let original_length = usize::try_from(row.get::<i64>(3)?)?;
+    let augmentation_length = row
+        .get::<Option<i64>>(4)?
+        .map(usize::try_from)
+        .transpose()?;
+    Ok((
+        RetainedInput { decision, input },
+        original_length,
+        augmentation_length,
+    ))
+}
+
+pub(crate) async fn load(conn: &Connection, height: u64) -> Result<AuthenticatedDecision> {
+    let (retained, original_length, augmentation_length) = load_record(conn, height).await?;
     let authority = committee(conn, height).await?;
-    if let Some(augmentation) = row.get::<Option<Vec<u8>>>(4)? {
-        verify_certificate(&decision, &augmentation, &authority)?;
+    let maximum = authority.maximum_proof_bytes()?;
+    ensure!(
+        original_length <= maximum && augmentation_length.is_none_or(|length| length <= maximum),
+        "certificate exceeds committee size bound"
+    );
+    let row = conn
+        .query(
+            "SELECT original_proof, proof_augmentation FROM certified_decisions WHERE height = ?1",
+            [height.to_be_bytes().to_vec()],
+        )
+        .await?
+        .next()
+        .await?
+        .context("certified decision unavailable")?;
+    if let Some(augmentation) = row.get::<Option<Vec<u8>>>(1)? {
+        verify_certificate(&retained.decision, &augmentation, &authority)?;
     }
-    AuthenticatedDecision::verify(decision, input, row.get(3)?, &authority)
+    AuthenticatedDecision::verify(retained.decision, retained.input, row.get(0)?, &authority)
+}
+
+pub(crate) async fn load_verified_input(conn: &Connection, height: u64) -> Result<RetainedInput> {
+    let (retained, original_length, augmentation_length) = load_record(conn, height).await?;
+    let authority = committee(conn, height).await?;
+    proof_read::verify(conn, &retained.decision, &authority, original_length, false).await?;
+    if let Some(length) = augmentation_length {
+        proof_read::verify(conn, &retained.decision, &authority, length, true).await?;
+    }
+    Ok(retained)
 }
 
 pub(crate) async fn append(conn: &Connection, certified: &AuthenticatedDecision) -> Result<()> {

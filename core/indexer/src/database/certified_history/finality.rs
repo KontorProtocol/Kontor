@@ -2,7 +2,10 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::{BlockHash, Txid, hashes::Hash};
 use libsql::{Connection, TransactionBehavior, params};
 
-use super::{branch, closure, durable_writer, fixed, frontier, load, replay, replay_input, work};
+use super::{
+    branch, closure, durable_writer, fixed, frontier, load_verified_input, replay, replay_input,
+    work,
+};
 use crate::protocol::canonical_application::DecisionExclusions;
 use crate::protocol::canonical_codec::{Decoder, Encoder};
 use crate::protocol::coordinator::application_closure::WorkItem;
@@ -103,7 +106,7 @@ async fn seed(conn: &Connection, origin: WorkOrigin, decision: u64, txid: Txid) 
         .await?
         .context("finality seed on superseded interval")?;
     ensure!(!selected.is_block, "block cannot supply batch exclusion");
-    let original = load(conn, decision).await?;
+    let original = load_verified_input(conn, decision).await?;
     ensure!(
         original
             .input()
@@ -251,7 +254,7 @@ async fn build_one(
     let item = if selected.is_block {
         WorkItem::Execute { decision }
     } else {
-        let certified = load(conn, decision).await?;
+        let certified = load_verified_input(conn, decision).await?;
         let original = certified.input().transactions()?;
         let mut direct = Vec::new();
         let mut rows = conn.query("SELECT txid FROM closure_finality_seeds WHERE plan_key = ?1 AND decision = ?2 ORDER BY txid",

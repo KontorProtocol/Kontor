@@ -556,3 +556,52 @@ async fn registration_stage_rejects_wrong_decision_lineage_generation_and_writer
     assert_eq!(registrations::latest(&conn).await?, Some(genesis));
     Ok(())
 }
+
+#[tokio::test]
+async fn bounded_input_load_checks_original_and_augmentation_before_exposing_input() -> Result<()> {
+    let (_directory, conn, authority, input, decision, keys) = prepared().await?;
+    let original = proof(&decision, &keys, &[0, 1, 2], 0);
+    let certified = AuthenticatedDecision::verify(
+        decision.clone(),
+        input.clone(),
+        original.clone(),
+        &authority,
+    )?;
+    append(&conn, &certified).await?;
+    let loaded = load_verified_input(&conn, 1).await?;
+    assert_eq!(loaded.input(), &input);
+    assert_eq!(loaded.decision(), &decision);
+    let augmentation = proof(&decision, &keys, &[1, 2, 3], 2);
+    let certified = AuthenticatedDecision::verify(
+        decision.clone(),
+        input.clone(),
+        augmentation.clone(),
+        &authority,
+    )?;
+    augment(&conn, &certified).await?;
+    assert_eq!(load_verified_input(&conn, 1).await?.decision(), &decision);
+
+    let mut corrupted = augmentation;
+    *corrupted.last_mut().unwrap() ^= 1;
+    conn.execute(
+        "UPDATE certified_decisions SET proof_augmentation = ?1",
+        [corrupted],
+    )
+    .await?;
+    assert!(load_verified_input(&conn, 1).await.is_err());
+    conn.execute("UPDATE certified_decisions SET proof_augmentation = NULL, original_proof = substr(original_proof, 1, length(original_proof) - 1)", ()).await?;
+    assert!(load_verified_input(&conn, 1).await.is_err());
+    conn.execute(
+        "UPDATE certified_decisions SET original_proof = zeroblob(?1)",
+        [i64::try_from(authority.maximum_proof_bytes()? + 1)?],
+    )
+    .await?;
+    assert!(load_verified_input(&conn, 1).await.is_err());
+    conn.execute(
+        "UPDATE certified_decisions SET original_proof = ?1",
+        [original],
+    )
+    .await?;
+    assert_eq!(load_verified_input(&conn, 1).await?.input(), &input);
+    Ok(())
+}
