@@ -116,6 +116,8 @@ pub struct MockBitcoin {
     prev_hash: BlockHash,
     mempool: Vec<bitcoin::Transaction>,
     tx_counter: u32,
+    transaction_factory: fn(u32) -> bitcoin::Transaction,
+    first_block_transaction: Option<bitcoin::Transaction>,
     /// Txs confirmed in mined blocks, keyed by txid. Used as RPC stand-in.
     mined_txs: HashMap<Txid, bitcoin::Transaction>,
     /// Track which txids were mined at which height, for rollback cleanup.
@@ -141,6 +143,8 @@ impl MockBitcoin {
             prev_hash: base_hash,
             mempool: Vec::new(),
             tx_counter: 0,
+            transaction_factory: make_tx,
+            first_block_transaction: None,
             mined_txs: HashMap::new(),
             block_txids: HashMap::new(),
             mined_blocks: Vec::new(),
@@ -148,6 +152,16 @@ impl MockBitcoin {
             #[cfg(test)]
             replay_gate: None,
         }
+    }
+
+    pub fn with_transactions(
+        mut self,
+        first_block: bitcoin::Transaction,
+        factory: fn(u32) -> bitcoin::Transaction,
+    ) -> Self {
+        self.first_block_transaction = Some(first_block);
+        self.transaction_factory = factory;
+        self
     }
 
     pub fn tip_height(&self) -> u64 {
@@ -166,7 +180,7 @@ impl MockBitcoin {
         let mut events = Vec::with_capacity(count);
         for _ in 0..count {
             self.tx_counter += 1;
-            let tx = make_tx(self.tx_counter);
+            let tx = (self.transaction_factory)(self.tx_counter);
             let txid = tx.compute_txid();
             let fee = MempoolEntry {
                 vsize: 1,
@@ -192,6 +206,12 @@ impl MockBitcoin {
         let height = self.tip_height;
 
         let mut confirmed_raw = Vec::new();
+        // Replacing the first block must replay setup, not inherit its old state.
+        if height == self.base_height + 1
+            && let Some(tx) = &self.first_block_transaction
+        {
+            confirmed_raw.push(tx.clone());
+        }
         let mut remove_events = Vec::new();
 
         for txid in txids {

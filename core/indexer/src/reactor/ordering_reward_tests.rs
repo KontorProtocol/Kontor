@@ -15,7 +15,7 @@ use crate::runtime::staking::{address, api as staking};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{Decimal, Runtime};
+use crate::runtime::{ComponentCache, Decimal, Runtime};
 use crate::test_utils::test_runtime_with_genesis;
 
 #[derive(Debug, PartialEq)]
@@ -30,10 +30,11 @@ async fn snapshot(cluster: &ReactorCluster, node: usize, height: u64) -> Result<
     let (dir, name) = &cluster.node_dirs[node];
     let reader = Reader::new(dir.path(), name).await?;
     let conn = reader.connection().await?;
+    let engine = Runtime::new_engine()?;
     let mut runtime = Runtime::new_read_only(
-        cluster.engine.clone(),
-        Runtime::new_linkers(&cluster.engine)?,
-        cluster.component_cache.clone(),
+        engine.clone(),
+        Runtime::new_linkers(&engine)?,
+        ComponentCache::new(),
         (*conn).clone(),
     )
     .await?;
@@ -90,8 +91,8 @@ async fn prod_reactor_ordering_rewards_survive_rollback_restart_and_late_join() 
     ReactorCluster::assert_checkpoints_match(&block, 1, 3);
     let first = snapshot(&cluster, 0, 1).await?;
     let initial = Decimal::from("400");
-    // LiteExecutor's shared test signer is prefunded at genesis; emission samples
-    // all circulating supply, not just escrowed stake.
+    // The first certified block issues the test signer's funds before emission;
+    // emission samples all circulating supply, not just escrowed stake.
     let paid = sub_decimal(first.escrow, initial)?;
     let initial_supply = sub_decimal(first.supply, paid)?;
     let expected = div_decimal(

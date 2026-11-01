@@ -1570,3 +1570,46 @@ readiness barrier still assumes a pre-first-block batch. Both need migration to
 authenticated genesis and appropriately ordered real setup inputs. Other reactor
 fixtures and the remaining K4 replay/transport/review/CI work are still pending.
 No remote CI or new independent review cycle was started.
+
+### K4 cluster authenticated startup and real transaction execution
+
+The preceding goal turn made progress: complete mock Bitcoin bodies were committed
+as `44e957de`. This continuation replaces the cluster's synthetic genesis/counter
+seeding. LiteExecutor now mocks Bitcoin I/O and configured validation latency only;
+transaction recognition and execution use the normal retained operations. Fresh
+and restarted nodes run the native genesis journal, then engine-free certified
+recovery before Malachite starts. A shared session factory retains the component
+cache across nodes without sharing their mutable storage sessions.
+
+The cluster's first mock Bitcoin block carries an actual Kontor issuance and
+counter publication transaction. Subsequent generated transactions carry counter
+calls. The counter address is `counter_1_1`, after the coinbase. Replacing the first
+block repeats its setup input so state comes from ordered execution, not fixture
+seeding. The mock still does not validate Bitcoin scripts, PoW or UTXOs. The old
+readiness barrier that expected an empty Batch(0) has been removed. Test readiness
+means reactors initialized; each test must explicitly supply its first block.
+
+The migrated three-validator case establishes first certified Block(1), then two
+batches anchored to Bitcoin 1 without intervening blocks. It verifies each batch's
+persisted certificate/input and the first decision's block command, reads counter
+value 6 through the normal selected view path on all three nodes, confirms those
+transactions in Bitcoin 2 and checks the value stays 6, then restarts one node on
+its existing database and reads 6 again. The final local run passed in 46.00s,
+session 73927 exit 0, `.build-cache/k4-cluster-startup17.log`, SHA-256
+`b9f567a11b98be19b78a9a300e2255959efd4b8dd11e787ad89a12232b045111`.
+The same binary's two mock-body/reorg regression tests passed in 0.00s,
+`.build-cache/k4-mock-bitcoin18.log`, SHA-256
+`f8a81a380aeb2ae5be77f2061821ca7e56fccfc315ce0d32198243710672c71a`.
+Draft coordinator definition:
+`d76e2709c9b5fd3e18c111014a0df2900ea45116e22b9913a92d5e43ddbb2688`.
+Formatting and diff checks passed. Earlier run15 passed the smaller notification
+case; runs14 and16 exposed fixture compilation errors corrected before run17.
+
+This is not full cluster acceptance. Other cases still assume Batch(0), synthetic
+counter funding, or volatile rollback/replay behavior and require migration with
+their assertions preserved. The existing fixed-delay node-stop helper also needs
+an explicit task-completion handshake for reliable restart evidence under faults.
+The ordinary successful restart above is limited evidence, not a teardown-race
+qualification. Remaining K4 finality/replay, bounded proof transport/admission,
+consolidated review and scoped CI/merge remain required. No PR, push or remote CI
+was started for this checkpoint.
