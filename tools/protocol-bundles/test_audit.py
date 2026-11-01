@@ -1,6 +1,7 @@
 """Negative ownership controls that must fail before link-time dead stripping."""
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -10,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from audit import GDB_SCRIPT, audit_inputs, audit_final, compiler_debug_metadata, definitions, owner, private_local_inputs
 from build import digest, verify_staged_inputs
-from common_ownership import graph_references, linker_owners, platform_owners, reject_common_shadow, reject_unowned_references, runtime_paths
+from common_ownership import graph_references, linker_owners, platform_owners, reject_common_shadow, reject_unowned_references, runtime_paths, verify
 from provenance import fingerprint, source_inputs
 from symbol_tool import inspect
 
@@ -114,6 +115,23 @@ class Ownership(unittest.TestCase):
                                 audit_final(Path("linked-node"), self.graphs, sets,
                                             ["51.0.0-dev", "51.0.0-kontor.1"], root, {},
                                             kind="executor")
+
+    def test_executor_final_node_owner_requires_concrete_input(self):
+        symbol = "blst_keygen"
+        linked = {symbol: {"address": "1000", "kind": "T"}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("audit.private_local_inputs", return_value=([set(), set()], [])):
+                with patch("audit.definitions", side_effect=lambda _path, globals_only=True:
+                           linked if globals_only else {}):
+                    with self.assertRaisesRegex(RuntimeError, "unowned final definition"):
+                        audit_final(Path("linked-node"), self.graphs, [set(), set()],
+                                    ["51.0.0-dev", "51.0.0-kontor.1"], root, {}, kind="executor")
+                    audit_final(Path("linked-node"), self.graphs, [set(), set()],
+                                ["51.0.0-dev", "51.0.0-kontor.1"], root, {}, kind="executor",
+                                node={symbol: ["node/libblst.a"]})
+            final = json.loads((root / "final-ownership.json").read_text())
+            self.assertEqual(final[symbol]["owner"], {"node_inputs": ["node/libblst.a"]})
 
     def test_private_local_input_inventory_keeps_globals_separate(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -381,6 +399,75 @@ class Ownership(unittest.TestCase):
         output = path.with_suffix(".o")
         subprocess.run(["cc", "-c", str(path), "-o", str(output)], check=True)
         return output
+
+    def test_executor_node_native_definition_cannot_own_retained_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node_native = self.object(root, "node_native", "int blst_keygen(void) { return 1; }")
+            root_codegen = self.object(root, "root_codegen", "int kontor_node_root(void) { return 1; }")
+            importer = self.object(root, "retained", "extern int blst_keygen(void); int kontor_first_call(void) { return blst_keygen(); }")
+            executable = root / "node"
+            subprocess.run(["cc", "-x", "c", "-", "-o", str(executable)],
+                           input="int main(void) { return 0; }", text=True, check=True)
+            self.graphs[0]["artifacts"] = [{"path": str(importer)}]
+            sets, _ = audit_inputs(self.graphs, root)
+            env = dict(os.environ, RUSTC="rustc")
+            with self.assertRaisesRegex(RuntimeError, "imports have no declared owner.*blst_keygen"):
+                verify(self.graphs, sets, [], executable, env, root, kind="executor",
+                       node_objects=[node_native, root_codegen], compiler_objects=[root_codegen])
+
+            platform_importer = self.object(root, "platform_importer",
+                                            'extern int puts(const char *); int kontor_first_call(void) { return puts("ok"); }')
+            self.graphs[0]["artifacts"] = [{"path": str(platform_importer)}]
+            sets, _ = audit_inputs(self.graphs, root)
+            common, node = verify(self.graphs, sets, [], executable, env, root, kind="executor",
+                                  node_objects=[node_native, root_codegen], compiler_objects=[root_codegen])
+            self.assertIn("blst_keygen", node)
+            self.assertNotIn("blst_keygen", common)
+            report = json.loads((root / "common-reference-ownership.json").read_text())
+            self.assertIn("puts", report["references"][0]["platform"])
+            self.assertNotIn(str(node_native), [item["path"] for item in report["common_inputs"]])
+            node_report = json.loads((root / "node-input-ownership.json").read_text())
+            self.assertEqual([item["path"] for item in node_report["node_inputs"]],
+                             sorted([str(node_native), str(root_codegen)]))
+            node_collision = self.object(root, "node_collision",
+                                         "int kontor_first_call(void) { return 1; }")
+            with self.assertRaisesRegex(RuntimeError, "shadows node input definitions"):
+                verify(self.graphs, sets, [], executable, env, root, kind="executor",
+                       node_objects=[node_collision, root_codegen], compiler_objects=[root_codegen])
+
+    def test_executor_compiler_allocator_requires_root_codegen_owner(self):
+        symbol = "_RNvCs1234_7___rustc12___rust_alloc"
+        native = ("_" if sys.platform == "darwin" else "") + symbol
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            allocator = self.object(root, "allocator",
+                                    f'int shim(void) __asm__("{native}"); int shim(void) {{ return 1; }}')
+            root_codegen = self.object(root, "root_codegen", "int kontor_node_root(void) { return 1; }")
+            importer = self.object(root, "retained",
+                                   f'extern int shim(void) __asm__("{native}"); int kontor_first_call(void) {{ return shim(); }}')
+            executable = root / "node"
+            subprocess.run(["cc", "-x", "c", "-", "-o", str(executable)],
+                           input="int main(void) { return 0; }", text=True, check=True)
+            self.graphs[0]["artifacts"] = [{"path": str(importer)}]
+            sets, _ = audit_inputs(self.graphs, root)
+            env = dict(os.environ, RUSTC="rustc")
+            with self.assertRaisesRegex(RuntimeError, "imports have no declared owner"):
+                verify(self.graphs, sets, [], executable, env, root, kind="executor",
+                       node_objects=[allocator, root_codegen], compiler_objects=[root_codegen])
+            common, node = verify(self.graphs, sets, [], executable, env, root, kind="executor",
+                                  node_objects=[allocator, root_codegen], compiler_objects=[allocator])
+            self.assertNotIn(symbol, common)
+            self.assertIn(symbol, node)
+            report = json.loads((root / "common-reference-ownership.json").read_text())
+            self.assertEqual(report["references"][0]["compiler_runtime"], [symbol])
+            node_report = json.loads((root / "node-input-ownership.json").read_text())
+            self.assertEqual(node_report["compiler_runtime"][symbol], [str(allocator)])
+            duplicate = self.object(root, "duplicate_allocator",
+                                    f'int shim(void) __asm__("{native}"); int shim(void) {{ return 2; }}')
+            with self.assertRaisesRegex(RuntimeError, "duplicates root compiler runtime"):
+                verify(self.graphs, sets, [], executable, env, root, kind="executor",
+                       node_objects=[allocator, duplicate], compiler_objects=[allocator])
 
     def test_undefined_foreign_import_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

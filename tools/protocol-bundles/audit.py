@@ -173,9 +173,12 @@ def audit_inputs(graphs, output):
     return sets, versions
 
 
-def audit_final(executable, graphs, sets, versions, output, common, kind="proof"):
+def audit_final(executable, graphs, sets, versions, output, common, kind="proof", node=None):
     if kind not in ("proof", "executor"):
         raise RuntimeError(f"unknown final audit kind: {kind}")
+    node = node or {}
+    if kind == "proof" and node:
+        raise RuntimeError("proof final audit has unexpected node inputs")
     symbols = definitions(executable)
     attributed = {}
     for name, value in symbols.items():
@@ -193,6 +196,8 @@ def audit_final(executable, graphs, sets, versions, output, common, kind="proof"
             attribution = matches[0]
         elif not matches and name in common:
             attribution = {"common_inputs": common[name]}
+        elif kind == "executor" and not matches and name in node:
+            attribution = {"node_inputs": node[name]}
         else:
             raise RuntimeError(f"ambiguous or unowned final definition: {name}: {matches}")
         attributed[name] = dict(value, owner=attribution)

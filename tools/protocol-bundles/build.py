@@ -237,7 +237,7 @@ def qualify(graphs, args, env, output):
          str(ROOT / "protocol-bundles/proof/host.rs"), *dependencies, "-o", str(executable)],
         host_output, env, output / "link.log")
     host_objects = sorted(host_output.glob("*.rcgu.o"))
-    common = verify_common_ownership(graphs, sets, host_objects, executable, env, output)
+    common, _ = verify_common_ownership(graphs, sets, host_objects, executable, env, output)
     helpers = audit_final(executable, graphs, sets, versions, output, common)
     macro_hashes = proc_macro_hashes(graphs, options, env, output)
     libraries = runtime_libraries(executable, env, graphs)
@@ -394,13 +394,16 @@ def build_node(graphs, args, base_env, output):
     run(command, ROOT, env, log)
     executable = node_executable(log)
     archives, _, native_outputs, proc_macros = current_artifacts(log, directory / "target", args.target, "indexer")
-    host_inputs = set(archives)
-    host_inputs.update(node_codegen_objects(Path(spec["root_objects"]), spec_path))
+    root_objects = node_codegen_objects(Path(spec["root_objects"]), spec_path)
+    node_inputs = set(archives)
+    node_inputs.update(root_objects)
     for script in native_outputs:
-        host_inputs.update(Path(script["out_dir"]).rglob("*.a"))
-    common = verify_common_ownership(graphs, sets, sorted(host_inputs), executable, env, directory,
-                                    kind="executor")
-    helpers = audit_final(executable, graphs, sets, versions, directory, common, kind="executor")
+        node_inputs.update(Path(script["out_dir"]).rglob("*.a"))
+    common, node = verify_common_ownership(graphs, sets, [], executable, env, directory,
+                                          kind="executor", node_objects=sorted(node_inputs),
+                                          compiler_objects=root_objects)
+    helpers = audit_final(executable, graphs, sets, versions, directory, common,
+                          kind="executor", node=node)
     libraries = runtime_libraries(executable, env, graphs)
     if digest(lock) != lock_hash or source_inputs(ROOT, data, kind="node") != sources:
         raise RuntimeError("node source or lock changed during compilation")
@@ -416,7 +419,7 @@ def build_node(graphs, args, base_env, output):
               "native_helpers": helpers, "runtime_libraries": libraries,
               "compiler_proc_macros": [{"path": str(path), "sha256": digest(path)} for path in proc_macros],
               "ownership": {name: digest(directory / name) for name in (
-                  "common-reference-ownership.json", "input-ownership.json",
+                  "common-reference-ownership.json", "node-input-ownership.json", "input-ownership.json",
                   "input-local-ownership.json", "final-ownership.json")},
               "status": "node linked and native ownership checked; execution qualification required"}
     if args.node_qualification:

@@ -23,6 +23,9 @@ MAC_RUNTIME = {"/usr/lib/libSystem.B.dylib",
 MAC_NODE_RUNTIME = MAC_RUNTIME | {"/usr/lib/libc++.1.dylib"}
 OPTIONAL_UNWIND = {"__unw_add_dynamic_fde", "__unw_add_dynamic_eh_frame_section",
                    "__unw_remove_dynamic_eh_frame_section"}
+RUSTC_ALLOCATOR = re.compile(
+    r"^_RNvCs[0-9A-Za-z]+_7___rustc(?:12___rust_alloc|14___rust_dealloc|"
+    r"14___rust_realloc|19___rust_alloc_zeroed|35___rust_no_alloc_shim_is_unstable_v2)$")
 
 
 def references(path):
@@ -97,6 +100,12 @@ def reject_common_shadow(graph, names, common):
         raise RuntimeError(f"{graph['graph']} shadows common host/sysroot definitions: {sorted(overlap)[:100]}")
 
 
+def reject_node_shadow(graph, names, node):
+    overlap = (names & node.keys()) - INPUT_RUNTIME
+    if overlap:
+        raise RuntimeError(f"{graph['graph']} shadows node input definitions: {sorted(overlap)[:100]}")
+
+
 def graph_references(graph, index, sets):
     names = set()
     strong = set()
@@ -129,16 +138,27 @@ def linker_owners(executable):
     return {"_GLOBAL_OFFSET_TABLE_": got}
 
 
-def reject_unowned_references(graph, names, refs, common, platform, optional, linker):
+def reject_unowned_references(graph, names, refs, common, platform, optional, linker, compiler=None):
+    compiler = compiler or {}
     shadowed = names & platform.keys()
     if shadowed:
         raise RuntimeError(f"{graph['graph']} shadows a platform export: {sorted(shadowed)[:100]}")
-    unresolved = refs - names - common.keys() - platform.keys() - optional - linker.keys()
+    unresolved = refs - names - common.keys() - platform.keys() - optional - linker.keys() - compiler.keys()
     if unresolved:
         raise RuntimeError(f"{graph['graph']} imports have no declared owner: {sorted(unresolved)[:100]}")
 
 
-def verify(graphs, sets, host_objects, executable, env, output, kind="proof"):
+def verify(graphs, sets, host_objects, executable, env, output, kind="proof",
+           node_objects=(), compiler_objects=()):
+    if kind not in ("proof", "executor"):
+        raise RuntimeError(f"unknown runtime audit kind: {kind}")
+    if kind == "proof" and (node_objects or compiler_objects):
+        raise RuntimeError("proof audit has unexpected node inputs")
+    if kind == "executor" and (host_objects or not node_objects or not compiler_objects):
+        raise RuntimeError("executor audit requires separate node and root compiler inputs")
+    compiler_paths = set(compiler_objects)
+    if not compiler_paths <= set(node_objects):
+        raise RuntimeError("root compiler inputs are absent from node inventory")
     common = {}
     inventories = []
     sysroot = Path(subprocess.check_output([env["RUSTC"], "--print", "sysroot"], env=env, text=True).strip())
@@ -150,7 +170,7 @@ def verify(graphs, sets, host_objects, executable, env, output, kind="proof"):
         if not nonshared.is_file():
             raise RuntimeError("missing compiler-selected libc_nonshared archive")
         paths.append(nonshared.resolve())
-    if not host_objects or not paths:
+    if (kind == "proof" and not host_objects) or not paths:
         raise RuntimeError("missing concrete host/sysroot input inventory")
     for path in paths:
         names = definitions(path)
@@ -161,8 +181,28 @@ def verify(graphs, sets, host_objects, executable, env, output, kind="proof"):
         inventories.append(record)
         for name in names:
             common.setdefault(name, []).append(str(path))
+    node = {}
+    node_inventories = []
+    compiler = {}
+    for path in sorted(set(node_objects)):
+        names = definitions(path)
+        if GDB_SCRIPT in names:
+            compiler_debug_metadata(path)
+        node_inventories.append({"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                 "definitions": names})
+        for name in names:
+            node.setdefault(name, []).append(str(path))
+            if path in compiler_paths and RUSTC_ALLOCATOR.fullmatch(name):
+                compiler.setdefault(name, []).append(str(path))
+    ambiguous_compiler = {name: owners for name, owners in compiler.items() if node[name] != owners}
+    if ambiguous_compiler:
+        raise RuntimeError(f"node duplicates root compiler runtime definitions: {sorted(ambiguous_compiler)[:100]}")
+    overlap = (common.keys() & node.keys()) - INPUT_RUNTIME
+    if overlap:
+        raise RuntimeError(f"node shadows common host/sysroot definitions: {sorted(overlap)[:100]}")
     for graph, names in zip(graphs, sets, strict=True):
         reject_common_shadow(graph, names, common)
+        reject_node_shadow(graph, names, node)
     graph_refs = []
     graph_optional = []
     for index, graph in enumerate(graphs):
@@ -171,15 +211,22 @@ def verify(graphs, sets, host_objects, executable, env, output, kind="proof"):
         graph_optional.append(optional)
     candidates = set.union(*graph_refs, *sets) - common.keys()
     platform, libraries = platform_owners(executable, candidates, kind=kind)
+    compiler_platform_overlap = compiler.keys() & platform.keys()
+    if compiler_platform_overlap:
+        raise RuntimeError(f"root compiler runtime shadows platform exports: {sorted(compiler_platform_overlap)[:100]}")
     linker = linker_owners(executable)
     for graph, names, refs, optional in zip(graphs, sets, graph_refs, graph_optional, strict=True):
-        reject_unowned_references(graph, names, refs, common, platform, optional, linker)
+        reject_unowned_references(graph, names, refs, common, platform, optional, linker, compiler)
     report = {"common_inputs": inventories, "platform_libraries": libraries,
               "linker_definitions": linker,
               "optional_weak_system_unwind": [sorted(names) for names in graph_optional],
               "references": [{"graph": graph["graph"], "own": sorted(refs & names),
                               "common": sorted(refs & common.keys()), "platform": sorted(refs & platform.keys()),
-                              "linker": sorted(refs & linker.keys())}
+                              "linker": sorted(refs & linker.keys()),
+                              "compiler_runtime": sorted(refs & compiler.keys())}
                              for graph, names, refs in zip(graphs, sets, graph_refs, strict=True)]}
     (output / "common-reference-ownership.json").write_text(json.dumps(report, sort_keys=True) + "\n")
-    return common
+    if kind == "executor":
+        (output / "node-input-ownership.json").write_text(json.dumps(
+            {"node_inputs": node_inventories, "compiler_runtime": compiler}, sort_keys=True) + "\n")
+    return common, node
