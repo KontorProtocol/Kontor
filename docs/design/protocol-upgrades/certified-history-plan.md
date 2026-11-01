@@ -12,6 +12,33 @@ authority together. K5/K6 add signing coordination and authorized upgrade contro
 K7/K8 add activation and cross-upgrade recovery; K9 extends history transport to
 cross-era cold catch-up. None of those capabilities is claimed complete by K4.
 
+### Current implementation status, 1 November 2026
+
+K4 production integration is implemented locally. The reactor persists verified
+certificates and exact inputs before acknowledgement, applies durable closure
+stages, derives successor authority from completed execution, and resumes retained
+work before starting consensus. Local checks cover certified branch replacement,
+finality replay, interrupted recovery, committee exit, confirmation accounting,
+cluster catch-up and ordinary maximum-size signed gossip delivery.
+
+The independently linked first/observer node passed its local ARM64 dev semantic
+and certified-history qualification. Both linked graphs also matched all eleven
+stages of the preserved historical execution archive at `e9033433`. That archive
+has no certificate history and is used only for execution comparison. Separate
+signed-certificate fixtures establish the authority and closure checks.
+
+Consolidated lead and independent review, final-candidate scoped CI and merge are
+still required. The newest test-helper cleanup changes the unreleased observer's
+source identity; earlier linked evidence retains its original source binding and
+is not presented as a build of that new identity. Final candidate qualification
+must use the current definitions. No remote CI has been launched for K4.
+
+The implementation checkpoints below are chronological development records. Their
+statements about unfinished integration describe their recorded checkpoint, not
+current outstanding tasks. The execution ledger contains the later results. K4
+does not implement K5/K6 engine handoff and upgrade authorization, K7/K8 activation
+and cross-upgrade replay, or K9 cross-era retrieval.
+
 ### Operator scope correction, 1 November 2026
 
 Oversized-certificate paging is deferred outside this goal. It is not a K4 or
@@ -28,7 +55,7 @@ solely for oversized proofs. The tested incremental verifier and bounded journal
 reads remain useful. Managed lifecycle integration and signing/generation fences
 remain in K5/K6; K9 retains necessary cross-era history retrieval.
 
-### Local implementation checkpoint
+### Historical local implementation checkpoint
 
 K4 is not yet fully integrated into the production reactor or ready for a PR. The local
 implementation has canonical manifest/input/decision codecs, checked historical

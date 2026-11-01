@@ -217,8 +217,7 @@ fn transaction_with_size(size: usize, value: u64) -> Transaction {
     tx
 }
 
-#[test]
-fn maximal_batch_inputs_fit_the_actual_proposal_stream_encoding() {
+fn maximal_batches() -> [Vec<Transaction>; 2] {
     const MAX_BODY: usize = 4_186_112;
     let large = vec![
         transaction_with_size(4_000_000, 1),
@@ -229,7 +228,13 @@ fn maximal_batch_inputs_fit_the_actual_proposal_stream_encoding() {
     let mut many: Vec<_> = (0..count).map(|i| transaction(i as u64)).collect();
     let remainder = MAX_BODY - 4 - count * small;
     many.last_mut().unwrap().output[0].script_pubkey = ScriptBuf::from_bytes(vec![0; remainder]);
-    for txs in [large, many] {
+    [large, many]
+}
+
+#[test]
+fn maximal_batch_inputs_fit_the_actual_proposal_stream_encoding() {
+    const MAX_BODY: usize = 4_186_112;
+    for txs in maximal_batches() {
         let wire = batch(&txs);
         assert_eq!(wire.body.len(), MAX_BODY);
         let value = Value::from_proto(wire).unwrap();
@@ -241,7 +246,7 @@ fn maximal_batch_inputs_fit_the_actual_proposal_stream_encoding() {
         );
         let encoded = ProtobufCodec.encode(&stream).unwrap();
         // Retain at least 7 KiB of the 8 KiB allowance for the outer signed
-        // gossip envelope. Full gossip framing remains a phase integration check.
+        // gossip envelope. The two-peer test also checks actual signed delivery.
         assert!(encoded.len() <= 4 * 1024 * 1024 - 7 * 1024);
         let decoded: StreamMessage<ProposalPart> = ProtobufCodec.decode(encoded).unwrap();
         assert_eq!(
@@ -258,3 +263,6 @@ fn maximal_batch_inputs_fit_the_actual_proposal_stream_encoding() {
     }
     assert!(Value::from_proto(batch(&[transaction_with_size(4_000_001, 1)])).is_err());
 }
+
+#[path = "certified_value_wire/gossip.rs"]
+mod gossip;

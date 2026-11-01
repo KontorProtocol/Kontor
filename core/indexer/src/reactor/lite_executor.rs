@@ -9,7 +9,6 @@ use indexer_types::Transaction;
 use tokio::sync::OnceCell;
 
 use super::prepare_executor_startup;
-use crate::block::filter_map;
 use crate::database::Writer;
 use crate::protocol::coordinator::selection::ExecutionSelection;
 use crate::protocol::coordinator::{bootstrap, linked};
@@ -136,13 +135,5 @@ impl Executor for LiteExecutor {
         tx: &Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
         execution::execute_transaction(runtime, height, tx_id, tx).await
-    }
-
-    fn parse_transaction(
-        &self,
-        _selection: &ExecutionSelection,
-        tx: &BitcoinTransaction,
-    ) -> Option<Transaction> {
-        filter_map((0, tx.clone()))
     }
 }

@@ -33,82 +33,6 @@ pub fn make_tx(nonce: u32) -> bitcoin::Transaction {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use anyhow::Result;
-    use bitcoin::{BlockHash, Witness, hashes::Hash};
-
-    use super::MockBitcoin;
-    use crate::bitcoin_follower::block::BlockInput;
-    use crate::bitcoin_follower::event::BlockEvent;
-    use crate::consensus::test_fixtures::context;
-
-    fn inserted(events: &[BlockEvent]) -> &BlockInput {
-        let BlockEvent::BlockInsert { block, .. } = &events[0] else {
-            panic!("expected mined block");
-        };
-        block
-    }
-
-    #[test]
-    fn mined_blocks_retain_exact_witnesses_and_checked_commitments() -> Result<()> {
-        let mut bitcoin = MockBitcoin::new(0);
-        bitcoin.generate_mempool_txs(2);
-        bitcoin.mempool[0].input[0].witness = Witness::from_slice(&[b"retained witness"]);
-        let transaction = bitcoin.mempool[0].clone();
-        let txid = transaction.compute_txid();
-        let (events, removed) = bitcoin.mine_block(&[txid]);
-        assert_eq!(removed.len(), 1);
-        assert_eq!(bitcoin.mempool.len(), 1);
-        let block = inserted(&events);
-        let input = block.exact_input(context())?;
-        let transactions = input.transactions()?;
-        assert_eq!(transactions.len(), 2);
-        assert!(transactions[0].is_coinbase());
-        assert_eq!(transactions[1], transaction);
-        assert_eq!(bitcoin.get_raw_transaction(&txid), Some(transaction));
-        assert_eq!(BlockInput::from_exact(&input)?, *block);
-        assert_eq!(
-            inserted(&bitcoin.get_all_block_events()).exact_input(context())?,
-            input
-        );
-        let mut wrong_hash = block.clone();
-        wrong_hash.hash = BlockHash::all_zeros();
-        assert!(wrong_hash.exact_input(context()).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn reorg_preserves_surviving_header_and_replaces_removed_bodies() -> Result<()> {
-        let mut bitcoin = MockBitcoin::new(17);
-        let (events, _) = bitcoin.mine_empty_block();
-        let first = inserted(&events).clone();
-        bitcoin.generate_mempool_txs(1);
-        let removed_txid = bitcoin.mempool_txids()[0];
-        let (events, _) = bitcoin.mine_block_all();
-        let removed = inserted(&events).clone();
-        assert_eq!(removed.prev_hash, first.hash);
-        bitcoin.reset_to(18);
-        assert_eq!(bitcoin.get_all_block_events().len(), 1);
-        assert_eq!(inserted(&bitcoin.get_all_block_events()), &first);
-        assert!(bitcoin.get_raw_transaction(&removed_txid).is_none());
-        let (events, _) = bitcoin.mine_empty_block();
-        let replacement = inserted(&events);
-        assert_eq!(replacement.height, removed.height);
-        assert_eq!(replacement.prev_hash, first.hash);
-        assert_ne!(replacement.hash, removed.hash);
-        replacement.exact_input(context())?;
-        first.exact_input(context())?;
-        bitcoin.reset_to(17);
-        let (events, _) = bitcoin.mine_empty_block();
-        let new_first = inserted(&events);
-        assert_eq!(new_first.prev_hash, first.prev_hash);
-        assert_ne!(new_first.hash, first.hash);
-        new_first.exact_input(context())?;
-        Ok(())
-    }
-}
-
 pub struct MockBitcoin {
     base_height: u64,
     base_hash: BlockHash,
@@ -320,5 +244,81 @@ impl MockBitcoin {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use bitcoin::{BlockHash, Witness, hashes::Hash};
+
+    use super::MockBitcoin;
+    use crate::bitcoin_follower::block::BlockInput;
+    use crate::bitcoin_follower::event::BlockEvent;
+    use crate::consensus::test_fixtures::context;
+
+    fn inserted(events: &[BlockEvent]) -> &BlockInput {
+        let BlockEvent::BlockInsert { block, .. } = &events[0] else {
+            panic!("expected mined block");
+        };
+        block
+    }
+
+    #[test]
+    fn mined_blocks_retain_exact_witnesses_and_checked_commitments() -> Result<()> {
+        let mut bitcoin = MockBitcoin::new(0);
+        bitcoin.generate_mempool_txs(2);
+        bitcoin.mempool[0].input[0].witness = Witness::from_slice(&[b"retained witness"]);
+        let transaction = bitcoin.mempool[0].clone();
+        let txid = transaction.compute_txid();
+        let (events, removed) = bitcoin.mine_block(&[txid]);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(bitcoin.mempool.len(), 1);
+        let block = inserted(&events);
+        let input = block.exact_input(context())?;
+        let transactions = input.transactions()?;
+        assert_eq!(transactions.len(), 2);
+        assert!(transactions[0].is_coinbase());
+        assert_eq!(transactions[1], transaction);
+        assert_eq!(bitcoin.get_raw_transaction(&txid), Some(transaction));
+        assert_eq!(BlockInput::from_exact(&input)?, *block);
+        assert_eq!(
+            inserted(&bitcoin.get_all_block_events()).exact_input(context())?,
+            input
+        );
+        let mut wrong_hash = block.clone();
+        wrong_hash.hash = BlockHash::all_zeros();
+        assert!(wrong_hash.exact_input(context()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn reorg_preserves_surviving_header_and_replaces_removed_bodies() -> Result<()> {
+        let mut bitcoin = MockBitcoin::new(17);
+        let (events, _) = bitcoin.mine_empty_block();
+        let first = inserted(&events).clone();
+        bitcoin.generate_mempool_txs(1);
+        let removed_txid = bitcoin.mempool_txids()[0];
+        let (events, _) = bitcoin.mine_block_all();
+        let removed = inserted(&events).clone();
+        assert_eq!(removed.prev_hash, first.hash);
+        bitcoin.reset_to(18);
+        assert_eq!(bitcoin.get_all_block_events().len(), 1);
+        assert_eq!(inserted(&bitcoin.get_all_block_events()), &first);
+        assert!(bitcoin.get_raw_transaction(&removed_txid).is_none());
+        let (events, _) = bitcoin.mine_empty_block();
+        let replacement = inserted(&events);
+        assert_eq!(replacement.height, removed.height);
+        assert_eq!(replacement.prev_hash, first.hash);
+        assert_ne!(replacement.hash, removed.hash);
+        replacement.exact_input(context())?;
+        first.exact_input(context())?;
+        bitcoin.reset_to(17);
+        let (events, _) = bitcoin.mine_empty_block();
+        let new_first = inserted(&events);
+        assert_eq!(new_first.prev_hash, first.prev_hash);
+        assert_ne!(new_first.hash, first.hash);
+        new_first.exact_input(context())?;
+        Ok(())
     }
 }

@@ -583,31 +583,6 @@ fn vacuum_pages_to_reclaim(freelist: i64) -> Option<i64> {
     }
 }
 
-#[cfg(test)]
-mod vacuum_throttle_tests {
-    use super::*;
-
-    #[test]
-    fn below_high_threshold_is_noop() {
-        assert_eq!(vacuum_pages_to_reclaim(0), None);
-        assert_eq!(vacuum_pages_to_reclaim(PRUNE_VACUUM_HIGH_PAGES), None);
-    }
-
-    #[test]
-    fn above_high_reclaims_excess_over_low_uncapped() {
-        // 600 > HIGH(512); excess 600 − LOW(128) = 472 < MAX(512) → not capped.
-        assert_eq!(vacuum_pages_to_reclaim(600), Some(472));
-    }
-
-    #[test]
-    fn large_freelist_is_capped_at_max() {
-        assert_eq!(
-            vacuum_pages_to_reclaim(1_000_000),
-            Some(PRUNE_VACUUM_MAX_PAGES)
-        );
-    }
-}
-
 impl<E: Executor> ExecutionContext<E> {
     pub(super) async fn simulate_raw(&mut self, raw: Vec<u8>) -> Result<SimulationOutcome> {
         // Recognition belongs at admission, since the protocol may change while
@@ -737,5 +712,30 @@ impl<E: Executor> ExecutionContext<E> {
         }
 
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod vacuum_throttle_tests {
+    use super::*;
+
+    #[test]
+    fn below_high_threshold_is_noop() {
+        assert_eq!(vacuum_pages_to_reclaim(0), None);
+        assert_eq!(vacuum_pages_to_reclaim(PRUNE_VACUUM_HIGH_PAGES), None);
+    }
+
+    #[test]
+    fn above_high_reclaims_excess_over_low_uncapped() {
+        // 600 > HIGH(512); excess 600 − LOW(128) = 472 < MAX(512) → not capped.
+        assert_eq!(vacuum_pages_to_reclaim(600), Some(472));
+    }
+
+    #[test]
+    fn large_freelist_is_capped_at_max() {
+        assert_eq!(
+            vacuum_pages_to_reclaim(1_000_000),
+            Some(PRUNE_VACUUM_MAX_PAGES)
+        );
     }
 }

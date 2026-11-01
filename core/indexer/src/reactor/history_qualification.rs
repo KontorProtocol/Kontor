@@ -168,7 +168,7 @@ pub(crate) async fn run(
         1,
         Some(anchor),
     );
-    let result = async {
+    async {
         batch(&mut reactor, 1, anchor, 1, &[]).await?;
         let empty = records(&conn).await?;
         ensure!(empty.len() == initial.len() + 1);
@@ -223,6 +223,5 @@ pub(crate) async fn run(
         Ok(json!({"genesis_entries": initial.len(), "anchor_batch_entries": 2,
             "block_entries": 2, "later_batch_entries": 1, "atomic_failure": true,
             "rollback_prefix": true, "exact_replay": true}))
-    }.await;
-    result
+    }.await
 }

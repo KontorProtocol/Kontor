@@ -397,12 +397,12 @@ async fn qualify_finality(
                 conn.execute_batch("CREATE TRIGGER interrupt_finality_seed BEFORE INSERT ON closure_finality_seeds BEGIN SELECT RAISE(ABORT, 'injected planner write failure'); END").await?;
                 ensure!(finality::step(&conn, next_height).await.is_err());
                 ensure!(conn.is_autocommit());
-                ensure!(closure::progress(&reopened, next_height).await? == before);
-                ensure!(work::for_origin(&reopened, origin).await.is_err());
+                ensure!(closure::progress(reopened, next_height).await? == before);
+                ensure!(work::for_origin(reopened, origin).await.is_err());
                 conn.execute_batch("DROP TRIGGER interrupt_finality_seed")
                     .await?;
                 ensure!(!finality::step(&conn, next_height).await?);
-                ensure!(closure::progress(&reopened, next_height).await? == before);
+                ensure!(closure::progress(reopened, next_height).await? == before);
                 ensure!(
                     conn.query(
                         "SELECT 1 FROM excluded_batch_txids WHERE batch_height = 5",
@@ -414,7 +414,7 @@ async fn qualify_finality(
                     .is_none()
                 );
                 let mut steps = 1;
-                while !finality::step(&reopened, next_height).await? {
+                while !finality::step(reopened, next_height).await? {
                     steps += 1;
                     ensure!(steps < 30, "bounded fixture planner failed to finish");
                 }
@@ -433,8 +433,8 @@ async fn qualify_finality(
                 );
                 conn.execute_batch("CREATE TRIGGER interrupt_finality_publish BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected finality publication failure'); END").await?;
                 ensure!(reactor.apply_certified_closure(next_height).await.is_err());
-                ensure!(work::for_origin(&reopened, origin).await?.cursor().is_err());
-                ensure!(closure::progress(&reopened, next_height).await? == before);
+                ensure!(work::for_origin(reopened, origin).await?.cursor().is_err());
+                ensure!(closure::progress(reopened, next_height).await? == before);
                 ensure!(
                     conn.query(
                         "SELECT 1 FROM excluded_batch_txids WHERE batch_height = 5",
@@ -483,7 +483,7 @@ async fn qualify_finality(
         }
     }
     ensure!(next_height == 13 && reactor.execution.last_height == 106);
-    ensure!(certified_startup(&reopened).await?.1 == Height::new(13));
+    ensure!(certified_startup(reopened).await?.1 == Height::new(13));
     ensure!(
         conn.query(
             "SELECT 1 FROM transactions WHERE txid IN (?1, ?2)",
@@ -739,21 +739,21 @@ async fn qualify_batches(
                 if interrupt {
                     ensure!(finished.is_err());
                     ensure!(
-                        replay_input::get(&reopened, frozen.id()?, origin, height)
+                        replay_input::get(reopened, frozen.id()?, origin, height)
                             .await
                             .is_err()
                     );
-                    ensure!(closure::recover(&reopened, height).await? == before);
+                    ensure!(closure::recover(reopened, height).await? == before);
                     conn.execute_batch("DROP TRIGGER interrupt_frozen_plan")
                         .await?;
                 } else {
                     finished?;
                 }
             }
-            ensure!(replay_input::get(&reopened, frozen.id()?, origin, height).await? == frozen);
+            ensure!(replay_input::get(reopened, frozen.id()?, origin, height).await? == frozen);
             reactor.rollback(99).await?;
             reactor
-                .handle_block(BlockInput::from_exact(decision.value.input())?, &decision)
+                .handle_block(BlockInput::from_exact(decision.value.input())?, decision)
                 .await?;
             reactor
                 .process_decided_batch(
@@ -774,7 +774,7 @@ async fn qualify_batches(
                     .await?
                     .is_none()
             );
-            let pending = closure::recover(&reopened, height).await?;
+            let pending = closure::recover(reopened, height).await?;
             ensure!(
                 reactor
                     .process_decided_batch(
@@ -788,7 +788,7 @@ async fn qualify_batches(
                     .await
                     .is_err()
             );
-            ensure!(closure::recover(&reopened, height).await? == pending);
+            ensure!(closure::recover(reopened, height).await? == pending);
             conn.execute_batch("CREATE TRIGGER interrupt_frozen_batch BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected frozen batch failure'); END").await?;
             ensure!(
                 reactor
@@ -803,7 +803,7 @@ async fn qualify_batches(
                     .await
                     .is_err()
             );
-            ensure!(closure::recover(&reopened, height).await? == pending);
+            ensure!(closure::recover(reopened, height).await? == pending);
             conn.execute_batch("DROP TRIGGER interrupt_frozen_batch")
                 .await?;
             ensure!(
@@ -825,7 +825,7 @@ async fn qualify_batches(
                 anyhow::bail!("missing replay batch application");
             };
             ensure!(*exclusions == frozen.exclusions);
-            ensure!(replay_input::get(&reopened, frozen.id()?, origin, height).await? == frozen);
+            ensure!(replay_input::get(reopened, frozen.id()?, origin, height).await? == frozen);
         }
         let stage = begin_stage(service, &reactor.execution.session, network, height)
             .await?
@@ -859,7 +859,7 @@ async fn qualify_replacement(
 ) -> Result<()> {
     let conn = reactor.db_conn();
     let network = reactor.execution.network;
-    ensure!(certified_startup(&reopened).await?.1 == Height::new(4));
+    ensure!(certified_startup(reopened).await?.1 == Height::new(4));
     let before_replacement =
         closure::canonical_position(&conn, reactor.consensus.protocol_context.chain).await?;
     let old_hash = genesis_block(network).block_hash();
@@ -946,12 +946,12 @@ async fn qualify_replacement(
             .hash
             == old_hash
     );
-    ensure!(closure::recover(&reopened, 4).await?.stage == 0);
+    ensure!(closure::recover(reopened, 4).await?.stage == 0);
     ensure!(conn.is_autocommit() && service.active_roots().await == 0);
     conn.execute_batch("DROP TRIGGER interrupt_rollback_stage")
         .await?;
     reactor.rollback(99).await?;
-    let rolled_back = closure::recover(&reopened, 4).await?;
+    let rolled_back = closure::recover(reopened, 4).await?;
     ensure!(
         rolled_back.stage == 1
             && rolled_back.next.map(|next| next.0) == Some(WorkItem::Execute { decision: 4 })
@@ -962,10 +962,10 @@ async fn qualify_replacement(
     ensure!(select_block_at_height(&conn, 0).await?.is_some());
     ensure!(certified_history::branch::at(&conn, 100, 1).await? == Some(old_hash));
     ensure!(certified_history::branch::tip(&conn).await? == Some((100, replacement_hash)));
-    ensure!(completion::completed(&reopened, 1).await? == *completed);
+    ensure!(completion::completed(reopened, 1).await? == *completed);
     ensure!(certified_history::load(&conn, 2).await?.decision().height == 2);
     ensure!(certified_history::committee(&conn, 4).await?.height == 4);
-    ensure!(certified_startup(&reopened).await.is_err());
+    ensure!(certified_startup(reopened).await.is_err());
     reactor
         .handle_block(replacement_block, &replacement_decision)
         .await?;
@@ -982,8 +982,8 @@ async fn qualify_replacement(
             .await?
             .is_some()
     );
-    ensure!(certified_startup(&reopened).await?.1 == Height::new(5));
-    ensure!(completion::completed(&reopened, 1).await? == *completed);
+    ensure!(certified_startup(reopened).await?.1 == Height::new(5));
+    ensure!(completion::completed(reopened, 1).await? == *completed);
     ensure!(service.active_roots().await == 0);
 
     Ok(())

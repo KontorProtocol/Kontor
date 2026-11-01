@@ -2114,3 +2114,61 @@ Raw local evidence SHA-256:
 - `k4-historical-parity44.log`: `17d62e210fc2ccf1208c4d670fadd37b253402283d5db196b33522d89f862117`.
 - `k4-historical-parity44.json`: `323276dc7ea5bd56f71b0e860559863153004df005a06be31479bad5d08c62aa`.
 - `k4-certified-batch-regression46.log`: `45cbc8a765bfb7c009e3bf0fbc9c0b70ae3a931972ce2230cc8fe0641492086a`.
+
+
+### K4 linked archive and signed gossip acceptance, 1 November 2026
+
+The actual independently linked first/observer node at `e9033433` matched all
+11 preserved archive stages in each graph (session55533, exit0, 11.11s execution).
+The original archive was not regenerated. The build and comparison records are
+under `.build-cache/k4-archive-bundles/`, including `archive-comparison.json`,
+`archive.stdout.json` and `archive.stderr.log`; the full build log is
+`.build-cache/k4-linked-archive47.log`. Executable SHA-256:
+`1824912eaa44378b2cff9422fe9cc11f78696c0f1133b64e772127725572351b`.
+The comparison record binds the source, build report, binary and raw outputs.
+This closes the earlier linked archive comparison gap; it is not evidence of
+committee authority for the uncertified old archive or of other platforms.
+
+Added actual two-peer signed GossipSub delivery to `certified_value_wire` using
+the production engine/network configuration. Both maximum framed batch shapes
+(one maximum-size transaction plus filler, and many small transactions) cross
+the transport and retain exact encoded bytes and authenticated publisher identity.
+The readiness barrier observes a small message on the same channel before sending
+each large message once. Peers use temporary WAL directories and ephemeral ports;
+normal teardown stops and joins each engine. No framing limit or fork changed.
+All six wire tests passed (session68750, exit0, 3.27s; 13.90s compilation), recorded
+in `.build-cache/k4-gossip50.log`. Attempt48 caught a PeerId type mismatch. Attempt49
+incorrectly awaited mesh membership for persistent peers; the corrected fixture
+uses bidirectional persistent connections and actual message delivery. Neither
+failed attempt is acceptance evidence.
+
+Clippy53 passed the indexer tests with `protocol-qualification` and `-D warnings`
+(session45355, exit0, 27.84s), after removing unused test adapters, redundant borrows
+and test-only lint issues. Ordinary workspace formatting exposed remaining
+formatting differences in two fixture files, subsequently formatted. These are not execution
+rule changes. Removing the unused runtime test helper nevertheless changes the
+unreleased observer source definition to
+`7026414e4530a26af9768253beea0e4bd426d28d6bcccec15d494c2014d1a82a`.
+Historical first/second definitions and frozen sources remain untouched. The
+updated draft coordinator definition is
+`c918d397b03749c18d0de2aafe9c9aa50adebbffaeaae9788304a87e1446e6b5`.
+Earlier linked results remain bound to their tested sources; final candidate CI
+must rebuild and qualify the current definitions.
+
+Lead inspection traced durable append before acknowledgement, retained input use
+at Finalized, closure completion before next-height publication, and atomic
+successor committee/closure/frontier persistence. The framing test deliberately
+isolates transport from consensus authority; signed certificate/closure tests
+cover that distinct invariant. The cleanup removes only unused test paths or
+changes borrow/formatting structure. Prior scoped recovery, accounting and cluster
+results remain recorded above with their source bindings. Full grouped independent
+review, final-candidate scoped platform checks and merge remain outstanding.
+
+The focused source-root, coordinator-definition, node comparison/build/execution
+tooling checks also passed: 41 tests in 6.70s (session98795, exit0). Final local
+workspace formatting and diff whitespace checks passed. Raw evidence SHA-256:
+
+- `k4-linked-archive47.log`: `a659f65f14144698d15d70d92bc95bc6e558215a8b25b5d334570c70b5a6199c`.
+- `k4-gossip50.log`: `24a00863e09f187cb0f4bdc99384a9e90e55b346e2449131e268142a756334b3`.
+- `k4-clippy53.log`: `c49257ed31e9632265ab9ff69b1e1ccfe86f95f97b189e21947c623d14d09ebd`.
+- `k4-build-tools54.log`: `5c64aa92104b4181fcfe809af823004f10eb651068548acf863e9de67860fc83`.

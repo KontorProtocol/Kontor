@@ -41,6 +41,9 @@ impl BlockInput {
     }
 
     pub(crate) fn exact_input(&self, context: EraContext) -> Result<ExactInput> {
+        #[cfg(not(test))]
+        let Transactions::Block(block) = &self.transactions;
+        #[cfg(test)]
         let block = match &self.transactions {
             Transactions::Block(block) => block,
             #[cfg(test)]

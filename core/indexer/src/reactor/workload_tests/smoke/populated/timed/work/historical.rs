@@ -49,11 +49,27 @@ impl HistoricalWork for TimedWork<'_> {
         )?;
         self.pending.check_unconfirmed(self.reactor).await?;
         self.check_tracking(&self.tracked).await?;
-        let tip = (self.reactor.execution.last_height, self.reactor.execution.last_hash);
+        let tip = (
+            self.reactor.execution.last_height,
+            self.reactor.execution.last_hash,
+        );
         let height = self.reactor.execution.test_runtime().await.storage.height;
-        let context = self.reactor.execution.test_runtime().await.storage.tx_context.clone();
+        let context = self
+            .reactor
+            .execution
+            .test_runtime()
+            .await
+            .storage
+            .tx_context
+            .clone();
         let output = self.reactor.execution.test_runtime().await.previous_output;
-        let op_return = self.reactor.execution.test_runtime().await.op_return_data.clone();
+        let op_return = self
+            .reactor
+            .execution
+            .test_runtime()
+            .await
+            .op_return_data
+            .clone();
         let counters = {
             let runtime = self.reactor.execution.test_runtime().await;
             (
@@ -94,7 +110,10 @@ impl HistoricalWork for TimedWork<'_> {
         {
             let runtime = self.reactor.execution.test_runtime().await;
             ensure!(
-                (self.reactor.execution.last_height, self.reactor.execution.last_hash) == tip
+                (
+                    self.reactor.execution.last_height,
+                    self.reactor.execution.last_hash
+                ) == tip
                     && !runtime.simulating
                     && runtime.storage.height == height
                     && runtime.storage.tx_context == context

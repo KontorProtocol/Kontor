@@ -255,12 +255,11 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
         }
         // No pending Bitcoin block or RPC is supplied after the durable acknowledgement.
         let execution = reactor.advance().await;
-        if exiting && execution.is_err() {
+        if exiting && let Err(error) = &execution {
             assert_eq!(
                 block_height, 14,
                 "validator exited before its scheduled epoch"
             );
-            let error = execution.unwrap_err();
             assert!(
                 error
                     .downcast_ref::<completion::InvalidNextAuthority>()

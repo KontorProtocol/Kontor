@@ -13,8 +13,6 @@ use crate::bitcoin_client::error::Error as RpcError;
 use crate::bitcoin_client::types::Acceptance;
 use crate::bitcoin_client::{Client, check_mempool_acceptance};
 use crate::bitcoin_follower::block::BlockInput;
-#[cfg(test)]
-use crate::block::filter_map;
 use crate::database::queries::insert_transaction_execution_usage;
 use crate::protocol::coordinator::linked::{
     self, PreparedBlock, PreparedTransaction, TransactionRecognizer,
@@ -212,14 +210,6 @@ pub(crate) trait Executor: Sync {
         Ok(result)
     }
 
-    /// Parse a bitcoin::Transaction into an indexer_types::Transaction.
-    #[cfg(test)]
-    fn parse_transaction(
-        &self,
-        selection: &ExecutionSelection,
-        tx: &bitcoin::Transaction,
-    ) -> Option<indexer_types::Transaction>;
-
     // Owned preparation never carries storage authority across a suspension.
     // Production moves recognition to a blocking worker; the default is for
     // lightweight executors whose recognizer has no expensive decoding.
@@ -296,14 +286,6 @@ impl Executor for NoopExecutor {
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
         Ok(Vec::new())
     }
-    #[cfg(test)]
-    fn parse_transaction(
-        &self,
-        _selection: &ExecutionSelection,
-        _tx: &bitcoin::Transaction,
-    ) -> Option<indexer_types::Transaction> {
-        None
-    }
 }
 
 /// Production executor: handles transaction validation and op execution.
@@ -313,11 +295,6 @@ pub struct RuntimeExecutor {
 }
 
 impl RuntimeExecutor {
-    #[cfg(test)]
-    fn recognize_transaction(tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
-        filter_map((0, tx.clone()))
-    }
-
     pub fn new(bitcoin_client: Client) -> Self {
         Self { bitcoin_client }
     }
@@ -438,17 +415,6 @@ impl Executor for RuntimeExecutor {
             ExecutorVersion::LegacyP1 => {
                 execution::execute_transaction(runtime, height, tx_id, tx).await
             }
-        }
-    }
-
-    #[cfg(test)]
-    fn parse_transaction(
-        &self,
-        selection: &ExecutionSelection,
-        tx: &bitcoin::Transaction,
-    ) -> Option<indexer_types::Transaction> {
-        match selection.version() {
-            ExecutorVersion::LegacyP1 => Self::recognize_transaction(tx),
         }
     }
 

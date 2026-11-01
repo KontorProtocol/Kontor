@@ -1,3 +1,5 @@
+use std::slice;
+
 use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::opcodes::all::OP_PUSHNUM_1;
@@ -43,7 +45,7 @@ fn witness_order_and_context_are_bound_even_when_txids_match() {
     let mut witnessed = first.clone();
     witnessed.input[0].witness = Witness::from_slice(&[b"different instructions"]);
     assert_eq!(first.compute_txid(), witnessed.compute_txid());
-    let a = batch(&[first.clone()]);
+    let a = batch(slice::from_ref(&first));
     let b = batch(&[witnessed]);
     assert_ne!(a.descriptor().id(), b.descriptor().id());
     assert!(ExactInput::validate(a.descriptor().clone(), b.body().to_vec()).is_err());
