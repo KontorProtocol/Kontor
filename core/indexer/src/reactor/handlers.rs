@@ -12,7 +12,7 @@ use malachitebft_core_types::{ExtendedCommitCertificate, Round, Validity, VoteEx
 use tracing::{info, warn};
 
 use crate::consensus::codec::ProtobufCodec;
-use crate::consensus::{Address, Ctx, Height, ProposalPart, ProposalParts, ValueId};
+use crate::consensus::{Address, Ctx, Height, ProposalPart, ProposalParts, Value, ValueId};
 
 use super::Reactor;
 use super::consensus_state;
@@ -196,7 +196,10 @@ impl<E: Executor> Reactor<E> {
         value_bytes: bytes::Bytes,
         reply: tokio::sync::oneshot::Sender<SyncedValueOutcome<Ctx>>,
     ) -> Result<()> {
-        let result = if let Ok(value) = ProtobufCodec.decode(value_bytes) {
+        let decoded: Result<Value, _> = ProtobufCodec.decode(value_bytes);
+        let result = if let Ok(value) = decoded
+            && value.descriptor().context == self.consensus.protocol_context
+        {
             let proposed = ProposedValue {
                 height,
                 round,

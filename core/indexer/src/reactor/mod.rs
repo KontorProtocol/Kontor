@@ -53,7 +53,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use bitcoin::{BlockHash, Network, Txid};
+use bitcoin::{BlockHash, Network};
 use malachitebft_app_channel::NetworkMsg;
 use malachitebft_app_channel::app::types::LocallyProposedValue;
 use malachitebft_core_types::{LinearTimeouts, Round};
@@ -62,7 +62,7 @@ use tracing::{debug, info, warn};
 
 use crate::bitcoin_client::Client;
 use crate::consensus::finality_types::StateEvent;
-use crate::consensus::{BatchTx, Ctx};
+use crate::consensus::Ctx;
 #[cfg(test)]
 use crate::database::canonical_history;
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
@@ -89,7 +89,7 @@ use crate::{
         self,
         queries::{
             PRUNE_WATERMARK_KEY, get_meta_u64, insert_block, select_block_at_height,
-            select_block_latest, select_unconfirmed_batch_tx,
+            select_block_latest,
         },
     },
     runtime::GenesisParameters,
@@ -316,20 +316,6 @@ impl<E: Executor> Reactor<E> {
     }
 
     /// Check unconfirmed_batch_txs for a raw transaction (DB-level resolution).
-    async fn resolve_tx_from_db(
-        conn: &libsql::Connection,
-        txid: &Txid,
-        batch_height: u64,
-    ) -> Option<bitcoin::Transaction> {
-        if let Ok(Some(raw_bytes)) =
-            select_unconfirmed_batch_tx(conn, &txid.to_string(), batch_height).await
-            && let Ok(tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&raw_bytes)
-        {
-            return Some(tx);
-        }
-        None
-    }
-
     async fn refresh_validator_set_owned(&mut self) -> Result<()> {
         let selection = self.select_executor(ApplicationPosition::Committee).await?;
         let lease = self.begin_unit(&selection, false).await?;
@@ -360,54 +346,6 @@ impl<E: Executor> Reactor<E> {
                 .context("Failed to send proposal part to network")?;
         }
         Ok(())
-    }
-
-    async fn resolve_batch_txs(
-        &mut self,
-        txs: &[BatchTx],
-        batch_height: u64,
-    ) -> Result<Vec<bitcoin::Transaction>> {
-        let conn = self.db_conn();
-        // First pass: everything the pool and DB can answer, in order. Slots that
-        // still need bitcoind are left `None` and their txids collected, so the
-        // RPC misses go out as ONE batch instead of a round trip per txid — the
-        // replay/sync path resolves whole decided histories here.
-        let mut resolved: Vec<Option<bitcoin::Transaction>> = Vec::with_capacity(txs.len());
-        let mut rpc_slots: Vec<usize> = Vec::new();
-        let mut rpc_txids: Vec<Txid> = Vec::new();
-        for entry in txs {
-            match entry {
-                BatchTx::Raw(tx) => resolved.push(Some(tx.clone())),
-                BatchTx::Id(txid) => {
-                    // The retained body must belong to this decision: the same
-                    // txid can carry different witnesses at different heights.
-                    // Missing bodies use the pool/RPC fallback for new decisions
-                    // or finalized history whose retained bytes were pruned.
-                    if let Some(tx) = Self::resolve_tx_from_db(&conn, txid, batch_height).await {
-                        resolved.push(Some(tx));
-                    } else if let Some((raw, _)) = self.consensus.mempool.candidates.get(txid) {
-                        resolved.push(Some(raw.clone()));
-                    } else {
-                        rpc_slots.push(resolved.len());
-                        rpc_txids.push(*txid);
-                        resolved.push(None);
-                    }
-                }
-            }
-        }
-        if !rpc_txids.is_empty() {
-            let fetched = self.executor.resolve_transactions(&rpc_txids).await;
-            for ((slot, txid), tx) in rpc_slots.iter().zip(&rpc_txids).zip(fetched) {
-                match tx {
-                    Some(tx) => resolved[*slot] = Some(tx),
-                    None => anyhow::bail!("Could not resolve decided batch transaction {txid}"),
-                }
-            }
-        }
-        Ok(resolved
-            .into_iter()
-            .map(|t| t.expect("all slots filled"))
-            .collect())
     }
 
     async fn process_block_event(&mut self, event: BlockEvent) -> Result<()> {
@@ -1059,20 +997,14 @@ pub(crate) async fn start_consensus(
 async fn start_linked_consensus(
     engine_config: engine::EngineConfig,
     session: &LinkedSession,
-    service: &OwnerService,
-    network: Network,
+    _service: &OwnerService,
+    _network: Network,
     observation_channels: Option<consensus_state::ObservationChannels>,
     timeouts: Option<LinearTimeouts>,
     last_block_height: u64,
     mempool_fee_index: mempool_fee_index::MempoolFeeIndex,
 ) -> Result<consensus_state::ConsensusState> {
-    let selection =
-        select_legacy_p1(&session.conn, network, ApplicationPosition::Committee).await?;
-    let lease = linked::begin_canonical_unit(service, session, &selection, network, false).await?;
-    let result = linked::derive_committee(session, &selection, network).await;
-    let validator_set = linked::finish_canonical_unit(lease, result, false)
-        .await
-        .context("Failed to build genesis from staking contract")?;
+    let (_, _, validator_set) = consensus_state::certified_startup(&session.conn).await?;
     start_consensus_with_genesis(
         engine_config,
         session.conn.clone(),

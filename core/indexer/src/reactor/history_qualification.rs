@@ -172,8 +172,8 @@ pub(crate) async fn run(
         let hash = raw.block_hash();
         let input = CanonicalInput::bitcoin(&raw.txdata)?;
         let block = BlockInput::from_bitcoin(2, hash, raw);
-        let decision = DeferredDecision { consensus_height: Height::new(3), value: Value::Block { height: 2, hash },
-            certificate: Vec::new(), certified_txs: None };
+        let decision = DeferredDecision { consensus_height: Height::new(3), value: Value::from_input(block.exact_input(reactor.consensus.protocol_context)?)?,
+            certificate: Vec::new(), execution_txs: None };
         // Fail the second journal append, after transactions and lifecycle ran.
         // Both journal entries and the block must share the effects transaction.
         conn.execute_batch(&format!("CREATE TRIGGER reject_lifecycle BEFORE INSERT ON canonical_applications WHEN NEW.ordinal = {} BEGIN SELECT RAISE(ABORT, 'qualification lifecycle failure'); END", prefix.len() + 2)).await?;

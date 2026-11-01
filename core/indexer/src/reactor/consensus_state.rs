@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use bitcoin::Txid;
-use bitcoin::hashes::Hash;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
@@ -19,23 +18,22 @@ use malachitebft_core_types::{HeightParams, LinearTimeouts};
 use malachitebft_engine::host::Next;
 
 use prost::Message;
-use sha3::Digest;
 
 use crate::bitcoin_follower::block::BlockInput;
 use crate::consensus::codec::decode_commit_certificate;
 use crate::consensus::finality_types::*;
-use crate::consensus::signing::Ed25519Provider;
+use crate::consensus::signing::{Ed25519Provider, PublicKey};
 use crate::consensus::{
-    Address, Ctx, Genesis, Height, PartStreamsMap, ProposalData, ProposalFin, ProposalInit,
-    ProposalPart, ProposalParts, ValidatorSet, Value,
+    Address, CommitCertificate, Ctx, Genesis, Height, PartStreamsMap, ProposalData, ProposalFin,
+    ProposalInit, ProposalPart, ProposalParts, Validator, ValidatorSet, Value, proto,
 };
+use crate::database::certified_history::{self, Status};
 use crate::database::queries::{
-    delete_unexecuted_batch_suffix, get_checkpoint_latest, get_transaction_by_txid, insert_batch,
-    insert_batch_txids, insert_unconfirmed_batch_tx, min_unsettled_batch_tx_height,
-    select_batches_from_anchor, select_batches_in_range, select_block_at_height,
-    select_existing_txids, select_latest_consensus_height, select_min_batch_height,
-    select_unconfirmed_batch_txs, select_unfinalized_batches,
+    get_checkpoint_latest, get_transaction_by_txid, insert_batch, insert_batch_txids,
+    insert_unconfirmed_batch_tx, min_unsettled_batch_tx_height, select_block_at_height,
+    select_existing_txids, select_unfinalized_batches,
 };
+use crate::protocol::coordinator::certified_input::EraContext;
 pub use crate::protocol::coordinator::decision::DeferredDecision;
 use crate::protocol::coordinator::v1::build_finality_events;
 
@@ -61,6 +59,7 @@ pub struct PendingProposal {
 
 /// All consensus-related state for the reactor.
 pub struct ConsensusState {
+    pub(crate) protocol_context: EraContext,
     pub signing_provider: Ed25519Provider,
     pub address: Address,
     pub mempool: Mempool,
@@ -195,31 +194,8 @@ pub(super) fn authenticate_proposal(
     Ok(())
 }
 
-/// The signed preimage over a proposal: `Keccak256(height ‖ round ‖ data)`. The
-/// single definition used by both `stream_proposal` (to sign) and
-/// `verify_proposal_parts` (to verify) so the two cannot diverge.
 pub(super) fn proposal_sign_hash(height: Height, round: Round, data: &ProposalData) -> [u8; 32] {
-    let mut hasher = sha3::Keccak256::new();
-    hasher.update(height.as_u64().to_be_bytes());
-    hasher.update(round.as_i64().to_be_bytes());
-    match data {
-        ProposalData::Batch {
-            anchor_height,
-            anchor_hash,
-            transactions,
-        } => {
-            hasher.update(anchor_height.to_be_bytes());
-            hasher.update(anchor_hash.to_byte_array());
-            for tx in transactions {
-                hasher.update(tx.compute_txid().to_byte_array());
-            }
-        }
-        ProposalData::Block { height, hash } => {
-            hasher.update(height.to_be_bytes());
-            hasher.update(hash.to_byte_array());
-        }
-    }
-    hasher.finalize().into()
+    data.signing_digest(height, round)
 }
 
 async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> Result<Vec<Txid>> {
@@ -389,6 +365,46 @@ async fn load_unfinalized_batches(
     Ok(batches)
 }
 
+pub(super) async fn certified_startup(
+    conn: &libsql::Connection,
+) -> Result<(EraContext, Height, ValidatorSet)> {
+    let frontier = certified_history::frontier(conn).await?;
+    ensure!(
+        frontier.status == Status::Ready,
+        "certified history unavailable"
+    );
+    ensure!(
+        frontier.closed_height == frontier.authenticated_height,
+        "unfinished certified closure must recover before consensus startup"
+    );
+    let protocol_context = frontier
+        .context
+        .context("missing certified protocol context")?;
+    let next = frontier
+        .closed_height
+        .checked_add(1)
+        .context("consensus height exhausted")?;
+    let authority = certified_history::committee(conn, next).await?;
+    ensure!(
+        authority.context == protocol_context,
+        "historical committee context differs"
+    );
+    authority.validate()?;
+    let current_validator_set = ValidatorSet::try_new(
+        authority
+            .members
+            .iter()
+            .map(|member| {
+                Ok(Validator::new(
+                    PublicKey::from_bytes(member.key)?,
+                    member.power,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?,
+    )?;
+    Ok((protocol_context, Height::new(next), current_validator_set))
+}
+
 impl ConsensusState {
     pub async fn new(
         conn: libsql::Connection,
@@ -401,48 +417,13 @@ impl ConsensusState {
         validator_index: Option<usize>,
         mempool_fee_index: MempoolFeeIndex,
     ) -> Result<Self> {
-        let current_validator_set = genesis.validator_set;
+        let (protocol_context, current_height, current_validator_set) =
+            certified_startup(&conn).await?;
+        ensure!(
+            genesis.validator_set == current_validator_set,
+            "engine startup committee differs from certified authority"
+        );
 
-        // Forget the decided-but-unexecuted SUFFIX of consensus history —
-        // committed to the batches table but never executed before the node
-        // shut down; those consensus heights re-sync from peers. Children are
-        // deleted first (the FKs carry no cascade — deliberately, see
-        // schema.sql). A failure here must be LOUD: the old `if let Ok`
-        // silently resumed consensus above decisions this node never executed
-        // (#424).
-        let (deleted, resume_floor) = delete_unexecuted_batch_suffix(&conn, last_block_height)
-            .await
-            .context("Failed to delete unexecuted batch suffix")?;
-        if deleted > 0 {
-            info!(
-                deleted,
-                resume_floor, last_block_height, "Deleted unexecuted batch suffix"
-            );
-        }
-
-        // `Err` must be loud, like the suffix delete three lines up (#424): folding
-        // a transient read failure into "fresh start" resumes a node with thousands
-        // of decided heights at height 1, re-deciding history. Only a genuinely
-        // empty table is a fresh start.
-        let current_height = match select_latest_consensus_height(&conn)
-            .await
-            .context("Failed to read the latest consensus height")?
-        {
-            Some(h) => {
-                let resume = Height::new(h + 1);
-                info!(%resume, "Resuming consensus from DB");
-                resume
-            }
-            None => Height::new(1),
-        };
-
-        // Rebuild finality tracking. Without this a restart inside the window drops
-        // every pending deadline, so the node never performs a rollback its peers do
-        // and its `transactions` table keeps rows theirs no longer have — the
-        // divergence behind #515. Runs AFTER the suffix cleanup above, both so we
-        // never re-track a batch it just deleted and because that cleanup is what
-        // bounds the band on a lagging node (the anchor-mismatch record-only branch
-        // writes rows at the PROPOSED higher anchor).
         let unfinalized_batches = load_unfinalized_batches(&conn, last_block_height)
             .await
             .context("Failed to rehydrate finality tracking")?;
@@ -473,6 +454,7 @@ impl ConsensusState {
         }
 
         Ok(Self {
+            protocol_context,
             signing_provider,
             address,
             mempool: Mempool::default(),
@@ -561,14 +543,7 @@ impl ConsensusState {
         value: &LocallyProposedValue<Ctx>,
         pol_round: Round,
     ) -> Vec<StreamMessage<ProposalPart>> {
-        let data_part = match &value.value {
-            Value::Batch {
-                anchor_height,
-                anchor_hash,
-                ..
-            } => ProposalData::new_batch(*anchor_height, *anchor_hash, value.value.batch_raw_txs()),
-            Value::Block { height, hash } => ProposalData::new_block(*height, *hash),
-        };
+        let data_part = ProposalData::new(value.value.clone());
 
         // The Fin signature covers Init(height,round) + Data. `verify_proposal_parts`
         // recomputes the same preimage — keep both on `proposal_sign_hash` so they
@@ -806,37 +781,21 @@ impl ConsensusState {
         conn: &libsql::Connection,
         from_anchor: u64,
     ) -> Result<Vec<DeferredDecision>> {
-        let batches = select_batches_from_anchor(conn, from_anchor)
-            .await
-            .context("Failed to query batches from anchor")?;
-
-        batches
-            .into_iter()
-            .map(|b| {
-                let anchor_hash = b
-                    .anchor_hash
-                    .parse::<bitcoin::BlockHash>()
-                    .context("Failed to parse anchor hash from DB")?;
-                let value = if b.is_block {
-                    Value::new_block(b.anchor_height, anchor_hash)
-                } else {
-                    let txids: Vec<Txid> = b
-                        .txids
-                        .iter()
-                        .map(|s| s.parse().context("Failed to parse txid from DB"))
-                        .collect::<Result<Vec<_>>>()?;
-                    Value::new_batch(b.anchor_height, anchor_hash, txids)
-                };
-                Ok(DeferredDecision {
-                    consensus_height: Height::new(b.consensus_height),
+        let frontier = certified_history::frontier(conn).await?;
+        let mut decisions = Vec::new();
+        for height in 1..=frontier.authenticated_height {
+            let certified = certified_history::load(conn, height).await?;
+            let value = Value::from_input(certified.input().clone())?;
+            if value.block_height() >= from_anchor {
+                decisions.push(DeferredDecision {
+                    consensus_height: Height::new(height),
                     value,
-                    certificate: b.certificate,
-                    // Loaded straight from the decided record, so `value` already
-                    // holds the certified content — nothing to preserve separately.
-                    certified_txs: None,
-                })
-            })
-            .collect()
+                    certificate: certified.proof().to_vec(),
+                    execution_txs: None,
+                });
+            }
+        }
+        Ok(decisions)
     }
 
     pub async fn block_hash_at_height(
@@ -850,82 +809,19 @@ impl ConsensusState {
         }
     }
 
-    /// Attach any retained bodies for this exact decision. Confirmation alone
-    /// does not remove them: finality-floor GC keeps the executed witness available
-    /// through the rollback window, including for record-only batches.
-    async fn load_raw_txs_if_unfinalized(
-        &self,
-        conn: &libsql::Connection,
-        consensus_height: u64,
-    ) -> Result<Option<Vec<bitcoin::Transaction>>> {
-        let raw_bytes = select_unconfirmed_batch_txs(conn, consensus_height)
-            .await
-            .context("Failed to query unconfirmed batch txs")?;
-        let txs: Vec<bitcoin::Transaction> = raw_bytes
-            .iter()
-            .map(|raw| {
-                bitcoin::consensus::deserialize(raw)
-                    .context("Failed to deserialize batch tx from DB")
-            })
-            .collect::<Result<Vec<_>>>()?;
-        if txs.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(txs))
-        }
-    }
-
-    fn batch_to_decided(
-        &self,
-        b: &crate::database::types::BatchQueryResult,
-    ) -> Result<(Value, crate::consensus::CommitCertificate<Ctx>)> {
-        let anchor_hash = b
-            .anchor_hash
-            .parse::<bitcoin::BlockHash>()
-            .context("Failed to parse anchor hash from DB")?;
-
-        let value = if b.is_block {
-            Value::new_block(b.anchor_height, anchor_hash)
-        } else {
-            let txids: Vec<Txid> = b
-                .txids
-                .iter()
-                .map(|s| s.parse().context("Failed to parse txid from DB"))
-                .collect::<Result<Vec<_>>>()?;
-            Value::new_batch(b.anchor_height, anchor_hash, txids)
-        };
-
-        let proto = crate::consensus::proto::CommitCertificate::decode(b.certificate.as_slice())
-            .context("Failed to decode commit certificate protobuf")?;
-        let certificate =
-            decode_commit_certificate(proto).context("Failed to decode commit certificate")?;
-
-        Ok((value, certificate))
-    }
-
     pub(super) async fn get_decided_range(
         &self,
         conn: &libsql::Connection,
         start: Height,
         end: Height,
-    ) -> Result<Vec<(Value, crate::consensus::CommitCertificate<Ctx>)>> {
-        let batches = select_batches_in_range(conn, start.as_u64(), end.as_u64())
-            .await
-            .context("Failed to query batches for sync range")?;
-
+    ) -> Result<Vec<(Value, CommitCertificate<Ctx>)>> {
+        let frontier = certified_history::frontier(conn).await?;
         let mut results = Vec::new();
-        for b in &batches {
-            let (mut value, cert) = self.batch_to_decided(b)?;
-
-            if !b.is_block
-                && let Some(raw_txs) = self
-                    .load_raw_txs_if_unfinalized(conn, b.consensus_height)
-                    .await?
-            {
-                value.set_raw_txs(raw_txs);
-            }
-
-            results.push((value, cert));
+        for height in start.as_u64().max(1)..=end.as_u64().min(frontier.authenticated_height) {
+            let certified = certified_history::load(conn, height).await?;
+            let certificate =
+                decode_commit_certificate(proto::CommitCertificate::decode(certified.proof())?)?;
+            results.push((Value::from_input(certified.input().clone())?, certificate));
         }
         Ok(results)
     }
@@ -934,10 +830,8 @@ impl ConsensusState {
         &self,
         conn: &libsql::Connection,
     ) -> Result<Option<Height>> {
-        Ok(select_min_batch_height(conn)
-            .await
-            .context("Failed to query min batch height")?
-            .map(Height::new))
+        let frontier = certified_history::frontier(conn).await?;
+        Ok((frontier.authenticated_height > 0).then(|| Height::new(1)))
     }
 
     /// Run finality checks. Returns the events produced and, if a rollback is needed,
@@ -1040,7 +934,6 @@ mod tests {
     use crate::database::queries::{confirm_transaction, insert_block, insert_transaction};
     use crate::reactor::mock_bitcoin::make_tx;
     use crate::test_utils::{new_mock_block_hash, new_test_db};
-    use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, Txid};
 
     fn txid(n: u8) -> Txid {
@@ -1363,7 +1256,7 @@ mod tests {
             consensus_height: Height::new(41),
             value: Value::new_block(300, BlockHash::all_zeros()),
             certificate: vec![1, 2, 3],
-            certified_txs: None,
+            execution_txs: None,
         });
         queued.push_back(DeferredDecision {
             consensus_height: Height::new(42),
@@ -1371,7 +1264,7 @@ mod tests {
             certificate: vec![4, 5, 6],
             // A replay had already narrowed this one — the DECIDED list is what a
             // syncing peer needs, not the empty set we would have executed.
-            certified_txs: Some(vec![make_tx(1), make_tx(2)]),
+            execution_txs: Some(vec![make_tx(1), make_tx(2)]),
         });
 
         record_undrained_decisions(&conn, &queued).await;
@@ -1468,7 +1361,6 @@ mod tests {
             Validator, ValidatorSet,
         };
         use bitcoin::BlockHash;
-        use bitcoin::hashes::Hash;
         use malachitebft_core_types::Round;
 
         fn key(seed: u8) -> PrivateKey {

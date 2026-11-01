@@ -35,8 +35,8 @@ The Bitcoin poller now retains the complete decoded Bitcoin block, including its
 header and transaction witnesses. Its checked history conversion validates the
 requested hash, parent, size and Bitcoin commitments, and replay reconstructs the
 same block from the retained body. Synthetic transaction-only ingress is test-only.
-The poller-to-history round trip is covered locally, but proposal signing and
-ValueId still require integration with the canonical descriptor.
+The poller-to-history round trip is covered locally. Live values and proposal
+signatures now use the canonical descriptor as described below.
 Baseline composition now derives KPM1 and the genesis-era context from the selected
 executor reference, its committed parameter sources, the verified native manifest,
 and an explicit equal-schema no-op migration. The consensus/coordinator reference
@@ -54,8 +54,29 @@ still match genesis. Ready startup does not republish native initialization stag
 Old populated databases are preserved and refused with an explicit
 history-unavailable/rebuild-required error. Local checks cover a new connection,
 corrupt records, cancellation during initialization and resumption of its suffix.
-Live proposal construction and post-genesis recovery still need to use this context;
-the ordinary Decided/Finalized execution path is not yet journal-integrated.
+Live values now require complete validated inputs. ValueId and proposal-part signing
+bind the same canonical descriptor, including witnesses and protocol context.
+Proposal streaming and native sync use the new descriptor/body framing; old
+hash-only values are rejected. The proposal receiver checks the persisted context
+and full block input against local Bitcoin ingress. Batch validation retains the
+original immutable value while host I/O runs. Replay exclusions have a separate
+execution list and cannot change the certified identity.
+Startup now selects its height and committee from the certified frontier and
+historical authority, without deleting a batch suffix or consulting MAX(batches).
+An unfinished closure currently prevents engine startup until recovery is connected.
+History readers now load authenticated retained inputs instead of reconstructing
+values from transaction IDs. Their paging and replay-query bounds still need work.
+Five focused public-wire tests passed locally: identity/signature binding, protobuf/
+stream/serde round trips, malformed and legacy rejection, full Bitcoin block input,
+and maximal batch-body framing. The latter covers proposal-stream encoding and
+reserves outer-envelope space; complete signed gossip framing is still pending.
+The production library compiles. The broader test compile currently reports 32
+errors in old constructors/fields/imports and the removed transaction resolver test.
+Migrate these fixtures to real inputs and certified genesis; do not restore a
+production hash-only fallback just to preserve old fixtures.
+The ordinary Decided/Finalized execution path is not yet journal-integrated, and
+post-genesis closure recovery, certified branch rules and proof paging remain
+unfinished. This checkpoint is deliberately not a merge candidate.
 Both explicit link sets still need their complete integration acceptance evidence.
 
 ## Result and boundaries

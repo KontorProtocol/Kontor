@@ -460,7 +460,7 @@ async fn workload_frozen_replay() -> Result<()> {
                 text(&decision["block_hash"])?.parse()?,
             ),
             certificate: hex::decode(text(&decision["certificate_hex"])?)?,
-            certified_txs: None,
+            execution_txs: None,
         };
         trial.test_runtime().await.component_cache.clear();
         trial.handle_block(block.clone(), &decision).await?;

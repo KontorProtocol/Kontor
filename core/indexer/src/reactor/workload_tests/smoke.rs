@@ -214,7 +214,7 @@ async fn apply(reactor: &mut Reactor<RuntimeExecutor>, block: Block) -> Result<(
         consensus_height: Height::new(next),
         value: Value::new_block(block.height, block.hash),
         certificate: Vec::new(),
-        certified_txs: None,
+        execution_txs: None,
     };
     reactor.handle_block(block, &decision).await
 }

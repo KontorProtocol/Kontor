@@ -7,28 +7,9 @@ message Address {
 }
 
 message Value {
-    oneof kind {
-        BatchValue batch = 1;
-        BlockValue block = 2;
-    }
-}
-
-message BatchValue {
-    uint64 anchor_height = 1;
-    bytes anchor_hash = 2;
-    repeated BatchTx txs = 3;
-}
-
-message BatchTx {
-    oneof tx {
-        bytes txid = 1;
-        bytes raw_tx = 2;
-    }
-}
-
-message BlockValue {
-    uint64 height = 1;
-    bytes hash = 2;
+    reserved 1, 2;
+    bytes descriptor = 3;
+    bytes body = 4;
 }
 
 message ValueId {
@@ -85,10 +66,8 @@ message ProposalInit {
 }
 
 message ProposalData {
-    uint64 anchor_height = 1;
-    repeated bytes transactions = 2;
-    bytes anchor_hash = 3;
-    bool is_block = 4;
+    reserved 1, 2, 3, 4;
+    Value value = 5;
 }
 
 message ProposalFin {

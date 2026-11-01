@@ -212,7 +212,7 @@ async fn fails_and_recovers(fault: Fault) -> Result<()> {
         consensus_height: Height::new(1),
         value: Value::new_block(2, block.hash),
         certificate: Vec::new(),
-        certified_txs: None,
+        execution_txs: None,
     };
     let mut reactor = reactor(runtime, &dir).await?;
     let saved = snapshot(&conn).await?;

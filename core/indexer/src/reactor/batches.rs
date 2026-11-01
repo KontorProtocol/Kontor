@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Txid};
 use indexer_types::Event;
@@ -26,6 +26,7 @@ use crate::database::queries::{
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
 use crate::protocol::canonical_application::{ApplicationSource, DecisionExclusions};
 use crate::protocol::canonical_input::CanonicalInput;
+use crate::protocol::coordinator::certified_input::{Command, MAX_BATCH_BYTES};
 use crate::protocol::coordinator::linked::PreparedTransaction;
 pub(super) use crate::protocol::coordinator::v1::batch_is_ordered;
 use crate::protocol::coordinator::v1::{build_replay_queue, dependency_sort};
@@ -77,6 +78,7 @@ pub(super) enum IoApply {
     /// An incoming batch proposal: on apply, accept (file under `undecided`,
     /// release the engine's reply with `Some`) or reject (`None`).
     ValidateProposal {
+        value: Value,
         selection: ExecutionSelection,
         height: Height,
         round: Round,
@@ -491,12 +493,50 @@ impl<E: Executor> Reactor<E> {
     /// as out of order, and it stays the minimum forever so no newer block is
     /// ever proposed. The insert side refuses to buffer those now; this makes
     /// the proposer independently unable to emit one.
-    fn pending_block_value(&self) -> Option<Value> {
+    fn pending_block_value(&self) -> Result<Option<Value>> {
         self.consensus
             .pending_blocks
             .range(self.last_height + 1..)
             .next()
-            .map(|(&height, block)| Value::new_block(height, block.hash))
+            .map(|(_, block)| -> Result<Value> {
+                Ok(Value::from_input(
+                    block.exact_input(self.consensus.protocol_context)?,
+                )?)
+            })
+            .transpose()
+    }
+
+    fn batch_proposal_value(
+        &self,
+        height: u64,
+        hash: BlockHash,
+        mut txs: Vec<bitcoin::Transaction>,
+    ) -> Result<Value> {
+        let mut bytes = 4usize;
+        let count = txs
+            .iter()
+            .take_while(|tx| {
+                match bytes
+                    .checked_add(4)
+                    .and_then(|size| size.checked_add(tx.total_size()))
+                {
+                    Some(size) if size <= MAX_BATCH_BYTES => {
+                        bytes = size;
+                        true
+                    }
+                    _ => false,
+                }
+            })
+            .count();
+        // Admission takes a dependency-ordered prefix. It never changes work
+        // already certified, and leaves the remainder in the proposal pool.
+        txs.truncate(count);
+        Ok(Value::new_batch_raw(
+            self.consensus.protocol_context,
+            height,
+            hash,
+            txs,
+        )?)
     }
 
     /// The state-only half of building a BATCH proposal: candidates judged
@@ -584,23 +624,19 @@ impl<E: Executor> Reactor<E> {
         let last_height = self.last_height;
         let last_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
 
-        let value = match data {
-            ProposalData::Block { height: bh, hash } => {
+        if data.value().descriptor().context != self.consensus.protocol_context {
+            let _ = reply.send(None);
+            return Ok(());
+        }
+        let value = match data.value().command() {
+            Command::Block {
+                height: bh, hash, ..
+            } => {
                 if let Some(block) = self.consensus.pending_blocks.get(bh) {
-                    // Deliberately NOT gated on `bh == last_height + 1`.
-                    //
-                    // Tempting, since a node behind on execution votes here for a
-                    // block it cannot yet apply. But a `Value::Block` asserts only
-                    // "this is the canonical Bitcoin block at this height", which
-                    // this node can confirm from its own buffer; when to run it is
-                    // a local ordering matter, settled by `handle_finalized` and
-                    // the deferred queue. Withholding the vote would trade a stuck
-                    // node for a stalled chain: at 3-of-4 quorum with one
-                    // validator already down, one nil vote is the difference
-                    // between the network advancing and halting — which is the
-                    // failure this whole change exists to prevent, reintroduced
-                    // from the other side.
-                    if block.hash != *hash {
+                    if block.hash != *hash
+                        || block.exact_input(self.consensus.protocol_context)?
+                            != *data.value().input()
+                    {
                         warn!(
                             block_height = bh,
                             proposed = %hash,
@@ -642,13 +678,13 @@ impl<E: Executor> Reactor<E> {
                     let _ = reply.send(None);
                     return Ok(());
                 }
-                Value::new_block(*bh, *hash)
+                data.value().clone()
             }
-            ProposalData::Batch {
+            Command::Batch {
                 anchor_height,
                 anchor_hash,
-                transactions,
             } => {
+                let transactions = data.value().batch_raw_txs();
                 // SNAPSHOT phase: every state predicate, judged now for the
                 // fast reject. Re-judged at apply time — see `IoJob`.
                 if let Some(reason) = self
@@ -657,7 +693,7 @@ impl<E: Executor> Reactor<E> {
                         &conn,
                         *anchor_height,
                         *anchor_hash,
-                        transactions,
+                        &transactions,
                         last_height,
                         last_hash,
                     )
@@ -669,7 +705,7 @@ impl<E: Executor> Reactor<E> {
                 }
                 let selection = self.preparation_selection().await?;
                 let mut parsed_txs = Vec::with_capacity(transactions.len());
-                for tx in transactions {
+                for tx in &transactions {
                     let txid = tx.compute_txid();
                     // Parse the PROPOSAL'S OWN bytes, never the pool's cached copy.
                     // Kontor ops live in the taproot witness, which the txid does
@@ -698,6 +734,7 @@ impl<E: Executor> Reactor<E> {
                 self.io_jobs.push_back(IoJob {
                     verdicts,
                     apply: IoApply::ValidateProposal {
+                        value: data.value().clone(),
                         selection,
                         height,
                         round,
@@ -741,7 +778,7 @@ impl<E: Executor> Reactor<E> {
         // Blocks first, always — even with a batch validation in flight. They
         // need no I/O, and a chain whose block proposals queue behind a slow
         // bitcoind is the head-of-line blocking this design removes.
-        if let Some(value) = self.pending_block_value() {
+        if let Some(value) = self.pending_block_value()? {
             self.fulfill_pending_with(value).await?;
             return Ok(true);
         }
@@ -771,8 +808,12 @@ impl<E: Executor> Reactor<E> {
                     .await?
                     .is_none()
                 {
-                    self.fulfill_pending_with(Value::new_batch_raw(last_height, last_hash, txs))
-                        .await?;
+                    self.fulfill_pending_with(self.batch_proposal_value(
+                        last_height,
+                        last_hash,
+                        txs,
+                    )?)
+                    .await?;
                     return Ok(true);
                 }
             }
@@ -825,7 +866,7 @@ impl<E: Executor> Reactor<E> {
             // set still validating answers a LATER round, and its apply keeps
             // only the pool hygiene.
             info!(past_deadline, idle_retry, "Proposing empty batch");
-            self.fulfill_pending_with(Value::new_batch_raw(last_height, last_hash, vec![]))
+            self.fulfill_pending_with(self.batch_proposal_value(last_height, last_hash, vec![])?)
                 .await?;
             return Ok(true);
         }
@@ -952,10 +993,15 @@ impl<E: Executor> Reactor<E> {
                     info!("Not proposing batch: {reason}");
                     return Ok(());
                 }
-                self.fulfill_pending_with(Value::new_batch_raw(anchor_height, anchor_hash, txs))
-                    .await
+                self.fulfill_pending_with(self.batch_proposal_value(
+                    anchor_height,
+                    anchor_hash,
+                    txs,
+                )?)
+                .await
             }
             IoApply::ValidateProposal {
+                value,
                 selection,
                 height,
                 round,
@@ -965,7 +1011,9 @@ impl<E: Executor> Reactor<E> {
                 parsed,
                 reply,
             } => {
-                if !selection.can_reuse_preparation(&self.preparation_selection().await?) {
+                if value.descriptor().context != self.consensus.protocol_context
+                    || !selection.can_reuse_preparation(&self.preparation_selection().await?)
+                {
                     let _ = reply.send(None);
                     return Ok(());
                 }
@@ -982,6 +1030,10 @@ impl<E: Executor> Reactor<E> {
                 }
                 let transactions: Vec<bitcoin::Transaction> =
                     verdicts.into_iter().map(|(tx, _)| tx).collect();
+                ensure!(
+                    transactions == value.batch_raw_txs(),
+                    "proposal validation changed exact inputs"
+                );
                 // Freshness: the snapshot's state predicates, re-judged. The
                 // anchor gate in `validate_batch` is what turns "the tip moved
                 // while we validated" into a plain rejection instead of a vote
@@ -1011,7 +1063,7 @@ impl<E: Executor> Reactor<E> {
                     round,
                     valid_round: Round::Nil,
                     proposer,
-                    value: Value::new_batch_raw(anchor_height, anchor_hash, transactions),
+                    value,
                     validity: Validity::Valid,
                 };
                 self.consensus
@@ -1053,13 +1105,7 @@ impl<E: Executor> Reactor<E> {
         let decisions = decisions.into_iter();
         let mut out = Vec::with_capacity(decisions.size_hint().0);
         for decision in decisions {
-            let txs = match &decision.value {
-                Value::Batch { txs, .. } => {
-                    self.resolve_batch_txs(txs, decision.consensus_height.as_u64())
-                        .await?
-                }
-                Value::Block { .. } => Vec::new(),
-            };
+            let txs = decision.execution_txs();
             out.push((decision, txs));
         }
         Ok(out)
@@ -1380,10 +1426,11 @@ impl<E: Executor> Reactor<E> {
                 break;
             };
 
-            match &decision.value {
-                Value::Block {
+            match decision.value.command() {
+                Command::Block {
                     height: bh,
                     hash: decided_hash,
+                    ..
                 } => {
                     let bh = *bh;
                     let decided_hash = *decided_hash;
@@ -1522,11 +1569,9 @@ impl<E: Executor> Reactor<E> {
                         break;
                     }
                 }
-                Value::Batch {
+                Command::Batch {
                     anchor_height,
                     anchor_hash,
-                    txs,
-                    ..
                 } => {
                     if *anchor_height > self.last_height {
                         // debug!, not info!: every held batch is re-tested after every
@@ -1544,14 +1589,12 @@ impl<E: Executor> Reactor<E> {
                     info!(
                         anchor_height = *anchor_height,
                         consensus_height = %decision.consensus_height,
-                        num_txs = txs.len(),
+                        num_txs = decision.value.descriptor().input_count,
                         "Draining deferred batch decision"
                     );
                     let anchor_height = *anchor_height;
                     let anchor_hash = *anchor_hash;
-                    let resolved_txs = self
-                        .resolve_batch_txs(txs, decision.consensus_height.as_u64())
-                        .await?;
+                    let resolved_txs = decision.execution_txs();
                     let outcome = self
                         .process_decided_batch(
                             anchor_height,
@@ -1559,7 +1602,7 @@ impl<E: Executor> Reactor<E> {
                             decision.consensus_height,
                             &decision.certificate,
                             &resolved_txs,
-                            decision.certified_txs.as_deref(),
+                            Some(&decision.decided_txs()),
                         )
                         .await
                         .context("process_decided_batch failed in deferred drain")?;
@@ -1645,15 +1688,12 @@ impl<E: Executor> Reactor<E> {
                     value: proposal.value.clone(),
                 });
             }
-            match &proposal.value {
-                Value::Batch {
+            match proposal.value.command() {
+                Command::Batch {
                     anchor_height,
                     anchor_hash,
-                    txs,
                 } => {
-                    let full_txs = self
-                        .resolve_batch_txs(txs, certificate.height.as_u64())
-                        .await?;
+                    let full_txs = proposal.value.batch_raw_txs();
 
                     for tx in &full_txs {
                         self.consensus.mempool.suppress(&tx.compute_txid());
@@ -1675,7 +1715,7 @@ impl<E: Executor> Reactor<E> {
                                 consensus_height: certificate.height,
                                 value: proposal.value.clone(),
                                 certificate: cert_bytes,
-                                certified_txs: None,
+                                execution_txs: None,
                             },
                         );
                     } else {
@@ -1700,7 +1740,7 @@ impl<E: Executor> Reactor<E> {
                         }
                     }
                 }
-                Value::Block { height, hash } => {
+                Command::Block { height, hash, .. } => {
                     let cert_bytes = encode_commit_certificate(&certificate)
                         .context("Failed to encode commit certificate")?
                         .encode_to_vec();
@@ -1742,7 +1782,7 @@ impl<E: Executor> Reactor<E> {
                         consensus_height: certificate.height,
                         value: proposal.value.clone(),
                         certificate: cert_bytes,
-                        certified_txs: None,
+                        execution_txs: None,
                     };
 
                     // Being buffered at the right height is not the same as being the
@@ -2020,7 +2060,7 @@ mod tests {
             consensus_height: Height::new(consensus_height),
             value: Value::new_batch_raw(0, bitcoin::BlockHash::all_zeros(), vec![]),
             certificate: Vec::new(),
-            certified_txs: None,
+            execution_txs: None,
         }
     }
 
@@ -2500,7 +2540,7 @@ mod tests {
         // Pass one already ran: `first` was excluded, and the decision carries the
         // full decided list alongside the narrowed transactions.
         let (mut decision, _) = carrying(14, vec![second.clone(), survivor_tx.clone()]);
-        decision.certified_txs = Some(decided_all.clone());
+        decision.execution_txs = Some(decided_all.clone());
 
         // Pass two excludes `second`.
         let excluded = excl(&[(14, second.compute_txid())]);
@@ -2532,7 +2572,7 @@ mod tests {
             Vec::new(),
             &HashMap::new(),
         );
-        assert!(queue[0].certified_txs.is_none());
+        assert!(queue[0].execution_txs.is_none());
     }
 
     /// A queued decision BELOW the replay set's max must SURVIVE. Anchors go

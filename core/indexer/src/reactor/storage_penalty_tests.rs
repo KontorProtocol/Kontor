@@ -82,7 +82,7 @@ async fn block(reactor: &mut Reactor<NoopExecutor>, height: u64) -> Result<()> {
         consensus_height: Height::new(height - 2015),
         value: Value::new_block(height, block.hash),
         certificate: Vec::new(),
-        certified_txs: None,
+        execution_txs: None,
     };
     reactor.handle_block(block, &decision).await
 }
