@@ -403,18 +403,24 @@ class Ownership(unittest.TestCase):
     def test_executor_node_native_definition_cannot_own_retained_import(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            node_native = self.object(root, "node_native", "int blst_keygen(void) { return 1; }")
+            native_symbols = ("blst_keygen", "rustsecp256k1_v0_10_0_ecdsa_sign_recoverable",
+                              "ring_core_0_17_14__CRYPTO_memcmp")
+            node_native = self.object(root, "node_native", "\n".join(
+                f"int {symbol}(void) {{ return 1; }}" for symbol in native_symbols))
             root_codegen = self.object(root, "root_codegen", "int kontor_node_root(void) { return 1; }")
-            importer = self.object(root, "retained", "extern int blst_keygen(void); int kontor_first_call(void) { return blst_keygen(); }")
             executable = root / "node"
             subprocess.run(["cc", "-x", "c", "-", "-o", str(executable)],
                            input="int main(void) { return 0; }", text=True, check=True)
-            self.graphs[0]["artifacts"] = [{"path": str(importer)}]
-            sets, _ = audit_inputs(self.graphs, root)
             env = dict(os.environ, RUSTC="rustc")
-            with self.assertRaisesRegex(RuntimeError, "imports have no declared owner.*blst_keygen"):
-                verify(self.graphs, sets, [], executable, env, root, kind="executor",
-                       node_objects=[node_native, root_codegen], compiler_objects=[root_codegen])
+            for symbol in native_symbols:
+                with self.subTest(symbol=symbol):
+                    importer = self.object(root, "retained_" + symbol,
+                                           f"extern int {symbol}(void); int kontor_first_call(void) {{ return {symbol}(); }}")
+                    self.graphs[0]["artifacts"] = [{"path": str(importer)}]
+                    sets, _ = audit_inputs(self.graphs, root)
+                    with self.assertRaisesRegex(RuntimeError, "imports have no declared owner.*" + symbol):
+                        verify(self.graphs, sets, [], executable, env, root, kind="executor",
+                               node_objects=[node_native, root_codegen], compiler_objects=[root_codegen])
 
             platform_importer = self.object(root, "platform_importer",
                                             'extern int puts(const char *); int kontor_first_call(void) { return puts("ok"); }')
@@ -430,6 +436,17 @@ class Ownership(unittest.TestCase):
             node_report = json.loads((root / "node-input-ownership.json").read_text())
             self.assertEqual([item["path"] for item in node_report["node_inputs"]],
                              sorted([str(node_native), str(root_codegen)]))
+            std_importer = self.object(root, "std_importer",
+                                       "extern void rust_eh_personality(void); int kontor_first_call(void) { rust_eh_personality(); return 1; }")
+            self.graphs[0]["artifacts"] = [{"path": str(std_importer)}]
+            sets, _ = audit_inputs(self.graphs, root)
+            common, _ = verify(self.graphs, sets, [], executable, env, root, kind="executor",
+                               node_objects=[node_native, root_codegen], compiler_objects=[root_codegen])
+            self.assertIn("rust_eh_personality", common)
+            self.assertTrue(any(Path(path).name.startswith("libstd-")
+                                for path in common["rust_eh_personality"]))
+            report = json.loads((root / "common-reference-ownership.json").read_text())
+            self.assertIn("rust_eh_personality", report["references"][0]["common"])
             node_collision = self.object(root, "node_collision",
                                          "int kontor_first_call(void) { return 1; }")
             with self.assertRaisesRegex(RuntimeError, "shadows node input definitions"):
