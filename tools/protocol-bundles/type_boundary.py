@@ -76,7 +76,7 @@ ADAPTER_TESTS = [
     for test in ('height_parameters_preserve_committee_order_and_all_timeouts',
                  'event_keeps_generation_rounds_and_canonical_payload',
                  'local_failure_is_not_reclassified_as_a_peer_fault')
-]
+] + ['managed::adapter::tests::publication_rejection_returns_the_original_buffer_for_retry']
 
 
 def probes_for(graphs):

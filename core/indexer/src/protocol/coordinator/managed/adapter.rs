@@ -4,8 +4,8 @@ use kontor_consensus_first::Engine as FirstEngine;
 use kontor_consensus_second::Engine as SecondEngine;
 
 use super::types::{
-    Delivery, EngineError, EnginePoll, EngineState, ProposalPartBytes, Publish, ReplyError,
-    ReplyToken, Response,
+    Delivery, EngineError, EnginePoll, EngineState, ProposalPartBytes, Publish, PublishError,
+    ReplyError, ReplyToken, Response,
 };
 
 // Each expansion imports only its selected bundle's public facade. Exhaustive
@@ -411,17 +411,26 @@ impl SelectedEngine {
         &mut self,
         generation: u64,
         part: ProposalPartBytes,
-    ) -> Result<Publish, EngineError> {
-        match self {
-            Self::First(engine) => engine
-                .publish(generation, first::part(part))
-                .map(first::publish)
-                .map_err(first::error),
-            Self::Second(engine) => engine
-                .publish(generation, second::part(part))
-                .map(second::publish)
-                .map_err(second::error),
-        }
+    ) -> Result<(), PublishError> {
+        let (outcome, part) = match self {
+            Self::First(engine) => {
+                let part = first::part(part);
+                let outcome = engine
+                    .publish(generation, &part)
+                    .map(first::publish)
+                    .map_err(first::error);
+                (outcome, ProposalPartBytes(part.0))
+            }
+            Self::Second(engine) => {
+                let part = second::part(part);
+                let outcome = engine
+                    .publish(generation, &part)
+                    .map(second::publish)
+                    .map_err(second::error);
+                (outcome, ProposalPartBytes(part.0))
+            }
+        };
+        publication(outcome, part)
     }
 
     pub(crate) fn request_stop(&mut self) -> Result<(), EngineError> {
@@ -450,5 +459,42 @@ impl SelectedEngine {
             Self::First(engine) => engine.poll_listen_address().map_err(first::error),
             Self::Second(engine) => engine.poll_listen_address().map_err(second::error),
         }
+    }
+}
+
+fn publication(
+    outcome: Result<Publish, EngineError>,
+    part: ProposalPartBytes,
+) -> Result<(), PublishError> {
+    match outcome {
+        Ok(Publish::Sent) => Ok(()),
+        Ok(Publish::Full) => Err(PublishError::Full(part)),
+        Ok(Publish::Closed) => Err(PublishError::Closed(part)),
+        Err(error) => Err(PublishError::Engine(error, part)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EngineError, ProposalPartBytes, Publish, PublishError, publication};
+
+    #[test]
+    fn publication_rejection_returns_the_original_buffer_for_retry() {
+        for outcome in [
+            Ok(Publish::Full),
+            Ok(Publish::Closed),
+            Err(EngineError::Stopping),
+        ] {
+            let part = ProposalPartBytes(vec![8, 0, 255, 1]);
+            let original = part.0.as_ptr();
+            let returned = match publication(outcome, part).unwrap_err() {
+                PublishError::Full(part)
+                | PublishError::Closed(part)
+                | PublishError::Engine(_, part) => part,
+            };
+            assert_eq!(returned.0.as_ptr(), original);
+            assert_eq!(returned.0, [8, 0, 255, 1]);
+        }
+        assert!(publication(Ok(Publish::Sent), ProposalPartBytes(vec![1])).is_ok());
     }
 }

@@ -2687,7 +2687,7 @@ operations for the upcoming control-thread integration.
 
 The maintained `tools/kontor protocol-bundles` command now forwards
 `--build-consensus`. Consensus staging compiles the actual node adapter sources
-against both independently staged libraries and runs six focused conversion
+against both independently staged libraries and runs seven focused conversion
 tests. The checker requires both bundles' named tests to execute with no failures
 or ignored tests, and records source, library, executable and log hashes. Node
 adapter sources are included in the staging provenance inventory.
@@ -2702,10 +2702,17 @@ against the staged graph reports and raw diagnostics.
 The subsequent adapter test compile failed with E0583: importing the parent module
 through an external `#[path]` changed Rust's child-module lookup directory. The
 harness now explicitly imports the actual adapter and DTO files. Seventeen focused
-tooling checks pass after this fix, but its Rust compilation remains pending while
-the signer agent runs its final checks. The partial run is recorded honestly as
-exit 1 in `.build-cache/k5-consensus-staging-partial.json`; no successful consensus
-qualification marker was produced.
+tooling checks passed after this fix. The next compile exposed publication's
+borrowed argument requirement. Publication now returns the original owned payload
+on full, closed or failed delivery, allowing retry without copying or loss.
+
+A focused rerun verified the staged library hashes, compiled the actual adapters,
+and passed all seven adapter tests, with zero failed, ignored or filtered out.
+The payload retry test checks the original allocation is retained. Evidence and
+source/library/binary/log bindings are in
+`.build-cache/k5-node-adapter-validation/result.json`; raw output is under its
+`node-adapter` directory. The earlier partial runs remain failures, not relabeled
+passes. No full node handoff qualification marker is claimed by this focused run.
 
 The node module is gated by `kontor_managed`; the production builder does not
 enable it yet. Production reactor wiring, control-thread implementation, managed

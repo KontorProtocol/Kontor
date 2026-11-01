@@ -174,6 +174,13 @@ pub(crate) enum Publish {
     Closed,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PublishError {
+    Full(ProposalPartBytes),
+    Closed(ProposalPartBytes),
+    Engine(EngineError, ProposalPartBytes),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum EngineError {
     InvalidConfiguration(String),
