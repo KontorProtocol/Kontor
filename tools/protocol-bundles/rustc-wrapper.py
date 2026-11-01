@@ -7,7 +7,7 @@ import re
 import sys
 
 namespace = os.environ.get("KONTOR_NATIVE_NAMESPACE", "")
-if not re.fullmatch(r"kontor_(first|second)_[0-9a-f]{24}", namespace):
+if not re.fullmatch(r"kontor_(first|second|observer)_[0-9a-f]{24}", namespace):
     raise SystemExit("missing or invalid protocol graph compiler namespace")
 wrapper = Path(__file__).resolve()
 if Path(os.environ.get("RUSTC_WRAPPER", "")).resolve() != wrapper or os.environ.get("RUSTC_WORKSPACE_WRAPPER"):

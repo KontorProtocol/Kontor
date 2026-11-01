@@ -22,6 +22,13 @@ def prepare(compiler, arguments, spec):
     name = arguments[arguments.index('--crate-name') + 1]
     if name not in ('indexer', 'kontor'):
         return arguments, None
+    link_set = spec.get('link_set')
+    expected = {'legacy-qualification': ['first', 'second'], 'k4-node': ['first', 'observer']}
+    if link_set is not None:
+        if link_set not in expected or [graph['graph'] for graph in spec['graphs']] != expected[link_set]:
+            raise RuntimeError('node link set does not match its executor libraries')
+    if link_set == 'k4-node':
+        arguments.extend(['--cfg', 'kontor_observer'])
     for graph in spec['graphs']:
         if digest(graph['facade']) != graph['facade_sha256']:
             raise RuntimeError('retained facade changed before node compilation')

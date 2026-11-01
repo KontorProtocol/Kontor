@@ -17,6 +17,8 @@ use super::bundle_ownership::{
 use super::counter::Counter;
 use super::invocation::InvocationBudget;
 use super::{Runtime, TransactionContext};
+use crate::protocol::operations::RecognitionCall;
+use crate::protocol::registration::RegistrationCall;
 use crate::protocol::session::{Operations, OwnerCapabilities, SessionExports};
 
 pub(crate) struct BundleSession {
@@ -61,6 +63,7 @@ impl SimulationContext {
 }
 
 impl BundleSession {
+    #[cfg(kontor_retained)]
     pub(crate) fn export(runtime: Runtime) -> SessionExports {
         Self::export_registry(runtime, false)
     }
@@ -70,9 +73,28 @@ impl BundleSession {
         Self::export_registry(runtime, true)
     }
 
+    #[cfg(kontor_retained)]
     fn export_registry(runtime: Runtime, qualification: bool) -> SessionExports {
         let recognize = runtime.recognizer();
         let session = Self::new(runtime);
+        Self::export_session(session, recognize, qualification)
+    }
+
+    pub(crate) fn export_observer(runtime: Runtime) -> (SessionExports, RegistrationCall) {
+        let recognize = runtime.recognizer();
+        let session = Self::new(runtime);
+        let registrations = session.registrations();
+        (
+            Self::export_session(session, recognize, false),
+            registrations,
+        )
+    }
+
+    fn export_session(
+        session: Arc<Self>,
+        recognize: RecognitionCall,
+        qualification: bool,
+    ) -> SessionExports {
         let operations: Operations = (
             session.initializer(),
             session.inspect(),

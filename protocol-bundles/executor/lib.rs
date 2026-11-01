@@ -24,6 +24,8 @@ mod testlib_exports {
 }
 
 use bitcoin::{Network, p2p::Magic};
+use protocol::registration::RegistrationCall;
+use protocol::session::SharedOwner;
 use protocol::session::{HostError, HostFuture, SessionExports};
 use protocol::storage_callbacks::StorageCallbacks;
 use runtime::bundle_session::BundleSession;
@@ -45,6 +47,16 @@ pub fn factory() -> Result<Factory, HostError> {
 // to the production factory or making them selectable through node configuration.
 pub fn qualification_factory() -> Result<Factory, HostError> {
     make_factory(true)
+}
+
+pub fn registration_observer(owner: SharedOwner) -> Result<RegistrationCall, HostError> {
+    let session = owner.downcast::<BundleSession>().map_err(|_| {
+        (
+            2,
+            "registration observer requires its originating session".into(),
+        )
+    })?;
+    Ok(session.registrations())
 }
 
 fn make_factory(qualification: bool) -> Result<Factory, HostError> {

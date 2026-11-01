@@ -110,23 +110,23 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           python3 tools/protocol-bundles/qualify_node.py --profile "${{ matrix.profile }}" --output target/protocol-evidence
-          test -f target/protocol-evidence/aarch64-apple-darwin/${{ matrix.profile }}/executors/node-execution.json
+          test -f target/protocol-evidence/aarch64-apple-darwin/${{ matrix.profile }}/executors/k4-node/node-execution.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: protocol-bundle-evidence-${{ matrix.os }}-${{ matrix.profile }}
           path: |
-            target/protocol-evidence/*/*/executors/*.json
-            target/protocol-evidence/*/*/executors/*.log
-            target/protocol-evidence/*/*/executors/first/*.json
-            target/protocol-evidence/*/*/executors/first/*.log
-            target/protocol-evidence/*/*/executors/second/*.json
-            target/protocol-evidence/*/*/executors/second/*.log
-            target/protocol-evidence/*/*/executors/node/*.json
-            target/protocol-evidence/*/*/executors/node/*.log
-            target/protocol-evidence/*/*/executors/node/type-boundary/*.json
-            target/protocol-evidence/*/*/executors/node/type-boundary/*.log
-            target/protocol-evidence/*/*/executors/node/type-boundary/*.rs
+            target/protocol-evidence/*/*/executors/k4-node/*.json
+            target/protocol-evidence/*/*/executors/k4-node/*.log
+            target/protocol-evidence/*/*/executors/k4-node/first/*.json
+            target/protocol-evidence/*/*/executors/k4-node/first/*.log
+            target/protocol-evidence/*/*/executors/k4-node/observer/*.json
+            target/protocol-evidence/*/*/executors/k4-node/observer/*.log
+            target/protocol-evidence/*/*/executors/k4-node/node/*.json
+            target/protocol-evidence/*/*/executors/k4-node/node/*.log
+            target/protocol-evidence/*/*/executors/k4-node/node/type-boundary/*.json
+            target/protocol-evidence/*/*/executors/k4-node/node/type-boundary/*.log
+            target/protocol-evidence/*/*/executors/k4-node/node/type-boundary/*.rs
           if-no-files-found: error
 
   compare:

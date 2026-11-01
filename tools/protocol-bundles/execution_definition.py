@@ -168,7 +168,7 @@ def verify_reference(root, manifest, metadata):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("graph", choices=("first", "second"))
+    parser.add_argument("graph", choices=("first", "second", "observer"))
     parser.add_argument("--write", action="store_true", help="explicitly replace the pre-release reference")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]

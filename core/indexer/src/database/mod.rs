@@ -1,4 +1,5 @@
 pub(crate) mod canonical_history;
+pub(crate) mod certified_history;
 pub mod confirmation;
 pub mod connection;
 mod genesis;

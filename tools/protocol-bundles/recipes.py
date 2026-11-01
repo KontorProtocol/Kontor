@@ -56,6 +56,22 @@ RETAINED_EXECUTOR_GRAPHS = {
                    source_snapshot="fc85d7f7479662012faef9bc43e3efaf7c9299ddc940ffd5ef5865abe5667592")
     for label, graph in EXECUTOR_GRAPHS.items()
 }
+OBSERVER_GRAPH = replace(EXECUTOR_GRAPHS["second"], directory="executor-observer")
+EXECUTOR_LINK_SETS = {
+    "legacy-qualification": RETAINED_EXECUTOR_GRAPHS,
+    "k4-node": {"first": RETAINED_EXECUTOR_GRAPHS["first"], "observer": OBSERVER_GRAPH},
+}
+
+
+def executor_graphs(link_set):
+    if link_set is None:
+        return EXECUTOR_GRAPHS
+    try:
+        return EXECUTOR_LINK_SETS[link_set]
+    except KeyError as error:
+        raise ValueError(f"unknown executor link set: {link_set}") from error
+
+
 HISTORICAL = {
     "first": ("75a06735d294f3fc04a4ffff54492d3bf80e4121faa2e2aae64434e5b252db6b",
               "0a84113a26aea6aa3faef82eba2c5fd3164db061082da3fc4497517962d243de"),

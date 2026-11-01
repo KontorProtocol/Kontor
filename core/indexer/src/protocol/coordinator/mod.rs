@@ -1,7 +1,10 @@
+pub(crate) mod certified_decision;
+pub(crate) mod certified_input;
 pub(crate) mod committee;
 pub(crate) mod decision;
 pub(crate) mod genesis;
 pub(crate) mod linked;
+pub(crate) mod manifest;
 pub(crate) mod migration;
 pub(crate) mod selection;
 pub(crate) mod v1;

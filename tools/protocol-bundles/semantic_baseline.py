@@ -23,7 +23,7 @@ def project(observation):
     }
 
 
-def verify(observations, root):
+def verify(observations, root, expected_graphs=('first', 'second')):
     path = root / 'tools/protocol-bundles/semantic-baseline.json'
     expected = json.loads(path.read_text())
     if expected['schema'] != 1:
@@ -39,7 +39,9 @@ def verify(observations, root):
         if not source.resolve().is_relative_to(root.resolve()) or digest(source) != checksum:
             raise ValueError(f'historical semantic fixture changed: {relative}')
     graphs = observations['executors']
-    if [graph['graph'] for graph in graphs] != ['first', 'second']:
+    if tuple(expected_graphs) not in (('first', 'second'), ('first', 'observer')):
+        raise ValueError('unknown historical comparison graph set')
+    if [graph['graph'] for graph in graphs] != list(expected_graphs):
         raise ValueError('historical comparison requires both actual retained graphs')
     for graph in graphs:
         actual = project(graph['observations'])
@@ -50,4 +52,4 @@ def verify(observations, root):
                 raise ValueError(f"historical semantic comparison differs for {graph['graph']}: {section}/{differing}")
     return {'baseline_sha256': digest(path), 'historical_source': expected['historical_source'],
             'historical_base': expected['provenance']['historical_base'],
-            'matching_observations': True, 'graphs': ['first', 'second']}
+            'matching_observations': True, 'graphs': list(expected_graphs)}

@@ -20,7 +20,7 @@ from provenance import fingerprint, locked_packages, runtime_libraries, source_i
 from provenance import tools as toolchain_inputs
 from source_policy import check as check_source_policy
 from symbol_tool import TOOLCHAIN
-from recipes import EXECUTOR_GRAPHS, GRAPHS, graph_root, identity, verify_engine_observations, verify_identity, verify_reservations
+from recipes import EXECUTOR_LINK_SETS, GRAPHS, executor_graphs, graph_root, identity, verify_engine_observations, verify_identity, verify_reservations
 from capabilities import verify as verify_capabilities
 from type_boundary import verify as verify_type_boundary
 
@@ -365,6 +365,7 @@ def node_codegen_objects(path, spec):
 
 
 def build_node(graphs, args, base_env, output):
+    recipes = executor_graphs(args.link_set)
     manifest = ROOT / "protocol-bundles/node/Cargo.toml"
     lock = manifest.with_name("Cargo.lock")
     recipe = tomllib.loads(manifest.read_text())
@@ -384,10 +385,11 @@ def build_node(graphs, args, base_env, output):
     write_json(directory / "metadata.json", data)
     write_json(directory / "source-inputs.json", sources)
     for graph in graphs:
-        verify_identity(ROOT, graph, EXECUTOR_GRAPHS)
+        verify_identity(ROOT, graph, recipes)
         verify_staged_inputs(graph)
     sets, versions = audit_inputs(graphs, directory)
-    spec = {"compiler": env["RUSTC"], "features": features, "source_inputs_sha256": fingerprint(sources),
+    spec = {"compiler": env["RUSTC"], "features": features, "link_set": args.link_set,
+            "source_inputs_sha256": fingerprint(sources),
             "lock_sha256": lock_hash, "root_objects": str(directory / "root-objects.json"),
             "graphs": [{"graph": graph["graph"], "facade": graph["facade"],
                         "facade_sha256": digest(Path(graph["facade"])),
@@ -428,7 +430,7 @@ def build_node(graphs, args, base_env, output):
     if metadata(manifest, args.target, env, args.offline, features) != data:
         raise RuntimeError("node dependency metadata changed during compilation")
     for graph in graphs:
-        verify_identity(ROOT, graph, EXECUTOR_GRAPHS)
+        verify_identity(ROOT, graph, recipes)
         verify_staged_inputs(graph)
     result = {"qualification_command": args.node_qualification, "executable": str(executable), "executable_sha256": digest(executable),
               "source_inputs_sha256": fingerprint(sources), "lock_sha256": lock_hash,
@@ -472,6 +474,8 @@ def main():
     parser.add_argument("--target", choices=sorted(TARGETS))
     parser.add_argument("--profile", choices=("release", "dev"), default="release")
     parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--link-set", choices=sorted(EXECUTOR_LINK_SETS),
+                        help="select an explicit retained executor source configuration")
     parser.add_argument("--jobs", type=int, default=2)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--build-executors", action="store_true",
@@ -488,6 +492,10 @@ def main():
     if args.install_node and not args.build_node:
         parser.error("--install-node requires --build-node")
     production = args.build_executors or args.build_node
+    if args.link_set and not production:
+        parser.error("--link-set requires --build-executors or --build-node")
+    if production and args.link_set is None:
+        args.link_set = "k4-node"
     if not 1 <= args.jobs <= 2:
         parser.error("protocol qualification uses one or two compiler jobs")
     env = dict(os.environ, RUSTUP_TOOLCHAIN=TOOLCHAIN, RUSTC_WRAPPER="", CCACHE_DISABLE="1",
@@ -510,6 +518,8 @@ def main():
     output = args.output.resolve() / args.target / args.profile
     if production:
         output /= "executors"
+        if args.link_set:
+            output /= args.link_set
     output.mkdir(parents=True, exist_ok=True)
     lock = (args.output.resolve() / ".build.lock").open("a")
     try:
@@ -520,7 +530,7 @@ def main():
     if production:
         (output / "executor-build.json").unlink(missing_ok=True)
         (output / "node-build.json").unlink(missing_ok=True)
-    graphs = EXECUTOR_GRAPHS if production else GRAPHS
+    graphs = executor_graphs(args.link_set) if production else GRAPHS
     verify_reservations(ROOT, graphs)
     verify_capabilities(ROOT)
     reports = [build_graph(graph, args, env, output, graphs) for graph in graphs]
@@ -543,13 +553,14 @@ def main():
             verify_identity(ROOT, report, graphs)
             verify_staged_inputs(report)
         write_json(output / "executor-build.json", {"compiler": compiler, "toolchain_inputs": toolchain,
-                   "target": args.target, "profile": args.profile, "graphs": reports,
+                   "target": args.target, "profile": args.profile, "link_set": args.link_set, "graphs": reports,
                    "status": "staged libraries; final node link and execution qualification required"})
         if node is not None:
             if args.install_node:
                 node["installed"] = install_node(node, args.install_node)
             write_json(output / "node-build.json", {"compiler": compiler, "toolchain_inputs": toolchain,
-                       "target": args.target, "profile": args.profile, "graphs": reports, "node": node})
+                       "target": args.target, "profile": args.profile, "link_set": args.link_set,
+                       "graphs": reports, "node": node})
             print(f"Node built at {node['executable']}; execution qualification has not run.", flush=True)
             return
         print(f"Executor libraries staged at {output}; node qualification has not run.", flush=True)

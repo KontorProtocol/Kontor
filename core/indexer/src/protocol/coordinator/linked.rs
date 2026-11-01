@@ -11,12 +11,14 @@ use indexer_types::Block;
 #[cfg(test)]
 use indexer_types::Transaction;
 #[cfg(kontor_linked)]
-use kontor_executor_first::{
-    execution_definition as retained_definition, factory as retained_factory,
+use kontor_executor_first::{execution_definition as first_definition, factory as first_factory};
+#[cfg(all(kontor_linked, kontor_observer))]
+use kontor_executor_observer::{
+    execution_definition as observer_definition, factory as observer_factory, registration_observer,
 };
 use libsql::Connection;
 #[cfg(kontor_linked)]
-use std::panic::AssertUnwindSafe;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use super::committee::materialize_committee;
 use super::genesis::bind_identity;
@@ -35,6 +37,7 @@ use crate::protocol::identity::{ExecutionDefinitionId, ExecutionIdentity};
 #[cfg(any(test, feature = "protocol-qualification"))]
 use crate::protocol::operations::{AddressEnvelope, ViewOutcome};
 use crate::protocol::operations::{GenesisEnvelope, RecognitionCall, SessionOwner};
+use crate::protocol::registration::RegistrationObservation;
 #[cfg(kontor_linked)]
 use crate::protocol::session::{HostError, HostFuture};
 use crate::protocol::session::{SelectionSource, SessionExports};
@@ -59,15 +62,17 @@ pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession
     let origin = runtime.executor_version();
     let network = runtime.network;
     let conn = runtime.storage.conn.clone();
-    let exports = BundleSession::export(runtime);
-    adapt_session(
+    let (exports, registrations) = BundleSession::export_observer(runtime);
+    let mut session = adapt_session(
         origin,
         execution_definition(),
         network,
         conn,
         canonical,
         exports,
-    )
+    );
+    session.operations.registrations = Some(registrations);
+    session
 }
 
 fn adapt_session(
@@ -104,6 +109,7 @@ fn adapt_session(
         view,
         committee,
         migration,
+        registrations: None,
     };
     let make_root = Arc::new(
         move |selection: ExecutionSelection, adapter: OwnerAdapter| {
@@ -196,17 +202,81 @@ pub(crate) fn session_factory(
     network: Network,
     view_gas_limit: Option<u64>,
 ) -> Result<SessionFactory> {
-    if retained_definition() != REFERENCE {
+    #[cfg(kontor_observer)]
+    let reference = observer_definition();
+    #[cfg(not(kontor_observer))]
+    let reference = first_definition();
+    if reference != REFERENCE {
         return Err(anyhow!(
             "linked executor does not match its registered definition"
         ));
     }
-    retained_session_factory(
-        network,
-        view_gas_limit,
-        retained_factory,
-        retained_definition(),
-    )
+    session_factory_for_definition(network, execution_definition()?, view_gas_limit)
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("execution definition {0:?} is not linked for production")]
+pub(crate) struct UnavailableExecutionDefinition(pub(crate) ExecutionDefinitionId);
+
+pub(crate) fn session_factory_for_definition(
+    network: Network,
+    definition: ExecutionDefinitionId,
+    view_gas_limit: Option<u64>,
+) -> Result<SessionFactory> {
+    #[cfg(not(kontor_linked))]
+    if definition == execution_definition()? {
+        return session_factory(network, view_gas_limit);
+    }
+    #[cfg(kontor_linked)]
+    {
+        let first_id = DefinitionReference::decode(first_definition())?.id()?;
+        #[cfg(kontor_observer)]
+        {
+            let observer_id = DefinitionReference::decode(observer_definition())?.id()?;
+            if first_id == observer_id {
+                return Err(anyhow!(
+                    "distinct executor factories claim the same definition"
+                ));
+            }
+            if definition == observer_id {
+                return Ok(with_registration_observer(retained_session_factory(
+                    network,
+                    view_gas_limit,
+                    observer_factory,
+                    observer_definition(),
+                )?));
+            }
+        }
+        if definition == first_id {
+            return retained_session_factory(
+                network,
+                view_gas_limit,
+                first_factory,
+                first_definition(),
+            );
+        }
+    }
+    // The historical second graph is qualification-only. Merely linking a
+    // library never grants it a production mapping, and unknown IDs never fall
+    // back to the node's default executor.
+    Err(UnavailableExecutionDefinition(definition).into())
+}
+
+#[cfg(all(kontor_linked, kontor_observer))]
+pub(crate) fn with_registration_observer(factory: SessionFactory) -> SessionFactory {
+    Arc::new(move |conn| {
+        let factory = factory.clone();
+        Box::pin(async move {
+            let mut session = factory(conn).await?;
+            let observer = catch_unwind(AssertUnwindSafe(|| {
+                registration_observer(session.owner.clone())
+            }))
+            .map_err(|_| HostFailure::from((1, "registration export panicked".into())))?
+            .map_err(HostFailure::from)?;
+            session.operations.registrations = Some(observer);
+            Ok(session)
+        })
+    })
 }
 
 #[cfg(kontor_linked)]
@@ -223,7 +293,7 @@ pub(crate) fn retained_session_factory(
     let reference = DefinitionReference::decode(definition)?;
     let storage_contract = StorageContract::resolve(&reference)?;
     let definition = reference.id()?;
-    let factory = std::panic::catch_unwind(constructor)
+    let factory = catch_unwind(constructor)
         .map_err(|_| HostFailure::from((1, "executor factory export panicked".into())))?
         .map_err(HostFailure::from)?;
     Ok(Arc::new(move |conn| {
@@ -262,7 +332,7 @@ pub(crate) fn retained_session_factory_with_callbacks(
     let reference = DefinitionReference::decode(definition)?;
     let storage_contract = StorageContract::resolve(&reference)?;
     let definition = reference.id()?;
-    let factory = std::panic::catch_unwind(constructor)
+    let factory = catch_unwind(constructor)
         .map_err(|_| HostFailure::from((1, "executor factory export panicked".into())))?
         .map_err(HostFailure::from)?;
     Ok(Arc::new(move |conn| {
@@ -682,6 +752,31 @@ pub(crate) async fn derive_committee(
     materialize_committee(members)
 }
 
+pub(crate) async fn observe_registrations(
+    session: &LinkedSession,
+    selection: &ExecutionSelection,
+    network: Network,
+    watched: Vec<String>,
+) -> Result<RegistrationObservation> {
+    selection
+        .verify_committee(&session.conn, network, session.origin())
+        .await?;
+    let observer = session
+        .executor
+        .operations
+        .registrations
+        .as_ref()
+        .ok_or_else(|| anyhow!("selected executor does not expose registration observation"))?;
+    observer(
+        session.executor.owner.clone(),
+        selection.envelope(),
+        watched,
+    )
+    .await
+    .map_err(HostFailure::from)
+    .map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,6 +795,22 @@ mod tests {
     use std::time::Duration;
     use tokio::sync::Notify;
     use tokio::time::timeout;
+
+    #[test]
+    fn unavailable_definition_has_no_default_factory_fallback() {
+        let definition = ExecutionDefinitionId([0xff; 32]);
+        for limit in [None, Some(0)] {
+            let result = session_factory_for_definition(Network::Regtest, definition, limit);
+            let error = result.err().expect("unknown definition acquired a factory");
+            assert_eq!(
+                error
+                    .downcast_ref::<UnavailableExecutionDefinition>()
+                    .unwrap()
+                    .0,
+                definition
+            );
+        }
+    }
 
     async fn lifecycle_state(conn: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
         let mut state = Vec::new();

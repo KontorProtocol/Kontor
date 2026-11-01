@@ -1,3 +1,5 @@
+#[cfg(kontor_linked)]
+use super::{ALTERNATE_GRAPH, alternate_executor};
 use std::fs;
 use std::path::Path;
 #[cfg(not(kontor_linked))]
@@ -74,11 +76,11 @@ fn qualification_factory(name: &str) -> Result<SessionFactory> {
                 kontor_executor_first::qualification_factory,
                 kontor_executor_first::execution_definition(),
             ),
-            "second" => retained_session_factory(
+            ALTERNATE_GRAPH => retained_session_factory(
                 NETWORK,
                 None,
-                kontor_executor_second::qualification_factory,
-                kontor_executor_second::execution_definition(),
+                alternate_executor::qualification_factory,
+                alternate_executor::execution_definition(),
             ),
             _ => bail!("unknown migration qualification graph"),
         }

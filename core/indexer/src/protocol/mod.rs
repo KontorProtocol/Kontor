@@ -11,6 +11,7 @@ pub(crate) mod migration_input;
 pub(crate) mod migration_work;
 pub(crate) mod native_bootstrap;
 pub(crate) mod operations;
+pub(crate) mod registration;
 pub(crate) mod session;
 pub(crate) mod storage_aux;
 pub(crate) mod storage_callbacks;
