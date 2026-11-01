@@ -2766,3 +2766,36 @@ The same linked test executable also passed all 12 durable-signer tests locally,
 including conflicting retries after reopen, fencing races and failed writes.
 This reused the compiled binary without another Cargo build; its hash and raw log
 are recorded alongside the adapter result.
+
+### K5 node control-thread checkpoint
+
+The node now constructs the selected non-Send engine on a dedicated control
+thread. Bounded node-owned event and command queues carry typed messages and
+reply tokens; bundle Tokio and Malachite types remain private. The node can
+request stop and revoke signing independently of that thread. Node async tasks
+poll for thread completion without blocking on a running thread's join.
+
+The engine slot is released only after an explicit successful join. A timeout
+retains its handle and slot. An abandoned handle requests stop, but leaves the
+slot unavailable; failed startup or teardown also fails closed. The worker
+retains and drains the actual engine. Pending commands are rejected before
+blocking teardown, returning publication buffers where non-publication is known.
+A lost acknowledgement after admission is represented as unconfirmed, rather
+than incorrectly reported as a definitely unsent publication. Readiness expiry
+is enforced even when the event queue is full.
+
+Twelve focused managed-node tests passed in the actual node test executable
+linked to both independently staged consensus bundles. Four new tests cover
+ordinary control-thread startup/replies/listener discovery/stop for both bundles,
+a blocked real engine startup while node signing is independently revoked,
+timeout retention and rejected competing startup, failed and abandoned owners,
+and unacknowledged Ready expiry. These tests run on the node's single-threaded
+async test runtime, so the blocked control thread does not occupy that runtime.
+The existing startup and adapter tests also passed. Evidence is
+`.build-cache/k5-control-test.json` and `.build-cache/k5-control-test.log`.
+
+This is still component integration. The reactor must adopt these events/replies,
+reject stale generations before applying work, persist the selected managed
+baseline/generation, and use the stop/revoke/join sequence for live handoff. The
+production builder and K6 control path remain unfinished. No new CI or independent
+microreview was requested; the grouped PR still needs its consolidated review.

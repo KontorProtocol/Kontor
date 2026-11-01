@@ -488,6 +488,7 @@ mod tests {
             let part = ProposalPartBytes(vec![8, 0, 255, 1]);
             let original = part.0.as_ptr();
             let returned = match publication(outcome, part).unwrap_err() {
+                PublishError::Unconfirmed => panic!("direct publication always returns an outcome"),
                 PublishError::Full(part)
                 | PublishError::Closed(part)
                 | PublishError::Engine(_, part) => part,

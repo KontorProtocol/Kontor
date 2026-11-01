@@ -176,6 +176,7 @@ pub(crate) enum Publish {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PublishError {
+    Unconfirmed,
     Full(ProposalPartBytes),
     Closed(ProposalPartBytes),
     Engine(EngineError, ProposalPartBytes),
