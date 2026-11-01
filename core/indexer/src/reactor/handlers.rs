@@ -12,7 +12,9 @@ use malachitebft_core_types::{ExtendedCommitCertificate, Round, Validity, VoteEx
 use tracing::{info, warn};
 
 use crate::consensus::codec::ProtobufCodec;
-use crate::consensus::{Address, Ctx, Height, ProposalPart, ProposalParts, Value, ValueId};
+use crate::consensus::{
+    Address, Ctx, Height, ProposalPart, ProposalParts, ReassemblySaturated, Value, ValueId,
+};
 use crate::database::certified_history::branch;
 
 use super::Reactor;
@@ -94,8 +96,9 @@ impl<E: Executor> Reactor<E> {
         // Buffer the part; act only once the full stream (Init + Data + Fin) is
         // reassembled. A lone Data part — the shortcut the old code trusted —
         // can no longer claim the round.
-        let Some(parts) = self.consensus.part_streams.insert(from, part) else {
-            return reply_none(reply);
+        let parts = match self.consensus.part_streams.insert(from, part) {
+            Ok(Some(parts)) => parts,
+            Ok(None) | Err(ReassemblySaturated) => return reply_none(reply),
         };
 
         self.accept_proposal_parts(parts, reply).await

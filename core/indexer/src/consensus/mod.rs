@@ -23,7 +23,7 @@ pub use address::Address;
 pub use context::Ctx;
 pub use genesis::Genesis;
 pub use height::Height;
-pub use part_streams::{PartStreamsMap, ProposalParts};
+pub use part_streams::{PartStreamsMap, ProposalParts, ReassemblySaturated};
 pub use proposal::Proposal;
 pub use proposal_part::{ProposalData, ProposalFin, ProposalInit, ProposalPart};
 pub use validator_set::{Validator, ValidatorSet};
