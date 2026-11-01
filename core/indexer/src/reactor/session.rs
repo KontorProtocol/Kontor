@@ -2,7 +2,7 @@ use std::future::Future;
 
 use anyhow::{Result, anyhow, bail, ensure};
 
-use super::Reactor;
+use super::execution::ExecutionContext;
 use super::executor::Executor;
 use crate::database::canonical_history::{self, HistoryState};
 use crate::database::queries::prune_contract_state;
@@ -27,7 +27,7 @@ use crate::runtime::pool::LinkedSession;
 #[cfg(test)]
 use tokio::sync::MutexGuard;
 
-impl<E: Executor> Reactor<E> {
+impl<E: Executor> ExecutionContext<E> {
     pub(super) fn record_application(
         &self,
         storage_height: u64,

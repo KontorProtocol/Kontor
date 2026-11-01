@@ -7,6 +7,7 @@ pub(crate) mod certified;
 mod confirmation_position_tests;
 pub mod consensus_state;
 pub mod engine;
+mod execution;
 pub mod executor;
 mod handlers;
 #[cfg(test)]
@@ -70,7 +71,7 @@ use crate::metrics::PENDING_BLOCKS;
 use crate::protocol::coordinator::bootstrap;
 #[cfg(test)]
 use crate::protocol::coordinator::committee::build_validator_set;
-use crate::protocol::coordinator::linked::{self, TransactionRecognizer};
+use crate::protocol::coordinator::linked;
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
 };
@@ -88,15 +89,13 @@ use crate::{
     consensus::Genesis,
     database::{
         self,
-        queries::{
-            PRUNE_WATERMARK_KEY, get_meta_u64, insert_block, select_block_at_height,
-            select_block_latest,
-        },
+        queries::{insert_block, select_block_at_height, select_block_latest},
     },
     runtime::GenesisParameters,
 };
 use libsql::Connection;
 
+use execution::ExecutionContext;
 use executor::Executor;
 use mempool::MempoolPreparation;
 
@@ -137,12 +136,8 @@ pub struct PruneConfig {
 }
 
 pub(crate) struct Reactor<E: Executor> {
-    executor: E,
-    recognizer: TransactionRecognizer,
-    session: LinkedSession,
-    network: Network,
+    execution: ExecutionContext<E>,
     node_label: String,
-    owner_service: OwnerService,
     shutdown: ShutdownSignal,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
@@ -151,13 +146,6 @@ pub(crate) struct Reactor<E: Executor> {
     simulate_rx: Option<Receiver<Simulation>>,
     consensus: consensus_state::ConsensusState,
 
-    prune: PruneConfig,
-    /// In-memory mirror of the persisted prune watermark `W_prev` (node_meta) —
-    /// the highest height already collapsed to one row per path. Loaded at startup;
-    /// advanced (and re-persisted) by each successful prune. See `project_state_pruning`.
-    prune_watermark: u64,
-    last_height: u64,
-    last_hash: Option<BlockHash>,
     /// Shared with the API (`Env.consensus_listen_addr`); written on the first
     /// `Listening` (see `handle_consensus_msg`'s `ConsensusReady` arm).
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
@@ -244,32 +232,52 @@ impl<E: Executor> Reactor<E> {
         last_hash: Option<BlockHash>,
         consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     ) -> Self {
+        let execution = ExecutionContext::new(
+            executor,
+            session,
+            network,
+            owner_service,
+            consensus.protocol_context,
+            prune,
+            last_height,
+            last_hash,
+        );
+        Self::from_execution(
+            execution,
+            block_rx,
+            mempool_rx,
+            shutdown,
+            ready_tx,
+            event_tx,
+            simulate_rx,
+            consensus,
+            consensus_listen_addr,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_execution(
+        execution: ExecutionContext<E>,
+        block_rx: Receiver<BlockEvent>,
+        mempool_rx: Receiver<MempoolEvent>,
+        shutdown: ShutdownSignal,
+        ready_tx: Option<oneshot::Sender<bool>>,
+        event_tx: Option<mpsc::Sender<Event>>,
+        simulate_rx: Option<Receiver<Simulation>>,
+        consensus: consensus_state::ConsensusState,
+        consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
+    ) -> Self {
         let node_label = consensus
             .validator_index
             .map(|i| format!("node_{i}"))
             .unwrap_or_else(|| "follower".to_string());
-        let recognizer = TransactionRecognizer::new(
-            session.origin(),
-            network,
-            session.executor.operations.recognize.clone(),
-        );
         Self {
-            executor,
-            recognizer,
-            session,
-            network,
+            execution,
             node_label,
-            owner_service,
             shutdown,
             block_rx,
             mempool_rx,
             simulate_rx,
-            prune,
-            // Loaded from node_meta in `run()` when pruning is enabled; 0 here means
-            // "nothing collapsed yet" (safe — the first prune's band (0, W] catches up).
-            prune_watermark: 0,
-            last_height,
-            last_hash,
             ready_tx,
             event_tx,
             consensus,
@@ -286,7 +294,7 @@ impl<E: Executor> Reactor<E> {
         position: ApplicationPosition,
     ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
         let conn = self.db_conn();
-        let network = self.network;
+        let network = self.execution.network;
         async move { select_legacy_p1(&conn, network, position).await }
     }
 
@@ -294,14 +302,14 @@ impl<E: Executor> Reactor<E> {
         &self,
     ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
         self.select_executor(ApplicationPosition::Preparation {
-            anchor_height: self.last_height,
-            anchor_hash: self.last_hash,
+            anchor_height: self.execution.last_height,
+            anchor_hash: self.execution.last_hash,
         })
     }
 
     // Ordering writes and executor callbacks share the unit's physical transaction.
     fn db_conn(&self) -> libsql::Connection {
-        self.session.conn.clone()
+        self.execution.session.conn.clone()
     }
 
     async fn send_proposal_parts(
@@ -502,7 +510,7 @@ impl<E: Executor> Reactor<E> {
                             self.consensus.mempool.stage_snapshot(&transactions);
                             let selection = self.preparation_selection().await?;
                             self.mempool_preparation = Some(MempoolPreparation {
-                                result: self.executor.parse_mempool(&self.recognizer, &selection, transactions), selection,
+                                result: self.execution.executor.parse_mempool(&self.execution.recognizer, &selection, transactions), selection,
                             });
                             self.consensus.mempool_fee_index.replace(fees, mempool_min_fee_sat_per_vb);
                             self.consensus.mempool_fee_index.recompute();
@@ -515,7 +523,7 @@ impl<E: Executor> Reactor<E> {
                             self.consensus.mempool.stage(&tx);
                             let selection = self.preparation_selection().await?;
                             self.mempool_preparation = Some(MempoolPreparation {
-                                result: self.executor.parse_mempool(&self.recognizer, &selection, vec![tx]), selection,
+                                result: self.execution.executor.parse_mempool(&self.execution.recognizer, &selection, vec![tx]), selection,
                             });
                             self.consensus.mempool_fee_index.insert(txid, fee);
                         },
@@ -537,7 +545,7 @@ impl<E: Executor> Reactor<E> {
                     let selection = self.preparation_selection().await?;
                     if !previous.selection.same_recognition_rules(&selection) {
                         self.mempool_preparation = Some(MempoolPreparation {
-                            result: self.executor.parse_mempool(&self.recognizer, &selection, self.consensus.mempool.raw_inputs()),
+                            result: self.execution.executor.parse_mempool(&self.execution.recognizer, &selection, self.consensus.mempool.raw_inputs()),
                             selection,
                         });
                         continue;
@@ -667,7 +675,7 @@ impl<E: Executor> Reactor<E> {
     pub(crate) async fn run(&mut self) -> Result<()> {
         // A startup mutation is part of the reactor's owned durable unit. It
         // must finish before shutdown can release the writer or runtime.
-        self.maintain_executor(None).await?;
+        self.execution.maintain_executor(None).await?;
         self.advance()
             .await
             .context("advance failed during startup finality settle")?;
@@ -1032,9 +1040,17 @@ pub fn run(
                 .await
                 .context("create_runtime_executor failed")?;
 
+                let context = certified_history::frontier(&session.conn).await?.context
+                    .context("startup lacks certified protocol context")?;
+                let mut execution = ExecutionContext::new(exec, session, network,
+                    owner_service.clone(), context, prune, last_height, last_hash);
+                if !execution.recover(&shutdown).await? {
+                    return Ok(());
+                }
+
                 // Existing databases need a one-time conversion before pruning.
                 if prune.enabled {
-                    database::init::ensure_incremental_auto_vacuum(&session.conn)
+                    database::init::ensure_incremental_auto_vacuum(&execution.session.conn)
                         .await
                         .context("ensure_incremental_auto_vacuum failed")?;
                 }
@@ -1110,39 +1126,17 @@ pub fn run(
                 // placeholder).
                 fee_index.recompute();
 
-                let selection = select_legacy_p1(&session.conn, network,
-                    ApplicationPosition::Preparation { anchor_height: last_height, anchor_hash: last_hash }).await?;
-                let recognizer = TransactionRecognizer::new(session.origin(), network, session.executor.operations.recognize.clone());
-                let initial_mempool = exec.parse_mempool(&recognizer, &selection, initial_raw_txs).await?;
-                let mut consensus = start_linked_consensus(engine_config, &session, &owner_service, network,
-                    observation_channels, timeouts, last_height, fee_index).await.context("start_consensus failed")?;
-
+                let selection = execution.select_executor(ApplicationPosition::Preparation {
+                    anchor_height: execution.last_height, anchor_hash: execution.last_hash,
+                }).await?;
+                let initial_mempool = execution.executor.parse_mempool(&execution.recognizer,
+                    &selection, initial_raw_txs).await?;
+                let mut consensus = start_linked_consensus(engine_config, &execution.session,
+                    &owner_service, network, observation_channels, timeouts, execution.last_height,
+                    fee_index).await.context("start_consensus failed")?;
                 consensus.mempool.replace(initial_mempool);
-
-                let mut reactor = Reactor::from_session(
-                    exec,
-                    session,
-                    network,
-                    owner_service,
-                    block_rx,
-                    mempool_rx,
-                    shutdown.clone(),
-                    ready_tx,
-                    event_tx,
-                    simulate_rx,
-                    consensus,
-                    prune,
-                    last_height,
-                    last_hash,
-                    consensus_listen_addr,
-                );
-
-                // Disabling pruning or increasing retention does not restore
-                // deleted history. Rollback must still respect this boundary.
-                reactor.prune_watermark =
-                    get_meta_u64(&reactor.db_conn(), PRUNE_WATERMARK_KEY, 0)
-                        .await
-                        .context("loading prune watermark failed")?;
+                let mut reactor = Reactor::from_execution(execution, block_rx, mempool_rx,
+                    shutdown.clone(), ready_tx, event_tx, simulate_rx, consensus, consensus_listen_addr);
 
                 reactor.run().await
             }

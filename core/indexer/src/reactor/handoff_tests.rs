@@ -167,7 +167,7 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
                 next.try_recv(),
                 Err(oneshot::error::TryRecvError::Empty)
             ));
-            assert_eq!(reactor.last_height, block_height - 1);
+            assert_eq!(reactor.execution.last_height, block_height - 1);
             reactor
                 .process_block_event(BlockEvent::BlockInsert {
                     target_height: block_height,
@@ -188,7 +188,7 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
                 "must not authorize a new consensus height"
             );
             assert!(
-                staking::get_active_set(&mut *reactor.test_runtime().await)
+                staking::get_active_set(&mut *reactor.execution.test_runtime().await)
                     .await?
                     .is_empty()
             );
@@ -204,7 +204,7 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
                 if exiting { 100 } else { 101 }
             );
         }
-        assert_eq!(reactor.last_height, block_height);
+        assert_eq!(reactor.execution.last_height, block_height);
         assert_eq!(
             select_block_latest(&reactor.db_conn())
                 .await?

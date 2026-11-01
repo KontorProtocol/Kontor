@@ -218,8 +218,8 @@ impl<'a> TimedWork<'a> {
         let last_consensus = select_latest_consensus_height(&reactor.db_conn())
             .await?
             .context("timed fixture lacks anchor decision")?;
-        let height = reactor.last_height;
-        let tip = (height, reactor.last_hash);
+        let height = reactor.execution.last_height;
+        let tip = (height, reactor.execution.last_hash);
         Ok(Self {
             reactor,
             observer_cache: ComponentCache::new(),
@@ -267,7 +267,7 @@ impl<'a> TimedWork<'a> {
     }
 
     async fn check_tracking(&self, tracked: &[TrackedBatch]) -> Result<()> {
-        let height = self.reactor.last_height;
+        let height = self.reactor.execution.last_height;
         let expected: Vec<_> = tracked
             .iter()
             .filter(|batch| batch.anchor + FINALITY_WINDOW > height)
@@ -339,13 +339,13 @@ impl<'a> TimedWork<'a> {
         }
         self.plan.recipes[block]
             .check_slice(
-                &mut *self.reactor.test_runtime().await,
+                &mut *self.reactor.execution.test_runtime().await,
                 &all,
                 &roots,
                 &ExecutionSlice {
                     operations: range,
                     layout: self.plan.layout,
-                    height: self.reactor.last_height,
+                    height: self.reactor.execution.last_height,
                     confirmed,
                 },
             )
@@ -376,16 +376,16 @@ impl Work for TimedWork<'_> {
                 transactions,
             } => {
                 ensure!(
-                    *anchor_height == self.reactor.last_height
-                        && self.reactor.last_hash == Some(self.plan.blocks[*block].block.prev_hash)
+                    *anchor_height == self.reactor.execution.last_height
+                        && self.reactor.execution.last_hash == Some(self.plan.blocks[*block].block.prev_hash)
                 );
                 self.range(*block, transactions)?;
             }
             Action::Block { block } => {
                 let input = &self.plan.blocks[*block];
                 ensure!(
-                    input.block.height == self.reactor.last_height + 1
-                        && self.reactor.last_hash == Some(input.block.prev_hash)
+                    input.block.height == self.reactor.execution.last_height + 1
+                        && self.reactor.execution.last_hash == Some(input.block.prev_hash)
                 );
                 self.range(*block, &self.plan.schedule.blocks[*block].fresh)?;
                 self.pruning = Some(
@@ -403,25 +403,25 @@ impl Work for TimedWork<'_> {
                 operations,
             } => {
                 ensure!(
-                    *anchor_height == self.reactor.last_height
+                    *anchor_height == self.reactor.execution.last_height
                         && *request == self.api_results.len()
                 );
                 ensure!(self.plan.api.instructions(*request)?.len() == *operations);
-                ensure!(!self.reactor.test_runtime().await.simulating && self.simulation.is_none());
+                ensure!(!self.reactor.execution.test_runtime().await.simulating && self.simulation.is_none());
             }
         }
-        self.storage_height = self.reactor.test_runtime().await.storage.height;
-        self.transaction_context = self.reactor.test_runtime().await.storage.tx_context.clone();
-        self.previous_output = self.reactor.test_runtime().await.previous_output;
-        self.op_return_data = self.reactor.test_runtime().await.op_return_data.clone();
+        self.storage_height = self.reactor.execution.test_runtime().await.storage.height;
+        self.transaction_context = self.reactor.execution.test_runtime().await.storage.tx_context.clone();
+        self.previous_output = self.reactor.execution.test_runtime().await.previous_output;
+        self.op_return_data = self.reactor.execution.test_runtime().await.op_return_data.clone();
         self.operation_counters = {
-            let runtime = self.reactor.test_runtime().await;
+            let runtime = self.reactor.execution.test_runtime().await;
             (
                 runtime.id_generation_counter.get().await,
                 runtime.result_id_counter.get().await,
             )
         };
-        self.tip = (self.reactor.last_height, self.reactor.last_hash);
+        self.tip = (self.reactor.execution.last_height, self.reactor.execution.last_hash);
         Checkpoint::capture(
             self.directory,
             &database_projection(&self.reactor.db_conn()).await?,
@@ -484,15 +484,14 @@ impl Work for TimedWork<'_> {
         // cache before its first canonical call. Keep prior execution entries,
         // and restore that cache even if an oracle returns an error.
         let execution_cache = mem::replace(
-            &mut self.reactor.test_runtime().await.component_cache,
+            &mut self.reactor.execution.test_runtime().await.component_cache,
             self.observer_cache.clone(),
         );
         let cache_before = execution_cache.workload_metrics().await;
         let result = self.check_observed(event).await;
-        self.reactor.test_runtime().await.component_cache = execution_cache;
+        self.reactor.execution.test_runtime().await.component_cache = execution_cache;
         ensure!(
-            self.reactor
-                .test_runtime()
+            self.reactor.execution.test_runtime()
                 .await
                 .component_cache
                 .workload_metrics()
@@ -561,7 +560,7 @@ impl TimedWork<'_> {
                 )?;
                 files
                     .check(
-                        &mut *self.reactor.test_runtime().await,
+                        &mut *self.reactor.execution.test_runtime().await,
                         self.plan.recipes[*block].files()?,
                     )
                     .await?;
@@ -578,7 +577,7 @@ impl TimedWork<'_> {
             Action::Block { block } => {
                 let input = &self.plan.blocks[*block];
                 ensure!(
-                    (self.reactor.last_height, self.reactor.last_hash)
+                    (self.reactor.execution.last_height, self.reactor.execution.last_hash)
                         == (input.block.height, Some(input.block.hash))
                 );
                 let range = self.range(*block, &self.plan.schedule.blocks[*block].fresh)?;
@@ -634,7 +633,7 @@ impl TimedWork<'_> {
                 )?;
                 files
                     .check(
-                        &mut *self.reactor.test_runtime().await,
+                        &mut *self.reactor.execution.test_runtime().await,
                         self.plan.recipes[*block].files()?,
                     )
                     .await?;
@@ -664,9 +663,9 @@ impl TimedWork<'_> {
                 )?;
                 after.check(self.before.as_ref().context("missing API prestate")?)?;
                 {
-                    let runtime = self.reactor.test_runtime().await;
+                    let runtime = self.reactor.execution.test_runtime().await;
                     ensure!(
-                        (self.reactor.last_height, self.reactor.last_hash) == self.tip
+                        (self.reactor.execution.last_height, self.reactor.execution.last_hash) == self.tip
                             && !runtime.simulating
                             && runtime.storage.height == self.storage_height
                             && runtime.storage.tx_context == self.transaction_context

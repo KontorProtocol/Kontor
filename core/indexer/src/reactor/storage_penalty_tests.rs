@@ -131,7 +131,7 @@ async fn block_penalties_converge_and_survive_rollback_and_runtime_reopen() -> R
         at_height(&mut runtime, 2015).await?;
         let mut reactor = reactor(runtime, &dir).await?;
         block(&mut reactor, 2016).await?;
-        let mut runtime_guard = reactor.test_runtime().await;
+        let mut runtime_guard = reactor.execution.test_runtime().await;
         let rt = &mut *runtime_guard;
         let paid = sub_decimal(
             staking::get_staking_info(rt).await?.total_stake,
@@ -177,7 +177,7 @@ async fn block_penalties_converge_and_survive_rollback_and_runtime_reopen() -> R
 
         drop(runtime_guard);
         reactor.rollback(2015).await?;
-        let mut runtime_guard = reactor.test_runtime().await;
+        let mut runtime_guard = reactor.execution.test_runtime().await;
         let rt = &mut *runtime_guard;
         assert_eq!(
             staking::get_stake(rt, &id.to_string())
@@ -212,7 +212,7 @@ async fn block_penalties_converge_and_survive_rollback_and_runtime_reopen() -> R
 
         // A fresh runtime must derive settlement/cleanup solely from persisted state.
         let replacement = {
-            let rt = reactor.test_runtime().await;
+            let rt = reactor.execution.test_runtime().await;
             Runtime::new_with(
                 rt.engine.clone(),
                 Runtime::new_linkers(&rt.engine)?,
@@ -224,37 +224,37 @@ async fn block_penalties_converge_and_survive_rollback_and_runtime_reopen() -> R
             )
             .await?
         };
-        reactor.replace_test_runtime(replacement);
-        let supply_before_claim = token::total_supply(&mut *reactor.test_runtime().await).await?;
+        reactor.execution.replace_test_runtime(replacement);
+        let supply_before_claim = token::total_supply(&mut *reactor.execution.test_runtime().await).await?;
         let burner_before_claim =
-            token::balance(&mut *reactor.test_runtime().await, HolderRef::Burner)
+            token::balance(&mut *reactor.execution.test_runtime().await, HolderRef::Burner)
                 .await?
                 .unwrap_or_default();
         assert_eq!(
-            filestorage::claim_rewards(&mut *reactor.test_runtime().await, &fixture.hosts[0].1)
+            filestorage::claim_rewards(&mut *reactor.execution.test_runtime().await, &fixture.hosts[0].1)
                 .await??,
             earned_before_exhaustion
         );
         let fees = sub_decimal(
-            token::balance(&mut *reactor.test_runtime().await, HolderRef::Burner)
+            token::balance(&mut *reactor.execution.test_runtime().await, HolderRef::Burner)
                 .await?
                 .unwrap_or_default(),
             burner_before_claim,
         )?;
         assert_eq!(
-            token::total_supply(&mut *reactor.test_runtime().await).await?,
+            token::total_supply(&mut *reactor.execution.test_runtime().await).await?,
             sub_decimal(supply_before_claim, fees)?
         );
         let topup = Decimal::from("10");
         staking::add_stake(
-            &mut *reactor.test_runtime().await,
+            &mut *reactor.execution.test_runtime().await,
             &fixture.hosts[0].1,
             topup,
         )
         .await??;
         block(&mut reactor, 2017).await?;
         assert_eq!(
-            staking::get_stake(&mut *reactor.test_runtime().await, &id.to_string())
+            staking::get_stake(&mut *reactor.execution.test_runtime().await, &id.to_string())
                 .await?
                 .unwrap()
                 .stake,
@@ -285,8 +285,8 @@ async fn exhausting_last_validator_commits_the_penalty_before_halting() -> Resul
     let mut reactor = reactor(runtime, &dir).await?;
     let error = block(&mut reactor, 2016).await.unwrap_err();
     assert!(format!("{error:#}").contains("validator set is empty"));
-    assert_eq!(reactor.last_height, 2016);
-    let mut runtime_guard = reactor.test_runtime().await;
+    assert_eq!(reactor.execution.last_height, 2016);
+    let mut runtime_guard = reactor.execution.test_runtime().await;
     let rt = &mut *runtime_guard;
     assert!(staking::get_active_set(rt).await?.is_empty());
     // This block's ordering reward was credited and then burned with the bond.
@@ -348,8 +348,8 @@ async fn fractional_last_validator_leaves_consensus_but_keeps_storage_obligation
     let mut reactor = reactor(runtime, &dir).await?;
     let error = block(&mut reactor, 2016).await.unwrap_err();
     assert!(format!("{error:#}").contains("validator set is empty"));
-    assert_eq!(reactor.last_height, 2016);
-    let mut runtime_guard = reactor.test_runtime().await;
+    assert_eq!(reactor.execution.last_height, 2016);
+    let mut runtime_guard = reactor.execution.test_runtime().await;
     let rt = &mut *runtime_guard;
     let remaining = staking::get_stake(rt, &node.to_string())
         .await?
@@ -375,13 +375,13 @@ async fn fractional_last_validator_leaves_consensus_but_keeps_storage_obligation
     drop(runtime_guard);
     reactor.rollback(2015).await?;
     assert_eq!(
-        staking::get_staking_info(&mut *reactor.test_runtime().await)
+        staking::get_staking_info(&mut *reactor.execution.test_runtime().await)
             .await?
             .total_stake,
         bonded
     );
     assert_eq!(
-        staking::get_active_set(&mut *reactor.test_runtime().await)
+        staking::get_active_set(&mut *reactor.execution.test_runtime().await)
             .await?
             .len(),
         1

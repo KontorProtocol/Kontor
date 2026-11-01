@@ -616,3 +616,50 @@ rollback, replay and planning, recover without an engine, and compare state,
 lineage, cursor and committee with uninterrupted execution. Include a nontrivial
 starting height and persisted pruning watermark. Keeping the existing Executor
 trait temporarily is acceptable if recovery cannot invoke its admission/RPC methods.
+
+### Shared execution context and pre-engine recovery checkpoint
+
+The Reactor now owns one `ExecutionContext` containing its session, executor,
+recognizer, protocol/network context, applied position, pruning bounds and owner
+service. Owned block/lifecycle, batch and rollback handlers execute on this context.
+The shared closure step consumes retained inputs and published work, returning only
+after a settled planning page or application stage. Live proposal-cache cleanup,
+mempool suppression, metrics and notifications consume committed results outside
+canonical execution. Optional observation failures cannot make committed work look
+retryable. The rollback tip/hash read now occurs inside the owned transaction.
+
+Production startup invokes recovery after native initialization and before initial
+mempool preparation or Malachite startup. Recovery loads the persisted prune watermark
+regardless of current pruning configuration, validates saved stages, reconstructs
+the actual applied position, and resumes unfinished work. Native block zero maps to
+scheduling position `(H0 - 1, None)`. Shutdown is honored between settled steps;
+unfinished closure work cannot reach engine startup. Completed state and historical
+successor authority are verified before passing the same execution context to the
+live Reactor. Initial mempool recognition uses the recovered position.
+
+Focused qualification now closes fifteen decisions. Before initial engine creation
+it checks the nontrivial H0=100 baseline position. After stopping the engine it
+certifies a replacement at 107, closes/reopens executor sessions, exercises shutdown,
+rejects rollback below a persisted prune watermark even with pruning disabled,
+resumes after rollback to 106, interrupts block/lifecycle stage persistence and
+finality-plan publication, and completes recovery using an unreachable Bitcoin RPC
+endpoint. It checks canonical lineage/cursor, ownership settlement, restored tip,
+next committee and idempotent completed restart. The existing automatic finality
+replay and live callback tests run through the same shared step driver.
+
+`cargo test --locked -p indexer --features protocol-qualification --test certified_callbacks -- --nocapture`
+passed both tests in 87.91 seconds after a 41.05-second debug build. Log:
+`.build-cache/k4-recovery-test3.log`; SHA-256
+`d875160300c64ceca2ef9523662b67493a4f5e671518c36199bdadc227a8ecd5`.
+Unreleased coordinator definition:
+`f38d0deeee0199208889046c695bf02e1e2eab10d2c110305e8b78f7da657016`.
+Two preceding compile attempts exposed fixture-only errors (a missing `Ok(())` and
+a private draft-field assertion); both were corrected before this passing run.
+
+This is actual shared-handler and engine-free recovery evidence, not full process
+restart or cluster acceptance. Remaining recovery coverage includes interruption
+inside multi-page planning and batch replay with reopened executor sessions and
+comparison against uninterrupted execution. Broader replay-policy cases, legacy
+unit-fixture adaptation, bounded proof serving, independent graph acceptance and
+consolidated K4 review remain. No remote CI, performance campaign or merge was
+performed for this checkpoint.

@@ -1356,3 +1356,30 @@ conditions and recovery acceptance are recorded in the certified-history plan. T
 is planning agreement, not an implementation verdict. Consolidated review and CI
 remain at the complete K4 group. No
 push, PR, CI run or Daybreak assignment was made for this checkpoint.
+
+### K4 shared execution context and startup recovery
+
+Extracted engine-independent ownership of canonical execution from Reactor, moved
+actual owned block/batch/rollback handlers onto that context, and made both live
+execution and startup recovery consume the same bounded closure step. Startup
+loads pruning bounds and validates/replays saved work before mempool recognition
+and engine creation, then moves the recovered context into Reactor. Notifications
+consume committed results; rollback reads its new tip before committing.
+
+Lead inspection covered unique mutable session/tip ownership, retained-input
+selection, original owned transaction boundaries, stage-before-notification ordering,
+prune-watermark loading with pruning disabled, baseline H0 scheduling, recovered
+mempool selection and successor authority. The agreed planning boundary is retained.
+Consolidated independent K4 implementation review has not yet been requested.
+
+Focused local qualification: 2 passed in 87.91s, build 41.05s, terminal exit 0.
+Evidence `.build-cache/k4-recovery-test3.log`, SHA-256
+`d875160300c64ceca2ef9523662b67493a4f5e671518c36199bdadc227a8ecd5`.
+Source definition `f38d0deeee0199208889046c695bf02e1e2eab10d2c110305e8b78f7da657016`.
+The new scenario stops Malachite, reopens executor sessions around a replacement
+rollback, injected block/lifecycle and finality-publication failures, and verifies
+recovered position, lineage, cursor and historical successor committee without
+Bitcoin RPC. Shutdown and persisted pruning rejection are covered. Full startup
+supervisor/cluster behavior and interrupted multi-page/batch replay parity still
+need acceptance coverage. Existing broad fixtures still require K4 API adaptation.
+No remote CI or new performance work was launched.

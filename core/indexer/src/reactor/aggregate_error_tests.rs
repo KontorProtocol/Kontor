@@ -285,8 +285,8 @@ async fn fails_and_recovers(fault: Fault) -> Result<()> {
     if matches!(fault, Fault::NonceInsert) {
         assert_eq!(allocation.load(Ordering::SeqCst), 3);
     }
-    assert_eq!(reactor.last_height, 1);
-    assert_eq!(reactor.last_hash, Some(new_mock_block_hash(1)));
+    assert_eq!(reactor.execution.last_height, 1);
+    assert_eq!(reactor.execution.last_hash, Some(new_mock_block_hash(1)));
     assert!(conn.is_autocommit());
     assert_eq!(
         snapshot(&conn).await?,
@@ -294,7 +294,7 @@ async fn fails_and_recovers(fault: Fault) -> Result<()> {
         "block rollback did not restore {fault:?}"
     );
     reactor.handle_block(block, &decision).await?;
-    assert_eq!(reactor.last_height, 2);
+    assert_eq!(reactor.execution.last_height, 2);
     let identity = get_identity(&conn, &claimant_key.to_string())
         .await?
         .unwrap();

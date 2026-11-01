@@ -34,6 +34,7 @@ use futures_util::future::BoxFuture;
 
 use super::Reactor;
 use super::consensus_state;
+use super::execution::ExecutionContext;
 use super::executor::{Executor, TxPolicy};
 use super::mempool_fee_index::MempoolFeeIndex;
 use crate::protocol::coordinator::selection::ExecutionSelection;
@@ -166,7 +167,13 @@ impl BatchOutcome {
     }
 }
 
-impl<E: Executor> Reactor<E> {
+pub(super) struct AppliedBatch {
+    pub(super) outcome: BatchOutcome,
+    pub(super) parsed_count: usize,
+    pub(super) executed_ops: u64,
+}
+
+impl<E: Executor> ExecutionContext<E> {
     /// Persist a decided batch's certified content, idempotently: the
     /// immutable txid list (`batch_txids`, what sync serves for this
     /// consensus height) and the raw txs (`unconfirmed_batch_txs`, what
@@ -258,8 +265,7 @@ impl<E: Executor> Reactor<E> {
         // The DECIDED transactions, when a rollback exclusion has narrowed
         // `batch_txs`. Recorded instead of the executed set — see `record_batch_txs`.
         certified: Option<&[bitcoin::Transaction]>,
-    ) -> Result<BatchOutcome> {
-        let started_at = Instant::now();
+    ) -> Result<AppliedBatch> {
         let conn = self.db_conn();
         let closure_height = certified_history::frontier(&conn)
             .await?
@@ -284,7 +290,7 @@ impl<E: Executor> Reactor<E> {
             };
             let retained = certified_history::load(&conn, consensus_height.as_u64()).await?;
             let expected = ExactInput::batch(
-                self.consensus.protocol_context,
+                self.protocol_context,
                 anchor_height,
                 anchor_hash,
                 certified.unwrap_or(batch_txs),
@@ -473,8 +479,65 @@ impl<E: Executor> Reactor<E> {
             ((outcome, count, ops), stage_outcome, remaining)
         });
         let ((outcome, parsed_count, executed_ops), _) = stage.finish(result).await?;
+        Ok(AppliedBatch {
+            outcome,
+            parsed_count,
+            executed_ops,
+        })
+    }
+}
+
+impl<E: Executor> Reactor<E> {
+    pub(super) async fn process_decided_batch(
+        &mut self,
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        consensus_height: Height,
+        certificate: &[u8],
+        batch_txs: &[bitcoin::Transaction],
+        certified: Option<&[bitcoin::Transaction]>,
+    ) -> Result<BatchOutcome> {
+        let started_at = Instant::now();
+        let applied = self
+            .execution
+            .process_decided_batch(
+                anchor_height,
+                anchor_hash,
+                consensus_height,
+                certificate,
+                batch_txs,
+                certified,
+            )
+            .await?;
+        Ok(self
+            .observe_batch(
+                applied,
+                anchor_height,
+                anchor_hash,
+                consensus_height,
+                batch_txs,
+                started_at,
+            )
+            .await)
+    }
+
+    pub(super) async fn observe_batch(
+        &mut self,
+        applied: AppliedBatch,
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        consensus_height: Height,
+        batch_txs: &[bitcoin::Transaction],
+        started_at: Instant,
+    ) -> BatchOutcome {
+        let AppliedBatch {
+            outcome,
+            parsed_count,
+            executed_ops,
+        } = applied;
+        let conn = self.db_conn();
         if outcome == BatchOutcome::RecordedOnly {
-            return Ok(outcome);
+            return outcome;
         }
         // Optional test observations never select canonical finality work.
         let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
@@ -510,7 +573,7 @@ impl<E: Executor> Reactor<E> {
             "Batch processing complete"
         );
 
-        Ok(BatchOutcome::Executed)
+        BatchOutcome::Executed
     }
 
     // A replacement can be at or below the applied tip. The certified branch,
@@ -649,8 +712,8 @@ impl<E: Executor> Reactor<E> {
         reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>,
     ) -> Result<()> {
         let conn = self.db_conn();
-        let last_height = self.last_height;
-        let last_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
+        let last_height = self.execution.last_height;
+        let last_hash = self.execution.last_hash.unwrap_or(BlockHash::all_zeros());
 
         if data.value().descriptor().context != self.consensus.protocol_context {
             let _ = reply.send(None);
@@ -754,10 +817,11 @@ impl<E: Executor> Reactor<E> {
                     // not commit to, so a same-txid variant sitting in this node's
                     // mempool would otherwise be judged (and later voted on) in
                     // place of the witness the proposer actually streamed.
-                    let parsed = if let Some(p) =
-                        self.executor
-                            .prepare_transaction(&self.recognizer, &selection, tx)?
-                    {
+                    let parsed = if let Some(p) = self.execution.executor.prepare_transaction(
+                        &self.execution.recognizer,
+                        &selection,
+                        tx,
+                    )? {
                         p
                     } else {
                         warn!(%txid, "Rejecting proposal: transaction failed to parse");
@@ -772,7 +836,10 @@ impl<E: Executor> Reactor<E> {
                     parsed_txs.push(parsed);
                 }
                 let threshold = compute_fee_threshold(&self.consensus.mempool_fee_index);
-                let verdicts = self.executor.validate_txs(transactions.clone(), threshold);
+                let verdicts = self
+                    .execution
+                    .executor
+                    .validate_txs(transactions.clone(), threshold);
                 self.io_jobs.push_back(IoJob {
                     verdicts,
                     apply: IoApply::ValidateProposal {
@@ -809,8 +876,8 @@ impl<E: Executor> Reactor<E> {
     }
 
     pub(super) async fn try_fulfill_pending_proposal(&mut self) -> Result<bool> {
-        let last_height = self.last_height;
-        let last_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
+        let last_height = self.execution.last_height;
+        let last_hash = self.execution.last_hash.unwrap_or(BlockHash::all_zeros());
 
         let past_deadline = match &self.consensus.pending_proposal {
             Some(p) => Instant::now() >= p.hard_deadline,
@@ -881,7 +948,7 @@ impl<E: Executor> Reactor<E> {
                         candidates = txs.len(),
                         "Validating candidate batch off-loop; reply deferred"
                     );
-                    let verdicts = self.executor.validate_txs(txs, threshold);
+                    let verdicts = self.execution.executor.validate_txs(txs, threshold);
                     self.io_jobs.push_back(IoJob {
                         verdicts,
                         apply: IoApply::BuildProposal {
@@ -994,8 +1061,8 @@ impl<E: Executor> Reactor<E> {
                     // engine moved on. BANK the verdicts for the next GetValue
                     // rather than burning them — see `ValidatedCandidates`.
                     if !kept.is_empty()
-                        && anchor_height == self.last_height
-                        && anchor_hash == self.last_hash.unwrap_or(BlockHash::all_zeros())
+                        && anchor_height == self.execution.last_height
+                        && anchor_hash == self.execution.last_hash.unwrap_or(BlockHash::all_zeros())
                     {
                         debug!(
                             count = kept.len(),
@@ -1010,8 +1077,8 @@ impl<E: Executor> Reactor<E> {
                     }
                     return Ok(());
                 }
-                if anchor_height != self.last_height
-                    || anchor_hash != self.last_hash.unwrap_or(BlockHash::all_zeros())
+                if anchor_height != self.execution.last_height
+                    || anchor_hash != self.execution.last_hash.unwrap_or(BlockHash::all_zeros())
                 {
                     // The tip moved mid-validation: this snapshot answers a
                     // question nobody is asking anymore. Re-snapshot against
@@ -1036,8 +1103,8 @@ impl<E: Executor> Reactor<E> {
                         anchor_height,
                         anchor_hash,
                         &txs,
-                        self.last_height,
-                        self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                        self.execution.last_height,
+                        self.execution.last_hash.unwrap_or(BlockHash::all_zeros()),
                     )
                     .await?
                 {
@@ -1110,8 +1177,8 @@ impl<E: Executor> Reactor<E> {
                         anchor_height,
                         anchor_hash,
                         &transactions,
-                        self.last_height,
-                        self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                        self.execution.last_height,
+                        self.execution.last_hash.unwrap_or(BlockHash::all_zeros()),
                     )
                     .await?
                 {
@@ -1190,7 +1257,9 @@ impl<E: Executor> Reactor<E> {
 
     async fn prune_finalized_bodies(&mut self, conn: &libsql::Connection) {
         let floor =
-            match min_unfinalized_batch_height(conn, FINALITY_WINDOW, self.last_height).await {
+            match min_unfinalized_batch_height(conn, FINALITY_WINDOW, self.execution.last_height)
+                .await
+            {
                 Ok(Some(h)) => h,
                 // All batches are final — reclaim every body (consensus_height <= current).
                 Ok(None) => self.consensus.current_height.as_u64() + 1,

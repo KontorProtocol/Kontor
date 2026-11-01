@@ -200,7 +200,7 @@ async fn reactor(
         hash,
         address,
     );
-    reactor.prune_watermark = get_meta_u64(&reactor.db_conn(), PRUNE_WATERMARK_KEY, 0).await?;
+    reactor.execution.prune_watermark = get_meta_u64(&reactor.db_conn(), PRUNE_WATERMARK_KEY, 0).await?;
     Ok(reactor)
 }
 

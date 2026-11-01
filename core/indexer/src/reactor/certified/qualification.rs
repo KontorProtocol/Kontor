@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
@@ -22,7 +23,9 @@ use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, Value, Vote};
 use crate::database::certified_history::{self, closure, completion, finality, replay_input, work};
 use crate::database::connection::new_connection;
-use crate::database::queries::{insert_batch, insert_block, select_block_at_height};
+use crate::database::queries::{
+    PRUNE_WATERMARK_KEY, insert_batch, insert_block, select_block_at_height, set_meta_u64,
+};
 use crate::protocol::canonical_application::{ApplicationSource, DecisionExclusions};
 use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
 use crate::protocol::coordinator::bootstrap;
@@ -38,6 +41,7 @@ use crate::protocol_qualification::fixture::issuance_transaction;
 use crate::reactor::batches::BatchOutcome;
 use crate::reactor::consensus_state::certified_startup;
 use crate::reactor::engine::EngineConfig;
+use crate::reactor::execution::{ExecutionContext, ExecutionStep};
 use crate::reactor::executor::RuntimeExecutor;
 use crate::reactor::mempool_fee_index::MempoolFeeIndex;
 use crate::reactor::{PruneConfig, Reactor, start_linked_consensus};
@@ -89,6 +93,22 @@ pub(crate) async fn run(
     let session = LinkedSession::new(conn.clone(), factory(conn.clone()).await?);
     initialize(service, &session, network, 100, genesis).await?;
     bootstrap::complete(service, &session, network, &baseline).await?;
+    let client = Client::new("http://127.0.0.1:1".into(), String::new(), String::new())?;
+    let mut execution = ExecutionContext::new(
+        RuntimeExecutor::new(client),
+        session,
+        network,
+        service.clone(),
+        baseline.context,
+        PruneConfig {
+            enabled: false,
+            retain_blocks: 144,
+        },
+        0,
+        None,
+    );
+    ensure!(execution.recover(&Shutdown::new().signal()).await?);
+    ensure!(execution.last_height == 99 && execution.last_hash.is_none());
     // An unrelated legacy batch row must not select or erase certified history.
     insert_batch(
         &conn,
@@ -108,7 +128,7 @@ pub(crate) async fn run(
             consensus_enabled: false,
             discovery: Default::default(),
         },
-        &session,
+        &execution.session,
         service,
         network,
         None,
@@ -182,10 +202,8 @@ pub(crate) async fn run(
         let (_mempool_tx, mempool_rx) = mpsc::channel(1);
         let (addr_tx, _addr_rx) = watch::channel(None);
         let shutdown = Shutdown::new();
-        let client = Client::new("http://127.0.0.1:1".into(), String::new(), String::new())?;
-        let mut reactor = Reactor::from_session(RuntimeExecutor::new(client), session,
-            network, service.clone(), block_rx, mempool_rx, shutdown.signal(), None, None,
-            None, state, PruneConfig { enabled: false, retain_blocks: 144 }, 99, None, addr_tx);
+        let mut reactor = Reactor::from_execution(execution, block_rx, mempool_rx,
+            shutdown.signal(), None, None, None, state, addr_tx);
         let decision = DeferredDecision { consensus_height: Height::new(1), value: value.clone(),
             certificate: original_proof, execution_txs: None };
         let block = BlockInput::from_exact(value.input())?;
@@ -204,7 +222,7 @@ pub(crate) async fn run(
         ensure!(applied.stage == 1 && applied.next.map(|next| next.0) == Some(WorkItem::Finality));
         ensure!(applied.position.ordinal == initial.ordinal + 2);
         let foreign_cursor = work::qualify(&conn, &reopened, applied.work_origin()?).await?;
-        let foreign_stage = begin_stage(service, &reactor.session, network, 1).await?.context("missing finality stage")?;
+        let foreign_stage = begin_stage(service, &reactor.execution.session, network, 1).await?.context("missing finality stage")?;
         ensure!(foreign_stage.finish(Ok(((), StageOutcome::FinalityEvaluated, foreign_cursor))).await.is_err());
         ensure!(closure::recover(&reopened, 1).await? == applied);
 
@@ -214,7 +232,7 @@ pub(crate) async fn run(
             if interrupt {
                 conn.execute_batch("CREATE TRIGGER interrupt_replay_plan BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected replay plan publication failure'); END").await?;
             }
-            let stage = begin_stage(service, &reactor.session, network, 1).await?.context("missing finality plan stage")?;
+            let stage = begin_stage(service, &reactor.execution.session, network, 1).await?.context("missing finality plan stage")?;
             let result = async {
                 let draft = work::begin(&conn, applied.work_origin()?).await?;
                 let draft = work::append(&conn, draft, &[
@@ -244,7 +262,7 @@ pub(crate) async fn run(
         ensure!(reactor.consensus.closed_next_height(&conn, Height::new(1)).await?.is_none());
         // The first block has no batch obligations. Exercise the owned finality
         // stage directly; full reactor finality/replay integration is separate.
-        let stage = begin_stage(service, &reactor.session, network, 1).await?.context("missing finality stage")?;
+        let stage = begin_stage(service, &reactor.execution.session, network, 1).await?.context("missing finality stage")?;
         ensure!(stage.action() == WorkItem::Finality);
         let result = async {
             let (_, rollback) = reactor.consensus.run_finality_checks(&conn, 100).await?;
@@ -275,10 +293,10 @@ pub(crate) async fn run(
             qualify_replacement(&mut reactor, &reopened, service, &decision, &completed).await?;
             qualify_finality(&mut reactor, &reopened, service).await?;
             qualify_live_closure(&mut reactor).await?;
-            Ok(json!({"authenticated": 14, "closed": 14, "live_closure_driver": true, "automatic_finality_replay": true, "owned_replacement_rollback": true, "bounded_work_plan": true, "replay_plan_publication_atomic": true, "local_reorg_is_not_authority": true, "owned_batch_stages": true, "owned_block_stage": true,
+            Ok((json!({"authenticated": 15, "closed": 15, "engine_free_recovery": true, "live_closure_driver": true, "automatic_finality_replay": true, "owned_replacement_rollback": true, "bounded_work_plan": true, "replay_plan_publication_atomic": true, "local_reorg_is_not_authority": true, "owned_batch_stages": true, "owned_block_stage": true,
             "closure_publication_atomic": true, "next_height_after_closure": true, "ack_after_durable_input": true,
             "interrupted_append_rolled_back": true, "finalization_without_volatile_cache": true,
-            "original_and_one_augmentation": true, "reopen_verified": true}))
+            "original_and_one_augmentation": true, "reopen_verified": true}), reactor))
         }.await,
         Err(error) => Err(error),
     };
@@ -286,7 +304,9 @@ pub(crate) async fn run(
         .stop_and_wait(None, Some(Duration::from_secs(5)))
         .await;
     stopped.context("qualification engine shutdown")?;
-    result
+    let (evidence, reactor) = result?;
+    qualify_engine_free_recovery(reactor.execution, &factory, dir.path()).await?;
+    Ok(evidence)
 }
 
 async fn accept_for_closure(
@@ -326,7 +346,7 @@ async fn qualify_finality(
     service: &OwnerService,
 ) -> Result<()> {
     let conn = reactor.db_conn();
-    let network = reactor.network;
+    let network = reactor.execution.network;
     let parent = issuance_transaction()?;
     let parent_id = parent.compute_txid();
     let mut child = parent.clone();
@@ -334,7 +354,10 @@ async fn qualify_finality(
     child.input[0].previous_output.vout = 0;
     let child_id = child.compute_txid();
     let mut next_height = 5;
-    let mut tip = reactor.last_hash.context("missing finality starting tip")?;
+    let mut tip = reactor
+        .execution
+        .last_hash
+        .context("missing finality starting tip")?;
     for bitcoin_height in 100..=106 {
         if bitcoin_height > 100 {
             let mut block = genesis_block(network);
@@ -451,7 +474,7 @@ async fn qualify_finality(
             next_height += 1;
         }
     }
-    ensure!(next_height == 13 && reactor.last_height == 106);
+    ensure!(next_height == 13 && reactor.execution.last_height == 106);
     ensure!(certified_startup(&reopened).await?.1 == Height::new(13));
     ensure!(
         conn.query(
@@ -496,7 +519,7 @@ async fn qualify_batches(
     completed: &ClosureRecord,
 ) -> Result<()> {
     let conn = reactor.db_conn();
-    let network = reactor.network;
+    let network = reactor.execution.network;
     for height in 2..=3 {
         let raw = if height == 2 {
             vec![]
@@ -647,7 +670,7 @@ async fn qualify_batches(
                 if interrupt {
                     conn.execute_batch("CREATE TRIGGER interrupt_frozen_plan BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected frozen plan failure'); END").await?;
                 }
-                let stage = begin_stage(service, &reactor.session, network, height)
+                let stage = begin_stage(service, &reactor.execution.session, network, height)
                     .await?
                     .context("missing freeze stage")?;
                 let result = async {
@@ -796,7 +819,7 @@ async fn qualify_batches(
             ensure!(*exclusions == frozen.exclusions);
             ensure!(replay_input::get(&reopened, frozen.id()?, origin, height).await? == frozen);
         }
-        let stage = begin_stage(service, &reactor.session, network, height)
+        let stage = begin_stage(service, &reactor.execution.session, network, height)
             .await?
             .context("missing batch finality stage")?;
         let result = async {
@@ -827,7 +850,7 @@ async fn qualify_replacement(
     completed: &ClosureRecord,
 ) -> Result<()> {
     let conn = reactor.db_conn();
-    let network = reactor.network;
+    let network = reactor.execution.network;
     ensure!(certified_startup(&reopened).await?.1 == Height::new(4));
     let before_replacement =
         closure::canonical_position(&conn, reactor.consensus.protocol_context.chain).await?;
@@ -849,7 +872,7 @@ async fn qualify_replacement(
         .process_block_event(BlockEvent::Rollback { to_height: 99 })
         .await?;
     ensure!(reactor.consensus.pending_blocks.is_empty());
-    ensure!(reactor.last_height == 100 && reactor.last_hash == Some(old_hash));
+    ensure!(reactor.execution.last_height == 100 && reactor.execution.last_hash == Some(old_hash));
     ensure!(
         closure::canonical_position(&conn, reactor.consensus.protocol_context.chain).await?
             == before_replacement
@@ -903,7 +926,7 @@ async fn qualify_replacement(
     ensure!(reactor.rollback(98).await.is_err());
     conn.execute_batch("CREATE TRIGGER interrupt_rollback_stage BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected rollback stage failure'); END").await?;
     ensure!(reactor.rollback(99).await.is_err());
-    ensure!(reactor.last_height == 100 && reactor.last_hash == Some(old_hash));
+    ensure!(reactor.execution.last_height == 100 && reactor.execution.last_hash == Some(old_hash));
     ensure!(
         closure::canonical_position(&conn, reactor.consensus.protocol_context.chain).await?
             == before_replacement
@@ -926,7 +949,7 @@ async fn qualify_replacement(
             && rolled_back.next.map(|next| next.0) == Some(WorkItem::Execute { decision: 4 })
             && rolled_back.remaining.count - rolled_back.remaining.index == 2
     );
-    ensure!(reactor.last_height == 99 && reactor.last_hash.is_none());
+    ensure!(reactor.execution.last_height == 99 && reactor.execution.last_hash.is_none());
     ensure!(select_block_at_height(&conn, 100).await?.is_none());
     ensure!(select_block_at_height(&conn, 0).await?.is_some());
     ensure!(certified_history::branch::at(&conn, 100, 1).await? == Some(old_hash));
@@ -962,8 +985,11 @@ async fn qualify_live_closure(reactor: &mut Reactor<RuntimeExecutor>) -> Result<
     let conn = reactor.db_conn();
     let (event_tx, mut events) = mpsc::channel(8);
     reactor.event_tx = Some(event_tx);
-    let mut block = genesis_block(reactor.network);
-    block.header.prev_blockhash = reactor.last_hash.context("missing live fixture tip")?;
+    let mut block = genesis_block(reactor.execution.network);
+    block.header.prev_blockhash = reactor
+        .execution
+        .last_hash
+        .context("missing live fixture tip")?;
     block.header.nonce = 107;
     let hash = block.block_hash();
     let value = Value::from_input(ExactInput::block(
@@ -991,13 +1017,13 @@ async fn qualify_live_closure(reactor: &mut Reactor<RuntimeExecutor>) -> Result<
     conn.execute_batch("CREATE TRIGGER interrupt_live_stage BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected live execution failure'); END").await?;
     ensure!(reactor.advance().await.is_err());
     ensure!(matches!(next.try_recv(), Err(TryRecvError::Empty)));
-    ensure!(reactor.last_height == 106);
+    ensure!(reactor.execution.last_height == 106);
     ensure!(certified_history::frontier(&conn).await?.closed_height == 12);
     conn.execute_batch("DROP TRIGGER interrupt_live_stage")
         .await?;
     reactor.advance().await?;
     ensure!(matches!(next.await?, Next::Start(height, _) if height == Height::new(14)));
-    ensure!(reactor.last_height == 107 && reactor.last_hash == Some(hash));
+    ensure!(reactor.execution.last_height == 107 && reactor.execution.last_hash == Some(hash));
     ensure!(
         select_block_at_height(&conn, 107)
             .await?
@@ -1037,5 +1063,153 @@ async fn qualify_live_closure(reactor: &mut Reactor<RuntimeExecutor>) -> Result<
         heartbeats == 1,
         "empty batch notification missing or duplicated"
     );
+    Ok(())
+}
+
+async fn reopen_execution(
+    execution: ExecutionContext<RuntimeExecutor>,
+    factory: &SessionFactory,
+    path: &Path,
+) -> Result<ExecutionContext<RuntimeExecutor>> {
+    let ExecutionContext {
+        executor,
+        session,
+        recognizer,
+        network,
+        protocol_context,
+        owner_service,
+        prune,
+        ..
+    } = execution;
+    ensure!(session.conn.is_autocommit() && owner_service.active_roots().await == 0);
+    drop(recognizer);
+    drop(session);
+    let conn = new_connection(path, "callbacks.db").await?;
+    let session = LinkedSession::new(conn.clone(), factory(conn).await?);
+    Ok(ExecutionContext::new(
+        executor,
+        session,
+        network,
+        owner_service,
+        protocol_context,
+        prune,
+        0,
+        None,
+    ))
+}
+
+// The engine has stopped before entering this fixture. The executor's Bitcoin
+// RPC endpoint is unreachable, so recovery must use only retained certified data.
+async fn qualify_engine_free_recovery(
+    mut execution: ExecutionContext<RuntimeExecutor>,
+    factory: &SessionFactory,
+    path: &Path,
+) -> Result<()> {
+    let conn = execution.db_conn();
+    let mut block = genesis_block(execution.network);
+    block.header.prev_blockhash = select_block_at_height(&conn, 106)
+        .await?
+        .context("missing recovery parent")?
+        .hash;
+    block.header.nonce = 15107;
+    let hash = block.block_hash();
+    let value = Value::from_input(ExactInput::block(
+        execution.protocol_context,
+        107,
+        serialize(&block),
+    )?)?;
+    let authority = certified_history::committee(&conn, 15).await?;
+    let decision = Decision {
+        height: 15,
+        predecessor: authority.decision,
+        committee: authority.id()?,
+        descriptor: value.descriptor().clone(),
+    };
+    let certified = AuthenticatedDecision::verify(
+        decision,
+        value.input().clone(),
+        encode_commit_certificate(&certificate_at(&value, 15, 0))?.encode_to_vec(),
+        &authority,
+    )?;
+    certified_history::append(&conn, &certified).await?;
+    let cancelled = Shutdown::new();
+    cancelled.cancel();
+    execution = reopen_execution(execution, factory, path).await?;
+    ensure!(!execution.recover(&cancelled.signal()).await?);
+    ensure!(closure::progress(&conn, 15).await?.stage == 0);
+    ensure!(execution.last_height == 107);
+    ensure!(certified_startup(&conn).await.is_err());
+
+    // Turning pruning off must not erase the persisted rollback boundary.
+    set_meta_u64(&conn, PRUNE_WATERMARK_KEY, 107).await?;
+    ensure!(!execution.prune.enabled);
+    let error = execution
+        .recover(&Shutdown::new().signal())
+        .await
+        .unwrap_err();
+    ensure!(error.to_string().contains("persisted prune watermark"));
+    ensure!(closure::progress(&conn, 15).await?.stage == 0);
+    // This fixture has not deleted history; restore its actual retained floor.
+    set_meta_u64(&conn, PRUNE_WATERMARK_KEY, 106).await?;
+    execution = reopen_execution(execution, factory, path).await?;
+    ensure!(!execution.recover(&cancelled.signal()).await?);
+    ensure!(execution.prune_watermark == 106);
+    ensure!(matches!(
+        execution.step_certified_closure(15).await?,
+        ExecutionStep::RolledBack(106)
+    ));
+    let rolled_back = closure::recover(&conn, 15).await?;
+    ensure!(rolled_back.stage == 1 && select_block_at_height(&conn, 107).await?.is_none());
+    execution = reopen_execution(execution, factory, path).await?;
+    conn.execute_batch("CREATE TRIGGER interrupt_recovery BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected engine-free stage failure'); END").await?;
+    ensure!(execution.recover(&Shutdown::new().signal()).await.is_err());
+    ensure!(execution.last_height == 106 && execution.prune_watermark == 106);
+    ensure!(closure::recover(&conn, 15).await?.head == rolled_back.head);
+    ensure!(
+        closure::canonical_position(&conn, execution.protocol_context.chain).await?
+            == rolled_back.position
+    );
+    ensure!(execution.owner_service.active_roots().await == 0);
+    conn.execute_batch("DROP TRIGGER interrupt_recovery")
+        .await?;
+    execution = reopen_execution(execution, factory, path).await?;
+    ensure!(!execution.recover(&cancelled.signal()).await?);
+    ensure!(matches!(
+        execution.step_certified_closure(15).await?,
+        ExecutionStep::Block(_)
+    ));
+    let applied = closure::progress(&conn, 15).await?;
+    ensure!(applied.stage == 2 && applied.position.ordinal == rolled_back.position.ordinal + 2);
+    // Keep the sealed planner draft but interrupt its stage publication.
+    conn.execute_batch("CREATE TRIGGER interrupt_recovery_finality BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected recovered plan publication failure'); END").await?;
+    ensure!(execution.step_certified_closure(15).await.is_err());
+    ensure!(closure::progress(&conn, 15).await?.head == applied.head);
+    ensure!(
+        conn.query(
+            "SELECT phase FROM closure_finality_plans WHERE plan_key = ?1",
+            [applied.work_origin()?.key()?.to_vec()]
+        )
+        .await?
+        .next()
+        .await?
+        .context("missing recovered finality draft")?
+        .get::<u64>(0)?
+            == 3
+    );
+    conn.execute_batch("DROP TRIGGER interrupt_recovery_finality")
+        .await?;
+    execution = reopen_execution(execution, factory, path).await?;
+    ensure!(execution.recover(&Shutdown::new().signal()).await?);
+    ensure!(execution.last_height == 107 && execution.last_hash == Some(hash));
+    ensure!(execution.prune_watermark == 106 && execution.session.conn.is_autocommit());
+    ensure!(execution.owner_service.active_roots().await == 0);
+    let complete = completion::completed(&conn, 15).await?;
+    ensure!(complete.output == applied.position);
+    ensure!(certified_startup(&conn).await?.1 == Height::new(16));
+    let authority = certified_history::committee(&conn, 16).await?;
+    ensure!(authority.id()? == complete.next_committee);
+    execution = reopen_execution(execution, factory, path).await?;
+    ensure!(execution.recover(&Shutdown::new().signal()).await?);
+    ensure!(completion::completed(&conn, 15).await? == complete);
     Ok(())
 }

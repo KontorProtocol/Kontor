@@ -49,18 +49,18 @@ async fn rollback_guard_preserves_deleted_history_boundary_after_reconfiguration
         )
         .await?;
     }
-    reactor.last_height = 108;
-    reactor.prune = PruneConfig {
+    reactor.execution.last_height = 108;
+    reactor.execution.prune = PruneConfig {
         enabled: true,
         retain_blocks: 6,
     };
     // Deadline 108 can invalidate anchor 102 and must restore height 101.
-    ensure!(reactor.check_rollback_depth(101).is_ok());
-    ensure!(reactor.check_rollback_depth(100).is_err());
+    ensure!(reactor.execution.check_rollback_depth(101).is_ok());
+    ensure!(reactor.execution.check_rollback_depth(100).is_err());
     // Reproduce a database written by the previous six-block retention policy.
     // Changing configuration cannot restore its discarded predecessor values.
     conn.execute("BEGIN", ()).await?;
-    ensure!(reactor.prune_state(0, 102).await.is_err());
+    ensure!(reactor.execution.prune_state(0, 102).await.is_err());
     ensure!(!conn.is_autocommit());
     conn.execute("ROLLBACK", ()).await?;
     conn.authorizer(Some(Arc::new(|context: &AuthContext<'_>| {
@@ -75,12 +75,12 @@ async fn rollback_guard_preserves_deleted_history_boundary_after_reconfiguration
             Authorization::Allow
         }
     })))?;
-    let failed = reactor.prune_state(0, 102).await;
+    let failed = reactor.execution.prune_state(0, 102).await;
     conn.authorizer(None)?;
     ensure!(failed.is_err());
     ensure!(conn.is_autocommit());
     ensure!(get_meta_u64(&conn, PRUNE_WATERMARK_KEY, 0).await? == 0);
-    ensure!(reactor.prune_state(0, 102).await? >= 2);
+    ensure!(reactor.execution.prune_state(0, 102).await? >= 2);
     let mut rows = conn
         .query(
             "SELECT height FROM contract_state WHERE contract_id = 1 AND path = ? ORDER BY height",
@@ -92,21 +92,21 @@ async fn rollback_guard_preserves_deleted_history_boundary_after_reconfiguration
         retained.push(row.get::<u64>(0)?);
     }
     ensure!(retained == [102, 108]);
-    reactor.last_height = 108;
-    reactor.prune_watermark = get_meta_u64(&conn, PRUNE_WATERMARK_KEY, 0).await?;
-    ensure!(reactor.prune_watermark == 102);
+    reactor.execution.last_height = 108;
+    reactor.execution.prune_watermark = get_meta_u64(&conn, PRUNE_WATERMARK_KEY, 0).await?;
+    ensure!(reactor.execution.prune_watermark == 102);
     let mut unsafe_configurations = Vec::new();
     for (label, enabled, retain_blocks) in [
         ("original retention", true, 6),
         ("increased retention", true, 288),
         ("disabled pruning", false, 288),
     ] {
-        reactor.prune = PruneConfig {
+        reactor.execution.prune = PruneConfig {
             enabled,
             retain_blocks,
         };
-        ensure!(reactor.check_rollback_depth(102).is_ok());
-        if reactor.check_rollback_depth(101).is_ok() {
+        ensure!(reactor.execution.check_rollback_depth(102).is_ok());
+        if reactor.execution.check_rollback_depth(101).is_ok() {
             unsafe_configurations.push(label);
         }
     }

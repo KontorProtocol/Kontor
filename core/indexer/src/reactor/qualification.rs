@@ -174,7 +174,7 @@ async fn scenario(
             .states
             .insert(format!("{label}/initial"), initial.clone());
         let selection = reactor.preparation_selection().await?;
-        let recognized = reactor.recognizer.recognize(&selection, serialize(&raw))?
+        let recognized = reactor.execution.recognizer.recognize(&selection, serialize(&raw))?
             .map_err(anyhow::Error::msg)?.context("recognized signed fixture")?;
         report.states.insert(format!("{label}/recognition"),
             json!({"index":recognized.index,"txid":recognized.txid.to_string(),"inputs":recognized.inputs}));
@@ -214,16 +214,14 @@ async fn scenario(
                 .states
                 .insert(format!("{label}/executed"), state(&conn).await?);
         }
-        let block = reactor
-            .executor
+        let block = reactor.execution.executor
             .prepare_block(
-                &reactor.recognizer,
+                &reactor.execution.recognizer,
                 &reactor.preparation_selection().await?,
                 raw_confirmation_block(&raw, 2)?,
             )
             .await?;
-        let (count, ops, errors) = reactor
-            .execute_block_unit(
+        let (count, ops, errors) = reactor.execution.execute_block_unit(
                 &reactor
                     .select_executor(ApplicationPosition::Block {
                         height: block.height,
@@ -245,16 +243,14 @@ async fn scenario(
             report
                 .states
                 .insert(format!("{label}/rollback"), state(&conn).await?);
-            let replacement = reactor
-                .executor
+            let replacement = reactor.execution.executor
                 .prepare_block(
-                    &reactor.recognizer,
+                    &reactor.execution.recognizer,
                     &reactor.preparation_selection().await?,
                     raw_confirmation_block(&raw, 4)?,
                 )
                 .await?;
-            let (count, ops, _) = reactor
-                .execute_block_unit(
+            let (count, ops, _) = reactor.execution.execute_block_unit(
                     &reactor
                         .select_executor(ApplicationPosition::Block {
                             height: replacement.height,

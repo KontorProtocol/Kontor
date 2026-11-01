@@ -29,6 +29,7 @@ use crate::protocol::coordinator::selection::{
 use crate::runtime::ownership::adapter::HostFailure;
 
 use super::consensus_state;
+use super::execution::ExecutionContext;
 use super::executor::Executor;
 use super::{Reactor, SimulationOutcome};
 
@@ -43,7 +44,13 @@ const PRUNE_VACUUM_LOW_PAGES: i64 = 128; // ~0.5 MiB kept on the freelist for re
 const PRUNE_VACUUM_HIGH_PAGES: i64 = 512; // ~2 MiB slack before we bother reclaiming
 const PRUNE_VACUUM_MAX_PAGES: i64 = 512; // ~2 MiB returned per call (bounds lock hold)
 
-impl<E: Executor> Reactor<E> {
+pub(super) struct AppliedBlock {
+    pub(super) block: PreparedBlock,
+    pub(super) unbatched_count: usize,
+    pub(super) executed_ops: u64,
+}
+
+impl<E: Executor> ExecutionContext<E> {
     /// Refuse a rollback that reaches below what pruning retains.
     ///
     /// Reconstructing state as of `to_height` needs the superseded `contract_state`
@@ -82,8 +89,7 @@ impl<E: Executor> Reactor<E> {
         self.check_rollback_depth(height)?;
         let conn = self.db_conn();
         let frontier = certified_history::frontier(&conn).await?;
-        let boundary =
-            certified_history::branch::boundary(&conn, self.consensus.protocol_context).await?;
+        let boundary = certified_history::branch::boundary(&conn, self.protocol_context).await?;
         ensure!(
             height >= boundary.first_height - 1,
             "rollback crosses native genesis boundary"
@@ -109,50 +115,22 @@ impl<E: Executor> Reactor<E> {
             .await
             .map_err(HostFailure::from)?;
             canonical_history::rollback(&conn, height).await?;
-            Ok(((), StageOutcome::RolledBack, remaining))
+            let hash = if height < boundary.first_height {
+                None
+            } else {
+                Some(
+                    select_block_at_height(&conn, height)
+                        .await?
+                        .context("post-rollback Bitcoin block is missing")?
+                        .hash,
+                )
+            };
+            Ok((hash, StageOutcome::RolledBack, remaining))
         }
         .await;
-        stage.finish(result).await?;
+        let (hash, _) = stage.finish(result).await?;
         self.last_height = height;
-
-        // Drop candidates validated against the old tip. An in-flight `IoJob` is
-        // still safe — its apply re-checks the anchor and re-runs `validate_batch`
-        // against the new tip before doing anything — but the banked set is
-        // consumed on a LATER `try_fulfill` with only an anchor-equality guard, so
-        // clearing it here is the belt to that suspenders and keeps a stale bank
-        // from ever reaching the proposer.
-        self.validated_candidates = None;
-
-        // Err is NOT "no previous block": folding a transient read failure into
-        // `last_hash = None` makes the next batch anchored at this height fail its
-        // hash gate and record-only while every peer executes it — an over-skip
-        // that forks the checkpoint (I5, and the exact Err-vs-None distinction
-        // `missing_txids` argues for). Only a genuine absent row (pre-genesis
-        // truncation) clears the hash; a read error stops the node.
-        match select_block_at_height(&self.db_conn(), height)
-            .await
-            .context("Failed to read the post-rollback tip block")?
-        {
-            Some(row) if height >= boundary.first_height => {
-                info!("Rollback to height {} ({})", height, row.hash);
-                self.last_hash = Some(row.hash);
-            }
-            _ if height < boundary.first_height => {
-                self.last_hash = None;
-            }
-            _ => bail!("post-rollback Bitcoin block is missing at height {height}"),
-        }
-
-        self.consensus
-            .refresh_finality_observation(&conn, height)
-            .await?;
-
-        if let Some(tx) = &self.event_tx
-            && tx.send(Event::Rolledback { height }).await.is_err()
-        {
-            warn!("Event receiver dropped, cannot send Rolledback event");
-        }
-
+        self.last_hash = hash;
         Ok(())
     }
 
@@ -304,136 +282,6 @@ impl<E: Executor> Reactor<E> {
         Ok((unbatched_count, executed_ops, failures))
     }
 
-    pub(super) async fn simulate_raw(&mut self, raw: Vec<u8>) -> Result<SimulationOutcome> {
-        // Recognition belongs at admission, since the protocol may change while
-        // an RPC request waits in the bounded simulation queue.
-        let selection = self.simulation_selection().await?;
-        let tx = match self
-            .executor
-            .prepare_simulation(&self.recognizer, &selection, raw)?
-        {
-            Ok(Some(tx)) => tx,
-            Ok(None) => return Ok(Err("Not a valid Kontor transaction".to_owned())),
-            Err(error) => return Ok(Err(error)),
-        };
-        self.simulate_selected(selection, tx).await.map(Ok)
-    }
-
-    fn simulation_selection(
-        &self,
-    ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
-        let conn = self.db_conn();
-        let network = self.network;
-        async move {
-            let tip = select_block_latest(&conn).await?;
-            let height = tip.map_or(Ok(1), |row| {
-                row.height
-                    .checked_add(1)
-                    .context("simulation height overflow")
-            })?;
-            select_legacy_p1(&conn, network, ApplicationPosition::Simulation { height }).await
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) async fn simulate(
-        &mut self,
-        tx: indexer_types::Transaction,
-    ) -> Result<Vec<OpWithResult>> {
-        let selection = self.simulation_selection().await?;
-        self.simulate_selected(selection, PreparedTransaction::fixture(tx))
-            .await
-    }
-
-    /// Simulate a transaction: execute in a temporary block, inspect results,
-    /// merge in any deterministic-failure messages captured during execution,
-    /// then rollback. Unlike `/inspect`, this carries live error strings —
-    /// they're not persisted to chain state, only available here while the
-    /// virtual block is still in scope.
-    /// Runs the simulation with its out-of-transaction state restored on EVERY
-    /// exit, not just the successful one.
-    ///
-    /// The database savepoint does not cover contract-facing metadata or the
-    /// shared operation counters. Isolate the counters so runtime clones cannot
-    /// mutate the originals, and restore context even on a returned error.
-    /// Outer errors remain fatal; the SQL transaction is rolled back before the
-    /// reactor reports them. The reactor task must not be cancelled mid-flight.
-    async fn simulate_selected(
-        &mut self,
-        selection: ExecutionSelection,
-        tx: PreparedTransaction,
-    ) -> Result<Vec<OpWithResult>> {
-        let lease = self.begin_unit(&selection, true).await?;
-        let result = self.simulate_inner(&selection, tx).await;
-        self.finish_unit(lease, result, false).await
-    }
-
-    async fn simulate_inner(
-        &mut self,
-        selection: &ExecutionSelection,
-        tx: PreparedTransaction,
-    ) -> Result<Vec<OpWithResult>> {
-        // Simulation runs against a FABRICATED block one past the tip and then
-        // rolls it away. `execute_block` sets `storage.height` to that block as it
-        // goes, so without the restore in `simulate` the runtime is left pointing at
-        // a height whose `blocks` row no longer exists. The next identity created
-        // outside a `set_context` — a decided batch executing at the real tip, say —
-        // then inserts `signers(height = <discarded height>)` and trips the
-        // `signers.height -> blocks.height` foreign key, which is classified
-        // non-deterministic and kills the reactor.
-        selection.verify_base(&self.db_conn()).await?;
-        let block_row = select_block_latest(&self.db_conn())
-            .await
-            .context("Failed to query latest block for simulation")?;
-        let height = block_row.as_ref().map_or(1, |row| row.height + 1);
-        let block = PreparedBlock {
-            height,
-            input: None,
-            hash: new_mock_block_hash(height as u32),
-            prev_hash: block_row
-                .as_ref()
-                .map_or(new_mock_block_hash(0), |row| row.hash),
-            transactions: vec![tx],
-        };
-        let (_unbatched, _executed, failures) = self
-            .execute_block(selection, &block)
-            .await
-            .context("execute_block failed during simulation")?;
-        let tx = &block.transactions[0];
-        let response = (self.session.executor.operations.inspect)(
-            self.session.executor.owner.clone(),
-            selection.envelope(),
-            tx.payload(selection, self.network)?,
-            tx.index,
-        )
-        .await
-        .map_err(HostFailure::from)?;
-        let mut results: Vec<OpWithResult> = serde_json::from_slice(&response)?;
-
-        // Simulate's block has exactly one tx; failures[0] is the per-input
-        // per-op failure vec for it. Flatten in declaration order (inputs
-        // then ops) to align with inspect's flat OpWithResult vec — both
-        // produce one entry per inst in input.insts.ops.
-        if let Some(tx_failures) = failures.into_iter().next() {
-            let mut flat = tx_failures
-                .into_iter()
-                .flat_map(|input_errs| input_errs.into_iter());
-            for ow in results.iter_mut() {
-                if let Some(Some(e)) = flat.next() {
-                    let msg = format!("{e:#}");
-                    match ow {
-                        OpWithResult::Materialized { error_message, .. }
-                        | OpWithResult::Rejected { error_message, .. } => {
-                            *error_message = Some(msg);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(results)
-    }
-
     /// Run block lifecycle operations: challenge expiry/generation and epoch transitions.
     async fn run_block_lifecycle(
         &mut self,
@@ -443,27 +291,13 @@ impl<E: Executor> Reactor<E> {
         linked::run_block_lifecycle(&self.session, selection, self.network, &block.header()).await
     }
 
-    /// Execute `block` and record the decision that certifies it in the SAME
-    /// transaction as the block's own writes.
-    ///
-    /// The decision is NOT optional: a block is only ever executed because
-    /// consensus decided it, and taking it by value rather than `Option` makes
-    /// "no block executes without a consensus record" a type-level fact instead
-    /// of a convention a future caller could opt out of.
-    ///
-    /// A consensus record and the execution it certifies must commit or fail
-    /// together. Writing the `batches` row first — as this did — let a node keep
-    /// a row claiming a height it never executed: the row survived, the
-    /// execution did not, and every restart then resumed consensus above state
-    /// the node did not hold. `delete_unexecuted_batch_suffix` cleans that up at
-    /// startup, but the window should not exist at all; `process_decided_batch`
-    /// has always taken the savepoint first, and the block path was the outlier.
+    // Effects, lifecycle, application identity and the saved work cursor share
+    // the owned transaction. Notifications only see its committed result.
     pub(super) async fn handle_block(
         &mut self,
         block: impl Into<BlockInput>,
         decision: &consensus_state::DeferredDecision,
-    ) -> Result<()> {
-        let started_at = Instant::now();
+    ) -> Result<AppliedBlock> {
         let block = block.into();
         let height = block.height;
         let hash = block.hash;
@@ -516,7 +350,7 @@ impl<E: Executor> Reactor<E> {
                 certified_history::load(&self.db_conn(), decision.consensus_height.as_u64())
                     .await?;
             ensure!(
-                *retained.input() == block.exact_input(self.consensus.protocol_context)?,
+                *retained.input() == block.exact_input(self.protocol_context)?,
                 "block application differs from retained certified bytes"
             );
             let block = self
@@ -536,6 +370,56 @@ impl<E: Executor> Reactor<E> {
 
         self.last_height = height;
         self.last_hash = Some(hash);
+        Ok(AppliedBlock {
+            block,
+            unbatched_count,
+            executed_ops,
+        })
+    }
+}
+
+impl<E: Executor> Reactor<E> {
+    pub(super) async fn rollback(&mut self, height: u64) -> Result<()> {
+        self.execution.rollback(height).await?;
+        self.observe_rollback(height).await;
+        Ok(())
+    }
+
+    pub(super) async fn observe_rollback(&mut self, height: u64) {
+        self.validated_candidates = None;
+        if let Err(error) = self
+            .consensus
+            .refresh_finality_observation(&self.db_conn(), height)
+            .await
+        {
+            warn!(%error, "Cannot refresh optional rollback observations");
+        }
+        if let Some(tx) = &self.event_tx
+            && tx.send(Event::Rolledback { height }).await.is_err()
+        {
+            warn!("Event receiver dropped, cannot send Rolledback event");
+        }
+    }
+
+    pub(super) async fn handle_block(
+        &mut self,
+        block: impl Into<BlockInput>,
+        decision: &consensus_state::DeferredDecision,
+    ) -> Result<()> {
+        let started_at = Instant::now();
+        let applied = self.execution.handle_block(block, decision).await?;
+        self.observe_block(applied, started_at).await;
+        Ok(())
+    }
+
+    pub(super) async fn observe_block(&mut self, applied: AppliedBlock, started_at: Instant) {
+        let AppliedBlock {
+            block,
+            unbatched_count,
+            executed_ops,
+        } = applied;
+        let height = block.height;
+        let hash = block.hash;
         // Discard consumed candidates. A later local reorg can supply a new
         // replacement at the same height; branch admission checks it independently.
         // A different local block remains a replacement proposal candidate.
@@ -587,8 +471,138 @@ impl<E: Executor> Reactor<E> {
             duration_ms = started_at.elapsed().as_millis() as u64,
             "Block processed"
         );
+    }
 
-        Ok(())
+    pub(super) async fn simulate_raw(&mut self, raw: Vec<u8>) -> Result<SimulationOutcome> {
+        // Recognition belongs at admission, since the protocol may change while
+        // an RPC request waits in the bounded simulation queue.
+        let selection = self.simulation_selection().await?;
+        let tx = match self.execution.executor.prepare_simulation(
+            &self.execution.recognizer,
+            &selection,
+            raw,
+        )? {
+            Ok(Some(tx)) => tx,
+            Ok(None) => return Ok(Err("Not a valid Kontor transaction".to_owned())),
+            Err(error) => return Ok(Err(error)),
+        };
+        self.simulate_selected(selection, tx).await.map(Ok)
+    }
+
+    fn simulation_selection(
+        &self,
+    ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
+        let conn = self.db_conn();
+        let network = self.execution.network;
+        async move {
+            let tip = select_block_latest(&conn).await?;
+            let height = tip.map_or(Ok(1), |row| {
+                row.height
+                    .checked_add(1)
+                    .context("simulation height overflow")
+            })?;
+            select_legacy_p1(&conn, network, ApplicationPosition::Simulation { height }).await
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) async fn simulate(
+        &mut self,
+        tx: indexer_types::Transaction,
+    ) -> Result<Vec<OpWithResult>> {
+        let selection = self.simulation_selection().await?;
+        self.simulate_selected(selection, PreparedTransaction::fixture(tx))
+            .await
+    }
+
+    /// Simulate a transaction: execute in a temporary block, inspect results,
+    /// merge in any deterministic-failure messages captured during execution,
+    /// then rollback. Unlike `/inspect`, this carries live error strings —
+    /// they're not persisted to chain state, only available here while the
+    /// virtual block is still in scope.
+    /// Runs the simulation with its out-of-transaction state restored on EVERY
+    /// exit, not just the successful one.
+    ///
+    /// The database savepoint does not cover contract-facing metadata or the
+    /// shared operation counters. Isolate the counters so runtime clones cannot
+    /// mutate the originals, and restore context even on a returned error.
+    /// Outer errors remain fatal; the SQL transaction is rolled back before the
+    /// reactor reports them. The reactor task must not be cancelled mid-flight.
+    async fn simulate_selected(
+        &mut self,
+        selection: ExecutionSelection,
+        tx: PreparedTransaction,
+    ) -> Result<Vec<OpWithResult>> {
+        let lease = self.execution.begin_unit(&selection, true).await?;
+        let result = self.simulate_inner(&selection, tx).await;
+        self.execution.finish_unit(lease, result, false).await
+    }
+
+    async fn simulate_inner(
+        &mut self,
+        selection: &ExecutionSelection,
+        tx: PreparedTransaction,
+    ) -> Result<Vec<OpWithResult>> {
+        // Simulation runs against a FABRICATED block one past the tip and then
+        // rolls it away. `execute_block` sets `storage.height` to that block as it
+        // goes, so without the restore in `simulate` the runtime is left pointing at
+        // a height whose `blocks` row no longer exists. The next identity created
+        // outside a `set_context` — a decided batch executing at the real tip, say —
+        // then inserts `signers(height = <discarded height>)` and trips the
+        // `signers.height -> blocks.height` foreign key, which is classified
+        // non-deterministic and kills the reactor.
+        selection.verify_base(&self.db_conn()).await?;
+        let block_row = select_block_latest(&self.db_conn())
+            .await
+            .context("Failed to query latest block for simulation")?;
+        let height = block_row.as_ref().map_or(1, |row| row.height + 1);
+        let block = PreparedBlock {
+            height,
+            input: None,
+            hash: new_mock_block_hash(height as u32),
+            prev_hash: block_row
+                .as_ref()
+                .map_or(new_mock_block_hash(0), |row| row.hash),
+            transactions: vec![tx],
+        };
+        let (_unbatched, _executed, failures) = self
+            .execution
+            .execute_block(selection, &block)
+            .await
+            .context("execute_block failed during simulation")?;
+        let tx = &block.transactions[0];
+        let response = (self.execution.session.executor.operations.inspect)(
+            self.execution.session.executor.owner.clone(),
+            selection.envelope(),
+            tx.payload(selection, self.execution.network)?,
+            tx.index,
+        )
+        .await
+        .map_err(HostFailure::from)?;
+        let mut results: Vec<OpWithResult> = serde_json::from_slice(&response)?;
+
+        // Simulate's block has exactly one tx; failures[0] is the per-input
+        // per-op failure vec for it. Flatten in declaration order (inputs
+        // then ops) to align with inspect's flat OpWithResult vec — both
+        // produce one entry per inst in input.insts.ops.
+        if let Some(tx_failures) = failures.into_iter().next() {
+            let mut flat = tx_failures
+                .into_iter()
+                .flat_map(|input_errs| input_errs.into_iter());
+            for ow in results.iter_mut() {
+                if let Some(Some(e)) = flat.next() {
+                    let msg = format!("{e:#}");
+                    match ow {
+                        OpWithResult::Materialized { error_message, .. }
+                        | OpWithResult::Rejected { error_message, .. } => {
+                            *error_message = Some(msg);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     /// Prune finalized, superseded `contract_state` versions below the finality
@@ -607,7 +621,7 @@ impl<E: Executor> Reactor<E> {
     /// finalized, superseded rows and reads only want the latest. Crash between the
     /// two commits just leaves the watermark un-advanced and the band retries.
     pub(super) async fn maybe_prune_state(&mut self) {
-        if !self.prune.enabled {
+        if !self.execution.prune.enabled {
             return;
         }
         match certified_history::frontier(&self.db_conn()).await {
@@ -619,23 +633,24 @@ impl<E: Executor> Reactor<E> {
             }
         }
         let retain = self
+            .execution
             .prune
             .retain_blocks
             .max(minimum_prune_retention_blocks());
         // W = how far we COULD prune; `prune_watermark` (W_prev) = how far we HAVE.
-        let Some(w) = self.last_height.checked_sub(retain) else {
+        let Some(w) = self.execution.last_height.checked_sub(retain) else {
             return;
         };
-        if w <= self.prune_watermark {
+        if w <= self.execution.prune_watermark {
             return; // nothing newly finalized since the last prune (or post-reorg)
         }
-        let w_prev = self.prune_watermark;
+        let w_prev = self.execution.prune_watermark;
         // Best-effort GC: a prune failure must NOT fail the block. On error we leave
         // `prune_watermark` unadvanced so the same band `(w_prev, w]` retries next
         // block (the band query is idempotent, so the catch-up is harmless).
-        match self.prune_state(w_prev, w).await {
+        match self.execution.prune_state(w_prev, w).await {
             Ok(deleted) => {
-                self.prune_watermark = w; // persisted in the same txn as the deletes
+                self.execution.prune_watermark = w; // persisted in the same txn as the deletes
                 if deleted > 0 {
                     debug!(w_prev, w, deleted, "pruned contract_state band");
                 }
@@ -658,11 +673,11 @@ impl<E: Executor> Reactor<E> {
     /// shrinks it back when the live set has shrunk. Cheap when there's nothing to
     /// do (a single `freelist_count` read).
     async fn maybe_vacuum(&mut self) -> Result<()> {
-        let freelist = self.freelist_count().await?;
+        let freelist = self.execution.freelist_count().await?;
         let Some(pages) = vacuum_pages_to_reclaim(freelist) else {
             return Ok(());
         };
-        self.vacuum(pages).await?;
+        self.execution.vacuum(pages).await?;
         debug!(freelist, reclaimed_pages = pages, "incremental_vacuum");
         Ok(())
     }
