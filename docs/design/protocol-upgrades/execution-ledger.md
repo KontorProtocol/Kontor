@@ -2195,3 +2195,58 @@ The source-only correction will be included in the consolidated review, not sent
 through a separate independent review campaign.
 
 Raw `k4-default-clippy57.log` SHA-256: `0a8f51e7cd08db8e6e474c64fcc36b46becfb5015f74f413932cbddf8bf3bfbd`.
+
+
+### K4 consolidated review and original-bundle acceptance, 1 November 2026
+
+The single independent reviewer examined the complete K4 group from merge-base
+`fdf6a65d3a14cf88af7271d666bf13b001849d2f` through `f6d1b320` (including the
+normal-build cfg corrections). Remote main was independently checked and remained
+that K3 merge; no K4 PR existed. Review covered durable acknowledgement, exact
+input/proof bindings, genesis/unavailable legacy state, stage/observation atomicity,
+closure/Next ordering, historical authority, branch replacement, frozen replay
+intervals/exclusions, recovery, ownership, factory mapping and qualification gates.
+The reviewer compared all 1,264 frozen entries against the K3 source with no
+mismatches and inspected prior linked evidence hashes. No runtime work was rerun
+by the reviewer.
+
+One material finding was accepted: proposal reassembly had stream/part count caps
+but no aggregate raw-body byte admission before proposer authentication. Five
+unfinished near-4-MiB Data streams exceed the agreed 16-MiB budget. The post-completion
+early-proposal limits do not cover those streams. The bounded correction is
+assigned as `K4-REASSEMBLY-BOUND` to the existing defensive implementer in an isolated
+worktree; integration, lead review and focused independent follow-up remain
+required. This is an identified resource-bound failure, not a new paging project.
+No other material state, authority or compatibility regression was found.
+
+The reviewer also identified repeated full-batch decoding and membership scanning
+in finality seed validation, quadratic in transaction count when many transactions
+fail in one batch. The lead confirmed the source path in `finality::seed`, `probe`
+and `capture`. Practical latency has not been measured. Retain this scalability
+limitation without adding a performance campaign or merge gate, consistent with the
+operator's performance disposition. It is not a claim of acceptable worst-case
+throughput or a reason to change gas or ordering.
+
+The explicit `legacy-qualification` link set then built both relocated original
+executors at `f6d1b320`, passed native ownership/interface controls and executed all
+25 existing qualification cases (session45836, exit0, 99.91s runtime). First and
+second matched each other and the preserved semantic baseline; no current K4
+certified-history result is claimed by this legacy link set. The original execution
+definitions remain `a69902e230dfa7ae50079838c5d90cf33c6a00de9fc901bf2c26e363449e19e4`
+and `0565ceaf03d95097c02f86ad4bfb6f0c352900ecdfcf071960a408404a81bc48`.
+Artifacts are under `.build-cache/k4-legacy-bundles/aarch64-unknown-linux-gnu/dev/executors/legacy-qualification/`.
+The lead independently verified the build report, stdout, stderr and installed
+binary hashes. Executable SHA-256:
+`09d63f7fb9d33aafa9fc4628aebec9b11fafb375f33eaf58b563b11d67fe5915`.
+This closes relocated original-second linked execution, not final production
+platform CI. Existing first/observer evidence and pending final candidate checks
+retain their distinct scopes. The reviewer will inspect this evidence and the
+buffering fix in a focused follow-up, preserving the rest of the completed review.
+
+Raw `k4-linked-legacy58.log` SHA-256: `c30380665c360a466203081cc629a07b2cbab1dbc5507bf21f2116f2d83ace90`.
+
+The independent follow-up verified the legacy build/output/binary and ownership
+report hashes, checked all 536 qualification source entries against `f6d1b320`,
+and confirmed both original definitions, the 25 cases, the semantic baseline and
+explicitly absent certified-history claim. It accepted this acceptance gap as
+closed. The reassembly correction and final-candidate CI remain outstanding.
