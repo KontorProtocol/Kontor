@@ -1,3 +1,8 @@
+CREATE TABLE IF NOT EXISTS certified_protocols (
+    protocol_id BLOB PRIMARY KEY CHECK (length(protocol_id) = 32),
+    manifest BLOB NOT NULL CHECK (length(manifest) <= 65536)
+);
+
 CREATE TABLE IF NOT EXISTS certified_history_state (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     status TEXT NOT NULL CHECK (status IN ('pending', 'initializing', 'ready', 'unavailable')),

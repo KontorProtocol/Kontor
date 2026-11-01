@@ -68,7 +68,7 @@ use crate::database::canonical_history;
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
 #[cfg(test)]
 use crate::protocol::coordinator::committee::build_validator_set;
-use crate::protocol::coordinator::genesis::bind_identity;
+use crate::protocol::coordinator::bootstrap;
 use crate::protocol::coordinator::linked::{self, TransactionRecognizer};
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
@@ -1000,7 +1000,7 @@ pub(crate) async fn create_executor_session(
             })
             .collect(),
     );
-    bind_identity(
+    let (baseline, initialize) = bootstrap::prepare(
         &writer.connection(),
         network,
         starting_block_height,
@@ -1016,15 +1016,18 @@ pub(crate) async fn create_executor_session(
     owner_service
         .apply_linked_startup_compile_gate(&session)
         .await?;
-    linked::initialize(
-        owner_service,
-        &session,
-        network,
-        starting_block_height,
-        genesis,
-    )
-    .await
-    .context("Failed to publish native contracts")?;
+    if initialize {
+        linked::initialize(
+            owner_service,
+            &session,
+            network,
+            starting_block_height,
+            genesis,
+        )
+        .await
+        .context("Failed to publish native contracts")?;
+    }
+    bootstrap::complete(owner_service, &session, network, &baseline).await?;
     Ok((exec, session, height, hash))
 }
 

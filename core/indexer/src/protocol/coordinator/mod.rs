@@ -1,5 +1,6 @@
 pub(crate) mod application_closure;
 pub(crate) mod baseline;
+pub(crate) mod bootstrap;
 pub(crate) mod certified_decision;
 pub(crate) mod certified_input;
 pub(crate) mod closure_execution;

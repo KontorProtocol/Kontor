@@ -32,6 +32,11 @@ use bitcoin::Network;
 async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() -> Result<()> {
     let (reader, writer, (dir, name)) = new_test_db().await?;
     let conn = writer.connection();
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: random_x_only_pubkey(),
+        ed25519_pubkey: PrivateKey::from([77; 32]).public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }]);
     let gate = Arc::new(BlockingGate::default());
     let owner = OwnerService::new();
     owner.set_startup_compile_gate(gate.clone());
@@ -60,7 +65,7 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
         },
         Client::new("".to_string(), "".to_string(), "".to_string())?,
         None,
-        test_genesis(&[]),
+        genesis.clone(),
         None,
         1_000,
         None,
@@ -151,7 +156,7 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
         &resumed_owner,
         Client::new("".to_string(), "".to_string(), "".to_string())?,
         None,
-        &test_genesis(&[]),
+        &genesis,
         bitcoin::Network::Regtest,
     )
     .await?;

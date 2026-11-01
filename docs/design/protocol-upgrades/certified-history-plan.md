@@ -14,14 +14,14 @@ cross-era cold catch-up. None of those capabilities is claimed complete by K4.
 
 ### Local implementation checkpoint
 
-K4 is not yet integrated into the production reactor or ready for a PR. The local
+K4 is not yet fully integrated into the production reactor or ready for a PR. The local
 implementation has canonical manifest/input/decision codecs, checked historical
 authority, durable certificate/input append, registration-generation observations,
 and restartable application-stage records. A stage retains its original K3
 application records even when canonical rollback removes those applications.
 Its effects, observation and remaining work commit together. Normal stages consume
 one work item; finality processing may replace the remaining work with rollback
-and replay. Startup recovery verifies the stage chain and rejects unjournaled
+and replay. The stage-recovery API verifies the chain and rejects unjournaled
 canonical effects rather than repeating a committed stage.
 
 The stage runner uses the actual retained-runtime ownership and observation paths.
@@ -29,8 +29,8 @@ Focused local checks cover transaction interruption, reopen/retry, stale admissi
 input substitution, omitted block lifecycle, rollback/replay and missing/corrupt
 records. These checks do not establish complete reactor behavior or cross-platform
 qualification. The live Decided/Finalized and next-height gates, final closure and
-committee publication, baseline composition, certified-branch rules, startup
-integration and oversized-proof transport remain to be connected and qualified.
+committee publication, certified-branch rules, post-genesis startup recovery
+and oversized-proof transport remain to be connected and qualified.
 The Bitcoin poller now retains the complete decoded Bitcoin block, including its
 header and transaction witnesses. Its checked history conversion validates the
 requested hash, parent, size and Bitcoin commitments, and replay reconstructs the
@@ -45,7 +45,17 @@ target conditions and locked dependency checksums/revisions. The node build chec
 that reference before and after compilation. References are not refreshed implicitly;
 this baseline remains unreleased while K4 is under development.
 Baseline composition and foreign-context rejection have focused local coverage.
-Startup and live proposal construction still need to select and persist this context.
+The production executor-session startup now reserves the manifest and genesis
+context before native initialization, then records the initial registration
+observation and committee through the retained executor. The manifest and genesis
+reservation commit atomically. Reopening verifies the stored manifest, genesis
+observation and closure; before any certified decision, the canonical lineage must
+still match genesis. Ready startup does not republish native initialization stages.
+Old populated databases are preserved and refused with an explicit
+history-unavailable/rebuild-required error. Local checks cover a new connection,
+corrupt records, cancellation during initialization and resumption of its suffix.
+Live proposal construction and post-genesis recovery still need to use this context;
+the ordinary Decided/Finalized execution path is not yet journal-integrated.
 Both explicit link sets still need their complete integration acceptance evidence.
 
 ## Result and boundaries

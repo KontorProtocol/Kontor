@@ -3,12 +3,14 @@ use libsql::{Connection, TransactionBehavior, params};
 
 use super::canonical_history::{self, HistoryState};
 use crate::protocol::canonical_codec::{Decoder, Encoder};
+use crate::protocol::coordinator::baseline::Baseline;
 use crate::protocol::coordinator::certified_decision::{
     AuthenticatedDecision, CommitteeRecord, Decision, verify_certificate,
 };
 use crate::protocol::coordinator::certified_input::{EraContext, ExactInput};
+use crate::protocol::coordinator::manifest::ProtocolManifest;
 use crate::protocol::coordinator::registration_history::RegistrationSnapshot;
-use crate::protocol::identity::domain_digest;
+use crate::protocol::identity::{ProtocolId, domain_digest};
 
 pub(crate) mod closure;
 pub(crate) mod registrations;
@@ -123,6 +125,41 @@ pub(crate) async fn frontier(conn: &Connection) -> Result<Frontier> {
 }
 
 pub(crate) async fn begin_genesis(conn: &Connection, context: EraContext) -> Result<()> {
+    reserve_genesis(conn, context, None).await
+}
+
+pub(crate) async fn begin_baseline(conn: &Connection, baseline: &Baseline) -> Result<()> {
+    ensure!(
+        baseline.manifest.chain == baseline.context.chain
+            && baseline.manifest.id()? == baseline.context.protocol,
+        "baseline manifest/context binding differs"
+    );
+    reserve_genesis(conn, baseline.context, Some(&baseline.manifest)).await
+}
+
+pub(crate) async fn protocol(conn: &Connection, id: ProtocolId) -> Result<ProtocolManifest> {
+    let row = conn
+        .query(
+            "SELECT manifest FROM certified_protocols WHERE protocol_id = ?1",
+            [id.0.to_vec()],
+        )
+        .await?
+        .next()
+        .await?
+        .context("certified protocol manifest unavailable")?;
+    let manifest = ProtocolManifest::decode(&row.get::<Vec<u8>>(0)?)?;
+    ensure!(
+        manifest.id()? == id,
+        "stored protocol manifest identity differs"
+    );
+    Ok(manifest)
+}
+
+async fn reserve_genesis(
+    conn: &Connection,
+    context: EraContext,
+    manifest: Option<&ProtocolManifest>,
+) -> Result<()> {
     ensure!(context.codec == 1, "unsupported genesis history codec");
     durable_writer(conn).await?;
     let tx = conn
@@ -170,6 +207,20 @@ pub(crate) async fn begin_genesis(conn: &Connection, context: EraContext) -> Res
         ),
         Status::Unavailable => {
             anyhow::bail!("certified history unavailable; authentic rebuild required")
+        }
+    }
+    if let Some(manifest) = manifest {
+        if state.status == Status::Pending {
+            tx.execute(
+                "INSERT INTO certified_protocols (protocol_id, manifest) VALUES (?1, ?2)",
+                params![context.protocol.0.to_vec(), manifest.encode()?],
+            )
+            .await?;
+        } else {
+            ensure!(
+                protocol(&tx, context.protocol).await? == *manifest,
+                "certified baseline manifest changed on restart"
+            );
         }
     }
     tx.commit().await?;
