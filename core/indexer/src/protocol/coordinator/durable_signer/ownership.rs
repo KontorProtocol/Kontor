@@ -68,7 +68,18 @@ impl GenerationOwner {
             }
         }
         let lock_path = directory.join("generation.lock");
+        let journal_path = directory.join("generations.log");
         let lock_existed = path_present(&lock_path)?;
+        let journal_existed = path_present(&journal_path)?;
+        if lock_existed != journal_existed {
+            return Err(fault("generation lock and journal presence differ"));
+        }
+        if !journal_existed
+            && (path_present(&directory.join("signatures.log"))?
+                || path_present(&directory.join("signers"))?)
+        {
+            return Err(fault("signing history exists without generation journal"));
+        }
         let ownership = if lock_existed {
             OpenOptions::new()
                 .read(true)
@@ -84,18 +95,6 @@ impl GenerationOwner {
         verify_private_regular(&lock_path, &ownership)?;
         if !lock_existed {
             sync_directory(&directory)?;
-        }
-
-        let journal_path = directory.join("generations.log");
-        let journal_existed = path_present(&journal_path)?;
-        if lock_existed != journal_existed {
-            return Err(fault("generation lock and journal presence differ"));
-        }
-        if !journal_existed
-            && (path_present(&directory.join("signatures.log"))?
-                || path_present(&directory.join("signers"))?)
-        {
-            return Err(fault("signing history exists without generation journal"));
         }
         let (mut journal, network_key, mut digest) = if journal_existed {
             let mut journal = OpenOptions::new()
@@ -633,6 +632,27 @@ mod tests {
     }
 
     #[test]
+    fn deleted_lock_is_not_recreated_by_repeated_failed_opens() {
+        let root = TempDir::new().unwrap();
+        let owner = open_owner(&root);
+        let generation = owner.reserve(None).unwrap();
+        let lock_path = directory(&root).join("generation.lock");
+        fs::remove_file(&lock_path).unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                GenerationOwner::open(&directory(&root), test_fixtures::context().chain),
+                Err(SigningError::Fault(_))
+            ));
+            assert!(!path_present(&lock_path).unwrap());
+        }
+        assert!(matches!(
+            owner.reserve(None),
+            Err(SigningError::InvalidRequest(_))
+        ));
+        drop(generation);
+    }
+
+    #[test]
     fn missing_prior_validator_history_is_not_recreated() {
         let root = TempDir::new().unwrap();
         let owner = open_owner(&root);
@@ -675,6 +695,7 @@ mod tests {
             GenerationOwner::open(&directory(&root), test_fixtures::context().chain),
             Err(SigningError::Fault(_))
         ));
+        assert!(!path_present(&directory(&root).join("generation.lock")).unwrap());
     }
 
     #[test]
