@@ -15,7 +15,7 @@ use sha3::{Digest, Keccak256};
 use crate::protocol::coordinator::certified_input::EraContext;
 use crate::protocol::identity::ChainId;
 
-use super::{SignerIdentity, SigningError};
+use super::{DurableSigner, SignerIdentity, SigningError};
 
 const MAGIC: &[u8; 4] = b"KGO1";
 // Header: magic || chain[32] || network seed[32] || Keccak256(prefix).
@@ -201,6 +201,30 @@ impl OwnedGeneration {
 
     pub(crate) fn network_key(&self) -> [u8; 32] {
         self.owner.network_key
+    }
+
+    pub(crate) fn validate_signer(
+        &self,
+        signer: Option<&DurableSigner>,
+    ) -> Result<(), SigningError> {
+        self.with_active(|| match (self.validator, signer) {
+            (None, None) => Ok(()),
+            (Some(validator), Some(signer))
+                if signer.public_key == validator
+                    && signer.identity.generation == self.generation
+                    && signer.identity.context.chain == self.owner.chain
+                    && signer.owned_generation.as_ref().is_some_and(|owned| {
+                        Arc::ptr_eq(&owned.owner, &self.owner)
+                            && owned.generation == self.generation
+                            && owned.validator == self.validator
+                    }) =>
+            {
+                Ok(())
+            }
+            _ => Err(SigningError::InvalidRequest(
+                "signer does not belong to reserved engine generation".into(),
+            )),
+        })
     }
 
     // The node calls this only after the engine worker joined, or startup created no worker.
@@ -514,6 +538,59 @@ mod tests {
         let reopened =
             DurableSigner::open_owned(next.clone(), test_fixtures::context(), key).unwrap();
         assert_eq!(reopened.public_key(), public);
+    }
+
+    #[test]
+    fn admission_requires_exact_owner_generation_and_mode() {
+        let root = TempDir::new().unwrap();
+        let other_root = TempDir::new().unwrap();
+        let owner = open_owner(&root);
+        let other_owner = open_owner(&other_root);
+        let key = PrivateKey::from([11; 32]);
+        let public = *key.public_key().as_bytes();
+        let other_follower = other_owner.reserve(None).unwrap();
+        other_follower.joined().unwrap();
+        let other = other_owner.reserve(Some(public)).unwrap();
+        let other_signer =
+            DurableSigner::open_owned(other, test_fixtures::context(), key.clone()).unwrap();
+        let follower = owner.reserve(None).unwrap();
+        follower.validate_signer(None).unwrap();
+        assert!(matches!(
+            follower.validate_signer(Some(&other_signer)),
+            Err(SigningError::InvalidRequest(_))
+        ));
+        follower.joined().unwrap();
+
+        let validator = owner.reserve(Some(public)).unwrap();
+        assert_eq!(validator.generation(), 2);
+        assert!(matches!(
+            validator.validate_signer(None),
+            Err(SigningError::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            validator.validate_signer(Some(&other_signer)),
+            Err(SigningError::InvalidRequest(_))
+        ));
+        let raw = DurableSigner::open(
+            &root.path().join("raw-signer"),
+            validator
+                .signer_identity(test_fixtures::context(), &key)
+                .unwrap(),
+            key.clone(),
+        )
+        .unwrap();
+        assert!(matches!(
+            validator.validate_signer(Some(&raw)),
+            Err(SigningError::InvalidRequest(_))
+        ));
+        let owned =
+            DurableSigner::open_owned(validator.clone(), test_fixtures::context(), key).unwrap();
+        validator.validate_signer(Some(&owned)).unwrap();
+        validator.joined().unwrap();
+        assert_eq!(
+            validator.validate_signer(Some(&owned)),
+            Err(SigningError::Fenced)
+        );
     }
 
     #[test]
