@@ -1832,3 +1832,41 @@ run 31 are the corrected block-removal stimulus and field shorthand. Confirmatio
 position/parity and archive fixture migration, obsolete replay interfaces, bounded
 proof paging/admission, real-graph integration, consolidated review and CI remain
 unfinished. No PR, push or remote CI campaign was launched.
+
+### K4 certified confirmation and reorg accounting fixtures
+
+Continuing from `f3006af6503c6a73fb99f7ed85d7af8ca3014cf1`, the two automatic
+confirmation-position regressions now initialize certified history from genesis,
+execute an issuance and publication in certified Bitcoin Block 1, and use signed
+batch/block decisions with exact retained inputs. The test advances the production
+closure one settled step at a time, allowing inspection immediately after the
+replacement block's rollback stage. No seeded runtime is promoted to authority.
+
+Both paths retain successful contract output and gas assertions, raw Bitcoin
+position versus recognized-transaction ordinal checks, and actual execution/op
+counts. The batched path proves unchanged transaction effects and charges on
+confirmation, preserved batch identity after rollback, cleared confirmation,
+receipt-stream recovery to the pre-block cursor, and reconfirmation at a different
+raw position with zero repeated operations. The batch is now consensus height 2,
+after the certified initial block. Its Bitcoin execution height remains 1.
+
+Full certified block processing also runs native lifecycle operations. The effects
+snapshot therefore compares transaction-associated state and receipts, all gas
+usage and depositor footprints, contract/provenance rows, and the target contract's
+current-state projection. Lifecycle-only state and receipts are excluded from the
+equality assertion because a new block legitimately changes them. Receipt recovery
+uses the captured pre-block maximum receipt ID, including the surviving batch,
+rather than the later maximum that can include rolled-back lifecycle receipts.
+The fixtures still do not establish Bitcoin PoW, UTXO or script acceptance.
+
+Local evidence: `k4-confirmation33.log`, session 83147, exit 0, two passed in 49.82s.
+The existing manual cross-revision parity test was ignored, as intended by its
+explicit-run marker; this result does not cover that test or its legacy seed.
+Log SHA-256 `4b96ff0149fc635fc9d4a6c92d4ec9f0f720f15ee8d6e758e2acfed73b1b3dcb`.
+Draft definition `a0fff15b64e949ce6634b1c6698a864f76fcc607f3318ad3642a24ad6ebb578c`.
+Formatting and diff checks passed. Lead inspection traced certificate retention,
+closure stepping, rollback and receipt recovery; the consolidated independent
+K4 review remains pending. No production execution changes, PR, push or remote CI
+were made for this fixture migration. Manual historical parity/archive migration,
+obsolete replay interfaces, bounded proof transport/admission and the rest of K4
+integration/review/CI remain unfinished.
