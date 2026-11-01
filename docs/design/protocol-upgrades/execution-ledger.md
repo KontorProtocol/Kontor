@@ -2933,3 +2933,44 @@ recovery. Production engine ownership before canonical mutation, managed engine
 startup, final independent-graph node builder, K6 and grouped acceptance/review
 remain unfinished. The local library tests do not establish final production
 binary or cross-platform qualification. No CI was launched.
+
+### K5 managed daemon startup and ownership checkpoint
+
+The managed daemon now acquires its persistent generation owner and initial
+signer before opening the schema-initializing writer. Read-only protocol
+admission runs first, and runs again after the exclusive owner is acquired.
+Unsupported intermediate databases remain untouched. A competing node cannot
+create a second database in the owned directory. Network identity persists
+independently of validator identity.
+
+The reactor retains the node coordinator and starts the real first consensus
+bundle through its typed adapter. Restart reserves a fresh generation only after
+the previous engine has joined. The WAL path is era-specific and stable across
+restarts within an era. Production managed startup requires the coordinator;
+legacy startup remains available to existing isolated test/qualification fixtures.
+There is no new Malachite fork change in this checkpoint.
+
+Twelve focused Rust tests passed, zero failed or ignored, in 53.20 seconds. The
+new live test publishes actual native genesis, starts a consensus round, joins
+the engine, restarts another round using the same node owner and WAL, joins again,
+and verifies the next reservation is generation three. Admission, preserved
+network identity, exclusive ownership, bootstrap and owned-genesis shutdown are
+also covered. Two earlier attempts failed at initial network readiness inside a
+sandbox that denied localhost socket creation, independently reproduced with
+`socket.socket()`. Their failed logs are preserved. The successful run used
+localhost access without increasing startup timeouts.
+
+`.build-cache/k5-managed-startup-test.json` binds the test source, binary, raw log,
+runner, wrapper and staged-library specification. The actual daemon entry point
+also compiled successfully with the managed configuration; its final evidence is
+`.build-cache/k5-managed-daemon-build.json`. After the tests, only a conditional
+import in `main.rs` changed to remove a managed-build warning. The final daemon
+build covers that correction; the tested library sources are unchanged.
+
+Lead review traced admission before initialization, owner/signer lifetimes,
+reactor startup and shutdown, generation reuse after join, and same-era WAL
+selection. This is component integration using independently staged consensus
+libraries, not final independent executor-plus-consensus production-link evidence.
+The production builder, K6 authorization/rehearsal, activation/recovery and the
+consolidated K5/K6 review remain outstanding. Existing warnings for unselected
+later-phase helpers remain visible. No PR or CI campaign was launched.

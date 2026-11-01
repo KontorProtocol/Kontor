@@ -24,6 +24,19 @@ pub async fn open_node_database_for_genesis(
     starting_block_height: u64,
     genesis: &GenesisParameters,
 ) -> Result<(Reader, Writer)> {
+    admit_node_database(data_dir, filename, network, starting_block_height, genesis).await?;
+    let writer = Writer::new(data_dir, filename).await?;
+    let reader = Reader::new(data_dir, filename).await?;
+    Ok((reader, writer))
+}
+
+pub(crate) async fn admit_node_database(
+    data_dir: &Path,
+    filename: &str,
+    network: Network,
+    starting_block_height: u64,
+    genesis: &GenesisParameters,
+) -> Result<Baseline> {
     let chain = configured_chain(network, starting_block_height, &envelope(genesis))?;
     let baseline = Baseline::for_node(chain)?;
     preflight_with_protocol(
@@ -33,9 +46,7 @@ pub async fn open_node_database_for_genesis(
     )
     .await
     .context("database protocol admission failed; database was not initialized or migrated")?;
-    let writer = Writer::new(data_dir, filename).await?;
-    let reader = Reader::new(data_dir, filename).await?;
-    Ok((reader, writer))
+    Ok(baseline)
 }
 
 /// Validate existing genesis before opening connections that initialize or migrate

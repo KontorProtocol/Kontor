@@ -131,6 +131,8 @@ pub(crate) async fn run(
             consensus_enabled: false,
             discovery: Default::default(),
         },
+        #[cfg(kontor_managed)]
+        None,
         &execution.session,
         service,
         network,

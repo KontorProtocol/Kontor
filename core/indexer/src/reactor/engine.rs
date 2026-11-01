@@ -14,6 +14,11 @@ use crate::consensus::codec::ProtobufCodec;
 use crate::consensus::signing::{Ed25519Provider, PrivateKey};
 use crate::consensus::{Address, Ctx};
 
+#[cfg(kontor_managed)]
+mod managed;
+#[cfg(kontor_managed)]
+pub use managed::NodeCoordinator;
+
 pub struct EngineConfig {
     pub private_key: PrivateKey,
     pub listen_addr: String,

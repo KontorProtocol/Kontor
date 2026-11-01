@@ -13,6 +13,8 @@ use clap::{Parser, Subcommand};
 use futures_util::{FutureExt, future};
 use indexer::config::GenesisConfig;
 use indexer::confirmation_backfill::{self, ConfirmationBackfillArgs};
+#[cfg(not(kontor_managed))]
+use indexer::database;
 use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
 use indexer::info::{compute_info_core, run_info_publisher};
@@ -23,7 +25,7 @@ use indexer::receipt_stream_rotation::{self, ReceiptStreamRotationArgs};
 use indexer::runtime::GenesisParameters;
 use indexer::stopper::{self, Shutdown};
 use indexer::{api, built_info, reactor, reg_tester, runtime};
-use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging};
+use indexer::{bitcoin_client, bitcoin_follower, config::Config, logging};
 use indexer_types::{Inst, InstKind};
 use kontor_build::{BuildArgs, run as build};
 use malachitebft_app_channel::app::config::{BootstrapProtocol, DiscoveryConfig, Selector};
@@ -266,6 +268,40 @@ async fn run_daemon(config: Config) -> Result<()> {
     }));
     let filename = "state.db";
     let genesis: GenesisParameters = GenesisConfig::load(&config.genesis_file)?.try_into()?;
+    let private_key = indexer::consensus::signing::resolve_consensus_private_key(
+        config.consensus_mode,
+        config.consensus_private_key.as_deref(),
+        config.consensus_private_key_file.as_deref(),
+    )?;
+    let consensus_enabled =
+        config.consensus_mode == indexer::consensus::signing::ConsensusMode::Validator;
+    if !consensus_enabled {
+        info!("Consensus mode: follower — sync-only, will not sign");
+    }
+    let engine_config = reactor::engine::EngineConfig {
+        private_key,
+        listen_addr: config.consensus_listen_addr.clone(),
+        persistent_peers: config.consensus_peers.clone(),
+        data_dir: config.data_dir.clone(),
+        consensus_enabled,
+        discovery: DiscoveryConfig {
+            enabled: true,
+            bootstrap_protocol: BootstrapProtocol::Full,
+            selector: Selector::Random,
+            ..Default::default()
+        },
+    };
+
+    #[cfg(kontor_managed)]
+    let (coordinator, reader, writer) = reactor::engine::NodeCoordinator::open_database(
+        &engine_config,
+        filename,
+        config.network,
+        config.starting_block_height,
+        &genesis,
+    )
+    .await?;
+    #[cfg(not(kontor_managed))]
     let (reader, writer) = database::open_node_database_for_genesis(
         &config.data_dir,
         filename,
@@ -341,30 +377,6 @@ async fn run_daemon(config: Config) -> Result<()> {
     )
     .await;
 
-    let private_key = indexer::consensus::signing::resolve_consensus_private_key(
-        config.consensus_mode,
-        config.consensus_private_key.as_deref(),
-        config.consensus_private_key_file.as_deref(),
-    )?;
-    let consensus_enabled =
-        config.consensus_mode == indexer::consensus::signing::ConsensusMode::Validator;
-    if !consensus_enabled {
-        info!("Consensus mode: follower — sync-only, will not sign");
-    }
-    let engine_config = reactor::engine::EngineConfig {
-        private_key,
-        listen_addr: config.consensus_listen_addr.clone(),
-        persistent_peers: config.consensus_peers.clone(),
-        data_dir: config.data_dir.clone(),
-        consensus_enabled,
-        discovery: DiscoveryConfig {
-            enabled: true,
-            bootstrap_protocol: BootstrapProtocol::Full,
-            selector: Selector::Random,
-            ..Default::default()
-        },
-    };
-
     let (ready_tx, ready_rx) = oneshot::channel();
     let reactor_handle = reactor::run(
         config.starting_block_height,
@@ -377,6 +389,8 @@ async fn run_daemon(config: Config) -> Result<()> {
         Some(event_tx),
         Some(simulate_rx),
         engine_config,
+        #[cfg(kontor_managed)]
+        coordinator,
         bitcoin.clone(),
         genesis,
         None,

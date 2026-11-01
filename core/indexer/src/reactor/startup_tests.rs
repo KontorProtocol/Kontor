@@ -10,6 +10,8 @@ use tokio::time::{interval, sleep, timeout};
 
 use super::certified_fixture;
 use super::engine::EngineConfig;
+#[cfg(kontor_managed)]
+use super::engine::NodeCoordinator;
 use super::executor::NoopExecutor;
 use super::mempool_fee_index::MempoolFeeIndex;
 use super::{PruneConfig, Reactor, create_executor_session, run, start_linked_consensus};
@@ -43,6 +45,21 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
     let (_block_tx, block_rx) = mpsc::channel(1);
     let (_mempool_tx, mempool_rx) = mpsc::channel(1);
     let (addr_tx, _addr_rx) = watch::channel(None);
+    let engine_config = EngineConfig {
+        private_key: PrivateKey::from([77; 32]),
+        listen_addr: "/ip4/127.0.0.1/tcp/0".to_string(),
+        persistent_peers: Vec::new(),
+        data_dir: dir.path().to_path_buf(),
+        consensus_enabled: true,
+        discovery: Default::default(),
+    };
+    #[cfg(kontor_managed)]
+    let coordinator = {
+        let (coordinator, _, _) =
+            NodeCoordinator::open_database(&engine_config, &name, Network::Regtest, 1, &genesis)
+                .await?;
+        coordinator
+    };
     let mut reactor = run(
         1,
         shutdown.signal(),
@@ -53,14 +70,9 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
         None,
         None,
         None,
-        EngineConfig {
-            private_key: PrivateKey::from([77; 32]),
-            listen_addr: "/ip4/127.0.0.1/tcp/0".to_string(),
-            persistent_peers: Vec::new(),
-            data_dir: dir.path().to_path_buf(),
-            consensus_enabled: true,
-            discovery: Default::default(),
-        },
+        engine_config,
+        #[cfg(kontor_managed)]
+        coordinator,
         Client::new("".to_string(), "".to_string(), "".to_string())?,
         genesis.clone(),
         None,
@@ -200,6 +212,8 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
             consensus_enabled: true,
             discovery: Default::default(),
         },
+        #[cfg(kontor_managed)]
+        None,
         &session,
         &owner,
         Network::Regtest,

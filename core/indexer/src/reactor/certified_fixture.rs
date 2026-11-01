@@ -60,6 +60,8 @@ pub(super) async fn reactor(
             consensus_enabled: false,
             discovery: Default::default(),
         },
+        #[cfg(kontor_managed)]
+        None,
         &session,
         &service,
         Network::Regtest,
