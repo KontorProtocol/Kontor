@@ -35,6 +35,15 @@ pub(super) async fn seed() -> Result<TempDir> {
     let dir = TempDir::new()?;
     let conn = new_connection(dir.path(), "source.db").await?;
     conn.execute("BEGIN", ()).await?;
+    // Real receipt epochs are random node-local metadata. Independent platform
+    // runs need identical fixture input so every table can remain in comparison.
+    let updated = conn
+        .execute(
+            "UPDATE receipt_stream_state SET epoch = ? WHERE singleton = 1",
+            params!["a".repeat(64)],
+        )
+        .await?;
+    ensure!(updated == 1, "migration fixture receipt stream is absent");
     canonical_history::bind_genesis(&conn, ChainId([1; 32])).await?;
     insert_block(
         &conn,
@@ -47,8 +56,6 @@ pub(super) async fn seed() -> Result<TempDir> {
     conn.execute("INSERT INTO contract_state (contract_id, height, size, path, value) VALUES (1, 1, 7, ?1, ?2)",
         params![b"migration-input".as_slice(), b"payload".as_slice()]).await?;
     conn.execute("COMMIT", ()).await?;
-    // Both graphs start with identical node-local metadata as well as logical
-    // state, so the comparison need not discard receipt or other existing tables.
     conn.execute(
         "VACUUM INTO ?1",
         [dir.path().join("seed.db").to_string_lossy().as_ref()],
@@ -271,10 +278,11 @@ mod tests {
 
     #[tokio::test]
     async fn migration_qualification_compares_full_state_and_validates_journal() -> Result<()> {
-        let seed = seed().await?;
+        let first_seed = seed().await?;
+        let second_seed = seed().await?;
         let factory = session_factory(NETWORK, None)?;
-        let first = qualify_graph("in-tree", seed.path(), factory.clone()).await?;
-        let second = qualify_graph("in-tree", seed.path(), factory).await?;
+        let first = qualify_graph("in-tree", first_seed.path(), factory.clone()).await?;
+        let second = qualify_graph("in-tree", second_seed.path(), factory).await?;
         assert_eq!(first, second);
         Ok(())
     }
