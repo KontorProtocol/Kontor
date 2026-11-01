@@ -93,14 +93,16 @@ proof for every transaction or platform.
 
 The maintained node builder records source, lock, compiler, native ownership,
 link and execution evidence. Docker's production build route now installs its
-audited executable. The full release image is not yet validated. Platform
+audited executable. The local ARM64 release image builds successfully, contains
+that exact executable, and passes non-root CLI smoke checks with qualification
+commands absent. This does not replace platform execution qualification. Platform
 comparison explicitly requires release results from all three supported platforms,
 with exhaustive dev/release comparison available only manually. Comparator-only
 changes run focused evidence controls instead of rebuilding all platforms.
 
 Before K2b can merge, finish the remaining guest panic payload and missing-context
-publication/provenance checks; validate the complete release image and
-required platform checks; consolidate the lead and two independent phase reviews;
+publication/provenance checks and required platform checks; consolidate the lead
+and two independent phase reviews;
 and pass final-candidate CI. The Daybreak implementer has the bounded panic-parity
 assignment. The integrated ownership checks establish one local dev cell, not
 release-platform qualification. No delegated result is accepted solely from its status

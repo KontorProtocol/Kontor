@@ -41,8 +41,18 @@ payload or missing-context publication/provenance behavior.
 
 The Daybreak implementer is addressing that remaining clause under bounded task
 `kontor-k2b-panic-parity`. A source patch or running build is not a passing result.
-The full release container, final platform qualification, consolidated lead/two
-independent reviews, PR CI and merge are still pending.
+The production release container built successfully from runtime source
+`a7807439`. Image `a1da95362b4735bb8a9dbb3ad894852e4fe042ce942aaac4a2a60f2301421e96`
+contains the exact audited executable with SHA-256
+`1fc5d8b0a0cf5168e428b07ec9bd44d6caed6ebffbcdb6c76f22724ff24795ef`.
+Non-root CLI help passed and the qualification-only command was rejected.
+Preserved ownership reports, build log and linker-input inventory match their
+recorded hashes. Evidence is in the production worktree's
+`.build-cache/production-release-image-v1-evidence` directory. This local Podman
+OCI image omits Docker healthcheck metadata; the Dockerfile healthcheck is
+unchanged. These packaging checks do not qualify execution across platforms.
+Final platform qualification, consolidated lead/two independent reviews, PR CI
+and merge remain pending.
 
 No K2b broad CI campaign has been launched. Comparator-only changes select focused
 controls; execution/build changes retain the required platform matrix. Before
