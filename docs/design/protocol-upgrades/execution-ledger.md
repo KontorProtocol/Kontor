@@ -1613,3 +1613,35 @@ The ordinary successful restart above is limited evidence, not a teardown-race
 qualification. Remaining K4 finality/replay, bounded proof transport/admission,
 consolidated review and scoped CI/merge remain required. No PR, push or remote CI
 was started for this checkpoint.
+
+### K4 explicit initial anchors and node task completion
+
+Continuing from `bcb7460e` (a progress turn), migrated ten cluster cases that
+expected Batch(0): each now explicitly processes setup Block(1), with subsequent
+Bitcoin heights and anchors shifted while preserving transaction counts and
+assertions. The stuck-validation case also establishes its anchor before starting
+the delayed I/O job. The dropped-startup-proposal fixture supplies Block(1) after
+its existing round-zero readiness barrier. No production ordering rule changed.
+
+Cluster restart now waits for the old node future's completion signal before
+reopening its database, replacing the fixed 500ms delay. Timeout or premature
+channel closure fails the test. This checks node-task completion, not the future
+K5 engine-handoff timeout/signing qualification.
+
+Seven selected local tests passed, 335.12s, session 18418 exit 0:
+anchor transition; blocks progressing during stuck validation; happy finality;
+missing transaction rollback with complete and partial submission; actual counter
+state/confirmation/restart; dropped initial proposal with a delayed retry proposer.
+Evidence: `.build-cache/k4-cluster-migration19.log`, SHA-256
+`30c148b135ecf9c07865bd6deeb0519ec42e852d3c3307cab42836b009c05ca8`.
+Draft coordinator definition:
+`34aeafc15480afc156004a584c66031a575e81040eaab6f6782f2aa8bd3e6656`.
+Formatting/diff checks passed. Other migrated cases still need execution evidence.
+
+Remaining old reorg cases incorrectly expect a local Bitcoin rollback notification
+to immediately undo canonical state. They must preserve their assertions while
+applying them after certification of the replacement block. The simulation case
+still uses an ambiguous empty Bitcoin encoding and should execute a real counter
+call with a no-state-leak assertion. Full cluster, late-join/deep recovery, remaining
+K4 transport/admission and final review/CI remain incomplete. No remote run or PR
+was created for this local checkpoint.
