@@ -66,7 +66,7 @@ use crate::consensus::Ctx;
 #[cfg(test)]
 use crate::database::canonical_history;
 use crate::database::certified_history;
-use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
+use crate::metrics::PENDING_BLOCKS;
 use crate::protocol::coordinator::bootstrap;
 #[cfg(test)]
 use crate::protocol::coordinator::committee::build_validator_set;
@@ -120,18 +120,6 @@ use mempool::MempoolPreparation;
 /// deep-reorg bail in `process_block_event` fires on an ordinary shallow reorg.
 /// Keep this constant and that config default in lockstep.
 const MAX_PENDING_BLOCKS: usize = 128;
-
-/// Ceiling on `consensus_state::deferred_decisions` — decided values parked
-/// because their data has not arrived or their turn has not come.
-///
-/// Unlike [`MAX_PENDING_BLOCKS`] this is not backpressure: there is nothing to
-/// slow down, since the queue is fed by consensus itself. It is an OOM backstop
-/// for the one state that cannot resolve itself — a node whose execution has
-/// fallen behind heights the network already decided, which parks one entry per
-/// decided value from then on. Set far above any legitimate backlog: a healthy
-/// node idles near zero and drains within a block, and a tight bound would turn
-/// a transient stall into the crash loop this bound exists to avoid.
-const MAX_DEFERRED_DECISIONS: usize = 4096;
 
 pub type SimulationOutcome = std::result::Result<Vec<OpWithResult>, String>;
 
@@ -427,7 +415,6 @@ impl<E: Executor> Reactor<E> {
             // executes no blocks and decides no batches, so a gauge hung off
             // either of those paths would go stale precisely when it is needed.
             gauge!(PENDING_BLOCKS).set(self.consensus.pending_blocks.len() as f64);
-            gauge!(DEFERRED_DECISIONS).set(self.consensus.deferred_decisions.len() as f64);
 
             let hard_deadline_instant = self.consensus.pending_proposal.as_ref().map(|p| {
                 let deadline = p.hard_deadline;
@@ -641,6 +628,7 @@ impl<E: Executor> Reactor<E> {
                         .await
                         .context("apply_io_verdicts failed")?;
                     self.consensus.try_acknowledge_decision(&self.db_conn()).await?;
+                    self.advance().await.context("advance failed after proposal input became available")?;
                 }
                 _ = fee_publish_ticker.tick() => {
                     // Project OFF the loop: at mainnet mempool sizes the
@@ -982,7 +970,7 @@ async fn start_consensus_with_genesis(
         .position(|v| v.address == engine_output.address);
 
     let mut state = consensus_state::ConsensusState::new(
-        conn,
+        conn.clone(),
         engine_output.signing_provider,
         genesis,
         engine_output.address,
@@ -995,6 +983,9 @@ async fn start_consensus_with_genesis(
     .await
     .context("Failed to build consensus state")?;
     state.observation = observation_channels;
+    state
+        .refresh_finality_observation(&conn, last_block_height)
+        .await?;
     if let Some(t) = timeouts {
         state.timeouts = t;
     }

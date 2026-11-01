@@ -4,10 +4,11 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::serialize;
 use bitcoin::{BlockHash, Network, hashes::Hash};
-use indexer_types::BlockRow;
+use indexer_types::{BlockRow, Event};
 use libsql::{Connection, params};
 use malachitebft_app_channel::app::types::ProposedValue;
 use malachitebft_core_types::{CommitSignature, NilOrVal, Round, Validity};
+use malachitebft_engine::host::Next;
 use serde_json::{Value as Json, json};
 use tempfile::TempDir;
 use tokio::sync::oneshot::error::TryRecvError;
@@ -273,7 +274,8 @@ pub(crate) async fn run(
             qualify_batches(&mut reactor, &reopened, service, &decision, &completed).await?;
             qualify_replacement(&mut reactor, &reopened, service, &decision, &completed).await?;
             qualify_finality(&mut reactor, &reopened, service).await?;
-            Ok(json!({"authenticated": 12, "closed": 12, "automatic_finality_replay": true, "owned_replacement_rollback": true, "bounded_work_plan": true, "replay_plan_publication_atomic": true, "local_reorg_is_not_authority": true, "owned_batch_stages": true, "owned_block_stage": true,
+            qualify_live_closure(&mut reactor).await?;
+            Ok(json!({"authenticated": 14, "closed": 14, "live_closure_driver": true, "automatic_finality_replay": true, "owned_replacement_rollback": true, "bounded_work_plan": true, "replay_plan_publication_atomic": true, "local_reorg_is_not_authority": true, "owned_batch_stages": true, "owned_block_stage": true,
             "closure_publication_atomic": true, "next_height_after_closure": true, "ack_after_durable_input": true,
             "interrupted_append_rolled_back": true, "finalization_without_volatile_cache": true,
             "original_and_one_augmentation": true, "reopen_verified": true}))
@@ -953,5 +955,87 @@ async fn qualify_replacement(
     ensure!(completion::completed(&reopened, 1).await? == *completed);
     ensure!(service.active_roots().await == 0);
 
+    Ok(())
+}
+
+async fn qualify_live_closure(reactor: &mut Reactor<RuntimeExecutor>) -> Result<()> {
+    let conn = reactor.db_conn();
+    let (event_tx, mut events) = mpsc::channel(8);
+    reactor.event_tx = Some(event_tx);
+    let mut block = genesis_block(reactor.network);
+    block.header.prev_blockhash = reactor.last_hash.context("missing live fixture tip")?;
+    block.header.nonce = 107;
+    let hash = block.block_hash();
+    let value = Value::from_input(ExactInput::block(
+        reactor.consensus.protocol_context,
+        107,
+        serialize(&block),
+    )?)?;
+    let proof = certificate_at(&value, 13, 0);
+    accept_for_closure(reactor, value, 13).await?;
+    reactor.consensus.undecided.clear();
+    let mut competing = block;
+    competing.header.nonce += 1;
+    let competing_value = Value::from_input(ExactInput::block(
+        reactor.consensus.protocol_context,
+        107,
+        serialize(&competing),
+    )?)?;
+    reactor
+        .consensus
+        .pending_blocks
+        .insert(107, BlockInput::from_exact(competing_value.input())?);
+    let (reply, mut next) = oneshot::channel();
+    reactor.handle_finalized(proof.clone(), reply).await?;
+    ensure!(matches!(next.try_recv(), Err(TryRecvError::Empty)));
+    conn.execute_batch("CREATE TRIGGER interrupt_live_stage BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected live execution failure'); END").await?;
+    ensure!(reactor.advance().await.is_err());
+    ensure!(matches!(next.try_recv(), Err(TryRecvError::Empty)));
+    ensure!(reactor.last_height == 106);
+    ensure!(certified_history::frontier(&conn).await?.closed_height == 12);
+    conn.execute_batch("DROP TRIGGER interrupt_live_stage")
+        .await?;
+    reactor.advance().await?;
+    ensure!(matches!(next.await?, Next::Start(height, _) if height == Height::new(14)));
+    ensure!(reactor.last_height == 107 && reactor.last_hash == Some(hash));
+    ensure!(
+        select_block_at_height(&conn, 107)
+            .await?
+            .context("certified block was not executed")?
+            .hash
+            == hash
+    );
+    ensure!(reactor.pending_block_value().await? == Some(competing_value));
+    let completed = completion::completed(&conn, 13).await?;
+    let (reply, next) = oneshot::channel();
+    reactor.handle_finalized(proof, reply).await?;
+    reactor.advance().await?;
+    ensure!(matches!(next.await?, Next::Start(height, _) if height == Height::new(14)));
+    ensure!(completion::completed(&conn, 13).await? == completed);
+
+    let value = Value::new_batch_raw(reactor.consensus.protocol_context, 107, hash, vec![])?;
+    let proof = certificate_at(&value, 14, 0);
+    accept_for_closure(reactor, value, 14).await?;
+    // Decided can finish execution before Finalized arrives. The later callback
+    // must release Next without replaying the already committed empty batch.
+    reactor.advance().await?;
+    let completed = completion::completed(&conn, 14).await?;
+    ensure!(reactor.consensus.current_height == Height::new(14));
+    let (reply, next) = oneshot::channel();
+    reactor.handle_finalized(proof, reply).await?;
+    reactor.advance().await?;
+    ensure!(matches!(next.await?, Next::Start(height, _) if height == Height::new(15)));
+    ensure!(completion::completed(&conn, 14).await? == completed);
+    let mut heartbeats = 0;
+    while let Ok(event) = events.try_recv() {
+        if let Event::BatchProcessed { txids } = event {
+            ensure!(txids.is_empty());
+            heartbeats += 1;
+        }
+    }
+    ensure!(
+        heartbeats == 1,
+        "empty batch notification missing or duplicated"
+    );
     Ok(())
 }

@@ -13,9 +13,10 @@ async fn certified_branch_preserves_historical_anchors_and_parent_boundary() -> 
 #[tokio::test]
 async fn decision_ack_and_finalization_use_durable_exact_inputs() -> Result<()> {
     let evidence = certified_decision_callbacks().await?;
-    assert_eq!(evidence["authenticated"], 12);
-    assert_eq!(evidence["closed"], 12);
+    assert_eq!(evidence["authenticated"], 14);
+    assert_eq!(evidence["closed"], 14);
     assert_eq!(evidence["automatic_finality_replay"], true);
+    assert_eq!(evidence["live_closure_driver"], true);
     assert_eq!(evidence["owned_block_stage"], true);
     assert_eq!(evidence["owned_replacement_rollback"], true);
     assert_eq!(evidence["bounded_work_plan"], true);

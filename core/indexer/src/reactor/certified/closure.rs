@@ -1,8 +1,11 @@
 use std::future::Future;
 
 use anyhow::{Context, Result, ensure};
+use indexer_types::Event;
+use tracing::warn;
 
 use crate::bitcoin_follower::block::BlockInput;
+use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{Height, Value};
 use crate::database::certified_history::{self, closure, completion, finality, replay_input, work};
 use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
@@ -20,6 +23,10 @@ impl<E: Executor> Reactor<E> {
         // Keep the planner and executor state machines out of the caller's frame.
         Box::pin(async move {
             let conn = self.db_conn();
+            if certified_history::frontier(&conn).await?.closed_height >= height {
+                completion::completed(&conn, height).await?;
+                return Ok(());
+            }
             closure::begin(&conn, height).await?;
             loop {
                 let progress = closure::progress(&conn, height).await?;
@@ -28,7 +35,16 @@ impl<E: Executor> Reactor<E> {
                     return Ok(());
                 };
                 match action {
-                    WorkItem::Rollback { height } => self.rollback(height).await?,
+                    WorkItem::Rollback { height } => {
+                        self.rollback(height).await?;
+                        let checkpoint = self.consensus.get_checkpoint(&conn).await;
+                        self.consensus
+                            .emit_state_event(StateEvent::RollbackExecuted {
+                                to_anchor: height + 1,
+                                entries_removed: 0,
+                                checkpoint,
+                            });
+                    }
                     WorkItem::Execute { decision } | WorkItem::Replay { decision, .. } => {
                         let retained = certified_history::load(&conn, decision).await?;
                         let value = Value::from_input(retained.input().clone())?;
@@ -64,15 +80,28 @@ impl<E: Executor> Reactor<E> {
                                 } else {
                                     None
                                 };
-                                self.process_decided_batch(
-                                    anchor_height,
-                                    anchor_hash,
-                                    Height::new(decision),
-                                    retained.proof(),
-                                    selected.as_deref().unwrap_or(&original),
-                                    selected.as_ref().map(|_| original.as_slice()),
-                                )
-                                .await?;
+                                let outcome = self
+                                    .process_decided_batch(
+                                        anchor_height,
+                                        anchor_hash,
+                                        Height::new(decision),
+                                        retained.proof(),
+                                        selected.as_deref().unwrap_or(&original),
+                                        selected.as_ref().map(|_| original.as_slice()),
+                                    )
+                                    .await?;
+                                for transaction in &original {
+                                    self.consensus.mempool.suppress(&transaction.compute_txid());
+                                }
+                                if let Some(txids) = outcome
+                                    .announced_txids(selected.as_deref().unwrap_or(&original))
+                                    && let Some(tx) = &self.event_tx
+                                    && tx.send(Event::BatchProcessed { txids }).await.is_err()
+                                {
+                                    warn!(
+                                        "Event receiver dropped, cannot send BatchProcessed event"
+                                    );
+                                }
                             }
                         }
                     }
@@ -85,12 +114,28 @@ impl<E: Executor> Reactor<E> {
                             begin_stage(&self.owner_service, &self.session, self.network, height)
                                 .await?
                                 .context("finality stage disappeared")?;
+                        let observed = self.consensus.unfinalized_batches.clone();
                         let result = async {
+                            // These optional test events cannot choose or change the saved plan.
+                            let events = if self.consensus.observation.is_some() {
+                                self.consensus
+                                    .run_finality_checks(&conn, self.last_height)
+                                    .await?
+                                    .0
+                            } else {
+                                Vec::new()
+                            };
                             let cursor = work::publish(&conn, draft).await?;
-                            Ok(((), StageOutcome::FinalityEvaluated, cursor))
+                            Ok((events, StageOutcome::FinalityEvaluated, cursor))
                         }
                         .await;
-                        stage.finish(result).await?;
+                        match stage.finish(result).await {
+                            Ok((events, _)) => self.consensus.emit_finality_events(&events),
+                            Err(error) => {
+                                self.consensus.unfinalized_batches = observed;
+                                return Err(error);
+                            }
+                        }
                     }
                     WorkItem::Observe => {
                         let stage =

@@ -547,3 +547,72 @@ work includes replacing the volatile live driver, recovery before engine startup
 bounded proof transport, adapting the old unit fixtures, broader replay-policy
 cases, independent graph acceptance and the consolidated K4 review. No new PR,
 remote CI campaign, or performance investigation was started for this checkpoint.
+
+### Live certified execution checkpoint
+
+Live `advance` now consumes the unfinished authenticated decision through the saved
+closure driver. The old volatile replay queue, local-block redelivery dependency,
+and block-decline path have been removed from live execution. A durable decision
+ends pending proposal work. Execution may finish after Decided persistence and
+before Finalized arrives, but Next is released only after the completed closure
+establishes the next historical committee. Finalized verifies its proof against
+retained inputs; redelivery does not execute completed effects again. Cancellation
+of a particular Next receiver does not erase durable completion.
+
+Batch notifications and mempool suppression follow committed execution. Empty
+executed batches still emit a heartbeat. A conflicting locally buffered block stays
+a proposal candidate while the certified block executes. Optional test finality
+observation state is maintained separately and cannot select canonical replay work.
+Observation events are emitted after stage publication; failed publication restores
+their temporary tracking state. Normal nodes do not build that in-memory tracking
+set. Full certified inputs remain retained when legacy raw-body caches are pruned.
+
+The focused fixture now closes fourteen decisions. New coverage supplies a
+conflicting local block and no volatile proposal cache, interrupts live application,
+checks that Next remains pending, retries from saved work, repeats Finalized without
+new effects, and handles an empty batch that completed before Finalized. It verifies
+exactly one batch heartbeat. Both tests passed in 75.36 seconds after a 29.13-second
+build. Evidence: `.build-cache/k4-live-final.log`, SHA-256
+`eda706f0c076b58f07bf1a510120897fcc4687586286f4acf23835060f44a46b`.
+
+Startup still refuses unfinished closure work. The next extraction must share the
+actual canonical execution handlers with an engine-independent recovery context,
+then launch Malachite only after recovery and historical committee selection.
+Old broad fixtures, obsolete executor I/O capabilities, bounded proof serving,
+broader replay-policy cases, independent graph acceptance and complete K4 review
+remain. These local checks do not establish full node restart or cluster acceptance.
+
+### Agreed engine-independent recovery boundary
+
+The sole planning reviewer explicitly agrees to extracting the shared canonical
+execution context. This is planning agreement, not review of its implementation.
+The context owns the existing session, executor, recognizer, network/protocol
+context, applied tip, pruning bounds and owner service. Startup moves that same
+context into the Reactor after recovery, without duplicating mutable tip/session
+state or opening another writer. Admission, signing and Next remain outside it.
+
+The shared interface consumes the next durable work item and exact retained input,
+preserving the existing owned transaction for effects, K3 applications, registration
+observation and stage/cursor advancement. It exposes bounded progression between
+planning pages as well as committed execution stages. Ownership must settle before
+yielding. Committed outcomes carry the data needed for live cache invalidation,
+mempool suppression and notifications; observer failure cannot make a committed
+operation appear retryable. Startup reconstructs durable obligations and may omit
+ephemeral notifications.
+
+Startup must complete/verify native initialization, construct this context, and
+load the persisted prune watermark before recovery, even if pruning is disabled.
+Validate saved stage/work history once, resume published cursors and unfinished
+planning drafts, complete the closure, verify the resulting canonical position and
+successor committee, and release execution ownership. Only then prepare the mempool
+against the recovered position and start Malachite. Do not reuse pre-recovery tip
+values. At the baseline boundary the scheduling tip is `(H0 - 1, None)`, not native
+block zero's mock hash; recover the applied position independently of authenticated D.
+
+Recovery uses no current bitcoind acceptance, proposal cache or block redelivery.
+Cancellation settles ownership and leaves no running engine or ready signal while
+closure work is unfinished. Acceptance must reopen midway through block/lifecycle,
+rollback, replay and planning, recover without an engine, and compare state,
+lineage, cursor and committee with uninterrupted execution. Include a nontrivial
+starting height and persisted pruning watermark. Keeping the existing Executor
+trait temporarily is acceptable if recovery cannot invoke its admission/RPC methods.

@@ -143,6 +143,10 @@ impl<E: Executor> Reactor<E> {
             _ => bail!("post-rollback Bitcoin block is missing at height {height}"),
         }
 
+        self.consensus
+            .refresh_finality_observation(&conn, height)
+            .await?;
+
         if let Some(tx) = &self.event_tx
             && tx.send(Event::Rolledback { height }).await.is_err()
         {
@@ -534,7 +538,10 @@ impl<E: Executor> Reactor<E> {
         self.last_hash = Some(hash);
         // Discard consumed candidates. A later local reorg can supply a new
         // replacement at the same height; branch admission checks it independently.
-        self.consensus.pending_blocks.retain(|&h, _| h > height);
+        // A different local block remains a replacement proposal candidate.
+        self.consensus
+            .pending_blocks
+            .retain(|&h, candidate| h != height || candidate.hash != hash);
 
         // Reflect what's actually persisted, not what we're mid-processing.
         // Op counter increments only after commit so the simulation path

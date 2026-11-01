@@ -1,10 +1,13 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
 use bitcoin::Txid;
+use libsql::Connection;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use super::batches::batch_is_ordered;
 use super::mempool::Mempool;
@@ -29,10 +32,11 @@ use crate::consensus::{
 };
 use crate::database::certified_history::{self, Status};
 use crate::database::queries::{
-    get_checkpoint_latest, get_transaction_by_txid, insert_batch, insert_batch_txids,
-    insert_unconfirmed_batch_tx, min_unsettled_batch_tx_height, select_block_at_height,
-    select_existing_txids, select_unfinalized_batches,
+    get_checkpoint_latest, get_transaction_by_txid, min_unsettled_batch_tx_height,
+    select_block_at_height, select_existing_txids, select_unfinalized_batches,
 };
+#[cfg(test)]
+use crate::database::queries::{insert_batch, insert_batch_txids, insert_unconfirmed_batch_tx};
 use crate::protocol::coordinator::certified_input::EraContext;
 pub use crate::protocol::coordinator::decision::DeferredDecision;
 use crate::protocol::coordinator::v1::build_finality_events;
@@ -87,13 +91,8 @@ pub struct ConsensusState {
     // drop every losing-round proposal for a height in one step once it's decided.
     pub undecided: BTreeMap<Height, BTreeMap<Round, ProposedValue<Ctx>>>,
 
-    // Finality tracking
+    // Optional observation state, never authoritative for execution.
     pub unfinalized_batches: Vec<UnfinalizedBatch>,
-
-    // Decided values waiting for block data or anchor block processing.
-    // Used during sync (decisions arrive before blocks from poller) and
-    // rollback replay (decisions replayed from DB while blocks redeliver).
-    pub deferred_decisions: VecDeque<DeferredDecision>,
 
     // Blocks received from the poller, keyed by height. Consumed when a
     // Value::Block decision is finalized.
@@ -228,6 +227,7 @@ async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> R
 /// confirms this node's copy is the only one a syncing peer can obtain: not its
 /// mempool, not bitcoind. Dropping them reopens the sync hole this change closes
 /// elsewhere by removing the finality-window gate on serving raw txs.
+#[cfg(test)]
 async fn record_undrained_decisions(
     conn: &libsql::Connection,
     decisions: &VecDeque<DeferredDecision>,
@@ -443,17 +443,6 @@ impl ConsensusState {
             "engine startup committee differs from certified authority"
         );
 
-        let unfinalized_batches = load_unfinalized_batches(&conn, last_block_height)
-            .await
-            .context("Failed to rehydrate finality tracking")?;
-        if !unfinalized_batches.is_empty() {
-            info!(
-                count = unfinalized_batches.len(),
-                tip = last_block_height,
-                "Rehydrated finality tracking"
-            );
-        }
-
         // Divergence probe, diagnostic only. A batch-executed transaction still
         // unconfirmed below the finality window is past the point where a rollback
         // can act on it, and if it later confirms this node dedups where a peer
@@ -485,8 +474,7 @@ impl ConsensusState {
             current_proposer: None,
             part_streams: PartStreamsMap::new(),
             undecided: BTreeMap::new(),
-            unfinalized_batches,
-            deferred_decisions: VecDeque::new(),
+            unfinalized_batches: Vec::new(),
             pending_blocks: BTreeMap::new(),
             current_validator_set,
             observation: None,
@@ -500,40 +488,16 @@ impl ConsensusState {
         })
     }
 
-    /// Clear consensus state that is invalidated by a reorg rollback.
-    /// Pending blocks, cached blocks, and in-flight batch data are all stale.
-    pub async fn clear_on_rollback(
+    pub(super) async fn refresh_finality_observation(
         &mut self,
-        conn: &libsql::Connection,
-        to_height: u64,
+        conn: &Connection,
+        tip: u64,
     ) -> Result<()> {
-        self.pending_blocks.clear();
-        self.early_proposals.clear();
-        // Record before discarding. A queued decision is queued precisely BECAUSE it
-        // could not be applied, so unlike the executed and record-only ones it has
-        // written NO `batches` row — clearing it erases the only copy of that
-        // consensus height (I3). `current_height` is already past it so it is never
-        // re-decided, and `delete_unexecuted_batch_suffix` trims a SUFFIX, so the hole
-        // is permanent and this node becomes a defective sync source for any range
-        // covering it. The drain's two discard paths already record; this was the
-        // third and only unrecorded one.
-        record_undrained_decisions(conn, &self.deferred_decisions).await;
-        self.deferred_decisions.clear();
-        self.pending_proposal = None;
-        // Finality tracking is RE-DERIVED, not cleared. Batches anchored at or below
-        // the fork are untouched by the rollback — their `transactions` rows carry
-        // `height = anchor_height` and survive the cascade — so discarding their
-        // deadlines reopens exactly the #515 hole on the reorg path. Re-deriving
-        // rather than filtering in memory also drops the batches whose anchor block
-        // was replaced: the query joins the block CURRENTLY at that height by hash.
-        // Propagate rather than clear on failure: an empty tracking set is exactly
-        // the #515 divergence condition, and reaching it from a transient error
-        // (SQLITE_BUSY, a WAL hiccup) would be silent. The sole caller sits in
-        // `process_block_event`, which already returns `Result`, and the startup
-        // path treats the same failure as fatal.
-        self.unfinalized_batches = load_unfinalized_batches(conn, to_height)
-            .await
-            .context("Failed to re-derive finality tracking after rollback")?;
+        self.unfinalized_batches = if self.observation.is_some() {
+            load_unfinalized_batches(conn, tip).await?
+        } else {
+            Vec::new()
+        };
         Ok(())
     }
 
@@ -796,28 +760,6 @@ impl ConsensusState {
         }
     }
 
-    pub(super) async fn get_decided_from_anchor(
-        &self,
-        conn: &libsql::Connection,
-        from_anchor: u64,
-    ) -> Result<Vec<DeferredDecision>> {
-        let frontier = certified_history::frontier(conn).await?;
-        let mut decisions = Vec::new();
-        for height in 1..=frontier.authenticated_height {
-            let certified = certified_history::load(conn, height).await?;
-            let value = Value::from_input(certified.input().clone())?;
-            if value.block_height() >= from_anchor {
-                decisions.push(DeferredDecision {
-                    consensus_height: Height::new(height),
-                    value,
-                    certificate: certified.proof().to_vec(),
-                    execution_txs: None,
-                });
-            }
-        }
-        Ok(decisions)
-    }
-
     pub async fn block_hash_at_height(
         &self,
         conn: &libsql::Connection,
@@ -909,9 +851,6 @@ impl ConsensusState {
     ) -> Result<Option<&'static str>> {
         if !self.pending_blocks.is_empty() {
             return Ok(Some("block is pending"));
-        }
-        if self.deferred_decisions.iter().any(|d| d.value.is_block()) {
-            return Ok(Some("deferred block decision waiting"));
         }
         if anchor_height != last_height {
             return Ok(Some("anchor height mismatch"));

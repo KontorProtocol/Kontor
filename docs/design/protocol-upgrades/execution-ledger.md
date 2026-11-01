@@ -1324,3 +1324,35 @@ rejects an unfinished closure. Both require integration before K4 is complete.
 Broader replay cases, proof transport, old unit-fixture adaptation, independent
 graph qualification and the one consolidated review remain. No push, PR, remote
 CI run or new Daybreak assignment accompanies this intermediate checkpoint.
+
+## K4 live closure integration checkpoint
+
+From `2a98f6851465fedc394670f70ec10087bf31c167`, the live reactor advances durable
+certified closure work instead of an in-memory replay queue. Finalized verifies the
+saved decision and retains its callback until completion; repeated callbacks cannot
+repeat committed effects. The lead checked Decided/Finalized ordering, historical
+committee selection before Next, post-commit notification timing, cancelled reply
+handling, local candidate versus certified input separation, and obsolete volatile
+replay removal. Optional observer tracking does not control canonical finality.
+
+Both focused tests passed in 75.36 seconds (29.13-second build), including live-stage
+failure/retry, a conflicting local block, cleared proposal cache, callback redelivery,
+execution before Finalized, and one empty-batch heartbeat. Raw evidence:
+`.build-cache/k4-live-final.log`, SHA-256
+`eda706f0c076b58f07bf1a510120897fcc4687586286f4acf23835060f44a46b`.
+Unreleased coordinator definition:
+`6e791a6c5478a918f74c13bfc960dda8ad81de66a3c2904dd54cfaefefc4f3d0`.
+The earlier live test also passed; the final run adds proposal cancellation at the
+durable decision and removes an obsolete unbounded history helper.
+
+No broad unit-suite pass, full engine restart, cluster run or independent linked
+qualification is claimed. Old fixtures require adaptation, and the compiler still
+reports unused legacy executor resolution/redelivery capabilities awaiting removal.
+Startup recovery remains unimplemented. The sole planning reviewer explicitly agreed
+to the shared engine-independent canonical execution context, with one owner of
+execution state, bounded progression, settled ownership, committed outcomes separate
+from notifications, and pruning/tip reconstruction before engine startup. The detailed
+conditions and recovery acceptance are recorded in the certified-history plan. This
+is planning agreement, not an implementation verdict. Consolidated review and CI
+remain at the complete K4 group. No
+push, PR, CI run or Daybreak assignment was made for this checkpoint.
