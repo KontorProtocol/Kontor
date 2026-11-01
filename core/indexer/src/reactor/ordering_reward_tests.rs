@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use anyhow::{Result, bail};
+use libsql::{Builder, OpenFlags};
 
 use super::ReactorCluster;
-use crate::bitcoin_follower::event::BlockEvent;
 use crate::consensus::signing::PrivateKey;
-use crate::database::Reader;
+use crate::database::certified_history;
 use crate::database::queries::{get_contract_id_from_address, get_contract_signer_id};
 use crate::reactor::build_validator_set;
 use crate::reg_tester::random_x_only_pubkey;
@@ -26,21 +26,34 @@ struct Rewards {
     total_stake: Decimal,
 }
 
-async fn snapshot(cluster: &ReactorCluster, node: usize, height: u64) -> Result<Rewards> {
+async fn snapshot(cluster: &mut ReactorCluster, node: usize, height: u64) -> Result<Rewards> {
+    let source = cluster.node_conn(0).await.clone();
+    let required_closure = certified_history::frontier(&source)
+        .await?
+        .authenticated_height;
     let (dir, name) = &cluster.node_dirs[node];
-    let reader = Reader::new(dir.path(), name).await?;
-    let conn = reader.connection().await?;
+    // Inspect the running node without rerunning schema initialization, which
+    // acquires a write lock and can block its active closure on this test thread.
+    let db = Builder::new_local(dir.path().join(name))
+        .flags(OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .build()
+        .await?;
+    let conn = db.connect()?;
     let engine = Runtime::new_engine()?;
     let mut runtime = Runtime::new_read_only(
         engine.clone(),
         Runtime::new_linkers(&engine)?,
         ComponentCache::new(),
-        (*conn).clone(),
+        conn.clone(),
     )
     .await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
-        if staking::last_reward_height(&mut runtime).await? == Some(height) {
+        // Catch-up may revisit this Bitcoin height on an abandoned branch.
+        // Wait for the source's certified closure before sampling reward state.
+        if certified_history::frontier(&conn).await?.closed_height >= required_closure
+            && staking::last_reward_height(&mut runtime).await? == Some(height)
+        {
             break;
         }
         if tokio::time::Instant::now() >= deadline {
@@ -64,8 +77,9 @@ async fn snapshot(cluster: &ReactorCluster, node: usize, height: u64) -> Result<
             Decimal::default()
         );
     }
+    // Contract publication has user deposits; lifecycle writes have no transaction.
     let mut rows = conn.query(
-        "SELECT count(*) FROM contract_state WHERE height > 0 AND (depositor IS NOT NULL OR deposited_gas IS NOT NULL)", (),
+        "SELECT count(*) FROM contract_state WHERE height > 0 AND tx_id IS NULL AND (depositor IS NOT NULL OR deposited_gas IS NOT NULL)", (),
     ).await?;
     assert_eq!(rows.next().await?.unwrap().get::<u64>(0)?, 0);
     Ok(Rewards {
@@ -89,7 +103,7 @@ async fn prod_reactor_ordering_rewards_survive_rollback_restart_and_late_join() 
     cluster.mine_empty_and_send();
     let block = cluster.wait_for_block(1, Duration::from_secs(60)).await;
     ReactorCluster::assert_checkpoints_match(&block, 1, 3);
-    let first = snapshot(&cluster, 0, 1).await?;
+    let first = snapshot(&mut cluster, 0, 1).await?;
     let initial = Decimal::from("400");
     // The first certified block issues the test signer's funds before emission;
     // emission samples all circulating supply, not just escrowed stake.
@@ -114,24 +128,19 @@ async fn prod_reactor_ordering_rewards_survive_rollback_restart_and_late_join() 
         sum = add_decimal(sum, *stake)?;
     }
     assert_eq!(sum, first.escrow);
-    assert_eq!(snapshot(&cluster, 1, 1).await?, first);
+    assert_eq!(snapshot(&mut cluster, 1, 1).await?, first);
     cluster.mine_empty_and_send();
     cluster.wait_for_block(2, Duration::from_secs(60)).await;
-    let second = snapshot(&cluster, 0, 2).await?;
-    cluster.mock_bitcoin().reset_to(1);
-    cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
-    cluster.wait_for_rollback(1, Duration::from_secs(60)).await;
-    assert_eq!(snapshot(&cluster, 0, 1).await?, first);
-    cluster.mine_empty_and_send();
-    cluster.wait_for_block(2, Duration::from_secs(60)).await;
-    assert_eq!(snapshot(&cluster, 0, 2).await?, second);
+    let second = snapshot(&mut cluster, 0, 2).await?;
+    cluster.replace_after(1).await;
+    assert_eq!(snapshot(&mut cluster, 0, 2).await?, second);
     cluster.restart_node(1).await;
-    assert_eq!(snapshot(&cluster, 1, 2).await?, second);
+    assert_eq!(snapshot(&mut cluster, 1, 2).await?, second);
     assert_eq!(cluster.add_node().await?, 3);
     for event in cluster.mock_bitcoin().get_all_block_events() {
         cluster.block_txs[3].try_send(event)?;
     }
-    assert_eq!(snapshot(&cluster, 3, 2).await?, second);
+    assert_eq!(snapshot(&mut cluster, 3, 2).await?, second);
     cluster.shutdown().await;
     Ok(())
 }

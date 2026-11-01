@@ -1645,3 +1645,69 @@ still uses an ambiguous empty Bitcoin encoding and should execute a real counter
 call with a no-state-leak assertion. Full cluster, late-join/deep recovery, remaining
 K4 transport/admission and final review/CI remain incomplete. No remote run or PR
 was created for this local checkpoint.
+
+
+### K4 certified reorg, simulation and catch-up fixture migration
+
+Continued from `060a058c`, a progress turn. Cluster reorg cases now submit and
+await the certified replacement block before asserting rollback. The combined
+wait retains each node's rollback and replacement events. A real counter proves
+that a reorg below a batch anchor removes its effects, preserves its certificate,
+and permits re-submission under a later decision. Reorg at the anchor preserves
+its effects and still delivers the original batch's finality verdict. Every old
+certificate and completed closure remains verifiable after branch replacement.
+Simulation executes a real counter increment and proves no state leak, including
+agreement of the following block's checkpoints.
+
+Cluster startup now obtains its ordered committee from `certified_startup` after
+recovery, as the production node does. Separately constructing a genesis set gave
+the four-validator fixture a different member order and correctly failed the
+existing authority check. No production authority check was relaxed. Deep-reorg
+catch-up compares every retained decision and exact input and verifies the joining
+node's completed closures while its Bitcoin feed contains only the surviving
+branch. Ordinary catch-up selects the checkpoint at the requested height and
+checks the joining node's real counter state.
+
+The reward test preserves emission arithmetic, stake totals, empty reward pools,
+rollback/restart and late-join equality. Its deposit assertion is now scoped to
+lifecycle writes (`tx_id IS NULL`), since real contract publication creates user
+deposits. Inspection uses an existing read-only database connection rather than
+rerunning schema initialization beside the active writer. Sampling waits for the
+source's authenticated consensus height to close locally: Bitcoin height alone
+can transiently match while the joining node replays an abandoned branch.
+
+Local evidence, all logs under `.build-cache/`:
+
+- `k4-cluster-reorg20.log`: session 5171 exit 0, four passed in 214.67s:
+  batch rollback/re-submission, receipt-stream rollback boundary, immutable
+  decisions/closures across reorg, and real simulation. SHA-256
+  `f10349a8500f674aaf40f46e40cd8c9f6789583e0171ddc0b74070c4dd30958a`.
+  Draft definition `88692a8597e5bb893590e6e603d99b467ad68bebd876c4ac518588a4f1972082`.
+- `k4-cluster-catchup21.log`: same binary, session 11721 exit 101,
+  retained-anchor finality passed; three startup committee-order failures.
+  SHA-256 `682da7fd8a34f7fd5cb6a2dde0107eaa238af04c8cf84b15cee2dabdf4e7b7c1`.
+- `k4-cluster-catchup22.log`: session 81937 exit 101, deep-reorg catch-up passed;
+  reward deposit assertion and wrong-height checkpoint selection failed.
+  SHA-256 `b7952888d483ffa1407afb12404976957c8e2fae2676f059c63f38471b784303`.
+  Draft definition `84587596342d7eaa760910b3957bb568d12b602ecfaed9a8eb61ff9e60f358f0`.
+- `k4-cluster-catchup23.log`: session 24115 exit 101, ordinary catch-up passed;
+  reward inspection hit schema-initialization lock contention.
+  SHA-256 `f44493bc654221bccc60fc57cd5847843598330d694b07a6ff9f3bc7fcac28e8`.
+  Draft definition `9f8a4418e3028a8caaa3ffd8088788099910ef06fd186fd848464aca487aa2f8`.
+- `k4-cluster-rewards24.log`: session 33425 exit 101, reward arithmetic, rollback
+  and restart passed before late-join sampling crossed a rollback stage.
+  SHA-256 `cdb6a1c89f3828e84178ac71015c476c9a9f46a0afb030d246c7ccced4ea5b33`.
+  Draft definition `c58140ec81b1aaabe69f2a1e363a0d97c3d91cf6307c056a2ef40a9a5f54c215`.
+- `k4-cluster-rewards25.log`: session 69315 exit 0, reward rollback, restart and
+  late-join case passed in 129.26s with the certified-closure barrier.
+  SHA-256 `b7453ea4a188c118d2849761fa545a3141bfe60440275069179738289842f72a`.
+  Draft definition `9873c85ac4cdd37d3f0dddab1982bf86aaf2c5b35104dc71e8cac63b48de96e5`.
+
+These are scoped results at the listed source definitions, not a complete suite
+pass at the final checkpoint. Follow-up runs targeted explained failures and
+preserved prior evidence. Formatting and diff checks passed. The obsolete
+shutdown-during-replay gate still intercepts unused `replay_blocks_after`; migrate
+it to an active owned closure stage and retain the shutdown/drain assertions.
+Remaining cluster cases, bounded proof paging/admission, real-graph integration,
+lead and consolidated independent review, and final CI remain incomplete. No PR,
+push or remote CI campaign was launched.
