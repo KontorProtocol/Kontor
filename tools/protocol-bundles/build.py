@@ -21,6 +21,7 @@ from source_policy import check as check_source_policy
 from symbol_tool import TOOLCHAIN
 from recipes import EXECUTOR_GRAPHS, GRAPHS, identity, verify_engine_observations, verify_identity, verify_reservations
 from capabilities import verify as verify_capabilities
+from type_boundary import verify as verify_type_boundary
 
 ROOT = Path(__file__).resolve().parents[2]
 MALACHITE = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
@@ -418,6 +419,8 @@ def build_node(graphs, args, base_env, output):
                   "common-reference-ownership.json", "input-ownership.json",
                   "input-local-ownership.json", "final-ownership.json")},
               "status": "node linked and native ownership checked; execution qualification required"}
+    if args.node_qualification:
+        result["interface_checks"] = verify_type_boundary(graphs, args.target, env, directory)
     write_json(directory / "build-inputs.json", result)
     return result
 
