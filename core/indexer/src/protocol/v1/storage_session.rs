@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, ensure};
 
 use crate::protocol::storage_session::SessionCallbacks;
 use crate::runtime::{counter::Counter, stack::Stack};
@@ -44,5 +44,21 @@ pub(crate) async fn rollback(callbacks: SessionCallbacks, stack: &Stack<u64>) ->
         Some(index) => callbacks.5(index).await.map_err(|error| anyhow!(error))?,
         None => (),
     }
+    Ok(())
+}
+
+pub(crate) async fn begin_migration(
+    callbacks: SessionCallbacks,
+    stack: &Stack<u64>,
+    counter: &Counter,
+) -> Result<()> {
+    ensure!(
+        stack.is_empty().await,
+        "migration cannot enter a nested transaction"
+    );
+    callbacks.6().await.map_err(|error| anyhow!(error))?;
+    stack.push(0).await?;
+    counter.reset().await;
+    counter.increment().await;
     Ok(())
 }

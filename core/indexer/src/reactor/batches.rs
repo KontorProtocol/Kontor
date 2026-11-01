@@ -21,9 +21,11 @@ use crate::database::queries::{
     delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids,
     insert_excluded_batch_txids, insert_transaction, insert_unconfirmed_batch_tx,
     min_unfinalized_batch_height, select_applicable_exclusions, select_block_at_height,
-    select_existing_txids,
+    select_decision_exclusions, select_existing_txids,
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
+use crate::protocol::canonical_application::{ApplicationSource, DecisionExclusions};
+use crate::protocol::canonical_input::CanonicalInput;
 use crate::protocol::coordinator::linked::PreparedTransaction;
 pub(super) use crate::protocol::coordinator::v1::batch_is_ordered;
 use crate::protocol::coordinator::v1::{build_replay_queue, dependency_sort};
@@ -142,7 +144,7 @@ fn restore_waiting(
 pub(super) enum BatchOutcome {
     /// Executed and committed at its anchor.
     Executed,
-    /// Recorded for sync/bookkeeping only (empty batch, or anchor mismatch).
+    /// Recorded for sync/bookkeeping only (unparseable input or anchor mismatch).
     RecordedOnly,
 }
 
@@ -275,52 +277,6 @@ impl<E: Executor> Reactor<E> {
             "Processing decided batch"
         );
 
-        // Empty batch — just record for sync, no execution or finality tracking
-        if batch_txs.is_empty() {
-            insert_batch(
-                &conn,
-                consensus_height.as_u64(),
-                anchor_height,
-                &anchor_hash.to_string(),
-                certificate,
-                false,
-            )
-            .await
-            .context("Failed to insert empty batch")?;
-
-            // Empty to EXECUTE is not empty as DECIDED. A rollback can narrow a batch
-            // until nothing is left to run while its certificate still certifies the
-            // original txids, and `batch_txids` records what consensus decided (I4) —
-            // a peer syncing this height re-derives the exclusions itself, so it needs
-            // that list. `certified` is None for a genuinely empty decided batch, which
-            // has nothing to record. `record_batch_txs` writes the DECIDED list to
-            // both tables, so an emptied batch still records its certified txids AND
-            // their raw bodies — the bodies of all-excluded txs exist nowhere else.
-            if certified.is_some() {
-                self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
-                    .await
-                    .context("Failed to record the decided txids of an emptied batch")?;
-            }
-
-            gauge!(CONSENSUS_HEIGHT).set(consensus_height.as_u64() as f64);
-
-            let checkpoint = self.consensus.get_checkpoint(&conn).await;
-            self.consensus.emit_state_event(StateEvent::BatchApplied {
-                consensus_height,
-                anchor_height,
-                txid_count: 0,
-                checkpoint,
-            });
-
-            info!(
-                anchor = anchor_height,
-                consensus_height = %consensus_height,
-                duration_ms = started_at.elapsed().as_millis() as u64,
-                "Empty batch recorded"
-            );
-            return Ok(BatchOutcome::RecordedOnly);
-        }
-
         // A decided batch may only EXECUTE against the exact chain state it was
         // anchored to: the local tip must sit at `anchor_height` with
         // `anchor_hash`. Anything else — a deferred drain whose anchor fell
@@ -409,8 +365,21 @@ impl<E: Executor> Reactor<E> {
             parsed
         };
 
+        let input = CanonicalInput::bitcoin(certified.unwrap_or(batch_txs))?;
         let lease = self.begin_unit(&selection, false).await?;
         let result = async {
+            let mut applicable = select_decision_exclusions(&conn, consensus_height.as_u64())
+                .await?
+                .iter()
+                .map(|value| value.parse::<Txid>().map(|id| id.to_byte_array()))
+                .collect::<Result<Vec<_>, _>>()?;
+            applicable.sort_unstable();
+            let exclusions = DecisionExclusions::for_batch(
+                consensus_height.as_u64(),
+                certified.unwrap_or(batch_txs),
+                batch_txs,
+                &applicable,
+            )?;
             insert_batch(
                 &conn,
                 consensus_height.as_u64(),
@@ -455,19 +424,31 @@ impl<E: Executor> Reactor<E> {
                     .context("execute_transaction failed")?;
             }
 
+            self.record_application(
+                anchor_height,
+                ApplicationSource::Batch {
+                    anchor_height,
+                    anchor_hash: anchor_hash.to_byte_array(),
+                    exclusions,
+                },
+                Some(input),
+            )
+            .await?;
             Ok(())
         }
         .await;
         self.finish_unit(lease, result, true).await?;
         // The in-memory finality obligation must match a persisted batch.
         let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
-        self.consensus.unfinalized_batches.push(UnfinalizedBatch {
-            consensus_height,
-            anchor_height,
-            anchor_hash,
-            txids,
-            deadline: deadline_for(anchor_height),
-        });
+        if !txids.is_empty() {
+            self.consensus.unfinalized_batches.push(UnfinalizedBatch {
+                consensus_height,
+                anchor_height,
+                anchor_hash,
+                txids,
+                deadline: deadline_for(anchor_height),
+            });
+        }
         gauge!(CONSENSUS_HEIGHT).set(consensus_height.as_u64() as f64);
         // Counter increments only after commit so we count ops persisted,
         // not ops attempted (mirrors the block path; simulation can't reach

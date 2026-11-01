@@ -1,13 +1,16 @@
-#[cfg(test)]
 use std::future::Future;
 
-use anyhow::{Result, ensure};
+use anyhow::{Result, anyhow, bail, ensure};
 
 use super::Reactor;
 use super::executor::Executor;
+use crate::database::canonical_history::{self, HistoryState};
 use crate::database::queries::prune_contract_state;
+use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
+use crate::protocol::canonical_input::CanonicalInput;
 use crate::protocol::coordinator::linked;
 use crate::protocol::coordinator::selection::{ApplicationPosition, ExecutionSelection};
+use crate::protocol::identity::ExecutionIdentity;
 use crate::runtime::ownership::LinkedCanonicalRootLease;
 use crate::runtime::ownership::adapter::HostFailure;
 
@@ -25,6 +28,42 @@ use crate::runtime::pool::LinkedSession;
 use tokio::sync::MutexGuard;
 
 impl<E: Executor> Reactor<E> {
+    pub(super) fn record_application(
+        &self,
+        storage_height: u64,
+        source: ApplicationSource,
+        input: Option<CanonicalInput>,
+    ) -> impl Future<Output = Result<()>> + Send + 'static {
+        let conn = self.db_conn();
+        let definition = self.session.executor.execution_definition;
+        async move {
+            let cursor = match canonical_history::state(&conn).await? {
+                HistoryState::Unavailable => return Ok(()),
+                HistoryState::PendingGenesis => {
+                    bail!("canonical execution preceded genesis identity")
+                }
+                HistoryState::Ready(cursor) => cursor,
+            };
+            canonical_history::append(
+                &conn,
+                &CanonicalApplication {
+                    chain: cursor.chain,
+                    ordinal: cursor
+                        .ordinal
+                        .checked_add(1)
+                        .ok_or_else(|| anyhow!("application ordinal overflow"))?,
+                    parent_lineage: cursor.lineage,
+                    execution: ExecutionIdentity::Baseline(definition?),
+                    storage_height,
+                    source,
+                    input,
+                },
+            )
+            .await?;
+            Ok(())
+        }
+    }
+
     pub(super) async fn begin_unit(
         &mut self,
         selection: &ExecutionSelection,
@@ -54,13 +93,19 @@ impl<E: Executor> Reactor<E> {
             .select_executor(ApplicationPosition::Maintenance { rollback_height })
             .await?;
         let lease = self.begin_unit(&selection, false).await?;
-        let result = (self.session.executor.operations.maintenance)(
-            self.session.executor.owner.clone(),
-            selection.envelope(),
-        )
-        .await
-        .map_err(HostFailure::from)
-        .map_err(Into::into);
+        let operation = self.session.executor.operations.maintenance.clone();
+        let owner = self.session.executor.owner.clone();
+        let conn = self.db_conn();
+        let result = async move {
+            operation(owner, selection.envelope())
+                .await
+                .map_err(HostFailure::from)?;
+            if let Some(height) = rollback_height {
+                canonical_history::rollback(&conn, height).await?;
+            }
+            Ok(())
+        }
+        .await;
         self.finish_unit(lease, result, true).await
     }
 

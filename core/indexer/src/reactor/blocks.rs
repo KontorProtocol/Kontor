@@ -2,6 +2,7 @@ use std::future::Future;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
+use bitcoin::hashes::Hash;
 use indexer_types::{BlockRow, Event, OpWithResult};
 use metrics::{counter, gauge};
 use tracing::{debug, info, warn};
@@ -15,6 +16,7 @@ use crate::database::queries::{
     select_block_at_height, select_block_latest,
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
+use crate::protocol::canonical_application::ApplicationSource;
 use crate::protocol::coordinator::linked::{self, PreparedBlock, PreparedTransaction};
 use crate::protocol::coordinator::minimum_prune_retention_blocks;
 use crate::protocol::coordinator::selection::{
@@ -131,6 +133,9 @@ impl<E: Executor> Reactor<E> {
         decision: &consensus_state::DeferredDecision,
     ) -> Result<(usize, u64)> {
         selection.verify_base(&self.db_conn()).await?;
+        if block.input.is_none() {
+            bail!("canonical block has no input commitment");
+        }
         insert_batch(
             &self.db_conn(),
             decision.consensus_height.as_u64(),
@@ -146,9 +151,28 @@ impl<E: Executor> Reactor<E> {
             .execute_block(selection, block)
             .await
             .context("execute_block failed")?;
+        self.record_application(
+            block.height,
+            ApplicationSource::BlockTransactions {
+                height: block.height,
+                hash: block.hash.to_byte_array(),
+                parent_hash: block.prev_hash.to_byte_array(),
+            },
+            block.input,
+        )
+        .await?;
         self.run_block_lifecycle(selection, block)
             .await
             .context("run_block_lifecycle failed")?;
+        self.record_application(
+            block.height,
+            ApplicationSource::BlockLifecycle {
+                height: block.height,
+                hash: block.hash.to_byte_array(),
+            },
+            None,
+        )
+        .await?;
         Ok((unbatched_count, executed_ops))
     }
 
@@ -331,6 +355,7 @@ impl<E: Executor> Reactor<E> {
         let height = block_row.as_ref().map_or(1, |row| row.height + 1);
         let block = PreparedBlock {
             height,
+            input: None,
             hash: new_mock_block_hash(height as u32),
             prev_hash: block_row
                 .as_ref()

@@ -150,12 +150,14 @@ fn factory_with_decorator(
             NETWORK,
             Some(DEFAULT_VIEW_GAS_LIMIT),
             kontor_executor_first::factory,
+            kontor_executor_first::execution_definition(),
             decorate,
         ),
         "second" => retained_session_factory_with_callbacks(
             NETWORK,
             Some(DEFAULT_VIEW_GAS_LIMIT),
             kontor_executor_second::factory,
+            kontor_executor_second::execution_definition(),
             decorate,
         ),
         _ => anyhow::bail!("unknown retained graph {graph}"),
@@ -187,9 +189,14 @@ fn session_export_panics() -> std::result::Result<RetainedFactory, HostError> {
 }
 
 pub(super) async fn qualify_export_panics() -> Result<Value> {
-    let constructor_error = retained_session_factory(NETWORK, None, constructor_panics)
-        .err()
-        .context("constructor panic escaped the factory boundary")?;
+    let constructor_error = retained_session_factory(
+        NETWORK,
+        None,
+        constructor_panics,
+        kontor_executor_first::execution_definition(),
+    )
+    .err()
+    .context("constructor panic escaped the factory boundary")?;
     let constructor = constructor_error
         .downcast_ref::<HostFailure>()
         .context("constructor panic lost its host failure type")?;
@@ -200,7 +207,12 @@ pub(super) async fn qualify_export_panics() -> Result<Value> {
 
     let dir = TempDir::new()?;
     let conn = new_connection(dir.path(), "export-panic.db").await?;
-    let factory = retained_session_factory(NETWORK, None, session_export_panics)?;
+    let factory = retained_session_factory(
+        NETWORK,
+        None,
+        session_export_panics,
+        kontor_executor_first::execution_definition(),
+    )?;
     let session_error = factory(conn)
         .await
         .err()

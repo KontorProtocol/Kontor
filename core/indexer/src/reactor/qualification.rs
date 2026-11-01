@@ -11,7 +11,7 @@ use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::{Block as BitcoinBlock, Network, Transaction, Witness};
-use libsql::{Connection, Value};
+use libsql::Connection;
 use malachitebft_engine::node::NodeRef;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
@@ -29,8 +29,10 @@ use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_helpers::new_mock_block_hash;
 use crate::consensus::Height;
 use crate::consensus::signing::PrivateKey;
+use crate::database::canonical_history::{self, HistoryState};
 use crate::database::connection::new_connection;
 use crate::protocol::coordinator::selection::ApplicationPosition;
+use crate::protocol_qualification::snapshot::full_state;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::LinkedSession;
@@ -85,38 +87,32 @@ fn raw_confirmation_block(tx: &Transaction, position: usize) -> Result<BlockInpu
 }
 
 async fn state(conn: &Connection) -> Result<Json> {
-    let mut names = conn
-        .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name",
-            (),
-        )
-        .await?;
-    let mut result = BTreeMap::new();
-    while let Some(table) = names.next().await? {
-        let name: String = table.get(0)?;
-        let quoted = name.replace('"', "\"\"");
-        let mut rows = conn
-            .query(&format!("SELECT * FROM \"{quoted}\""), ())
-            .await?;
-        let count = rows.column_count();
-        let mut values = Vec::new();
-        while let Some(row) = rows.next().await? {
-            let mut fields = Vec::new();
-            for column in 0..count {
-                fields.push(match row.get_value(column)? {
-                    Value::Null => json!(["null"]),
-                    Value::Integer(value) => json!(["integer", value]),
-                    Value::Real(value) => json!(["real_bits", value.to_bits()]),
-                    Value::Text(value) => json!(["text", value]),
-                    Value::Blob(value) => json!(["blob", hex::encode(value)]),
-                });
-            }
-            values.push(serde_json::to_string(&fields)?);
-        }
-        values.sort();
-        result.insert(name, values);
+    // The archived oracle predates these tables. Its original state is preserved;
+    // it cannot acquire authentic history merely by opening it in a newer node.
+    ensure!(
+        canonical_history::state(conn).await? == HistoryState::Unavailable,
+        "legacy oracle unexpectedly acquired canonical lineage"
+    );
+    let mut snapshot = full_state(conn).await?;
+    let tables = snapshot
+        .as_object_mut()
+        .context("SQL snapshot is not an object")?;
+    for name in [
+        "canonical_applications",
+        "migration_applications",
+        "genesis_applications",
+    ] {
+        ensure!(
+            tables.get(name) == Some(&json!([])),
+            "legacy oracle gained journal entries: {name}"
+        );
+        tables.remove(name);
     }
-    Ok(serde_json::to_value(result)?)
+    ensure!(
+        tables.remove("canonical_history_state").is_some(),
+        "history status table missing"
+    );
+    Ok(snapshot)
 }
 
 async fn scenario(

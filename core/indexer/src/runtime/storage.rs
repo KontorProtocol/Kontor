@@ -589,6 +589,15 @@ impl Storage {
         (self.host.maintenance.2)(pages).await.map_err(host_failure)
     }
 
+    pub(crate) async fn begin_migration(&self) -> Result<()> {
+        storage_session::begin_migration(
+            self.host.session.clone(),
+            &self.savepoint_stack,
+            &self.savepoint_counter,
+        )
+        .await
+    }
+
     pub async fn savepoint(&self) -> Result<()> {
         storage_session::savepoint(
             self.host.session.clone(),

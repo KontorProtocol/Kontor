@@ -6,10 +6,12 @@ use std::sync::{Arc, Weak};
 use anyhow::Result;
 use libsql::Connection;
 
+use crate::protocol::canonical_codec::CodecError;
 use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
+use crate::protocol::identity::ExecutionDefinitionId;
 use crate::protocol::operations::{
     BeginUnitCall, CommitteeCall, ContractWitCall, InitializeCall, InspectCall, LifecycleCall,
-    MaintenanceCall, RecognitionCall, TransactionCall, ViewCall,
+    MaintenanceCall, MigrationCall, RecognitionCall, TransactionCall, ViewCall,
 };
 
 use super::{ChildContext, RootKeeper, RootState, TaskCompletion};
@@ -67,6 +69,7 @@ pub(crate) struct ExecutorOperations {
     pub(crate) contract_wit: ContractWitCall,
     pub(crate) view: ViewCall,
     pub(crate) committee: CommitteeCall,
+    pub(crate) migration: MigrationCall,
 }
 
 #[cfg(test)]
@@ -96,6 +99,9 @@ impl Default for ExecutorOperations {
             view: Arc::new(|_, _, _, _| {
                 Box::pin(async { Err((2, "mock has no view operation".into())) })
             }),
+            migration: Arc::new(|_, _, _, _| {
+                Box::pin(async { Err((2, "mock has no migration operation".into())) })
+            }),
             committee: Arc::new(|_, _| {
                 Box::pin(async { Err((2, "mock has no committee operation".into())) })
             }),
@@ -105,6 +111,7 @@ impl Default for ExecutorOperations {
 
 #[derive(Clone)]
 pub(crate) struct ExecutorSession {
+    pub(crate) execution_definition: Result<ExecutionDefinitionId, CodecError>,
     pub(crate) origin: ExecutorVersion,
     pub(crate) operations: ExecutorOperations,
     pub(crate) owner: SharedOwner,

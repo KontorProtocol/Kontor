@@ -387,6 +387,27 @@ pub async fn select_applicable_exclusions(
     Ok(out)
 }
 
+pub(crate) async fn select_decision_exclusions(
+    conn: &Connection,
+    height: u64,
+) -> Result<Vec<String>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT DISTINCT e.txid FROM excluded_batch_txids e WHERE e.batch_height = ?1
+         AND NOT EXISTS (
+             SELECT 1 FROM transactions t WHERE t.txid = e.txid
+             AND t.confirmed_height IS NOT NULL AND t.confirmed_height <= e.deadline
+             AND (t.batch_height IS NULL OR t.batch_height = e.batch_height))",
+            [height],
+        )
+        .await?;
+    let mut txids = Vec::new();
+    while let Some(row) = rows.next().await? {
+        txids.push(row.get(0)?);
+    }
+    Ok(txids)
+}
+
 /// Record what a finality pass dropped, as `(consensus_height, txid, deadline)`.
 /// Idempotent — the same batch can be narrowed by more than one pass.
 pub async fn insert_excluded_batch_txids(

@@ -99,6 +99,9 @@ class NodeComparison(unittest.TestCase):
         write_json(directory / 'node-build.json', build)
         observations = {'schema': 1, 'cases': sorted(CASES), 'executors': [
             {'graph': name, 'observations': sample_observation()} for name in EXECUTOR_GRAPHS]}
+        observations['storage_contracts'] = {'rejected_before_construction': [
+            f'{graph}:{mutation}' for graph in EXECUTOR_GRAPHS
+            for mutation in ('missing', 'unknown', 'changed', 'multiple')]}
         write_json(directory / 'node-execution.stdout.json', observations)
         (directory / 'node-execution.stderr.log').write_text('synthetic execution log')
         execution = {'schema': 1, 'matching_observations': True, 'target': target, 'profile': profile,

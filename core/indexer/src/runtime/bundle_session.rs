@@ -62,6 +62,15 @@ impl SimulationContext {
 
 impl BundleSession {
     pub(crate) fn export(runtime: Runtime) -> SessionExports {
+        Self::export_registry(runtime, false)
+    }
+
+    #[cfg(kontor_retained)]
+    pub(crate) fn export_qualification(runtime: Runtime) -> SessionExports {
+        Self::export_registry(runtime, true)
+    }
+
+    fn export_registry(runtime: Runtime, qualification: bool) -> SessionExports {
         let recognize = runtime.recognizer();
         let session = Self::new(runtime);
         let operations: Operations = (
@@ -75,6 +84,11 @@ impl BundleSession {
             session.contract_wit(),
             session.view(),
             session.committee(),
+            if qualification {
+                session.migration_qualification()
+            } else {
+                session.migration()
+            },
         );
         let retained = session.clone();
         let roots = Arc::new(

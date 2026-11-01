@@ -2,19 +2,32 @@ name: Docker cache qualification
 
 on:
   pull_request:
-    paths:
-      - "core/**"
-      - "Dockerfile"
-      - ".dockerignore"
-      - ".github/actions/setup-docker/**"
-      - ".github/workflows/docker-cache.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  scope:
+    name: Docker cache change scope
+    runs-on: ubuntu-latest
+    outputs:
+      required: ${{ steps.select.outputs.docker_cache }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Test cache selection
+        run: python3 -m unittest discover -s tools/ci -p 'test_pr_scope.py'
+      - id: select
+        run: python3 tools/ci/pr_scope.py
+
   cacher:
+    needs: scope
+    if: needs.scope.outputs.required == 'true'
     name: Docker cache (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60

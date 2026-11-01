@@ -33,6 +33,7 @@ use tokio::sync::oneshot;
 use tokio::time::{Duration, sleep};
 use wasmtime::Engine;
 
+use crate::database::canonical_history;
 use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::database::queries::insert_block;
 use crate::database::types::{ContractRow, FileMeta};
@@ -753,6 +754,9 @@ async fn test_runtime_with_genesis_config_and_engine(
         runtime.publish_native_contracts(genesis).await?;
     }
 
+    // This fixture writes directly through the legacy runtime without a raw-input
+    // journal. Preserve that distinction instead of fabricating canonical history.
+    canonical_history::initialize(&runtime.storage.conn).await?;
     Ok((runtime, db_dir, db_name))
 }
 

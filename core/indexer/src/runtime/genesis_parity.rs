@@ -3,7 +3,7 @@ use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use bitcoin::Network;
 use indexer_types::BlockRow;
 use libsql::{Connection, Value, params};
@@ -15,8 +15,10 @@ use super::ownership::OwnerService;
 use super::pool::LinkedSession;
 use super::{ComponentCache, Decimal, GenesisParameters, GenesisValidator, Runtime, Storage};
 use crate::built_info::GIT_COMMIT_HASH;
+use crate::database::canonical_history::{self, HistoryState};
 use crate::database::connection::new_connection;
 use crate::database::queries::insert_block;
+use crate::protocol::coordinator::genesis::bind_identity;
 use crate::protocol::coordinator::linked;
 use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
 use crate::runtime::ownership::adapter::HostFailure;
@@ -140,6 +142,9 @@ async fn linked_initializer_preserves_native_genesis_and_resume() -> Result<()> 
         let mut states = Vec::new();
         for (filename, linked) in [("baseline.db", false), ("linked.db", true)] {
             let conn = new_connection(directory.path(), filename).await?;
+            if linked {
+                bind_identity(&conn, network, 1, &envelope).await?;
+            }
             insert_block(
                 &conn,
                 BlockRow::builder()
@@ -163,15 +168,17 @@ async fn linked_initializer_preserves_native_genesis_and_resume() -> Result<()> 
             .await?;
             runtime.network = network;
             let service = OwnerService::new();
+            let mut expected_stages = Vec::new();
             if linked {
                 let session = LinkedSession::new(conn.clone(), linked::link_runtime(runtime, true));
                 let before = logical_state(&conn).await?;
-                let mut steps = (session.executor.operations.initialize)(
+                let steps = (session.executor.operations.initialize)(
                     session.executor.owner.clone(),
                     envelope.clone(),
                 )
-                .map_err(HostFailure::from)?
-                .into_iter();
+                .map_err(HostFailure::from)?;
+                expected_stages = steps.iter().map(|(commit, _)| *commit).collect();
+                let mut steps = steps.into_iter();
                 let _first = steps.next().context("missing prepare step")?;
                 let (_, second) = steps.next().context("missing first publication")?;
                 let selection = select_legacy_p1(
@@ -192,9 +199,9 @@ async fn linked_initializer_preserves_native_genesis_and_resume() -> Result<()> 
                     .unwrap_err();
                 assert!(format!("{error:#}").contains("initialization steps are out of order"));
                 assert_eq!(logical_state(&conn).await?, before);
-                linked::initialize(&service, &session, network, envelope.clone()).await?;
+                linked::initialize(&service, &session, network, 1, envelope.clone()).await?;
                 let fresh = logical_state(&conn).await?;
-                linked::initialize(&service, &session, network, envelope.clone()).await?;
+                linked::initialize(&service, &session, network, 1, envelope.clone()).await?;
                 assert_eq!(
                     logical_state(&conn).await?,
                     fresh,
@@ -207,7 +214,50 @@ async fn linked_initializer_preserves_native_genesis_and_resume() -> Result<()> 
             }
             assert!(conn.is_autocommit());
             assert_eq!(service.active_roots().await, 0);
-            states.push(logical_state(&conn).await?);
+            let mut state = logical_state(&conn).await?;
+            if linked {
+                let HistoryState::Ready(cursor) = canonical_history::state(&conn).await? else {
+                    bail!("linked genesis did not bind its chain");
+                };
+                assert!(cursor.ordinal > 0 && cursor.authentic);
+                assert_eq!(
+                    state["canonical_applications"].as_array().unwrap().len(),
+                    cursor.ordinal as usize
+                );
+                assert_eq!(
+                    state["genesis_applications"].as_array().unwrap().len(),
+                    cursor.ordinal as usize
+                );
+                assert_eq!(
+                    cursor.ordinal as usize,
+                    expected_stages.iter().filter(|commit| **commit).count()
+                );
+                for (stage, commits) in expected_stages.iter().enumerate() {
+                    assert_eq!(
+                        canonical_history::genesis_stage_applied(&conn, stage as u32).await?,
+                        *commits
+                    );
+                }
+            } else {
+                assert_eq!(
+                    canonical_history::state(&conn).await?,
+                    HistoryState::PendingGenesis
+                );
+                assert_eq!(state["canonical_applications"], json!([]));
+                assert_eq!(state["genesis_applications"], json!([]));
+            }
+            assert_eq!(state["migration_applications"], json!([]));
+            // Runtime parity compares every execution table. The new coordinator
+            // journal is checked above because the legacy initializer lacks it.
+            for name in [
+                "canonical_history_state",
+                "canonical_applications",
+                "genesis_applications",
+                "migration_applications",
+            ] {
+                state.as_object_mut().unwrap().remove(name).unwrap();
+            }
+            states.push(state);
         }
         assert_eq!(states[0], states[1], "native genesis differs on {network}");
     }

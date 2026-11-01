@@ -3,6 +3,7 @@ use std::path::Path;
 use libsql::{Connection, Error, TransactionBehavior};
 use tokio::fs;
 
+use super::canonical_history;
 use super::confirmation::initialize_confirmation_metadata;
 use super::receipt_stream::initialize_receipt_stream;
 
@@ -52,6 +53,9 @@ pub async fn initialize_database(data_dir: &Path, conn: &libsql::Connection) -> 
     conn.execute_batch(CREATE_SCHEMA).await?;
     initialize_confirmation_metadata(conn).await?;
     initialize_receipt_stream(conn).await?;
+    canonical_history::initialize(conn).await.map_err(|error| {
+        Error::ConnectionFailed(format!("canonical history initialization: {error:#}"))
+    })?;
     conn.execute(CREATE_CONTRACT_STATE_TRIGGER, ()).await?;
     ensure_current_state(conn).await?;
     conn.query("PRAGMA journal_mode = WAL;", ()).await?;

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use indexer::reg_tester::{RegTesterCluster, default_kontor_bin};
 use indexer::runtime::ContractAddress;
 use indexer_types::{Inst, InstKind};
@@ -59,7 +59,9 @@ async fn cluster_consensus_lifecycle() -> Result<()> {
     cluster.resume_node(3).await?;
     let cached_contract = tokio::time::timeout(Duration::from_secs(120), &mut cached).await??;
     assert_eq!(cached_contract, contract);
-    assert!(cluster.client(3).wit(&contract).await.is_ok());
+    cluster.client(3).wit(&contract).await.context(
+        "cached publication returned but the resumed node could not serve the contract WIT",
+    )?;
     let (rt, mut ident) = cluster.identity().await?;
     let contract_addr = indexer_types::ContractAddress {
         name: contract.name.clone(),

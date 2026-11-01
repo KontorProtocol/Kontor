@@ -20,6 +20,9 @@ class NodeExecution(unittest.TestCase):
         self.observations = {'schema': 1, 'cases': sorted(CASES), 'executors': [
             {'graph': 'first', 'observations': sample_observation()},
             {'graph': 'second', 'observations': sample_observation()}]}
+        self.observations['storage_contracts'] = {'rejected_before_construction': [
+            f'{graph}:{mutation}' for graph in ('first', 'second')
+            for mutation in ('missing', 'unknown', 'changed', 'multiple')]}
 
     def prepare(self, status=0):
         self.binary.write_text(f'#!{sys.executable}\nimport sys\nprint({json.dumps(self.observations)!r})\nsys.exit({status})\n')
@@ -60,13 +63,15 @@ class NodeExecution(unittest.TestCase):
         self.assertFalse(self.success.exists())
 
     def test_missing_graph_case_and_disagreement_are_rejected(self):
-        for kind in ('graph', 'case', 'mismatch'):
+        for kind in ('graph', 'case', 'mismatch', 'storage'):
             with self.subTest(kind=kind):
                 original = json.loads(json.dumps(self.observations))
                 if kind == 'graph':
                     self.observations['executors'].pop()
                 elif kind == 'case':
                     self.observations['cases'].pop()
+                elif kind == 'storage':
+                    self.observations['storage_contracts']['rejected_before_construction'].pop()
                 else:
                     self.observations['executors'][1]['observations']['state'] = 'different'
                 self.prepare()

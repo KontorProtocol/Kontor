@@ -10,6 +10,8 @@ pub mod executor;
 mod handlers;
 #[cfg(test)]
 mod handoff_tests;
+#[cfg(feature = "protocol-qualification")]
+pub(crate) mod history_qualification;
 #[cfg(test)]
 pub(crate) mod lite_executor;
 mod mempool;
@@ -60,9 +62,12 @@ use tracing::{debug, info, warn};
 use crate::bitcoin_client::Client;
 use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
+#[cfg(test)]
+use crate::database::canonical_history;
 use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
 #[cfg(test)]
 use crate::protocol::coordinator::committee::build_validator_set;
+use crate::protocol::coordinator::genesis::bind_identity;
 use crate::protocol::coordinator::linked::{self, TransactionRecognizer};
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
@@ -961,6 +966,8 @@ pub(crate) async fn create_runtime_executor(
     runtime
         .publish_native_contracts_owned(genesis, owner_service)
         .await?;
+    // Compatibility fixtures bypass the coordinator's genesis journal.
+    canonical_history::initialize(&runtime.storage.conn).await?;
     Ok((exec, runtime, height, hash))
 }
 
@@ -978,15 +985,6 @@ pub(crate) async fn create_executor_session(
     u64,
     Option<BlockHash>,
 )> {
-    let (height, hash) = prepare_executor_startup(starting_block_height, writer).await?;
-    let exec = new_runtime_executor(bitcoin_client, replay_tx);
-    let session = linked::canonical_session(writer.connection(), network)
-        .await
-        .context("Failed to initialize retained executor session")?;
-    #[cfg(test)]
-    owner_service
-        .apply_linked_startup_compile_gate(&session)
-        .await?;
     let genesis = (
         decimal_to_string(genesis.sigma_min),
         genesis
@@ -1001,9 +999,31 @@ pub(crate) async fn create_executor_session(
             })
             .collect(),
     );
-    linked::initialize(owner_service, &session, network, genesis)
+    bind_identity(
+        &writer.connection(),
+        network,
+        starting_block_height,
+        &genesis,
+    )
+    .await?;
+    let (height, hash) = prepare_executor_startup(starting_block_height, writer).await?;
+    let exec = new_runtime_executor(bitcoin_client, replay_tx);
+    let session = linked::canonical_session(writer.connection(), network)
         .await
-        .context("Failed to publish native contracts")?;
+        .context("Failed to initialize retained executor session")?;
+    #[cfg(test)]
+    owner_service
+        .apply_linked_startup_compile_gate(&session)
+        .await?;
+    linked::initialize(
+        owner_service,
+        &session,
+        network,
+        starting_block_height,
+        genesis,
+    )
+    .await
+    .context("Failed to publish native contracts")?;
     Ok((exec, session, height, hash))
 }
 

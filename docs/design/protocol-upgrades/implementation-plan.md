@@ -23,11 +23,39 @@ Review task: `kontor-upgrade-plan-v1`; reviewer session
 
 The goal is the complete merged system, including integrated failure/recovery
 evidence. A build experiment, this plan, or an early merged phase is not completion.
-Each phase below is one PR. Fork PRs receive the same two reviews and CI gates as
-node PRs. Production changes begin only after both implementer and reviewer
-explicitly approve the same revision. Material revisions require renewed agreement.
+K3 through K11 remain ordered implementation milestones. On 1 November 2026,
+the operator authorized six grouped PRs to reduce CI usage, and the planning
+reviewer explicitly agreed the grouping:
 
-## Implementation checkpoint, 31 October 2026
+1. K3: atomic migration substrate and execution identity.
+2. K4: certified history and historical committee authority.
+3. K5 and K6: durable signing/engine coordination, then upgrade authorization.
+4. K7 and K8: activation together with cross-boundary replay and recovery.
+5. K9: historical transport and verified cold catch-up.
+6. K10 and K11: client/operator integration and final qualification/documentation.
+
+Complete and locally validate milestones in dependency order within each group.
+Start dependent groups from verified preceding merges. Keep every milestone's
+acceptance evidence; develop integration coverage throughout rather than deferring
+it to K11. K5/K6 retain separate consensus, network-identity and approval authorities.
+
+Each group requires the lead's review and one independent Codex reviewer, as
+authorized by the operator on 1 November. The independent brief combines state,
+accounting, persistence and compatibility correctness with architecture,
+authorization, concurrency, ownership, failure/recovery and evidence quality.
+Review depth remains proportional to risk. Consolidate reviews around complete
+groups; follow up only where material changes invalidate coverage. The same
+independent reviewer agrees consequential plans and revisions before implementation.
+This supersedes earlier two-reviewer and per-phase-PR requirements in historical
+amendments below, without invalidating completed reviews. Required fork work has
+the same review and CI gates.
+
+Batch locally validated fixes before pushing and target one final-candidate CI
+campaign per group. This is not a cap on necessary corrective runs or a waiver of
+checks. Retain valid evidence with its original source bindings and rerun affected
+checks when changes require it.
+
+## Implementation checkpoint, 1 November 2026
 
 S2 merged in [PR 613](https://github.com/KontorProtocol/Kontor/pull/613) as
 `a94587744cd7bce30d6662fb4b32a7c65ce67912`. The lead verified the actual merge
@@ -69,7 +97,14 @@ comparison and required CI passing. It provides selected in-tree P1 execution,
 retained policy and native artifact/provenance inputs, and logical storage
 callbacks. It does not establish independent production dependency graphs.
 
-K2b production extraction is implemented locally and remains unmerged. The
+K2b merged in [PR 618](https://github.com/KontorProtocol/Kontor/pull/618) as
+`aad23bccdaa300ed207bb328abc8c124e68efbe9`. All 32 final-candidate checks passed.
+The actual merge and qualified PR test commit share tree
+`f1489674fb396e4745faf96b723af36e02cdd558`. The lead reproduced the stack and
+linked-node comparisons from the raw CI artifacts. Both comparisons cover all
+three release platforms; stack qualification also includes three bounded dev
+smoke cells. Duplicate post-merge qualification/mobile runs were cancelled only
+after verifying exact tree equivalence. The
 [agreed extraction design](k2b-production-boundary.md) defines its boundary and
 acceptance criteria. Two independently locked production graphs contain the
 actual retained Runtime and Wasmtime `.2`/`.3`, including conflicting features.
@@ -100,21 +135,51 @@ comparison explicitly requires release results from all three supported platform
 with exhaustive dev/release comparison available only manually. Comparator-only
 changes run focused evidence controls instead of rebuilding all platforms.
 
-Before K2b can merge, finish the remaining guest panic payload and missing-context
-publication/provenance checks and required platform checks; consolidate the lead
-and two independent phase reviews;
-and pass final-candidate CI. The Daybreak implementer has the bounded panic-parity
-assignment. The integrated ownership checks establish one local dev cell, not
-release-platform qualification. No delegated result is accepted solely from its status
-message. No K2b PR or broad CI campaign has been started at this checkpoint.
-The remaining activation, authorization, consensus handoff, migration, historical
-verification and recovery phases below are still required for goal completion.
+The lead and both then-required independent reviewers completed K2b review,
+including the native ownership and historical semantic corrections. Guest panic
+and publication/provenance gaps are closed. The three-platform linked comparison
+matches the historical semantic baseline with observation digest
+`4b33893c3385cce609eb6f8f129c3796ae10fd9cb05735371e7f1e07cd4d5985`.
+K3 starts from this verified merge using the agreed revision2 design below.
+Activation, authorization, consensus handoff, migration, historical verification
+and recovery remain required; K2b does not implement those features.
 
-The operator replaced the unavailable external reviewer with a second independent
-Codex reviewer using a complementary brief. Preserve valid reviews and consolidate
-focused follow-up on material corrections. Publication of the Site and SDK remains
-deferred until the end of the goal and review of the complete work. Current evidence
-and exact revision records are tracked in [the execution ledger](execution-ledger.md).
+The local K3 candidate adds canonical application lineage, immutable execution
+and storage requirements, durable genesis stages and an owned atomic migration
+entry point. Both independently linked executors pass 22 bounded scenario groups
+and the preserved full logical-state comparison on Linux ARM64 dev. The focused
+K3 suite passes 62 tests, including process crash/retry, rollback, cleanup failure
+and migration while the API view pool is saturated. These are local results;
+consolidated independent review, final-candidate CI and merge remain pending.
+The live upgrade controller, validator authorization and after-H activation are
+still later milestones. K3 does not expose a public migration execution route.
+
+Publication of the Site and SDK remains deferred until the end of the goal and
+review of the complete work. Current evidence and exact revision records are
+tracked in [the execution ledger](execution-ledger.md).
+
+## CI selection refinement, 1 November 2026
+
+The operator requested narrower PR checks after K2b. The planning reviewer agreed
+ordinary CI and Docker fetch-cache selection based on complete diffs, with missing
+history or uncovered inputs retaining checks. Ordinary Rust tests and SDK regtest
+remain sensitive to node changes. Artifact regeneration follows contract/SDK source
+dependencies, committed outputs, build configuration and external embedded WIT
+inputs; shared Cargo/toolchain changes remain conservative. Local dependency coverage
+includes workspace inheritance, target/build/dev dependencies and local patches.
+
+The Docker cache stage only fetches dependencies. Its selector tracks manifests,
+locks, configuration, conventional and explicit target/build-script paths, and
+container/setup inputs. Main-branch production image building is not gated by this
+fetch-only policy. Cheap CI controls always run, and the ordinary CI aggregate
+rejects failed scope detection and missing or failed selected jobs.
+
+Native-stack, linked-node, native-crypto and mobile qualification retain their
+existing coverage in this amendment. In particular, changing retained behavior
+still requires release qualification plus bounded dev smoke. The narrower ordinary
+checks do not claim that unrelated node paths can never affect linked execution.
+Local selector tests and workflow validation are recorded with the K3 candidate;
+this amendment does not claim the unmerged workflows have run in GitHub yet.
 
 ## Planning baseline evidence, 27 October 2026
 
@@ -422,8 +487,9 @@ state/receipt comparisons validate equivalent replay beyond checkpoint coverage.
 The following concrete K3 decisions were agreed by the lead and the system
 planning reviewer on 1 November 2026 (plan revision 2, SHA-256
 `ed4b9805db24d250621b098ff33b516995b5612d8f058130d57e53e1ee6e85c2`).
-They describe planned work, not implemented capabilities. Implementation starts
-from the verified K2b merge; authorization and live activation remain K6/K7.
+They define the K3 candidate implemented from the verified K2b merge. Local
+validation is recorded in the execution ledger; review and merge remain pending.
+Authorization and live activation remain K6/K7.
 
 Use distinct chain, execution-definition, migration-definition, protocol and
 plan identifiers. Canonical encodings use explicit field order, fixed-width
@@ -432,6 +498,21 @@ commits target-independent semantic sources, locks, features and build policy;
 platform artifacts remain separate mappings. Existing applications receive an
 explicit baseline-execution identity variant. K4 adds the accepted KPM1 manifest
 identity without reinterpreting that variant or the existing numeric P1 tag.
+
+The lead and sole planning reviewer additionally agreed the StorageV1 identity
+boundary on 1 November 2026 (refinement record SHA-256
+`ef5eac999ccd6a43ae46c2f5cd5b6969458a87cee6588a6d24a7d6be78b9de9d`).
+Commit an immutable storage contract reference in the execution definition's
+source inventory, including logical rules and initial implementation digests.
+Resolve it to a versioned node callback adapter before executor construction,
+rejecting unsupported requirements. Current SQL, adapter and shared database
+dependencies remain artifact provenance, qualified against each retained
+contract and the preserved original oracle. They do not redefine historical
+execution identities whenever the node changes. Exclude only whole node-only
+modules from semantic inventory, retain shared interfaces and effective inherited
+package settings, and preserve the broader artifact inventory. K4 composes this
+requirement without changing K3's baseline identity. This refinement is included
+in K3's consolidated acceptance and review, not a separate milestone.
 
 Canonical application lineage records reversible application order, source and
 storage positions, branch, execution identity, complete ordered witness-inclusive
@@ -636,10 +717,10 @@ an explicit linker-backend hash.
 
 ## Review and merge ledger
 
-For each phase record base/head, acceptance commands/results, independent subagent
-review, Interlink review, findings/dispositions, any follow-up review after material
-edits, PR URL, current-head CI and actual merge commit. Begin dependent phases from
-the merged state. New security advisories may receive exact documented exceptions
+For each milestone retain its acceptance commands/results and evidence. For each
+grouped PR record base/head, lead and single independent review, findings and
+dispositions, focused follow-up after material edits, PR URL, current-head CI and
+actual merge commit. Begin dependent groups from the verified merged state. New security advisories may receive exact documented exceptions
 in `core/.cargo/audit.toml`; these are accepted exceptions, never described as fixes.
 No blanket suppression and no weakening other tests to pass CI.
 
@@ -657,7 +738,7 @@ No blanket suppression and no weakening other tests to pass CI.
   deployment constraints and unresolved economic policies. Query to 01a147e5 remains
   pending. Preserve existing economics during extraction; do not resolve unrelated
   staking/penalty/sponsorship policy by accident.
-- Every phase needs both review channels and green current-head CI before merge.
+- Every grouped PR needs the lead and single independent review plus green current-head CI before merge.
 
 ## Planning review evidence
 

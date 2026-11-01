@@ -2,6 +2,7 @@ pub(crate) mod committee;
 pub(crate) mod decision;
 pub(crate) mod genesis;
 pub(crate) mod linked;
+pub(crate) mod migration;
 pub(crate) mod selection;
 pub(crate) mod v1;
 

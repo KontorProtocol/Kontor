@@ -304,6 +304,53 @@ resident; bundle unloading is unsupported.
 
 ## Changing a retained bundle
 
+### Execution definition references
+
+Each production executor has an explicit `definition.bin`. Its execution ID
+binds target-independent semantic source hashes, the graph lock, resolved
+features and build policy. The builder verifies this reference before and after
+compilation using unfiltered Cargo metadata. Platform-specific artifact hashes
+remain separate build evidence. A stale reference fails the build; a build does
+not regenerate it. The retained crate embeds its own reference directly, without
+depending on a build-script environment variable.
+
+For a deliberately changed, unreleased definition, run
+`python3 tools/protocol-bundles/execution_definition.py first --write` (or
+`second`) under the pinned toolchain, inspect the changed inputs and ID, then
+qualify the resulting executors. Omitting `--write` only verifies the reference.
+Never overwrite a released definition to silence a mismatch. Preserve its
+source graph and add the new definition separately. Compatibility qualification
+of a new compiler/platform artifact is distinct from changing execution rules.
+
+The definition also commits the immutable `protocol/v1/storage-contract.json`
+reference. It specifies the required logical storage semantics and identifies
+the initial SQL adapter sources. The node resolves that requirement before
+constructing a retained factory and rejects missing, changed, unknown or multiple
+requirements. Distinct executors can require the same StorageV1 contract.
+
+Do not regenerate this reference from the latest adapter. Current SQL, adapter
+sources, shared libsql/SQLite dependencies and build settings are recorded in
+node artifact provenance. Changing them requires compatibility qualification
+against every retained storage contract, including the preserved original oracle.
+Two executors agreeing through the same changed adapter is insufficient evidence.
+If a shared dependency cannot preserve an old contract, it cannot replace that
+contract's implementation merely because a newer executor supports it.
+
+Semantic source inventory is distinct from broad artifact provenance. Whole
+node-only coordinator, ownership and pool modules are excluded from execution
+identity; shared interfaces and mixed modules remain bound conservatively.
+Resolved local package properties capture inherited manifest settings without
+binding unrelated workspace dependencies such as Malachite. Node implementation
+changes still appear in artifact provenance and retain their applicable tests.
+
+The migration qualification factory registers a fixed test-only Rust routine
+alongside the no-op migration. It exercises budgeted reads and writes, immutable
+input, atomic rollback and retry through the real executor adapters. The normal
+factory rejects that routine. It is not a deployed smart contract or an enabled
+network upgrade; authorization and activation remain later milestones.
+
+### Retained graph changes
+
 1. Preserve the old manifest, lock, source identity and semantics. Add a new
    protocol mapping in the later production phases rather than rewriting history.
 2. Assign each retained Wasmtime graph a unique immutable package version and
@@ -315,7 +362,7 @@ resident; bundle unloading is unsupported.
    resource counts pass. Preserve portable lifting charges.
 4. Run the negative controls and real qualification on every shipped node
    platform. Audit both bundle locks using the existing core advisory policy.
-5. Obtain independent and Interlink reviews of semantics, native/process
+5. Obtain lead and one independent review of semantics, native/process
    ownership and integration. Compiler changes require renewed qualification of
    every retained protocol. Historical transaction replay alone is insufficient.
 
