@@ -481,35 +481,7 @@ impl<E: Executor> Reactor<E> {
     }
 
     pub(super) async fn simulate_raw(&mut self, raw: Vec<u8>) -> Result<SimulationOutcome> {
-        // Recognition belongs at admission, since the protocol may change while
-        // an RPC request waits in the bounded simulation queue.
-        let selection = self.simulation_selection().await?;
-        let tx = match self.execution.executor.prepare_simulation(
-            &self.execution.recognizer,
-            &selection,
-            raw,
-        )? {
-            Ok(Some(tx)) => tx,
-            Ok(None) => return Ok(Err("Not a valid Kontor transaction".to_owned())),
-            Err(error) => return Ok(Err(error)),
-        };
-        self.simulate_selected(selection, tx).await.map(Ok)
-    }
-
-    fn simulation_selection(
-        &self,
-    ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
-        let conn = self.db_conn();
-        let network = self.execution.network;
-        async move {
-            let tip = select_block_latest(&conn).await?;
-            let height = tip.map_or(Ok(1), |row| {
-                row.height
-                    .checked_add(1)
-                    .context("simulation height overflow")
-            })?;
-            select_legacy_p1(&conn, network, ApplicationPosition::Simulation { height }).await
-        }
+        self.execution.simulate_raw(raw).await
     }
 
     #[cfg(test)]
@@ -517,99 +489,7 @@ impl<E: Executor> Reactor<E> {
         &mut self,
         tx: indexer_types::Transaction,
     ) -> Result<Vec<OpWithResult>> {
-        let selection = self.simulation_selection().await?;
-        self.simulate_selected(selection, PreparedTransaction::fixture(tx))
-            .await
-    }
-
-    /// Simulate a transaction: execute in a temporary block, inspect results,
-    /// merge in any deterministic-failure messages captured during execution,
-    /// then rollback. Unlike `/inspect`, this carries live error strings —
-    /// they're not persisted to chain state, only available here while the
-    /// virtual block is still in scope.
-    /// Runs the simulation with its out-of-transaction state restored on EVERY
-    /// exit, not just the successful one.
-    ///
-    /// The database savepoint does not cover contract-facing metadata or the
-    /// shared operation counters. Isolate the counters so runtime clones cannot
-    /// mutate the originals, and restore context even on a returned error.
-    /// Outer errors remain fatal; the SQL transaction is rolled back before the
-    /// reactor reports them. The reactor task must not be cancelled mid-flight.
-    async fn simulate_selected(
-        &mut self,
-        selection: ExecutionSelection,
-        tx: PreparedTransaction,
-    ) -> Result<Vec<OpWithResult>> {
-        let lease = self.execution.begin_unit(&selection, true).await?;
-        let result = self.simulate_inner(&selection, tx).await;
-        self.execution.finish_unit(lease, result, false).await
-    }
-
-    async fn simulate_inner(
-        &mut self,
-        selection: &ExecutionSelection,
-        tx: PreparedTransaction,
-    ) -> Result<Vec<OpWithResult>> {
-        // Simulation runs against a FABRICATED block one past the tip and then
-        // rolls it away. `execute_block` sets `storage.height` to that block as it
-        // goes, so without the restore in `simulate` the runtime is left pointing at
-        // a height whose `blocks` row no longer exists. The next identity created
-        // outside a `set_context` — a decided batch executing at the real tip, say —
-        // then inserts `signers(height = <discarded height>)` and trips the
-        // `signers.height -> blocks.height` foreign key, which is classified
-        // non-deterministic and kills the reactor.
-        selection.verify_base(&self.db_conn()).await?;
-        let block_row = select_block_latest(&self.db_conn())
-            .await
-            .context("Failed to query latest block for simulation")?;
-        let height = block_row.as_ref().map_or(1, |row| row.height + 1);
-        let block = PreparedBlock {
-            height,
-            input: None,
-            hash: new_mock_block_hash(height as u32),
-            prev_hash: block_row
-                .as_ref()
-                .map_or(new_mock_block_hash(0), |row| row.hash),
-            transactions: vec![tx],
-        };
-        let (_unbatched, _executed, failures) = self
-            .execution
-            .execute_block(selection, &block)
-            .await
-            .context("execute_block failed during simulation")?;
-        let tx = &block.transactions[0];
-        let response = (self.execution.session.executor.operations.inspect)(
-            self.execution.session.executor.owner.clone(),
-            selection.envelope(),
-            tx.payload(selection, self.execution.network)?,
-            tx.index,
-        )
-        .await
-        .map_err(HostFailure::from)?;
-        let mut results: Vec<OpWithResult> = serde_json::from_slice(&response)?;
-
-        // Simulate's block has exactly one tx; failures[0] is the per-input
-        // per-op failure vec for it. Flatten in declaration order (inputs
-        // then ops) to align with inspect's flat OpWithResult vec — both
-        // produce one entry per inst in input.insts.ops.
-        if let Some(tx_failures) = failures.into_iter().next() {
-            let mut flat = tx_failures
-                .into_iter()
-                .flat_map(|input_errs| input_errs.into_iter());
-            for ow in results.iter_mut() {
-                if let Some(Some(e)) = flat.next() {
-                    let msg = format!("{e:#}");
-                    match ow {
-                        OpWithResult::Materialized { error_message, .. }
-                        | OpWithResult::Rejected { error_message, .. } => {
-                            *error_message = Some(msg);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(results)
+        self.execution.simulate(tx).await
     }
 
     /// Prune finalized, superseded `contract_state` versions below the finality
@@ -723,5 +603,137 @@ mod vacuum_throttle_tests {
             vacuum_pages_to_reclaim(1_000_000),
             Some(PRUNE_VACUUM_MAX_PAGES)
         );
+    }
+}
+
+impl<E: Executor> ExecutionContext<E> {
+    pub(super) async fn simulate_raw(&mut self, raw: Vec<u8>) -> Result<SimulationOutcome> {
+        // Recognition belongs at admission, since the protocol may change while
+        // an RPC request waits in the bounded simulation queue.
+        let selection = self.simulation_selection().await?;
+        let tx = match self
+            .executor
+            .prepare_simulation(&self.recognizer, &selection, raw)?
+        {
+            Ok(Some(tx)) => tx,
+            Ok(None) => return Ok(Err("Not a valid Kontor transaction".to_owned())),
+            Err(error) => return Ok(Err(error)),
+        };
+        self.simulate_selected(selection, tx).await.map(Ok)
+    }
+
+    fn simulation_selection(
+        &self,
+    ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
+        let conn = self.db_conn();
+        let network = self.network;
+        async move {
+            let tip = select_block_latest(&conn).await?;
+            let height = tip.map_or(Ok(1), |row| {
+                row.height
+                    .checked_add(1)
+                    .context("simulation height overflow")
+            })?;
+            select_legacy_p1(&conn, network, ApplicationPosition::Simulation { height }).await
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) async fn simulate(
+        &mut self,
+        tx: indexer_types::Transaction,
+    ) -> Result<Vec<OpWithResult>> {
+        let selection = self.simulation_selection().await?;
+        self.simulate_selected(selection, PreparedTransaction::fixture(tx))
+            .await
+    }
+
+    /// Simulate a transaction: execute in a temporary block, inspect results,
+    /// merge in any deterministic-failure messages captured during execution,
+    /// then rollback. Unlike `/inspect`, this carries live error strings —
+    /// they're not persisted to chain state, only available here while the
+    /// virtual block is still in scope.
+    /// Runs the simulation with its out-of-transaction state restored on EVERY
+    /// exit, not just the successful one.
+    ///
+    /// The database savepoint does not cover contract-facing metadata or the
+    /// shared operation counters. Isolate the counters so runtime clones cannot
+    /// mutate the originals, and restore context even on a returned error.
+    /// Outer errors remain fatal; the SQL transaction is rolled back before the
+    /// reactor reports them. The reactor task must not be cancelled mid-flight.
+    async fn simulate_selected(
+        &mut self,
+        selection: ExecutionSelection,
+        tx: PreparedTransaction,
+    ) -> Result<Vec<OpWithResult>> {
+        let lease = self.begin_unit(&selection, true).await?;
+        let result = self.simulate_inner(&selection, tx).await;
+        self.finish_unit(lease, result, false).await
+    }
+
+    async fn simulate_inner(
+        &mut self,
+        selection: &ExecutionSelection,
+        tx: PreparedTransaction,
+    ) -> Result<Vec<OpWithResult>> {
+        // Simulation runs against a FABRICATED block one past the tip and then
+        // rolls it away. `execute_block` sets `storage.height` to that block as it
+        // goes, so without the restore in `simulate` the runtime is left pointing at
+        // a height whose `blocks` row no longer exists. The next identity created
+        // outside a `set_context` — a decided batch executing at the real tip, say —
+        // then inserts `signers(height = <discarded height>)` and trips the
+        // `signers.height -> blocks.height` foreign key, which is classified
+        // non-deterministic and kills the reactor.
+        selection.verify_base(&self.db_conn()).await?;
+        let block_row = select_block_latest(&self.db_conn())
+            .await
+            .context("Failed to query latest block for simulation")?;
+        let height = block_row.as_ref().map_or(1, |row| row.height + 1);
+        let block = PreparedBlock {
+            height,
+            input: None,
+            hash: new_mock_block_hash(height as u32),
+            prev_hash: block_row
+                .as_ref()
+                .map_or(new_mock_block_hash(0), |row| row.hash),
+            transactions: vec![tx],
+        };
+        let (_unbatched, _executed, failures) = self
+            .execute_block(selection, &block)
+            .await
+            .context("execute_block failed during simulation")?;
+        let tx = &block.transactions[0];
+        let response = (self.session.executor.operations.inspect)(
+            self.session.executor.owner.clone(),
+            selection.envelope(),
+            tx.payload(selection, self.network)?,
+            tx.index,
+        )
+        .await
+        .map_err(HostFailure::from)?;
+        let mut results: Vec<OpWithResult> = serde_json::from_slice(&response)?;
+
+        // Simulate's block has exactly one tx; failures[0] is the per-input
+        // per-op failure vec for it. Flatten in declaration order (inputs
+        // then ops) to align with inspect's flat OpWithResult vec — both
+        // produce one entry per inst in input.insts.ops.
+        if let Some(tx_failures) = failures.into_iter().next() {
+            let mut flat = tx_failures
+                .into_iter()
+                .flat_map(|input_errs| input_errs.into_iter());
+            for ow in results.iter_mut() {
+                if let Some(Some(e)) = flat.next() {
+                    let msg = format!("{e:#}");
+                    match ow {
+                        OpWithResult::Materialized { error_message, .. }
+                        | OpWithResult::Rejected { error_message, .. } => {
+                            *error_message = Some(msg);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(results)
     }
 }

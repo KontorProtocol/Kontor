@@ -1787,3 +1787,48 @@ suite claim on the new source. K4 still needs the remaining synthetic fixture
 migration, obsolete replay interfaces removed, bounded proof paging/admission,
 real-graph integration, lead and consolidated independent review, and final CI.
 No PR, push or remote CI campaign was launched.
+
+### K4 execution-only state fixtures and certified mempool startup
+
+Continuing from `dc049146`, moved simulation selection, owned simulation execution,
+and inspection from `Reactor` to `ExecutionContext`. Reactor entry points delegate
+without changing selection, unit ownership, failure handling or result assembly.
+The four context-restoration tests now use the existing execution-only fixture;
+seeded runtime state is never promoted to certified authority. The pruning test
+uses the same fixture and the real runtime maintenance operation, without an
+unused consensus engine. Its pruning watermark, injected failure, SQL rollback
+and reconfiguration assertions remain intact.
+
+The five mempool tests now construct a real certified fixture, authenticate a
+signed first-block decision, finalize and execute its closure, and require the
+next global consensus height to be 2. Their proposal anchors use that block's
+actual hash. Delayed witness replacement, stale selections after rollback,
+retained-recognizer dispatch, and event-loop backpressure assertions remain.
+The backpressure test initially failed because the migration accidentally supplied
+an empty second block, removing its intended transaction-removal stimulus. Restored
+that staged non-Kontor transaction in the second block. It is a synthetic spend;
+this test establishes reactor event handling, not Bitcoin UTXO/script acceptance.
+The assertion that late recognition cannot restore a removed transaction was not
+weakened. No mempool implementation change was needed.
+
+Local evidence (one Cargo/runtime operation at a time, two build jobs):
+
+- `k4-state-fixtures30.log`: session 48099 exit 0, six passed in 142.10s: pruning,
+  four simulation-context cases, and real-cluster simulation with unchanged state.
+  SHA-256 `8f08de46542610297384763c4719bc91e5d6d460134d7833fc83063e5c74b1ef`.
+  Draft definition `33c14ac215b83324b568b79264857acb24045a80ba5c3d5a4b46dfe3e365487e`.
+- `k4-mempool31.log`: session 72490 exit 101, four passed and the explained
+  block-removal fixture failure in 85.29s.
+  SHA-256 `7567b51322c24ad7a4571ecf59597dd8b7b3ab0e5b77fa4adef27fc59db58c92`.
+  Draft definition `427330bfeaf49b202bca75db34a63e0a31e0e549468b949f395954076a29bd12`.
+- `k4-mempool-removal32.log`: session 15325 exit 0, corrected pending-recognition,
+  block/request liveness and channel-backpressure case passed in 17.22s.
+  SHA-256 `562980707e90857a5df35737047d572cc5d72e1ec63921c251f9348d0e47aa21`.
+  Draft definition `4ee41619d3562b9e508823ccd8570368596f71152319ac5d157303b1f36cab20`.
+
+Formatting and diff checks passed. These are scoped results at the listed source
+bindings, not a full final-head suite claim. The only source differences after
+run 31 are the corrected block-removal stimulus and field shorthand. Confirmation
+position/parity and archive fixture migration, obsolete replay interfaces, bounded
+proof paging/admission, real-graph integration, consolidated review and CI remain
+unfinished. No PR, push or remote CI campaign was launched.
