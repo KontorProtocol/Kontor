@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "1ff599e08e01c6b35fad9a099bc16964226b9f66ded5af64ee468a9455a507e8",
+  "parent_manifest_sha256": "dce2033245e6b62de19e0b92877cf88543d16b3e035bba39fd267bcbad6cd5b8",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1203,7 +1203,7 @@
   "sources": {
     "call": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "6dfd1f00fe50a24b0f0e62613f7f8ba70905414f76933dbfa78139b012d2bff3"
+      "sha256": "d6d8bb9ff21f9cbc5cfe72ccc6e3f804f12f3affad71803b2830a7a15b4cd7d2"
     },
     "chain_fixture": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
@@ -1211,7 +1211,7 @@
     },
     "fees": {
       "path": "core/indexer/src/protocol/v1/fees.rs",
-      "sha256": "20b9b761045d4b0b325dedb3fc64e50181c508970ccda31b2bd9d8db19c659fc"
+      "sha256": "68e026fcb23f82e334148e69cfbcc44e84f7b7d3745badfb64b285761cf12a01"
     },
     "historical_phase10_gzip": {
       "path": "tools/native-stack/fixtures/phase10-resource-chain-capture.json.gz",
@@ -1235,11 +1235,11 @@
     },
     "native_bootstrap_abi": {
       "path": "core/indexer/src/protocol/native_bootstrap.rs",
-      "sha256": "ffb35a1c1cd2cf6d1858d4ffe660a0c26e2abbb140ff6c9e5dce532a97408bbb"
+      "sha256": "73366d9e7cc11a48b31bd8d659a76be4fe29630dc004de4271a7e8d349266497"
     },
     "native_bootstrap_adapter": {
       "path": "core/indexer/src/database/native_bootstrap.rs",
-      "sha256": "0b036872414aa6a9453d8d6e7c510927b68a470df569b93014b35bffc97a5fb8"
+      "sha256": "85eef64d131c150de2e52ec5a76c1cf7d75a3251ba9aeb079ad984ff4656b943"
     },
     "native_genesis_preflight": {
       "path": "core/indexer/src/database/genesis.rs",
@@ -1267,7 +1267,7 @@
     },
     "retained_native_bootstrap": {
       "path": "core/indexer/src/protocol/v1/native_bootstrap.rs",
-      "sha256": "3aace4c49b1d986e7548edad0953bff7c8650c484394ae0dc4dcc0ac3fc0501a"
+      "sha256": "71b6d8a569a8c266918b8de2aece348206ac3cc145522e8de7e433c68e605434"
     },
     "retained_native_build.json": {
       "path": "core/indexer/src/protocol/v1/native/build.json",
@@ -1323,11 +1323,11 @@
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "410aa7470e488d96de065a454156a912b774f504b7387031a03ae990377fc23f"
+      "sha256": "468c74719cd7ee097892cae08a3b72a0f0d968e2794cbd0817a95ce8c3993ae8"
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",
-      "sha256": "054727b7eaef0e678196b23efda8e7a8fa88e5ecd90017f9d1a0eca2ecbf5856"
+      "sha256": "5f755c530c1273da43552ccd948cee2d7d2a7cf7544e91115840b3d8250d303a"
     },
     "token": {
       "path": "core/indexer/src/runtime/token.rs",

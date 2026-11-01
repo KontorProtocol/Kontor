@@ -38,11 +38,11 @@
     },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
-      "sha256": "360bb078bb26f76652473066fb4c7a27eb124962b72b2cdfc437f687b6ae8e57"
+      "sha256": "3c7cc358f8b1a06b34f6204e15b2559a4cba0ac8bc41329024aa0053f0aae63c"
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
-      "sha256": "6dfd1f00fe50a24b0f0e62613f7f8ba70905414f76933dbfa78139b012d2bff3"
+      "sha256": "d6d8bb9ff21f9cbc5cfe72ccc6e3f804f12f3affad71803b2830a7a15b4cd7d2"
     },
     "call_output": {
       "path": "core/indexer/src/runtime/call/result.rs",
@@ -102,11 +102,11 @@
     },
     "component_cache": {
       "path": "core/indexer/src/runtime/component_cache.rs",
-      "sha256": "02ecaab3142f30f86ea1d54ecb9fa28738325a3ac35465bc813f9937e1d14a9f"
+      "sha256": "9077cd4a75dc1196a569a202e8b9de976305574fdcb703b1f1434bbe3bd7b287"
     },
     "core_lockfile": {
       "path": "core/Cargo.lock",
-      "sha256": "6e7ea3f1f76c383f267f9b00125a86dc01de45f7f3a2e5082da89598265b525f"
+      "sha256": "6eb28d6c43415be285eb34ee852562e6912f101139fdaa4980d70e1455f730e8"
     },
     "counter_guest": {
       "path": "test-contracts/binaries/counter.wasm.br",
@@ -142,7 +142,7 @@
     },
     "fee_settlement": {
       "path": "core/indexer/src/protocol/v1/fees.rs",
-      "sha256": "20b9b761045d4b0b325dedb3fc64e50181c508970ccda31b2bd9d8db19c659fc"
+      "sha256": "68e026fcb23f82e334148e69cfbcc44e84f7b7d3745badfb64b285761cf12a01"
     },
     "fiber_source_capture": {
       "path": "tools/native-stack/capture_fiber_source.py",
@@ -154,7 +154,7 @@
     },
     "filestorage_settlement": {
       "path": "core/indexer/src/runtime/filestorage/settlement_tests.rs",
-      "sha256": "fa0317e10858d796e37d4f85021589f12297ace947d67e0d1bf61a4ac618785f"
+      "sha256": "a292d8a510959d75204c73eac5ce1f8208625bc9d458fc27910bd1b283398985"
     },
     "finite_stack_boundary_validator": {
       "path": "tools/native-stack/resource_boundary_evidence.py",
@@ -226,11 +226,11 @@
     },
     "indexer_build_script": {
       "path": "core/indexer/build.rs",
-      "sha256": "182fc2714a0772379cd74e8025f02d7841732b38e69788ac0d9fc5e55abe519d"
+      "sha256": "ed8ed78fb607fbac0322990ac64a5fef5f5aa571590c34f6b77012121be33fb7"
     },
     "indexer_manifest": {
       "path": "core/indexer/Cargo.toml",
-      "sha256": "b8f3848a7408da12f46b25bb91a4c8b6a290f4c8aae94ce561857e4f5a74b9b0"
+      "sha256": "c9a63befcddcabb2c3a02d46fadbef4158b3a60908b900f91756834385d56d08"
     },
     "initial_protocol_definition": {
       "path": "core/indexer/src/protocol/coordinator/genesis.rs",
@@ -262,11 +262,11 @@
     },
     "native_bootstrap_abi": {
       "path": "core/indexer/src/protocol/native_bootstrap.rs",
-      "sha256": "ffb35a1c1cd2cf6d1858d4ffe660a0c26e2abbb140ff6c9e5dce532a97408bbb"
+      "sha256": "73366d9e7cc11a48b31bd8d659a76be4fe29630dc004de4271a7e8d349266497"
     },
     "native_bootstrap_adapter": {
       "path": "core/indexer/src/database/native_bootstrap.rs",
-      "sha256": "0b036872414aa6a9453d8d6e7c510927b68a470df569b93014b35bffc97a5fb8"
+      "sha256": "85eef64d131c150de2e52ec5a76c1cf7d75a3251ba9aeb079ad984ff4656b943"
     },
     "native_build_metadata": {
       "path": "native-contracts/binaries/build.json",
@@ -322,7 +322,7 @@
     },
     "native_staking_rewards_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/native_staking_rewards.rs",
-      "sha256": "2a21b52866db4669f6002fa30ce40448d15267134c8deb83c8a9281b67810635"
+      "sha256": "ce53ecd0dc656dd2f86fecb9cbd21d2ac0380603d8e9d14c50c028b4f6ceaf7e"
     },
     "native_staking_rewards_capture": {
       "path": "tools/native-stack/capture_resource_native_staking_rewards.py",
@@ -358,7 +358,7 @@
     },
     "operation_ownership": {
       "path": "core/indexer/src/runtime/ownership.rs",
-      "sha256": "fec5909edbc71bfbf48421b2aee8bbe38d37eb0665759356c977941699f50abb"
+      "sha256": "89f76b15b96c4d3c753c8ad3a3e5e6ef0872d2a51db5309059c2159519116a68"
     },
     "pending_host_capture": {
       "path": "tools/native-stack/capture_resource_pending.py",
@@ -386,11 +386,11 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "410aa7470e488d96de065a454156a912b774f504b7387031a03ae990377fc23f"
+      "sha256": "468c74719cd7ee097892cae08a3b72a0f0d968e2794cbd0817a95ce8c3993ae8"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "e74893176e5e9a26fb87c76d36fedbd94e5510b806e43469ea48958ce98e717e"
+      "sha256": "5d4cd565a766d6c302551fd6ff05a2da6dbc37c4fe87d16afed1d7de5ea76b9f"
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -490,7 +490,7 @@
     },
     "retained_native_bootstrap": {
       "path": "core/indexer/src/protocol/v1/native_bootstrap.rs",
-      "sha256": "3aace4c49b1d986e7548edad0953bff7c8650c484394ae0dc4dcc0ac3fc0501a"
+      "sha256": "71b6d8a569a8c266918b8de2aece348206ac3cc145522e8de7e433c68e605434"
     },
     "retained_native_build.json": {
       "path": "core/indexer/src/protocol/v1/native/build.json",
@@ -546,15 +546,15 @@
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
-      "sha256": "d5fdff24fa8b1594e611318789c79232f3d02a9fdbe8c11894259369a9ac75a8"
+      "sha256": "f171fe1ee7dbfde6589bbe4951acc3ea91dfd535f6a5a2482236a711ecc15d93"
     },
     "runtime_pool": {
       "path": "core/indexer/src/runtime/pool.rs",
-      "sha256": "4f6cafe06de20c77606898e31b4bd81f1f3a0366689ebc3267ce824e053a212a"
+      "sha256": "f5e6e6623887c49d2772efef660e52cfa79ba4a458d0be323cf45461774388b3"
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",
-      "sha256": "054727b7eaef0e678196b23efda8e7a8fa88e5ecd90017f9d1a0eca2ecbf5856"
+      "sha256": "5f755c530c1273da43552ccd948cee2d7d2a7cf7544e91115840b3d8250d303a"
     },
     "sqlite_large_values_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_large_values.rs",
@@ -650,7 +650,7 @@
     },
     "suite_dispatch_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "e74893176e5e9a26fb87c76d36fedbd94e5510b806e43469ea48958ce98e717e"
+      "sha256": "5d4cd565a766d6c302551fd6ff05a2da6dbc37c4fe87d16afed1d7de5ea76b9f"
     },
     "suite_registry_builder": {
       "path": "tools/native-stack/resource_suite_registry.py",
@@ -678,11 +678,11 @@
     },
     "test_runtime_setup": {
       "path": "core/indexer/src/test_utils.rs",
-      "sha256": "544a7fbf51927a02fcc78b22b3006a16022e1611ef7bd41dc67657db340f9c22"
+      "sha256": "e5a09776340abfd5b5cc71d14f5fcaa70a98c88f651a119809193a17c62ea0bb"
     },
     "testing_host_imports": {
       "path": "core/indexer/src/runtime/host_files.rs",
-      "sha256": "1d8cadee984433d4ed9ea809b82116217ca7f4770b9182bcefcc3ef7c0fafb45"
+      "sha256": "328518bd59974ff10990e65663fcf2056b91bb0787fcb1e53e75bd3629fca805"
     },
     "testlib_manifest": {
       "path": "core/testlib/Cargo.toml",
