@@ -1,0 +1,5 @@
+error: index name `entries` is reserved (shadows the map accessor of the same name); rename the index
+ --> tests/ui/indexed_reserved_entries.rs:5:9
+  |
+5 | #[index(entries, by = value)]
+  |         ^^^^^^^

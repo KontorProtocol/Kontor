@@ -1,0 +1,27 @@
+[package]
+name = "macros"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+# The library backend behind wit-bindgen's `generate!`, driven directly by
+# `import!`/`interface!` so the emitted items can be filtered (the embedded
+# component-type custom section must NOT ride into contract binaries for an
+# imported world).
+wit-bindgen-core = { workspace = true }
+wit-bindgen-rust = { workspace = true }
+wit-parser = { workspace = true }
+wit-validator = { path = "../wit-validator" }
+anyhow = { workspace = true }
+
+syn = {version = "=3.0.9", features = ["full"]}
+quote = "=1.0.47"
+proc-macro2 = "=1.0.107"
+darling = "=0.24.1"
+heck = "=0.5.0"

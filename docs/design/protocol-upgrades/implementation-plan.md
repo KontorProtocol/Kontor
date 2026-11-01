@@ -645,6 +645,47 @@ changes are explicitly prelaunch; no claim of compatibility with older dev netwo
 
 ### K5. Durable signer and engine coordinator
 
+K4 merged as `0a2cbd89e8ebdd8acc74b514e6d5e85e4c9466dd` (PR 620).
+The sole independent reviewer explicitly agreed the following K5/K6 packaging
+and integration refinement, revision 2, before production implementation:
+
+- Preserve K4's consensus reference, node lock, source closure, baseline
+  composition and observer definition. K4 is a prelaunch development baseline,
+  without live upgrade authorization. The new managed baseline gets a distinct
+  consensus, protocol and era identity. Existing K4 databases are rejected before
+  any canonical, journal, identity or signer mutation. Do not relabel data,
+  automatically delete it, or create a replacement datadir for an operator.
+- Build independently locked `consensus-first` and `consensus-second` graphs using
+  the already merged managed Malachite revision
+  `6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09`. Both use real Kontor contexts;
+  the second has a deliberately incompatible wire codec. Preserve historical
+  certificate verification. Consensus graphs do not need a Wasmtime dependency.
+- Keep each graph's Tokio, ractor, Malachite types and runtime private. The node
+  boundary uses owned bytes, opaque handles and generation-bound one-use reply
+  tokens. Composite protocol dispatch selects engine, coordinator rules and
+  certificate/control codecs together. Freeze the first final managed protocol
+  before constructing its successor; retain runnable historical managed protocols.
+- Keep signing admission and generation fencing serialized with durable commit.
+  Fencing remains callable while another thread waits for engine join. A timeout
+  retains ownership and never licenses a second engine. Proposal Fin and engine
+  SignProposal share one proposal-value commitment despite their different
+  encodings. Disable unsupported vote extensions; constrain ValidatorProof to its
+  membership role and distinct network identity. Approval signing is an explicit
+  operator capability, and followers have no consensus signing capability.
+- Persist accepted control outcome, control head/nonce, pending-plan mutation and
+  high-water update atomically with certified append before acknowledging Decided.
+  Schedule requires no pending plan; Postpone keeps its target and moves H strictly
+  later with fresh notice; Cancel matches the pending plan. Accepted authorization
+  survives subsequent committee changes. Until K7, reaching scheduled H fails
+  closed while valid Cancel/Postpone remains prioritized. Ordinary Block H cannot
+  consume the plan; K7's authorized transition descriptor does so.
+- Rehearsal uses an isolated consistent copy with independent storage authority
+  and no live signer or engine capability. Report source, target, lineage and work
+  accounting even on failure. No automatic rehearsal service is added.
+
+This refinement preserves the grouped scope and representative acceptance checks.
+No additional fork change, performance campaign or broad review round is implied.
+
 Dependencies: F3/K4. Modules: signing/proposal-part paths, engine adapters, reactor
 next-height gate, node startup. Result: one node signer with separately durable slots,
 round/step/high-water checks, exact retry signatures and generation leases. All

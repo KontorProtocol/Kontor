@@ -1,0 +1,17 @@
+error: Store derive does not support Result type in Enums
+ --> tests/ui/store_invalid_result_inner.rs:5:5
+  |
+5 |     Var(Result<u64, Error>),
+  |     ^^^
+
+error: Store derive does not support Result type in Enums
+  --> tests/ui/store_invalid_result_inner.rs:10:5
+   |
+10 |     Var(anyhow::Result<u64>),
+   |     ^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+  --> tests/ui/store_invalid_result_inner.rs:11:2
+   |
+11 | }
+   |  ^ consider adding a `main` function to `$DIR/tests/ui/store_invalid_result_inner.rs`

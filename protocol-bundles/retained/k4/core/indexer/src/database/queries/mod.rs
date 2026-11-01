@@ -1,0 +1,56 @@
+use thiserror::Error as ThisError;
+
+mod batches;
+mod blocks;
+mod checkpoints;
+mod contract_results;
+mod contract_state;
+mod contracts;
+mod current_state;
+mod execution_usage;
+mod node_meta;
+mod pagination;
+mod signers;
+mod transactions;
+mod versioned;
+
+pub use batches::*;
+pub use blocks::*;
+pub use checkpoints::*;
+pub use contract_results::*;
+pub use contract_state::*;
+pub use contracts::*;
+pub use execution_usage::*;
+pub use node_meta::*;
+pub use pagination::*;
+pub use signers::*;
+pub use transactions::*;
+
+#[derive(ThisError, Debug)]
+pub enum Error {
+    #[error("LibSQL error: {0}")]
+    LibSQL(#[from] libsql::Error),
+    #[error("Row deserialization error: {0}")]
+    RowDeserialization(#[from] serde::de::value::Error),
+    #[error("Invalid cursor format")]
+    InvalidCursor,
+    #[error("Storage value exceeds the requested byte limit")]
+    ValueTooLarge,
+    #[error("Contract not found: {0}")]
+    ContractNotFound(String),
+    #[error("Invalid data: {0}")]
+    InvalidData(String),
+    #[error("row scan requires direct scalar leaves")]
+    NonScalarRow,
+    #[error("Key codec error: {0:?}")]
+    KeyCodec(stdlib::CodecError),
+}
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+mod index_benchmarks;
+
+#[cfg(test)]
+mod current_state_tests;

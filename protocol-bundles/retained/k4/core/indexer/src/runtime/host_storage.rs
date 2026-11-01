@@ -1,0 +1,415 @@
+use anyhow::{Result, anyhow};
+use futures_util::{Stream, StreamExt};
+use postcard::{Error as EncodingError, ser_flavors::Flavor, serialize_with_flavor};
+use serde::{Deserialize, Serialize};
+use wasmtime::component::{Access, Resource};
+use wasmtime::{AsContext, Trap};
+
+use crate::protocol::v1::native::is_deposit_exempt;
+use crate::protocol::v1::storage_error::ReadError;
+use crate::protocol::v1::storage_state::LiveRow;
+use crate::protocol::v1::types::CORE_SIGNER_ID;
+
+use super::{
+    ExecutionError, Runtime,
+    fuel::Fuel,
+    wit::{HasContractId, Keys, StorageRows},
+};
+
+/// The storage trust boundary: reject a non-well-formed guest path ONCE, here,
+/// before it reaches any subtree/keys/matching parse or gets persisted. This is
+/// the single validation choke-point the old string scheme had at
+/// `DotPathBuf::push`, relocated to the host now that the guest sends raw codec
+/// bytes (`list<u8>`). Walking the elements once guarantees every downstream op
+/// can rely on well-formedness, and — crucially — a malformed path can never be
+/// STORED (which would later crash a `keys()` scan into a non-deterministic
+/// error). An empty path is the valid zero-element key (whole-keyspace), so it
+/// passes. The rejection is a DETERMINISTIC contract error (depends only on the
+/// input bytes, identical on every node), NOT a host/infrastructure error —
+/// otherwise it would be misclassified as non-deterministic (see `handle_call`).
+fn validate_path(path: &[u8]) -> Result<()> {
+    let mut rest = path;
+    while !rest.is_empty() {
+        match stdlib::next_element(rest) {
+            Ok((_, r)) => rest = r,
+            Err(_) => {
+                return Err(ExecutionError::Deterministic(anyhow!(
+                    "malformed storage path: not well-formed codec bytes"
+                ))
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn meter_path<T>(accessor: &mut Access<'_, T, Runtime>, path: &[u8]) -> Result<()> {
+    Fuel::Path(path.len() as u64).consume(accessor)?;
+    validate_path(path)
+}
+
+/// Keep only paid-for metadata; exhausting discovery cannot mutate state. The
+/// stream is dropped before callers write, so no SQL cursor survives mutation.
+async fn collect_delete_rows<T>(
+    accessor: &mut Access<'_, T, Runtime>,
+    rows: impl Stream<Item = Result<LiveRow, ReadError>>,
+) -> Result<Vec<LiveRow>> {
+    let mut rows = Box::pin(rows);
+    let mut paid = Vec::new();
+    loop {
+        Fuel::StorageScan.consume(accessor)?;
+        let Some(row) = rows.next().await.transpose()? else {
+            return Ok(paid);
+        };
+        Fuel::Delete(1, (row.path.len() as u64).saturating_add(row.size)).consume(accessor)?;
+        paid.push(row);
+    }
+}
+
+// The guest selects the slot type. Valid writes through another setter can fail
+// this decode, so this is a contract failure, not evidence of database corruption.
+pub(crate) fn decode_storage_value<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
+    let (value, rest) = postcard::take_from_bytes(bytes).map_err(|error| {
+        ExecutionError::Deterministic(anyhow!("invalid storage value: {error}"))
+    })?;
+    if !rest.is_empty() {
+        return Err(ExecutionError::Deterministic(anyhow!("trailing storage bytes")).into());
+    }
+    Ok(value)
+}
+
+struct BoundedOutput {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl Flavor for BoundedOutput {
+    type Output = Vec<u8>;
+
+    fn try_extend(&mut self, bytes: &[u8]) -> Result<(), EncodingError> {
+        if bytes.len() > self.limit - self.bytes.len() {
+            return Err(EncodingError::SerializeBufferFull);
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn try_push(&mut self, byte: u8) -> Result<(), EncodingError> {
+        if self.bytes.len() == self.limit {
+            return Err(EncodingError::SerializeBufferFull);
+        }
+        self.bytes.push(byte);
+        Ok(())
+    }
+
+    fn finalize(self) -> Result<Self::Output, EncodingError> {
+        Ok(self.bytes)
+    }
+}
+
+fn encode_storage_value<T: Serialize>(value: &T, max_bytes: u64) -> Result<Vec<u8>> {
+    // Use Postcard's existing encoder, stopping output as soon as it exceeds the
+    // available byte budget. A sizing pass would still traverse an unaffordable value.
+    serialize_with_flavor(
+        value,
+        BoundedOutput {
+            bytes: Vec::new(),
+            limit: usize::try_from(max_bytes).unwrap_or(usize::MAX),
+        },
+    )
+    .map_err(|error| match error {
+        EncodingError::SerializeBufferFull => Trap::OutOfFuel.into(),
+        other => other.into(),
+    })
+}
+
+impl Runtime {
+    pub(crate) async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
+        &self,
+        accessor: &mut Access<'_, S, Self>,
+        self_: Resource<T>,
+        path: Vec<u8>,
+    ) -> Result<Option<R>> {
+        Fuel::StorageRead.consume(accessor)?;
+        meter_path(accessor, &path)?;
+        let fuel = accessor.as_context().get_fuel()?;
+        let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
+        // Apply the byte price after the base/path charges, before copying the
+        // stored blob out of SQL. Budget exhaustion must retain its Wasm trap type.
+        let max_value_bytes = fuel / Fuel::Get(1).cost();
+        let raw = self
+            .storage
+            .get(max_value_bytes, contract_id, &path)
+            .await
+            .map_err(|error| {
+                if matches!(
+                    error.downcast_ref::<ReadError>(),
+                    Some(ReadError::ValueTooLarge)
+                ) {
+                    Trap::OutOfFuel.into()
+                } else {
+                    error
+                }
+            })?;
+        let Some(bytes) = raw else { return Ok(None) };
+        Fuel::Get(bytes.len()).consume(accessor)?;
+        Ok(Some(decode_storage_value(&bytes)?))
+    }
+
+    pub(crate) async fn _get_keys<S, T: HasContractId>(
+        &self,
+        accessor: &mut Access<'_, S, Self>,
+        resource: Resource<T>,
+        path: Vec<u8>,
+        lo: Option<Vec<u8>>,
+        hi: Option<Vec<u8>>,
+        descending: bool,
+    ) -> Result<Resource<Keys>> {
+        Fuel::GetKeys.consume(accessor)?;
+        let bound_bytes = lo
+            .as_ref()
+            .map_or(0, Vec::len)
+            .saturating_add(hi.as_ref().map_or(0, Vec::len));
+        Fuel::Path(bound_bytes as u64).consume(accessor)?;
+        meter_path(accessor, &path)?;
+        // `lo`/`hi` are NOT validated as paths: they are synthetic byte-comparison
+        // bounds (`cs.path >= path ++ lo`, `cs.path < path ++ hi`), never decoded. An
+        // EXCLUSIVE bound is `sort_upper_bound`, which deliberately is
+        // NOT well-formed codec bytes, so `validate_path` would reject a legitimate
+        // `range(..=hi)`. Only real stored rows (always well-formed) are decoded, so a
+        // malformed bound is harmless (an empty bound is normalized to unbounded in
+        // `scan_bounds`, keeping the child-only `> path` invariant).
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&resource)?.get_contract_id();
+        let stream = Box::pin(
+            self.storage
+                .keys(contract_id, path, lo, hi, descending)
+                .await?,
+        );
+        Ok(table.push(Keys { stream })?)
+    }
+
+    /// Open the shared scalar/covering row cursor. `_next_storage_row` meters
+    /// stored bytes before decoding through the same helper as point reads.
+    pub(crate) async fn _get_storage_rows<S, T: HasContractId>(
+        &self,
+        accessor: &mut Access<'_, S, Self>,
+        resource: Resource<T>,
+        path: Vec<u8>,
+        lo: Option<Vec<u8>>,
+        hi: Option<Vec<u8>>,
+        descending: bool,
+    ) -> Result<Resource<StorageRows>> {
+        Fuel::GetKeys.consume(accessor)?;
+        let bound_bytes = lo
+            .as_ref()
+            .map_or(0, Vec::len)
+            .saturating_add(hi.as_ref().map_or(0, Vec::len));
+        Fuel::Path(bound_bytes as u64).consume(accessor)?;
+        meter_path(accessor, &path)?;
+        // `lo`/`hi` are byte-comparison bounds, not paths — see `_get_keys` for why they
+        // are not validated as paths: the exclusive sentinel is not a stored element.
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&resource)?.get_contract_id();
+        let cursor = self
+            .storage
+            .storage_rows(contract_id, path, lo, hi, descending);
+        Ok(table.push(StorageRows { cursor })?)
+    }
+
+    pub(crate) async fn _exists<S, T: HasContractId>(
+        &self,
+        accessor: &mut Access<'_, S, Self>,
+        resource: Resource<T>,
+        path: Vec<u8>,
+    ) -> Result<bool> {
+        Fuel::Exists.consume(accessor)?;
+        meter_path(accessor, &path)?;
+        let table = self.table.lock().await;
+        let _self = table.get(&resource)?;
+        self.storage.exists(_self.get_contract_id(), &path).await
+    }
+
+    /// Delete a key by tombstoning its WHOLE subtree (the node + every live
+    /// descendant — a struct/map value persists under child paths). Metered by the
+    /// subtree size. Discovery consumes fuel incrementally; all rows must be
+    /// paid for before mutation. Returns true if a live value was removed.
+    pub(crate) async fn _delete<S, T: HasContractId>(
+        &self,
+        accessor: &mut Access<'_, S, Self>,
+        self_: Resource<T>,
+        path: Vec<u8>,
+    ) -> Result<bool> {
+        Fuel::StorageDelete.consume(accessor)?;
+        meter_path(accessor, &path)?;
+        let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
+        // Read → meter → write. A flat `Set(0)` charged the same whether the
+        // subtree held one row or thousands; meter by the rows/bytes tombstoned.
+        let rows = self.storage.find_live_subtree(contract_id, &path).await?;
+        let rows = collect_delete_rows(accessor, rows).await?;
+        self.storage.footprint().on_free(&rows).await?;
+        let (removed, _freed) = self.storage.tombstone_rows(contract_id, &rows).await?;
+        Ok(removed)
+    }
+
+    pub(crate) async fn _set_primitive<S, T: HasContractId, V: Serialize>(
+        &self,
+        accessor: &mut Access<'_, S, Self>,
+        resource: Resource<T>,
+        path: Vec<u8>,
+        value: V,
+    ) -> Result<()> {
+        Fuel::StorageWrite.consume(accessor)?;
+        meter_path(accessor, &path)?;
+        let contract_id = self.table.lock().await.get(&resource)?.get_contract_id();
+        let fuel = accessor.as_context().get_fuel()?;
+        let bs = &encode_storage_value(&value, fuel / Fuel::Set(1).cost())?;
+        Fuel::Set(bs.len() as u64).consume(accessor)?;
+        // Stamp the op's payer (from the current call frame) as this row's
+        // depositor — who collateralizes it via the storage-deposit FLOOR. The
+        // frame's `depositor` is `None` for non-settling ops (core-signed / no-payer
+        // — set at prepare_call's stamp gate, which matches the settle gate), and
+        // the token (deposit-denominating ledger) is exempt by contract id
+        // (recursion). The host derives each holder's footprint by summing the live
+        // rows they're the depositor of, so the floor moves with the row: a later
+        // overwrite (new depositor) or delete drops it from the old setter's sum.
+        let exempt = is_deposit_exempt(contract_id);
+        let frame_depositor = self.stack.peek().await.and_then(|f| f.depositor);
+        let depositor = match frame_depositor {
+            Some(id) if id != CORE_SIGNER_ID && !exempt => Some(id),
+            _ => None,
+        };
+        // The deposit for this row is a slice of GAS — `(path + value) bytes ×
+        // storage rate` — charged against the op's fuel budget here, so an
+        // unaffordable growth trips the out-of-gas path and the op deterministically
+        // reverts (the per-op cap = the gas limit). The reservation is RETURNED at
+        // settle (only execution burns), so it bounds per-op growth without being a
+        // cost — the collateral is the floor, not a moved token. The per-row
+        // `deposited_gas` records the deposit (integer gas) for the footprint cache;
+        // the token value is derived (× gas→token) only at the floor read.
+        let deposited_gas = if depositor.is_some() {
+            let deposit_gas = self
+                .selected_pricing()
+                .storage_deposit_gas((path.len() + bs.len()) as u64)
+                .ok_or_else(|| {
+                    ExecutionError::Deterministic(anyhow!("storage reservation overflow"))
+                })?;
+            let deposit_fuel = deposit_gas
+                .checked_mul(self.selected_gas_policy().fuel_multiplier)
+                .ok_or_else(|| {
+                    ExecutionError::Deterministic(anyhow!("storage reservation overflow"))
+                })?;
+            Fuel::Deposit(deposit_fuel).consume(accessor).map_err(|_| {
+                ExecutionError::Deterministic(anyhow!(
+                    "storage deposit exceeds the op's gas budget"
+                ))
+            })?;
+            self.deposit.record_charge(deposit_gas).await;
+            if let Some(gauge) = &self.gauge {
+                gauge.record_deposit(deposit_fuel)?;
+            }
+            Some(deposit_gas)
+        } else {
+            None
+        };
+        // Maintain the eager footprint cache BEFORE the write: subtract the row this
+        // overwrites (read while it's still live) from its setter, add the new row to
+        // its depositor. Same connection/savepoint as the write, so it rolls back with
+        // the op. Skipped for deposit-exempt contracts (the token ledger) — they never
+        // carry a depositor, so neither the new row nor any row they overwrite can
+        // affect a floor, and this avoids a displaced-row read on the hottest write.
+        if !exempt {
+            self.storage
+                .footprint()
+                .on_set(contract_id, &path, depositor, deposited_gas)
+                .await?;
+        }
+        #[cfg(test)]
+        if let Some((target, gate)) = &self.init_host_gate
+            && *target == contract_id
+        {
+            gate.wait().await;
+        }
+        self.storage
+            .set(contract_id, &path, bs, depositor, deposited_gas)
+            .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indexer_types::serialize;
+    use proptest::prelude::*;
+    use stdlib::KeyElement;
+
+    #[test]
+    fn encoding_limit_preserves_postcard_bytes() -> Result<()> {
+        fn check<T: Serialize>(value: T) -> Result<()> {
+            let expected = serialize(&value)?;
+            for limit in 0..=expected.len() {
+                let result = encode_storage_value(&value, limit as u64);
+                if limit < expected.len() {
+                    assert!(matches!(
+                        result.unwrap_err().downcast_ref::<Trap>(),
+                        Some(Trap::OutOfFuel)
+                    ));
+                } else {
+                    assert_eq!(result?, expected);
+                }
+            }
+            Ok(())
+        }
+        check(u64::MAX)?;
+        check(i64::MIN)?;
+        check(f64::NEG_INFINITY)?;
+        check(true)?;
+        check("é\0hello")?;
+        check(vec![0u8; 128])?;
+        check(())?;
+        Ok(())
+    }
+
+    proptest! {
+        // The storage trust boundary must never PANIC on arbitrary guest bytes —
+        // it returns Ok (well-formed, including empty) or a deterministic Err
+        // (malformed). This is the regression guard for the whole class of bugs
+        // that came from the host trusting raw codec bytes.
+        #[test]
+        fn validate_path_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
+            let _ = validate_path(&bytes);
+        }
+
+        // Anything built from real codec elements is well-formed and passes.
+        #[test]
+        fn well_formed_path_always_validates(
+            s in any::<String>(),
+            n in any::<u64>(),
+            b in any::<bool>(),
+        ) {
+            let mut p = Vec::new();
+            s.encode_to(&mut p);
+            n.encode_to(&mut p);
+            b.encode_to(&mut p);
+            prop_assert!(validate_path(&p).is_ok());
+        }
+    }
+
+    #[test]
+    fn empty_path_is_valid() {
+        // The zero-element key (contract root / whole-keyspace) is well-formed.
+        assert!(validate_path(&[]).is_ok());
+    }
+
+    #[test]
+    fn malformed_paths_are_rejected() {
+        // String tag (0x02) with no terminator.
+        assert!(validate_path(&[0x02, b'a', b'b']).is_err());
+        // Int tag claiming 8 bytes but truncated.
+        assert!(validate_path(&[0x1C, 0x00]).is_err());
+        // A valid element followed by a dangling tag.
+        let mut p = "ok".to_string().encode();
+        p.push(0x02);
+        assert!(validate_path(&p).is_err());
+    }
+}

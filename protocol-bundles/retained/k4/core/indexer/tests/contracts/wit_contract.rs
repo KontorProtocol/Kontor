@@ -1,0 +1,72 @@
+use indexer::runtime::token;
+use testlib::*;
+
+const WIT: &str = r#"package root:component;
+
+world root {
+  import kontor:built-in/error;
+  import kontor:built-in/context-types;
+  import kontor:built-in/context;
+  import kontor:built-in/numbers-types;
+  import kontor:built-in/deposit;
+  import kontor:built-in/pagination;
+  import kontor:built-in/numbers;
+  use kontor:built-in/pagination.{cursor-request};
+  use kontor:built-in/context.{view-context, proc-context, signer, contract};
+  use kontor:built-in/context-types.{holder-ref};
+  use kontor:built-in/error.{error};
+  use kontor:built-in/numbers-types.{decimal};
+
+  record balance {
+    acc: holder-ref,
+    amt: decimal,
+  }
+
+  record balance-page {
+    items: list<balance>,
+    next: option<string>,
+  }
+
+  record transfer {
+    src: holder-ref,
+    dst: holder-ref,
+    amt: decimal,
+  }
+
+  record burn {
+    src: holder-ref,
+    amt: decimal,
+  }
+
+  record mint {
+    dst: holder-ref,
+    amt: decimal,
+  }
+
+  record emission {
+    scheduled-total: decimal,
+    ordering-minted: decimal,
+    storage-unminted: decimal,
+  }
+
+  export storage-emission-budget: func(ctx: borrow<view-context>) -> option<decimal>;
+  export last-emission-height: func(ctx: borrow<view-context>) -> option<u64>;
+  export mint: func(ctx: borrow<proc-context>, amt: decimal) -> result<mint, error>;
+  export burn: func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;
+  export transfer: func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
+  export balance: func(ctx: borrow<view-context>, acc: holder-ref) -> option<decimal>;
+  export floor: func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
+  export balances: func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
+  export total-supply: func(ctx: borrow<view-context>) -> decimal;
+  export dev-mint-enabled: func(ctx: borrow<view-context>) -> bool;
+  export attach: func(ctx: borrow<proc-context>, vout: u32, amt: decimal) -> result<transfer, error>;
+  export detach: func(ctx: borrow<proc-context>) -> result<transfer, error>;
+}
+"#;
+
+#[testlib::test(contracts_dir = "../../test-contracts")]
+async fn test_get_wit_from_api() -> Result<()> {
+    let wit = runtime.wit(&token::address()).await?;
+    assert_eq!(WIT, wit);
+    Ok(())
+}

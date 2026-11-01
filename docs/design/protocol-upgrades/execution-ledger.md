@@ -2390,3 +2390,61 @@ Evidence record: `.build-cache/k4-ci-test-correction.json`. Raw log hashes:
 - `k4-reactor-ci-correction67.log`: `e56ec29d76fca026edc4002185f35acece29dd42d8e32ef9a8f3fd846a37e5e3`.
 - `k4-rollback-lock-isolation68.log`: `543cced63e12dd26ca246c218ce17e8f8ff4c7604b6e881071adf08c83f6576d`.
 - `k4-ci-regressions69.log`: `a6c48471f9b9f6bfc5a0402209fd2829a40d5148b8ccc14e4fd3253c7b8e8960`.
+
+### K4 merge and final qualification, 1 November 2026
+
+PR [620](https://github.com/KontorProtocol/Kontor/pull/620) merged as
+`0a2cbd89e8ebdd8acc74b514e6d5e85e4c9466dd`. Its tree
+`00391db8c5665c82c0601a8a749253d4f37e569f` exactly matches candidate
+`25fee2f6d56afdb20d72f5dbb4180b398704e7a7` and the qualified PR test merge
+`364a3d4776778536d332c6e52241c257e73038a3`. Lead and sole independent
+review coverage includes the final regression-fixture corrections above.
+
+All four final-candidate workflows completed successfully: ordinary CI
+`41339806743`, native stack `41339806784`, linked-node qualification
+`41339806858`, and Docker cache qualification `41339806748`. Both comparison
+jobs and `CI required checks` passed. The lead downloaded the raw release and
+dev-smoke evidence, validated it against the checked-out source and artifacts,
+and reproduced both CI comparisons locally without rerunning workloads.
+All three linked-node release platforms produced the same observations digest,
+`2dff48679c667cfe78a8db2076a6a0139435a69e03f1aab586af416f5915b2cc`.
+This qualifies the recorded cases, not all possible executions or throughput.
+
+Evidence is retained in the preceding worktree under
+`protocol-certified-history/.build-cache/k4-final-25fee2f6/`, including raw
+reports, comparison records, ordinary CI logs, terminal workflow checks and the
+merge response. Duplicate post-merge stack and linked qualification runs
+`41343775884` and `41343775867` were requested cancelled only after verifying
+tree equality. Main CI `41343775846` remains responsible for its unique image
+publication. No SDK or Site publication was performed.
+
+The next grouped phase, K5/K6, starts from this verified merge in the isolated
+`protocol-upgrade-control` worktree. Its agreed revision-2 plan preserves the K4
+development baseline without silently relabeling existing databases, introduces
+independently locked real managed consensus graphs, and implements durable
+signing, engine coordination and explicit upgrade authorization. Actual
+after-H activation and cross-boundary recovery remain in K7/K8.
+
+### K5/K6 baseline preservation, 1 November 2026
+
+The extended existing snapshot tool captured K4 from the exact merge, using locked
+offline node and observer metadata under the shared Cargo lock. It verified both
+definitions before and after relocation. Snapshot
+`protocol-bundles/retained/k4/snapshot.json` has SHA-256
+`9359c0b7cdca0d9e2852262337061ce43a0856b32e36c173a41c4b874ba1ebf9`.
+It preserves coordinator definition
+`f02def02f91e190b72103d6d2a77c9521d86c0c1b7d814b9b792415fd8f9b4af`
+and observer definition
+`7026414e4530a26af9768253beea0e4bd426d28d6bcccec15d494c2014d1a82a`.
+The selected historical executor reference is included; its complete existing K3
+snapshot remains separately hash-bound rather than copied again. This preserves
+development-baseline interpretation, not a claim that an old K4 live engine is
+linked into the managed baseline.
+
+Focused source-root and coordinator-definition tests passed (7 and 3 tests).
+They check the frozen inventory, every coordinator source digest, historical
+executor reference, and baseline composition/lock inputs. The original snapshot
+checks still reject mutations, extra files and substituted inventories.
+No Rust build or runtime workload was started. Managed consensus adapters,
+durable signing and upgrade control remain to be implemented and reviewed as one
+group before its final-candidate CI campaign.

@@ -1,0 +1,11 @@
+error: Model derive only supports unit or single-field tuple variants
+ --> tests/ui/model_invalid_multi_field_variant.rs:5:5
+  |
+5 |     Multi(u64, u64),
+  |     ^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/model_invalid_multi_field_variant.rs:6:2
+  |
+6 | }
+  |  ^ consider adding a `main` function to `$DIR/tests/ui/model_invalid_multi_field_variant.rs`

@@ -11,12 +11,35 @@ import build
 import provenance
 from freeze_sources import verify_snapshot
 from recipes import EXECUTOR_GRAPHS, graph_root, identity, verify_identity
+from coordinator_definition import DESTINATION as CONSENSUS_REFERENCE
 
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class SourceRoots(unittest.TestCase):
+    def test_k4_snapshot_retains_coordinator_and_manifest_composition_inputs(self):
+        root = ROOT / "protocol-bundles/retained/k4"
+        record = verify_snapshot(root, "9359c0b7cdca0d9e2852262337061ce43a0856b32e36c173a41c4b874ba1ebf9")
+        self.assertEqual(record["source_commit"], "0a2cbd89e8ebdd8acc74b514e6d5e85e4c9466dd")
+        self.assertEqual(record["kind"], "coordinator")
+        reference = (root / CONSENSUS_REFERENCE).read_bytes()
+        self.assertEqual(hashlib.sha256(b"kontor/consensus-definition/v1\0" + reference).hexdigest(),
+                         "f02def02f91e190b72103d6d2a77c9521d86c0c1b7d814b9b792415fd8f9b4af")
+        for path, digest in json.loads(reference)["sources"].items():
+            self.assertEqual(hashlib.sha256((root / path).read_bytes()).hexdigest(), digest, path)
+        retained = record["retained_executor_snapshot"]
+        self.assertEqual(retained["snapshot_sha256"],
+                         "fc85d7f7479662012faef9bc43e3efaf7c9299ddc940ffd5ef5865abe5667592")
+        verify_snapshot(ROOT / retained["source_root"], retained["snapshot_sha256"])
+        reference_path = "protocol-bundles/executor-first/definition.bin"
+        self.assertEqual((root / retained["source_root"] / reference_path).read_bytes(),
+                         (ROOT / retained["source_root"] / reference_path).read_bytes())
+        for path in ("protocol-bundles/node/Cargo.lock", "protocol-bundles/node/Cargo.toml",
+                     "protocol-bundles/executor-observer/definition.bin",
+                     "core/indexer/src/protocol/coordinator/baseline.rs"):
+            self.assertIn(path, record["files"])
+
     def test_frozen_inventory_rejects_mutation_additions_and_substituted_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

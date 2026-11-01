@@ -1,0 +1,547 @@
+extern crate alloc;
+use stdlib::Storage;
+mod error {
+    pub type Error = String;
+}
+#[index(due, by = status, sort = deadline_height)]
+struct Challenge {
+    id: String,
+    #[index]
+    status: u64,
+    deadline_height: u64,
+    seed: u64,
+}
+#[automatically_derived]
+impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S>
+for Challenge {
+    const STORES_ROOT: bool = false;
+    fn __set(ctx: &alloc::rc::Rc<__S>, base_path: stdlib::KeyPath, value: Challenge) {
+        stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), value.id);
+        stdlib::WriteStorage::__set(ctx, base_path.push_interned(1u8), value.status);
+        stdlib::WriteStorage::__set(
+            ctx,
+            base_path.push_interned(2u8),
+            value.deadline_height,
+        );
+        stdlib::WriteStorage::__set(ctx, base_path.push_interned(3u8), value.seed);
+    }
+}
+pub struct ChallengeModel<__S> {
+    pub base_path: stdlib::KeyPath,
+    ctx: alloc::rc::Rc<__S>,
+}
+#[doc(hidden)]
+pub type __ChallengeModelFor<__S> = ChallengeModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> ChallengeModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        Self {
+            base_path: base_path.clone(),
+            ctx,
+        }
+    }
+    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        let __idx_status = self.status();
+        let __idx_deadline_height = self.deadline_height();
+        let mut entries = alloc::vec::Vec::new();
+        entries
+            .push(stdlib::IndexEntry {
+                name_id: 0u8,
+                bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                    ::alloc::intrinsics::write_box_via_move(
+                        ::alloc::boxed::Box::new_uninit(),
+                        [stdlib::IndexKey::index_key(&__idx_status)],
+                    ),
+                ),
+                sort: None,
+                projection: None,
+            });
+        entries
+            .push(stdlib::IndexEntry {
+                name_id: 1u8,
+                bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                    ::alloc::intrinsics::write_box_via_move(
+                        ::alloc::boxed::Box::new_uninit(),
+                        [stdlib::IndexKey::index_key(&__idx_status)],
+                    ),
+                ),
+                sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                projection: None,
+            });
+        entries
+    }
+    pub fn id(&self) -> String {
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(0u8)).unwrap()
+    }
+    pub fn status(&self) -> u64 {
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(1u8)).unwrap()
+    }
+    pub fn deadline_height(&self) -> u64 {
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(2u8)).unwrap()
+    }
+    pub fn seed(&self) -> u64 {
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(3u8)).unwrap()
+    }
+    pub fn load(&self) -> Challenge {
+        Challenge {
+            id: self.id(),
+            status: self.status(),
+            deadline_height: self.deadline_height(),
+            seed: self.seed(),
+        }
+    }
+}
+pub struct ChallengeWriteModel<__S: stdlib::HasViewStorage> {
+    pub base_path: stdlib::KeyPath,
+    ctx: alloc::rc::Rc<__S>,
+    index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
+    model: ChallengeModel<__S::View>,
+}
+#[doc(hidden)]
+pub type __ChallengeWriteModelFor<__S> = ChallengeWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> ChallengeWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
+        Self {
+            base_path: base_path.clone(),
+            ctx,
+            index_binding: None,
+            model: ChallengeModel::new(
+                alloc::rc::Rc::new(view_storage),
+                base_path.clone(),
+            ),
+        }
+    }
+    pub fn with_index(
+        mut self,
+        index_root: stdlib::KeyPath,
+        index_key: alloc::vec::Vec<u8>,
+    ) -> Self {
+        self.index_binding = Some((index_root, index_key));
+        self
+    }
+    pub fn id(&self) -> String {
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(0u8)).unwrap()
+    }
+    pub fn status(&self) -> u64 {
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(1u8)).unwrap()
+    }
+    pub fn deadline_height(&self) -> u64 {
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(2u8)).unwrap()
+    }
+    pub fn seed(&self) -> u64 {
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(3u8)).unwrap()
+    }
+    pub fn set_id(&self, value: String) {
+        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_interned(0u8), value);
+    }
+    pub fn update_id(&self, f: impl Fn(String) -> String) {
+        let path = self.base_path.push_interned(0u8);
+        let old: String = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+    }
+    pub fn try_update_id(
+        &self,
+        f: impl Fn(String) -> Result<String, crate::error::Error>,
+    ) -> Result<(), crate::error::Error> {
+        let path = self.base_path.push_interned(0u8);
+        let old: String = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+        Ok(())
+    }
+    pub fn set_status(&self, value: u64) {
+        let path = self.base_path.push_interned(1u8);
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = value;
+        if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_deadline_height = self.deadline_height();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
+                        sort: None,
+                        projection: None,
+                    },
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                        projection: None,
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
+                        sort: None,
+                        projection: None,
+                    },
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                        projection: None,
+                    },
+                ],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+    }
+    pub fn update_status(&self, f: impl Fn(u64) -> u64) {
+        let path = self.base_path.push_interned(1u8);
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_deadline_height = self.deadline_height();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
+                        sort: None,
+                        projection: None,
+                    },
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                        projection: None,
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
+                        sort: None,
+                        projection: None,
+                    },
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                        projection: None,
+                    },
+                ],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+    }
+    pub fn try_update_status(
+        &self,
+        f: impl Fn(u64) -> Result<u64, crate::error::Error>,
+    ) -> Result<(), crate::error::Error> {
+        let path = self.base_path.push_interned(1u8);
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_deadline_height = self.deadline_height();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
+                        sort: None,
+                        projection: None,
+                    },
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                        projection: None,
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
+                        sort: None,
+                        projection: None,
+                    },
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                        projection: None,
+                    },
+                ],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+        Ok(())
+    }
+    pub fn set_deadline_height(&self, value: u64) {
+        let path = self.base_path.push_interned(2u8);
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = value;
+        if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_status = self.status();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_status)],
+                            ),
+                        ),
+                        sort: Some(stdlib::KeyElement::encode(&old)),
+                        projection: None,
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_status)],
+                            ),
+                        ),
+                        sort: Some(stdlib::KeyElement::encode(&new)),
+                        projection: None,
+                    },
+                ],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+    }
+    pub fn update_deadline_height(&self, f: impl Fn(u64) -> u64) {
+        let path = self.base_path.push_interned(2u8);
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_status = self.status();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_status)],
+                            ),
+                        ),
+                        sort: Some(stdlib::KeyElement::encode(&old)),
+                        projection: None,
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_status)],
+                            ),
+                        ),
+                        sort: Some(stdlib::KeyElement::encode(&new)),
+                        projection: None,
+                    },
+                ],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+    }
+    pub fn try_update_deadline_height(
+        &self,
+        f: impl Fn(u64) -> Result<u64, crate::error::Error>,
+    ) -> Result<(), crate::error::Error> {
+        let path = self.base_path.push_interned(2u8);
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_status = self.status();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_status)],
+                            ),
+                        ),
+                        sort: Some(stdlib::KeyElement::encode(&old)),
+                        projection: None,
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_status)],
+                            ),
+                        ),
+                        sort: Some(stdlib::KeyElement::encode(&new)),
+                        projection: None,
+                    },
+                ],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+        Ok(())
+    }
+    pub fn set_seed(&self, value: u64) {
+        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_interned(3u8), value);
+    }
+    pub fn update_seed(&self, f: impl Fn(u64) -> u64) {
+        let path = self.base_path.push_interned(3u8);
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+    }
+    pub fn try_update_seed(
+        &self,
+        f: impl Fn(u64) -> Result<u64, crate::error::Error>,
+    ) -> Result<(), crate::error::Error> {
+        let path = self.base_path.push_interned(3u8);
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+        Ok(())
+    }
+    pub fn load(&self) -> Challenge {
+        Challenge {
+            id: self.id(),
+            status: self.status(),
+            deadline_height: self.deadline_height(),
+            seed: self.seed(),
+        }
+    }
+}
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for ChallengeWriteModel<__S> {
+    type Target = ChallengeModel<__S::View>;
+    fn deref(&self) -> &Self::Target {
+        &self.model
+    }
+}
+#[automatically_derived]
+impl stdlib::Indexed for Challenge {
+    const HAS_INDEXES: bool = true;
+    fn index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        let mut entries = alloc::vec::Vec::new();
+        entries
+            .push(stdlib::IndexEntry {
+                name_id: 0u8,
+                bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                    ::alloc::intrinsics::write_box_via_move(
+                        ::alloc::boxed::Box::new_uninit(),
+                        [stdlib::IndexKey::index_key(&self.status)],
+                    ),
+                ),
+                sort: None,
+                projection: None,
+            });
+        entries
+            .push(stdlib::IndexEntry {
+                name_id: 1u8,
+                bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                    ::alloc::intrinsics::write_box_via_move(
+                        ::alloc::boxed::Box::new_uninit(),
+                        [stdlib::IndexKey::index_key(&self.status)],
+                    ),
+                ),
+                sort: Some(stdlib::KeyElement::encode(&self.deadline_height)),
+                projection: None,
+            });
+        entries
+    }
+}
+pub trait ChallengeIndex<K>: stdlib::IndexScan<K> + Sized
+where
+    K: stdlib::KeyElement + Clone + 'static,
+{
+    fn status(&self, status: u64) -> stdlib::IndexQuery<'_, K, Self> {
+        let __b0 = stdlib::IndexKey::index_key(&status);
+        stdlib::IndexQuery::new(self, 0u8, alloc::vec::Vec::from([__b0]))
+    }
+    fn due(&self, status: u64) -> stdlib::SortedIndexQuery<'_, K, u64, Self> {
+        let __b0 = stdlib::IndexKey::index_key(&status);
+        stdlib::SortedIndexQuery::new(self, 1u8, alloc::vec::Vec::from([__b0]))
+    }
+}

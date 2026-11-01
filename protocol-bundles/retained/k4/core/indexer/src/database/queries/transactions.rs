@@ -1,0 +1,235 @@
+use indexer_types::{PaginationMeta, TransactionRow};
+use libsql::{Connection, Value, de::from_row, params};
+
+use super::Error;
+use super::contracts::get_contract_id_from_address;
+use super::pagination::{PageOptions, PageSource, get_paginated};
+use crate::database::types::TransactionQuery;
+
+pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<u64, Error> {
+    conn.execute(
+        "INSERT INTO transactions (height, txid, confirmed_height, tx_index, batch_height) VALUES (?, ?, ?, ?, ?)",
+        params![
+            row.height,
+            row.txid,
+            row.confirmed_height.map(Value::try_from).transpose()?,
+            row.tx_index,
+            row.batch_height.map(Value::try_from).transpose()?,
+        ],
+    )
+    .await?;
+    let tx_id = conn.last_insert_rowid() as u64;
+    // NB: the retained body (`unconfirmed_batch_txs`) is deliberately NOT deleted
+    // on confirmation. It is kept until the batch height passes the finality
+    // window (`delete_unconfirmed_batch_txs_below`, driven from the finality
+    // settle), so sync and replay reproduce the exact executed witness for every
+    // non-final height — the txid does not commit to the witness, so the mempool
+    // copy a peer would otherwise resolve could be a same-txid variant. Confirming
+    // early is precisely the race that made the old confirm-time delete unsafe.
+    Ok(tx_id)
+}
+
+pub async fn confirm_transaction(
+    conn: &Connection,
+    txid: &str,
+    confirmed_height: u64,
+    tx_index: u32,
+) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE transactions SET confirmed_height = ?, tx_index = ? WHERE txid = ?",
+        params![confirmed_height, tx_index, txid],
+    )
+    .await?;
+    // Body retention now ends at FINALITY, not confirmation — see `insert_transaction`.
+    Ok(())
+}
+
+pub async fn get_transaction_by_txid(
+    conn: &Connection,
+    txid: &str,
+) -> Result<Option<TransactionRow>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT id, txid, height, confirmed_height, tx_index, batch_height FROM transactions WHERE txid = ?",
+            params![txid],
+        )
+        .await?;
+
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+}
+
+pub async fn get_transactions_at_height(
+    conn: &Connection,
+    height: u64,
+) -> Result<Vec<TransactionRow>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT id, txid, height, confirmed_height, tx_index, batch_height FROM transactions WHERE height = ?",
+            params![height],
+        )
+        .await?;
+
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        results.push(from_row(&row)?);
+    }
+    Ok(results)
+}
+
+pub async fn get_transactions_paginated(
+    conn: &Connection,
+    query: TransactionQuery,
+) -> Result<(Vec<TransactionRow>, PaginationMeta), Error> {
+    let mut params: Vec<(String, Value)> = Vec::new();
+    let var = "t";
+    let columns = "t.id, t.txid, t.height, t.confirmed_height, t.tx_index, t.batch_height";
+    let mut from = "transactions t".to_string();
+    let mut where_clauses = vec![];
+    let mut needs_distinct = false;
+
+    if let Some(address) = &query.contract {
+        let contract_id = get_contract_id_from_address(conn, address)
+            .await?
+            .ok_or(Error::ContractNotFound(address.to_string()))?;
+        needs_distinct = true;
+        from = format!("{} JOIN contract_state c ON c.tx_id = t.id", from);
+        where_clauses.push(format!("c.contract_id = {}", contract_id));
+    }
+
+    if let Some(signer_id) = query.signer_id {
+        // contract_results carries the per-op signer (set by execute_op),
+        // including per-input signer for aggregated/bulk transactions —
+        // so this captures "transactions a user was involved in" via any
+        // op that produced a result.
+        needs_distinct = true;
+        from = format!("{} JOIN contract_results r ON r.tx_id = t.id", from);
+        where_clauses.push("r.signer_id = :signer_id".to_string());
+        params.push((":signer_id".to_string(), Value::try_from(signer_id)?));
+    }
+
+    if let Some(height) = query.height {
+        where_clauses.push("t.height = :height".to_string());
+        params.push((":height".to_string(), Value::try_from(height)?));
+    }
+
+    get_paginated(
+        conn,
+        PageSource {
+            alias: var,
+            columns,
+            from: &from,
+            distinct: needs_distinct,
+            select_joins: "",
+        },
+        where_clauses,
+        params,
+        PageOptions {
+            order: query.order,
+            cursor: query.cursor,
+            offset: query.offset,
+            limit: query.limit,
+            count: query.count,
+        },
+    )
+    .await
+}
+
+/// Bound placeholders per `txid IN (?…)` statement. SQLite's compile-time
+/// `SQLITE_MAX_VARIABLE_NUMBER` is 32766 and exceeding it fails at PREPARE, so an
+/// unchunked list is a crash, not a slow query. The largest caller is `make_value`,
+/// which passes the entire mempool pool — bounded by bitcoind, not by anything
+/// Kontor controls — so the chunking has to live here rather than at a call site.
+const TXID_PROBE_CHUNK: usize = 900;
+
+/// Rows in the transactions table for any of `txids`, keyed by txid.
+///
+/// One statement per chunk; absent txids are simply absent from the map.
+pub async fn select_transactions_by_txids(
+    conn: &Connection,
+    txids: &[String],
+) -> Result<std::collections::HashMap<String, TransactionRow>, Error> {
+    let mut result = std::collections::HashMap::new();
+    for chunk in txids.chunks(TXID_PROBE_CHUNK) {
+        let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+        let sql = format!(
+            "SELECT id, txid, height, confirmed_height, tx_index, batch_height \
+             FROM transactions WHERE txid IN ({})",
+            placeholders.join(", ")
+        );
+        let params: Vec<Value> = chunk.iter().map(|t| Value::from(t.clone())).collect();
+        let mut rows = conn
+            .query(&sql, libsql::params::Params::Positional(params))
+            .await?;
+        while let Some(row) = rows.next().await? {
+            let parsed: TransactionRow = from_row(&row)?;
+            result.insert(parsed.txid.clone(), parsed);
+        }
+    }
+    Ok(result)
+}
+
+/// Return the subset of `txids` that already exist in the transactions table.
+pub async fn select_existing_txids(
+    conn: &Connection,
+    txids: &[String],
+) -> Result<std::collections::HashSet<String>, Error> {
+    Ok(select_transactions_by_txids(conn, txids)
+        .await?
+        .into_keys()
+        .collect())
+}
+
+/// Lowest anchor height of a batch-executed transaction that is not SETTLED —
+/// meaning it did not confirm on Bitcoin by its batch's deadline.
+///
+/// "Settled" must mean exactly what the finality verdict means. Testing only for
+/// `confirmed_height IS NULL` would treat a LATE confirmation as settled, when
+/// finality still counts it missing and still owes that batch a rollback. A batch
+/// row's `height` IS its anchor, so its deadline is `height + finality_window` and
+/// no join is needed.
+///
+/// Two callers, both of which need the finality notion: the startup floor extension
+/// (how far below the window rehydration must reach to pick up a batch whose verdict
+/// was never rendered) and the divergence probe.
+pub async fn min_unsettled_batch_tx_height(
+    conn: &Connection,
+    finality_window: u64,
+) -> Result<Option<u64>, Error> {
+    // Two arms instead of one OR so each can name its partial index: the OR form
+    // has no usable index and walks every batch-executed row in history. The
+    // unconfirmed arm is an O(1) seek on a band-sized index; the late-confirmation
+    // arm is an index-only scan of confirmed batch rows.
+    let unconfirmed = match conn
+        .query(
+            "SELECT MIN(height) FROM transactions \
+             INDEXED BY idx_transactions_unconfirmed_batch \
+             WHERE batch_height IS NOT NULL AND confirmed_height IS NULL",
+            (),
+        )
+        .await?
+        .next()
+        .await?
+    {
+        Some(row) => row.get::<Option<u64>>(0)?,
+        None => None,
+    };
+    let late_confirmed = match conn
+        .query(
+            "SELECT MIN(height) FROM transactions \
+             INDEXED BY idx_transactions_batch_confirmed \
+             WHERE batch_height IS NOT NULL AND confirmed_height IS NOT NULL \
+               AND confirmed_height > height + ?",
+            params![finality_window],
+        )
+        .await?
+        .next()
+        .await?
+    {
+        Some(row) => row.get::<Option<u64>>(0)?,
+        None => None,
+    };
+    Ok(match (unconfirmed, late_confirmed) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    })
+}
