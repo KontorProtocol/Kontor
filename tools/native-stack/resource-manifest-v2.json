@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "dce2033245e6b62de19e0b92877cf88543d16b3e035bba39fd267bcbad6cd5b8",
+  "parent_manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1227,7 +1227,7 @@
     },
     "initial_protocol_definition": {
       "path": "core/indexer/src/protocol/coordinator/genesis.rs",
-      "sha256": "1a8ddc1d469e5de017b664097b5087c0387eeb6d1772b589bc0a53e168d83a5d"
+      "sha256": "18542d88c717587ea277eb020229fde272925081e6bcde6f58e32408bf1c3ed3"
     },
     "invocation": {
       "path": "core/indexer/src/runtime/invocation.rs",
@@ -1323,11 +1323,11 @@
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "468c74719cd7ee097892cae08a3b72a0f0d968e2794cbd0817a95ce8c3993ae8"
+      "sha256": "63e397bbacb5d2f1908a79bffcce53a1e4760df1d04769d346e35acd2d2b8690"
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",
-      "sha256": "5f755c530c1273da43552ccd948cee2d7d2a7cf7544e91115840b3d8250d303a"
+      "sha256": "7ea80c6e27fcf35577e8cf39125923c9b3884805cc72266f628e49aacfe0b43d"
     },
     "token": {
       "path": "core/indexer/src/runtime/token.rs",
