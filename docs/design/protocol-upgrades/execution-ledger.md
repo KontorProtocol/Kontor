@@ -1,5 +1,46 @@
 # Protocol upgrade implementation ledger
 
+## K2b local checkpoint, 31 October 2026
+
+K2b remains unmerged. The current implementation and outstanding phase gates are
+summarized in [the implementation plan](implementation-plan.md) and
+[the agreed production boundary](k2b-production-boundary.md). Earlier entries below
+are historical evidence, not the current phase status.
+
+The local production worktree now builds both real independently locked executor
+graphs and links them into the node. The bounded ARM64 dev run matches thirteen
+scenario groups across both graphs. The separate preserved-input comparison
+matches all eleven pre-extraction logical-state stages. No cross-platform result
+is inferred from that local run.
+
+Recent local implementation checkpoints:
+
+- `697a2410`: real transaction publication, fees/deposits, failure and replay cases.
+- `0044003d`: preserved pre-extraction baseline through the linked node.
+- `7850ead2`: audited production node installation and Docker build route.
+- `deef86aa` and `f0f09445`: explicit release3/full6 comparison and CI scope selection.
+- `aeaa83cf` and `53bb95a0`: actual-library compile controls and their evidence bindings.
+
+The compile controls accept the shared structural factory signatures and reject
+cross-graph Wasmtime Engine and Tokio Handle values and private Runtime imports.
+All five controls passed against actual staged libraries. The builder/comparator
+test suite passes 93 tests; the CI helper suite passes 24 tests. Missing dependencies
+and unrelated compiler failures cannot satisfy a negative compile control.
+
+The Daybreak implementer is completing actual linked-graph ownership qualification
+under task `kontor-k2b-linked-ownership`, in an isolated worktree. Pending callback
+I/O, cancellation, opaque cursor cleanup, fault classification and shared node
+capacity must be validated before acceptance. A source patch or running build is
+not a passing result. The full release container, final platform qualification,
+consolidated lead/two independent reviews, PR CI and merge are still pending.
+
+No K2b broad CI campaign has been launched. Comparator-only changes select focused
+controls; execution/build changes retain the required platform matrix. Before
+launching CI, inspect prior runs and preserve equivalent merge-tree evidence to
+avoid unnecessary post-merge qualification. The operational performance gate was
+superseded by the operator's explicit prelaunch acceptance, not by relabeling the
+earlier extreme-workload failures as passes.
+
 ## Plan approval
 
 PLAN-1 records the explicit two-party approval of DRAFT-4 content hash
