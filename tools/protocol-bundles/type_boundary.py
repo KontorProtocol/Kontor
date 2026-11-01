@@ -37,6 +37,7 @@ use std::time::Duration;
 pub fn adapt(value: Validator) -> SecondValidator {
     SecondValidator { public_key: value.public_key, voting_power: value.voting_power }
 }
+
 pub fn drive(engine: &mut Engine) {
     if let Ok(EnginePoll::Event(event)) = engine.poll() {
         if let Some(token) = event.reply {
@@ -67,6 +68,15 @@ pub fn require_send<T: Send>() {}
 pub fn move_owner() { require_send::<Engine>(); }
 '''),
 }
+
+
+ADAPTER_TESTS = [
+    f'managed::adapter::{graph}::tests::{test}'
+    for graph in ('first', 'second')
+    for test in ('height_parameters_preserve_committee_order_and_all_timeouts',
+                 'event_keeps_generation_rounds_and_canonical_payload',
+                 'local_failure_is_not_reclassified_as_a_peer_fault')
+]
 
 
 def probes_for(graphs):
@@ -160,3 +170,39 @@ def verify(graphs, target, env, output):
               'controls': controls}
     report_path.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
     return {'report_sha256': sha(report_path), 'controls': list(controls)}
+
+
+def verify_node_adapter(root, graphs, target, env, output):
+    if probes_for(graphs) is not CONSENSUS_PROBES:
+        raise RuntimeError('node adapter checks require consensus graphs')
+    directory = output / 'node-adapter'
+    directory.mkdir(exist_ok=True)
+    source = directory / 'adapter.rs'
+    module = root / 'core/indexer/src/protocol/coordinator/managed.rs'
+    source.write_text(f'#[path = {json.dumps(str(module))}]\nmod managed;\n')
+    arguments, libraries = inputs_for(graphs, True)
+    for graph in graphs:
+        arguments.extend(['--extern', f"kontor_consensus_{graph['graph']}={graph['facade']}"])
+    binary = directory / 'adapter-tests'
+    command = [env['RUSTC'], '--edition=2024', '--target', target, '--test',
+               '--crate-name', 'node_adapter', '-Cpanic=unwind', *arguments, str(source), '-o', str(binary)]
+    compiled = subprocess.run(command, env=env, text=True, capture_output=True, timeout=120)
+    compiler_log = directory / 'compile.log'
+    compiler_log.write_text(compiled.stdout + compiled.stderr)
+    if compiled.returncode != 0:
+        raise RuntimeError(f'actual node adapter failed to compile: {compiler_log}')
+    tested = subprocess.run([str(binary), '--test-threads=1'], env=env, text=True,
+                            capture_output=True, timeout=30)
+    log = directory / 'test.log'
+    log.write_text(tested.stdout + tested.stderr)
+    if not adapter_tests_passed(tested.returncode, tested.stdout):
+        raise RuntimeError(f'actual node adapter tests failed or did not execute: {log}')
+    return {'tests': ADAPTER_TESTS, 'source_sha256': sha(source), 'binary_sha256': sha(binary),
+            'compiler_log_sha256': sha(compiler_log), 'test_log_sha256': sha(log),
+            'libraries': libraries, 'graph_inputs': {graph['graph']: fingerprint(graph) for graph in graphs}}
+
+
+def adapter_tests_passed(returncode, output):
+    return (returncode == 0
+            and f'test result: ok. {len(ADAPTER_TESTS)} passed; 0 failed; 0 ignored;' in output
+            and all(f'test {name} ... ok' in output for name in ADAPTER_TESTS))

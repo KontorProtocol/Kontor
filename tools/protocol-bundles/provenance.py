@@ -73,6 +73,10 @@ def consensus_sources(root):
 def repository_sources(root, kind):
     if kind == "consensus":
         sources = consensus_sources(root)
+        adapter = root / "core/indexer/src/protocol/coordinator/managed.rs"
+        sources[str(adapter.relative_to(root))] = sha(adapter)
+        for path in local_source_files(adapter.with_suffix(""), root.resolve()):
+            sources[str(path.relative_to(root))] = sha(path)
         for path in local_source_files(root / "tools/protocol-bundles", root.resolve()):
             sources[str(path.relative_to(root))] = sha(path)
         return sources

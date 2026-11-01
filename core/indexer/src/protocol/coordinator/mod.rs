@@ -11,6 +11,8 @@ pub(crate) mod committee;
 pub(crate) mod decision;
 pub(crate) mod genesis;
 pub(crate) mod linked;
+#[cfg(kontor_managed)]
+pub(crate) mod managed;
 pub(crate) mod manifest;
 pub(crate) mod migration;
 pub(crate) mod registration_history;

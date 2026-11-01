@@ -10,6 +10,9 @@ pub struct ProtocolBundlesArgs {
     /// Stage production executors without linking or qualifying a node.
     #[arg(long, conflicts_with = "build_node")]
     pub build_executors: bool,
+    /// Stage production consensus bundles and check their typed node adapters.
+    #[arg(long, conflicts_with_all = ["build_node", "build_executors"])]
+    pub build_consensus: bool,
     /// Link the production node and audit native ownership.
     #[arg(long, conflicts_with = "build_executors")]
     pub build_node: bool,
@@ -52,6 +55,9 @@ pub fn protocol_bundles(args: ProtocolBundlesArgs) -> Result<()> {
     }
     if args.build_executors {
         command.arg("--build-executors");
+    }
+    if args.build_consensus {
+        command.arg("--build-consensus");
     }
     if args.build_node {
         command.arg("--build-node");

@@ -2673,3 +2673,30 @@ CI or handoff qualification ran in this checkpoint. The durable-signing agent
 has the reserved Cargo/runtime slot in its isolated worktree; source-only
 tooling tests do not establish production integration. Actual staged builds,
 linked node adapters, signer integration and grouped acceptance remain open.
+
+### K5 typed node adapter checkpoint
+
+Added node-owned coordination messages and explicit adapters for both production
+consensus facades. Each adapter moves canonical payload bytes without decoding
+or re-encoding them, preserves request generation, round distinctions, committee
+order and timeout fields, and maps typed errors without matching their text.
+Reply tokens retain their originating bundle tag; a token from the other bundle
+is rejected before invoking either engine. The selected owner remains non-Send
+and exposes poll, respond, publication, readiness diagnostics and stop/join
+operations for the upcoming control-thread integration.
+
+The maintained `tools/kontor protocol-bundles` command now forwards
+`--build-consensus`. Consensus staging compiles the actual node adapter sources
+against both independently staged libraries and runs six focused conversion
+tests. The checker requires both bundles' named tests to execute with no failures
+or ignored tests, and records source, library, executable and log hashes. Node
+adapter sources are included in the staging provenance inventory.
+
+At this source checkpoint, formatting/whitespace checks and 75 focused Python/C
+tooling tests pass (`.build-cache/k5-node-adapter-tooling-tests.log`). The Rust
+adapter tests and CLI compilation have not yet run: the delegated signer still
+owns the Cargo/runtime slot. The new node module is gated by `kontor_managed`;
+the production builder does not enable it yet. No production reactor wiring,
+control-thread implementation, managed baseline activation or successful linked
+handoff is claimed. Those remain part of this grouped implementation, followed
+by the consolidated review and required CI.

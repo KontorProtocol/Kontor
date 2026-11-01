@@ -23,7 +23,7 @@ from source_policy import check as check_source_policy
 from symbol_tool import TOOLCHAIN
 from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, GRAPHS, MALACHITE_REVISION, MALACHITE_VERSION, executor_graphs, graph_root, identity, verify_engine_observations, verify_identity, verify_reservations
 from capabilities import verify as verify_capabilities
-from type_boundary import verify as verify_type_boundary
+from type_boundary import verify as verify_type_boundary, verify_node_adapter
 
 ROOT = Path(__file__).resolve().parents[2]
 MALACHITE = MALACHITE_REVISION
@@ -565,6 +565,7 @@ def main():
     if args.build_consensus:
         audit_inputs(reports, output)
         consensus_controls = {"interfaces": verify_type_boundary(reports, args.target, env, output),
+                              "node_adapter": verify_node_adapter(ROOT, reports, args.target, env, output),
                               "input_ownership_sha256": digest(output / "input-ownership.json")}
     for report in reports:
         data = json.loads((output / report["graph"] / "metadata.json").read_text())

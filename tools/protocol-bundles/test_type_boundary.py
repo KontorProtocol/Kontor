@@ -4,10 +4,19 @@ import tempfile
 import unittest
 
 from provenance import sha
-from type_boundary import CONSENSUS_PROBES, check_diagnostics, inputs_for, probes_for
+from type_boundary import ADAPTER_TESTS, CONSENSUS_PROBES, adapter_tests_passed, check_diagnostics, inputs_for, probes_for
 
 
 class Diagnostics(unittest.TestCase):
+    def test_adapter_test_evidence_requires_both_bundles_and_successful_exit(self):
+        summary = f'test result: ok. {len(ADAPTER_TESTS)} passed; 0 failed; 0 ignored;'
+        output = '\n'.join(f'test {name} ... ok' for name in ADAPTER_TESTS) + '\n' + summary
+        self.assertTrue(adapter_tests_passed(0, output))
+        self.assertFalse(adapter_tests_passed(1, output))
+        self.assertFalse(adapter_tests_passed(0, summary))
+        self.assertFalse(adapter_tests_passed(0, output.replace(ADAPTER_TESTS[-1], 'unrelated_test')))
+        self.assertFalse(adapter_tests_passed(0, output.replace('0 ignored', '1 ignored')))
+
     def error(self, code):
         return json.dumps({'level': 'error', 'code': {'code': code}})
 
