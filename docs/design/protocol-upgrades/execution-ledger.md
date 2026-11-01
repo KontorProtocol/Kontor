@@ -2448,3 +2448,37 @@ checks still reject mutations, extra files and substituted inventories.
 No Rust build or runtime workload was started. Managed consensus adapters,
 durable signing and upgrade control remain to be implemented and reviewed as one
 group before its final-candidate CI campaign.
+
+### K5/K6 real consensus graph foundation, 1 November 2026
+
+Added independent `consensus-first` and `consensus-second` workspaces pinned to
+managed Malachite `6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09`. They compile the
+production Kontor context, validators, certified values, proposal/vote types and
+protobuf codecs. Their local protocol subset includes the exact descriptor/body
+validation and identity codecs. Neither resolved graph contains Wasmtime, libsql
+or Malachite's TestContext crate. The production signing module in these graphs
+contains public-key/address types only; private keys are available solely to tests.
+
+The first wire codec preserves the existing protobuf framing. The second wraps
+all codec messages in its distinct versioned envelope. A representative real
+Kontor block value keeps its certified identity across round-trip, and the two
+wire formats reject each other's input. This does not change historical value or
+certificate encodings. The wrapper also accounts for envelope bytes in sync
+response length reporting.
+
+Each independently locked graph passed 24 library tests, including inherited
+certificate, committee arithmetic, descriptor/body, identity and work-accounting
+checks, plus wire incompatibility. The first check encountered a read-only ccache
+configuration; disabling ccache allowed the build to proceed. Isolated resolution
+exposed Serde's previously indirect `rc` feature, now explicit in both manifests.
+An explicit test-module path enables reuse of the production certified-input
+tests from the new crate. Earlier failed attempts remain logs, not passes.
+Evidence: `.build-cache/k5-consensus-graph-foundation.json`, with raw log and lock
+hashes. New Rust files pass formatting checks.
+
+This is an intermediate local checkpoint. The crates are not yet linked into the
+node, and managed lifecycle, node event/reply bridge, durable signer and authorized
+control remain unfinished. Unused-code warnings reflect that unwired state and
+are not suppressed. The existing live baseline reference remains unchanged;
+its replacement and old-database preflight belong to the managed-baseline
+integration, so this checkpoint is not a final-candidate node build.

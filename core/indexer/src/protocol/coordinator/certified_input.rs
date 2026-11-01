@@ -357,4 +357,5 @@ fn decode_block(bytes: &[u8]) -> Result<Block, CodecError> {
 }
 
 #[cfg(test)]
+#[path = "certified_input/tests.rs"]
 mod tests;
