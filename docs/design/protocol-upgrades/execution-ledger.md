@@ -2326,3 +2326,27 @@ Push the consolidated correction promptly so workflow concurrency cancels the
 superseded active candidate, rather than paying for both full campaigns. The
 corrected candidate still requires its own passing CI, including the stack matrix
 that did not execute in the first campaign.
+
+### K4 regtest first-block startup correction
+
+SDK job 124933441505 in CI run 41335140236 failed while starting the real
+`kontor regtest` devnet. Its harness waited for `/api` availability before mining
+height 102; K4 now needs the first certified block before publishing chain-state
+availability. Move the existing one-block mining operation immediately after all
+active node processes spawn and before the availability barrier. Keep the seed
+listen-address barrier, quorum, readiness predicate and later height check intact.
+This is a harness ordering correction, not a consensus-rule change.
+
+Lead traced the CI log and caller flow. The sole reviewer checked the focused
+diff and accepted the correction. Local dev binary build passed in 55.29 seconds
+(`k4-regtest-startup-build61.log`). A real `kontor regtest` process then reached
+its SDK readiness marker with eight funded identities in 18.676 seconds, served
+`/api` at height 103 and exited zero on SIGTERM. Evidence:
+`.build-cache/k4-regtest-startup63.json` and `.log`; binary SHA-256
+`17dc82ea029bdce22a77a1ec27161cd02c2fef4081e89cf09409fd2457109ebd`,
+log SHA-256 `2404d654c57fdbe38e2d23c2b91076f24e50328ad3c4e235332fa4b21879d670`.
+The first local probe reached readiness but its checker used the wrong API JSON
+envelope; correcting the checker to read `result.height` produced the recorded
+pass. This focused startup check is not a claim that the complete SDK suite ran
+locally. The corrected candidate still requires CI. No executor definition or
+coordinator reference binds this harness file, and none was regenerated.
