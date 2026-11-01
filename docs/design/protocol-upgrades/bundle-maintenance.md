@@ -221,6 +221,9 @@ controls on one Linux runner without repeating the platform builds. Changes to
 node execution or build inputs still require the selected matrix; missing Git
 history requires qualification. Unrelated changes skip both groups. Builder
 checks run once before the matrix rather than once per platform.
+The small native-object negative controls also run on ARM Linux and macOS during
+release qualification, since those exercise the target object format and native
+symbol reader. They do not rebuild the Rust dependency graphs.
 
 Qualification also compiles five interface controls against the exact staged
 production libraries, without linking or running another node. The public

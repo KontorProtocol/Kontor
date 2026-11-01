@@ -92,6 +92,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+      - name: Check native ownership controls on the target platform
+        if: matrix.profile == 'release' && matrix.os != 'ubuntu-latest'
+        run: python3 -m unittest discover -s tools/protocol-bundles -p 'test_audit.py'
       - name: Install node dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install boost libevent zeromq
