@@ -1,9 +1,12 @@
 use super::*;
 use crate::bitcoin_client::mock::MockBitcoinRpc;
+use crate::protocol::coordinator::certified_input::EraContext;
 use crate::protocol::coordinator::linked::PreparedTransaction;
+use crate::protocol::identity::{ChainId, ProtocolId};
 use crate::stopper::Shutdown;
 use crate::test_utils::new_numbered_blockchain;
 use bitcoin::blockdata::constants::genesis_block;
+use bitcoin::consensus::serialize;
 use bitcoin::hashes::Hash;
 use bitcoin::{Network, Witness};
 use indexer_types::{Block, Transaction};
@@ -335,6 +338,37 @@ fn delivery_preserves_unknown_transactions_and_witnesses_until_recognition() {
     );
 }
 
+#[tokio::test]
+async fn fetched_block_preserves_original_header_and_body_for_certification() {
+    let first = genesis_block(Network::Regtest);
+    let mut second = first.clone();
+    second.header.prev_blockhash = first.block_hash();
+    second.header.time += 1;
+    let rpc = MockBitcoinRpc::from_bitcoin_blocks(vec![(0, first.clone()), (1, second.clone())]);
+    let block = fetch_and_process(rpc, 1).await.unwrap();
+    let mut pending = HashMap::from([(1, block)]);
+    let mut cache = BlockHashCache::new(10);
+    cache.insert(0, first.block_hash());
+    let DeliveryResult::Ok { mut events, .. } = deliver_blocks(&mut pending, &mut cache, 1, 2, 1)
+    else {
+        panic!("expected complete block delivery");
+    };
+    let BlockEvent::BlockInsert { block, .. } = events.remove(0) else {
+        panic!("expected raw block");
+    };
+    let context = EraContext {
+        chain: ChainId([1; 32]),
+        era: [2; 32],
+        protocol: ProtocolId([3; 32]),
+        codec: 1,
+    };
+    let exact = block.exact_input(context).unwrap();
+    assert_eq!(exact.body(), serialize(&second));
+    assert_eq!(BlockInput::from_exact(&exact).unwrap(), block);
+    assert_eq!(block.hash, second.block_hash());
+    assert_eq!(block.prev_hash, first.block_hash());
+}
+
 // -- run() integration tests --
 
 use crate::test_utils::gen_numbered_blocks;
@@ -366,7 +400,6 @@ async fn run_delivers_blocks_in_order() {
             vec![],
             Arc::new(Notify::new()),
             fast_config(),
-            mpsc::channel(1).1,
         )
         .await
     });
@@ -404,7 +437,6 @@ async fn run_delivers_new_blocks_at_tip() {
             vec![],
             Arc::new(Notify::new()),
             fast_config(),
-            mpsc::channel(1).1,
         )
         .await
     });
@@ -456,7 +488,6 @@ async fn run_detects_reorg() {
             vec![],
             Arc::new(Notify::new()),
             fast_config(),
-            mpsc::channel(1).1,
         )
         .await
     });
@@ -524,7 +555,6 @@ async fn run_rollback_on_chain_shrink() {
             vec![],
             Arc::new(Notify::new()),
             fast_config(),
-            mpsc::channel(1).1,
         )
         .await
     });
@@ -582,7 +612,6 @@ async fn run_detects_offline_reorg() {
             known,
             Arc::new(Notify::new()),
             fast_config(),
-            mpsc::channel(1).1,
         )
         .await
     });
@@ -631,7 +660,6 @@ async fn run_no_offline_reorg_when_hashes_match() {
             known,
             Arc::new(Notify::new()),
             fast_config(),
-            mpsc::channel(1).1,
         )
         .await
     });
@@ -683,7 +711,6 @@ async fn run_offline_reorg_deeper_than_cache_errors() {
         known,
         Arc::new(Notify::new()),
         fast_config(),
-        mpsc::channel(1).1,
     )
     .await;
     assert!(result.is_err());
@@ -709,7 +736,6 @@ async fn run_start_height_1_skips_offline_check() {
             vec![],
             Arc::new(Notify::new()),
             fast_config(),
-            mpsc::channel(1).1,
         )
         .await
     });
@@ -750,7 +776,6 @@ async fn run_reorg_during_catchup() {
             vec![],
             Arc::new(Notify::new()),
             fast_config(),
-            mpsc::channel(1).1,
         )
         .await
     });
@@ -821,89 +846,7 @@ async fn run_cancellation_stops_cleanly() {
         vec![],
         Arc::new(Notify::new()),
         fast_config(),
-        mpsc::channel(1).1,
     )
     .await;
     assert!(result.is_ok());
-}
-
-/// A replay request means "resume strictly after this height", matching the
-/// rollback convention. Assignment would let a stale request that predates a
-/// poller-side reorg move the poller FORWARD and silently skip blocks, so it
-/// may only ever rewind.
-#[test]
-fn apply_replay_rewinds_to_just_after_the_requested_height() {
-    let mut cache = BlockHashCache::new(10);
-    let mut next_height = 10;
-    apply_replay(&mut cache, &mut next_height, 3);
-    assert_eq!(next_height, 4);
-}
-
-#[test]
-fn apply_replay_ignores_a_request_that_would_move_the_poller_forward() {
-    let mut cache = BlockHashCache::new(10);
-    let mut next_height = 4;
-    // A stale request from before a reorg rollback already rewound us further.
-    apply_replay(&mut cache, &mut next_height, 8);
-    assert_eq!(next_height, 4, "must not skip blocks 4..=8");
-}
-
-#[test]
-fn apply_replay_is_a_noop_at_the_current_position() {
-    let mut cache = BlockHashCache::new(10);
-    let mut next_height = 5;
-    apply_replay(&mut cache, &mut next_height, 4);
-    assert_eq!(next_height, 5);
-}
-
-#[tokio::test]
-async fn run_replay_redelivers_blocks() {
-    let blocks = new_numbered_blockchain(5);
-    let rpc = MockBitcoinRpc::new(blocks.clone());
-    let cancel = Shutdown::new();
-    let (tx, mut rx) = mpsc::channel(32);
-    let (replay_tx, replay_rx) = mpsc::channel(4);
-
-    let cancel2 = cancel.signal();
-    let handle = tokio::spawn(async move {
-        run(
-            rpc,
-            tx,
-            cancel2,
-            1,
-            vec![],
-            Arc::new(Notify::new()),
-            fast_config(),
-            replay_rx,
-        )
-        .await
-    });
-
-    // Receive all 5 blocks initially
-    for expected in &blocks {
-        let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
-        match event {
-            BlockEvent::BlockInsert { block, .. } => {
-                assert_eq!(block.height, expected.height);
-            }
-            other => panic!("expected BlockInsert, got {:?}", other),
-        }
-    }
-
-    // Send replay request from height 3
-    replay_tx.send(3).await.unwrap();
-
-    // Should re-deliver blocks 4 and 5
-    for expected_height in [4, 5] {
-        let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
-        match event {
-            BlockEvent::BlockInsert { block, .. } => {
-                assert_eq!(block.height, expected_height);
-            }
-            other => panic!("expected BlockInsert at {expected_height}, got {:?}", other),
-        }
-    }
-
-    cancel.cancel();
-    handle.await.unwrap().unwrap();
 }

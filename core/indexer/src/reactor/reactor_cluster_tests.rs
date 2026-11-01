@@ -5,7 +5,6 @@ mod startup_recovery_tests;
 
 use startup_recovery_tests::StartupFaults;
 
-use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,33 +12,92 @@ use std::time::Duration;
 use crate::stopper::{Shutdown, ShutdownSignal};
 use anyhow::{Result, anyhow};
 use bitcoin::Transaction as BitcoinTransaction;
-use bitcoin::absolute::LockTime;
 use bitcoin::consensus::serialize;
-use bitcoin::transaction::Version;
+use tokio::runtime::Handle;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
-use tokio::task::JoinSet;
+use tokio::task::{JoinSet, spawn_blocking};
 use tokio::time::timeout;
 use tracing::{Instrument, info, info_span};
 
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
+use crate::config::DEFAULT_VIEW_GAS_LIMIT;
 use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
 use crate::consensus::signing::PrivateKey;
-use crate::consensus::{Genesis, Height, Validator, ValidatorSet};
+use crate::consensus::{Genesis, Height};
+use crate::database::certified_history;
 use crate::database::receipt_stream::{recovery_boundary, stream_state};
 use crate::keygen;
 use crate::logging;
-use crate::reactor::consensus_state::{ConsensusState, ObservationChannels};
+use crate::protocol::coordinator::application_closure::WorkItem;
+use crate::protocol::coordinator::linked;
+use crate::reactor::certified_fixture;
+use crate::reactor::consensus_state::{ConsensusState, ObservationChannels, certified_startup};
 use crate::reactor::engine::{self, EngineConfig};
-use crate::reactor::lite_executor::{LiteExecutor, shared_engine_and_cache};
+use crate::reactor::execution::ExecutionContext;
+use crate::reactor::lite_executor::{LiteExecutor, shared_session_factory};
 use crate::reactor::mock_bitcoin::MockBitcoin;
 use crate::reactor::{Reactor, Simulation};
-use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::GenesisValidator;
+use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::ownership::{AsyncGate, OwnerService};
+use bitcoin::Network;
+use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use indexer_types::Event;
 use indexer_types::OpWithResult;
+use indexer_types::{ContractAddress, Inst, InstKind, Insts};
 use malachitebft_app_channel::app::config::{BootstrapProtocol, DiscoveryConfig, Selector};
-use malachitebft_app_channel::app::types::core::VotingPower;
+
+fn counter_key() -> Keypair {
+    Keypair::from_secret_key(
+        &Secp256k1::new(),
+        &SecretKey::from_slice(&[31; 32]).unwrap(),
+    )
+}
+
+fn counter_address() -> ContractAddress {
+    ContractAddress {
+        name: "counter".into(),
+        height: 1,
+        tx_index: 1,
+    }
+}
+
+fn counter_transaction(nonce: u32) -> BitcoinTransaction {
+    certified_fixture::transaction(
+        &counter_key(),
+        Insts::direct(vec![Inst {
+            gas_limit: 100_000,
+            kind: InstKind::Call {
+                contract: counter_address(),
+                expr: "increment()".into(),
+            },
+        }]),
+        nonce,
+    )
+    .unwrap()
+}
+
+fn counter_setup_transaction() -> Result<BitcoinTransaction> {
+    certified_fixture::transaction(
+        &counter_key(),
+        Insts::direct(vec![
+            Inst {
+                gas_limit: 100_000,
+                kind: InstKind::Issuance,
+            },
+            Inst {
+                gas_limit: 100_000,
+                kind: InstKind::Publish {
+                    name: "counter".into(),
+                    bytes: include_bytes!("../../../../test-contracts/binaries/counter.wasm.br")
+                        .to_vec(),
+                    provenance: testlib::sample_provenance(),
+                },
+            },
+        ]),
+        0,
+    )
+}
 
 async fn wait_matching<T>(
     rx: &mut mpsc::Receiver<T>,
@@ -78,6 +136,7 @@ struct ReactorCluster {
     /// Child of the cluster token, so cancelling the cluster still stops everyone
     /// while a single node can also be stopped on its own.
     node_cancels: Vec<Shutdown>,
+    node_completions: Vec<Option<oneshot::Receiver<()>>>,
     owner_services: Arc<Mutex<Vec<Option<OwnerService>>>>,
     /// Per-node `validate_txs` latency, passed to every spawned/restarted node.
     validation_delay: Option<Duration>,
@@ -98,7 +157,6 @@ struct ReactorCluster {
     node_count: usize,
     ready_rx: mpsc::Receiver<usize>,
     mock_bitcoin: Arc<Mutex<MockBitcoin>>,
-    genesis: Genesis,
     genesis_validators: Vec<GenesisValidator>,
     private_keys: Vec<PrivateKey>,
     /// Node 0's resolved consensus listen multiaddr — the bootstrap seed every
@@ -107,8 +165,7 @@ struct ReactorCluster {
     /// resolved address on a per-node watch the reactor writes on bind.
     seed_addr: String,
     shared_pubkey: String,
-    engine: wasmtime::Engine,
-    component_cache: crate::runtime::ComponentCache,
+    session_factory: SessionFactory,
     decided_tx: mpsc::Sender<DecidedBatch>,
     finality_tx: mpsc::Sender<FinalityEvent>,
     state_tx: mpsc::Sender<StateEvent>,
@@ -129,12 +186,6 @@ struct BatchResult {
 
 #[allow(dead_code)]
 struct BlockResult {
-    state_events: Vec<StateEvent>,
-    events: Vec<Event>,
-}
-
-#[allow(dead_code)]
-struct RollbackResult {
     state_events: Vec<StateEvent>,
     events: Vec<Event>,
 }
@@ -175,11 +226,6 @@ impl ReactorCluster {
             .map(|k| PrivateKey::from(k.ed25519_private))
             .collect();
 
-        let validators: Vec<Validator> = private_keys
-            .iter()
-            .map(|pk| Validator::new(pk.public_key(), 100 as VotingPower))
-            .collect();
-
         let genesis_validators: Vec<GenesisValidator> = validator_keys
             .iter()
             .map(|k| GenesisValidator {
@@ -188,9 +234,6 @@ impl ReactorCluster {
                 ed25519_pubkey: k.ed25519_pubkey.to_vec(),
             })
             .collect();
-
-        let validator_set = ValidatorSet::new(validators);
-        let genesis = Genesis { validator_set };
 
         let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
         let cancel = Shutdown::new();
@@ -201,10 +244,15 @@ impl ReactorCluster {
             .map(|_| crate::test_utils::new_test_db_dir().expect("node data dir"))
             .collect();
         let node_cancels: Vec<Shutdown> = (0..total).map(|_| cancel.child()).collect();
+        let mut node_completions: Vec<Option<oneshot::Receiver<()>>> =
+            (0..total).map(|_| None).collect();
         let owner_services = Arc::new(Mutex::new((0..total).map(|_| None).collect()));
-        let mock_bitcoin = Arc::new(Mutex::new(MockBitcoin::new(0)));
-        let shared_pubkey = random_x_only_pubkey();
-        let (engine, component_cache) = shared_engine_and_cache().await;
+        let mock_bitcoin = Arc::new(Mutex::new(
+            MockBitcoin::new(0)
+                .with_transactions(counter_setup_transaction()?, counter_transaction),
+        ));
+        let shared_pubkey = counter_key().x_only_public_key().0.to_string();
+        let session_factory = shared_session_factory().await;
 
         let (decided_tx, decided_rx) = mpsc::channel(1024);
         let (finality_tx, finality_rx) = mpsc::channel(1024);
@@ -242,14 +290,12 @@ impl ReactorCluster {
             let (node_conn_tx, node_conn_rx) = oneshot::channel();
             conn_rxs[i] = Some(node_conn_rx);
 
-            Self::spawn_node(
+            node_completions[i] = Some(Self::spawn_node(
                 i,
                 private_keys[i].clone(),
-                &genesis,
                 &genesis_validators,
                 peers,
                 addr_tx,
-                node_block_tx,
                 node_block_rx,
                 node_mempool_rx,
                 node_cancels[i].signal(),
@@ -262,8 +308,7 @@ impl ReactorCluster {
                 Some(sim_rx),
                 mock_bitcoin.clone(),
                 shared_pubkey.clone(),
-                engine.clone(),
-                component_cache.clone(),
+                session_factory.clone(),
                 node_conn_tx,
                 node_dirs[i].0.path().to_path_buf(),
                 node_dirs[i].1.clone(),
@@ -272,7 +317,7 @@ impl ReactorCluster {
                 startup_faults.clone(),
                 reactor_errors.clone(),
                 &mut join_set,
-            );
+            ));
             started_nodes[i] = true;
 
             if i == 0 {
@@ -285,6 +330,7 @@ impl ReactorCluster {
             conn_rxs,
             node_dirs,
             node_cancels,
+            node_completions,
             owner_services,
             validation_delay,
             block_txs,
@@ -298,13 +344,11 @@ impl ReactorCluster {
             node_count: initial,
             ready_rx,
             mock_bitcoin,
-            genesis,
             genesis_validators,
             private_keys,
             seed_addr,
             shared_pubkey,
-            engine,
-            component_cache,
+            session_factory,
             decided_tx,
             finality_tx,
             state_tx,
@@ -339,7 +383,12 @@ impl ReactorCluster {
     /// is owned by the cluster, so the database survives for a restart.
     async fn stop_node(&mut self, i: usize) {
         self.node_cancels[i].cancel();
-        // Its connection belongs to a runtime that is going away.
+        if let Some(completed) = self.node_completions[i].take() {
+            timeout(Duration::from_secs(30), completed)
+                .await
+                .expect("node task did not finish after cancellation")
+                .expect("node task panicked before completing");
+        }
         self.conns[i] = None;
     }
 
@@ -348,8 +397,6 @@ impl ReactorCluster {
     /// lived only in memory.
     async fn restart_node(&mut self, i: usize) {
         self.stop_node(i).await;
-        // Give the task a moment to unwind and release the database.
-        tokio::time::sleep(Duration::from_millis(500)).await;
 
         self.node_cancels[i] = self.cancel.child();
         let (node_block_tx, node_block_rx) = mpsc::channel(256);
@@ -361,14 +408,12 @@ impl ReactorCluster {
         let (node_conn_tx, node_conn_rx) = oneshot::channel();
         self.conn_rxs[i] = Some(node_conn_rx);
 
-        Self::spawn_node(
+        self.node_completions[i] = Some(Self::spawn_node(
             i,
             self.private_keys[i].clone(),
-            &self.genesis,
             &self.genesis_validators,
             vec![self.seed_addr.clone()],
             addr_tx,
-            node_block_tx,
             node_block_rx,
             node_mempool_rx,
             self.node_cancels[i].signal(),
@@ -381,8 +426,7 @@ impl ReactorCluster {
             Some(sim_rx),
             self.mock_bitcoin.clone(),
             self.shared_pubkey.clone(),
-            self.engine.clone(),
-            self.component_cache.clone(),
+            self.session_factory.clone(),
             node_conn_tx,
             self.node_dirs[i].0.path().to_path_buf(),
             self.node_dirs[i].1.clone(),
@@ -391,7 +435,7 @@ impl ReactorCluster {
             None,
             self.reactor_errors.clone(),
             &mut self.join_set,
-        );
+        ));
 
         // Only this node reports ready — `wait_for_ready` would block forever
         // waiting on the peers that never went down.
@@ -440,11 +484,9 @@ impl ReactorCluster {
     fn spawn_node(
         i: usize,
         private_key: PrivateKey,
-        genesis: &Genesis,
         genesis_validators: &[GenesisValidator],
         peers: Vec<String>,
         consensus_listen_addr: watch::Sender<Option<String>>,
-        node_block_tx: mpsc::Sender<BlockEvent>,
         node_block_rx: mpsc::Receiver<BlockEvent>,
         node_mempool_rx: mpsc::Receiver<MempoolEvent>,
         cancel: ShutdownSignal,
@@ -457,8 +499,7 @@ impl ReactorCluster {
         sim_rx: Option<mpsc::Receiver<Simulation>>,
         mock_btc: Arc<Mutex<MockBitcoin>>,
         pubkey: String,
-        engine: wasmtime::Engine,
-        component_cache: crate::runtime::ComponentCache,
+        session_factory: SessionFactory,
         // Hands this node's storage connection back to the test. The runtime is
         // built inside the spawned task, so without this a test has no way to look
         // at what a particular node actually wrote — which is most of what there is
@@ -476,39 +517,23 @@ impl ReactorCluster {
         startup_faults: Option<StartupFaults>,
         reactor_errors: Arc<Mutex<Vec<(usize, String)>>>,
         join_set: &mut JoinSet<()>,
-    ) {
-        let genesis = genesis.clone();
+    ) -> oneshot::Receiver<()> {
         let genesis_vals = genesis_validators.to_vec();
         let owner_service = OwnerService::new();
         owner_services.lock().unwrap()[i] = Some(owner_service.clone());
         let span = info_span!("cluster", id = %pubkey, node = i);
         let node = async move {
-            let (mut executor, runtime) = if first_boot {
-                LiteExecutor::new(
-                    &data_dir,
-                    &db_name,
-                    mock_btc,
-                    pubkey,
-                    &genesis_vals,
-                    engine,
-                    component_cache,
-                    node_block_tx,
-                )
-                .await
-                .expect("LiteExecutor setup failed")
-            } else {
-                LiteExecutor::reopen(
-                    &data_dir,
-                    &db_name,
-                    mock_btc,
-                    pubkey,
-                    engine,
-                    component_cache,
-                    node_block_tx,
-                )
-                .await
-                .expect("LiteExecutor reopen failed")
-            };
+            assert_eq!(data_dir.join(&db_name).exists(), !first_boot);
+            let (mut executor, session, resume_height, resume_hash) = LiteExecutor::open(
+                &data_dir,
+                &db_name,
+                mock_btc,
+                &genesis_vals,
+                session_factory,
+                &owner_service,
+            )
+            .await
+            .expect("certified cluster session");
             if let Some(delay) = validation_delay {
                 executor.set_validation_delay(delay);
             }
@@ -533,10 +558,37 @@ impl ReactorCluster {
                 },
             };
 
-            let conn = runtime.get_storage_conn();
+            let conn = session.conn.clone();
             // Ignore the error: a test that never asks for the connection drops the
             // receiver, which is fine.
             let _ = conn_tx.send(conn.clone());
+
+            let context = certified_history::frontier(&conn)
+                .await
+                .unwrap()
+                .context
+                .unwrap();
+            let mut execution = ExecutionContext::new(
+                executor,
+                session,
+                Network::Regtest,
+                owner_service,
+                context,
+                super::PruneConfig {
+                    enabled: false,
+                    retain_blocks: 144,
+                },
+                resume_height,
+                resume_hash,
+            );
+            if !execution.recover(&cancel).await.expect("cluster recovery") {
+                return;
+            }
+            let resume_height = execution.last_height;
+            let (_, _, validator_set) = certified_startup(&conn)
+                .await
+                .expect("recovered cluster committee");
+            let genesis = Genesis { validator_set };
 
             let engine_output = match engine::start(engine_config).await {
                 Ok(o) => o,
@@ -553,18 +605,6 @@ impl ReactorCluster {
                 .validators
                 .iter()
                 .position(|v| v.address == engine_output.address);
-
-            // A restarted node must resume from what it persisted. Hard-coding 0
-            // would make it believe the chain is fresh, and the restart test would
-            // then pass for entirely the wrong reason.
-            let (resume_height, resume_hash) = if first_boot {
-                (0, None)
-            } else {
-                match crate::database::queries::select_block_latest(&conn).await {
-                    Ok(Some(row)) => (row.height, Some(row.hash)),
-                    _ => (0, None),
-                }
-            };
 
             let mut state = ConsensusState::new(
                 conn.clone(),
@@ -589,10 +629,8 @@ impl ReactorCluster {
                 state_tx: stx,
             });
 
-            let mut reactor = Reactor::new(
-                executor,
-                runtime,
-                owner_service,
+            let mut reactor = Reactor::from_execution(
+                execution,
                 node_block_rx,
                 node_mempool_rx,
                 cancel.clone(),
@@ -600,12 +638,6 @@ impl ReactorCluster {
                 Some(etx),
                 sim_rx,
                 state,
-                super::PruneConfig {
-                    enabled: false,
-                    retain_blocks: 144,
-                },
-                resume_height,
-                resume_hash,
                 // Same path as production: the reactor's `ConsensusReady` handler
                 // reads the resolved address and publishes it here. `start_with`
                 // awaits the seed's receiver to bootstrap the followers.
@@ -620,7 +652,45 @@ impl ReactorCluster {
                 reactor_errors.lock().unwrap().push((i, msg));
             }
         };
-        join_set.spawn(node.instrument(span));
+        let (completed, completion) = oneshot::channel();
+        join_set.spawn(async move {
+            node.instrument(span).await;
+            // The node future and its owned database/engine handles are dropped
+            // before a restart is allowed to open that database again.
+            let _ = completed.send(());
+        });
+        completion
+    }
+
+    async fn counter_value(&self, node: usize) -> Result<String> {
+        let (dir, name) = &self.node_dirs[node];
+        let data_dir = dir.path().to_path_buf();
+        let name = name.clone();
+        let handle = Handle::current();
+        // Opening a pool connection initializes SQLite with a blocking busy
+        // handler. Keep the test's single node-driving thread free to commit
+        // any write transaction that initialization is waiting for.
+        spawn_blocking(move || {
+            handle.block_on(async move {
+                let pool = linked::new_read_pool(
+                    data_dir,
+                    name,
+                    Network::Regtest,
+                    DEFAULT_VIEW_GAS_LIMIT,
+                )?;
+                let address = counter_address();
+                linked::execute_view(
+                    &OwnerService::new(),
+                    pool.get().await?,
+                    Network::Regtest,
+                    (address.name, address.height, address.tx_index),
+                    "get()".into(),
+                )
+                .await?
+                .map_err(|(_, message)| anyhow!(message))
+            })
+        })
+        .await?
     }
 
     async fn add_node(&mut self) -> Result<usize> {
@@ -642,14 +712,12 @@ impl ReactorCluster {
         let (node_conn_tx, node_conn_rx) = oneshot::channel();
         self.conn_rxs[i] = Some(node_conn_rx);
 
-        Self::spawn_node(
+        self.node_completions[i] = Some(Self::spawn_node(
             i,
             self.private_keys[i].clone(),
-            &self.genesis,
             &self.genesis_validators,
             vec![self.seed_addr.clone()],
             addr_tx,
-            node_block_tx,
             node_block_rx,
             node_mempool_rx,
             self.node_cancels[i].signal(),
@@ -662,8 +730,7 @@ impl ReactorCluster {
             Some(sim_rx),
             self.mock_bitcoin.clone(),
             self.shared_pubkey.clone(),
-            self.engine.clone(),
-            self.component_cache.clone(),
+            self.session_factory.clone(),
             node_conn_tx,
             self.node_dirs[i].0.path().to_path_buf(),
             self.node_dirs[i].1.clone(),
@@ -672,7 +739,7 @@ impl ReactorCluster {
             None,
             self.reactor_errors.clone(),
             &mut self.join_set,
-        );
+        ));
 
         self.started_nodes[i] = true;
         self.node_count += 1;
@@ -687,35 +754,8 @@ impl ReactorCluster {
             let _ = self.ready_rx.recv().await;
         }
 
-        // Reactor-init is not mesh-readiness. If a test drives the cluster the
-        // instant reactors are up, the first proposal races an unformed gossip
-        // mesh and gets dropped (NoPeersSubscribedToTopic) — the proposer's peers
-        // never see it, so height 1 churns through round changes. Under parallel
-        // test load that startup churn is what pushes later finality waits past
-        // their timeouts. Block here until every node has decided consensus height
-        // 1, which proves the mesh is formed and consensus works on all nodes.
-        let target = self.node_count;
-        let mut decided: HashSet<usize> = HashSet::new();
-        let barrier = tokio::time::timeout(Duration::from_secs(30), async {
-            while decided.len() < target {
-                match self.decided_rx.recv().await {
-                    Some(d) if d.consensus_height.as_u64() >= 1 => {
-                        if let Some(idx) = d.validator_index {
-                            decided.insert(idx);
-                        }
-                    }
-                    Some(_) => {}
-                    None => break,
-                }
-            }
-        })
-        .await;
-        assert!(
-            barrier.is_ok(),
-            "consensus readiness barrier timed out: only {}/{target} nodes decided height 1 (cluster {})",
-            decided.len(),
-            self.shared_pubkey
-        );
+        // Mesh formation is established by each test's first certified block.
+        // There is deliberately no empty Batch(0) startup barrier.
     }
 
     fn send_block_event(&self, event: BlockEvent) {
@@ -842,30 +882,6 @@ impl ReactorCluster {
         assert!(errors.is_empty(), "reactor(s) died: {errors:?}");
     }
 
-    /// Wait until `height` is DECIDED by consensus, without requiring every node
-    /// to have executed it.
-    ///
-    /// `wait_for_block` demands `BlockProcessed` from all `node_count` nodes,
-    /// which is the right check when everyone is healthy but cannot express
-    /// "the chain advanced even though one node could not follow" — the exact
-    /// property at stake when a node is deliberately left behind.
-    async fn wait_for_block_decided(&mut self, height: u64, timeout: Duration) {
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
-        loop {
-            tokio::select! {
-                _ = &mut deadline => {
-                    panic!("wait_for_block_decided(height={height}) timed out");
-                }
-                Some(d) = self.decided_rx.recv() => {
-                    if d.value.is_block() && d.value.block_height() == height {
-                        return;
-                    }
-                }
-            }
-        }
-    }
-
     /// Wait until a block is decided, processed by all nodes, and events emitted.
     /// Cross-checks: decided_rx (Value::Block), state_rx (BlockProcessed × node_count),
     /// event_rx (Event::Processed × node_count).
@@ -914,44 +930,29 @@ impl ReactorCluster {
         }
     }
 
-    /// Wait until a rollback is executed and events emitted.
-    /// Cross-checks: state_rx (RollbackExecuted), event_rx (Event::Rolledback).
-    async fn wait_for_rollback(&mut self, to_height: u64, timeout: Duration) -> RollbackResult {
-        let mut state_seen = false;
-        let mut event_seen = false;
-        let mut state_events = Vec::new();
-        let mut events = Vec::new();
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
-
-        loop {
-            if state_seen && event_seen {
-                break;
-            }
-            tokio::select! {
-                _ = &mut deadline => {
-                    panic!(
-                        "wait_for_rollback(to={to_height}) timed out: state={state_seen} event={event_seen}"
-                    );
-                }
-                Some(se) = self.state_rx.recv() => {
-                    if matches!(&se, StateEvent::RollbackExecuted { to_anchor, .. } if *to_anchor == to_height) {
-                        state_seen = true;
-                    }
-                    state_events.push(se);
-                }
-                Some(ev) = self.event_rx.recv() => {
-                    if matches!(&ev, Event::Rolledback { height } if *height == to_height) {
-                        event_seen = true;
-                    }
-                    events.push(ev);
-                }
-            }
-        }
-        RollbackResult {
-            state_events,
-            events,
-        }
+    async fn replace_after(&mut self, surviving_height: u64) -> BlockResult {
+        self.mock_bitcoin().reset_to(surviving_height);
+        self.send_block_event(BlockEvent::Rollback {
+            to_height: surviving_height,
+        });
+        self.mine_empty_and_send();
+        let result = self
+            .wait_for_block(surviving_height + 1, Duration::from_secs(60))
+            .await;
+        assert_eq!(result.state_events.iter().filter(|event| matches!(event,
+            StateEvent::RollbackExecuted { to_anchor, .. } if *to_anchor == surviving_height + 1
+        )).count(), self.node_count);
+        assert_eq!(
+            result
+                .events
+                .iter()
+                .filter(|event| matches!(event,
+                    Event::Rolledback { height } if *height == surviving_height
+                ))
+                .count(),
+            self.node_count
+        );
+        result
     }
 
     /// Wait until a finality event matching the predicate arrives.
@@ -974,7 +975,7 @@ impl ReactorCluster {
     }
 
     /// Low-level: wait for a state event matching a predicate.
-    /// Use wait_for_block, wait_for_batch, or wait_for_rollback instead when possible.
+    /// Use wait_for_block or wait_for_batch instead when possible.
     async fn wait_for_state_event_matching(
         &mut self,
         pred: impl Fn(&StateEvent) -> bool,
@@ -984,7 +985,7 @@ impl ReactorCluster {
     }
 
     /// Low-level: wait for n state events matching a predicate.
-    /// Use wait_for_block, wait_for_batch, or wait_for_rollback instead when possible.
+    /// Use wait_for_block or wait_for_batch instead when possible.
     async fn wait_for_n_state_events_matching(
         &mut self,
         n: usize,
@@ -1059,18 +1060,50 @@ impl Drop for ReactorCluster {
 
 #[tokio::test]
 async fn prod_reactor_validators_agree_on_values() -> Result<()> {
-    crate::logging::setup();
-
     let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
-
-    for event in cluster.mock_bitcoin().generate_mempool_txs(3) {
-        cluster.send_mempool_event(event);
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
+    let mut batch_heights = Vec::new();
+    for _ in 0..2 {
+        for event in cluster.mock_bitcoin().generate_mempool_txs(3) {
+            cluster.send_mempool_event(event);
+        }
+        let result = cluster.wait_for_batch(1, Duration::from_secs(60)).await;
+        assert_eq!(result.txids.len(), 3);
+        batch_heights.push(result.consensus_height.as_u64());
     }
-
-    let result = cluster.wait_for_batch(0, Duration::from_secs(60)).await;
-    assert!(!result.txids.is_empty(), "Expected batch with txids");
-
+    for node in 0..3 {
+        assert_eq!(cluster.counter_value(node).await?, "6");
+        let conn = cluster.node_conn(node).await.clone();
+        assert!(
+            certified_history::load(&conn, 1)
+                .await?
+                .decision()
+                .descriptor
+                .command
+                .position()
+                .2
+        );
+        for height in &batch_heights {
+            let decision = certified_history::load(&conn, *height).await?;
+            let (anchor, _, is_block) = decision.decision().descriptor.command.position();
+            assert_eq!(anchor, 1);
+            assert!(!is_block);
+        }
+    }
+    cluster.mine_and_send(&[]);
+    cluster.wait_for_block(2, Duration::from_secs(60)).await;
+    for node in 0..3 {
+        assert_eq!(
+            cluster.counter_value(node).await?,
+            "6",
+            "confirmation must not execute twice"
+        );
+    }
+    cluster.restart_node(1).await;
+    assert_eq!(cluster.counter_value(1).await?, "6");
+    assert!(cluster.reactor_errors.lock().unwrap().is_empty());
     cluster.shutdown().await;
     Ok(())
 }
@@ -1081,14 +1114,7 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
 
     let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
-
-    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
-        cluster.send_mempool_event(event);
-    }
-
-    cluster.wait_for_batch(0, Duration::from_secs(60)).await;
-
-    cluster.mine_and_send(&[]);
+    cluster.mine_empty_and_send();
     cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
     for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
@@ -1096,6 +1122,15 @@ async fn prod_reactor_block_updates_anchor() -> Result<()> {
     }
 
     cluster.wait_for_batch(1, Duration::from_secs(60)).await;
+
+    cluster.mine_and_send(&[]);
+    cluster.wait_for_block(2, Duration::from_secs(60)).await;
+
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
+        cluster.send_mempool_event(event);
+    }
+
+    cluster.wait_for_batch(2, Duration::from_secs(60)).await;
 
     cluster.shutdown().await;
     Ok(())
@@ -1107,12 +1142,14 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
 
     let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
     for event in cluster.mock_bitcoin().generate_mempool_txs(3) {
         cluster.send_mempool_event(event);
     }
 
-    cluster.wait_for_batch(0, Duration::from_secs(60)).await;
+    cluster.wait_for_batch(1, Duration::from_secs(60)).await;
 
     cluster.mine_and_send(&[]);
 
@@ -1122,15 +1159,15 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
 
     let finality_events = cluster
         .wait_for_finality_event_matching(
-            |e| matches!(e, FinalityEvent::BatchFinalized { anchor_height, .. } if *anchor_height == 0),
+            |e| matches!(e, FinalityEvent::BatchFinalized { anchor_height, .. } if *anchor_height == 1),
             Duration::from_secs(60),
         )
         .await;
     assert!(
         finality_events.iter().any(
-            |e| matches!(e, FinalityEvent::BatchFinalized { anchor_height, .. } if *anchor_height == 0)
+            |e| matches!(e, FinalityEvent::BatchFinalized { anchor_height, .. } if *anchor_height == 1)
         ),
-        "Expected BatchFinalized at anchor 0, got: {finality_events:?}"
+        "Expected BatchFinalized at anchor 1, got: {finality_events:?}"
     );
 
     cluster.shutdown().await;
@@ -1227,12 +1264,6 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
 
     let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
-
-    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
-        cluster.send_mempool_event(event);
-    }
-    cluster.wait_for_batch(0, Duration::from_secs(60)).await;
-
     cluster.mine_empty_and_send();
     cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
@@ -1241,9 +1272,17 @@ async fn prod_reactor_cascade_invalidation() -> Result<()> {
     }
     cluster.wait_for_batch(1, Duration::from_secs(60)).await;
 
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(2, Duration::from_secs(60)).await;
+
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
+        cluster.send_mempool_event(event);
+    }
+    cluster.wait_for_batch(2, Duration::from_secs(60)).await;
+
     for i in 0..4 {
         cluster.mine_empty_and_send();
-        cluster.wait_for_block(2 + i, Duration::from_secs(60)).await;
+        cluster.wait_for_block(3 + i, Duration::from_secs(60)).await;
     }
     cluster.mine_empty_and_send();
 
@@ -1284,11 +1323,13 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
 
     let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
     for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
-    let batch0_result = cluster.wait_for_batch(0, Duration::from_secs(60)).await;
+    let batch0_result = cluster.wait_for_batch(1, Duration::from_secs(60)).await;
     let batch0_txids: Vec<bitcoin::Txid> = batch0_result
         .txids
         .iter()
@@ -1296,14 +1337,6 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
         .collect();
 
     cluster.mine_and_send(&batch0_txids);
-    cluster.wait_for_block(1, Duration::from_secs(60)).await;
-
-    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
-        cluster.send_mempool_event(event);
-    }
-    cluster.wait_for_batch(1, Duration::from_secs(60)).await;
-
-    cluster.mine_empty_and_send();
     cluster.wait_for_block(2, Duration::from_secs(60)).await;
 
     for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
@@ -1314,25 +1347,33 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     cluster.mine_empty_and_send();
     cluster.wait_for_block(3, Duration::from_secs(60)).await;
 
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
+        cluster.send_mempool_event(event);
+    }
+    cluster.wait_for_batch(3, Duration::from_secs(60)).await;
+
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(4, Duration::from_secs(60)).await;
+
     for i in 0..3 {
         cluster.mine_empty_and_send();
-        cluster.wait_for_block(4 + i, Duration::from_secs(60)).await;
+        cluster.wait_for_block(5 + i, Duration::from_secs(60)).await;
     }
     cluster.mine_empty_and_send();
 
     let finality_events = cluster
         .wait_for_finality_event_matching(
-            |e| matches!(e, FinalityEvent::Rollback { from_anchor, .. } if *from_anchor == 1),
+            |e| matches!(e, FinalityEvent::Rollback { from_anchor, .. } if *from_anchor == 2),
             Duration::from_secs(60),
         )
         .await;
 
     let rollback = finality_events
         .iter()
-        .find(|e| matches!(e, FinalityEvent::Rollback { from_anchor, .. } if *from_anchor == 1));
+        .find(|e| matches!(e, FinalityEvent::Rollback { from_anchor, .. } if *from_anchor == 2));
     assert!(
         rollback.is_some(),
-        "Expected Rollback from anchor 1, got: {finality_events:?}"
+        "Expected Rollback from anchor 2, got: {finality_events:?}"
     );
 
     if let Some(FinalityEvent::Rollback {
@@ -1342,7 +1383,7 @@ async fn prod_reactor_cross_block_cascade_invalidation() -> Result<()> {
     {
         assert!(
             invalidated_batches.len() >= 2,
-            "Expected cascade to invalidate batches at anchor 1 and 2, got {}",
+            "Expected cascade to invalidate batches at anchor 2 and 3, got {}",
             invalidated_batches.len()
         );
     }
@@ -1357,6 +1398,8 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
 
     let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
     let mempool_events = cluster.mock_bitcoin().generate_mempool_txs(2);
     let batch_txids: Vec<bitcoin::Txid> = mempool_events
@@ -1370,11 +1413,11 @@ async fn prod_reactor_batch_before_unbatched_at_same_anchor() -> Result<()> {
         cluster.send_mempool_event(event);
     }
 
-    cluster.wait_for_batch(0, Duration::from_secs(60)).await;
+    cluster.wait_for_batch(1, Duration::from_secs(60)).await;
 
     // Mine the same txids into a block — they should be deduped (unbatched_count=0)
     cluster.mine_and_send(&batch_txids);
-    let block_result = cluster.wait_for_block(1, Duration::from_secs(60)).await;
+    let block_result = cluster.wait_for_block(2, Duration::from_secs(60)).await;
     assert!(
         block_result.state_events.iter().any(|e| matches!(
             e,
@@ -1397,19 +1440,37 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
 
     let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
-
-    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
-        cluster.send_mempool_event(event);
-    }
-    cluster.wait_for_batch(0, Duration::from_secs(60)).await;
-
-    cluster.mine_and_send(&[]);
+    cluster.mine_empty_and_send();
     cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
     for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
-    cluster.wait_for_batch(1, Duration::from_secs(60)).await;
+    let preserved = cluster.wait_for_batch(1, Duration::from_secs(60)).await;
+    let checkpoint = preserved
+        .state_events
+        .iter()
+        .find_map(|event| match event {
+            StateEvent::BatchApplied {
+                consensus_height,
+                checkpoint,
+                ..
+            } if *consensus_height == preserved.consensus_height => *checkpoint,
+            _ => None,
+        })
+        .expect("preserved batch checkpoint");
+    let txids = preserved
+        .txids
+        .iter()
+        .map(|txid| txid.parse().unwrap())
+        .collect::<Vec<_>>();
+    cluster.mine_and_send(&txids);
+    cluster.wait_for_block(2, Duration::from_secs(60)).await;
+
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
+        cluster.send_mempool_event(event);
+    }
+    cluster.wait_for_batch(2, Duration::from_secs(60)).await;
 
     for _ in 0..6 {
         cluster.mine_empty_and_send();
@@ -1417,22 +1478,22 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
 
     cluster
         .wait_for_finality_event_matching(
-            |e| matches!(e, FinalityEvent::Rollback { from_anchor, .. } if *from_anchor == 1),
+            |e| matches!(e, FinalityEvent::Rollback { from_anchor, .. } if *from_anchor == 2),
             Duration::from_secs(60),
         )
         .await;
 
-    // Verify rollback preserves checkpoint from pre-anchor state
+    // The confirmed batch must survive rollback of the later missing batch.
     let rollback_events = cluster
         .wait_for_state_event_matching(
             |e| {
                 matches!(
                     e,
                     StateEvent::RollbackExecuted {
-                        to_anchor: 1,
-                        checkpoint: Some(_),
+                        to_anchor: 2,
+                        checkpoint: Some(restored),
                         ..
-                    }
+                    } if *restored == checkpoint
                 )
             },
             Duration::from_secs(60),
@@ -1442,12 +1503,12 @@ async fn prod_reactor_rollback_preserves_pre_anchor_state() -> Result<()> {
         rollback_events.iter().any(|e| matches!(
             e,
             StateEvent::RollbackExecuted {
-                to_anchor: 1,
-                checkpoint: Some(_),
+                to_anchor: 2,
+                checkpoint: Some(restored),
                 ..
-            }
+            } if *restored == checkpoint
         )),
-        "Expected RollbackExecuted to anchor 1 with checkpoint, got: {rollback_events:?}"
+        "Expected RollbackExecuted to anchor 2 with checkpoint, got: {rollback_events:?}"
     );
 
     cluster.shutdown().await;
@@ -1461,24 +1522,26 @@ async fn prod_reactor_all_nodes_reach_same_checkpoint() -> Result<()> {
     let num_nodes = 3;
     let mut cluster = ReactorCluster::start(num_nodes).await?;
     cluster.wait_for_ready().await;
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
     for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
-        cluster.send_mempool_event(event);
-    }
-    cluster.wait_for_batch(0, Duration::from_secs(60)).await;
-
-    cluster.mine_and_send(&[]);
-    let block1 = cluster.wait_for_block(1, Duration::from_secs(60)).await;
-    ReactorCluster::assert_checkpoints_match(&block1, 1, num_nodes);
-
-    for event in cluster.mock_bitcoin().generate_mempool_txs(3) {
         cluster.send_mempool_event(event);
     }
     cluster.wait_for_batch(1, Duration::from_secs(60)).await;
 
     cluster.mine_and_send(&[]);
-    let block2 = cluster.wait_for_block(2, Duration::from_secs(60)).await;
-    ReactorCluster::assert_checkpoints_match(&block2, 2, num_nodes);
+    let block1 = cluster.wait_for_block(2, Duration::from_secs(60)).await;
+    ReactorCluster::assert_checkpoints_match(&block1, 2, num_nodes);
+
+    for event in cluster.mock_bitcoin().generate_mempool_txs(3) {
+        cluster.send_mempool_event(event);
+    }
+    cluster.wait_for_batch(2, Duration::from_secs(60)).await;
+
+    cluster.mine_and_send(&[]);
+    let block2 = cluster.wait_for_block(3, Duration::from_secs(60)).await;
+    ReactorCluster::assert_checkpoints_match(&block2, 3, num_nodes);
 
     cluster.shutdown().await;
     Ok(())
@@ -1490,22 +1553,24 @@ async fn prod_reactor_multi_batch_same_anchor() -> Result<()> {
 
     let mut cluster = ReactorCluster::start(3).await?;
     cluster.wait_for_ready().await;
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
-    // First batch at anchor 0
+    // First batch at anchor 1
     for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
-    cluster.wait_for_batch(0, Duration::from_secs(60)).await;
+    cluster.wait_for_batch(1, Duration::from_secs(60)).await;
 
-    // Second batch also at anchor 0 (no block mined yet)
+    // Second batch also at anchor 1 (no intervening block)
     for event in cluster.mock_bitcoin().generate_mempool_txs(3) {
         cluster.send_mempool_event(event);
     }
-    cluster.wait_for_batch(0, Duration::from_secs(60)).await;
+    cluster.wait_for_batch(1, Duration::from_secs(60)).await;
 
     // Now mine a block and verify it processes
     cluster.mine_and_send(&[]);
-    cluster.wait_for_block(1, Duration::from_secs(60)).await;
+    cluster.wait_for_block(2, Duration::from_secs(60)).await;
 
     cluster.shutdown().await;
     Ok(())
@@ -1527,16 +1592,7 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
 
     let conn = cluster.node_conn(0).await.clone();
     let before_stream = stream_state(&conn).await?;
-    cluster.mock_bitcoin().reset_to(1);
-    cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
-    cluster.wait_for_rollback(1, Duration::from_secs(60)).await;
-
-    // Post-rollback, the decisions above the fork are forgotten and the
-    // re-delivered blocks are proposed and decided FRESH; the duplicate
-    // decided rows this leaves for identical blocks are drained safely on
-    // sync by the drain's already-executed/stale checks.
-    cluster.mine_empty_and_send();
-    cluster.wait_for_block(2, Duration::from_secs(60)).await;
+    cluster.replace_after(1).await;
 
     cluster.mine_empty_and_send();
     cluster.wait_for_block(3, Duration::from_secs(60)).await;
@@ -1557,12 +1613,8 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
     Ok(())
 }
 
-/// A Bitcoin rollback across a NON-empty decided batch: the batch's effects
-/// roll back with the blocks, the forgotten decision is not ghost-replayed
-/// (the audit regression: a decided-value reload placed after the truncation
-/// replayed batches with zero txids), the drain does not wedge on stale
-/// decisions, and the txs re-execute via a fresh mempool→batch decision on
-/// the re-delivered chain.
+/// Replacing a block below a batch's anchor removes its effects but preserves
+/// its certificate. Re-submission on the new branch executes through a new decision.
 #[tokio::test]
 async fn prod_reactor_bitcoin_rollback_across_decided_batch() -> Result<()> {
     crate::logging::setup();
@@ -1576,34 +1628,51 @@ async fn prod_reactor_bitcoin_rollback_across_decided_batch() -> Result<()> {
     cluster.wait_for_block(2, Duration::from_secs(60)).await;
 
     let mempool_events = cluster.mock_bitcoin().generate_mempool_txs(2);
+    let mut original_batches = Vec::new();
+    // A proposal may race the second transaction's recognition. Observe each
+    // submission independently instead of assuming both share one batch.
     for event in mempool_events.clone() {
         cluster.send_mempool_event(event);
+        let batch = cluster.wait_for_batch(2, Duration::from_secs(60)).await;
+        assert_eq!(batch.txids.len(), 1);
+        original_batches.push(batch);
     }
-    let first = cluster.wait_for_batch(2, Duration::from_secs(60)).await;
-    assert_eq!(first.txids.len(), 2, "setup batch must carry both txs");
 
-    // Reorg below the batch anchor — its effects are wiped with the blocks
-    // and its decision is forgotten (rows stay as consensus history).
-    cluster.mock_bitcoin().reset_to(1);
-    cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
-    cluster.wait_for_rollback(1, Duration::from_secs(60)).await;
+    for node in 0..3 {
+        assert_eq!(cluster.counter_value(node).await?, "2");
+    }
+    let conn = cluster.node_conn(0).await.clone();
+    let mut original_ids = Vec::new();
+    for batch in &original_batches {
+        let original = certified_history::load(&conn, batch.consensus_height.as_u64()).await?;
+        original_ids.push(original.decision().id()?);
+    }
+    cluster.replace_after(1).await;
+    for node in 0..3 {
+        assert_eq!(cluster.counter_value(node).await?, "0");
+    }
+    for (batch, original_id) in original_batches.iter().zip(original_ids) {
+        assert_eq!(
+            certified_history::load(&conn, batch.consensus_height.as_u64())
+                .await?
+                .decision()
+                .id()?,
+            original_id
+        );
+    }
 
-    // The re-delivered chain decides block 2 fresh; the rolled-back txs
-    // return via the mempool and re-execute in a NEW batch at the same
-    // anchor. This times out if a ghost replay consumed the txids
-    // (empty-batch record with txid_count=0) or if a stale reloaded
-    // decision wedged the drain.
-    cluster.mine_empty_and_send();
-    cluster.wait_for_block(2, Duration::from_secs(60)).await;
-    for event in mempool_events {
+    for (event, original_batch) in mempool_events.into_iter().zip(&original_batches) {
         cluster.send_mempool_event(event);
+        let replayed = cluster.wait_for_batch(2, Duration::from_secs(60)).await;
+        assert_eq!(
+            replayed.txids, original_batch.txids,
+            "the rolled-back transaction must re-execute in a fresh batch"
+        );
+        assert!(replayed.consensus_height > original_batches.last().unwrap().consensus_height);
     }
-    let replayed = cluster.wait_for_batch(2, Duration::from_secs(60)).await;
-    assert_eq!(
-        replayed.txids.len(),
-        2,
-        "rolled-back batch txs must re-execute in a fresh batch"
-    );
+    for node in 0..3 {
+        assert_eq!(cluster.counter_value(node).await?, "2");
+    }
 
     cluster.shutdown().await;
     Ok(())
@@ -1738,7 +1807,7 @@ async fn shutdown_during_finality_replay_waits_for_active_replay() -> Result<()>
     })
     .await??;
     let gate = Arc::new(AsyncGate::default());
-    cluster.mock_bitcoin().replay_gate = Some(gate.clone());
+    cluster.mock_bitcoin().rollback_stage_gate = Some(gate.clone());
     for _ in 0..8 {
         cluster.mine_empty_and_send();
     }
@@ -1761,6 +1830,19 @@ async fn shutdown_during_finality_replay_waits_for_active_replay() -> Result<()>
         .flatten()
         .cloned()
         .collect();
+    assert_eq!(gate.entries.load(Ordering::SeqCst), 3);
+    for (conn, owner) in conns.iter().zip(&owners) {
+        assert_eq!(owner.active_roots().await, 1);
+        assert!(!conn.is_autocommit());
+        let frontier = certified_history::frontier(conn).await?;
+        assert!(frontier.authenticated_height > frontier.closed_height);
+        let progress =
+            certified_history::closure::progress(conn, frontier.authenticated_height).await?;
+        assert_eq!(
+            progress.next.map(|(action, _)| action),
+            Some(WorkItem::Rollback { height: 0 })
+        );
+    }
     let reactor_errors = cluster.reactor_errors.clone();
     let mut shutdown = tokio::spawn(async move { cluster.shutdown_with_owners().await });
     let retained = timeout(Duration::from_millis(150), &mut shutdown)
@@ -1800,17 +1882,8 @@ async fn shutdown_during_finality_replay_waits_for_active_replay() -> Result<()>
     Ok(())
 }
 
-/// Every consensus height must leave a row in `batches` — that table is the decided
-/// sequence and the ONLY copy of it, since Malachite asks us for decided values
-/// rather than keeping them. A height with no row is a hole that cannot be refilled:
-/// the startup cleanup trims an unexecuted SUFFIX, never a gap in the middle.
-///
-/// SCOPE, so this is not mistaken for more than it is: measured green both with and
-/// without `record_declined_block`, so it does NOT cover that fix. Every decision in
-/// this scenario is executed before the reorg lands, so nothing is ever declined —
-/// reaching those paths needs a reorg to arrive between decide and execute, which
-/// the harness cannot schedule. What this does cover is the invariant itself, on a
-/// real reorg: it would catch a future change that starts dropping decisions.
+/// Every certified decision remains verifiable after execution moves to a new
+/// Bitcoin branch, including the abandoned branch's original bodies and proofs.
 #[tokio::test]
 async fn prod_reactor_reorg_leaves_no_gap_in_the_decided_sequence() -> Result<()> {
     crate::logging::setup();
@@ -1823,31 +1896,36 @@ async fn prod_reactor_reorg_leaves_no_gap_in_the_decided_sequence() -> Result<()
         cluster.wait_for_block(h, Duration::from_secs(60)).await;
     }
 
-    // Reorg away the top two blocks, then let the new chain be decided.
-    cluster.mock_bitcoin().reset_to(1);
-    cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
-    cluster.wait_for_rollback(1, Duration::from_secs(60)).await;
-    for h in 2..=4 {
+    let conn = cluster.node_conn(0).await.clone();
+    let before = certified_history::frontier(&conn).await?.closed_height;
+    let mut original_ids = Vec::new();
+    for height in 1..=before {
+        original_ids.push(
+            certified_history::load(&conn, height)
+                .await?
+                .decision()
+                .id()?,
+        );
+    }
+    cluster.replace_after(1).await;
+    for h in 3..=4 {
         cluster.mine_empty_and_send();
         cluster.wait_for_block(h, Duration::from_secs(60)).await;
     }
-
-    let conn = cluster.node_conn(0).await;
-    let mut rows = conn
-        .query(
-            "SELECT MIN(consensus_height), MAX(consensus_height), COUNT(*) FROM batches",
-            (),
-        )
-        .await?;
-    let row = rows.next().await?.expect("batches must not be empty");
-    let (min, max, count): (u64, u64, u64) = (row.get(0)?, row.get(1)?, row.get(2)?);
-    assert_eq!(
-        count,
-        max - min + 1,
-        "decided sequence has a gap: heights {min}..={max} but only {count} rows"
-    );
-
     cluster.shutdown().await;
+    let frontier = certified_history::frontier(&conn).await?;
+    assert_eq!(frontier.authenticated_height, frontier.closed_height);
+    assert!(frontier.closed_height > before);
+    for height in 1..=frontier.closed_height {
+        let decision = certified_history::load(&conn, height).await?;
+        certified_history::completion::completed(&conn, height).await?;
+        if height <= before {
+            assert_eq!(
+                decision.decision().id()?,
+                original_ids[(height - 1) as usize]
+            );
+        }
+    }
     Ok(())
 }
 
@@ -1894,13 +1972,14 @@ async fn prod_reactor_reorg_at_batch_anchor_keeps_batch_tracked() -> Result<()> 
 
     // Reorg back to the batch's own anchor. Block 2 survives with the same hash, so
     // the batch is untouched — only the blocks above it go.
-    cluster.mock_bitcoin().reset_to(2);
-    cluster.send_block_event(BlockEvent::Rollback { to_height: 2 });
-    cluster.wait_for_rollback(2, Duration::from_secs(60)).await;
+    cluster.replace_after(2).await;
+    for node in 0..3 {
+        assert_eq!(cluster.counter_value(node).await?, "1");
+    }
 
     // Climb past the deadline. The surviving batch's txs are still unconfirmed, so
     // finality must still invalidate it.
-    for _ in 0..7 {
+    for _ in 0..6 {
         cluster.mine_empty_and_send();
     }
     // Assert on WHICH batch was invalidated, not merely that some rollback happened:
@@ -1928,14 +2007,8 @@ async fn prod_reactor_reorg_at_batch_anchor_keeps_batch_tracked() -> Result<()> 
     Ok(())
 }
 
-/// A late joiner syncing across a ≥2-deep reorg episode. The decided sequence
-/// legitimately contains the stale chain-A block decisions followed by the
-/// chain-B re-decisions — every live node serves that history forever. The
-/// joiner declines the first stale decision at `tip + 1` by the buffered-hash
-/// check, but the DEEPER stale decisions sit ahead of its tip, where the drain
-/// used to park unconditionally — wedging on chain-A decisions with the
-/// chain-B re-decisions queued right behind them, permanently. This times out
-/// without the ahead-of-tip decline.
+/// A new node must replay the abandoned and replacement branches from certified
+/// inputs even though its Bitcoin poller now provides only the surviving branch.
 #[tokio::test]
 async fn prod_reactor_late_joiner_syncs_across_a_deep_reorg() -> Result<()> {
     crate::logging::setup();
@@ -1948,16 +2021,13 @@ async fn prod_reactor_late_joiner_syncs_across_a_deep_reorg() -> Result<()> {
         cluster.wait_for_block(h, Duration::from_secs(60)).await;
     }
 
-    // Reorg the top two blocks away and decide a longer replacement chain. The
-    // decided sequence now reads ... 2A, 3A, 2B, 3B, 4B ... — with fork-salted
-    // mock hashes, 2A/3A name blocks that no longer exist anywhere.
-    cluster.mock_bitcoin().reset_to(1);
-    cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
-    cluster.wait_for_rollback(1, Duration::from_secs(60)).await;
-    for h in 2..=4 {
+    cluster.replace_after(1).await;
+    for h in 3..=4 {
         cluster.mine_empty_and_send();
         cluster.wait_for_block(h, Duration::from_secs(60)).await;
     }
+    let source = cluster.node_conn(0).await.clone();
+    let source_height = certified_history::frontier(&source).await?.closed_height;
 
     // The joiner's poller serves only the surviving chain.
     let node_idx = cluster.add_node().await?;
@@ -1974,16 +2044,24 @@ async fn prod_reactor_late_joiner_syncs_across_a_deep_reorg() -> Result<()> {
             .query("SELECT COALESCE(MAX(height), 0) FROM blocks", ())
             .await?;
         tip = rows.next().await?.expect("row").get(0)?;
-        if tip >= 4 {
+        if tip >= 4 && certified_history::frontier(&conn).await?.closed_height >= source_height {
             break;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     assert!(
         tip >= 4,
-        "late joiner stuck at tip {tip} — the drain wedged on a stale pre-reorg \
-         block decision instead of declining it"
+        "late joiner stuck at tip {tip} while replaying certified branches"
     );
+
+    assert!(certified_history::frontier(&conn).await?.closed_height >= source_height);
+    for height in 1..=source_height {
+        let retained = certified_history::load(&source, height).await?;
+        let replayed = certified_history::load(&conn, height).await?;
+        assert_eq!(replayed.decision().id()?, retained.decision().id()?);
+        assert_eq!(replayed.input(), retained.input());
+        certified_history::completion::completed(&conn, height).await?;
+    }
 
     cluster.shutdown().await;
     Ok(())
@@ -2006,6 +2084,8 @@ async fn banked_verdicts_survive_the_deadline_and_track_the_pool() -> Result<()>
     let mut cluster =
         ReactorCluster::start_with_options(1, 1, Some(Duration::from_secs(4))).await?;
     cluster.wait_for_ready().await;
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
     let events = cluster.mock_bitcoin().generate_mempool_txs(2);
     let txids: Vec<String> = events
@@ -2028,7 +2108,7 @@ async fn banked_verdicts_survive_the_deadline_and_track_the_pool() -> Result<()>
     cluster.send_mempool_event(MempoolEvent::Remove(removed_txid));
 
     // The first non-empty decided batch must hold exactly the survivor.
-    let batch = cluster.wait_for_batch(0, Duration::from_secs(60)).await;
+    let batch = cluster.wait_for_batch(1, Duration::from_secs(60)).await;
     assert_eq!(
         batch.txids,
         vec![surviving.clone()],
@@ -2059,20 +2139,22 @@ async fn prod_reactor_blocks_flow_while_validation_is_stuck() -> Result<()> {
     let mut cluster =
         ReactorCluster::start_with_options(1, 1, Some(Duration::from_secs(600))).await?;
     cluster.wait_for_ready().await;
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
     // Park a candidate batch in the proposer: the mempool txs trigger a build
     // job whose validation outlives the test. The sleep guarantees the job is
-    // in flight before any block exists: the mempool debounce (500ms) or at
+    // in flight before the next block arrives: the mempool debounce (500ms) or at
     // latest the next held GetValue (~3s propose timeout) snapshots the
     // candidates and starts the 600s validation, which cannot finish. The
     // proof this ordering catches the regression: gating block proposals on
-    // the in-flight job makes this test time out on `wait_for_block(1)`.
+    // the in-flight job makes this test time out on `wait_for_block(2)`.
     for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    for h in 1..=3 {
+    for h in 2..=4 {
         cluster.mine_empty_and_send();
         cluster.wait_for_block(h, Duration::from_secs(60)).await;
     }
@@ -2088,19 +2170,25 @@ async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
 
     let mut cluster = ReactorCluster::start_with(4, 3).await?;
     cluster.wait_for_ready().await;
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
     for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
         cluster.send_mempool_event(event);
     }
-    cluster.wait_for_batch(0, Duration::from_secs(60)).await;
+    cluster.wait_for_batch(1, Duration::from_secs(60)).await;
 
     cluster.mine_and_send(&[]);
-    let block1 = cluster.wait_for_block(1, Duration::from_secs(60)).await;
+    let block1 = cluster.wait_for_block(2, Duration::from_secs(60)).await;
     let pre_join_checkpoints: Vec<_> = block1
         .state_events
         .iter()
         .filter_map(|e| match e {
-            StateEvent::BlockProcessed { checkpoint, .. } => *checkpoint,
+            StateEvent::BlockProcessed {
+                height: 2,
+                checkpoint,
+                ..
+            } => *checkpoint,
             _ => None,
         })
         .collect();
@@ -2118,15 +2206,19 @@ async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
         let _ = cluster.block_txs[node_idx].try_send(event);
     }
 
-    // Wait for late joiner to process block 1 and produce a checkpoint
+    // Wait for late joiner to process block 2 and produce a checkpoint
     let late_events = cluster
         .wait_for_state_event_matching(
-            |e| matches!(e, StateEvent::BlockProcessed { height: 1, .. }),
+            |e| matches!(e, StateEvent::BlockProcessed { height: 2, .. }),
             Duration::from_secs(60),
         )
         .await;
     let late_checkpoint = late_events.iter().find_map(|e| match e {
-        StateEvent::BlockProcessed { checkpoint, .. } => *checkpoint,
+        StateEvent::BlockProcessed {
+            height: 2,
+            checkpoint,
+            ..
+        } => *checkpoint,
         _ => None,
     });
 
@@ -2138,6 +2230,8 @@ async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
         pre_join_checkpoints.contains(&late_checkpoint.unwrap()),
         "Late joiner checkpoint should match existing nodes"
     );
+
+    assert_eq!(cluster.counter_value(node_idx).await?, "2");
 
     cluster.shutdown().await;
     Ok(())
@@ -2154,19 +2248,16 @@ async fn prod_reactor_simulate_transaction() -> Result<()> {
     cluster.mine_empty_and_send();
     cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
-    // Create a stub transaction for simulation
-    let tx = BitcoinTransaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![],
-        output: vec![],
-    };
-
-    // Simulate on node 0 — exercises savepoint → execute → inspect → rollback
-    let result = cluster.simulate(0, tx).await?;
-    assert!(
-        result.is_empty(),
-        "Expected empty results for stub transaction, got: {result:?}"
+    assert_eq!(cluster.counter_value(0).await?, "0");
+    let result = cluster.simulate(0, counter_transaction(99)).await?;
+    assert_eq!(result.len(), 1);
+    assert!(result[0].op().is_some());
+    assert!(result[0].result().is_some());
+    assert_eq!(result[0].error_message(), None);
+    assert_eq!(
+        cluster.counter_value(0).await?,
+        "0",
+        "simulation leaked its increment"
     );
 
     // Mine another block and verify all nodes agree on checkpoint.
@@ -2197,17 +2288,10 @@ async fn prod_reactor_pending_blocks_bounded_under_stalled_consensus() -> Result
     let producer = cluster.block_txs[0].clone();
     let flood = 1200u64;
     let mut accepted = 0u64;
-    for height in 1..=flood {
-        let event = BlockEvent::BlockInsert {
-            target_height: height,
-            block: indexer_types::Block {
-                height,
-                hash: crate::test_utils::new_mock_block_hash(height as u32),
-                prev_hash: crate::test_utils::new_mock_block_hash(height.saturating_sub(1) as u32),
-                transactions: Vec::new(),
-            }
-            .into(),
-        };
+    let mut bitcoin = MockBitcoin::new(0);
+    for _ in 1..=flood {
+        let (mut events, _) = bitcoin.mine_empty_block();
+        let event = events.pop().expect("mined block event");
         match tokio::time::timeout(Duration::from_secs(5), producer.send(event)).await {
             Ok(Ok(())) => accepted += 1,
             _ => break,
@@ -2231,73 +2315,58 @@ async fn prod_reactor_pending_blocks_bounded_under_stalled_consensus() -> Result
     Ok(())
 }
 
-/// A node whose execution has fallen behind heights the network already decided
-/// must PARK the out-of-order decision, not die on it.
-///
-/// This is the signet halt of 2026-08. One validator's executor was 128 blocks
-/// behind while its buffer held the whole window, so a decision for the network's
-/// tip found that block cached and went straight to the executor — whose height
-/// guard is a `bail!`, taken *after* the `batches` row was already committed.
-/// The reactor exited, the pod restarted, and because that validator held the
-/// third of three usable votes in a 3/4 quorum, each restart bought exactly one
-/// decided height before dying again: 121 restarts, 20 h, chain stopped.
-///
-/// The property is asymmetric on purpose. The lagging node stays stuck — the
-/// heights it missed will not be re-decided, and value-sync will not backfill a
-/// node whose *consensus* height is current — but it stays UP, keeps voting, and
-/// the chain keeps moving. A stuck node is an operator problem; a crash-looping
-/// one takes the network down with it.
+/// Missing local Bitcoin events must not strand execution behind consensus.
+/// The certified input carries the bytes needed to close each decision.
 #[tokio::test]
-async fn prod_reactor_out_of_order_block_decision_parks_instead_of_dying() -> Result<()> {
+async fn prod_reactor_missing_local_blocks_recover_from_certified_inputs() -> Result<()> {
     crate::logging::setup();
 
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
 
-    // Blocks 1 and 2 reach only nodes 0-2. Node 3 has no block at all, so it
-    // rejects both proposals and votes nil; 3 of 4 still clears the 2/3
-    // threshold, so consensus decides and executes them without it. Node 3's
-    // consensus height advances with every decision — which is precisely why it
-    // will never be re-sent these heights.
     let lagging = 3;
     for height in 1..=2u64 {
         let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
         for event in blk_events {
             for (i, tx) in cluster.block_txs.iter().enumerate() {
                 if i != lagging {
-                    let _ = tx.try_send(event.clone());
+                    tx.try_send(event.clone())?;
                 }
             }
         }
-        cluster
-            .wait_for_block_decided(height, Duration::from_secs(60))
+        let result = cluster
+            .wait_for_block(height, Duration::from_secs(60))
             .await;
+        ReactorCluster::assert_checkpoints_match(&result, height, 4);
     }
 
-    // Block 3 goes to everyone. Node 3 now holds a block for height 3 with a tip
-    // of 0 — buffered, but 2 heights out of reach. It accepts the proposal (the
-    // block IS the canonical one at that height, which is all a `Value::Block`
-    // asserts) and votes for it, so the decision lands on a node that cannot
-    // execute it. Before the ordering gate, this is the line that killed the
-    // reactor: "Unexpected block height 3, expected 1".
-    let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
-    for event in blk_events {
-        cluster.send_block_event(event);
-    }
-    cluster
-        .wait_for_block_decided(3, Duration::from_secs(60))
-        .await;
-
-    // The chain keeps advancing afterwards — the lagging node still votes, so
-    // quorum survives. Two more heights prove it is not a one-off.
-    for height in 4..=5u64 {
-        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
-        for event in blk_events {
-            cluster.send_block_event(event);
+    let source = cluster.node_conn(0).await.clone();
+    let recovered = cluster.node_conn(lagging).await.clone();
+    let source_height = certified_history::frontier(&source)
+        .await?
+        .authenticated_height;
+    assert!(source_height >= 2);
+    timeout(Duration::from_secs(10), async {
+        while certified_history::frontier(&recovered).await?.closed_height < source_height {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        cluster
-            .wait_for_block_decided(height, Duration::from_secs(60))
+        Ok::<(), anyhow::Error>(())
+    })
+    .await??;
+    for height in 1..=source_height {
+        let retained = certified_history::load(&source, height).await?;
+        let replayed = certified_history::load(&recovered, height).await?;
+        assert_eq!(replayed.decision().id()?, retained.decision().id()?);
+        assert_eq!(replayed.input(), retained.input());
+        certified_history::completion::completed(&recovered, height).await?;
+    }
+
+    for height in 3..=5u64 {
+        cluster.mine_empty_and_send();
+        let result = cluster
+            .wait_for_block(height, Duration::from_secs(60))
             .await;
+        ReactorCluster::assert_checkpoints_match(&result, height, 4);
     }
 
     cluster.assert_no_reactor_errors();
@@ -2305,23 +2374,8 @@ async fn prod_reactor_out_of_order_block_decision_parks_instead_of_dying() -> Re
     Ok(())
 }
 
-/// A block re-delivered AFTER the node already executed it must not stop the
-/// chain.
-///
-/// This is not a synthetic poke: `replay_blocks_after` re-sends every stored
-/// block event above a height, and the finality path deliberately keeps
-/// `pending_blocks` across a rollback. A replayed `BlockInsert` can therefore
-/// land after the deferred decisions have already drained and carried the tip
-/// past that height — the poller redelivering a block the node has since
-/// applied.
-///
-/// `process_block_event` buffers it with no tip check, and `make_value`
-/// proposes `pending_blocks.first_key_value()` with no tip check either, so the
-/// proposer offers an already-applied height. Nothing consumes it: the finalize
-/// gate only removes from `pending_blocks` when the decision is in order, and
-/// the drain's tip gate drops the decision without touching the buffer. If that
-/// is a closed loop, the stale entry stays the minimum forever, newer blocks
-/// are never proposed, and the chain stops.
+/// A poller may redeliver an already applied block. Its stale candidate must
+/// not pin the proposal queue ahead of newer blocks.
 #[tokio::test]
 async fn prod_reactor_replayed_block_below_tip_does_not_stall_the_chain() -> Result<()> {
     crate::logging::setup();

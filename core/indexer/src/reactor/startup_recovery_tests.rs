@@ -107,6 +107,7 @@ async fn lost_startup_proposal_recovers_with_a_late_retry_proposer() -> Result<(
             .await
             .context("cluster setup exceeded 120 s")?
             .context("cluster setup readiness channel closed")?;
+        cluster.mine_empty_and_send();
         timeout(Duration::from_secs(40), async {
         let mut decided = HashSet::new();
         let mut first_value = None;

@@ -1,0 +1,5 @@
+error: `nonexistent` is not a field of this struct
+ --> tests/ui/covering_include_unknown_field.rs:5:42
+  |
+5 | #[index(by_owner, by = owner, include = (nonexistent))]
+  |                                          ^^^^^^^^^^^

@@ -112,7 +112,7 @@ impl Pending {
 
     pub(crate) async fn check_unconfirmed(&self, trial: &Reactor<RuntimeExecutor>) -> Result<()> {
         ensure!(
-            trial.last_height == self.height,
+            trial.execution.last_height == self.height,
             "pending observation height changed"
         );
         let conn = trial.db_conn();
@@ -141,7 +141,8 @@ impl Pending {
             "pending block height is not consecutive"
         );
         ensure!(
-            trial.last_height == block.height && trial.last_hash == Some(block.hash),
+            trial.execution.last_height == block.height
+                && trial.execution.last_hash == Some(block.hash),
             "pending block differs from canonical tip"
         );
         let conn = trial.db_conn();

@@ -15,12 +15,13 @@ import tomllib
 from audit import audit_final, audit_inputs
 from common_ownership import verify as verify_common_ownership
 from execution_definition import verify_reference
+from coordinator_definition import verify as verify_coordinator_reference
 from metadata_control import proc_macro_hashes
 from provenance import fingerprint, locked_packages, runtime_libraries, source_inputs
 from provenance import tools as toolchain_inputs
 from source_policy import check as check_source_policy
 from symbol_tool import TOOLCHAIN
-from recipes import EXECUTOR_GRAPHS, GRAPHS, identity, verify_engine_observations, verify_identity, verify_reservations
+from recipes import EXECUTOR_LINK_SETS, GRAPHS, executor_graphs, graph_root, identity, verify_engine_observations, verify_identity, verify_reservations
 from capabilities import verify as verify_capabilities
 from type_boundary import verify as verify_type_boundary
 
@@ -46,7 +47,7 @@ def run(args, cwd, env, log):
         raise RuntimeError(f"command failed ({result.returncode}): {log}\n{log.read_text()[-12000:]}")
 
 
-def metadata(manifest, target, env, offline, features=()):
+def metadata(manifest, target, env, offline, features=(), *, source_root=None):
     command = ["cargo", "metadata", "--locked", "--format-version=1",
                "--manifest-path", str(manifest)]
     if target is not None:
@@ -55,11 +56,13 @@ def metadata(manifest, target, env, offline, features=()):
         command.extend(["--features", ",".join(features)])
     if offline:
         command.append("--offline")
-    return json.loads(subprocess.check_output(command, cwd=ROOT, env=env, text=True))
+    return json.loads(subprocess.check_output(command, cwd=ROOT if source_root is None else source_root,
+                                             env=env, text=True))
 
 
 def identities(graph, data, graphs=None):
     recipe = (GRAPHS if graphs is None else graphs)[graph]
+    source_root = graph_root(ROOT, recipe)
     revision, version, itoa = recipe.revision, recipe.version, recipe.itoa
     packages = {p["id"]: p for p in data["packages"]}
     nodes = {node["id"]: node for node in data["resolve"]["nodes"]}
@@ -91,7 +94,7 @@ def identities(graph, data, graphs=None):
         raise RuntimeError(f"{graph}: missing conflicting itoa version")
     for name in recipe.native_patches:
         package = one(name)
-        if Path(package["manifest_path"]).parent.resolve() != ROOT / "core/vendor" / name:
+        if Path(package["manifest_path"]).parent.resolve() != source_root / "core/vendor" / name:
             raise RuntimeError(f"{graph}: missing native patch for {name}")
     if recipe.kind == "executor":
         forbidden = {"libsql", "arc-malachitebft-app-channel", "if-watch"}
@@ -100,7 +103,7 @@ def identities(graph, data, graphs=None):
         # An optional native library still needs its patch if a new dependency
         # makes it reachable. Absence is not permission to use unowned symbols.
         for package in selected:
-            if package["name"] == "ring" and Path(package["manifest_path"]).parent.resolve() != ROOT / "core/vendor/ring":
+            if package["name"] == "ring" and Path(package["manifest_path"]).parent.resolve() != source_root / "core/vendor/ring":
                 raise RuntimeError(f"{graph}: missing native patch for ring")
     return [{"name": p["name"], "version": p["version"], "source": p["source"],
              "features": sorted(nodes[p["id"]]["features"])} for p in selected]
@@ -143,7 +146,8 @@ def current_artifacts(log, target_dir, target, package):
 def build_graph(graph, args, base_env, output, graphs=None):
     graphs = GRAPHS if graphs is None else graphs
     selected_recipe = graphs[graph]
-    manifest = ROOT / "protocol-bundles" / selected_recipe.directory / "Cargo.toml"
+    source_root = graph_root(ROOT, selected_recipe)
+    manifest = source_root / "protocol-bundles" / selected_recipe.directory / "Cargo.toml"
     lock = manifest.with_name("Cargo.lock")
     recipe = tomllib.loads(manifest.read_text())
     if any(recipe["profile"][profile].get("panic") != "unwind" for profile in ("dev", "release")):
@@ -160,15 +164,16 @@ def build_graph(graph, args, base_env, output, graphs=None):
                BUNDLE_GRAPH=graph,
                RUSTC_WRAPPER=str(wrapper),
                RUSTFLAGS=f"-Cmetadata={namespace} -Cpanic=unwind")
-    data = metadata(manifest, args.target, env, args.offline)
+    data = metadata(manifest, args.target, env, args.offline, source_root=source_root)
     definition = None
     if selected_recipe.kind == "executor":
         # Network identity covers all target dependencies, independently of the
         # platform-filtered artifact inventory used below.
-        definition = verify_reference(ROOT, manifest, metadata(manifest, None, env, args.offline))
+        definition = verify_reference(source_root, manifest, metadata(
+            manifest, None, env, args.offline, source_root=source_root))
     packages = identities(graph, data, graphs)
-    sources = source_inputs(ROOT, data, kind=selected_recipe.kind)
-    source_policy = check_source_policy(ROOT, data, kind=selected_recipe.kind)
+    sources = source_inputs(source_root, data, kind=selected_recipe.kind, tool_root=ROOT)
+    source_policy = check_source_policy(source_root, data, kind=selected_recipe.kind)
     write_json(graph_output / "source-inputs.json", sources)
     write_json(graph_output / "metadata.json", data)
     command = ["cargo", "build", "--locked", "--manifest-path", str(manifest),
@@ -177,15 +182,15 @@ def build_graph(graph, args, base_env, output, graphs=None):
     if args.offline:
         command.append("--offline")
     log = graph_output / "build.log"
-    run(command, ROOT, env, log)
+    run(command, source_root, env, log)
     if digest(lock) != lock_hash:
         raise RuntimeError("locked build modified the dependency lock")
-    if source_inputs(ROOT, data, kind=selected_recipe.kind) != sources:
+    if source_inputs(source_root, data, kind=selected_recipe.kind, tool_root=ROOT) != sources:
         raise RuntimeError("source inputs changed while the graph was compiling")
-    if metadata(manifest, args.target, env, args.offline) != data:
+    if metadata(manifest, args.target, env, args.offline, source_root=source_root) != data:
         raise RuntimeError("resolved metadata changed while the graph was compiling")
     if definition is not None and verify_reference(
-        ROOT, manifest, metadata(manifest, None, env, args.offline)
+        source_root, manifest, metadata(manifest, None, env, args.offline, source_root=source_root)
     ) != definition:
         raise RuntimeError("execution definition changed while the graph was compiling")
     archives, facade, native_outputs, proc_macros = current_artifacts(log, target_dir, args.target, recipe["package"]["name"])
@@ -361,6 +366,7 @@ def node_codegen_objects(path, spec):
 
 
 def build_node(graphs, args, base_env, output):
+    recipes = executor_graphs(args.link_set)
     manifest = ROOT / "protocol-bundles/node/Cargo.toml"
     lock = manifest.with_name("Cargo.lock")
     recipe = tomllib.loads(manifest.read_text())
@@ -375,15 +381,19 @@ def build_node(graphs, args, base_env, output):
     features = ["protocol-qualification"] if args.node_qualification else []
     data = metadata(manifest, args.target, env, args.offline, features)
     node_dependencies(data)
+    coordinator_data = metadata(manifest, None, env, args.offline, features)
+    coordinator_lock = tomllib.loads(lock.read_text())
+    coordinator = verify_coordinator_reference(ROOT, coordinator_data, coordinator_lock)
     sources = source_inputs(ROOT, data, kind="node")
     lock_hash = digest(lock)
     write_json(directory / "metadata.json", data)
     write_json(directory / "source-inputs.json", sources)
     for graph in graphs:
-        verify_identity(ROOT, graph, EXECUTOR_GRAPHS)
+        verify_identity(ROOT, graph, recipes)
         verify_staged_inputs(graph)
     sets, versions = audit_inputs(graphs, directory)
-    spec = {"compiler": env["RUSTC"], "features": features, "source_inputs_sha256": fingerprint(sources),
+    spec = {"compiler": env["RUSTC"], "features": features, "link_set": args.link_set,
+            "source_inputs_sha256": fingerprint(sources),
             "lock_sha256": lock_hash, "root_objects": str(directory / "root-objects.json"),
             "graphs": [{"graph": graph["graph"], "facade": graph["facade"],
                         "facade_sha256": digest(Path(graph["facade"])),
@@ -423,10 +433,12 @@ def build_node(graphs, args, base_env, output):
         raise RuntimeError("node source or lock changed during compilation")
     if metadata(manifest, args.target, env, args.offline, features) != data:
         raise RuntimeError("node dependency metadata changed during compilation")
+    if verify_coordinator_reference(ROOT, coordinator_data, coordinator_lock) != coordinator:
+        raise RuntimeError("coordinator definition changed during compilation")
     for graph in graphs:
-        verify_identity(ROOT, graph, EXECUTOR_GRAPHS)
+        verify_identity(ROOT, graph, recipes)
         verify_staged_inputs(graph)
-    result = {"qualification_command": args.node_qualification, "executable": str(executable), "executable_sha256": digest(executable),
+    result = {"coordinator_definition": coordinator, "qualification_command": args.node_qualification, "executable": str(executable), "executable_sha256": digest(executable),
               "source_inputs_sha256": fingerprint(sources), "lock_sha256": lock_hash,
               "link_spec_sha256": digest(spec_path), "build_log_sha256": digest(log),
               "root_codegen_sha256": digest(Path(spec["root_objects"])), "wrapper_sha256": digest(wrapper),
@@ -468,6 +480,8 @@ def main():
     parser.add_argument("--target", choices=sorted(TARGETS))
     parser.add_argument("--profile", choices=("release", "dev"), default="release")
     parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--link-set", choices=sorted(EXECUTOR_LINK_SETS),
+                        help="select an explicit retained executor source configuration")
     parser.add_argument("--jobs", type=int, default=2)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--build-executors", action="store_true",
@@ -484,6 +498,10 @@ def main():
     if args.install_node and not args.build_node:
         parser.error("--install-node requires --build-node")
     production = args.build_executors or args.build_node
+    if args.link_set and not production:
+        parser.error("--link-set requires --build-executors or --build-node")
+    if production and args.link_set is None:
+        args.link_set = "k4-node"
     if not 1 <= args.jobs <= 2:
         parser.error("protocol qualification uses one or two compiler jobs")
     env = dict(os.environ, RUSTUP_TOOLCHAIN=TOOLCHAIN, RUSTC_WRAPPER="", CCACHE_DISABLE="1",
@@ -506,6 +524,8 @@ def main():
     output = args.output.resolve() / args.target / args.profile
     if production:
         output /= "executors"
+        if args.link_set:
+            output /= args.link_set
     output.mkdir(parents=True, exist_ok=True)
     lock = (args.output.resolve() / ".build.lock").open("a")
     try:
@@ -516,7 +536,7 @@ def main():
     if production:
         (output / "executor-build.json").unlink(missing_ok=True)
         (output / "node-build.json").unlink(missing_ok=True)
-    graphs = EXECUTOR_GRAPHS if production else GRAPHS
+    graphs = executor_graphs(args.link_set) if production else GRAPHS
     verify_reservations(ROOT, graphs)
     verify_capabilities(ROOT)
     reports = [build_graph(graph, args, env, output, graphs) for graph in graphs]
@@ -526,7 +546,9 @@ def main():
     node = build_node(reports, args, env, output) if args.build_node else None
     for report in reports:
         data = json.loads((output / report["graph"] / "metadata.json").read_text())
-        if fingerprint(source_inputs(ROOT, data, kind=graphs[report["graph"]].kind)) != report["source_inputs_sha256"]:
+        recipe = graphs[report["graph"]]
+        if fingerprint(source_inputs(graph_root(ROOT, recipe), data, kind=recipe.kind,
+                                     tool_root=ROOT)) != report["source_inputs_sha256"]:
             raise RuntimeError("source inputs changed before qualification finished")
     if toolchain_inputs(env, args.target) != toolchain:
         raise RuntimeError("common compiler inputs changed during qualification")
@@ -537,13 +559,14 @@ def main():
             verify_identity(ROOT, report, graphs)
             verify_staged_inputs(report)
         write_json(output / "executor-build.json", {"compiler": compiler, "toolchain_inputs": toolchain,
-                   "target": args.target, "profile": args.profile, "graphs": reports,
+                   "target": args.target, "profile": args.profile, "link_set": args.link_set, "graphs": reports,
                    "status": "staged libraries; final node link and execution qualification required"})
         if node is not None:
             if args.install_node:
                 node["installed"] = install_node(node, args.install_node)
             write_json(output / "node-build.json", {"compiler": compiler, "toolchain_inputs": toolchain,
-                       "target": args.target, "profile": args.profile, "graphs": reports, "node": node})
+                       "target": args.target, "profile": args.profile, "link_set": args.link_set,
+                       "graphs": reports, "node": node})
             print(f"Node built at {node['executable']}; execution qualification has not run.", flush=True)
             return
         print(f"Executor libraries staged at {output}; node qualification has not run.", flush=True)

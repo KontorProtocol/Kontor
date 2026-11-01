@@ -1,35 +1,34 @@
-use crate::protocol::coordinator::linked::{PreparedBlock, PreparedTransaction};
-use crate::protocol::coordinator::selection::ApplicationPosition;
-use std::{slice, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use bitcoin::absolute::LockTime;
-use bitcoin::blockdata::constants::genesis_block;
-use bitcoin::consensus::{deserialize, serialize as serialize_bitcoin};
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
-use bitcoin::{Block as BitcoinBlock, Network, Transaction, Witness};
+use bitcoin::{BlockHash, Transaction};
+use indexer_types::{Inst, InstKind, Insts};
 use libsql::{Connection, Value, params};
+use malachitebft_core_types::Round;
+use malachitebft_engine::host::Next;
 use malachitebft_engine::node::NodeRef;
 use tempfile::TempDir;
 use testlib::sample_provenance;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
-use super::aggregate_error_tests::reactor;
+use super::Reactor;
+use super::certified_fixture;
+use super::execution::ExecutionStep;
+use super::executor::RuntimeExecutor;
 use crate::bitcoin_follower::block::BlockInput;
-use crate::block::filter_map;
-use crate::consensus::Height;
 use crate::consensus::signing::PrivateKey;
+use crate::consensus::{Ctx, Height, Value as ConsensusValue};
+use crate::database::certified_history;
 use crate::database::confirmation::get_confirmation_position;
 use crate::database::queries::get_transaction_by_txid;
 use crate::database::receipt_stream::{recovery_boundary, stream_state};
-use crate::runtime::token::api as token;
-use crate::runtime::wit::Signer;
-use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{
-    ContractAddress, Decimal, GenesisValidator, Runtime, TransactionContext, from_wave_expr,
-};
-use crate::test_utils::{new_mock_block_hash, signed_confirmation_call, test_runtime_with_genesis};
+use crate::runtime::{ContractAddress, Decimal, GenesisValidator, Runtime, from_wave_expr};
+use crate::test_utils::{signed_confirmation_call, test_genesis};
 
+#[cfg(feature = "protocol-qualification")]
 mod parity;
 
 struct StopEngine(NodeRef);
@@ -38,40 +37,6 @@ impl Drop for StopEngine {
     fn drop(&mut self) {
         self.0.stop(None);
     }
-}
-
-// Synthetic raw blocks exercise parsing and coordinator behavior. Constructed
-// prevouts and headers do not establish Bitcoin consensus or mempool acceptance.
-fn confirmation_block(tx: &Transaction, position: usize) -> Result<PreparedBlock> {
-    let block = raw_confirmation_block(tx, position)?
-        .prepare(|tx| Ok(filter_map((0, tx.clone())).map(PreparedTransaction::fixture)))?;
-    assert_eq!(block.transactions.len(), 1);
-    assert_eq!(block.transactions[0].index, position as u32);
-    Ok(block)
-}
-
-fn raw_confirmation_block(tx: &Transaction, position: usize) -> Result<BlockInput> {
-    assert!(position >= 2);
-    let mut raw = genesis_block(Network::Regtest);
-    raw.header.prev_blockhash = new_mock_block_hash(1);
-    for index in 1..position {
-        let mut unrelated = tx.clone();
-        unrelated.input[0].witness = Witness::new();
-        unrelated.lock_time = LockTime::from_consensus(index as u32);
-        raw.txdata.push(unrelated);
-    }
-    raw.txdata.push(tx.clone());
-    raw.header.merkle_root = raw.compute_merkle_root().context("fixture merkle root")?;
-    let raw: BitcoinBlock = deserialize(&serialize_bitcoin(&raw))?;
-    assert!(raw.txdata[0].is_coinbase());
-    assert!(raw.check_merkle_root());
-    let hash = raw.block_hash();
-    Ok(BlockInput::new(
-        2,
-        hash,
-        raw.header.prev_blockhash,
-        raw.txdata,
-    ))
 }
 
 async fn effects(conn: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
@@ -85,8 +50,20 @@ async fn effects(conn: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
         "transaction_execution_usage",
         "depositor_footprint",
     ] {
+        // Certified blocks also run native lifecycle operations. Compare all
+        // transaction effects, excluding lifecycle-only writes and receipts.
+        let predicate = match table {
+            "contract_state" | "contract_results" => "WHERE tx_id IS NOT NULL",
+            "current_contract_state" => {
+                "WHERE contract_id IN (SELECT id FROM contracts WHERE name = 'confirmation-fixture')"
+            }
+            _ => "",
+        };
         let mut rows = conn
-            .query(&format!("SELECT * FROM {table} ORDER BY 1, 2"), ())
+            .query(
+                &format!("SELECT * FROM {table} {predicate} ORDER BY 1, 2"),
+                (),
+            )
             .await?;
         let count = rows.column_count();
         let mut values = Vec::new();
@@ -130,102 +107,175 @@ async fn assert_successful_write(
     Ok(())
 }
 
-async fn fixture() -> Result<(Runtime, TempDir, ContractAddress, Transaction)> {
-    let secp = Secp256k1::new();
-    let key = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[71; 32])?);
-    let public_key = key.x_only_public_key().0.to_string();
-    let (mut runtime, dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
-        x_only_pubkey: public_key.clone(),
-        ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
-        stake: Decimal::from("100"),
-    }])
-    .await?;
-    let core = Signer::Core(Box::new(Signer::Nobody));
-    token::issue_to(
-        &mut runtime,
-        &core,
-        HolderRef::XOnlyPubkey(public_key),
-        Decimal::from("100"),
-    )
-    .await??;
-    runtime
-        .set_context(
-            1,
-            Some(TransactionContext::builder().tx_index(0).build()),
-            None,
-            None,
-        )
-        .await;
-    runtime
-        .publish(
-            &core,
-            runtime.core_payment(),
-            "confirmation-fixture",
-            include_bytes!("../../../../test-contracts/binaries/error_test.wasm.br"),
-            &sample_provenance(),
-        )
+async fn start_decision(
+    reactor: &mut Reactor<RuntimeExecutor>,
+    value: ConsensusValue,
+) -> Result<(u64, oneshot::Receiver<Next<Ctx>>)> {
+    let height = certified_history::frontier(&reactor.db_conn())
+        .await?
+        .authenticated_height
+        + 1;
+    let round = Round::new(0);
+    let proof = certified_fixture::certificate(
+        &PrivateKey::from([17; 32]),
+        &value,
+        Height::new(height),
+        round,
+    );
+    certified_fixture::proposal(reactor, value, Height::new(height), round);
+    let (reply, received) = oneshot::channel();
+    reactor
+        .consensus
+        .receive_decision(&reactor.db_conn(), proof.clone(), reply)
         .await?;
-    let address = ContractAddress {
-        name: "confirmation-fixture".into(),
-        height: 1,
-        tx_index: 0,
-    };
-    let raw = signed_confirmation_call(&key, address.clone())?;
-    Ok((runtime, dir, address, raw))
+    received.await?;
+    let (reply, next) = oneshot::channel();
+    reactor.handle_finalized(proof, reply).await?;
+    Ok((height, next))
+}
+
+async fn finish_decision(
+    reactor: &mut Reactor<RuntimeExecutor>,
+    height: u64,
+    next: oneshot::Receiver<Next<Ctx>>,
+) -> Result<Vec<(usize, u64)>> {
+    let mut blocks = Vec::new();
+    loop {
+        match reactor.execution.step_certified_closure(height).await? {
+            ExecutionStep::Complete => break,
+            ExecutionStep::Block(applied) => {
+                blocks.push((applied.unbatched_count, applied.executed_ops))
+            }
+            _ => {}
+        }
+    }
+    reactor.advance().await?;
+    assert!(
+        matches!(next.await?, Next::Start(next_height, _) if next_height == Height::new(height + 1))
+    );
+    Ok(blocks)
+}
+
+fn certified_confirmation_block(
+    tx: &Transaction,
+    position: usize,
+    parent: BlockHash,
+) -> BlockInput {
+    assert!(position >= 2);
+    let mut transactions = Vec::new();
+    for index in 1..position {
+        let mut unrelated = tx.clone();
+        unrelated.input[0].witness.clear();
+        unrelated.lock_time = LockTime::from_consensus(index as u32);
+        transactions.push(unrelated);
+    }
+    transactions.push(tx.clone());
+    certified_fixture::block(2, parent, position as u32, transactions)
 }
 
 async fn run_case(batched: bool) -> Result<()> {
-    let (runtime, dir, address, raw) = fixture().await?;
-    let txid = raw.compute_txid().to_string();
-    let mut reactor = reactor(runtime, &dir).await?;
+    let owner = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[71; 32])?);
+    let key = PrivateKey::from([17; 32]);
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: owner.x_only_public_key().0.to_string(),
+        ed25519_pubkey: key.public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }]);
+    let dir = TempDir::new()?;
+    let mut reactor = certified_fixture::reactor(dir.path(), &genesis, key, 1).await?;
     let cleanup = StopEngine(reactor.consensus.engine_handle.actor.clone());
     let conn = reactor.db_conn();
-    let original = effects(&conn).await?;
     let result = async {
+        let setup = certified_fixture::transaction(
+            &owner,
+            Insts::direct(vec![
+                Inst {
+                    gas_limit: 100_000,
+                    kind: InstKind::Issuance,
+                },
+                Inst {
+                    gas_limit: 100_000,
+                    kind: InstKind::Publish {
+                        name: "confirmation-fixture".into(),
+                        bytes: include_bytes!(
+                            "../../../../test-contracts/binaries/error_test.wasm.br"
+                        )
+                        .to_vec(),
+                        provenance: sample_provenance(),
+                    },
+                },
+            ]),
+            0,
+        )?;
+        let block = certified_fixture::block(
+            1,
+            certified_fixture::empty_block(1).prev_hash,
+            0,
+            vec![setup],
+        );
+        let anchor = block.hash;
+        let value =
+            ConsensusValue::from_input(block.exact_input(reactor.consensus.protocol_context)?)?;
+        let (height, next) = start_decision(&mut reactor, value).await?;
+        assert_eq!(finish_decision(&mut reactor, height, next).await?, [(1, 2)]);
+        let address = ContractAddress {
+            name: "confirmation-fixture".into(),
+            height: 1,
+            tx_index: 1,
+        };
+        let raw = signed_confirmation_call(&owner, address.clone())?;
+        let txid = raw.compute_txid().to_string();
+        let original = effects(&conn).await?;
         if batched {
-            reactor
-                .process_decided_batch(
-                    1,
-                    new_mock_block_hash(1),
-                    Height::new(1),
-                    &[],
-                    slice::from_ref(&raw),
-                    None,
-                )
-                .await?;
+            let value = ConsensusValue::new_batch_raw(
+                reactor.consensus.protocol_context,
+                1,
+                anchor,
+                vec![raw.clone()],
+            )?;
+            let (height, next) = start_decision(&mut reactor, value).await?;
+            assert_eq!(height, 2);
+            assert!(
+                finish_decision(&mut reactor, height, next)
+                    .await?
+                    .is_empty()
+            );
             let row = get_transaction_by_txid(&conn, &txid)
                 .await?
                 .context("batch executed")?;
             assert_eq!(row.height, 1);
-            assert_eq!(row.batch_height, Some(1));
+            assert_eq!(row.batch_height, Some(2));
             assert_eq!(row.confirmed_height, None);
             assert_eq!(get_confirmation_position(&conn, &txid).await?, None);
-            assert_successful_write(&mut *reactor.test_runtime().await, &txid, &address).await?;
-        }
-        let before_confirmation = effects(&conn).await?;
-        let block = confirmation_block(&raw, 2)?;
-        let (count, ops, failures) = reactor
-            .execute_block_unit(
-                &reactor
-                    .select_executor(ApplicationPosition::Block {
-                        height: block.height,
-                        hash: block.hash,
-                        consensus_height: 0,
-                    })
-                    .await?,
-                &block,
+            assert_successful_write(
+                &mut *reactor.execution.test_runtime().await,
+                &txid,
+                &address,
             )
             .await?;
-        assert_eq!(count, usize::from(!batched));
-        assert_eq!(ops, u64::from(!batched));
-        assert!(failures.iter().flatten().flatten().all(Option::is_none));
+        }
+        let before_confirmation = effects(&conn).await?;
+        let before_block_stream = stream_state(&conn).await?;
+        let block = certified_confirmation_block(&raw, 2, anchor);
+        let value =
+            ConsensusValue::from_input(block.exact_input(reactor.consensus.protocol_context)?)?;
+        let (height, next) = start_decision(&mut reactor, value).await?;
+        assert_eq!(
+            finish_decision(&mut reactor, height, next).await?,
+            [(usize::from(!batched), u64::from(!batched))]
+        );
         let row = get_transaction_by_txid(&conn, &txid)
             .await?
             .context("confirmed transaction")?;
         assert_eq!(row.confirmed_height, Some(2));
         assert_eq!(row.tx_index, Some(0));
         assert_eq!(get_confirmation_position(&conn, &txid).await?, Some(2));
-        assert_successful_write(&mut *reactor.test_runtime().await, &txid, &address).await?;
+        assert_successful_write(
+            &mut *reactor.execution.test_runtime().await,
+            &txid,
+            &address,
+        )
+        .await?;
         let applied = effects(&conn).await?;
         assert_ne!(applied, original);
         if batched {
@@ -234,7 +284,16 @@ async fn run_case(batched: bool) -> Result<()> {
                 "confirmation must not execute or charge again"
             );
             let before_stream = stream_state(&conn).await?;
-            reactor.rollback(1).await?;
+            let replacement = certified_confirmation_block(&raw, 4, anchor);
+            assert_ne!(replacement.hash, block.hash);
+            let value = ConsensusValue::from_input(
+                replacement.exact_input(reactor.consensus.protocol_context)?,
+            )?;
+            let (height, next) = start_decision(&mut reactor, value).await?;
+            assert!(matches!(
+                reactor.execution.step_certified_closure(height).await?,
+                ExecutionStep::RolledBack(1)
+            ));
             let after_stream = stream_state(&conn).await?;
             let recovery = recovery_boundary(
                 &conn,
@@ -244,32 +303,18 @@ async fn run_case(batched: bool) -> Result<()> {
             )
             .await?
             .expect("confirmation rollback must notify receipt consumers");
-            assert_eq!(recovery.cursor, before_stream.max_result_id);
+            assert_eq!(recovery.cursor, before_block_stream.max_result_id);
             assert_eq!(recovery.surviving_height, 1);
             let rolled_back = get_transaction_by_txid(&conn, &txid)
                 .await?
                 .context("batch survives reorg")?;
             assert_eq!(rolled_back.id, row.id);
             assert_eq!(rolled_back.height, 1);
-            assert_eq!(rolled_back.batch_height, Some(1));
+            assert_eq!(rolled_back.batch_height, Some(2));
             assert_eq!(rolled_back.confirmed_height, None);
             assert_eq!(get_confirmation_position(&conn, &txid).await?, None);
             assert_eq!(effects(&conn).await?, applied);
-            let replacement = confirmation_block(&raw, 4)?;
-            assert_ne!(replacement.hash, block.hash);
-            let (count, ops, _) = reactor
-                .execute_block_unit(
-                    &reactor
-                        .select_executor(ApplicationPosition::Block {
-                            height: replacement.height,
-                            hash: replacement.hash,
-                            consensus_height: 0,
-                        })
-                        .await?,
-                    &replacement,
-                )
-                .await?;
-            assert_eq!((count, ops), (0, 0));
+            assert_eq!(finish_decision(&mut reactor, height, next).await?, [(0, 0)]);
             assert_eq!(get_confirmation_position(&conn, &txid).await?, Some(4));
             let reconfirmed = get_transaction_by_txid(&conn, &txid).await?.unwrap();
             assert_eq!(reconfirmed.id, row.id);

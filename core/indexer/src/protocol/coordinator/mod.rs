@@ -1,8 +1,20 @@
+pub(crate) mod application_closure;
+pub(crate) mod baseline;
+pub(crate) mod bootstrap;
+pub(crate) mod certified_decision;
+pub(crate) mod certified_input;
+pub(crate) mod closure_execution;
+pub(crate) mod closure_record;
+pub(crate) mod closure_work;
+#[cfg(any(test, feature = "protocol-qualification"))]
 pub(crate) mod committee;
 pub(crate) mod decision;
 pub(crate) mod genesis;
 pub(crate) mod linked;
+pub(crate) mod manifest;
 pub(crate) mod migration;
+pub(crate) mod registration_history;
+pub(crate) mod replay_input;
 pub(crate) mod selection;
 pub(crate) mod v1;
 

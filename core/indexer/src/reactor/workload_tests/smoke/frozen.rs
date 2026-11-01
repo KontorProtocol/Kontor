@@ -20,6 +20,7 @@ use super::{
     decode_block, diagnostic, hash_file, reactor, receipts, stop_engine,
 };
 use crate::bitcoin_client::Client;
+use crate::bitcoin_follower::block::BlockInput;
 use crate::bls::taproot_derivation_path;
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Height, Value as ConsensusValue};
@@ -429,7 +430,7 @@ async fn workload_frozen_replay() -> Result<()> {
         ensure!(
             reporter
                 .capture(
-                    &mut *trial.test_runtime().await,
+                    &mut *trial.execution.test_runtime().await,
                     anchor_height,
                     anchor_hash,
                     &[]
@@ -438,7 +439,8 @@ async fn workload_frozen_replay() -> Result<()> {
                 == frozen.documents["before"],
             "restored report differs from frozen report"
         );
-        let balances = Balances::capture(&mut *trial.test_runtime().await, &reporter.payer).await?;
+        let balances =
+            Balances::capture(&mut *trial.execution.test_runtime().await, &reporter.payer).await?;
         ensure!(
             database_projection(&conn).await? == before,
             "restore validation mutated state"
@@ -453,22 +455,28 @@ async fn workload_frozen_replay() -> Result<()> {
             next == number(&decision["consensus_height"])?,
             "decision does not follow restored history"
         );
+        let raw: BitcoinBlock =
+            deserialize(&frozen.bytes(&frozen.manifest()["input"]["raw_block"])?)?;
+        let exact_block = BlockInput::from_bitcoin(
+            number(&decision["block_height"])?,
+            text(&decision["block_hash"])?.parse()?,
+            raw,
+        );
         let decision = DeferredDecision {
             consensus_height: Height::new(next),
-            value: ConsensusValue::new_block(
-                number(&decision["block_height"])?,
-                text(&decision["block_hash"])?.parse()?,
-            ),
+            value: ConsensusValue::from_input(
+                exact_block.exact_input(trial.consensus.protocol_context)?,
+            )?,
             certificate: hex::decode(text(&decision["certificate_hex"])?)?,
-            certified_txs: None,
+            execution_txs: None,
         };
-        trial.test_runtime().await.component_cache.clear();
-        trial.handle_block(block.clone(), &decision).await?;
+        trial.execution.test_runtime().await.component_cache.clear();
+        trial.handle_block(exact_block, &decision).await?;
         let rows = receipts(&conn, block.height).await?;
         numeric.compare(&conn, &rows).await?;
         let projection = database_projection(&conn).await?;
         accounting::check(
-            &mut *trial.test_runtime().await,
+            &mut *trial.execution.test_runtime().await,
             &balances,
             &reporter.payer,
             &block.transactions[0].txid.to_string(),
@@ -477,7 +485,7 @@ async fn workload_frozen_replay() -> Result<()> {
         .await?;
         let report = reporter
             .capture(
-                &mut *trial.test_runtime().await,
+                &mut *trial.execution.test_runtime().await,
                 block.height,
                 block.hash,
                 &raw_positions,

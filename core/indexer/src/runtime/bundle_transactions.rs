@@ -118,16 +118,6 @@ impl Runtime {
         Ok(serde_json::to_vec(&result)?)
     }
 
-    #[cfg(test)]
-    pub(crate) fn transaction_fixture(
-        &self,
-        selection: &SelectionEnvelope,
-        parsed: SessionOwner,
-        tx_index: u32,
-    ) -> Result<Transaction> {
-        self.prepared_transaction(selection, parsed, tx_index)
-    }
-
     pub(crate) fn recognizer(&self) -> RecognitionCall {
         let version = self.executor_version().tag();
         let network = self.network.magic().to_bytes();

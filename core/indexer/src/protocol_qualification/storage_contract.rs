@@ -1,3 +1,4 @@
+use super::{ALTERNATE_GRAPH, alternate_executor};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Result, anyhow, bail, ensure};
@@ -23,7 +24,7 @@ pub(super) fn qualify() -> Result<Value> {
     let mut checked = Vec::new();
     for (name, bytes) in [
         ("first", kontor_executor_first::execution_definition()),
-        ("second", kontor_executor_second::execution_definition()),
+        (ALTERNATE_GRAPH, alternate_executor::execution_definition()),
     ] {
         let original = DefinitionReference::decode(bytes)?;
         for mutation in ["missing", "unknown", "changed", "multiple"] {

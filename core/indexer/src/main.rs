@@ -324,7 +324,7 @@ async fn run_daemon(config: Config) -> Result<()> {
             .collect::<Vec<_>>()
     };
 
-    let (block_rx, mempool_rx, replay_tx, follower_handle) = bitcoin_follower::run(
+    let (block_rx, mempool_rx, follower_handle) = bitcoin_follower::run(
         bitcoin.clone(),
         shutdown.signal(),
         config.starting_block_height,
@@ -370,7 +370,6 @@ async fn run_daemon(config: Config) -> Result<()> {
         Some(simulate_rx),
         engine_config,
         bitcoin.clone(),
-        Some(replay_tx),
         GenesisConfig::load(&config.genesis_file)?.try_into()?,
         None,
         config.consensus_propose_timeout_ms,

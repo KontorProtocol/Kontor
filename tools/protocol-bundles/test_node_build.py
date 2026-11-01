@@ -49,6 +49,21 @@ class NodeBuild(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'facade changed'):
             wrapper.prepare('/pinned/rustc', ['--crate-name', 'indexer'], self.spec)
 
+    def test_observer_configuration_requires_its_explicit_library_set(self):
+        self.spec['link_set'] = 'k4-node'
+        with self.assertRaisesRegex(RuntimeError, 'does not match'):
+            wrapper.prepare('/pinned/rustc', ['--crate-name', 'indexer'], self.spec)
+        observer = copy.deepcopy(self.spec['graphs'][0])
+        observer['graph'] = 'observer'
+        self.spec['graphs'].append(observer)
+        arguments, _ = wrapper.prepare('/pinned/rustc', ['--crate-name', 'indexer'], self.spec)
+        self.assertIn('kontor_observer', arguments)
+        self.assertIn('kontor_executor_observer=' + str(self.facade), arguments)
+        self.assertNotIn('kontor_executor_second=' + str(self.facade), arguments)
+        self.spec['link_set'] = 'legacy-qualification'
+        with self.assertRaisesRegex(RuntimeError, 'does not match'):
+            wrapper.prepare('/pinned/rustc', ['--crate-name', 'indexer'], self.spec)
+
     @unittest.skipUnless(os.name == 'posix', 'Cargo pipe jobserver uses POSIX descriptors')
     def test_wrapper_preserves_cargo_jobserver_descriptors(self):
         read_fd, write_fd = os.pipe()

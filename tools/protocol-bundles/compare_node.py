@@ -7,8 +7,8 @@ from pathlib import Path
 
 from build import ROOT, digest, write_json
 from provenance import fingerprint, package_sources, repository_sources
-from qualify_node import CASES, verify_storage_contracts
-from recipes import EXECUTOR_GRAPHS, identity
+from qualify_node import CASES, verify_storage_contracts, verify_certified_history
+from recipes import EXECUTOR_LINK_SETS, executor_graphs, graph_root, identity
 from semantic_baseline import verify as verify_semantics
 from symbol_tool import TOOLCHAIN
 from type_boundary import verify_report as verify_interface_report
@@ -31,7 +31,7 @@ def file_hash(path, expected):
     require(digest(path) == expected, f'evidence hash mismatch: {path}')
 
 
-def sources(directory, report, root, kind):
+def sources(directory, report, root, kind, *, tool_root=None):
     data = read(directory / 'source-inputs.json')
     require(fingerprint(data) == report['source_inputs_sha256'], f'{kind} source inventory hash mismatch')
     # These Python files inspect evidence; neither the compiler nor the runtime
@@ -42,6 +42,13 @@ def sources(directory, report, root, kind):
                         and (Path(name).name.startswith('test_') or Path(name).name == 'compare_node.py'))}
     require(build_inputs(data['qualification_sources']) == build_inputs(repository_sources(root, kind)),
             f'{kind} source inventory differs from checked-out qualification inputs')
+    if tool_root is not None and tool_root != root:
+        expected_tools = package_sources(tool_root / 'tools/protocol-bundles', root=tool_root)
+        def tool_inputs(items):
+            return {name: value for name, value in items.items()
+                    if not Path(name).name.startswith('test_') and Path(name).name != 'compare_node.py'}
+        require('build_tools' in data and tool_inputs(data['build_tools']) == tool_inputs(expected_tools),
+                'executor current build-tool inventory differs')
     local = [package for package in data['packages'] if package['package'].startswith('path+file://<repository>/')]
     require(local, f'{kind} repository package inventory missing')
     for package in local:
@@ -52,10 +59,11 @@ def sources(directory, report, root, kind):
         def compiled_files(items):
             return {name: value for name, value in items.items()
                     if Path(name).suffix != '.md' and Path(name).name != '.gitignore'}
-        require(compiled_files(package['files']) == compiled_files(package_sources(directory)),
+        require(compiled_files(package['files']) == compiled_files(package_sources(directory, root=root.resolve())),
                 f'{kind} local package source differs: {relative}')
     inherited = data['inherited_manifests_and_configuration']
-    manifest = f"protocol-bundles/{'node' if kind == 'node' else 'executor-' + report['graph']}/Cargo.toml"
+    graph_directory = 'node' if kind == 'node' else report['identity']['directory']
+    manifest = f"protocol-bundles/{graph_directory}/Cargo.toml"
     manifests = [Path(name) for name in inherited if name.endswith('/' + manifest)]
     require(len(manifests) == 1, 'repository graph manifest missing or ambiguous')
     require(inherited[str(manifests[0])] == digest(root / manifest), 'repository graph manifest changed')
@@ -80,13 +88,15 @@ def sources(directory, report, root, kind):
                 require(recorded.get(str(path)) == digest(root / path), f'inherited repository input changed: {path}')
 
 
-def load_cell(path, root):
+def load_cell(path, root, link_set=None):
     directory = path.parent
     execution = read(path)
     require(execution['schema'] == 1 and execution['matching_observations'] is True, 'invalid execution result')
     build_path = directory / 'node-build.json'
     file_hash(build_path, execution['node_build_sha256'])
     build = read(build_path)
+    require(build.get('link_set') == execution.get('link_set') == link_set, 'executor link set mismatch')
+    recipes = executor_graphs(link_set)
     cell = (build['target'], build['profile'])
     require(cell == (execution['target'], execution['profile']), 'execution/build cell mismatch')
     node = build['node']
@@ -100,14 +110,15 @@ def load_cell(path, root):
     require(observations['schema'] == 1, 'unknown observation schema')
     require(set(observations['cases']) == CASES and len(observations['cases']) == len(CASES), 'case set changed')
     require(observations['cases'] == execution['cases'], 'case record differs from raw output')
-    verify_storage_contracts(observations)
-    graphs = list(EXECUTOR_GRAPHS)
+    verify_storage_contracts(observations, link_set)
+    verify_certified_history(observations, link_set, root)
+    graphs = list(recipes)
     require(execution['graphs'] == graphs and [item['graph'] for item in observations['executors']] == graphs,
             'missing or duplicate execution graph')
     require([item['graph'] for item in build['graphs']] == graphs, 'missing or duplicate build graph')
     require(observations['executors'][0]['observations'] == observations['executors'][1]['observations'],
             'within-node observations disagree')
-    require(execution['semantic_baseline'] == verify_semantics(observations, root),
+    require(execution['semantic_baseline'] == verify_semantics(observations, root, graphs),
             'historical semantic comparison record differs')
     compiler = dict(line.split(': ', 1) for line in build['compiler'].splitlines() if ': ' in line)
     require(compiler['release'] == TOOLCHAIN and compiler['host'] == cell[0], 'wrong compiler or host')
@@ -120,6 +131,7 @@ def load_cell(path, root):
     file_hash(node_dir / 'root-objects.json', node['root_codegen_sha256'])
     file_hash(root / 'tools/protocol-bundles/node-rustc-wrapper.py', node['wrapper_sha256'])
     spec = read(node_dir / 'link-spec.json')
+    require(spec.get('link_set') == link_set, 'node link specification uses another link set')
     require(spec['features'] == ['protocol-qualification'] and spec['lock_sha256'] == node['lock_sha256']
             and spec['source_inputs_sha256'] == node['source_inputs_sha256'], 'node link inputs disagree')
     require(read(node_dir / 'root-objects.json')['spec_sha256'] == node['link_spec_sha256'], 'stale root objects')
@@ -129,29 +141,30 @@ def load_cell(path, root):
     require([item['graph'] for item in spec['graphs']] == graphs, 'link graph set changed')
     for graph, linked in zip(build['graphs'], spec['graphs'], strict=True):
         name = graph['graph']
-        expected_identity = identity(root, name, EXECUTOR_GRAPHS)
+        expected_identity = identity(root, name, recipes)
         require(graph['identity'] == expected_identity, f'{name} graph identity changed')
         require(graph['lock_sha256'] == expected_identity['lock_sha256']
                 and graph['manifest_sha256'] == expected_identity['manifest_sha256'], f'{name} lock/manifest mismatch')
         require(linked['build_inputs_sha256'] == fingerprint(graph), f'{name} link graph inputs differ')
         require(read(directory / name / 'build-inputs.json') == graph, f'{name} graph report differs')
-        sources(directory / name, graph, root, 'executor')
+        sources(directory / name, graph, graph_root(root, recipes[name]), 'executor', tool_root=root)
         file_hash(directory / name / 'build.log', graph['build_log_sha256'])
         file_hash(root / 'tools/protocol-bundles/rustc-wrapper.py', graph['wrapper_sha256'])
     verify_interface_report(node_dir / 'type-boundary', node['interface_checks'], build['graphs'], cell[0])
     return cell, observations, {key: compiler[key] for key in ('release', 'commit-hash', 'LLVM version')}
 
 
-def compare(directory, root, profiles, upstream_status):
+def compare(directory, root, profiles, upstream_status, link_set=None):
     require(upstream_status == 'success', f'upstream qualification did not succeed: {upstream_status}')
     require(profiles in ('release', 'full'), 'unknown qualification profile policy')
+    executor_graphs(link_set)
     expected = {(target, profile) for target in TARGETS
                 for profile in (('release',) if profiles == 'release' else ('dev', 'release'))}
     found = {}
     reference = None
     compiler_reference = None
     for path in sorted(directory.rglob('node-execution.json')):
-        cell, observations, compiler = load_cell(path, root)
+        cell, observations, compiler = load_cell(path, root, link_set)
         require(cell in expected and cell not in found, f'unexpected or duplicate cell: {cell}')
         if reference is None:
             reference, compiler_reference = observations, compiler
@@ -160,6 +173,7 @@ def compare(directory, root, profiles, upstream_status):
         found[cell] = {'execution_sha256': digest(path), 'report': str(path)}
     require(set(found) == expected, f'missing required cells: {sorted(expected - set(found))}')
     return {'schema': 1, 'status': 'passed', 'policy': profiles, 'upstream_status': upstream_status,
+            'link_set': link_set,
             'cells': [{'target': cell[0], 'profile': cell[1], **found[cell]} for cell in sorted(found)],
             'matching_observations': True, 'observations_sha256': fingerprint(reference),
             'compiler': compiler_reference}
@@ -171,10 +185,11 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--profiles', choices=('release', 'full'), required=True)
     parser.add_argument('--upstream-status', required=True)
+    parser.add_argument('--link-set', choices=sorted(EXECUTOR_LINK_SETS), default='k4-node')
     args = parser.parse_args()
     args.output.unlink(missing_ok=True)
     try:
-        result = compare(args.directory, ROOT, args.profiles, args.upstream_status)
+        result = compare(args.directory, ROOT, args.profiles, args.upstream_status, args.link_set)
     except Exception as error:
         write_json(args.output, {'schema': 1, 'status': 'failed', 'policy': args.profiles,
                                 'upstream_status': args.upstream_status, 'error': str(error)})

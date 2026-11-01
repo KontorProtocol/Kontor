@@ -43,12 +43,11 @@ def check_diagnostics(returncode, text, expected):
 
 
 def inputs_for(graphs, check_files):
-    if [graph['graph'] for graph in graphs] != ['first', 'second']:
+    if [graph['graph'] for graph in graphs] not in (['first', 'second'], ['first', 'observer']):
         raise RuntimeError('interface controls require both production graphs')
     arguments = []
     inputs = {}
-    for graph in graphs:
-        name = graph['graph']
+    for name, graph in zip(('first', 'second'), graphs, strict=True):
         libraries = {name: Path(graph['facade'])}
         for dependency in ('wasmtime', 'tokio'):
             candidates = [item for item in graph['artifacts']

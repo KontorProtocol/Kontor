@@ -24,6 +24,8 @@ pub(crate) mod native;
 pub(crate) mod native_bootstrap;
 pub(crate) mod pricing;
 #[cfg(not(kontor_node))]
+pub(crate) mod registration;
+#[cfg(not(kontor_node))]
 pub(crate) mod resources;
 mod storage_bounds;
 #[cfg(test)]

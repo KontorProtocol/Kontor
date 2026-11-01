@@ -103,7 +103,8 @@ pub(super) async fn run(saved: Saved, digest: &str) -> Result<()> {
             let mut checked = 0;
             for (ordinal, (step, input)) in manifest.steps.iter().zip(&inputs).enumerate() {
                 ensure!(
-                    trial.last_height == step.height - 1 && trial.last_hash == Some(step.parent),
+                    trial.execution.last_height == step.height - 1
+                        && trial.execution.last_hash == Some(step.parent),
                     "replay tip differs from action anchor"
                 );
                 if let Some(requests) = &simulations[ordinal] {

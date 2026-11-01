@@ -10,8 +10,10 @@ use crate::protocol::operations::{
     BeginUnitCall, CommitteeCall, ContractWitCall, LifecycleCall, MaintenanceCall, SessionOwner,
     ViewCall,
 };
+use crate::protocol::registration::RegistrationCall;
 use crate::protocol::v1::committee::derive_committee;
 use crate::protocol::v1::lifecycle::run_block_lifecycle;
+use crate::protocol::v1::registration::observe;
 
 impl BundleSession {
     pub(crate) fn maintenance(self: &Arc<Self>) -> MaintenanceCall {
@@ -184,6 +186,34 @@ impl BundleSession {
                     .map_err(infrastructure)?;
                 let mut runtime = runtime.bind_selection(&selection).map_err(infrastructure)?;
                 derive_committee(&mut runtime).await.map_err(infrastructure)
+            })
+        })
+    }
+
+    pub(crate) fn registrations(self: &Arc<Self>) -> RegistrationCall {
+        let expected = self.clone();
+        Arc::new(move |opaque, selection, watched| {
+            let session = expected.clone();
+            Box::pin(async move {
+                session.verify_operation_owner(opaque)?;
+                let mut runtime = session.runtime.lock().await;
+                if !matches!(selection.3.0, 1 | 3 | 4 | 6 | 7 | 8) {
+                    return Err((
+                        2,
+                        "registration observation requires a canonical stage".into(),
+                    ));
+                }
+                runtime
+                    .verify_bundle_operation(&selection, selection.3.0)
+                    .map_err(infrastructure)?;
+                let mut runtime = runtime.bind_selection(&selection).map_err(infrastructure)?;
+                if runtime.storage.savepoint_stack.is_empty().await {
+                    return Err((
+                        2,
+                        "registration observation requires an open canonical unit".into(),
+                    ));
+                }
+                observe(&mut runtime, watched).await.map_err(infrastructure)
             })
         })
     }

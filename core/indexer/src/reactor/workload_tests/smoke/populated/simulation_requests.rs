@@ -114,10 +114,10 @@ impl SimulationRequests {
         warm_cache: bool,
     ) -> Result<()> {
         let before = database_projection(&trial.db_conn()).await?;
-        let height = trial.test_runtime().await.storage.height;
-        let tip = (trial.last_height, trial.last_hash);
+        let height = trial.execution.test_runtime().await.storage.height;
+        let tip = (trial.execution.last_height, trial.execution.last_hash);
         let expected_height = tip.0.checked_add(1).context("simulation height overflow")?;
-        ensure!(!trial.test_runtime().await.simulating);
+        ensure!(!trial.execution.test_runtime().await.simulating);
         let mut warmed = Vec::new();
         if warm_cache {
             let conn = trial.db_conn();
@@ -132,11 +132,17 @@ impl SimulationRequests {
             // Populate only existing canonical IDs outside simulation. Simulation
             // must still never cache a speculative publication's reusable row ID.
             for id in &warmed {
-                trial.test_runtime().await.load_component(*id).await?;
+                trial
+                    .execution
+                    .test_runtime()
+                    .await
+                    .load_component(*id)
+                    .await?;
             }
             for id in &warmed {
                 ensure!(
                     trial
+                        .execution
                         .test_runtime()
                         .await
                         .component_cache
@@ -160,11 +166,11 @@ impl SimulationRequests {
                     "configured simulation persisted state, usage, fees or receipts"
                 );
                 {
-                    let runtime = trial.test_runtime().await;
+                    let runtime = trial.execution.test_runtime().await;
                     ensure!(
                         !runtime.simulating
                             && runtime.storage.height == height
-                            && (trial.last_height, trial.last_hash) == tip,
+                            && (trial.execution.last_height, trial.execution.last_hash) == tip,
                         "configured simulation left speculative reactor context"
                     );
                 }

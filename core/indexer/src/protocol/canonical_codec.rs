@@ -111,6 +111,14 @@ impl<'a> Decoder<'a> {
         Ok(count)
     }
 
+    pub(crate) fn count16(&mut self, minimum_entry_bytes: usize) -> Result<usize, CodecError> {
+        let count = u16::from_be_bytes(self.fixed()?) as usize;
+        if minimum_entry_bytes == 0 || count > self.remaining.len() / minimum_entry_bytes {
+            return Err(CodecError::Truncated);
+        }
+        Ok(count)
+    }
+
     pub(crate) fn bytes(&mut self) -> Result<&'a [u8], CodecError> {
         let length = self.count(1)?;
         self.take(length)

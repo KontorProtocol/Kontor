@@ -1,0 +1,75 @@
+package root:component;
+
+world root {
+  use kontor:built-in/pagination.{cursor-request};
+  include kontor:built-in/built-in-native;
+  use kontor:built-in/context.{core-context, view-context, proc-context, signer, contract};
+  use kontor:built-in/context-types.{holder-ref};
+  use kontor:built-in/error.{error};
+  use kontor:built-in/numbers-types.{decimal};
+
+  record balance-page {
+    items: list<balance>,
+    next: option<string>,
+  }
+
+  record balance {
+    acc: holder-ref,
+    amt: decimal,
+  }
+
+  record transfer {
+    src: holder-ref,
+    dst: holder-ref,
+    amt: decimal,
+  }
+
+  record burn {
+    src: holder-ref,
+    amt: decimal,
+  }
+
+  record mint {
+    dst: holder-ref,
+    amt: decimal,
+  }
+
+  record emission {
+    scheduled-total: decimal,
+    ordering-minted: decimal,
+    storage-unminted: decimal,
+  }
+
+  export mint-emission: func(ctx: borrow<core-context>, eligible: bool) -> result<emission, error>;
+  export storage-emission-budget: func(ctx: borrow<view-context>) -> option<decimal>;
+  export allocate-storage-emission: func(ctx: borrow<core-context>, dst: holder-ref, amt: decimal) -> result<decimal, error>;
+  export transfer-ordering-reward: func(ctx: borrow<core-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
+  export last-emission-height: func(ctx: borrow<view-context>) -> option<u64>;
+
+  export issuance: func(ctx: borrow<core-context>, amt: decimal) -> result<mint, error>;
+  export issue-to: func(ctx: borrow<core-context>, dst: holder-ref, amt: decimal) -> result<mint, error>;
+  export hold: func(ctx: borrow<core-context>, amt: decimal) -> result<transfer, error>;
+  // Gas-escrow release (core-only, not part of the common token interface): burn
+  // `burn-amt` of execution gas, refund the rest of the escrow (incl. the returned
+  // storage-deposit reservation) to the payer. The storage-deposit FLOOR is enforced
+  // up front on every debit (`transfer`/`hold`/`burn` check `balance - floor`), so
+  // there is no separate settle-time floor check.
+  export release: func(ctx: borrow<core-context>, burn-amt: decimal) -> result<burn, error>;
+
+  export init: func(ctx: borrow<proc-context>) -> contract;
+
+  export mint: func(ctx: borrow<proc-context>, amt: decimal) -> result<mint, error>;
+  export burn: func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;
+  export transfer: func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
+  export balance: func(ctx: borrow<view-context>, acc: holder-ref) -> option<decimal>;
+  // A holder's storage-deposit FLOOR (footprint × D), token-denominated. Thin view over
+  // the native-only `deposit.storage-floor` host fn, so non-native contracts (which can't
+  // import that host fn) read a floor by calling this view cross-contract. 0 for holders
+  // with no deposited rows.
+  export floor: func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
+  export balances: func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
+  export total-supply: func(ctx: borrow<view-context>) -> decimal;
+  export dev-mint-enabled: func(ctx: borrow<view-context>) -> bool;
+  export attach: func(ctx: borrow<proc-context>, vout: u32, amt: decimal) -> result<transfer, error>;
+  export detach: func(ctx: borrow<proc-context>) -> result<transfer, error>;
+}

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
 use anyhow::{Result, ensure};
 use bitcoin::OutPoint;
@@ -8,15 +7,17 @@ use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use indexer_types::{Input, Inst, InstKind, Insts, OpStatus};
 use libsql::{AuthAction, AuthContext, Authorization};
 use stdlib::to_wave_expr;
-use tokio::time::timeout;
 
-use super::aggregate_error_tests::{reactor, snapshot};
+use super::aggregate_error_tests::snapshot;
+use super::execution_fixture::ExecutionFixture;
+use super::executor::RuntimeExecutor;
+use crate::bitcoin_client::Client;
 use crate::consensus::signing::PrivateKey;
 use crate::runtime::token::{address as token_address, api as token};
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{Decimal, GenesisValidator, TransactionContext};
-use crate::test_utils::{new_mock_transaction, test_runtime_with_genesis};
+use crate::test_utils::{new_mock_block_hash, new_mock_transaction, test_runtime_with_genesis};
 
 async fn restores_context(
     contract_error: bool,
@@ -25,7 +26,7 @@ async fn restores_context(
 ) -> Result<()> {
     let key = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[38; 32])?);
     let public = key.x_only_public_key().0;
-    let (mut runtime, directory, _name) = test_runtime_with_genesis(&[GenesisValidator {
+    let (mut runtime, _directory, _name) = test_runtime_with_genesis(&[GenesisValidator {
         x_only_pubkey: public.to_string(),
         ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
         stake: Decimal::from("100"),
@@ -38,7 +39,17 @@ async fn restores_context(
         Decimal::from("100"),
     )
     .await??;
-    let mut trial = reactor(runtime, &directory).await?;
+    let mut trial = ExecutionFixture::new(
+        runtime,
+        RuntimeExecutor::new(Client::new(
+            "http://127.0.0.1:1".into(),
+            String::new(),
+            String::new(),
+        )?),
+        1,
+        Some(new_mock_block_hash(1)),
+    )
+    .await?;
     let prior = TransactionContext {
         tx_id: None,
         tx_index: 7,
@@ -51,6 +62,7 @@ async fn restores_context(
         vout: 4,
     };
     trial
+        .execution
         .test_runtime()
         .await
         .set_context(
@@ -60,9 +72,19 @@ async fn restores_context(
             Some(vec![8, 7, 6]),
         )
         .await;
-    trial.test_runtime().await.simulating = was_simulating;
-    let ids = trial.test_runtime().await.id_generation_counter.clone();
-    let results = trial.test_runtime().await.result_id_counter.clone();
+    trial.execution.test_runtime().await.simulating = was_simulating;
+    let ids = trial
+        .execution
+        .test_runtime()
+        .await
+        .id_generation_counter
+        .clone();
+    let results = trial
+        .execution
+        .test_runtime()
+        .await
+        .result_id_counter
+        .clone();
     for _ in 0..2 {
         ids.increment().await;
     }
@@ -112,23 +134,51 @@ async fn restores_context(
             }
         })))?;
     }
-    let outcome = trial.simulate(tx).await;
+    let outcome = trial.execution.simulate(tx).await;
     conn.authorizer(None)?;
-    ensure!(trial.test_runtime().await.storage.height == 1);
-    ensure!(trial.test_runtime().await.storage.tx_context == Some(prior));
-    ensure!(trial.test_runtime().await.previous_output == Some(prior_output));
-    ensure!(trial.test_runtime().await.op_return_data.as_deref() == Some([8, 7, 6].as_slice()));
-    ensure!(trial.test_runtime().await.simulating == was_simulating);
+    ensure!(trial.execution.test_runtime().await.storage.height == 1);
+    ensure!(trial.execution.test_runtime().await.storage.tx_context == Some(prior));
+    ensure!(trial.execution.test_runtime().await.previous_output == Some(prior_output));
+    ensure!(
+        trial
+            .execution
+            .test_runtime()
+            .await
+            .op_return_data
+            .as_deref()
+            == Some([8, 7, 6].as_slice())
+    );
+    ensure!(trial.execution.test_runtime().await.simulating == was_simulating);
     ensure!(ids.get().await == 2 && results.get().await == 3);
-    ensure!(trial.test_runtime().await.id_generation_counter.get().await == 2);
-    ensure!(trial.test_runtime().await.result_id_counter.get().await == 3);
+    ensure!(
+        trial
+            .execution
+            .test_runtime()
+            .await
+            .id_generation_counter
+            .get()
+            .await
+            == 2
+    );
+    ensure!(
+        trial
+            .execution
+            .test_runtime()
+            .await
+            .result_id_counter
+            .get()
+            .await
+            == 3
+    );
     trial
+        .execution
         .test_runtime()
         .await
         .id_generation_counter
         .increment()
         .await;
     trial
+        .execution
         .test_runtime()
         .await
         .result_id_counter
@@ -144,6 +194,7 @@ async fn restores_context(
         );
         ensure!(
             trial
+                .execution
                 .test_runtime()
                 .await
                 .storage
@@ -162,9 +213,10 @@ async fn restores_context(
                 OpStatus::Ok
             }));
         ensure!(snapshot(&conn).await? == before);
-        ensure!(trial.test_runtime().await.stack.is_empty().await);
+        ensure!(trial.execution.test_runtime().await.stack.is_empty().await);
         ensure!(
             trial
+                .execution
                 .test_runtime()
                 .await
                 .storage
@@ -173,12 +225,6 @@ async fn restores_context(
                 .await
         );
     }
-    trial.consensus.engine_handle.actor.stop(None);
-    timeout(
-        Duration::from_secs(30),
-        &mut trial.consensus.engine_handle.handle,
-    )
-    .await??;
     Ok(())
 }
 

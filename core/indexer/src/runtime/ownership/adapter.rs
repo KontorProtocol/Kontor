@@ -13,6 +13,7 @@ use crate::protocol::operations::{
     BeginUnitCall, CommitteeCall, ContractWitCall, InitializeCall, InspectCall, LifecycleCall,
     MaintenanceCall, MigrationCall, RecognitionCall, TransactionCall, ViewCall,
 };
+use crate::protocol::registration::RegistrationCall;
 
 use super::{ChildContext, RootKeeper, RootState, TaskCompletion};
 
@@ -68,14 +69,18 @@ pub(crate) struct ExecutorOperations {
     pub(crate) lifecycle: LifecycleCall,
     pub(crate) contract_wit: ContractWitCall,
     pub(crate) view: ViewCall,
+    // Retained exports keep this operation; K4 derives live authority from registration observations.
+    #[cfg_attr(not(any(test, feature = "protocol-qualification")), allow(dead_code))]
     pub(crate) committee: CommitteeCall,
     pub(crate) migration: MigrationCall,
+    pub(crate) registrations: Option<RegistrationCall>,
 }
 
 #[cfg(test)]
 impl Default for ExecutorOperations {
     fn default() -> Self {
         Self {
+            registrations: None,
             initialize: Arc::new(|_, _| Err((2, "mock has no initializer".into()))),
             inspect: Arc::new(|_, _, _, _| {
                 Box::pin(async { Err((2, "mock has no inspection operation".into())) })

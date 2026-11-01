@@ -551,7 +551,6 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
         &writer,
         &owner_service,
         client.clone(),
-        None,
         &validators.genesis,
         Network::Regtest,
     )
@@ -621,12 +620,12 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
         .await?;
         if let Some(population) = &retained_history {
             population
-                .seed_height(&mut *history.test_runtime().await, height)
+                .seed_height(&mut *history.execution.test_runtime().await, height)
                 .await?;
         }
         if height == 90 {
             let scheduled = validators
-                .schedule(&mut *history.test_runtime().await)
+                .schedule(&mut *history.execution.test_runtime().await)
                 .await?;
             ensure!(scheduled.due == SMOKE_HEIGHT);
         }
@@ -635,7 +634,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
         population.check(&history.db_conn(), false).await?;
     }
     StoragePopulation::prepare(
-        &mut *history.test_runtime().await,
+        &mut *history.execution.test_runtime().await,
         config.agreements,
         config.members_per_agreement,
         [81; 32],
@@ -651,7 +650,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
     ) {
         Some(
             ShapeSigners::prepare(
-                &mut *history.test_runtime().await,
+                &mut *history.execution.test_runtime().await,
                 key,
                 delivery != Delivery::MixedMultiInput,
                 if delivery == Delivery::AggregateBoundary {
@@ -681,7 +680,8 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
     ensure!(layout.payer() == payer);
     let mixed = if let Some(rounds) = delivery.mixed_rounds() {
         let workload =
-            MixedWorkload::prepare(&mut *history.test_runtime().await, payer, rounds).await?;
+            MixedWorkload::prepare(&mut *history.execution.test_runtime().await, payer, rounds)
+                .await?;
         let (entries, files) = match delivery {
             Delivery::MixedPagination => (Some(257), 0),
             Delivery::MixedFiles => (Some(257), 5),
@@ -691,7 +691,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
         let workload = if let Some(entries) = entries {
             workload
                 .with_pagination(
-                    &mut *history.test_runtime().await,
+                    &mut *history.execution.test_runtime().await,
                     entries,
                     retained_history
                         .as_ref()
@@ -703,7 +703,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
         };
         Some(if files > 0 {
             workload
-                .with_files(&mut *history.test_runtime().await, files)
+                .with_files(&mut *history.execution.test_runtime().await, files)
                 .await?
         } else {
             workload
@@ -717,7 +717,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
     let counter_boundary = if delivery == Delivery::AggregateBoundary || delivery.full_block() {
         Some(
             BoundaryWorkload::prepare(
-                &mut *history.test_runtime().await,
+                &mut *history.execution.test_runtime().await,
                 match delivery {
                     Delivery::MaxGasBlock => BoundaryOperation::ExhaustFuel(addresses[0].clone()),
                     Delivery::PublicationBlock => BoundaryOperation::Publish,
@@ -731,7 +731,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
     };
     let projection_before = database_projection(&history.db_conn()).await?;
     let before = oracle::Before::capture(
-        &mut *history.test_runtime().await,
+        &mut *history.execution.test_runtime().await,
         &validators,
         &public_key.to_string(),
         config,
@@ -1043,7 +1043,8 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                         .map(|mixed| mixed.effects(layout))
                         .transpose()?
                         .unwrap_or_default();
-                    let anchor_rows = receipts(&trial.db_conn(), trial.last_height).await?;
+                    let anchor_rows =
+                        receipts(&trial.db_conn(), trial.execution.last_height).await?;
                     let before_checks = database_projection(&trial.db_conn()).await?;
                     model = model
                         .check_batch(&mut trial, &anchor_rows, &txids, &effects)
@@ -1168,7 +1169,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                     ensure!(all_paid.len() == paid.len());
                     boundary
                         .check(
-                            &mut *trial.test_runtime().await,
+                            &mut *trial.execution.test_runtime().await,
                             &paid,
                             layout,
                             execution_height,
@@ -1181,14 +1182,14 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                         .await?;
                     if let Some(signers) = &shape_signers {
                         signers
-                            .check_counter(&mut *trial.test_runtime().await)
+                            .check_counter(&mut *trial.execution.test_runtime().await)
                             .await?;
                     }
                     PaidEffects::default()
                 } else if let Some(mixed) = &mixed {
                     mixed
                         .check(
-                            &mut *trial.test_runtime().await,
+                            &mut *trial.execution.test_runtime().await,
                             &all_paid,
                             &paid,
                             layout,
@@ -1196,11 +1197,11 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                         )
                         .await?;
                     mixed
-                        .check_file_lifecycle(&mut *trial.test_runtime().await, &rows)
+                        .check_file_lifecycle(&mut *trial.execution.test_runtime().await, &rows)
                         .await?;
                     if let Some(shape_signers) = &shape_signers {
                         shape_signers
-                            .check(&mut *trial.test_runtime().await, mixed)
+                            .check(&mut *trial.execution.test_runtime().await, mixed)
                             .await?;
                     }
                     mixed.effects(layout)?
@@ -1240,11 +1241,11 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                             && paid[2].value.as_deref() == Some("\"é\\né\\n\"")
                     );
                     ensure!(
-                        state(&mut *trial.test_runtime().await, &addresses[0]).await?
+                        state(&mut *trial.execution.test_runtime().await, &addresses[0]).await?
                             == [1, 0, 0, 1]
                     );
                     ensure!(
-                        state(&mut *trial.test_runtime().await, &addresses[1]).await?
+                        state(&mut *trial.execution.test_runtime().await, &addresses[1]).await?
                             == [0, 0, 0, 0]
                     );
                     PaidEffects::default()

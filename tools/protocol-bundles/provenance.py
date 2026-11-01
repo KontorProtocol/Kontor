@@ -32,9 +32,8 @@ def retained_sources(root):
         directory = root / relative
         if not directory.is_dir():
             raise RuntimeError(f"missing retained source tree: {relative}")
-        for path in sorted(directory.rglob("*")):
-            if path.is_file() and "__pycache__" not in path.parts:
-                sources[str(path.relative_to(root))] = sha(path)
+        for path in local_source_files(directory, root.resolve()):
+            sources[str(path.relative_to(root))] = sha(path)
     return sources
 
 
@@ -81,9 +80,29 @@ def repository_sources(root, kind):
     return sources
 
 
-def package_sources(directory):
+def local_source_files(directory, root, ancestors=()):
+    resolved = directory.resolve(strict=True)
+    if not resolved.is_relative_to(root):
+        raise RuntimeError(f"local source escapes its graph root: {directory}")
+    if resolved in ancestors:
+        raise RuntimeError(f"cyclic local source directory: {directory}")
+    for path in sorted(directory.iterdir()):
+        if path.name in {".git", "target", "__pycache__"}:
+            continue
+        if not path.resolve(strict=True).is_relative_to(root):
+            raise RuntimeError(f"local source escapes its graph root: {path}")
+        if path.is_dir():
+            yield from local_source_files(path, root, (*ancestors, resolved))
+        elif path.is_file():
+            yield path
+        else:
+            raise RuntimeError(f"unsupported local source entry: {path}")
+
+
+def package_sources(directory, *, root=None):
     files = {}
-    for path in sorted(directory.rglob("*")):
+    paths = directory.rglob("*") if root is None else local_source_files(directory, root)
+    for path in sorted(paths):
         relative = path.relative_to(directory)
         if {".git", "target", "__pycache__"} & set(relative.parts) or not path.is_file():
             continue
@@ -91,26 +110,37 @@ def package_sources(directory):
     return files
 
 
-def source_inputs(root, data, *, kind="proof"):
+def source_inputs(root, data, *, kind="proof", tool_root=None):
     if kind not in ("proof", "executor", "node"):
         raise RuntimeError(f"unknown graph source kind: {kind}")
+    root = root.resolve()
+    tool_root = root if tool_root is None else tool_root.resolve()
     verified = verify_sources(data)
     packages = []
     trees = {}
     inherited = {}
     for package in data["packages"]:
-        directory = Path(package["manifest_path"]).parent
+        directory = Path(package["manifest_path"]).parent.resolve(strict=True)
+        local = package.get("source") is None
+        if local and not directory.is_relative_to(root):
+            raise RuntimeError(f"local package escapes its graph root: {directory}")
         for parent in (directory, *directory.parents):
             for relative in ("Cargo.toml", ".cargo/config", ".cargo/config.toml"):
                 path = parent / relative
                 if path.is_file():
+                    if local and not path.resolve(strict=True).is_relative_to(root):
+                        raise RuntimeError(f"inherited package input escapes its graph root: {path}")
                     inherited[str(path)] = sha(path)
+            # Frozen roots intentionally have no .git marker. Do not absorb the
+            # current node workspace's manifests into a historical graph.
+            if local and parent == root:
+                break
             if (parent / ".git").exists():
                 if package.get("source", "") and package["source"].startswith("git+"):
                     trees[str(parent)] = parent
                 break
         identity = package["id"].replace(str(root), "<repository>")
-        packages.append({"package": identity, "files": package_sources(directory)})
+        packages.append({"package": identity, "files": package_sources(directory, root=root if local else None)})
     sources = repository_sources(root, kind)
     git_sources = {}
     for identity, directory in sorted(trees.items()):
@@ -124,8 +154,11 @@ def source_inputs(root, data, *, kind="proof"):
             path = directory / relative
             if path.is_file():
                 inherited[str(path)] = sha(path)
-    return {"verified_external_sources": verified, "packages": packages, "qualification_sources": sources,
-            "inherited_manifests_and_configuration": inherited, "git_source_trees": git_sources}
+    result = {"verified_external_sources": verified, "packages": packages, "qualification_sources": sources,
+              "inherited_manifests_and_configuration": inherited, "git_source_trees": git_sources}
+    if tool_root != root:
+        result["build_tools"] = package_sources(tool_root / "tools/protocol-bundles", root=tool_root)
+    return result
 
 
 def locked_packages(lock):

@@ -12,7 +12,10 @@ use malachitebft_core_types::{ExtendedCommitCertificate, Round, Validity, VoteEx
 use tracing::{info, warn};
 
 use crate::consensus::codec::ProtobufCodec;
-use crate::consensus::{Address, Ctx, Height, ProposalPart, ProposalParts, ValueId};
+use crate::consensus::{
+    Address, Ctx, Height, ProposalPart, ProposalParts, ReassemblySaturated, Value, ValueId,
+};
+use crate::database::certified_history::branch;
 
 use super::Reactor;
 use super::consensus_state;
@@ -93,8 +96,9 @@ impl<E: Executor> Reactor<E> {
         // Buffer the part; act only once the full stream (Init + Data + Fin) is
         // reassembled. A lone Data part — the shortcut the old code trusted —
         // can no longer claim the round.
-        let Some(parts) = self.consensus.part_streams.insert(from, part) else {
-            return reply_none(reply);
+        let parts = match self.consensus.part_streams.insert(from, part) {
+            Ok(Some(parts)) => parts,
+            Ok(None) | Err(ReassemblySaturated) => return reply_none(reply),
         };
 
         self.accept_proposal_parts(parts, reply).await
@@ -188,7 +192,7 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
-    fn handle_process_synced_value(
+    async fn handle_process_synced_value(
         &mut self,
         height: Height,
         round: Round,
@@ -196,7 +200,25 @@ impl<E: Executor> Reactor<E> {
         value_bytes: bytes::Bytes,
         reply: tokio::sync::oneshot::Sender<SyncedValueOutcome<Ctx>>,
     ) -> Result<()> {
-        let result = if let Ok(value) = ProtobufCodec.decode(value_bytes) {
+        let decoded: Result<Value, _> = ProtobufCodec.decode(value_bytes);
+        let result = if let Ok(value) = decoded
+            && value.descriptor().context == self.consensus.protocol_context
+        {
+            if let Err(error) = branch::validate(
+                &self.db_conn(),
+                self.consensus.protocol_context,
+                value.command(),
+            )
+            .await
+            {
+                if error.downcast_ref::<branch::Rejected>().is_none() {
+                    return Err(error);
+                }
+                reply
+                    .send(SyncedValueOutcome::PeerFault)
+                    .map_err(|_| anyhow::anyhow!("Failed to send ProcessSyncedValue rejection"))?;
+                return Ok(());
+            }
             let proposed = ProposedValue {
                 height,
                 round,
@@ -350,11 +372,9 @@ impl<E: Executor> Reactor<E> {
                     value = %certificate.value_id,
                     "Decided"
                 );
-                // The reactor commits decisions in the Finalized handler, so just
-                // ack here to let consensus proceed to finalization.
-                reply
-                    .send(())
-                    .map_err(|_| anyhow::anyhow!("Failed to send Decided reply"))?;
+                self.consensus
+                    .receive_decision(&self.db_conn(), certificate, reply)
+                    .await?;
             }
 
             AppMsg::Finalized {
@@ -399,7 +419,8 @@ impl<E: Executor> Reactor<E> {
                 value_bytes,
                 reply,
             } => {
-                self.handle_process_synced_value(height, round, proposer, value_bytes, reply)?;
+                self.handle_process_synced_value(height, round, proposer, value_bytes, reply)
+                    .await?;
             }
 
             AppMsg::RestreamProposal {

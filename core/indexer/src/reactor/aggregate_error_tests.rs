@@ -9,26 +9,18 @@ use indexer_types::{
 };
 use libsql::{AuthAction, AuthContext, Authorization, Connection, Value as SqlValue};
 use stdlib::to_wave_expr;
-use tempfile::TempDir;
-use tokio::sync::{mpsc, watch};
 
-use super::consensus_state::DeferredDecision;
-use super::engine::EngineConfig;
+use super::execution_fixture::ExecutionFixture;
 use super::executor::{RuntimeExecutor, process_input};
-use super::mempool_fee_index::MempoolFeeIndex;
-use super::{PruneConfig, Reactor, start_consensus};
 use crate::bitcoin_client::Client;
 use crate::block::TxWalker;
 use crate::bls::{KONTOR_BLS_DST, RegistrationProof};
 use crate::consensus::signing::PrivateKey;
-use crate::consensus::{Height, Value};
 use crate::database::queries::{ensure_identity, get_identity};
-use crate::runtime::ownership::OwnerService;
 use crate::runtime::token::{address as token_address, api as token};
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{Decimal, GenesisValidator, Runtime};
-use crate::stopper::Shutdown;
+use crate::runtime::{Decimal, GenesisValidator};
 use crate::test_utils::bls_test::derive_test_key;
 use crate::test_utils::{
     new_mock_block_hash, new_mock_transaction, test_runtime, test_runtime_with_genesis,
@@ -40,56 +32,6 @@ enum Fault {
     NonceInsert,
     CallSignerRead,
     RegisterSignerRead,
-}
-
-pub(super) async fn reactor(
-    mut runtime: Runtime,
-    dir: &TempDir,
-) -> Result<Reactor<RuntimeExecutor>> {
-    let consensus = start_consensus(
-        EngineConfig {
-            private_key: PrivateKey::from([17; 32]),
-            listen_addr: "/ip4/127.0.0.1/tcp/0".into(),
-            persistent_peers: Vec::new(),
-            data_dir: dir.path().to_path_buf(),
-            consensus_enabled: false,
-            discovery: Default::default(),
-        },
-        &mut runtime,
-        None,
-        None,
-        1,
-        MempoolFeeIndex::new(None),
-    )
-    .await?;
-    let shutdown = Shutdown::new();
-    let (_block_tx, block_rx) = mpsc::channel(1);
-    let (_mempool_tx, mempool_rx) = mpsc::channel(1);
-    let (addr_tx, _addr_rx) = watch::channel(None);
-    let client = Client::new(
-        "http://127.0.0.1:1".to_owned(),
-        String::new(),
-        String::new(),
-    )?;
-    Ok(Reactor::new(
-        RuntimeExecutor::new(client),
-        runtime,
-        OwnerService::new(),
-        block_rx,
-        mempool_rx,
-        shutdown.signal(),
-        None,
-        None,
-        None,
-        consensus,
-        PruneConfig {
-            enabled: false,
-            retain_blocks: 144,
-        },
-        1,
-        Some(new_mock_block_hash(1)),
-        addr_tx,
-    ))
 }
 
 pub(super) async fn snapshot(conn: &Connection) -> Result<Vec<Vec<Vec<SqlValue>>>> {
@@ -134,7 +76,7 @@ async fn fails_and_recovers(fault: Fault) -> Result<()> {
     let claimant = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[32; 32])?);
     let publisher_key = publisher.x_only_public_key().0;
     let claimant_key = claimant.x_only_public_key().0;
-    let (mut runtime, dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
+    let (mut runtime, _dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
         x_only_pubkey: publisher_key.to_string(),
         ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
         stake: Decimal::from("100"),
@@ -208,13 +150,17 @@ async fn fails_and_recovers(fault: Fault) -> Result<()> {
             }],
         }],
     };
-    let decision = DeferredDecision {
-        consensus_height: Height::new(1),
-        value: Value::new_block(2, block.hash),
-        certificate: Vec::new(),
-        certified_txs: None,
-    };
-    let mut reactor = reactor(runtime, &dir).await?;
+    let mut reactor = ExecutionFixture::new(
+        runtime,
+        RuntimeExecutor::new(Client::new(
+            "http://127.0.0.1:1".into(),
+            String::new(),
+            String::new(),
+        )?),
+        1,
+        Some(new_mock_block_hash(1)),
+    )
+    .await?;
     let saved = snapshot(&conn).await?;
     let denials = Arc::new(AtomicUsize::new(0));
     let observed = denials.clone();
@@ -269,7 +215,7 @@ async fn fails_and_recovers(fault: Fault) -> Result<()> {
             Authorization::Allow
         }
     })))?;
-    let result = reactor.handle_block(block.clone(), &decision).await;
+    let result = reactor.block(block.clone(), 1).await;
     conn.authorizer(None)?;
     assert!(
         denials.load(Ordering::SeqCst) > 0,
@@ -285,16 +231,16 @@ async fn fails_and_recovers(fault: Fault) -> Result<()> {
     if matches!(fault, Fault::NonceInsert) {
         assert_eq!(allocation.load(Ordering::SeqCst), 3);
     }
-    assert_eq!(reactor.last_height, 1);
-    assert_eq!(reactor.last_hash, Some(new_mock_block_hash(1)));
+    assert_eq!(reactor.execution.last_height, 1);
+    assert_eq!(reactor.execution.last_hash, Some(new_mock_block_hash(1)));
     assert!(conn.is_autocommit());
     assert_eq!(
         snapshot(&conn).await?,
         saved,
         "block rollback did not restore {fault:?}"
     );
-    reactor.handle_block(block, &decision).await?;
-    assert_eq!(reactor.last_height, 2);
+    reactor.block(block, 1).await?;
+    assert_eq!(reactor.execution.last_height, 2);
     let identity = get_identity(&conn, &claimant_key.to_string())
         .await?
         .unwrap();

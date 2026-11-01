@@ -1,42 +1,47 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashSet;
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Txid};
-use indexer_types::Event;
 use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
 use malachitebft_core_types::{Round, Validity};
 use malachitebft_engine::host::Next;
 use metrics::{counter, gauge};
-use prost::Message;
 use tracing::{debug, error, info, warn};
 
-use crate::consensus::codec::encode_commit_certificate;
 use crate::consensus::finality_types::{
     DecidedBatch, FINALITY_WINDOW, StateEvent, UnfinalizedBatch, deadline_for,
 };
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, ProposalData, Value};
+#[cfg(feature = "protocol-qualification")]
+use crate::database::canonical_history::{self, HistoryState};
+use crate::database::certified_history::{self, branch, replay_input, work};
 use crate::database::queries::{
-    delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids,
-    insert_excluded_batch_txids, insert_transaction, insert_unconfirmed_batch_tx,
-    min_unfinalized_batch_height, select_applicable_exclusions, select_block_at_height,
+    delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids, insert_transaction,
+    insert_unconfirmed_batch_tx, min_unfinalized_batch_height, select_block_at_height,
     select_decision_exclusions, select_existing_txids,
 };
-use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
+use crate::metrics::{CONSENSUS_HEIGHT, DEFERRED_DECISIONS, ITEMS_INDEXED};
 use crate::protocol::canonical_application::{ApplicationSource, DecisionExclusions};
 use crate::protocol::canonical_input::CanonicalInput;
+use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
+use crate::protocol::coordinator::certified_input::{Command, ExactInput, MAX_BATCH_BYTES};
+use crate::protocol::coordinator::closure_execution::begin_stage;
 use crate::protocol::coordinator::linked::PreparedTransaction;
 pub(super) use crate::protocol::coordinator::v1::batch_is_ordered;
-use crate::protocol::coordinator::v1::{build_replay_queue, dependency_sort};
+use crate::protocol::coordinator::v1::dependency_sort;
 
 use futures_util::future::BoxFuture;
 
+use super::Reactor;
 use super::consensus_state;
+use super::execution::ExecutionContext;
 use super::executor::{Executor, TxPolicy};
 use super::mempool_fee_index::MempoolFeeIndex;
-use super::{MAX_DEFERRED_DECISIONS, Reactor};
-use crate::protocol::coordinator::selection::{ApplicationPosition, ExecutionSelection};
+#[cfg(feature = "protocol-qualification")]
+use crate::protocol::coordinator::selection::ApplicationPosition;
+use crate::protocol::coordinator::selection::ExecutionSelection;
 
 /// Multiplier applied to `MempoolFeeIndex::fastest_fee()` to derive the
 /// per-batch acceptance threshold, as an integer ratio: 9/10 means we accept
@@ -77,6 +82,7 @@ pub(super) enum IoApply {
     /// An incoming batch proposal: on apply, accept (file under `undecided`,
     /// release the engine's reply with `Some`) or reject (`None`).
     ValidateProposal {
+        value: Value,
         selection: ExecutionSelection,
         height: Height,
         round: Round,
@@ -126,17 +132,6 @@ fn compute_fee_threshold(fee_index: &MempoolFeeIndex) -> u64 {
     raw.max(fee_index.min_fee())
 }
 
-/// Put batches held during a drain pass back at the FRONT of the queue, in their
-/// original order, so nothing is reordered relative to what follows them.
-fn restore_waiting(
-    queue: &mut VecDeque<consensus_state::DeferredDecision>,
-    waiting: &mut VecDeque<consensus_state::DeferredDecision>,
-) {
-    while let Some(decision) = waiting.pop_back() {
-        queue.push_front(decision);
-    }
-}
-
 /// What `process_decided_batch` did with a decided batch. Callers must not
 /// announce `RecordedOnly` batches as processed — their transactions were
 /// never executed here.
@@ -155,7 +150,10 @@ impl BatchOutcome {
     /// variant added without revisiting them would silently take the "nothing
     /// happened" branch, dropping the `BatchProcessed` heartbeat that drives the
     /// info publisher and therefore API availability.
-    fn announced_txids(&self, batch_txs: &[bitcoin::Transaction]) -> Option<Vec<String>> {
+    pub(super) fn announced_txids(
+        &self,
+        batch_txs: &[bitcoin::Transaction],
+    ) -> Option<Vec<String>> {
         match self {
             BatchOutcome::Executed => Some(
                 batch_txs
@@ -173,7 +171,13 @@ impl BatchOutcome {
     }
 }
 
-impl<E: Executor> Reactor<E> {
+pub(super) struct AppliedBatch {
+    pub(super) outcome: BatchOutcome,
+    pub(super) parsed_count: usize,
+    pub(super) executed_ops: u64,
+}
+
+impl<E: Executor> ExecutionContext<E> {
     /// Persist a decided batch's certified content, idempotently: the
     /// immutable txid list (`batch_txids`, what sync serves for this
     /// consensus height) and the raw txs (`unconfirmed_batch_txs`, what
@@ -265,18 +269,91 @@ impl<E: Executor> Reactor<E> {
         // The DECIDED transactions, when a rollback exclusion has narrowed
         // `batch_txs`. Recorded instead of the executed set — see `record_batch_txs`.
         certified: Option<&[bitcoin::Transaction]>,
-    ) -> Result<BatchOutcome> {
-        let started_at = Instant::now();
+    ) -> Result<AppliedBatch> {
         let conn = self.db_conn();
+        let closure_height = certified_history::frontier(&conn)
+            .await?
+            .authenticated_height;
+        let stage = begin_stage(
+            &self.owner_service,
+            &self.session,
+            self.network,
+            closure_height,
+        )
+        .await?
+        .context("batch application has no pending closure stage")?;
+        let remaining = stage.remaining_after();
+        let result = async {
+            let frozen = match stage.action() {
+                WorkItem::Execute { decision } if decision == consensus_height.as_u64() => None,
+                WorkItem::Replay { decision, input } if decision == consensus_height.as_u64() => {
+                    let origin = work::published(&conn, remaining.plan).await?.origin;
+                    Some(replay_input::get(&conn, input, origin, decision).await?)
+                }
+                _ => bail!("batch application differs from closure work item"),
+            };
+            let retained =
+                certified_history::load_verified_input(&conn, consensus_height.as_u64()).await?;
+            let expected = ExactInput::batch(
+                self.protocol_context,
+                anchor_height,
+                anchor_hash,
+                certified.unwrap_or(batch_txs),
+            )?;
+            ensure!(
+                *retained.input() == expected,
+                "batch application differs from retained certified bytes"
+            );
+            if let Some(frozen) = &frozen {
+                ensure!(
+                    frozen.transactions(certified.unwrap_or(batch_txs))? == batch_txs,
+                    "batch execution subset differs from frozen replay input"
+                );
+                ensure!(
+                    self.last_height == anchor_height && self.last_hash == Some(anchor_hash),
+                    "selected replay batch has a different anchor"
+                );
+            }
+            let selection = stage.selection();
+            self.batch_txn(
+                selection,
+                anchor_height,
+                anchor_hash,
+                consensus_height,
+                certificate,
+                batch_txs,
+                certified,
+                frozen.map(|input| input.exclusions),
+            )
+            .await
+        }
+        .await;
+        let result = result.map(|(outcome, stage_outcome, count, ops)| {
+            ((outcome, count, ops), stage_outcome, remaining)
+        });
+        let ((outcome, parsed_count, executed_ops), _) = stage.finish(result).await?;
+        Ok(AppliedBatch {
+            outcome,
+            parsed_count,
+            executed_ops,
+        })
+    }
 
-        info!(
-            %consensus_height,
-            anchor_height,
-            %anchor_hash,
-            num_txs = batch_txs.len(),
-            "Processing decided batch"
-        );
-
+    // The caller owns the canonical root and transaction. Production callers
+    // must verify the certified closure and exact retained input before entering.
+    #[allow(clippy::too_many_arguments)]
+    async fn batch_txn(
+        &mut self,
+        selection: &ExecutionSelection,
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        consensus_height: Height,
+        certificate: &[u8],
+        batch_txs: &[bitcoin::Transaction],
+        certified: Option<&[bitcoin::Transaction]>,
+        frozen_exclusions: Option<DecisionExclusions>,
+    ) -> Result<(BatchOutcome, StageOutcome, usize, u64)> {
+        let conn = self.db_conn();
         // A decided batch may only EXECUTE against the exact chain state it was
         // anchored to: the local tip must sit at `anchor_height` with
         // `anchor_hash`. Anything else — a deferred drain whose anchor fell
@@ -285,8 +362,6 @@ impl<E: Executor> Reactor<E> {
         // tip writes state (and a checkpoint) at a height the chain disagrees
         // about, i.e. silent divergence. A skipped batch's txids then simply
         // never confirm here and the finality window resolves it.
-        // `None` ⇔ all-zeros is the pre-genesis convention `make_value` and
-        // proposal validation anchor with.
         let local_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
         if anchor_height != self.last_height || anchor_hash != local_hash {
             warn!(
@@ -297,7 +372,7 @@ impl<E: Executor> Reactor<E> {
                 consensus_height = %consensus_height,
                 "Skipping decided batch — anchor does not match local tip; recording only"
             );
-            return self
+            let outcome = self
                 .record_batch_for_sync(
                     &conn,
                     consensus_height,
@@ -307,7 +382,8 @@ impl<E: Executor> Reactor<E> {
                     batch_txs,
                     certified,
                 )
-                .await;
+                .await?;
+            return Ok((outcome, StageOutcome::ReplacedAnchorBatch, 0usize, 0u64));
         }
 
         // Execute in decided order. `validate_batch` enforces dependency
@@ -321,20 +397,13 @@ impl<E: Executor> Reactor<E> {
         // exits again). Proposal validation normally rejects unparseable txs before
         // they are decided; if one is decided anyway, record the batch for sync and
         // skip execution uniformly, rather than crash-looping the network.
-        let selection = self
-            .select_executor(ApplicationPosition::Batch {
-                anchor_height,
-                anchor_hash,
-                consensus_height: consensus_height.as_u64(),
-            })
-            .await?;
         let parsed_txs: Vec<PreparedTransaction> = {
             let mut parsed = Vec::with_capacity(batch_txs.len());
             let mut bad: Option<Txid> = None;
             for btx in batch_txs {
                 match self
                     .executor
-                    .prepare_transaction(&self.recognizer, &selection, btx)?
+                    .prepare_transaction(&self.recognizer, selection, btx)?
                 {
                     Some(p) => parsed.push(p),
                     None => {
@@ -350,7 +419,7 @@ impl<E: Executor> Reactor<E> {
                     "Decided batch contains an unparseable transaction — recording for sync \
                      and skipping execution (deterministic; every node does the same)"
                 );
-                return self
+                let outcome = self
                     .record_batch_for_sync(
                         &conn,
                         consensus_height,
@@ -360,87 +429,193 @@ impl<E: Executor> Reactor<E> {
                         batch_txs,
                         certified,
                     )
-                    .await;
+                    .await?;
+                return Ok((outcome, StageOutcome::UnrecognizedBatch, 0usize, 0u64));
             }
             parsed
         };
 
         let input = CanonicalInput::bitcoin(certified.unwrap_or(batch_txs))?;
-        let lease = self.begin_unit(&selection, false).await?;
-        let result = async {
+        let exclusions = if let Some(exclusions) = frozen_exclusions {
+            exclusions
+        } else {
             let mut applicable = select_decision_exclusions(&conn, consensus_height.as_u64())
                 .await?
                 .iter()
                 .map(|value| value.parse::<Txid>().map(|id| id.to_byte_array()))
                 .collect::<Result<Vec<_>, _>>()?;
             applicable.sort_unstable();
-            let exclusions = DecisionExclusions::for_batch(
+            DecisionExclusions::for_batch(
                 consensus_height.as_u64(),
                 certified.unwrap_or(batch_txs),
                 batch_txs,
                 &applicable,
-            )?;
-            insert_batch(
+            )?
+        };
+        insert_batch(
+            &conn,
+            consensus_height.as_u64(),
+            anchor_height,
+            &anchor_hash.to_string(),
+            certificate,
+            false,
+        )
+        .await
+        .context("Failed to insert batch")?;
+
+        // Store the certified txid list + raw txs for replay/sync recovery
+        self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
+            .await?;
+
+        for t in &parsed_txs {
+            let tx_id = insert_transaction(
                 &conn,
-                consensus_height.as_u64(),
-                anchor_height,
-                &anchor_hash.to_string(),
-                certificate,
-                false,
+                indexer_types::TransactionRow::builder()
+                    .height(anchor_height)
+                    .batch_height(consensus_height.as_u64())
+                    .txid(t.txid.to_string())
+                    .build(),
             )
             .await
-            .context("Failed to insert batch")?;
+            .context("Failed to insert transaction")?;
 
-            // Store the certified txid list + raw txs for replay/sync recovery
-            self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
-                .await?;
-
-            for t in &parsed_txs {
-                let tx_id = insert_transaction(
-                    &conn,
-                    indexer_types::TransactionRow::builder()
-                        .height(anchor_height)
-                        .batch_height(consensus_height.as_u64())
-                        .txid(t.txid.to_string())
-                        .build(),
+            // Canonical batch processing discards the per-op failure vec —
+            // deterministic op failures are already telemetered via warn! in
+            // execute_op. Only non-deterministic errors (Result::Err) abort.
+            let _failures = self
+                .executor
+                .execute_prepared(
+                    selection,
+                    &self.session,
+                    self.network,
+                    anchor_height,
+                    tx_id,
+                    t,
                 )
                 .await
-                .context("Failed to insert transaction")?;
+                .context("execute_transaction failed")?;
+        }
 
-                // Canonical batch processing discards the per-op failure vec —
-                // deterministic op failures are already telemetered via warn! in
-                // execute_op. Only non-deterministic errors (Result::Err) abort.
-                let _failures = self
-                    .executor
-                    .execute_prepared(
-                        &selection,
-                        &self.session,
-                        self.network,
-                        anchor_height,
-                        tx_id,
-                        t,
-                    )
-                    .await
-                    .context("execute_transaction failed")?;
-            }
-
-            self.record_application(
+        self.record_application(
+            anchor_height,
+            ApplicationSource::Batch {
                 anchor_height,
-                ApplicationSource::Batch {
-                    anchor_height,
-                    anchor_hash: anchor_hash.to_byte_array(),
-                    exclusions,
-                },
-                Some(input),
+                anchor_hash: anchor_hash.to_byte_array(),
+                exclusions,
+            },
+            Some(input),
+        )
+        .await?;
+        let executed_ops = parsed_txs
+            .iter()
+            .flat_map(|tx| tx.inputs.iter())
+            .map(|(_, count)| *count)
+            .sum::<u64>();
+        Ok((
+            BatchOutcome::Executed,
+            StageOutcome::Applied,
+            parsed_txs.len(),
+            executed_ops,
+        ))
+    }
+
+    #[cfg(feature = "protocol-qualification")]
+    pub(super) async fn execute_legacy_batch_unit(
+        &mut self,
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        consensus_height: Height,
+        batch_txs: &[bitcoin::Transaction],
+    ) -> Result<()> {
+        ensure!(
+            canonical_history::state(&self.db_conn()).await? == HistoryState::Unavailable,
+            "legacy comparison requires a database without canonical authority"
+        );
+        let selection = self
+            .select_executor(ApplicationPosition::Batch {
+                anchor_height,
+                anchor_hash,
+                consensus_height: consensus_height.as_u64(),
+            })
+            .await?;
+        let lease = self.begin_unit(&selection, false).await?;
+        let result = self
+            .batch_txn(
+                &selection,
+                anchor_height,
+                anchor_hash,
+                consensus_height,
+                &[],
+                batch_txs,
+                None,
+                None,
+            )
+            .await;
+        let (outcome, stage, _, _) = self.finish_unit(lease, result, true).await?;
+        ensure!(
+            matches!(outcome, BatchOutcome::Executed) && stage == StageOutcome::Applied,
+            "legacy comparison batch was not executed"
+        );
+        Ok(())
+    }
+}
+
+impl<E: Executor> Reactor<E> {
+    #[cfg(any(test, feature = "protocol-qualification"))]
+    pub(super) async fn process_decided_batch(
+        &mut self,
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        consensus_height: Height,
+        certificate: &[u8],
+        batch_txs: &[bitcoin::Transaction],
+        certified: Option<&[bitcoin::Transaction]>,
+    ) -> Result<BatchOutcome> {
+        let started_at = Instant::now();
+        let applied = self
+            .execution
+            .process_decided_batch(
+                anchor_height,
+                anchor_hash,
+                consensus_height,
+                certificate,
+                batch_txs,
+                certified,
             )
             .await?;
-            Ok(())
+        Ok(self
+            .observe_batch(
+                applied,
+                anchor_height,
+                anchor_hash,
+                consensus_height,
+                batch_txs,
+                started_at,
+            )
+            .await)
+    }
+
+    pub(super) async fn observe_batch(
+        &mut self,
+        applied: AppliedBatch,
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        consensus_height: Height,
+        batch_txs: &[bitcoin::Transaction],
+        started_at: Instant,
+    ) -> BatchOutcome {
+        let AppliedBatch {
+            outcome,
+            parsed_count,
+            executed_ops,
+        } = applied;
+        let conn = self.db_conn();
+        if outcome == BatchOutcome::RecordedOnly {
+            return outcome;
         }
-        .await;
-        self.finish_unit(lease, result, true).await?;
-        // The in-memory finality obligation must match a persisted batch.
+        // Optional test observations never select canonical finality work.
         let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
-        if !txids.is_empty() {
+        if self.consensus.observation.is_some() && !txids.is_empty() {
             self.consensus.unfinalized_batches.push(UnfinalizedBatch {
                 consensus_height,
                 anchor_height,
@@ -453,11 +628,6 @@ impl<E: Executor> Reactor<E> {
         // Counter increments only after commit so we count ops persisted,
         // not ops attempted (mirrors the block path; simulation can't reach
         // here so it never inflates the metric).
-        let executed_ops: u64 = parsed_txs
-            .iter()
-            .flat_map(|t| t.inputs.iter())
-            .map(|(_, operations)| *operations)
-            .sum();
         if executed_ops > 0 {
             counter!(ITEMS_INDEXED).increment(executed_ops);
         }
@@ -466,7 +636,7 @@ impl<E: Executor> Reactor<E> {
         self.consensus.emit_state_event(StateEvent::BatchApplied {
             consensus_height,
             anchor_height,
-            txid_count: parsed_txs.len(),
+            txid_count: parsed_count,
             checkpoint,
         });
 
@@ -477,26 +647,61 @@ impl<E: Executor> Reactor<E> {
             "Batch processing complete"
         );
 
-        Ok(BatchOutcome::Executed)
+        BatchOutcome::Executed
     }
 
-    /// The next pending Bitcoin block as a proposal value, if any. Blocks
-    /// outrank batches and need no I/O, so this fast path runs UNCONDITIONALLY
-    /// — a batch validation in flight must never starve block proposals, or a
-    /// slow bitcoind would stall the chain through the proposer.
-    ///
-    /// Range-bounded, not `first_key_value`: an entry at or below the tip is
-    /// already applied, and proposing it stops the chain — peers vote it valid
-    /// (they still hold the block), it is decided, the finalize gate rejects it
-    /// as out of order, and it stays the minimum forever so no newer block is
-    /// ever proposed. The insert side refuses to buffer those now; this makes
-    /// the proposer independently unable to emit one.
-    fn pending_block_value(&self) -> Option<Value> {
-        self.consensus
-            .pending_blocks
-            .range(self.last_height + 1..)
-            .next()
-            .map(|(&height, block)| Value::new_block(height, block.hash))
+    // A replacement can be at or below the applied tip. The certified branch,
+    // rather than the local cursor, distinguishes replacements from duplicates.
+    pub(super) async fn pending_block_value(&mut self) -> Result<Option<Value>> {
+        let conn = self.db_conn();
+        for block in self.consensus.pending_blocks.values() {
+            let input = block.exact_input(self.consensus.protocol_context)?;
+            match branch::validate(
+                &conn,
+                self.consensus.protocol_context,
+                &input.descriptor().command,
+            )
+            .await
+            {
+                Ok(()) => return Ok(Some(Value::from_input(input)?)),
+                Err(error) if error.downcast_ref::<branch::Rejected>().is_some() => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(None)
+    }
+
+    fn batch_proposal_value(
+        &self,
+        height: u64,
+        hash: BlockHash,
+        mut txs: Vec<bitcoin::Transaction>,
+    ) -> Result<Value> {
+        let mut bytes = 4usize;
+        let count = txs
+            .iter()
+            .take_while(|tx| {
+                match bytes
+                    .checked_add(4)
+                    .and_then(|size| size.checked_add(tx.total_size()))
+                {
+                    Some(size) if size <= MAX_BATCH_BYTES => {
+                        bytes = size;
+                        true
+                    }
+                    _ => false,
+                }
+            })
+            .count();
+        // Admission takes a dependency-ordered prefix. It never changes work
+        // already certified, and leaves the remainder in the proposal pool.
+        txs.truncate(count);
+        Ok(Value::new_batch_raw(
+            self.consensus.protocol_context,
+            height,
+            hash,
+            txs,
+        )?)
     }
 
     /// The state-only half of building a BATCH proposal: candidates judged
@@ -581,26 +786,36 @@ impl<E: Executor> Reactor<E> {
         reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>,
     ) -> Result<()> {
         let conn = self.db_conn();
-        let last_height = self.last_height;
-        let last_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
+        let last_height = self.execution.last_height;
+        let last_hash = self.execution.last_hash.unwrap_or(BlockHash::all_zeros());
 
-        let value = match data {
-            ProposalData::Block { height: bh, hash } => {
+        if data.value().descriptor().context != self.consensus.protocol_context {
+            let _ = reply.send(None);
+            return Ok(());
+        }
+        if let Err(error) = branch::validate(
+            &conn,
+            self.consensus.protocol_context,
+            data.value().command(),
+        )
+        .await
+        {
+            if error.downcast_ref::<branch::Rejected>().is_none() {
+                return Err(error);
+            }
+            warn!(%error, "Rejecting proposal outside certified Bitcoin branch");
+            let _ = reply.send(None);
+            return Ok(());
+        }
+        let value = match data.value().command() {
+            Command::Block {
+                height: bh, hash, ..
+            } => {
                 if let Some(block) = self.consensus.pending_blocks.get(bh) {
-                    // Deliberately NOT gated on `bh == last_height + 1`.
-                    //
-                    // Tempting, since a node behind on execution votes here for a
-                    // block it cannot yet apply. But a `Value::Block` asserts only
-                    // "this is the canonical Bitcoin block at this height", which
-                    // this node can confirm from its own buffer; when to run it is
-                    // a local ordering matter, settled by `handle_finalized` and
-                    // the deferred queue. Withholding the vote would trade a stuck
-                    // node for a stalled chain: at 3-of-4 quorum with one
-                    // validator already down, one nil vote is the difference
-                    // between the network advancing and halting — which is the
-                    // failure this whole change exists to prevent, reintroduced
-                    // from the other side.
-                    if block.hash != *hash {
+                    if block.hash != *hash
+                        || block.exact_input(self.consensus.protocol_context)?
+                            != *data.value().input()
+                    {
                         warn!(
                             block_height = bh,
                             proposed = %hash,
@@ -642,13 +857,13 @@ impl<E: Executor> Reactor<E> {
                     let _ = reply.send(None);
                     return Ok(());
                 }
-                Value::new_block(*bh, *hash)
+                data.value().clone()
             }
-            ProposalData::Batch {
+            Command::Batch {
                 anchor_height,
                 anchor_hash,
-                transactions,
             } => {
+                let transactions = data.value().batch_raw_txs();
                 // SNAPSHOT phase: every state predicate, judged now for the
                 // fast reject. Re-judged at apply time — see `IoJob`.
                 if let Some(reason) = self
@@ -657,7 +872,7 @@ impl<E: Executor> Reactor<E> {
                         &conn,
                         *anchor_height,
                         *anchor_hash,
-                        transactions,
+                        &transactions,
                         last_height,
                         last_hash,
                     )
@@ -669,17 +884,18 @@ impl<E: Executor> Reactor<E> {
                 }
                 let selection = self.preparation_selection().await?;
                 let mut parsed_txs = Vec::with_capacity(transactions.len());
-                for tx in transactions {
+                for tx in &transactions {
                     let txid = tx.compute_txid();
                     // Parse the PROPOSAL'S OWN bytes, never the pool's cached copy.
                     // Kontor ops live in the taproot witness, which the txid does
                     // not commit to, so a same-txid variant sitting in this node's
                     // mempool would otherwise be judged (and later voted on) in
                     // place of the witness the proposer actually streamed.
-                    let parsed = if let Some(p) =
-                        self.executor
-                            .prepare_transaction(&self.recognizer, &selection, tx)?
-                    {
+                    let parsed = if let Some(p) = self.execution.executor.prepare_transaction(
+                        &self.execution.recognizer,
+                        &selection,
+                        tx,
+                    )? {
                         p
                     } else {
                         warn!(%txid, "Rejecting proposal: transaction failed to parse");
@@ -694,10 +910,14 @@ impl<E: Executor> Reactor<E> {
                     parsed_txs.push(parsed);
                 }
                 let threshold = compute_fee_threshold(&self.consensus.mempool_fee_index);
-                let verdicts = self.executor.validate_txs(transactions.clone(), threshold);
+                let verdicts = self
+                    .execution
+                    .executor
+                    .validate_txs(transactions.clone(), threshold);
                 self.io_jobs.push_back(IoJob {
                     verdicts,
                     apply: IoApply::ValidateProposal {
+                        value: data.value().clone(),
                         selection,
                         height,
                         round,
@@ -730,20 +950,29 @@ impl<E: Executor> Reactor<E> {
     }
 
     pub(super) async fn try_fulfill_pending_proposal(&mut self) -> Result<bool> {
-        let last_height = self.last_height;
-        let last_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
+        let last_height = self.execution.last_height;
+        let last_hash = self.execution.last_hash.unwrap_or(BlockHash::all_zeros());
 
         let past_deadline = match &self.consensus.pending_proposal {
             Some(p) => Instant::now() >= p.hard_deadline,
             None => return Ok(false),
         };
 
-        // Blocks first, always — even with a batch validation in flight. They
-        // need no I/O, and a chain whose block proposals queue behind a slow
-        // bitcoind is the head-of-line blocking this design removes.
-        if let Some(value) = self.pending_block_value() {
+        // Block proposals require only local branch checks, so pending bitcoind
+        // validation must not delay them.
+        if let Some(value) = self.pending_block_value().await? {
             self.fulfill_pending_with(value).await?;
             return Ok(true);
+        }
+
+        if branch::tip(&self.db_conn()).await?.is_none() {
+            if past_deadline {
+                // No batch is legal before the first certified block. Release
+                // GetValue so Malachite's serial connector can deliver the next
+                // round or another proposer's block instead of waiting forever.
+                self.consensus.pending_proposal = None;
+            }
+            return Ok(false);
         }
 
         // A candidate set already validated for THIS anchor — banked when the
@@ -771,8 +1000,12 @@ impl<E: Executor> Reactor<E> {
                     .await?
                     .is_none()
                 {
-                    self.fulfill_pending_with(Value::new_batch_raw(last_height, last_hash, txs))
-                        .await?;
+                    self.fulfill_pending_with(self.batch_proposal_value(
+                        last_height,
+                        last_hash,
+                        txs,
+                    )?)
+                    .await?;
                     return Ok(true);
                 }
             }
@@ -795,7 +1028,7 @@ impl<E: Executor> Reactor<E> {
                         candidates = txs.len(),
                         "Validating candidate batch off-loop; reply deferred"
                     );
-                    let verdicts = self.executor.validate_txs(txs, threshold);
+                    let verdicts = self.execution.executor.validate_txs(txs, threshold);
                     self.io_jobs.push_back(IoJob {
                         verdicts,
                         apply: IoApply::BuildProposal {
@@ -825,7 +1058,7 @@ impl<E: Executor> Reactor<E> {
             // set still validating answers a LATER round, and its apply keeps
             // only the pool hygiene.
             info!(past_deadline, idle_retry, "Proposing empty batch");
-            self.fulfill_pending_with(Value::new_batch_raw(last_height, last_hash, vec![]))
+            self.fulfill_pending_with(self.batch_proposal_value(last_height, last_hash, vec![])?)
                 .await?;
             return Ok(true);
         }
@@ -836,6 +1069,12 @@ impl<E: Executor> Reactor<E> {
     /// stream the parts, release the engine's reply. No-op if nothing is held
     /// (the deadline or a competing path already answered).
     async fn fulfill_pending_with(&mut self, value: Value) -> Result<()> {
+        branch::validate(
+            &self.db_conn(),
+            self.consensus.protocol_context,
+            value.command(),
+        )
+        .await?;
         let Some(pending) = self.consensus.pending_proposal.take() else {
             return Ok(());
         };
@@ -902,8 +1141,8 @@ impl<E: Executor> Reactor<E> {
                     // engine moved on. BANK the verdicts for the next GetValue
                     // rather than burning them — see `ValidatedCandidates`.
                     if !kept.is_empty()
-                        && anchor_height == self.last_height
-                        && anchor_hash == self.last_hash.unwrap_or(BlockHash::all_zeros())
+                        && anchor_height == self.execution.last_height
+                        && anchor_hash == self.execution.last_hash.unwrap_or(BlockHash::all_zeros())
                     {
                         debug!(
                             count = kept.len(),
@@ -918,8 +1157,8 @@ impl<E: Executor> Reactor<E> {
                     }
                     return Ok(());
                 }
-                if anchor_height != self.last_height
-                    || anchor_hash != self.last_hash.unwrap_or(BlockHash::all_zeros())
+                if anchor_height != self.execution.last_height
+                    || anchor_hash != self.execution.last_hash.unwrap_or(BlockHash::all_zeros())
                 {
                     // The tip moved mid-validation: this snapshot answers a
                     // question nobody is asking anymore. Re-snapshot against
@@ -944,18 +1183,23 @@ impl<E: Executor> Reactor<E> {
                         anchor_height,
                         anchor_hash,
                         &txs,
-                        self.last_height,
-                        self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                        self.execution.last_height,
+                        self.execution.last_hash.unwrap_or(BlockHash::all_zeros()),
                     )
                     .await?
                 {
                     info!("Not proposing batch: {reason}");
                     return Ok(());
                 }
-                self.fulfill_pending_with(Value::new_batch_raw(anchor_height, anchor_hash, txs))
-                    .await
+                self.fulfill_pending_with(self.batch_proposal_value(
+                    anchor_height,
+                    anchor_hash,
+                    txs,
+                )?)
+                .await
             }
             IoApply::ValidateProposal {
+                value,
                 selection,
                 height,
                 round,
@@ -965,7 +1209,22 @@ impl<E: Executor> Reactor<E> {
                 parsed,
                 reply,
             } => {
-                if !selection.can_reuse_preparation(&self.preparation_selection().await?) {
+                if value.descriptor().context != self.consensus.protocol_context
+                    || !selection.can_reuse_preparation(&self.preparation_selection().await?)
+                {
+                    let _ = reply.send(None);
+                    return Ok(());
+                }
+                if let Err(error) = branch::validate(
+                    &self.db_conn(),
+                    self.consensus.protocol_context,
+                    value.command(),
+                )
+                .await
+                {
+                    if error.downcast_ref::<branch::Rejected>().is_none() {
+                        return Err(error);
+                    }
                     let _ = reply.send(None);
                     return Ok(());
                 }
@@ -982,6 +1241,10 @@ impl<E: Executor> Reactor<E> {
                 }
                 let transactions: Vec<bitcoin::Transaction> =
                     verdicts.into_iter().map(|(tx, _)| tx).collect();
+                ensure!(
+                    transactions == value.batch_raw_txs(),
+                    "proposal validation changed exact inputs"
+                );
                 // Freshness: the snapshot's state predicates, re-judged. The
                 // anchor gate in `validate_batch` is what turns "the tip moved
                 // while we validated" into a plain rejection instead of a vote
@@ -994,8 +1257,8 @@ impl<E: Executor> Reactor<E> {
                         anchor_height,
                         anchor_hash,
                         &transactions,
-                        self.last_height,
-                        self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                        self.execution.last_height,
+                        self.execution.last_hash.unwrap_or(BlockHash::all_zeros()),
                     )
                     .await?
                 {
@@ -1011,7 +1274,7 @@ impl<E: Executor> Reactor<E> {
                     round,
                     valid_round: Round::Nil,
                     proposer,
-                    value: Value::new_batch_raw(anchor_height, anchor_hash, transactions),
+                    value,
                     validity: Validity::Valid,
                 };
                 self.consensus
@@ -1025,175 +1288,58 @@ impl<E: Executor> Reactor<E> {
         }
     }
 
-    /// Load the decided values to replay for a rollback from `from_anchor`.
-    /// MUST run BEFORE the DB truncation: the query joins the `transactions`
-    /// rows for each batch's txids, and those are cascade-deleted with their
-    /// blocks by the rollback.
-    pub(super) async fn load_replay_decisions(
-        &mut self,
-        from_anchor: u64,
-    ) -> Result<Vec<consensus_state::DeferredDecision>> {
-        let conn = self.db_conn();
-        self.consensus
-            .get_decided_from_anchor(&conn, from_anchor)
-            .await
-            .context("Failed to load replay batches for rollback")
-    }
-
-    /// Pair each decision with the transactions it carries.
-    ///
-    /// Both sides of the replay merge must resolve the SAME way: the exclusion
-    /// closure needs tx INPUTS from the queued survivors too, and resolving only the
-    /// replay set let a descendant of an excluded tx through to execute against state
-    /// the rollback had wiped (#427 in a second form).
-    async fn resolve_decisions(
-        &mut self,
-        decisions: impl IntoIterator<Item = consensus_state::DeferredDecision>,
-    ) -> Result<Vec<(consensus_state::DeferredDecision, Vec<bitcoin::Transaction>)>> {
-        let decisions = decisions.into_iter();
-        let mut out = Vec::with_capacity(decisions.size_hint().0);
-        for decision in decisions {
-            let txs = match &decision.value {
-                Value::Batch { txs, .. } => {
-                    self.resolve_batch_txs(txs, decision.consensus_height.as_u64())
-                        .await?
-                }
-                Value::Block { .. } => Vec::new(),
-            };
-            out.push((decision, txs));
-        }
-        Ok(out)
-    }
-
-    /// Install the replay decisions loaded by `load_replay_decisions` and kick
-    /// off block redelivery. Runs AFTER the DB truncation: the raw-tx
-    /// resolution can touch bitcoind, and a transient failure here is
-    /// fatal-but-recoverable (the rollback already happened; on restart the
-    /// startup cleanup forgets the unexecuted suffix and the node re-syncs).
-    /// Before the truncation it would instead CANCEL a rollback that finality
-    /// already demanded.
-    pub(super) async fn prepare_replay(
-        &mut self,
-        from_anchor: u64,
-        replay_batches: Vec<consensus_state::DeferredDecision>,
-        // Per consensus height — see `select_applicable_exclusions`.
-        applicable: HashMap<u64, HashSet<String>>,
-    ) -> Result<()> {
-        info!(
-            from_anchor,
-            replay_batches = replay_batches.len(),
-            excluded = applicable.values().map(|s| s.len()).sum::<usize>(),
-            "Initiating rollback replay"
-        );
-
-        // BOTH sides resolve, not just the replay set — see `resolve_decisions`.
-        // Resolve from a CLONE of the queued survivors and clear the originals only
-        // once resolution has succeeded, rather than `mem::take`-ing first: a
-        // resolve failure (bitcoind unreachable for a `BatchTx::Id`) then leaves
-        // `deferred_decisions` intact instead of destroying the only in-memory copy
-        // of its rowless entries before propagating.
-        let replayed = self.resolve_decisions(replay_batches).await?;
-        let queued: Vec<_> = self.consensus.deferred_decisions.iter().cloned().collect();
-        let survivors = self.resolve_decisions(queued).await?;
-        self.consensus.deferred_decisions.clear();
-
-        let (queue, excluded) = build_replay_queue(replayed, survivors, &applicable);
-        self.consensus.deferred_decisions = queue;
-
-        // The excluded txids must also leave the proposal pool, or the next
-        // make_value re-proposes the very txs whose missing confirmations caused
-        // this rollback — repeating the same finality failure with no progress.
-        for txid in &excluded {
-            self.consensus.mempool.suppress(txid);
-        }
-
-        self.consensus
-            .unfinalized_batches
-            .retain(|b| b.anchor_height < from_anchor);
-
-        // The reactor truncated to `from_anchor - 1`, deleting the anchor block
-        // itself, so redelivery must START at `from_anchor` — i.e. strictly after
-        // `from_anchor - 1`. Asking for `from_anchor` under the exclusive convention
-        // resumes one block too late and the anchor never comes back.
-        self.executor
-            .replay_blocks_after(from_anchor.saturating_sub(1))
-            .await
-            .context("Failed to send replay request")?;
-        Ok(())
-    }
-
-    /// Apply everything the current tip makes possible: drain decisions that were
-    /// waiting on it, then settle any finality deadline it crossed, repeating while
-    /// a rollback keeps changing the tip.
-    ///
-    /// The single funnel for a RISING `last_height`. Previously the finality check
-    /// hung off one arm of the consensus-message handler, so a node whose tip
-    /// advanced any other way — notably a lagging node receiving blocks via
-    /// `BlockEvent::BlockInsert` — walked past deadlines without ever evaluating
-    /// them, and diverged from peers that did. Routing both call sites through here
-    /// makes "the tip never moves without a finality check" structural rather than
-    /// something each call site has to remember.
-    ///
-    /// Terminates: a rollback moves `last_height` strictly BELOW every deadline it
-    /// just settled, so the next pass has strictly fewer at-deadline batches.
     pub(super) async fn advance(&mut self) -> Result<()> {
-        loop {
-            self.drain_deferred_decisions()
-                .await
-                .context("drain_deferred_decisions failed")?;
-            if !self.settle_finality().await? {
-                self.resume_next_height()?;
-                return Ok(());
-            }
+        let conn = self.db_conn();
+        let frontier = certified_history::frontier(&conn).await?;
+        ensure!(
+            frontier.status == certified_history::Status::Ready,
+            "execution history is not ready"
+        );
+        if frontier.authenticated_height > frontier.closed_height {
+            ensure!(
+                frontier.closed_height.checked_add(1) == Some(frontier.authenticated_height),
+                "unfinished decision history has a gap"
+            );
+            // A durable decision ends proposal work even if Finalized is still queued.
+            self.consensus.pending_proposal = None;
+            self.validated_candidates = None;
+            gauge!(DEFERRED_DECISIONS).set(1.0);
+            self.apply_certified_closure(frontier.authenticated_height)
+                .await?;
+            self.prune_finalized_bodies(&conn).await;
         }
+        gauge!(DEFERRED_DECISIONS).set(0.0);
+        self.resume_next_height().await
     }
 
-    fn resume_next_height(&mut self) -> Result<()> {
+    async fn resume_next_height(&mut self) -> Result<()> {
         let Some((height, _)) = &self.consensus.pending_next_height else {
             return Ok(());
         };
-        if self
+        let height = *height;
+        let Some(next) = self
             .consensus
-            .deferred_decisions
-            .iter()
-            .any(|decision| decision.consensus_height == *height && decision.value.is_block())
-        {
+            .closed_next_height(&self.db_conn(), height)
+            .await?
+        else {
             return Ok(());
-        }
-        let (_, reply) = self.consensus.pending_next_height.take().unwrap();
-        reply
-            .send(Next::Start(
-                self.consensus.current_height,
-                self.consensus.height_params(),
-            ))
-            .map_err(|_| anyhow::anyhow!("Failed to send Finalized reply"))
+        };
+        let (_, reply) = self
+            .consensus
+            .pending_next_height
+            .take()
+            .context("next-height callback disappeared")?;
+        self.maybe_prune_state().await;
+        // Durable completion survives cancellation of this particular engine callback.
+        let _ = reply.send(next);
+        Ok(())
     }
 
-    /// Whether any tracked batch has reached its deadline at the current tip.
-    /// In-memory, bounded by the batches decided inside one finality window — no
-    /// database work on the per-block path.
-    fn finality_due(&self) -> bool {
-        self.consensus
-            .unfinalized_batches
-            .iter()
-            .any(|b| b.deadline <= self.last_height)
-    }
-
-    /// Run finality checks if any deadline has passed, performing the rollback and
-    /// replay they demand. Returns whether a rollback happened (so `advance` knows
-    /// the tip moved and it must drain again).
-    /// Best-effort GC of retained batch bodies below the finality window.
-    ///
-    /// The floor is DB-sourced (`min_unfinalized_batch_height`), NOT the in-memory
-    /// unfinalized set: that set holds only EXECUTED batches, so a record-only
-    /// batch (anchor-mismatch / unparseable) sitting between two executed heights
-    /// could otherwise be GC'd while still non-final — reopening the very
-    /// witness-variant hazard this retention closes. `None` means nothing is within
-    /// the window, so everything is final and reclaimable. A failure must not fail
-    /// the finality pass; it retries next settle.
     async fn prune_finalized_bodies(&mut self, conn: &libsql::Connection) {
         let floor =
-            match min_unfinalized_batch_height(conn, FINALITY_WINDOW, self.last_height).await {
+            match min_unfinalized_batch_height(conn, FINALITY_WINDOW, self.execution.last_height)
+                .await
+            {
                 Ok(Some(h)) => h,
                 // All batches are final — reclaim every body (consensus_height <= current).
                 Ok(None) => self.consensus.current_height.as_u64() + 1,
@@ -1207,373 +1353,6 @@ impl<E: Executor> Reactor<E> {
             Ok(_) => {}
             Err(e) => warn!(error = %e, floor, "failed to prune finalized batch bodies"),
         }
-    }
-
-    async fn settle_finality(&mut self) -> Result<bool> {
-        if !self.finality_due() {
-            return Ok(false);
-        }
-        let conn = self.db_conn();
-        let (events, rollback) = self
-            .consensus
-            .run_finality_checks(&conn, self.last_height)
-            .await?;
-        let Some((rollback_anchor, missing)) = rollback else {
-            self.consensus.emit_finality_events(&events);
-            // Finality advanced cleanly this pass — GC the retained bodies now
-            // below the window. Skipped on the rollback branch, where the
-            // unfinalized set is mid-flux; it catches up next settle.
-            self.prune_finalized_bodies(&conn).await;
-            return Ok(false);
-        };
-
-        // Depth-check BEFORE announcing anything. Rehydration can re-arm a deadline
-        // whose anchor sits far below the tip — that is exactly the #515 residue this
-        // PR picks up — and truncating below the prune watermark would destroy state
-        // rather than restore it. Halting for a re-sync is the intended outcome, and
-        // an observer must not be told a rollback happened when it did not.
-        self.check_rollback_depth(rollback_anchor.saturating_sub(1))
-            .context("finality rollback too deep")?;
-
-        // Record this pass's exclusions BEFORE the truncation. The base set (which
-        // txids went missing, and from which decision) is already known here — only
-        // the descendant closure needs the resolved raw txs, and that part is
-        // re-derivable. Writing after the rollback, as an earlier attempt did, leaves
-        // a window where the truncation is durable and the reason for it is not: the
-        // replay then reloads the full certified list and the oscillation returns.
-        //
-        // FATAL on failure, unlike the best-effort records elsewhere. Without this row
-        // the pass is simply the original bug, and doing the rollback anyway would
-        // commit to a truncation we can no longer justify on the next pass.
-        let base_rows: Vec<(u64, String, u64)> = missing
-            .iter()
-            .flat_map(|m| {
-                let (height, deadline) =
-                    (m.consensus_height.as_u64(), deadline_for(m.anchor_height));
-                m.txids
-                    .iter()
-                    .map(move |t| (height, t.to_string(), deadline))
-            })
-            .collect();
-        insert_excluded_batch_txids(&conn, &base_rows)
-            .await
-            .context("Failed to record this pass's finality exclusions")?;
-
-        // Read replay decisions BEFORE the truncation — the query joins rows that
-        // are cascade-deleted with their blocks.
-        let replay = self
-            .load_replay_decisions(rollback_anchor)
-            .await
-            .context("load_replay_decisions failed")?;
-
-        // Everything still applicable, this pass's rows included. Per DECISION: a row
-        // for height H filters H and nothing else, so a txid re-decided in a later
-        // batch against a fresh deadline still executes there. Applying exclusions
-        // globally would skip a transaction the network ran — a divergence, and worse
-        // than the stall this prevents.
-        let applicable = select_applicable_exclusions(&conn)
-            .await
-            .context("Failed to load applicable finality exclusions")?;
-
-        // Announce ONLY now, after every step that can still abort the pass: each
-        // read/write above is fallible and `?`-propagates, and an observer told
-        // about a rollback that then never happens is wrong about reality (I6) —
-        // on restart a reorg can even re-render the verdict clean, making the
-        // announcement permanently false. The truncation below is the commit point.
-        self.consensus.emit_finality_events(&events);
-
-        // Roll back to before the invalid anchor so all state at the anchor height
-        // (including the invalid txs' effects) is wiped cleanly.
-        self.rollback(rollback_anchor.saturating_sub(1))
-            .await
-            .context("rollback failed during finality rollback")?;
-
-        // Fallible raw-tx resolution/filtering only after the truncation is durable:
-        // a failure here must not cancel a rollback finality already demanded.
-        self.prepare_replay(rollback_anchor, replay, applicable)
-            .await
-            .context("prepare_replay failed")?;
-
-        let checkpoint = self.consensus.get_checkpoint(&conn).await;
-        self.consensus
-            .emit_state_event(StateEvent::RollbackExecuted {
-                to_anchor: rollback_anchor,
-                entries_removed: 0,
-                checkpoint,
-            });
-        Ok(true)
-    }
-
-    /// Record a decided block this node will NOT execute.
-    ///
-    /// `batches` is the decided sequence and the only copy of it — Malachite asks
-    /// US for decided values (`GetDecidedValues`), it does not keep them. So a
-    /// consensus height left without a row is a hole in the record, and one that
-    /// cannot be repaired: the startup cleanup trims an unexecuted SUFFIX, never a
-    /// gap in the middle.
-    ///
-    /// Batches have always done this — the anchor gate records a batch it cannot
-    /// apply and returns `RecordedOnly`. Block decisions did not, and the asymmetry
-    /// was an oversight rather than a decision: the row costs nothing to write
-    /// (`batches` has no foreign keys, so naming a block we do not hold is legal,
-    /// and nothing references a block decision's row), while the batch case that
-    /// DID get built also has to write `batch_txids` and `unconfirmed_batch_txs`.
-    ///
-    /// Declining to execute stays correct — the block was reorged away and running
-    /// it would bind the wrong block to this consensus height. We just write down
-    /// that we declined.
-    async fn record_declined_block(
-        &mut self,
-        decision: &consensus_state::DeferredDecision,
-    ) -> Result<()> {
-        // Height and hash come from the decision itself — passing them alongside
-        // invited a caller to record one block's decision under another's identity.
-        let block_height = decision.value.block_height();
-        let decided_hash = decision.value.block_hash();
-        // FATAL on failure, deliberately. A declined decision that leaves no row is
-        // the unrefillable middle gap this function exists to prevent: once
-        // `current_height` moves past it, nothing re-decides the height and the
-        // startup cleanup trims only a suffix. Failing is recoverable — restart
-        // resumes consensus at this height, value sync re-delivers the decision,
-        // and it is re-declined and recorded. Swallowing the error is not.
-        insert_batch(
-            &self.db_conn(),
-            decision.consensus_height.as_u64(),
-            block_height,
-            &decided_hash.to_string(),
-            &decision.certificate,
-            true,
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to record declined block decision at consensus height {} \
-                 (block {block_height})",
-                decision.consensus_height
-            )
-        })
-    }
-
-    pub(super) async fn drain_deferred_decisions(&mut self) -> Result<()> {
-        // Batches whose anchor block has not arrived yet. Held ASIDE rather than
-        // stopping the drain: a waiting batch can only ever be unblocked by a
-        // block, and the block decisions that would deliver it sit behind it in
-        // this same queue — so parking on one could stall the very thing it waits
-        // for. Restored to the front, in order, whenever a block executes and at
-        // exit, so a batch is re-evaluated the moment its anchor lands.
-        //
-        // Every batch is judged ONLY on its own anchor — never held because an
-        // earlier one is waiting. Holding a ready batch for queue order strands it:
-        // the tip keeps climbing past its anchor while it sits here, and the
-        // execution gate demands an exact `anchor == tip` match, so it would come
-        // back as record-only and its transactions would never run even though
-        // peers ran them.
-        //
-        // That costs no ordering guarantee, because a batch can only ever execute
-        // at exactly its own anchor. Anchor order therefore fixes execution order
-        // on every node, whatever position a decision happens to occupy here.
-        let mut waiting: VecDeque<consensus_state::DeferredDecision> = VecDeque::new();
-
-        loop {
-            let cs = &mut self.consensus;
-            let Some(decision) = cs.deferred_decisions.pop_front() else {
-                break;
-            };
-
-            match &decision.value {
-                Value::Block {
-                    height: bh,
-                    hash: decided_hash,
-                } => {
-                    let bh = *bh;
-                    let decided_hash = *decided_hash;
-
-                    // Gate on the tip BEFORE touching `pending_blocks`. A block
-                    // can only execute at exactly `last_height + 1`; handing
-                    // `handle_block` anything else trips its height guard, which
-                    // is fatal to the reactor. Holding the block buffered is not
-                    // permission to run it — a node whose execution has fallen
-                    // behind caches the whole window from its tip to the
-                    // network's, so the buffer hit says nothing about ordering.
-                    if bh <= self.last_height {
-                        // Terminal, never parked: the height is already executed
-                        // (a re-decide after a rollback, or a sync replaying
-                        // both) or was reorged away. Parking a decision that
-                        // nothing can ever satisfy wedges the drain forever.
-                        // Reachable with the block still buffered, too — the
-                        // finality path deliberately keeps `pending_blocks`
-                        // across a rollback and re-execution.
-                        match select_block_at_height(&self.db_conn(), bh).await {
-                            Ok(row) => {
-                                warn!(
-                                    block_height = bh,
-                                    decided = %decided_hash,
-                                    executed = ?row.map(|r| r.hash),
-                                    last_height = self.last_height,
-                                    consensus_height = %decision.consensus_height,
-                                    "Dropping deferred block decision — at or below tip"
-                                );
-                                // Dropped is not unrecorded. `batches` is the only
-                                // copy of the decided sequence — Malachite asks us
-                                // for decided values rather than keeping them — and
-                                // the startup cleanup trims an unexecuted SUFFIX,
-                                // never a hole in the middle. A height that leaves
-                                // no row can never be served to a syncing peer.
-                                self.record_declined_block(&decision).await?;
-                                continue;
-                            }
-                            Err(e) => {
-                                warn!(error = %e, block_height = bh, "Block lookup failed during drain; parking decision");
-                                self.consensus.deferred_decisions.push_front(decision);
-                                break;
-                            }
-                        }
-                    }
-                    if bh > self.last_height + 1 {
-                        // A decision ahead of the tip is one of two things, told
-                        // apart by the buffered block at its height. After a
-                        // reorg DEEPER than one block, the stale decisions for
-                        // the orphaned heights land here (only `tip + 1` can be
-                        // declined by the hash check below), while the re-decided
-                        // chain-B blocks queue up BEHIND them — parking would
-                        // wedge the drain forever, on every node that ever syncs
-                        // across the reorg. The poller's canonical block at this
-                        // height carrying a different hash is exactly the
-                        // evidence the `tip + 1` decline acts on: decline and
-                        // record, and let the re-decisions behind it through.
-                        if let Some(block) = self.consensus.pending_blocks.get(&bh)
-                            && block.hash != decided_hash
-                        {
-                            warn!(
-                                block_height = bh,
-                                decided = %decided_hash,
-                                local = %block.hash,
-                                consensus_height = %decision.consensus_height,
-                                "Dropping stale deferred block decision ahead of the tip — \
-                                 the canonical chain has replaced it"
-                            );
-                            self.record_declined_block(&decision).await?;
-                            continue;
-                        }
-                        // No buffered block, or the hashes match: the
-                        // predecessors were decided by the network but never
-                        // reached this node's executor, and nothing here can
-                        // close that gap — the missed heights will not be
-                        // re-decided — so park and stay loud: this node needs a
-                        // re-sync, and executing out of order is fatal.
-                        error!(
-                            block_height = bh,
-                            last_height = self.last_height,
-                            gap = bh - self.last_height,
-                            consensus_height = %decision.consensus_height,
-                            "Deferred block decision is ahead of the tip — this node cannot \
-                             catch up on its own and needs a re-sync"
-                        );
-                        self.consensus.deferred_decisions.push_front(decision);
-                        break;
-                    }
-
-                    let block = {
-                        let cs = &mut self.consensus;
-                        cs.pending_blocks.remove(&bh)
-                    };
-                    if let Some(block) = block {
-                        // A rollback can leave a decision whose block was
-                        // reorged away; the block now pending at this height
-                        // belongs to the NEW chain. Executing it under the old
-                        // decision would bind the wrong block to that consensus
-                        // record — drop the stale decision instead and leave
-                        // the block pending for a fresh proposal.
-                        if block.hash != decided_hash {
-                            warn!(
-                                block_height = bh,
-                                decided = %decided_hash,
-                                local = %block.hash,
-                                consensus_height = %decision.consensus_height,
-                                "Dropping stale deferred block decision — hash mismatch after rollback"
-                            );
-                            self.record_declined_block(&decision).await?;
-                            self.consensus.pending_blocks.insert(bh, block);
-                            continue;
-                        }
-                        info!(
-                            block_height = bh,
-                            consensus_height = %decision.consensus_height,
-                            "Draining deferred block decision"
-                        );
-                        self.handle_block(block, &decision)
-                            .await
-                            .context("handle_block failed in deferred drain")?;
-                        // The tip moved — anything held may now be ready.
-                        restore_waiting(&mut self.consensus.deferred_decisions, &mut waiting);
-                    } else {
-                        // `bh == last_height + 1` and the poller has not
-                        // delivered it yet. The already-executed and reorged
-                        // cases were both settled by the tip gate above, so this
-                        // is the one genuinely transient case: park and wait for
-                        // `BlockInsert` to drive the drain again.
-                        info!(
-                            block_height = bh,
-                            consensus_height = %decision.consensus_height,
-                            "Deferred block still waiting for data"
-                        );
-                        let cs = &mut self.consensus;
-                        cs.deferred_decisions.push_front(decision);
-                        break;
-                    }
-                }
-                Value::Batch {
-                    anchor_height,
-                    anchor_hash,
-                    txs,
-                    ..
-                } => {
-                    if *anchor_height > self.last_height {
-                        // debug!, not info!: every held batch is re-tested after every
-                        // block execution, so a lagging node catching up would emit
-                        // this once per (held batch x block) from inside the loop.
-                        debug!(
-                            anchor_height = *anchor_height,
-                            last_height = self.last_height,
-                            consensus_height = %decision.consensus_height,
-                            "Deferred batch still waiting for anchor — holding aside"
-                        );
-                        waiting.push_back(decision);
-                        continue;
-                    }
-                    info!(
-                        anchor_height = *anchor_height,
-                        consensus_height = %decision.consensus_height,
-                        num_txs = txs.len(),
-                        "Draining deferred batch decision"
-                    );
-                    let anchor_height = *anchor_height;
-                    let anchor_hash = *anchor_hash;
-                    let resolved_txs = self
-                        .resolve_batch_txs(txs, decision.consensus_height.as_u64())
-                        .await?;
-                    let outcome = self
-                        .process_decided_batch(
-                            anchor_height,
-                            anchor_hash,
-                            decision.consensus_height,
-                            &decision.certificate,
-                            &resolved_txs,
-                            decision.certified_txs.as_deref(),
-                        )
-                        .await
-                        .context("process_decided_batch failed in deferred drain")?;
-                    if let Some(txids) = outcome.announced_txids(&resolved_txs)
-                        && let Some(tx) = &self.event_tx
-                        && tx.send(Event::BatchProcessed { txids }).await.is_err()
-                    {
-                        warn!("Event receiver dropped, cannot send BatchProcessed event");
-                    }
-                }
-            }
-        }
-        restore_waiting(&mut self.consensus.deferred_decisions, &mut waiting);
-        Ok(())
     }
 
     pub(super) async fn handle_get_value(
@@ -1619,279 +1398,62 @@ impl<E: Executor> Reactor<E> {
         certificate: CommitCertificate<Ctx>,
         reply: tokio::sync::oneshot::Sender<Next<Ctx>>,
     ) -> Result<consensus_state::ConsensusResult> {
-        let conn = self.db_conn();
-        let last_height = self.last_height;
-        let mut result = consensus_state::ConsensusResult::None;
-
-        // Take every proposal we held for this height (all rounds) and pick the
-        // one matching the decided value. We match on value_id, not round: a node
-        // can decide a round it locally advanced past, so the value is often filed
-        // under a different round than the one in the certificate.
-        let decided = self
+        ensure!(
+            self.consensus.pending_next_height.is_none(),
+            "previous finalized callback is still awaiting execution"
+        );
+        let value = self
             .consensus
-            .undecided
-            .remove(&certificate.height)
-            .and_then(|rounds| {
-                rounds
-                    .into_values()
-                    .find(|p| p.value.id() == certificate.value_id)
+            .finalized_value(&self.db_conn(), &certificate)
+            .await?;
+        self.consensus.undecided.remove(&certificate.height);
+        if let Some(obs) = &self.consensus.observation {
+            let _ = obs.decided_tx.try_send(DecidedBatch {
+                validator_index: self.consensus.validator_index,
+                consensus_height: certificate.height,
+                value,
             });
-
-        if let Some(proposal) = decided {
-            if let Some(obs) = &self.consensus.observation {
-                let _ = obs.decided_tx.try_send(DecidedBatch {
-                    validator_index: self.consensus.validator_index,
-                    consensus_height: certificate.height,
-                    value: proposal.value.clone(),
-                });
-            }
-            match &proposal.value {
-                Value::Batch {
-                    anchor_height,
-                    anchor_hash,
-                    txs,
-                } => {
-                    let full_txs = self
-                        .resolve_batch_txs(txs, certificate.height.as_u64())
-                        .await?;
-
-                    for tx in &full_txs {
-                        self.consensus.mempool.suppress(&tx.compute_txid());
-                    }
-
-                    let cert_bytes = encode_commit_certificate(&certificate)
-                        .context("Failed to encode commit certificate")?
-                        .encode_to_vec();
-
-                    if *anchor_height > last_height {
-                        info!(
-                            anchor = anchor_height,
-                            last_height,
-                            consensus_height = %certificate.height,
-                            "Deferring batch — anchor block not yet processed"
-                        );
-                        self.consensus.deferred_decisions.push_back(
-                            consensus_state::DeferredDecision {
-                                consensus_height: certificate.height,
-                                value: proposal.value.clone(),
-                                certificate: cert_bytes,
-                                certified_txs: None,
-                            },
-                        );
-                    } else {
-                        // anchor_height <= last_height: process_decided_batch's
-                        // anchor gate executes at an exact tip match and
-                        // records-only (with certified content) for anything
-                        // stale — one gate for both callers.
-                        let outcome = self
-                            .process_decided_batch(
-                                *anchor_height,
-                                *anchor_hash,
-                                certificate.height,
-                                &cert_bytes,
-                                &full_txs,
-                                // Freshly decided — never narrowed by a replay.
-                                None,
-                            )
-                            .await
-                            .context("process_decided_batch failed in Finalized handler")?;
-                        if let Some(txids) = outcome.announced_txids(&full_txs) {
-                            result = consensus_state::ConsensusResult::BatchProcessed { txids };
-                        }
-                    }
-                }
-                Value::Block { height, hash } => {
-                    let cert_bytes = encode_commit_certificate(&certificate)
-                        .context("Failed to encode commit certificate")?
-                        .encode_to_vec();
-
-                    // Take the block only when it can execute immediately: the
-                    // exact next height, with no earlier block decision still
-                    // queued ahead of it. Everything else goes through the
-                    // deferred queue, the single ordered execution path.
-                    //
-                    // Without this, a buffered-but-not-next block was handed
-                    // straight to the executor, whose height guard is a `bail!`
-                    // — and the `batches` row had already been written. That is
-                    // how a signet validator spent 20 h restarting: each boot it
-                    // took one decision for a height 128 ahead of its tip, wrote
-                    // the record, died on the guard, and came back one consensus
-                    // height further from the state it actually held.
-                    //
-                    // The queue check is `is_block`, not `is_empty`: a deferred
-                    // BATCH must not hold a block back. Batches are only ever
-                    // gated on their own anchor (see `drain_deferred_decisions`),
-                    // and a batch waiting on this very block would deadlock
-                    // against it.
-                    let in_order = *height == self.last_height + 1
-                        && !self
-                            .consensus
-                            .deferred_decisions
-                            .iter()
-                            .any(|d| d.value.is_block());
-                    let ready = if in_order {
-                        self.consensus.pending_blocks.remove(height)
-                    } else {
-                        None
-                    };
-
-                    // Built ONCE. Every arm needs the same four fields, and
-                    // `certificate` is the full validator-set commit certificate —
-                    // cloning it per arm is pure waste.
-                    let decision = consensus_state::DeferredDecision {
-                        consensus_height: certificate.height,
-                        value: proposal.value.clone(),
-                        certificate: cert_bytes,
-                        certified_txs: None,
-                    };
-
-                    // Being buffered at the right height is not the same as being the
-                    // DECIDED block. A rollback can leave a decision whose block was
-                    // reorged away, and the block now pending at that height belongs
-                    // to the new chain — executing it under the old decision binds the
-                    // wrong block to that consensus record. The deferred drain has
-                    // always checked this; this path did not, so the guard held only
-                    // when the decision happened to arrive late.
-                    match ready {
-                        // Buffered, and it IS the decided block.
-                        Some(block) if block.hash == *hash => {
-                            info!(
-                                block_height = height,
-                                block_hash = %hash,
-                                consensus_height = %certificate.height,
-                                "Block decided and ready to process"
-                            );
-                            self.handle_block(block, &decision)
-                                .await
-                                .context("handle_block failed after consensus block")?;
-                        }
-                        // Buffered, but a DIFFERENT block — the decision is stale.
-                        // Settled here rather than falling through: the arm below asks
-                        // the DB whether an EXECUTED block differs, and at
-                        // `last_height + 1` nothing is executed yet, so it would read
-                        // "not stale" and defer a decision we just declined.
-                        Some(block) => {
-                            warn!(
-                                block_height = height,
-                                decided = %hash,
-                                local = %block.hash,
-                                consensus_height = %certificate.height,
-                                "Dropping stale block decision — hash mismatch after rollback"
-                            );
-                            self.record_declined_block(&decision).await?;
-                            // Back in the buffer: it is the canonical block for this
-                            // height on the new chain and still needs a fresh decision.
-                            self.consensus.pending_blocks.insert(*height, block);
-                        }
-                        // Not buffered: either the poller has not delivered it yet, or
-                        // the height was executed with a different block (reorged).
-                        None => {
-                            let is_stale = matches!(
-                                select_block_at_height(&conn, *height).await,
-                                Ok(Some(row)) if row.hash != *hash
-                            );
-                            if is_stale {
-                                warn!(
-                                    block_height = height,
-                                    block_hash = %hash,
-                                    consensus_height = %certificate.height,
-                                    "Ignoring stale block decision (post-rollback)"
-                                );
-                                self.record_declined_block(&decision).await?;
-                            } else {
-                                info!(
-                                    block_height = height,
-                                    block_hash = %hash,
-                                    last_height = self.last_height,
-                                    consensus_height = %certificate.height,
-                                    "Block decided but not ready to execute — deferring"
-                                );
-                                self.consensus.deferred_decisions.push_back(decision);
-                                // Run the drain NOW rather than waiting for the next
-                                // block event. The decision just queued may already be
-                                // settleable — after a ≥2-deep reorg, the stale
-                                // pre-reorg decision lands here with its replacement
-                                // block already buffered, and a node syncing that
-                                // range receives no further block events to trigger
-                                // the drain: without this it parks forever with the
-                                // re-decided chain queued behind it.
-                                self.advance()
-                                    .await
-                                    .context("advance failed after deferring a block decision")?;
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // We finalized a value we never assembled locally — a batch decided at
-            // a round whose proposal we never saw, whose txs are not in our pool.
-            // We have the certificate but not the content, so there is no row to
-            // write. Falling through to advance `current_height` past this height
-            // would make it a PERMANENT hole (I3): Malachite never re-delivers a
-            // height it considers decided, and the startup cleanup only trims a
-            // suffix. Fail-stop instead (I5) — restart resumes at this height and
-            // value-sync re-delivers the decided value into `undecided`, where the
-            // arm above records it. A node that keeps hitting this is persistently
-            // unable to follow consensus, which is exactly the loud stop an
-            // operator needs, not a quiet divergence.
-            bail!(
-                "Finalized value {} at height {} is not among our undecided proposals — \
-                 cannot record it; stopping so a restart re-syncs the decided value",
-                certificate.value_id,
-                certificate.height,
-            );
         }
-
-        // An OOM backstop, not a policy knob. A node that genuinely cannot catch
-        // up accumulates one deferred decision per decided value, each carrying a
-        // certificate and possibly raw txs, forever. Failing here turns an
-        // eventual OOM-kill into an explicit, diagnosable exit that names the
-        // gap. Deliberately far above any real backlog: a tight bound would
-        // recreate the crash loop this whole change exists to remove, and on a
-        // bare-quorum network a crash loop takes the chain down with it.
-        if self.consensus.deferred_decisions.len() > MAX_DEFERRED_DECISIONS {
-            bail!(
-                "deferred decision queue exceeded {MAX_DEFERRED_DECISIONS} entries at block \
-                 height {} (consensus height {}) — this node is not executing what consensus \
-                 decides and cannot recover on its own; re-sync required",
-                self.last_height,
-                certificate.height
-            );
-        }
-
-        self.consensus.current_height = certificate.height.increment();
         self.consensus.current_round = Round::Nil;
         self.consensus.pending_proposal = None;
-
-        anyhow::ensure!(
-            self.consensus.pending_next_height.is_none(),
-            "previous finalized decision is still awaiting execution"
-        );
         self.consensus.pending_next_height = Some((certificate.height, reply));
-
-        Ok(result)
+        Ok(consensus_state::ConsensusResult::None)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{batch_is_ordered, build_replay_queue, dependency_sort, restore_waiting};
+    use super::{batch_is_ordered, dependency_sort};
+    use crate::consensus::test_fixtures::context;
     use crate::consensus::{Height, Value};
     use crate::database::queries::{
         delete_unconfirmed_batch_txs_below, insert_batch, insert_unconfirmed_batch_tx,
+        select_unconfirmed_batch_tx,
     };
+    use crate::protocol::coordinator::v1::build_replay_queue;
     use crate::reactor::consensus_state::DeferredDecision;
-    use crate::reactor::{Reactor, lite_executor::LiteExecutor};
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use bitcoin::absolute::LockTime;
-    use bitcoin::consensus::serialize;
+    use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::hashes::Hash;
     use bitcoin::transaction::Version;
-    use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness};
+    use bitcoin::{
+        Amount, BlockHash, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
+    };
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::collections::VecDeque;
+
+    /// Put batches held during a drain pass back at the FRONT of the queue, in their
+    /// original order, so nothing is reordered relative to what follows them.
+    fn restore_waiting(
+        queue: &mut VecDeque<DeferredDecision>,
+        waiting: &mut VecDeque<DeferredDecision>,
+    ) {
+        while let Some(decision) = waiting.pop_back() {
+            queue.push_front(decision);
+        }
+    }
 
     /// A tx spending each outpoint in `parents`, with one output. `nonce`
     /// perturbs the output value so distinct txs get distinct txids.
@@ -1951,17 +1513,26 @@ mod tests {
         }
         for (height, expected) in [(10, Some(first)), (11, Some(second.clone())), (12, None)] {
             assert_eq!(
-                Reactor::<LiteExecutor>::resolve_tx_from_db(&conn, &txid, height).await,
+                select_unconfirmed_batch_tx(&conn, &txid.to_string(), height)
+                    .await
+                    .unwrap()
+                    .map(|bytes| deserialize::<Transaction>(&bytes).unwrap()),
                 expected
             );
         }
         delete_unconfirmed_batch_txs_below(&conn, 11).await.unwrap();
         assert_eq!(
-            Reactor::<LiteExecutor>::resolve_tx_from_db(&conn, &txid, 10).await,
+            select_unconfirmed_batch_tx(&conn, &txid.to_string(), 10)
+                .await
+                .unwrap()
+                .map(|bytes| deserialize::<Transaction>(&bytes).unwrap()),
             None
         );
         assert_eq!(
-            Reactor::<LiteExecutor>::resolve_tx_from_db(&conn, &txid, 11).await,
+            select_unconfirmed_batch_tx(&conn, &txid.to_string(), 11)
+                .await
+                .unwrap()
+                .map(|bytes| deserialize::<Transaction>(&bytes).unwrap()),
             Some(second)
         );
     }
@@ -2018,9 +1589,9 @@ mod tests {
     fn decision(consensus_height: u64) -> DeferredDecision {
         DeferredDecision {
             consensus_height: Height::new(consensus_height),
-            value: Value::new_batch_raw(0, bitcoin::BlockHash::all_zeros(), vec![]),
+            value: Value::new_batch_raw(context(), 0, BlockHash::all_zeros(), vec![]).unwrap(),
             certificate: Vec::new(),
-            certified_txs: None,
+            execution_txs: None,
         }
     }
 
@@ -2035,7 +1606,7 @@ mod tests {
         txs: Vec<Transaction>,
     ) -> (DeferredDecision, Vec<Transaction>) {
         let mut d = decision(consensus_height);
-        d.value = Value::new_batch_raw(0, bitcoin::BlockHash::all_zeros(), txs.clone());
+        d.value = Value::new_batch_raw(context(), 0, BlockHash::all_zeros(), txs.clone()).unwrap();
         (d, txs)
     }
 
@@ -2051,7 +1622,13 @@ mod tests {
         txs: Vec<Transaction>,
     ) -> (DeferredDecision, Vec<Transaction>) {
         let mut d = decision(consensus_height);
-        d.value = Value::new_batch_raw(anchor_height, bitcoin::BlockHash::all_zeros(), txs.clone());
+        d.value = Value::new_batch_raw(
+            context(),
+            anchor_height,
+            BlockHash::all_zeros(),
+            txs.clone(),
+        )
+        .unwrap();
         (d, txs)
     }
 
@@ -2095,7 +1672,7 @@ mod tests {
             closure.contains(&child.compute_txid()),
             "the closure must reach a descendant carried by a survivor"
         );
-        let survivor_txs = queue[1].value.batch_raw_txs();
+        let survivor_txs = queue[1].execution_txs();
         assert_eq!(
             survivor_txs.len(),
             1,
@@ -2126,7 +1703,7 @@ mod tests {
 
         let survivor = &queue[1];
         assert_eq!(
-            survivor.value.batch_raw_txs().len(),
+            survivor.execution_txs().len(),
             1,
             "the descendant must not execute"
         );
@@ -2159,7 +1736,7 @@ mod tests {
 
         let survivor = &queue[1];
         assert!(
-            survivor.value.batch_raw_txs().is_empty(),
+            survivor.execution_txs().is_empty(),
             "every tx descends from the excluded parent, so nothing may execute"
         );
         assert_eq!(
@@ -2187,12 +1764,11 @@ mod tests {
         );
 
         assert!(
-            queue[0].value.batch_raw_txs().is_empty(),
+            queue[0].execution_txs().is_empty(),
             "the decision it was excluded from must drop it"
         );
         let later: Vec<Txid> = queue[1]
-            .value
-            .batch_raw_txs()
+            .execution_txs()
             .iter()
             .map(|x| x.compute_txid())
             .collect();
@@ -2221,7 +1797,7 @@ mod tests {
         );
 
         assert!(
-            !queue[2].value.batch_raw_txs().is_empty(),
+            !queue[2].execution_txs().is_empty(),
             "the child must survive — its parent executes at another height"
         );
     }
@@ -2246,13 +1822,13 @@ mod tests {
         );
 
         assert!(
-            queue[1].value.batch_raw_txs().is_empty(),
+            queue[1].execution_txs().is_empty(),
             "the child executes before the parent's re-decide rebuilds its output, \
              so it must drop"
         );
         assert!(dropped.contains(&child.compute_txid()));
         assert_eq!(
-            queue[2].value.batch_raw_txs().len(),
+            queue[2].execution_txs().len(),
             1,
             "the re-decided parent itself still executes at its own height"
         );
@@ -2278,7 +1854,7 @@ mod tests {
         );
 
         assert_eq!(
-            queue[0].value.batch_raw_txs().len(),
+            queue[0].execution_txs().len(),
             1,
             "the child ran before the parent in the original sequence, so the \
              parent's exclusion cannot retroactively orphan it"
@@ -2302,7 +1878,7 @@ mod tests {
         );
 
         assert!(
-            queue[0].value.batch_raw_txs().is_empty(),
+            queue[0].execution_txs().is_empty(),
             "the parent's exclusion below the replay window still orphans the child"
         );
         assert!(dropped.contains(&child.compute_txid()));
@@ -2332,8 +1908,7 @@ mod tests {
         );
 
         let kept: Vec<Txid> = queue[0]
-            .value
-            .batch_raw_txs()
+            .execution_txs()
             .iter()
             .map(|t| t.compute_txid())
             .collect();
@@ -2364,7 +1939,7 @@ mod tests {
         );
 
         assert!(
-            queue[1].value.batch_raw_txs().is_empty(),
+            queue[1].execution_txs().is_empty(),
             "a descendant of an excluded, otherwise-absent parent must not execute"
         );
         assert!(dropped.contains(&child.compute_txid()));
@@ -2438,7 +2013,7 @@ mod tests {
             Vec::new(),
             &HashMap::new(),
         );
-        assert_eq!(queue[0].value.batch_raw_txs().len(), 2);
+        assert_eq!(queue[0].execution_txs().len(), 2);
         assert!(excluded.is_empty());
     }
 
@@ -2467,7 +2042,7 @@ mod tests {
 
         let survivor = &queue[1];
         assert_eq!(
-            survivor.value.batch_raw_txs().len(),
+            survivor.execution_txs().len(),
             1,
             "only the kept tx may EXECUTE"
         );
@@ -2499,8 +2074,8 @@ mod tests {
 
         // Pass one already ran: `first` was excluded, and the decision carries the
         // full decided list alongside the narrowed transactions.
-        let (mut decision, _) = carrying(14, vec![second.clone(), survivor_tx.clone()]);
-        decision.certified_txs = Some(decided_all.clone());
+        let (mut decision, _) = carrying(14, decided_all.clone());
+        decision.execution_txs = Some(vec![second.clone(), survivor_tx.clone()]);
 
         // Pass two excludes `second`.
         let excluded = excl(&[(14, second.compute_txid())]);
@@ -2511,7 +2086,7 @@ mod tests {
         );
 
         assert_eq!(
-            queue[0].value.batch_raw_txs().len(),
+            queue[0].execution_txs().len(),
             1,
             "only the untouched tx should remain executable"
         );
@@ -2522,17 +2097,17 @@ mod tests {
         );
     }
 
-    /// Nothing excluded means nothing to preserve — the value is already the
-    /// decided content and a redundant copy would just be a second answer.
+    /// Without exclusions, execution and certified history retain the same body.
     #[test]
-    fn build_replay_queue_leaves_certified_txs_unset_when_nothing_is_filtered() {
+    fn build_replay_queue_preserves_execution_and_certified_txs_without_exclusions() {
         let a = tx(&[OutPoint::null()], 1);
         let (queue, _) = build_replay_queue(
             vec![carrying(10, vec![a.clone()])],
             Vec::new(),
             &HashMap::new(),
         );
-        assert!(queue[0].certified_txs.is_none());
+        assert_eq!(queue[0].execution_txs(), vec![a.clone()]);
+        assert_eq!(queue[0].decided_txs(), vec![a]);
     }
 
     /// A queued decision BELOW the replay set's max must SURVIVE. Anchors go

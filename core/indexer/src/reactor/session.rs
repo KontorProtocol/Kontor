@@ -2,7 +2,7 @@ use std::future::Future;
 
 use anyhow::{Result, anyhow, bail, ensure};
 
-use super::Reactor;
+use super::execution::ExecutionContext;
 use super::executor::Executor;
 use crate::database::canonical_history::{self, HistoryState};
 use crate::database::queries::prune_contract_state;
@@ -14,7 +14,7 @@ use crate::protocol::identity::ExecutionIdentity;
 use crate::runtime::ownership::LinkedCanonicalRootLease;
 use crate::runtime::ownership::adapter::HostFailure;
 
-#[cfg(any(test, feature = "protocol-qualification"))]
+#[cfg(feature = "protocol-qualification")]
 use crate::protocol::coordinator::linked::PreparedBlock;
 #[cfg(test)]
 use crate::protocol::coordinator::linked::TransactionRecognizer;
@@ -27,7 +27,7 @@ use crate::runtime::pool::LinkedSession;
 #[cfg(test)]
 use tokio::sync::MutexGuard;
 
-impl<E: Executor> Reactor<E> {
+impl<E: Executor> ExecutionContext<E> {
     pub(super) fn record_application(
         &self,
         storage_height: u64,
@@ -170,7 +170,7 @@ impl<E: Executor> Reactor<E> {
         );
     }
 
-    #[cfg(any(test, feature = "protocol-qualification"))]
+    #[cfg(feature = "protocol-qualification")]
     pub(super) async fn execute_block_unit(
         &mut self,
         selection: &ExecutionSelection,

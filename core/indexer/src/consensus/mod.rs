@@ -8,6 +8,8 @@ mod part_streams;
 mod proposal;
 mod proposal_part;
 pub mod signing;
+#[cfg(test)]
+pub(crate) mod test_fixtures;
 mod validator_set;
 mod value;
 mod vote;
@@ -21,11 +23,11 @@ pub use address::Address;
 pub use context::Ctx;
 pub use genesis::Genesis;
 pub use height::Height;
-pub use part_streams::{PartStreamsMap, ProposalParts};
+pub use part_streams::{PartStreamsMap, ProposalParts, ReassemblySaturated};
 pub use proposal::Proposal;
 pub use proposal_part::{ProposalData, ProposalFin, ProposalInit, ProposalPart};
 pub use validator_set::{Validator, ValidatorSet};
-pub use value::{BatchTx, Value, ValueId};
+pub use value::{Value, ValueId};
 pub use vote::Vote;
 
 // Re-export from malachite for downstream crates that don't depend on it directly

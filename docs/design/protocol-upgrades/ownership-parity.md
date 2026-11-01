@@ -56,3 +56,11 @@ cancellation, cleanup and commit races, which this non-cancelled fixture does no
 Do not reuse the earlier K2a baseline as the S2 oracle or compare two owned paths
 and call that cross-revision acceptance. Passing this comparison does not replace
 the affected cross-platform qualification or consolidated phase reviews.
+
+
+For K4 and later candidates, enable `protocol-qualification` and use compare
+mode only. The ignored test delegates to the same execution-only comparator as
+`kontor qualify-executor-baseline <archive>`. It preserves the archive's lack of
+certified history; consensus startup is tested separately with authentic fixture
+certificates. Recording an archive still requires the preserved pre-extraction
+revision specified above. The candidate cannot redefine its own baseline.

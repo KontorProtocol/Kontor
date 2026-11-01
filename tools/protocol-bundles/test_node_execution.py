@@ -1,12 +1,28 @@
 import json
+import copy
+import hashlib
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 
-from build import digest
-from qualify_node import CASES, execute_node
+from build import ROOT, digest
+from qualify_node import CASES, CERTIFIED_CHECKS, execute_node, verify_certified_history
 from test_semantic_baseline import sample_observation
+
+
+def certified_sample():
+    """Synthetic gate input, never evidence that the Rust fixture ran."""
+    def hashed(domain, value):
+        return hashlib.sha256(domain + b'\0' + value).hexdigest()
+    executor = hashed(b'kontor/execution-definition/v1',
+                      (ROOT / 'protocol-bundles/executor-observer/definition.bin').read_bytes())
+    chain = bytes([7]) * 32
+    manifest = b'KPM1' + chain + (1).to_bytes(8, 'big') + bytes(32) + bytes.fromhex(executor) + bytes(164)
+    protocol = hashed(b'kontor/protocol-manifest/v1', manifest)
+    return {**{key: True for key in CERTIFIED_CHECKS}, 'authenticated': 15, 'closed': 15,
+            'executor_definition': executor, 'manifest': manifest.hex(), 'chain': chain.hex(),
+            'protocol': protocol, 'era': hashed(b'kontor/genesis-era/v1', chain + bytes.fromhex(protocol))}
 
 
 class NodeExecution(unittest.TestCase):
@@ -32,6 +48,40 @@ class NodeExecution(unittest.TestCase):
                 'qualification_command': True, 'executable_sha256': digest(self.binary),
                 'installed': {'path': str(self.binary), 'sha256': digest(self.binary)}}}))
         self.success.write_text('stale success')
+
+    def test_certified_gate_requires_complete_observer_bound_evidence(self):
+        original = certified_sample()
+        verify_certified_history({'certified_history': original}, 'k4-node')
+        for mutation in ('missing', 'check', 'count', 'executor', 'protocol', 'era', 'manifest'):
+            altered = copy.deepcopy(original)
+            if mutation == 'missing':
+                altered = None
+            elif mutation == 'check':
+                altered['ack_after_durable_input'] = False
+            elif mutation == 'count':
+                altered['closed'] = 14
+            elif mutation == 'manifest':
+                altered['manifest'] = altered['manifest'][:-2]
+            else:
+                altered['executor_definition' if mutation == 'executor' else mutation] = '00' * 32
+            with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
+                verify_certified_history({'certified_history': altered}, 'k4-node')
+        with self.assertRaisesRegex(RuntimeError, 'legacy qualification'):
+            verify_certified_history({'certified_history': original}, 'legacy-qualification')
+
+    def test_k4_execution_rejects_missing_certified_evidence(self):
+        self.observations['executors'][1]['graph'] = 'observer'
+        self.observations['storage_contracts']['rejected_before_construction'] = [
+            f'{graph}:{mutation}' for graph in ('first', 'observer')
+            for mutation in ('missing', 'unknown', 'changed', 'multiple')]
+        self.prepare()
+        report = json.loads(self.report.read_text())
+        report['link_set'] = 'k4-node'
+        report['graphs'][1]['graph'] = 'observer'
+        self.report.write_text(json.dumps(report))
+        with self.assertRaisesRegex(RuntimeError, 'certified history evidence'):
+            execute_node(self.report, 'k4-node')
+        self.assertFalse(self.success.exists())
 
     def test_pass_binds_raw_output_and_audited_binary(self):
         self.prepare()

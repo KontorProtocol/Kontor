@@ -1322,6 +1322,12 @@ impl RegTesterCluster {
             node_configs[offset + 1].running = Some(ClusterNode { client, child });
         }
 
+        // Availability requires the first certified block. Mine it before the
+        // availability barrier, or fresh clusters wait forever at height 101.
+        bitcoin_client
+            .generate_to_address(1, &identity.address.to_string())
+            .await?;
+
         // Now wait for *every* active node — seed included — to become available.
         // The seed was only waited for its listen address above (so its bootstrap
         // address could be handed to the followers before they existed); now that
@@ -1335,11 +1341,6 @@ impl RegTesterCluster {
             .filter_map(|nc| nc.running.as_ref().map(|cn| cn.client.clone()))
             .collect();
         futures_util::future::try_join_all(active_clients.iter().map(Self::wait_for_available))
-            .await?;
-
-        // Mine a block so we can verify all nodes process it (proves peer connectivity).
-        bitcoin_client
-            .generate_to_address(1, &identity.address.to_string())
             .await?;
 
         // Start the auto-miner

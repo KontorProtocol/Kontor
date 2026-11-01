@@ -1,0 +1,17 @@
+error: Store derive does not support generic parameters (lifetimes or types)
+ --> tests/ui/store_invalid_generics.rs:4:12
+  |
+4 | struct Test<'a> {
+  |            ^
+
+error: Store derive does not support generic parameters (lifetimes or types)
+ --> tests/ui/store_invalid_generics.rs:9:13
+  |
+9 | struct Test1<T> {
+  |             ^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+  --> tests/ui/store_invalid_generics.rs:11:2
+   |
+11 | }
+   |  ^ consider adding a `main` function to `$DIR/tests/ui/store_invalid_generics.rs`

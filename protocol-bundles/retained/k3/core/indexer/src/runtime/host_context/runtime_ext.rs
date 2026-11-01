@@ -1,0 +1,380 @@
+use anyhow::{Error, Result};
+use bitcoin::hashes::Hash;
+use futures_util::StreamExt;
+use serde::Deserialize;
+use wasmtime::component::{Access, Resource};
+use wasmtime::{AsContext, Trap};
+
+use crate::protocol::v1::storage_error::ReadError;
+use crate::runtime::host_storage::decode_storage_value;
+use crate::runtime::wit::kontor::built_in::context::HolderRef;
+use crate::runtime::wit::{
+    Contract, CoreContext, FallContext, HasContractId, Holder, Keys, ProcContext, ProcStorage,
+    Signer, StorageRows, Transaction, ViewContext, ViewStorage,
+};
+use crate::runtime::{ExecutionError, Runtime, fuel::Fuel, hash_bytes};
+
+impl Runtime {
+    pub(super) async fn _generate_id<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+    ) -> Result<String> {
+        Fuel::CryptoGenerateId.consume(accessor)?;
+        let count = self.id_generation_counter.get().await;
+        self.id_generation_counter.increment().await;
+        Ok(hex::encode(
+            &hash_bytes(
+                &[
+                    self.tx_context()
+                        .expect("Transaction context must be set to generate ids")
+                        .txid
+                        .to_raw_hash()
+                        .to_byte_array()
+                        .to_vec(),
+                    count.to_le_bytes().to_vec(),
+                ]
+                .concat(),
+            )[0..8],
+        ))
+    }
+
+    pub(super) async fn _signer_to_string<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<Signer>,
+    ) -> Result<String> {
+        Fuel::SignerToString.consume(accessor)?;
+        Ok(self.table.lock().await.get(&self_)?.to_string())
+    }
+
+    pub(super) async fn _proc_signer<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<Signer>> {
+        Fuel::ProcSigner.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        let signer = table.get(&self_)?.signer.clone();
+        Ok(table.push(signer)?)
+    }
+
+    pub(super) async fn _proc_payer<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<Holder>> {
+        Fuel::ProcPayer.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        let payer = table.get(&self_)?.payer.clone();
+        Ok(table.push(payer)?)
+    }
+
+    /// Look up a context resource's `contract_id`, resolve it to the
+    /// contract's address via storage, and push a fresh `Contract`
+    /// resource. Generic over the context type via `HasContractId` so
+    /// `proc`, `core`, and `view` all share one implementation; the
+    /// caller picks the right `Fuel` variant for the cost model.
+    pub(super) async fn _contract<C, T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<C>,
+        fuel: Fuel,
+    ) -> Result<Resource<Contract>>
+    where
+        C: HasContractId,
+    {
+        fuel.consume(accessor)?;
+        let contract_id = {
+            let table = self.table.lock().await;
+            table.get(&self_)?.get_contract_id()
+        };
+        let address = self
+            .storage
+            .contract_address(contract_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("contract_id {contract_id} has no address"))?;
+        Fuel::ContractNameBytes(address.name.len() as u64).consume(accessor)?;
+        let mut table = self.table.lock().await;
+        Ok(table.push(Contract { address })?)
+    }
+
+    pub(super) async fn _proc_contract_signer<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<Signer>> {
+        Fuel::ProcContractSigner.consume(accessor)?;
+        let contract_id = {
+            let table = self.table.lock().await;
+            table.get(&self_)?.contract_id
+        };
+        let signer_id = self
+            .storage
+            .contract_signer(contract_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no signer_id found for contract_id {contract_id}"))?;
+        let mut table = self.table.lock().await;
+        Ok(table.push(Signer::new_contract(contract_id, signer_id))?)
+    }
+
+    pub(super) async fn _proc_transaction<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        _: Resource<ProcContext>,
+    ) -> Result<Resource<Transaction>> {
+        Fuel::ProcTransaction.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        Ok(table.push(Transaction {})?)
+    }
+
+    pub(super) async fn _proc_view_context<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<ViewContext>> {
+        Fuel::ProcViewContext.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
+        Ok(table.push(ViewContext { contract_id })?)
+    }
+
+    pub(super) async fn _proc_view_storage<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<ProcStorage>,
+    ) -> Result<Resource<ViewStorage>> {
+        Fuel::ProcViewContext.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
+        Ok(table.push(ViewStorage { contract_id })?)
+    }
+
+    pub(super) async fn _view_storage<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<ViewContext>,
+    ) -> Result<Resource<ViewStorage>> {
+        Fuel::ViewStorage.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
+        Ok(table.push(ViewStorage { contract_id })?)
+    }
+
+    pub(super) async fn _proc_storage<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<ProcStorage>> {
+        Fuel::ProcStorage.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
+        Ok(table.push(ProcStorage { contract_id })?)
+    }
+
+    pub(super) async fn _next<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<Keys>,
+    ) -> Result<Option<Vec<u8>>> {
+        Fuel::StorageScan.consume(accessor)?;
+        let k: Option<Vec<u8>> = self
+            .table
+            .lock()
+            .await
+            .get_mut(&self_)?
+            .stream
+            .next()
+            .await
+            .transpose()?;
+        if let Some(bytes) = &k {
+            tracing::trace!("keys.next() returned {} bytes", bytes.len());
+            Fuel::KeysNext(bytes.len() as u64).consume(accessor)?;
+        }
+        // The child key's codec element bytes; the guest decodes it.
+        Ok(k)
+    }
+
+    pub(super) async fn _next_storage_row<T, V: for<'de> Deserialize<'de>>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<StorageRows>,
+    ) -> Result<Option<(Vec<u8>, V)>> {
+        Fuel::StorageScan.consume(accessor)?;
+        let fuel = accessor.as_context().get_fuel()?;
+        let max_bytes = fuel / Fuel::KeysNext(1).cost();
+        let item = self
+            .table
+            .lock()
+            .await
+            .get_mut(&self_)?
+            .cursor
+            .next(max_bytes)
+            .await
+            .map_err(|error| -> Error {
+                match error {
+                    ReadError::ValueTooLarge => Trap::OutOfFuel.into(),
+                    ReadError::NonScalarRow => ExecutionError::Deterministic(error.into()).into(),
+                    other => ExecutionError::NonDeterministic(other.into()).into(),
+                }
+            })?;
+        match item {
+            Some((member, raw_value)) => {
+                // Meter member + the raw value bytes read from the log (a covering read
+                // pays for the projection it returns, not just the member).
+                Fuel::KeysNext((member.len() + raw_value.len()) as u64).consume(accessor)?;
+                Ok(Some((member, decode_storage_value(&raw_value)?)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(super) async fn _fall_signer<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<FallContext>,
+    ) -> Result<Option<Resource<Signer>>> {
+        Fuel::FallSigner.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        Ok(table
+            .get(&self_)?
+            .signer
+            .clone()
+            .map(|s| table.push(s))
+            .transpose()?)
+    }
+
+    pub(super) async fn _fall_payer<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<FallContext>,
+    ) -> Result<Option<Resource<Holder>>> {
+        Fuel::FallPayer.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        Ok(table
+            .get(&self_)?
+            .payer
+            .clone()
+            .map(|h| table.push(h))
+            .transpose()?)
+    }
+
+    pub(super) async fn _fall_proc_context<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<FallContext>,
+    ) -> Result<Option<Resource<ProcContext>>> {
+        Fuel::FallProcContext.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        let res = table.get(&self_)?;
+        let contract_id = res.contract_id;
+        // Inherit both signer and payer from the fall context (a fall→proc
+        // promotion is just unwrapping the optional signer + payer, not an
+        // initial op call, so no override resolution happens here).
+        let signer = res.signer.clone();
+        let payer = res.payer.clone();
+        Ok(signer
+            .zip(payer)
+            .map(|(signer, payer)| {
+                table.push(ProcContext {
+                    contract_id,
+                    signer,
+                    payer,
+                })
+            })
+            .transpose()?)
+    }
+
+    pub(super) async fn _fall_view_context<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<FallContext>,
+    ) -> Result<Resource<ViewContext>> {
+        Fuel::FallViewContext.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&self_)?.contract_id;
+        Ok(table.push(ViewContext { contract_id })?)
+    }
+
+    pub(super) async fn _core_proc_context<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<CoreContext>,
+    ) -> Result<Resource<ProcContext>> {
+        Fuel::CoreProcContext.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        let res = table.get(&self_)?;
+        let contract_id = res.contract_id;
+        let signer = res.signer.clone();
+        // Core→Proc promotion: system context, no payer override applies.
+        // Payer = signer-as-holder (the Core signer pays itself).
+        let payer = Holder::for_signer_id(signer.signer_id().unwrap_or(0));
+        Ok(table.push(ProcContext {
+            contract_id,
+            signer: Signer::Core(Box::new(signer)),
+            payer,
+        })?)
+    }
+
+    pub(super) async fn _core_signer<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<CoreContext>,
+    ) -> Result<Resource<Signer>> {
+        Fuel::CoreProcContext.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        let res = table.get(&self_)?;
+        let signer = res.signer.clone();
+        Ok(table.push(Signer::Core(Box::new(signer)))?)
+    }
+
+    pub(super) async fn _core_signer_proc_context<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<CoreContext>,
+    ) -> Result<Resource<ProcContext>> {
+        Fuel::CoreProcContext.consume(accessor)?;
+        let mut table = self.table.lock().await;
+        let res = table.get(&self_)?;
+        let contract_id = res.contract_id;
+        let signer = res.signer.clone();
+        // Same as `_core_proc_context` but the signer is the inner signer,
+        // not wrapped in `Signer::Core`. Payer = signer-as-holder.
+        let payer = Holder::for_signer_id(signer.signer_id().unwrap_or(0));
+        Ok(table.push(ProcContext {
+            contract_id,
+            signer,
+            payer,
+        })?)
+    }
+
+    pub(super) fn _signer_to_holder_ref(signer: &Signer) -> HolderRef {
+        signer.into()
+    }
+
+    pub(super) async fn _signer_as_holder<T>(
+        &self,
+        accessor: &mut Access<'_, T, Self>,
+        self_: Resource<Signer>,
+    ) -> Result<Resource<Holder>> {
+        Fuel::SignerAsHolder.consume(accessor)?;
+        let signer = {
+            let table = self.table.lock().await;
+            table.get(&self_)?.clone()
+        };
+        let holder_ref = Self::_signer_to_holder_ref(&signer);
+        tracing::debug!("_signer_as_holder: signer={signer:?} holder_ref={holder_ref:?}");
+        let holder = Holder::from_holder_ref(holder_ref, self)
+            .await?
+            .map_err(|e| {
+                tracing::error!("holder resolution failed for signer {signer:?}: {e:?}");
+                anyhow::anyhow!("holder resolution failed: {e:?}")
+            })?;
+        let mut table = self.table.lock().await;
+        Ok(table.push(holder)?)
+    }
+
+    pub(crate) async fn _drop<T: 'static>(&self, rep: Resource<T>) -> Result<()> {
+        self.table.lock().await.delete(rep)?;
+        Ok(())
+    }
+}

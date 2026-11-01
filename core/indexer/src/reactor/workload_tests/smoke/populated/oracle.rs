@@ -234,7 +234,12 @@ impl Before {
         effects: &PaidEffects,
     ) -> Result<Self> {
         let next = self
-            .account_paid(&mut *reactor.test_runtime().await, rows, txids, effects)
+            .account_paid(
+                &mut *reactor.execution.test_runtime().await,
+                rows,
+                txids,
+                effects,
+            )
             .await?;
         next.check_lifecycle(reactor, rows).await
     }
@@ -247,24 +252,43 @@ impl Before {
         effects: &PaidEffects,
     ) -> Result<Self> {
         ensure!(
-            reactor.last_height == self.height,
+            reactor.execution.last_height == self.height,
             "batch changed canonical height"
         );
         let next = self
-            .account_paid(&mut *reactor.test_runtime().await, rows, txids, effects)
+            .account_paid(
+                &mut *reactor.execution.test_runtime().await,
+                rows,
+                txids,
+                effects,
+            )
             .await?;
-        ensure!(token::total_supply(&mut *reactor.test_runtime().await).await? == next.supply);
         ensure!(
-            escrow(&mut *reactor.test_runtime().await, &staking_address()).await?
+            token::total_supply(&mut *reactor.execution.test_runtime().await).await? == next.supply
+        );
+        ensure!(
+            escrow(
+                &mut *reactor.execution.test_runtime().await,
+                &staking_address()
+            )
+            .await?
                 == next.staking_escrow
         );
         ensure!(
-            escrow(&mut *reactor.test_runtime().await, &storage_address()).await?
+            escrow(
+                &mut *reactor.execution.test_runtime().await,
+                &storage_address()
+            )
+            .await?
                 == self.storage_escrow
         );
-        ensure!(reward_integer(&mut *reactor.test_runtime().await, 14).await? == self.reward_index);
         ensure!(
-            reward_integer(&mut *reactor.test_runtime().await, 16).await? == self.reward_remainder
+            reward_integer(&mut *reactor.execution.test_runtime().await, 14).await?
+                == self.reward_index
+        );
+        ensure!(
+            reward_integer(&mut *reactor.execution.test_runtime().await, 16).await?
+                == self.reward_remainder
         );
         Ok(next)
     }
@@ -372,7 +396,7 @@ impl Before {
         reactor: &mut Reactor<RuntimeExecutor>,
         rows: &[ResultRow],
     ) -> Result<Self> {
-        let height = reactor.last_height;
+        let height = reactor.execution.last_height;
         ensure!(
             height
                 == self
@@ -380,10 +404,13 @@ impl Before {
                     .checked_add(1)
                     .context("oracle height overflow")?
         );
-        let hash = reactor.last_hash.context("missing applied block hash")?;
+        let hash = reactor
+            .execution
+            .last_hash
+            .context("missing applied block hash")?;
         let mut next = self.clone();
         next.height = height;
-        let runtime = &mut *reactor.test_runtime().await;
+        let runtime = &mut *reactor.execution.test_runtime().await;
         ensure!(
             balance(runtime, HolderRef::XOnlyPubkey(self.payer.clone())).await?
                 == self.payer_balance

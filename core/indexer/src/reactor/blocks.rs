@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use bitcoin::hashes::Hash;
 use indexer_types::{BlockRow, Event, OpWithResult};
 use metrics::{counter, gauge};
@@ -10,6 +10,8 @@ use tracing::{debug, info, warn};
 use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_helpers::new_mock_block_hash;
 use crate::consensus::finality_types::StateEvent;
+use crate::database::canonical_history;
+use crate::database::certified_history;
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
@@ -17,6 +19,8 @@ use crate::database::queries::{
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::protocol::canonical_application::ApplicationSource;
+use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
+use crate::protocol::coordinator::closure_execution::begin_stage;
 use crate::protocol::coordinator::linked::{self, PreparedBlock, PreparedTransaction};
 use crate::protocol::coordinator::minimum_prune_retention_blocks;
 use crate::protocol::coordinator::selection::{
@@ -25,6 +29,7 @@ use crate::protocol::coordinator::selection::{
 use crate::runtime::ownership::adapter::HostFailure;
 
 use super::consensus_state;
+use super::execution::ExecutionContext;
 use super::executor::Executor;
 use super::{Reactor, SimulationOutcome};
 
@@ -39,7 +44,13 @@ const PRUNE_VACUUM_LOW_PAGES: i64 = 128; // ~0.5 MiB kept on the freelist for re
 const PRUNE_VACUUM_HIGH_PAGES: i64 = 512; // ~2 MiB slack before we bother reclaiming
 const PRUNE_VACUUM_MAX_PAGES: i64 = 512; // ~2 MiB returned per call (bounds lock hold)
 
-impl<E: Executor> Reactor<E> {
+pub(super) struct AppliedBlock {
+    pub(super) block: PreparedBlock,
+    pub(super) unbatched_count: usize,
+    pub(super) executed_ops: u64,
+}
+
+impl<E: Executor> ExecutionContext<E> {
     /// Refuse a rollback that reaches below what pruning retains.
     ///
     /// Reconstructing state as of `to_height` needs the superseded `contract_state`
@@ -75,62 +86,63 @@ impl<E: Executor> Reactor<E> {
     }
 
     pub(super) async fn rollback(&mut self, height: u64) -> Result<()> {
-        // The `blocks` cascade + the off-checkpoint footprint-cache reversal run
-        // together in one savepoint (capture-before, recompute-after enforced inside),
-        // so a crash can't leave the cache durably stale.
-        self.maintain_executor(Some(height))
+        self.check_rollback_depth(height)?;
+        let conn = self.db_conn();
+        let frontier = certified_history::frontier(&conn).await?;
+        let boundary = certified_history::branch::boundary(&conn, self.protocol_context).await?;
+        ensure!(
+            height >= boundary.first_height - 1,
+            "rollback crosses native genesis boundary"
+        );
+        let stage = begin_stage(
+            &self.owner_service,
+            &self.session,
+            self.network,
+            frontier.authenticated_height,
+        )
+        .await?
+        .context("rollback has no pending closure stage")?;
+        let remaining = stage.remaining_after();
+        let result = async {
+            ensure!(
+                stage.action() == (WorkItem::Rollback { height }),
+                "rollback differs from closure work item"
+            );
+            (self.session.executor.operations.maintenance)(
+                self.session.executor.owner.clone(),
+                stage.selection().envelope(),
+            )
             .await
-            .context("rollback_with_footprint failed")?;
+            .map_err(HostFailure::from)?;
+            canonical_history::rollback(&conn, height).await?;
+            let hash = if height < boundary.first_height {
+                None
+            } else {
+                Some(
+                    select_block_at_height(&conn, height)
+                        .await?
+                        .context("post-rollback Bitcoin block is missing")?
+                        .hash,
+                )
+            };
+            Ok((hash, StageOutcome::RolledBack, remaining))
+        }
+        .await;
+        let (hash, _) = stage.finish(result).await?;
         self.last_height = height;
-
-        // Drop candidates validated against the old tip. An in-flight `IoJob` is
-        // still safe — its apply re-checks the anchor and re-runs `validate_batch`
-        // against the new tip before doing anything — but the banked set is
-        // consumed on a LATER `try_fulfill` with only an anchor-equality guard, so
-        // clearing it here is the belt to that suspenders and keeps a stale bank
-        // from ever reaching the proposer.
-        self.validated_candidates = None;
-
-        // Err is NOT "no previous block": folding a transient read failure into
-        // `last_hash = None` makes the next batch anchored at this height fail its
-        // hash gate and record-only while every peer executes it — an over-skip
-        // that forks the checkpoint (I5, and the exact Err-vs-None distinction
-        // `missing_txids` argues for). Only a genuine absent row (pre-genesis
-        // truncation) clears the hash; a read error stops the node.
-        match select_block_at_height(&self.db_conn(), height)
-            .await
-            .context("Failed to read the post-rollback tip block")?
-        {
-            Some(row) => {
-                info!("Rollback to height {} ({})", height, row.hash);
-                self.last_hash = Some(row.hash);
-            }
-            None => {
-                warn!("Rollback to height {}, no previous block found", height);
-                self.last_hash = None;
-            }
-        }
-
-        // Refresh cached validator set — rolled-back state may have different active set
-        self.refresh_validator_set_owned().await?;
-
-        if let Some(tx) = &self.event_tx
-            && tx.send(Event::Rolledback { height }).await.is_err()
-        {
-            warn!("Event receiver dropped, cannot send Rolledback event");
-        }
-
+        self.last_hash = hash;
         Ok(())
     }
 
     /// The fallible body of `handle_block`'s transaction: the decision record
     /// (when the block arrives decided) plus the block's own writes. Split out
     /// so `handle_block` has a single place to roll back from.
-    async fn block_txn(
+    pub(super) async fn block_txn(
         &mut self,
         selection: &ExecutionSelection,
         block: &PreparedBlock,
-        decision: &consensus_state::DeferredDecision,
+        consensus_height: u64,
+        certificate: &[u8],
     ) -> Result<(usize, u64)> {
         selection.verify_base(&self.db_conn()).await?;
         if block.input.is_none() {
@@ -138,10 +150,10 @@ impl<E: Executor> Reactor<E> {
         }
         insert_batch(
             &self.db_conn(),
-            decision.consensus_height.as_u64(),
+            consensus_height,
             block.height,
             &block.hash.to_string(),
-            &decision.certificate,
+            certificate,
             true,
         )
         .await
@@ -271,6 +283,309 @@ impl<E: Executor> Reactor<E> {
         Ok((unbatched_count, executed_ops, failures))
     }
 
+    /// Run block lifecycle operations: challenge expiry/generation and epoch transitions.
+    async fn run_block_lifecycle(
+        &mut self,
+        selection: &ExecutionSelection,
+        block: &PreparedBlock,
+    ) -> Result<()> {
+        linked::run_block_lifecycle(&self.session, selection, self.network, &block.header()).await
+    }
+
+    // Effects, lifecycle, application identity and the saved work cursor share
+    // the owned transaction. Notifications only see its committed result.
+    pub(super) async fn handle_block(
+        &mut self,
+        block: impl Into<BlockInput>,
+        decision: &consensus_state::DeferredDecision,
+    ) -> Result<AppliedBlock> {
+        let block = block.into();
+        let height = block.height;
+        let hash = block.hash;
+        let prev_hash = block.prev_hash;
+        if height != self.last_height + 1 {
+            bail!(
+                "Unexpected block height {}, expected {}",
+                height,
+                self.last_height + 1
+            );
+        }
+
+        if let Some(last_hash) = self.last_hash {
+            if prev_hash != last_hash {
+                bail!(
+                    "Block at height {} has prev_hash {} but expected {}",
+                    height,
+                    prev_hash,
+                    last_hash
+                );
+            }
+        } else {
+            info!(
+                "Initial block received at height {} (hash {})",
+                height, hash
+            );
+        }
+
+        let closure_height = certified_history::frontier(&self.db_conn())
+            .await?
+            .authenticated_height;
+        let stage = begin_stage(
+            &self.owner_service,
+            &self.session,
+            self.network,
+            closure_height,
+        )
+        .await?
+        .context("block application has no pending closure stage")?;
+        let remaining = stage.remaining_after();
+        let result = async {
+            ensure!(
+                stage.action()
+                    == (WorkItem::Execute {
+                        decision: decision.consensus_height.as_u64()
+                    }),
+                "block application differs from closure work item"
+            );
+            let retained = certified_history::load_verified_input(
+                &self.db_conn(),
+                decision.consensus_height.as_u64(),
+            )
+            .await?;
+            ensure!(
+                *retained.input() == block.exact_input(self.protocol_context)?,
+                "block application differs from retained certified bytes"
+            );
+            let block = self
+                .executor
+                .prepare_block(&self.recognizer, stage.selection(), block)
+                .await?;
+            let (unbatched_count, executed_ops) = self
+                .block_txn(
+                    stage.selection(),
+                    &block,
+                    decision.consensus_height.as_u64(),
+                    &decision.certificate,
+                )
+                .await?;
+            Ok((
+                (block, unbatched_count, executed_ops),
+                StageOutcome::Applied,
+                remaining,
+            ))
+        }
+        .await;
+        let ((block, unbatched_count, executed_ops), _) = stage.finish(result).await?;
+
+        self.last_height = height;
+        self.last_hash = Some(hash);
+        Ok(AppliedBlock {
+            block,
+            unbatched_count,
+            executed_ops,
+        })
+    }
+}
+
+impl<E: Executor> Reactor<E> {
+    #[cfg(feature = "protocol-qualification")]
+    pub(super) async fn rollback(&mut self, height: u64) -> Result<()> {
+        self.execution.rollback(height).await?;
+        self.observe_rollback(height).await;
+        Ok(())
+    }
+
+    pub(super) async fn observe_rollback(&mut self, height: u64) {
+        self.validated_candidates = None;
+        if let Err(error) = self
+            .consensus
+            .refresh_finality_observation(&self.db_conn(), height)
+            .await
+        {
+            warn!(%error, "Cannot refresh optional rollback observations");
+        }
+        if let Some(tx) = &self.event_tx
+            && tx.send(Event::Rolledback { height }).await.is_err()
+        {
+            warn!("Event receiver dropped, cannot send Rolledback event");
+        }
+    }
+
+    #[cfg(any(test, feature = "protocol-qualification"))]
+    pub(super) async fn handle_block(
+        &mut self,
+        block: impl Into<BlockInput>,
+        decision: &consensus_state::DeferredDecision,
+    ) -> Result<()> {
+        let started_at = Instant::now();
+        let applied = self.execution.handle_block(block, decision).await?;
+        self.observe_block(applied, started_at).await;
+        Ok(())
+    }
+
+    pub(super) async fn observe_block(&mut self, applied: AppliedBlock, started_at: Instant) {
+        let AppliedBlock {
+            block,
+            unbatched_count,
+            executed_ops,
+        } = applied;
+        let height = block.height;
+        let hash = block.hash;
+        // Discard consumed candidates. A later local reorg can supply a new
+        // replacement at the same height; branch admission checks it independently.
+        // A different local block remains a replacement proposal candidate.
+        self.consensus
+            .pending_blocks
+            .retain(|&h, candidate| h != height || candidate.hash != hash);
+
+        // Reflect what's actually persisted, not what we're mid-processing.
+        // Op counter increments only after commit so the simulation path
+        // (rolls back instead of committing) doesn't inflate it.
+        gauge!(BLOCK_HEIGHT).set(height as f64);
+        if executed_ops > 0 {
+            counter!(ITEMS_INDEXED).increment(executed_ops);
+        }
+
+        let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;
+        self.consensus.emit_state_event(StateEvent::BlockProcessed {
+            height,
+            unbatched_count,
+            checkpoint,
+        });
+
+        if let Some(tx) = &self.event_tx {
+            let txids = block
+                .transactions
+                .iter()
+                .map(|t| t.txid.to_string())
+                .collect();
+            if tx
+                .send(Event::Processed {
+                    block: BlockRow::builder()
+                        .height(block.height)
+                        .hash(block.hash)
+                        .relevant(!block.transactions.is_empty())
+                        .build(),
+                    txids,
+                })
+                .await
+                .is_err()
+            {
+                warn!("Event receiver dropped, cannot send Processed event");
+            }
+        }
+        info!(
+            height,
+            %hash,
+            unbatched_count,
+            tx_count = block.transactions.len(),
+            duration_ms = started_at.elapsed().as_millis() as u64,
+            "Block processed"
+        );
+    }
+
+    pub(super) async fn simulate_raw(&mut self, raw: Vec<u8>) -> Result<SimulationOutcome> {
+        self.execution.simulate_raw(raw).await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn simulate(
+        &mut self,
+        tx: indexer_types::Transaction,
+    ) -> Result<Vec<OpWithResult>> {
+        self.execution.simulate(tx).await
+    }
+
+    /// Prune finalized, superseded `contract_state` versions below the finality
+    /// watermark `tip − max(retain, minimum_prune_retention_blocks())`. No-op for archive nodes
+    /// (`prune.enabled == false`) and until the chain is taller than the retain
+    /// window. Runs once per block; the per-block churn is small. Returning freed
+    /// pages to the OS (`incremental_vacuum`) is a separate, throttled step.
+    ///
+    /// Deliberately runs AFTER the block's commit, in its own (`Storage::prune`)
+    /// transaction — NOT folded into the block transaction — even though `Storage`
+    /// owns both. Three reasons: (1) it's best-effort, so a GC failure must not be
+    /// able to roll back or fail a validated block; (2) the block is consensus-
+    /// critical and latency-sensitive (durability, peer responses) while the prune is
+    /// opportunistic maintenance, so it stays off the block's critical path; (3) the
+    /// "committed but not yet pruned" window is benign — the prune only removes old,
+    /// finalized, superseded rows and reads only want the latest. Crash between the
+    /// two commits just leaves the watermark un-advanced and the band retries.
+    pub(super) async fn maybe_prune_state(&mut self) {
+        if !self.execution.prune.enabled {
+            return;
+        }
+        match certified_history::frontier(&self.db_conn()).await {
+            Ok(state) if state.authenticated_height == state.closed_height => {}
+            Ok(_) => return,
+            Err(error) => {
+                warn!(%error, "cannot establish completed closure before pruning");
+                return;
+            }
+        }
+        let retain = self
+            .execution
+            .prune
+            .retain_blocks
+            .max(minimum_prune_retention_blocks());
+        // W = how far we COULD prune; `prune_watermark` (W_prev) = how far we HAVE.
+        let Some(w) = self.execution.last_height.checked_sub(retain) else {
+            return;
+        };
+        if w <= self.execution.prune_watermark {
+            return; // nothing newly finalized since the last prune (or post-reorg)
+        }
+        let w_prev = self.execution.prune_watermark;
+        // Best-effort GC: a prune failure must NOT fail the block. On error we leave
+        // `prune_watermark` unadvanced so the same band `(w_prev, w]` retries next
+        // block (the band query is idempotent, so the catch-up is harmless).
+        match self.execution.prune_state(w_prev, w).await {
+            Ok(deleted) => {
+                self.execution.prune_watermark = w; // persisted in the same txn as the deletes
+                if deleted > 0 {
+                    debug!(w_prev, w, deleted, "pruned contract_state band");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, w_prev, w, "contract_state prune failed; will retry");
+                return;
+            }
+        }
+        if let Err(e) = self.maybe_vacuum().await {
+            warn!(error = %e, "incremental_vacuum failed");
+        }
+    }
+
+    /// Return freed pages to the OS via `Storage::incremental_vacuum`, throttled on
+    /// `freelist_count`: only act once slack exceeds `PRUNE_VACUUM_HIGH_PAGES`, keep
+    /// `PRUNE_VACUUM_LOW_PAGES` as a reuse buffer, and reclaim at most
+    /// `PRUNE_VACUUM_MAX_PAGES` per call so the write-lock hold stays bounded. The
+    /// `DELETE`s alone already plateau the file (freed pages are reused); this only
+    /// shrinks it back when the live set has shrunk. Cheap when there's nothing to
+    /// do (a single `freelist_count` read).
+    async fn maybe_vacuum(&mut self) -> Result<()> {
+        let freelist = self.execution.freelist_count().await?;
+        let Some(pages) = vacuum_pages_to_reclaim(freelist) else {
+            return Ok(());
+        };
+        self.execution.vacuum(pages).await?;
+        debug!(freelist, reclaimed_pages = pages, "incremental_vacuum");
+        Ok(())
+    }
+}
+
+/// Pages to hand back to the OS given the current `freelist_count`: `None` below
+/// the HIGH threshold (let the freelist absorb churn), else the excess above LOW
+/// capped at MAX. Pure so the throttle is unit-testable without a live DB.
+fn vacuum_pages_to_reclaim(freelist: i64) -> Option<i64> {
+    if freelist <= PRUNE_VACUUM_HIGH_PAGES {
+        None
+    } else {
+        Some((freelist - PRUNE_VACUUM_LOW_PAGES).min(PRUNE_VACUUM_MAX_PAGES))
+    }
+}
+
+impl<E: Executor> ExecutionContext<E> {
     pub(super) async fn simulate_raw(&mut self, raw: Vec<u8>) -> Result<SimulationOutcome> {
         // Recognition belongs at admission, since the protocol may change while
         // an RPC request waits in the bounded simulation queue.
@@ -399,227 +714,6 @@ impl<E: Executor> Reactor<E> {
         }
 
         Ok(results)
-    }
-
-    /// Run block lifecycle operations: challenge expiry/generation and epoch transitions.
-    async fn run_block_lifecycle(
-        &mut self,
-        selection: &ExecutionSelection,
-        block: &PreparedBlock,
-    ) -> Result<()> {
-        linked::run_block_lifecycle(&self.session, selection, self.network, &block.header()).await
-    }
-
-    /// Execute `block` and record the decision that certifies it in the SAME
-    /// transaction as the block's own writes.
-    ///
-    /// The decision is NOT optional: a block is only ever executed because
-    /// consensus decided it, and taking it by value rather than `Option` makes
-    /// "no block executes without a consensus record" a type-level fact instead
-    /// of a convention a future caller could opt out of.
-    ///
-    /// A consensus record and the execution it certifies must commit or fail
-    /// together. Writing the `batches` row first — as this did — let a node keep
-    /// a row claiming a height it never executed: the row survived, the
-    /// execution did not, and every restart then resumed consensus above state
-    /// the node did not hold. `delete_unexecuted_batch_suffix` cleans that up at
-    /// startup, but the window should not exist at all; `process_decided_batch`
-    /// has always taken the savepoint first, and the block path was the outlier.
-    pub(super) async fn handle_block(
-        &mut self,
-        block: impl Into<BlockInput>,
-        decision: &consensus_state::DeferredDecision,
-    ) -> Result<()> {
-        let started_at = Instant::now();
-        let block = block.into();
-        let height = block.height;
-        let hash = block.hash;
-        let prev_hash = block.prev_hash;
-        if height != self.last_height + 1 {
-            bail!(
-                "Unexpected block height {}, expected {}",
-                height,
-                self.last_height + 1
-            );
-        }
-
-        if let Some(last_hash) = self.last_hash {
-            if prev_hash != last_hash {
-                bail!(
-                    "Block at height {} has prev_hash {} but expected {}",
-                    height,
-                    prev_hash,
-                    last_hash
-                );
-            }
-        } else {
-            info!(
-                "Initial block received at height {} (hash {})",
-                height, hash
-            );
-        }
-
-        let selection = self
-            .select_executor(ApplicationPosition::Block {
-                height,
-                hash,
-                consensus_height: decision.consensus_height.as_u64(),
-            })
-            .await?;
-        let lease = self.begin_unit(&selection, false).await?;
-        let prepared = self
-            .executor
-            .prepare_block(&self.recognizer, &selection, block)
-            .await;
-        let block = match prepared {
-            Ok(block) => block,
-            Err(error) => return self.finish_unit(lease, Err(error), false).await,
-        };
-        let txn = self.block_txn(&selection, &block, decision).await;
-        let (unbatched_count, executed_ops) = self.finish_unit(lease, txn, true).await?;
-
-        self.last_height = height;
-        self.last_hash = Some(hash);
-        // Blocks at or below the tip can no longer be proposed or decided.
-        // Dropping them keeps `pending_block_value` proposing only heights still ahead,
-        // and keeps `validate_batch`'s "a block is pending" gate honest.
-        self.consensus.pending_blocks.retain(|&h, _| h > height);
-
-        // Reflect what's actually persisted, not what we're mid-processing.
-        // Op counter increments only after commit so the simulation path
-        // (rolls back instead of committing) doesn't inflate it.
-        gauge!(BLOCK_HEIGHT).set(height as f64);
-        if executed_ops > 0 {
-            counter!(ITEMS_INDEXED).increment(executed_ops);
-        }
-
-        // Update cached validator set after block execution
-        // (process_pending_validators may have activated/deactivated validators)
-        self.refresh_validator_set_owned().await?;
-
-        let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;
-        self.consensus.emit_state_event(StateEvent::BlockProcessed {
-            height,
-            unbatched_count,
-            checkpoint,
-        });
-
-        if let Some(tx) = &self.event_tx {
-            let txids = block
-                .transactions
-                .iter()
-                .map(|t| t.txid.to_string())
-                .collect();
-            if tx
-                .send(Event::Processed {
-                    block: BlockRow::builder()
-                        .height(block.height)
-                        .hash(block.hash)
-                        .relevant(!block.transactions.is_empty())
-                        .build(),
-                    txids,
-                })
-                .await
-                .is_err()
-            {
-                warn!("Event receiver dropped, cannot send Processed event");
-            }
-        }
-        info!(
-            height,
-            %hash,
-            unbatched_count,
-            tx_count = block.transactions.len(),
-            duration_ms = started_at.elapsed().as_millis() as u64,
-            "Block processed"
-        );
-
-        // GC finalized superseded contract_state versions LAST — after the block's
-        // own commit and after both BlockProcessed / Processed events — so this
-        // opportunistic, best-effort maintenance (a separate transaction) never
-        // delays block durability or subscriber notification.
-        self.maybe_prune_state().await;
-
-        Ok(())
-    }
-
-    /// Prune finalized, superseded `contract_state` versions below the finality
-    /// watermark `tip − max(retain, minimum_prune_retention_blocks())`. No-op for archive nodes
-    /// (`prune.enabled == false`) and until the chain is taller than the retain
-    /// window. Runs once per block; the per-block churn is small. Returning freed
-    /// pages to the OS (`incremental_vacuum`) is a separate, throttled step.
-    ///
-    /// Deliberately runs AFTER the block's commit, in its own (`Storage::prune`)
-    /// transaction — NOT folded into the block transaction — even though `Storage`
-    /// owns both. Three reasons: (1) it's best-effort, so a GC failure must not be
-    /// able to roll back or fail a validated block; (2) the block is consensus-
-    /// critical and latency-sensitive (durability, peer responses) while the prune is
-    /// opportunistic maintenance, so it stays off the block's critical path; (3) the
-    /// "committed but not yet pruned" window is benign — the prune only removes old,
-    /// finalized, superseded rows and reads only want the latest. Crash between the
-    /// two commits just leaves the watermark un-advanced and the band retries.
-    async fn maybe_prune_state(&mut self) {
-        if !self.prune.enabled {
-            return;
-        }
-        let retain = self
-            .prune
-            .retain_blocks
-            .max(minimum_prune_retention_blocks());
-        // W = how far we COULD prune; `prune_watermark` (W_prev) = how far we HAVE.
-        let Some(w) = self.last_height.checked_sub(retain) else {
-            return;
-        };
-        if w <= self.prune_watermark {
-            return; // nothing newly finalized since the last prune (or post-reorg)
-        }
-        let w_prev = self.prune_watermark;
-        // Best-effort GC: a prune failure must NOT fail the block. On error we leave
-        // `prune_watermark` unadvanced so the same band `(w_prev, w]` retries next
-        // block (the band query is idempotent, so the catch-up is harmless).
-        match self.prune_state(w_prev, w).await {
-            Ok(deleted) => {
-                self.prune_watermark = w; // persisted in the same txn as the deletes
-                if deleted > 0 {
-                    debug!(w_prev, w, deleted, "pruned contract_state band");
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, w_prev, w, "contract_state prune failed; will retry");
-                return;
-            }
-        }
-        if let Err(e) = self.maybe_vacuum().await {
-            warn!(error = %e, "incremental_vacuum failed");
-        }
-    }
-
-    /// Return freed pages to the OS via `Storage::incremental_vacuum`, throttled on
-    /// `freelist_count`: only act once slack exceeds `PRUNE_VACUUM_HIGH_PAGES`, keep
-    /// `PRUNE_VACUUM_LOW_PAGES` as a reuse buffer, and reclaim at most
-    /// `PRUNE_VACUUM_MAX_PAGES` per call so the write-lock hold stays bounded. The
-    /// `DELETE`s alone already plateau the file (freed pages are reused); this only
-    /// shrinks it back when the live set has shrunk. Cheap when there's nothing to
-    /// do (a single `freelist_count` read).
-    async fn maybe_vacuum(&mut self) -> Result<()> {
-        let freelist = self.freelist_count().await?;
-        let Some(pages) = vacuum_pages_to_reclaim(freelist) else {
-            return Ok(());
-        };
-        self.vacuum(pages).await?;
-        debug!(freelist, reclaimed_pages = pages, "incremental_vacuum");
-        Ok(())
-    }
-}
-
-/// Pages to hand back to the OS given the current `freelist_count`: `None` below
-/// the HIGH threshold (let the freelist absorb churn), else the excess above LOW
-/// capped at MAX. Pure so the throttle is unit-testable without a live DB.
-fn vacuum_pages_to_reclaim(freelist: i64) -> Option<i64> {
-    if freelist <= PRUNE_VACUUM_HIGH_PAGES {
-        None
-    } else {
-        Some((freelist - PRUNE_VACUUM_LOW_PAGES).min(PRUNE_VACUUM_MAX_PAGES))
     }
 }
 

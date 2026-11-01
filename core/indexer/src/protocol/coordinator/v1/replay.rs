@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use bitcoin::{Transaction, Txid};
 
-use crate::consensus::{Height, Value};
+use crate::consensus::Height;
 use crate::protocol::coordinator::decision::DeferredDecision;
 
 /// Assemble the post-rollback replay queue: merge the replay set with the decisions
@@ -90,12 +90,7 @@ pub(crate) fn build_replay_queue(
     let mut execution_order: Vec<usize> = (0..merged.len()).collect();
     execution_order.sort_by_key(|&i| {
         let (d, _) = &merged[i];
-        match &d.value {
-            Value::Batch { anchor_height, .. } => (*anchor_height, d.consensus_height.as_u64()),
-            // Blocks carry no batch txs; the walk ignores them, so their key only
-            // needs to be stable. Their own height orders them among batches.
-            Value::Block { height, .. } => (*height, d.consensus_height.as_u64()),
-        }
+        (d.value.block_height(), d.consensus_height.as_u64())
     });
 
     // Dropped positions per merged index, so the emit below filters by index and
@@ -104,7 +99,7 @@ pub(crate) fn build_replay_queue(
     let mut dropped_positions: HashMap<usize, HashSet<usize>> = HashMap::new();
     for &i in &execution_order {
         let (decision, txs) = &merged[i];
-        if !matches!(decision.value, Value::Batch { .. }) {
+        if !decision.value.is_batch() {
             continue;
         }
         let mut dropped = HashSet::new();
@@ -154,13 +149,7 @@ pub(crate) fn build_replay_queue(
     // deterministic per-position drop set is safe under the node-local queue order.
     let mut queue = VecDeque::with_capacity(merged.len());
     for (idx, (mut decision, txs)) in merged.into_iter().enumerate() {
-        if let Value::Batch {
-            anchor_height,
-            anchor_hash,
-            ..
-        } = &decision.value
-        {
-            let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
+        if decision.value.is_batch() {
             let dropped = dropped_positions.get(&idx);
             let kept: Vec<Transaction> = txs
                 .iter()
@@ -168,19 +157,7 @@ pub(crate) fn build_replay_queue(
                 .filter(|(pos, _)| !dropped.is_some_and(|d| d.contains(pos)))
                 .map(|(_, tx)| tx.clone())
                 .collect();
-            // Narrowing what we execute must not narrow what we record as decided —
-            // see `DeferredDecision::certified_txs`. The BODIES are retained, not just
-            // the txids: an excluded tx never confirmed, so this is the only copy left
-            // and a peer can get it nowhere else.
-            //
-            // `get_or_insert`, not assignment: a batch can be narrowed by more than
-            // one rollback, and on the second pass `txs` is already the first pass's
-            // survivors for a SURVIVOR decision (a replayed one is reloaded from the
-            // certified list each pass). The earliest list is the decided one.
-            if kept.len() != txs.len() {
-                decision.certified_txs.get_or_insert(txs);
-            }
-            decision.value = Value::new_batch_raw(anchor_height, anchor_hash, kept);
+            decision.execution_txs = Some(kept);
         }
         queue.push_back(decision);
     }

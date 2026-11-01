@@ -4,9 +4,11 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use bitcoin::{Transaction, Txid};
 
 mod finality;
+#[cfg(test)]
 mod replay;
 
 pub(crate) use finality::build_finality_events;
+#[cfg(test)]
 pub(crate) use replay::build_replay_queue;
 
 pub const FINALITY_WINDOW: u64 = 6;

@@ -1,19 +1,18 @@
 use anyhow::{Context, Result};
+#[cfg(test)]
+use bitcoin::BlockHash;
 use bitcoin::consensus::serialize;
 #[cfg(test)]
 use bitcoin::hashes::Hash;
-use bitcoin::{Network, Transaction as BitcoinTransaction, Txid};
+use bitcoin::{Network, Transaction as BitcoinTransaction};
 #[cfg(test)]
 use indexer_types::Block;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use tracing::warn;
 
 use crate::bitcoin_client::error::Error as RpcError;
 use crate::bitcoin_client::types::Acceptance;
 use crate::bitcoin_client::{Client, check_mempool_acceptance};
 use crate::bitcoin_follower::block::BlockInput;
-#[cfg(test)]
-use crate::block::filter_map;
 use crate::database::queries::insert_transaction_execution_usage;
 use crate::protocol::coordinator::linked::{
     self, PreparedBlock, PreparedTransaction, TransactionRecognizer,
@@ -169,13 +168,6 @@ pub(crate) trait Executor: Sync {
         threshold_sat_per_vb: u64,
     ) -> BoxFuture<'static, Result<Vec<(bitcoin::Transaction, TxPolicy)>>>;
 
-    /// Resolve many txids in one round trip
-    /// where the backend supports it (bitcoind's JSON-RPC batch + tx cache),
-    /// returning `None` per still-unresolved txid, in input order. The reactor's
-    /// replay/sync path resolves whole decided batches at once, so a per-txid
-    /// RPC there is one round trip per historical transaction.
-    async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<bitcoin::Transaction>>;
-
     #[cfg(test)]
     async fn execute_transaction_inner(
         &self,
@@ -217,19 +209,6 @@ pub(crate) trait Executor: Sync {
         insert_transaction_execution_usage(&runtime.get_storage_conn(), tx_id, usage?).await?;
         Ok(result)
     }
-
-    /// Signal the block source to re-deliver blocks strictly AFTER `after_height`.
-    /// Exclusive, matching the poller's rollback convention: a caller that has just
-    /// truncated to `h` asks for `h` so block `h` itself is re-delivered.
-    async fn replay_blocks_after(&mut self, after_height: u64) -> Result<()>;
-
-    /// Parse a bitcoin::Transaction into an indexer_types::Transaction.
-    #[cfg(test)]
-    fn parse_transaction(
-        &self,
-        selection: &ExecutionSelection,
-        tx: &bitcoin::Transaction,
-    ) -> Option<indexer_types::Transaction>;
 
     // Owned preparation never carries storage authority across a suspension.
     // Production moves recognition to a blocking worker; the default is for
@@ -296,9 +275,6 @@ impl Executor for NoopExecutor {
                 .collect())
         })
     }
-    async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<bitcoin::Transaction>> {
-        txids.iter().map(|_| None).collect()
-    }
     #[cfg(test)]
     async fn execute_transaction_inner(
         &self,
@@ -310,42 +286,30 @@ impl Executor for NoopExecutor {
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
         Ok(Vec::new())
     }
-    async fn replay_blocks_after(&mut self, _after_height: u64) -> Result<()> {
-        Ok(())
-    }
-    #[cfg(test)]
-    fn parse_transaction(
-        &self,
-        _selection: &ExecutionSelection,
-        _tx: &bitcoin::Transaction,
-    ) -> Option<indexer_types::Transaction> {
-        None
-    }
 }
 
-/// Production executor: handles transaction validation, resolution, and op execution.
+/// Production executor: handles transaction validation and op execution.
 /// Contract execution uses the selected retained session; Bitcoin I/O stays in the node.
 pub struct RuntimeExecutor {
     bitcoin_client: Client,
-    replay_tx: Option<tokio::sync::mpsc::Sender<u64>>,
 }
 
 impl RuntimeExecutor {
-    #[cfg(test)]
-    fn recognize_transaction(tx: &bitcoin::Transaction) -> Option<indexer_types::Transaction> {
-        filter_map((0, tx.clone()))
-    }
-
     pub fn new(bitcoin_client: Client) -> Self {
-        Self {
-            bitcoin_client,
-            replay_tx: None,
-        }
+        Self { bitcoin_client }
     }
 
-    pub fn with_replay_tx(mut self, tx: tokio::sync::mpsc::Sender<u64>) -> Self {
-        self.replay_tx = Some(tx);
-        self
+    #[cfg(test)]
+    pub(super) async fn retained_test_block(
+        &self,
+        height: u64,
+        hash: BlockHash,
+    ) -> Result<BlockInput> {
+        Ok(BlockInput::from_bitcoin(
+            height,
+            hash,
+            self.bitcoin_client.get_block(&hash).await?,
+        ))
     }
 }
 
@@ -438,26 +402,6 @@ impl Executor for RuntimeExecutor {
         })
     }
 
-    async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<bitcoin::Transaction>> {
-        // One JSON-RPC batch (cache-checked) instead of a round trip per txid.
-        match self.bitcoin_client.get_raw_transactions(txids).await {
-            Ok(results) => results
-                .into_iter()
-                .zip(txids)
-                .map(|(r, txid)| match r {
-                    Ok(tx) => Some(tx),
-                    Err(e) => {
-                        warn!(%txid, %e, "Failed to resolve transaction via RPC");
-                        None
-                    }
-                })
-                .collect(),
-            Err(e) => {
-                warn!(%e, "Batched transaction resolution failed");
-                txids.iter().map(|_| None).collect()
-            }
-        }
-    }
     #[cfg(test)]
     async fn execute_transaction_inner(
         &self,
@@ -471,25 +415,6 @@ impl Executor for RuntimeExecutor {
             ExecutorVersion::LegacyP1 => {
                 execution::execute_transaction(runtime, height, tx_id, tx).await
             }
-        }
-    }
-    async fn replay_blocks_after(&mut self, after_height: u64) -> Result<()> {
-        if let Some(tx) = &self.replay_tx {
-            tx.send(after_height)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to send replay request to poller: {e}"))?;
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn parse_transaction(
-        &self,
-        selection: &ExecutionSelection,
-        tx: &bitcoin::Transaction,
-    ) -> Option<indexer_types::Transaction> {
-        match selection.version() {
-            ExecutorVersion::LegacyP1 => Self::recognize_transaction(tx),
         }
     }
 

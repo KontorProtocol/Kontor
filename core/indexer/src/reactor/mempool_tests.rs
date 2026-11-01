@@ -7,22 +7,24 @@ use anyhow::{Result, ensure};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::Hash;
-use bitcoin::{Network, Transaction as BitcoinTransaction, Witness};
+use bitcoin::{Network, OutPoint, Transaction as BitcoinTransaction, Witness};
 use indexer_types::Transaction;
 use malachitebft_core_types::Round;
+use malachitebft_engine::host::Next;
 use malachitebft_engine::node::NodeRef;
+use tempfile::TempDir;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
-use super::aggregate_error_tests::reactor;
+use super::Reactor;
 use super::batches::IoApply;
+use super::certified_fixture;
 use super::consensus_state::PendingProposal;
-use super::executor::{Executor, RecognizedTransaction, TxPolicy};
+use super::executor::{Executor, RecognizedTransaction, RuntimeExecutor, TxPolicy};
 use super::mempool::MempoolPreparation;
-use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::signing::PrivateKey;
-use crate::consensus::{Address, Height, ProposalData};
+use crate::consensus::{Address, Height, ProposalData, Value};
 use crate::database::queries::rollback_to_height;
 use crate::protocol::coordinator::linked::{PreparedTransaction, TransactionRecognizer};
 use crate::protocol::coordinator::selection::{
@@ -31,7 +33,7 @@ use crate::protocol::coordinator::selection::{
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::{Decimal, GenesisValidator};
 use crate::stopper::Shutdown;
-use crate::test_utils::{new_mock_block_hash, test_runtime_with_genesis};
+use crate::test_utils::test_genesis;
 
 struct StopEngine(NodeRef);
 
@@ -39,6 +41,34 @@ impl Drop for StopEngine {
     fn drop(&mut self) {
         self.0.stop(None);
     }
+}
+
+async fn fixture() -> Result<(Reactor<RuntimeExecutor>, TempDir)> {
+    let key = PrivateKey::from([17; 32]);
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: random_x_only_pubkey(),
+        ed25519_pubkey: key.public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }]);
+    let directory = TempDir::new()?;
+    let mut trial = certified_fixture::reactor(directory.path(), &genesis, key.clone(), 1).await?;
+    let block = certified_fixture::empty_block(1);
+    let value = Value::from_input(block.exact_input(trial.consensus.protocol_context)?)?;
+    let height = Height::new(1);
+    let round = Round::new(0);
+    let proof = certified_fixture::certificate(&key, &value, height, round);
+    certified_fixture::proposal(&mut trial, value, height, round);
+    let (reply, persisted) = oneshot::channel();
+    trial
+        .consensus
+        .receive_decision(&trial.db_conn(), proof.clone(), reply)
+        .await?;
+    persisted.await?;
+    let (reply, next) = oneshot::channel();
+    trial.handle_finalized(proof, reply).await?;
+    trial.advance().await?;
+    ensure!(matches!(next.await?, Next::Start(height, _) if height == Height::new(2)));
+    Ok((trial, directory))
 }
 
 fn recognized(raw: BitcoinTransaction) -> RecognizedTransaction {
@@ -56,15 +86,11 @@ fn recognized(raw: BitcoinTransaction) -> RecognizedTransaction {
 #[tokio::test]
 async fn pending_recognition_keeps_blocks_and_requests_live_with_channel_backpressure() -> Result<()>
 {
-    let (runtime, dir, _) = test_runtime_with_genesis(&[GenesisValidator {
-        x_only_pubkey: random_x_only_pubkey(),
-        ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
-        stake: Decimal::from("100"),
-    }])
-    .await?;
-    let mut trial = reactor(runtime, &dir).await?;
+    let (mut trial, _directory) = fixture().await?;
+    let anchor_hash = trial.execution.last_hash.unwrap();
     let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
-    let raw = genesis_block(Network::Regtest).txdata.remove(0);
+    let mut raw = genesis_block(Network::Regtest).txdata.remove(0);
+    raw.input[0].previous_output = OutPoint::new(raw.compute_txid(), 0);
     let shutdown = Shutdown::new();
     trial.shutdown = shutdown.signal();
     let (block_tx, block_rx) = mpsc::channel(1);
@@ -91,12 +117,7 @@ async fn pending_recognition_keeps_blocks_and_requests_live_with_channel_backpre
             block_tx
                 .send(BlockEvent::BlockInsert {
                     target_height: 2,
-                    block: BlockInput::new(
-                        2,
-                        new_mock_block_hash(2),
-                        new_mock_block_hash(1),
-                        vec![raw.clone()],
-                    ),
+                    block: certified_fixture::block(2, anchor_hash, 0, vec![raw.clone()]),
                 })
                 .await?;
             let (reply, receive) = oneshot::channel();
@@ -133,13 +154,8 @@ async fn pending_recognition_keeps_blocks_and_requests_live_with_channel_backpre
 
 #[tokio::test]
 async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Result<()> {
-    let (runtime, dir, _) = test_runtime_with_genesis(&[GenesisValidator {
-        x_only_pubkey: random_x_only_pubkey(),
-        ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
-        stake: Decimal::from("100"),
-    }])
-    .await?;
-    let mut trial = reactor(runtime, &dir).await?;
+    let (mut trial, _directory) = fixture().await?;
+    let anchor_hash = trial.execution.last_hash.unwrap();
     let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
     let old = genesis_block(Network::Regtest).txdata.remove(0);
     let mut current = old.clone();
@@ -151,7 +167,7 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
                 IoApply::BuildProposal {
                     selection: trial.preparation_selection().await?,
                     anchor_height: 1,
-                    anchor_hash: new_mock_block_hash(1),
+                    anchor_hash,
                 },
                 Ok(vec![(old.clone(), verdict)]),
             )
@@ -164,7 +180,7 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
             IoApply::BuildProposal {
                 selection: trial.preparation_selection().await?,
                 anchor_height: 1,
-                anchor_hash: new_mock_block_hash(1),
+                anchor_hash,
             },
             Ok(vec![(current.clone(), TxPolicy::Accepted)]),
         )
@@ -174,7 +190,7 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
     trial.consensus.mempool.insert(recognized(old.clone()));
     let (reply, mut receive) = oneshot::channel();
     trial.consensus.pending_proposal = Some(PendingProposal {
-        height: Height::new(1),
+        height: Height::new(2),
         round: Round::new(0),
         reply,
         hard_deadline: Instant::now() + Duration::from_secs(60),
@@ -194,13 +210,8 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
 
 #[tokio::test]
 async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Result<()> {
-    let (runtime, dir, _) = test_runtime_with_genesis(&[GenesisValidator {
-        x_only_pubkey: random_x_only_pubkey(),
-        ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
-        stake: Decimal::from("100"),
-    }])
-    .await?;
-    let mut trial = reactor(runtime, &dir).await?;
+    let (mut trial, _directory) = fixture().await?;
+    let anchor_hash = trial.execution.last_hash.unwrap();
     let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
     let raw = genesis_block(Network::Regtest).txdata.remove(0);
     trial.consensus.mempool.insert(recognized(raw.clone()));
@@ -215,7 +226,7 @@ async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Resu
                 IoApply::BuildProposal {
                     selection: before.clone(),
                     anchor_height: 1,
-                    anchor_hash: new_mock_block_hash(1),
+                    anchor_hash,
                 },
                 Ok(vec![(raw.clone(), verdict)]),
             )
@@ -233,12 +244,18 @@ async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Resu
         trial
             .apply_io_verdicts(
                 IoApply::ValidateProposal {
+                    value: Value::new_batch_raw(
+                        trial.consensus.protocol_context,
+                        1,
+                        anchor_hash,
+                        vec![raw.clone()],
+                    )?,
                     selection,
-                    height: Height::new(1),
+                    height: Height::new(2),
                     round: Round::new(0),
                     proposer: Address::from_public_key(&PrivateKey::from([17; 32]).public_key()),
                     anchor_height: 1,
-                    anchor_hash: new_mock_block_hash(1),
+                    anchor_hash,
                     parsed: vec![recognized(raw.clone()).parsed.unwrap()],
                     reply,
                 },
@@ -246,20 +263,15 @@ async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Resu
             )
             .await?;
         ensure!(receive.await?.is_some() == accepted);
-        ensure!(trial.consensus.undecided.contains_key(&Height::new(1)) == accepted);
+        ensure!(trial.consensus.undecided.contains_key(&Height::new(2)) == accepted);
     }
     Ok(())
 }
 
 #[tokio::test]
 async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()> {
-    let (runtime, dir, _) = test_runtime_with_genesis(&[GenesisValidator {
-        x_only_pubkey: random_x_only_pubkey(),
-        ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
-        stake: Decimal::from("100"),
-    }])
-    .await?;
-    let mut trial = reactor(runtime, &dir).await?;
+    let (mut trial, _directory) = fixture().await?;
+    let anchor_hash = trial.execution.last_hash.unwrap();
     let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
     let raw = genesis_block(Network::Regtest).txdata.remove(0);
     trial.consensus.mempool.insert(recognized(raw.clone()));
@@ -268,7 +280,7 @@ async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()
             IoApply::BuildProposal {
                 selection: trial.preparation_selection().await?,
                 anchor_height: 1,
-                anchor_hash: new_mock_block_hash(1),
+                anchor_hash,
             },
             Ok(vec![(raw.clone(), TxPolicy::Accepted)]),
         )
@@ -277,7 +289,7 @@ async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()
     rollback_to_height(&trial.db_conn(), 1).await?;
     let (reply, mut receive) = oneshot::channel();
     trial.consensus.pending_proposal = Some(PendingProposal {
-        height: Height::new(1),
+        height: Height::new(2),
         round: Round::new(0),
         reply,
         hard_deadline: Instant::now() + Duration::from_secs(60),
@@ -295,13 +307,8 @@ async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()
 
 #[tokio::test]
 async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -> Result<()> {
-    let (runtime, dir, _) = test_runtime_with_genesis(&[GenesisValidator {
-        x_only_pubkey: random_x_only_pubkey(),
-        ed25519_pubkey: PrivateKey::from([17; 32]).public_key().as_bytes().to_vec(),
-        stake: Decimal::from("100"),
-    }])
-    .await?;
-    let mut trial = reactor(runtime, &dir).await?;
+    let (mut trial, _directory) = fixture().await?;
+    let anchor_hash = trial.execution.last_hash.unwrap();
     let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
     let raw = genesis_block(Network::Regtest).txdata.remove(0);
     let mut replacement = raw.clone();
@@ -311,7 +318,7 @@ async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -
     let record = seen.clone();
     // This deliberately recognizes bytes that P1 rejects, so a node-side P1
     // fallback cannot pass the dispatch assertions below.
-    trial.recognizer = TransactionRecognizer::new(
+    trial.execution.recognizer = TransactionRecognizer::new(
         ExecutorVersion::LegacyP1,
         Network::Regtest,
         Arc::new(move |_, bytes| {
@@ -327,9 +334,10 @@ async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -
     );
     let selection = trial.preparation_selection().await?;
     let prepared = trial
+        .execution
         .executor
         .parse_mempool(
-            &trial.recognizer,
+            &trial.execution.recognizer,
             &selection,
             vec![raw.clone(), replacement.clone()],
         )
@@ -354,15 +362,16 @@ async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -
         Network::Bitcoin,
         ApplicationPosition::Preparation {
             anchor_height: 1,
-            anchor_hash: Some(new_mock_block_hash(1)),
+            anchor_hash: Some(anchor_hash),
         },
     )
     .await?;
     ensure!(!prepared[0].parsed.as_ref().unwrap().eligible_for(&foreign));
     ensure!(
         trial
+            .execution
             .executor
-            .parse_mempool(&trial.recognizer, &foreign, vec![raw.clone()])
+            .parse_mempool(&trial.execution.recognizer, &foreign, vec![raw.clone()])
             .await
             .is_err()
     );
@@ -377,7 +386,12 @@ async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -
     let (reply, receive) = oneshot::channel();
     trial
         .validate_and_accept_proposal(
-            &ProposalData::new_batch(1, new_mock_block_hash(1), vec![replacement.clone()]),
+            &ProposalData::new(Value::new_batch_raw(
+                trial.consensus.protocol_context,
+                1,
+                anchor_hash,
+                vec![replacement.clone()],
+            )?),
             trial.consensus.address,
             Height::new(2),
             Round::new(0),
@@ -396,15 +410,16 @@ async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -
     ensure!(seen.lock().unwrap().last() == Some(&serialize(&replacement)));
 
     // Infrastructure failures must not become successful empty preparations.
-    trial.recognizer = TransactionRecognizer::new(
+    trial.execution.recognizer = TransactionRecognizer::new(
         ExecutorVersion::LegacyP1,
         Network::Regtest,
         Arc::new(|_, _| Err((0, "recognizer unavailable".into()))),
     );
     ensure!(
         trial
+            .execution
             .executor
-            .parse_mempool(&trial.recognizer, &selection, vec![raw])
+            .parse_mempool(&trial.execution.recognizer, &selection, vec![raw])
             .await
             .is_err()
     );

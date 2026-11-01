@@ -1,3 +1,4 @@
+use super::{ALTERNATE_GRAPH, alternate_executor};
 use std::collections::BTreeMap;
 use std::future::pending;
 use std::path::Path;
@@ -153,11 +154,11 @@ fn factory_with_decorator(
             kontor_executor_first::execution_definition(),
             decorate,
         ),
-        "second" => retained_session_factory_with_callbacks(
+        ALTERNATE_GRAPH => retained_session_factory_with_callbacks(
             NETWORK,
             Some(DEFAULT_VIEW_GAS_LIMIT),
-            kontor_executor_second::factory,
-            kontor_executor_second::execution_definition(),
+            alternate_executor::factory,
+            alternate_executor::execution_definition(),
             decorate,
         ),
         _ => anyhow::bail!("unknown retained graph {graph}"),
@@ -434,7 +435,7 @@ pub(super) async fn qualify_node_capacity(service: &OwnerService) -> Result<Valu
     )?;
     let second = pool(
         dir.path(),
-        "second",
+        ALTERNATE_GRAPH,
         CallbackMode::Pass,
         CallbackProbe::new(),
     )?;

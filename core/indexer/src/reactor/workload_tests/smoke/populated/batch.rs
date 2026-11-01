@@ -92,8 +92,8 @@ impl BatchProof {
             .context("missing anchor decision")?
             .checked_add(1)
             .context("batch height overflow")?;
-        let anchor = trial.last_hash.context("missing batch anchor")?;
-        let anchor_height = trial.last_height;
+        let anchor = trial.execution.last_hash.context("missing batch anchor")?;
+        let anchor_height = trial.execution.last_height;
         // Already-decided batches exercise execution and confirmation, not
         // consensus authorization. Keep the original transaction order intact.
         let outcome = trial
@@ -126,7 +126,7 @@ impl BatchProof {
         height: u64,
         checkpoint_directory: &Path,
     ) -> Result<Self> {
-        ensure!(!reveals.is_empty() && trial.last_height == anchor_height);
+        ensure!(!reveals.is_empty() && trial.execution.last_height == anchor_height);
         let conn = trial.db_conn();
         let all_paid = receipts(&conn, anchor_height).await?;
         let mut transactions = Vec::new();
@@ -212,7 +212,7 @@ impl BatchProof {
         let confirmed_height = anchor_height
             .checked_add(1)
             .context("confirmation height overflow")?;
-        ensure!(trial.last_height == confirmed_height);
+        ensure!(trial.execution.last_height == confirmed_height);
         let all_paid = receipts(&conn, anchor_height).await?;
         let mut checked = Vec::new();
         for proof in self.transactions {

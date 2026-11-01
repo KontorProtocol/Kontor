@@ -2,10 +2,16 @@
 mod aggregate_error_tests;
 mod batches;
 mod blocks;
+pub(crate) mod certified;
+#[cfg(test)]
+mod certified_fixture;
 #[cfg(test)]
 mod confirmation_position_tests;
 pub mod consensus_state;
 pub mod engine;
+mod execution;
+#[cfg(test)]
+mod execution_fixture;
 pub mod executor;
 mod handlers;
 #[cfg(test)]
@@ -18,6 +24,7 @@ mod mempool;
 pub mod mempool_fee_index;
 #[cfg(test)]
 mod mempool_tests;
+#[cfg(test)]
 pub mod mock_bitcoin;
 #[cfg(test)]
 mod pruning_tests;
@@ -52,7 +59,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use bitcoin::{BlockHash, Network, Txid};
+use bitcoin::{BlockHash, Network};
 use malachitebft_app_channel::NetworkMsg;
 use malachitebft_app_channel::app::types::LocallyProposedValue;
 use malachitebft_core_types::{LinearTimeouts, Round};
@@ -60,15 +67,15 @@ use metrics::gauge;
 use tracing::{debug, info, warn};
 
 use crate::bitcoin_client::Client;
-use crate::consensus::finality_types::StateEvent;
-use crate::consensus::{BatchTx, Ctx};
+use crate::consensus::Ctx;
 #[cfg(test)]
 use crate::database::canonical_history;
-use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
+use crate::database::certified_history;
+use crate::metrics::PENDING_BLOCKS;
+use crate::protocol::coordinator::bootstrap;
 #[cfg(test)]
 use crate::protocol::coordinator::committee::build_validator_set;
-use crate::protocol::coordinator::genesis::bind_identity;
-use crate::protocol::coordinator::linked::{self, TransactionRecognizer};
+use crate::protocol::coordinator::linked;
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
 };
@@ -86,15 +93,13 @@ use crate::{
     consensus::Genesis,
     database::{
         self,
-        queries::{
-            PRUNE_WATERMARK_KEY, get_meta_u64, insert_block, select_block_at_height,
-            select_block_latest, select_unconfirmed_batch_tx,
-        },
+        queries::{insert_block, select_block_at_height, select_block_latest},
     },
     runtime::GenesisParameters,
 };
 use libsql::Connection;
 
+use execution::ExecutionContext;
 use executor::Executor;
 use mempool::MempoolPreparation;
 
@@ -119,18 +124,6 @@ use mempool::MempoolPreparation;
 /// Keep this constant and that config default in lockstep.
 const MAX_PENDING_BLOCKS: usize = 128;
 
-/// Ceiling on `consensus_state::deferred_decisions` — decided values parked
-/// because their data has not arrived or their turn has not come.
-///
-/// Unlike [`MAX_PENDING_BLOCKS`] this is not backpressure: there is nothing to
-/// slow down, since the queue is fed by consensus itself. It is an OOM backstop
-/// for the one state that cannot resolve itself — a node whose execution has
-/// fallen behind heights the network already decided, which parks one entry per
-/// decided value from then on. Set far above any legitimate backlog: a healthy
-/// node idles near zero and drains within a block, and a tight bound would turn
-/// a transient stall into the crash loop this bound exists to avoid.
-const MAX_DEFERRED_DECISIONS: usize = 4096;
-
 pub type SimulationOutcome = std::result::Result<Vec<OpWithResult>, String>;
 
 pub type Simulation = (Vec<u8>, oneshot::Sender<Result<SimulationOutcome>>);
@@ -147,12 +140,8 @@ pub struct PruneConfig {
 }
 
 pub(crate) struct Reactor<E: Executor> {
-    executor: E,
-    recognizer: TransactionRecognizer,
-    session: LinkedSession,
-    network: Network,
+    execution: ExecutionContext<E>,
     node_label: String,
-    owner_service: OwnerService,
     shutdown: ShutdownSignal,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
@@ -161,13 +150,6 @@ pub(crate) struct Reactor<E: Executor> {
     simulate_rx: Option<Receiver<Simulation>>,
     consensus: consensus_state::ConsensusState,
 
-    prune: PruneConfig,
-    /// In-memory mirror of the persisted prune watermark `W_prev` (node_meta) —
-    /// the highest height already collapsed to one row per path. Loaded at startup;
-    /// advanced (and re-persisted) by each successful prune. See `project_state_pruning`.
-    prune_watermark: u64,
-    last_height: u64,
-    last_hash: Option<BlockHash>,
     /// Shared with the API (`Env.consensus_listen_addr`); written on the first
     /// `Listening` (see `handle_consensus_msg`'s `ConsensusReady` arm).
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
@@ -237,6 +219,7 @@ impl<E: Executor> Reactor<E> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub(crate) fn from_session(
         executor: E,
         session: LinkedSession,
@@ -254,32 +237,52 @@ impl<E: Executor> Reactor<E> {
         last_hash: Option<BlockHash>,
         consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     ) -> Self {
+        let execution = ExecutionContext::new(
+            executor,
+            session,
+            network,
+            owner_service,
+            consensus.protocol_context,
+            prune,
+            last_height,
+            last_hash,
+        );
+        Self::from_execution(
+            execution,
+            block_rx,
+            mempool_rx,
+            shutdown,
+            ready_tx,
+            event_tx,
+            simulate_rx,
+            consensus,
+            consensus_listen_addr,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_execution(
+        execution: ExecutionContext<E>,
+        block_rx: Receiver<BlockEvent>,
+        mempool_rx: Receiver<MempoolEvent>,
+        shutdown: ShutdownSignal,
+        ready_tx: Option<oneshot::Sender<bool>>,
+        event_tx: Option<mpsc::Sender<Event>>,
+        simulate_rx: Option<Receiver<Simulation>>,
+        consensus: consensus_state::ConsensusState,
+        consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
+    ) -> Self {
         let node_label = consensus
             .validator_index
             .map(|i| format!("node_{i}"))
             .unwrap_or_else(|| "follower".to_string());
-        let recognizer = TransactionRecognizer::new(
-            session.origin(),
-            network,
-            session.executor.operations.recognize.clone(),
-        );
         Self {
-            executor,
-            recognizer,
-            session,
-            network,
+            execution,
             node_label,
-            owner_service,
             shutdown,
             block_rx,
             mempool_rx,
             simulate_rx,
-            prune,
-            // Loaded from node_meta in `run()` when pruning is enabled; 0 here means
-            // "nothing collapsed yet" (safe — the first prune's band (0, W] catches up).
-            prune_watermark: 0,
-            last_height,
-            last_hash,
             ready_tx,
             event_tx,
             consensus,
@@ -296,7 +299,7 @@ impl<E: Executor> Reactor<E> {
         position: ApplicationPosition,
     ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
         let conn = self.db_conn();
-        let network = self.network;
+        let network = self.execution.network;
         async move { select_legacy_p1(&conn, network, position).await }
     }
 
@@ -304,45 +307,14 @@ impl<E: Executor> Reactor<E> {
         &self,
     ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
         self.select_executor(ApplicationPosition::Preparation {
-            anchor_height: self.last_height,
-            anchor_hash: self.last_hash,
+            anchor_height: self.execution.last_height,
+            anchor_hash: self.execution.last_hash,
         })
     }
 
     // Ordering writes and executor callbacks share the unit's physical transaction.
     fn db_conn(&self) -> libsql::Connection {
-        self.session.conn.clone()
-    }
-
-    /// Check unconfirmed_batch_txs for a raw transaction (DB-level resolution).
-    async fn resolve_tx_from_db(
-        conn: &libsql::Connection,
-        txid: &Txid,
-        batch_height: u64,
-    ) -> Option<bitcoin::Transaction> {
-        if let Ok(Some(raw_bytes)) =
-            select_unconfirmed_batch_tx(conn, &txid.to_string(), batch_height).await
-            && let Ok(tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&raw_bytes)
-        {
-            return Some(tx);
-        }
-        None
-    }
-
-    async fn refresh_validator_set_owned(&mut self) -> Result<()> {
-        let selection = self.select_executor(ApplicationPosition::Committee).await?;
-        let lease = self.begin_unit(&selection, false).await?;
-        let result = linked::derive_committee(&self.session, &selection, self.network).await;
-        let vs = self
-            .finish_unit(lease, result, false)
-            .await
-            .context("Failed to refresh validator set")?;
-        self.consensus.validator_index = vs
-            .validators
-            .iter()
-            .position(|v| v.address == self.consensus.address);
-        self.consensus.current_validator_set = vs;
-        Ok(())
+        self.execution.session.conn.clone()
     }
 
     async fn send_proposal_parts(
@@ -361,54 +333,6 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
-    async fn resolve_batch_txs(
-        &mut self,
-        txs: &[BatchTx],
-        batch_height: u64,
-    ) -> Result<Vec<bitcoin::Transaction>> {
-        let conn = self.db_conn();
-        // First pass: everything the pool and DB can answer, in order. Slots that
-        // still need bitcoind are left `None` and their txids collected, so the
-        // RPC misses go out as ONE batch instead of a round trip per txid — the
-        // replay/sync path resolves whole decided histories here.
-        let mut resolved: Vec<Option<bitcoin::Transaction>> = Vec::with_capacity(txs.len());
-        let mut rpc_slots: Vec<usize> = Vec::new();
-        let mut rpc_txids: Vec<Txid> = Vec::new();
-        for entry in txs {
-            match entry {
-                BatchTx::Raw(tx) => resolved.push(Some(tx.clone())),
-                BatchTx::Id(txid) => {
-                    // The retained body must belong to this decision: the same
-                    // txid can carry different witnesses at different heights.
-                    // Missing bodies use the pool/RPC fallback for new decisions
-                    // or finalized history whose retained bytes were pruned.
-                    if let Some(tx) = Self::resolve_tx_from_db(&conn, txid, batch_height).await {
-                        resolved.push(Some(tx));
-                    } else if let Some((raw, _)) = self.consensus.mempool.candidates.get(txid) {
-                        resolved.push(Some(raw.clone()));
-                    } else {
-                        rpc_slots.push(resolved.len());
-                        rpc_txids.push(*txid);
-                        resolved.push(None);
-                    }
-                }
-            }
-        }
-        if !rpc_txids.is_empty() {
-            let fetched = self.executor.resolve_transactions(&rpc_txids).await;
-            for ((slot, txid), tx) in rpc_slots.iter().zip(&rpc_txids).zip(fetched) {
-                match tx {
-                    Some(tx) => resolved[*slot] = Some(tx),
-                    None => anyhow::bail!("Could not resolve decided batch transaction {txid}"),
-                }
-            }
-        }
-        Ok(resolved
-            .into_iter()
-            .map(|t| t.expect("all slots filled"))
-            .collect())
-    }
-
     async fn process_block_event(&mut self, event: BlockEvent) -> Result<()> {
         match event {
             BlockEvent::BlockInsert {
@@ -421,27 +345,12 @@ impl<E: Executor> Reactor<E> {
                 }
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
-                // A block at or below the tip is already applied and can never be
-                // proposed or executed again — buffering it is not merely useless,
-                // it HALTS THE CHAIN. `pending_block_value` proposes the minimum pending
-                // height, peers still hold the block so they vote it valid, and it
-                // is decided; the finalize gate then refuses it as out of order and
-                // nothing removes it from the buffer. It stays the minimum forever,
-                // newer blocks are never proposed, and the only thing that would
-                // clear it — a successful block execution — is exactly what the loop
-                // prevents.
-                //
-                // Reachable from the poller: `replay_blocks_after` re-sends stored
-                // block events, and the finality path deliberately keeps
-                // `pending_blocks` across a rollback, so a replayed block can land
-                // after the deferred drain has already carried the tip past it.
-                if block.height <= self.last_height {
-                    debug!(
-                        block_height = block.height,
-                        %block.hash,
-                        last_height = self.last_height,
-                        "Ignoring block at or below the tip — already applied"
-                    );
+                let conn = self.db_conn();
+                let frontier = certified_history::frontier(&conn).await?;
+                if certified_history::branch::at(&conn, block.height, frontier.authenticated_height)
+                    .await?
+                    == Some(block.hash)
+                {
                     return Ok(());
                 }
 
@@ -468,43 +377,16 @@ impl<E: Executor> Reactor<E> {
                 }
             }
             BlockEvent::Rollback { to_height } => {
-                info!(to_height, "Bitcoin rollback — truncating state");
-                // A reorg deeper than `retain` would land in pruned territory (the
-                // per-height versions needed to rebuild the as-of-`to_height` snapshot
-                // are gone), so we BAIL rather than corrupt. This hard exit is the
-                // intended behaviour, not a stopgap: `retain` defaults to ~1 day of
-                // Bitcoin blocks, and a reorg that deep means Bitcoin itself violated
-                // the finality assumption the WHOLE consensus rests on — every node's
-                // anchored "finalized" batches are then invalid, pruned or not. There
-                // is no local recovery (auto-replay would just rebuild onto the same
-                // broken assumption), so halting for operator intervention is correct.
-                // Hence the guard keys off `retain` (the assumption) — not the actual
-                // prune watermark — because what it really detects is "Bitcoin broke
-                // finality", which is catastrophic independent of pruning.
-                self.check_rollback_depth(to_height)
-                    .context("Bitcoin reorg too deep")?;
-                self.rollback(to_height)
-                    .await
-                    .context("rollback failed during Bitcoin reorg")?;
-                // Decided values above the fork are anchored to blocks that no
-                // longer exist — they are deliberately forgotten here (their
-                // rows stay in the batches table as consensus history) and the
-                // network re-decides against the new chain; their txs return
-                // via the mempool. Do NOT reload them into deferred_decisions:
-                // old-chain entries would order ahead of new-chain decisions in
-                // the drain queue and wedge it (a batch waiting on an anchor
-                // whose only block decision is queued behind it).
+                // Local Bitcoin observations invalidate proposal candidates. Only a
+                // certified replacement may roll back canonical execution or authority.
                 self.consensus
-                    .clear_on_rollback(&self.db_conn(), to_height)
-                    .await
-                    .context("clear_on_rollback failed during Bitcoin reorg")?;
-                let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;
-                self.consensus
-                    .emit_state_event(StateEvent::RollbackExecuted {
-                        to_anchor: to_height,
-                        entries_removed: 0,
-                        checkpoint,
-                    });
+                    .pending_blocks
+                    .retain(|height, _| *height <= to_height);
+                self.validated_candidates = None;
+                info!(
+                    to_height,
+                    "Bitcoin reorg invalidated local block candidates"
+                );
             }
         }
         Ok(())
@@ -546,7 +428,6 @@ impl<E: Executor> Reactor<E> {
             // executes no blocks and decides no batches, so a gauge hung off
             // either of those paths would go stale precisely when it is needed.
             gauge!(PENDING_BLOCKS).set(self.consensus.pending_blocks.len() as f64);
-            gauge!(DEFERRED_DECISIONS).set(self.consensus.deferred_decisions.len() as f64);
 
             let hard_deadline_instant = self.consensus.pending_proposal.as_ref().map(|p| {
                 let deadline = p.hard_deadline;
@@ -634,7 +515,7 @@ impl<E: Executor> Reactor<E> {
                             self.consensus.mempool.stage_snapshot(&transactions);
                             let selection = self.preparation_selection().await?;
                             self.mempool_preparation = Some(MempoolPreparation {
-                                result: self.executor.parse_mempool(&self.recognizer, &selection, transactions), selection,
+                                result: self.execution.executor.parse_mempool(&self.execution.recognizer, &selection, transactions), selection,
                             });
                             self.consensus.mempool_fee_index.replace(fees, mempool_min_fee_sat_per_vb);
                             self.consensus.mempool_fee_index.recompute();
@@ -647,7 +528,7 @@ impl<E: Executor> Reactor<E> {
                             self.consensus.mempool.stage(&tx);
                             let selection = self.preparation_selection().await?;
                             self.mempool_preparation = Some(MempoolPreparation {
-                                result: self.executor.parse_mempool(&self.recognizer, &selection, vec![tx]), selection,
+                                result: self.execution.executor.parse_mempool(&self.execution.recognizer, &selection, vec![tx]), selection,
                             });
                             self.consensus.mempool_fee_index.insert(txid, fee);
                         },
@@ -669,7 +550,7 @@ impl<E: Executor> Reactor<E> {
                     let selection = self.preparation_selection().await?;
                     if !previous.selection.same_recognition_rules(&selection) {
                         self.mempool_preparation = Some(MempoolPreparation {
-                            result: self.executor.parse_mempool(&self.recognizer, &selection, self.consensus.mempool.raw_inputs()),
+                            result: self.execution.executor.parse_mempool(&self.execution.recognizer, &selection, self.consensus.mempool.raw_inputs()),
                             selection,
                         });
                         continue;
@@ -715,6 +596,7 @@ impl<E: Executor> Reactor<E> {
                     let consensus_result = self.handle_consensus_msg(msg)
                         .await
                         .context("handle_consensus_msg failed")?;
+                    self.consensus.try_acknowledge_decision(&self.db_conn()).await?;
                     if let consensus_state::ConsensusResult::BatchProcessed { txids } = &consensus_result
                         && let Some(tx) = &self.event_tx
                         && tx
@@ -758,6 +640,8 @@ impl<E: Executor> Reactor<E> {
                     self.apply_io_verdicts(job.apply, verdicts)
                         .await
                         .context("apply_io_verdicts failed")?;
+                    self.consensus.try_acknowledge_decision(&self.db_conn()).await?;
+                    self.advance().await.context("advance failed after proposal input became available")?;
                 }
                 _ = fee_publish_ticker.tick() => {
                     // Project OFF the loop: at mainnet mempool sizes the
@@ -796,7 +680,7 @@ impl<E: Executor> Reactor<E> {
     pub(crate) async fn run(&mut self) -> Result<()> {
         // A startup mutation is part of the reactor's owned durable unit. It
         // must finish before shutdown can release the writer or runtime.
-        self.maintain_executor(None).await?;
+        self.execution.maintain_executor(None).await?;
         self.advance()
             .await
             .context("advance failed during startup finality settle")?;
@@ -905,25 +789,12 @@ async fn prepare_executor_startup(
     Ok((last_height, last_hash))
 }
 
-fn new_runtime_executor(
-    bitcoin_client: Client,
-    replay_tx: Option<mpsc::Sender<u64>>,
-) -> executor::RuntimeExecutor {
-    let exec = executor::RuntimeExecutor::new(bitcoin_client);
-    if let Some(tx) = replay_tx {
-        exec.with_replay_tx(tx)
-    } else {
-        exec
-    }
-}
-
 #[cfg(test)]
 async fn create_uninitialized_runtime_executor(
     starting_block_height: u64,
     writer: &database::Writer,
     owner_service: &OwnerService,
     bitcoin_client: Client,
-    replay_tx: Option<mpsc::Sender<u64>>,
     network: Network,
 ) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
     let (last_height, last_hash) = prepare_executor_startup(starting_block_height, writer).await?;
@@ -937,7 +808,7 @@ async fn create_uninitialized_runtime_executor(
     owner_service.apply_startup_compile_gate(&mut runtime);
     runtime.network = network;
     Ok((
-        new_runtime_executor(bitcoin_client, replay_tx),
+        executor::RuntimeExecutor::new(bitcoin_client),
         runtime,
         last_height,
         last_hash,
@@ -950,7 +821,6 @@ pub(crate) async fn create_runtime_executor(
     writer: &database::Writer,
     owner_service: &OwnerService,
     bitcoin_client: Client,
-    replay_tx: Option<mpsc::Sender<u64>>,
     genesis: &GenesisParameters,
     network: Network,
 ) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
@@ -959,7 +829,6 @@ pub(crate) async fn create_runtime_executor(
         writer,
         owner_service,
         bitcoin_client,
-        replay_tx,
         network,
     )
     .await?;
@@ -976,7 +845,6 @@ pub(crate) async fn create_executor_session(
     writer: &database::Writer,
     owner_service: &OwnerService,
     bitcoin_client: Client,
-    replay_tx: Option<mpsc::Sender<u64>>,
     genesis: &GenesisParameters,
     network: Network,
 ) -> Result<(
@@ -999,7 +867,7 @@ pub(crate) async fn create_executor_session(
             })
             .collect(),
     );
-    bind_identity(
+    let (baseline, initialize) = bootstrap::prepare(
         &writer.connection(),
         network,
         starting_block_height,
@@ -1007,7 +875,7 @@ pub(crate) async fn create_executor_session(
     )
     .await?;
     let (height, hash) = prepare_executor_startup(starting_block_height, writer).await?;
-    let exec = new_runtime_executor(bitcoin_client, replay_tx);
+    let exec = executor::RuntimeExecutor::new(bitcoin_client);
     let session = linked::canonical_session(writer.connection(), network)
         .await
         .context("Failed to initialize retained executor session")?;
@@ -1015,15 +883,18 @@ pub(crate) async fn create_executor_session(
     owner_service
         .apply_linked_startup_compile_gate(&session)
         .await?;
-    linked::initialize(
-        owner_service,
-        &session,
-        network,
-        starting_block_height,
-        genesis,
-    )
-    .await
-    .context("Failed to publish native contracts")?;
+    if initialize {
+        linked::initialize(
+            owner_service,
+            &session,
+            network,
+            starting_block_height,
+            genesis,
+        )
+        .await
+        .context("Failed to publish native contracts")?;
+    }
+    bootstrap::complete(owner_service, &session, network, &baseline).await?;
     Ok((exec, session, height, hash))
 }
 
@@ -1055,20 +926,14 @@ pub(crate) async fn start_consensus(
 async fn start_linked_consensus(
     engine_config: engine::EngineConfig,
     session: &LinkedSession,
-    service: &OwnerService,
-    network: Network,
+    _service: &OwnerService,
+    _network: Network,
     observation_channels: Option<consensus_state::ObservationChannels>,
     timeouts: Option<LinearTimeouts>,
     last_block_height: u64,
     mempool_fee_index: mempool_fee_index::MempoolFeeIndex,
 ) -> Result<consensus_state::ConsensusState> {
-    let selection =
-        select_legacy_p1(&session.conn, network, ApplicationPosition::Committee).await?;
-    let lease = linked::begin_canonical_unit(service, session, &selection, network, false).await?;
-    let result = linked::derive_committee(session, &selection, network).await;
-    let validator_set = linked::finish_canonical_unit(lease, result, false)
-        .await
-        .context("Failed to build genesis from staking contract")?;
+    let (_, _, validator_set) = consensus_state::certified_startup(&session.conn).await?;
     start_consensus_with_genesis(
         engine_config,
         session.conn.clone(),
@@ -1102,7 +967,7 @@ async fn start_consensus_with_genesis(
         .position(|v| v.address == engine_output.address);
 
     let mut state = consensus_state::ConsensusState::new(
-        conn,
+        conn.clone(),
         engine_output.signing_provider,
         genesis,
         engine_output.address,
@@ -1115,6 +980,9 @@ async fn start_consensus_with_genesis(
     .await
     .context("Failed to build consensus state")?;
     state.observation = observation_channels;
+    state
+        .refresh_finality_observation(&conn, last_block_height)
+        .await?;
     if let Some(t) = timeouts {
         state.timeouts = t;
     }
@@ -1135,7 +1003,6 @@ pub fn run(
     simulate_rx: Option<Receiver<Simulation>>,
     engine_config: engine::EngineConfig,
     bitcoin_client: Client,
-    replay_tx: Option<mpsc::Sender<u64>>,
     genesis: GenesisParameters,
     observation_channels: Option<consensus_state::ObservationChannels>,
     consensus_propose_timeout_ms: u64,
@@ -1154,16 +1021,23 @@ pub fn run(
                     &writer,
                     &owner_service,
                     bitcoin_client,
-                    replay_tx,
-                    &genesis,
+                                &genesis,
                     network,
                 )
                 .await
                 .context("create_runtime_executor failed")?;
 
+                let context = certified_history::frontier(&session.conn).await?.context
+                    .context("startup lacks certified protocol context")?;
+                let mut execution = ExecutionContext::new(exec, session, network,
+                    owner_service.clone(), context, prune, last_height, last_hash);
+                if !execution.recover(&shutdown).await? {
+                    return Ok(());
+                }
+
                 // Existing databases need a one-time conversion before pruning.
                 if prune.enabled {
-                    database::init::ensure_incremental_auto_vacuum(&session.conn)
+                    database::init::ensure_incremental_auto_vacuum(&execution.session.conn)
                         .await
                         .context("ensure_incremental_auto_vacuum failed")?;
                 }
@@ -1239,39 +1113,17 @@ pub fn run(
                 // placeholder).
                 fee_index.recompute();
 
-                let selection = select_legacy_p1(&session.conn, network,
-                    ApplicationPosition::Preparation { anchor_height: last_height, anchor_hash: last_hash }).await?;
-                let recognizer = TransactionRecognizer::new(session.origin(), network, session.executor.operations.recognize.clone());
-                let initial_mempool = exec.parse_mempool(&recognizer, &selection, initial_raw_txs).await?;
-                let mut consensus = start_linked_consensus(engine_config, &session, &owner_service, network,
-                    observation_channels, timeouts, last_height, fee_index).await.context("start_consensus failed")?;
-
+                let selection = execution.select_executor(ApplicationPosition::Preparation {
+                    anchor_height: execution.last_height, anchor_hash: execution.last_hash,
+                }).await?;
+                let initial_mempool = execution.executor.parse_mempool(&execution.recognizer,
+                    &selection, initial_raw_txs).await?;
+                let mut consensus = start_linked_consensus(engine_config, &execution.session,
+                    &owner_service, network, observation_channels, timeouts, execution.last_height,
+                    fee_index).await.context("start_consensus failed")?;
                 consensus.mempool.replace(initial_mempool);
-
-                let mut reactor = Reactor::from_session(
-                    exec,
-                    session,
-                    network,
-                    owner_service,
-                    block_rx,
-                    mempool_rx,
-                    shutdown.clone(),
-                    ready_tx,
-                    event_tx,
-                    simulate_rx,
-                    consensus,
-                    prune,
-                    last_height,
-                    last_hash,
-                    consensus_listen_addr,
-                );
-
-                // Disabling pruning or increasing retention does not restore
-                // deleted history. Rollback must still respect this boundary.
-                reactor.prune_watermark =
-                    get_meta_u64(&reactor.db_conn(), PRUNE_WATERMARK_KEY, 0)
-                        .await
-                        .context("loading prune watermark failed")?;
+                let mut reactor = Reactor::from_execution(execution, block_rx, mempool_rx,
+                    shutdown.clone(), ready_tx, event_tx, simulate_rx, consensus, consensus_listen_addr);
 
                 reactor.run().await
             }

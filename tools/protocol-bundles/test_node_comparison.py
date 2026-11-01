@@ -10,9 +10,10 @@ from build import ROOT, digest, write_json
 from compare_node import OWNERSHIP, TARGETS, compare, sources as validate_sources
 from provenance import fingerprint, package_sources, repository_sources
 from qualify_node import CASES
-from recipes import EXECUTOR_GRAPHS, identity
+from recipes import EXECUTOR_GRAPHS, executor_graphs, graph_root, identity
 from semantic_baseline import verify as verify_semantics
 from test_semantic_baseline import sample_observation
+from test_node_execution import certified_sample
 from symbol_tool import TOOLCHAIN
 from type_boundary import PROBES, inputs_for
 
@@ -38,20 +39,35 @@ class NodeComparison(unittest.TestCase):
         self.root = Path(temporary.name)
         self.cells = [self.cell(target) for target in sorted(TARGETS)]
 
-    def cell(self, target, profile='release'):
+    def cell(self, target, profile='release', link_set=None):
         directory = self.root / f'{target}-{profile}'
         node_dir = directory / 'node'
         node_dir.mkdir(parents=True)
         graphs = []
-        for name in EXECUTOR_GRAPHS:
+        recipes = executor_graphs(link_set)
+        for name, recipe in recipes.items():
             graph_dir = directory / name
             graph_dir.mkdir()
-            write_json(graph_dir / 'source-inputs.json', self.sources['executor'])
+            source = self.sources['executor']
+            if link_set is not None:
+                source_root = graph_root(ROOT, recipe)
+                source = copy.deepcopy(source)
+                source['qualification_sources'] = repository_sources(source_root, 'executor')
+                source['packages'][0]['files'] = package_sources(source_root / 'core/numerics', root=source_root)
+                source['inherited_manifests_and_configuration'] = {
+                    name: digest(source_root / name.removeprefix('/fixture/'))
+                    for name in source['inherited_manifests_and_configuration']
+                    if name.startswith('/fixture/') and (source_root / name.removeprefix('/fixture/')).is_file()}
+                source['inherited_manifests_and_configuration'][f'/fixture/protocol-bundles/{recipe.directory}/Cargo.toml'] = digest(
+                    source_root / f'protocol-bundles/{recipe.directory}/Cargo.toml')
+                if source_root != ROOT:
+                    source['build_tools'] = package_sources(ROOT / 'tools/protocol-bundles', root=ROOT)
+            write_json(graph_dir / 'source-inputs.json', source)
             (graph_dir / 'build.log').write_text('synthetic successful build transcript')
-            graph_identity = identity(ROOT, name, EXECUTOR_GRAPHS)
+            graph_identity = identity(ROOT, name, recipes)
             graph = {'graph': name, 'identity': graph_identity,
                      'lock_sha256': graph_identity['lock_sha256'], 'manifest_sha256': graph_identity['manifest_sha256'],
-                     'source_inputs_sha256': fingerprint(self.sources['executor']),
+                     'source_inputs_sha256': fingerprint(source),
                      'build_log_sha256': digest(graph_dir / 'build.log'),
                      'wrapper_sha256': digest(ROOT / 'tools/protocol-bundles/rustc-wrapper.py')}
             graph['link_inputs'] = f'/synthetic/{name}'
@@ -68,7 +84,7 @@ class NodeComparison(unittest.TestCase):
         write_json(node_dir / 'source-inputs.json', self.sources['node'])
         (node_dir / 'build.log').write_text('synthetic node build transcript')
         node['build_log_sha256'] = digest(node_dir / 'build.log')
-        spec = {'features': ['protocol-qualification'], 'lock_sha256': node['lock_sha256'],
+        spec = {'features': ['protocol-qualification'], 'lock_sha256': node['lock_sha256'], 'link_set': link_set,
                 'source_inputs_sha256': node['source_inputs_sha256'],
                 'graphs': [{'graph': graph['graph'], 'build_inputs_sha256': fingerprint(graph)} for graph in graphs]}
         write_json(node_dir / 'link-spec.json', spec)
@@ -94,22 +110,70 @@ class NodeComparison(unittest.TestCase):
                    'libraries': inputs_for(graphs, False)[1],
                    'graph_inputs': {graph['graph']: fingerprint(graph) for graph in graphs}, 'controls': controls})
         node['interface_checks'] = {'report_sha256': digest(checks / 'result.json'), 'controls': list(PROBES)}
-        build = {'target': target, 'profile': profile, 'compiler': compiler,
+        build = {'target': target, 'profile': profile, 'compiler': compiler, 'link_set': link_set,
                  'toolchain_inputs': {'compiler': compiler}, 'node': node, 'graphs': graphs}
         write_json(directory / 'node-build.json', build)
         observations = {'schema': 1, 'cases': sorted(CASES), 'executors': [
-            {'graph': name, 'observations': sample_observation()} for name in EXECUTOR_GRAPHS]}
+            {'graph': name, 'observations': sample_observation()} for name in recipes]}
         observations['storage_contracts'] = {'rejected_before_construction': [
-            f'{graph}:{mutation}' for graph in EXECUTOR_GRAPHS
+            f'{graph}:{mutation}' for graph in recipes
             for mutation in ('missing', 'unknown', 'changed', 'multiple')]}
+        if link_set == 'k4-node':
+            observations['certified_history'] = certified_sample()
         write_json(directory / 'node-execution.stdout.json', observations)
         (directory / 'node-execution.stderr.log').write_text('synthetic execution log')
-        execution = {'schema': 1, 'matching_observations': True, 'target': target, 'profile': profile,
+        execution = {'schema': 1, 'matching_observations': True, 'target': target, 'profile': profile, 'link_set': link_set,
                      'executable_sha256': node['executable_sha256'], 'cases': observations['cases'],
-                     'graphs': list(EXECUTOR_GRAPHS), 'semantic_baseline': verify_semantics(observations, ROOT)}
+                     'graphs': list(recipes), 'semantic_baseline': verify_semantics(observations, ROOT, list(recipes))}
         write_json(directory / 'node-execution.json', execution)
         self.bind(directory)
         return directory
+
+    def test_k4_comparator_rejects_missing_certified_result(self):
+        for cell in self.cells:
+            shutil.rmtree(cell)
+        for target in sorted(TARGETS):
+            self.cell(target, link_set='k4-node')
+        compare(self.root, ROOT, 'release', 'success', 'k4-node')
+        directory = self.cells[0]
+        path = directory / 'node-execution.stdout.json'
+        observations = json.loads(path.read_text())
+        observations.pop('certified_history')
+        write_json(path, observations)
+        self.bind(directory)
+        with self.assertRaisesRegex(RuntimeError, 'certified history evidence'):
+            compare(self.root, ROOT, 'release', 'success', 'k4-node')
+
+    def test_retained_link_set_is_explicit_and_validates_both_source_roots(self):
+        for cell in self.cells:
+            shutil.rmtree(cell)
+        for target in sorted(TARGETS):
+            self.cell(target, link_set='legacy-qualification')
+        result = compare(self.root, ROOT, 'release', 'success', 'legacy-qualification')
+        self.assertEqual(result['link_set'], 'legacy-qualification')
+        with self.assertRaisesRegex(ValueError, 'link set mismatch'):
+            compare(self.root, ROOT, 'release', 'success')
+        with self.assertRaisesRegex(ValueError, 'unknown executor link set'):
+            compare(self.root, ROOT, 'release', 'success', 'unsupported')
+        directory = self.cells[0]
+        inventory = json.loads((directory / 'first/source-inputs.json').read_text())
+        inventory['build_tools']['build.py'] = 'unrecorded build change'
+        write_json(directory / 'first/source-inputs.json', inventory)
+        report = json.loads((directory / 'first/build-inputs.json').read_text())
+        report['source_inputs_sha256'] = fingerprint(inventory)
+        with self.assertRaisesRegex(ValueError, 'current build-tool inventory differs'):
+            validate_sources(directory / 'first', report,
+                             graph_root(ROOT, executor_graphs('legacy-qualification')['first']),
+                             'executor', tool_root=ROOT)
+
+    def test_observer_link_set_cannot_substitute_for_legacy_qualification(self):
+        for cell in self.cells:
+            shutil.rmtree(cell)
+        for target in sorted(TARGETS):
+            self.cell(target, link_set='k4-node')
+        self.assertEqual(compare(self.root, ROOT, 'release', 'success', 'k4-node')['status'], 'passed')
+        with self.assertRaisesRegex(ValueError, 'link set mismatch'):
+            compare(self.root, ROOT, 'release', 'success', 'legacy-qualification')
 
     def bind(self, directory):
         execution = json.loads((directory / 'node-execution.json').read_text())

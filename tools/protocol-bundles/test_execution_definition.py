@@ -60,6 +60,19 @@ class ExecutionDefinitionTests(unittest.TestCase):
             manifest.with_name("Cargo.lock").write_text("different dependencies")
             self.assertNotEqual(expected, reference(root, manifest, metadata))
 
+    def test_new_named_executor_does_not_hash_its_own_definition(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, metadata = self.fixture(root)
+            destination = old.parent.with_name("executor-observer")
+            old.parent.rename(destination)
+            manifest = destination / "Cargo.toml"
+            metadata["packages"][0]["manifest_path"] = str(manifest)
+            expected = reference(root, manifest, metadata)
+            manifest.with_name("definition.bin").write_bytes(expected)
+            self.assertEqual(expected, reference(root, manifest, metadata))
+            verify_reference(root, manifest, metadata)
+
     def test_node_implementation_changes_do_not_redefine_required_storage_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

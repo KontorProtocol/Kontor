@@ -49,20 +49,36 @@ impl HistoricalWork for TimedWork<'_> {
         )?;
         self.pending.check_unconfirmed(self.reactor).await?;
         self.check_tracking(&self.tracked).await?;
-        let tip = (self.reactor.last_height, self.reactor.last_hash);
-        let height = self.reactor.test_runtime().await.storage.height;
-        let context = self.reactor.test_runtime().await.storage.tx_context.clone();
-        let output = self.reactor.test_runtime().await.previous_output;
-        let op_return = self.reactor.test_runtime().await.op_return_data.clone();
+        let tip = (
+            self.reactor.execution.last_height,
+            self.reactor.execution.last_hash,
+        );
+        let height = self.reactor.execution.test_runtime().await.storage.height;
+        let context = self
+            .reactor
+            .execution
+            .test_runtime()
+            .await
+            .storage
+            .tx_context
+            .clone();
+        let output = self.reactor.execution.test_runtime().await.previous_output;
+        let op_return = self
+            .reactor
+            .execution
+            .test_runtime()
+            .await
+            .op_return_data
+            .clone();
         let counters = {
-            let runtime = self.reactor.test_runtime().await;
+            let runtime = self.reactor.execution.test_runtime().await;
             (
                 runtime.id_generation_counter.get().await,
                 runtime.result_id_counter.get().await,
             )
         };
         {
-            let runtime = self.reactor.test_runtime().await;
+            let runtime = self.reactor.execution.test_runtime().await;
             ensure!(
                 !runtime.simulating
                     && runtime.stack.is_empty().await
@@ -92,9 +108,12 @@ impl HistoricalWork for TimedWork<'_> {
         )?
         .check(&before)?;
         {
-            let runtime = self.reactor.test_runtime().await;
+            let runtime = self.reactor.execution.test_runtime().await;
             ensure!(
-                (self.reactor.last_height, self.reactor.last_hash) == tip
+                (
+                    self.reactor.execution.last_height,
+                    self.reactor.execution.last_hash
+                ) == tip
                     && !runtime.simulating
                     && runtime.storage.height == height
                     && runtime.storage.tx_context == context

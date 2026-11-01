@@ -1,0 +1,10 @@
+package root:component;
+
+world root {
+  include kontor:built-in/built-in-native;
+  use kontor:built-in/context.{view-context, proc-context, contract};
+
+  export init: func(ctx: borrow<proc-context>) -> contract;
+  export registered: func(ctx: borrow<proc-context>);
+  export provenance-updated: func(ctx: borrow<proc-context>);
+}

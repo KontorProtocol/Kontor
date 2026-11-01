@@ -1,5 +1,10 @@
 # Protocol upgrade implementation ledger
 
+Current scope override, 1 November 2026: oversized-certificate paging and its
+greater-than-10-MiB proof acceptance tests are deferred outside this goal by the
+operator. Earlier entries describing those as unfinished requirements are
+historical. See the latest scope-correction entry and certified-history plan.
+
 ## K2b local checkpoint, 31 October 2026
 
 K2b remains unmerged. The current implementation and outstanding phase gates are
@@ -1168,3 +1173,1220 @@ test now reports the actual WIT error when it fails; this is diagnostic detail,
 not a claimed fix for an unestablished cause. No new CI campaign has run for K3.
 Final release-platform checks and merge verification remain
 required. Local dev samples do not establish all-platform or all-input correctness.
+
+## K3 merged, 1 November 2026
+
+[PR 619](https://github.com/KontorProtocol/Kontor/pull/619) merged as
+`fdf6a65d3a14cf88af7271d666bf13b001849d2f`. Its final head was
+`c5481a2f168eb45407052eebfdde6f3e96b6f68e`, based on
+`aad23bccdaa300ed207bb328abc8c124e68efbe9`. GitHub tested synthetic merge
+`168510224e7310f742269b4e8c5ff2f94fd14601`. Both that tree and the actual merged
+tree are `32b14250524f795904b736cfd605da3bb934147b`; equality was verified before
+requesting cancellation of duplicate post-merge qualification.
+
+The lead and sole independent reviewer completed the consolidated review and
+accepted the real-reactor caller follow-up. Later corrections were confined to
+legacy test fixture initialization, generated source bindings, and reproducible
+migration fixture metadata. The lead inspected those corrections and preserved
+review coverage for unchanged production behavior. No material finding remains
+for K3. This is completion of K3, not completion of the protocol-upgrade goal.
+
+Two fixture problems were reproduced and fixed without weakening comparisons.
+Synthetic legacy fixtures now initialize unavailable canonical history consistently
+on first use and reopen; all 27 formerly failing ordinary tests passed on both
+platforms. Separately, independent migration qualification runs had random
+node-local receipt-stream epochs. The original test copied one seed database to
+both graphs and therefore missed the cross-run difference. The strengthened test
+uses independent seeds and failed before the correction. The qualification seed
+now fixes that metadata before execution, while production still creates random
+epochs. The test passed after the change and continues to compare every table.
+
+Final required evidence:
+
+- [Ordinary CI 41287408200](https://github.com/KontorProtocol/Kontor/actions/runs/41287408200)
+  passed, including Linux/macOS tests, lint/security, SDK and reproducible outputs.
+- [Stack qualification 41287408254](https://github.com/KontorProtocol/Kontor/actions/runs/41287408254)
+  passed all three release platforms, eight bounded dev smoke tests on each of
+  three platforms, and the explicit cross-platform comparison.
+- [Linked-node qualification 41287408362](https://github.com/KontorProtocol/Kontor/actions/runs/41287408362)
+  passed both actual retained graphs on Linux x86-64, Linux ARM64 and macOS ARM64,
+  including all 23 required scenario groups and the historical semantic baseline.
+  The final common observation digest is
+  `b32bd8ba109f9ffa8e169b866e3e4d8dc2b7ce8d9ba10df6fdd877bc107906a2`.
+- [Docker cache qualification 41287408495](https://github.com/KontorProtocol/Kontor/actions/runs/41287408495)
+  and [diagnostics 41287408246](https://github.com/KontorProtocol/Kontor/actions/runs/41287408246)
+  passed. Expected unselected image/S2 jobs remained skipped.
+
+Raw final evidence is retained in the `protocol-migrations` worktree under
+`.build-cache/k3-ci-c5481a2f/`. The lead independently reran both comparators over
+those downloaded artifacts, validating source/lock/compiler/component identities,
+raw log hashes, native ownership, type boundaries, exact cases and preserved
+historical observations. The reproduced stack comparison equals CI's output.
+The linked comparison agrees on all platforms, observation digest and compiler;
+only local report paths differ from CI's artifact paths.
+
+Earlier failed or incomplete evidence remains bound to its original source.
+The superseded `653ad035` linked run was canceled after its fixture mismatch was
+identified. It was not relabeled as a successful final-candidate comparison.
+Post-merge qualification runs 41290216054 and 41290216114 duplicate the verified
+successful tree; cancellation was requested only after retaining final evidence
+and verifying the actual merge. Main CI remains separate because it includes the
+production image path absent from PR CI. Both duplicate qualification runs were
+subsequently verified as completed with conclusion `cancelled`.
+
+## K4 implementation entry
+
+K4 begins in isolated branch `feat/protocol-certified-history` from verified merge
+`fdf6a65d3a14cf88af7271d666bf13b001849d2f`. The lead and sole planning reviewer
+already agreed [revision 2 of the concrete plan](certified-history-plan.md),
+including restartable closure stages, historical registration provenance, two
+explicit executor link sets, and bounded proof paging in K4 rather than deferring
+all recovery transport to K9. No repeated planning review is needed for these
+unchanged decisions.
+
+A pre-implementation source relocation experiment reproduced the original first
+and second definition bytes and IDs from a copied source root using locked offline
+resolution. It did not establish compilation or link acceptance. A framing preflight
+used actual existing Bitcoin/protobuf/stream/GossipSub encoders with maximum and
+many-small transaction inputs. It passed, with a minimum 7,977 bytes of headroom
+for the existing signed message. It did not qualify the final K4 schema or complete
+RPC aggregation. Both limitations remain explicit implementation acceptance work.
+
+K4 production changes and final acceptance remain unfinished. Publication stays
+at the end of the full goal. The Daybreak agent has no new assignment.
+
+The first packaging implementation now freezes the K3 executor input closure from
+the exact merged commit in `protocol-bundles/retained/k3`. Its 1,264 recorded files
+include local packages, semantic includes, inherited manifests, build support and
+unused path patches that Cargo still reads during resolution. The snapshot digest
+is `fc85d7f7479662012faef9bc43e3efaf7c9299ddc940ffd5ef5865abe5667592`.
+Both definitions reproduce byte for byte after locked offline resolution. Their
+IDs remain `a69902e230dfa7ae50079838c5d90cf33c6a00de9fc901bf2c26e363449e19e4`
+and `0565ceaf03d95097c02f86ad4bfb6f0c352900ecdfcf071960a408404a81bc48`.
+
+Build recipes can now select a separate, inventory-checked source root. Local
+dependencies and semantic symlinks cannot escape that root; inherited local
+manifest discovery stops at the explicit boundary even without a Git marker.
+Current compiler tooling is recorded separately from historical source inputs.
+The 119 local build-tool controls pass, including source substitution, mutation,
+added-file, escape and cycle rejection, and reference self-exclusion for newly
+named executors. The first test invocation encountered a read-only ccache directory;
+disabling ccache allowed the C-object controls to run successfully. This is not
+relocated compilation/link acceptance. CLI link-set selection, observer exports,
+node integration and the rest of K4 remain outstanding; no new CI was launched.
+
+
+## K4 frozen replay input checkpoint
+
+From base checkpoint `5e3a2fd00d5e406194e6b73a2953473eae028094`, replay work now
+binds exact per-batch frozen inputs and the actual batch execution/source validator
+consumes them. The lead traced plan publication, subset validation before effects,
+owned rollback, stage failure/retry, immutable branch eligibility and recovery.
+An occurrence-identity gap found during inspection was fixed by recording dropped
+positions in addition to the exclusion txid sets. Shared retained executor sources
+and released definitions are unchanged. The unreleased coordinator definition is
+`d2d49f6fc726d723969fb660c7022c15e7a77d6fe6994c5571370d879e9c999e`.
+
+The final local `certified_callbacks` run passed both tests, zero failures, in
+59.73 seconds (39.33-second build). Raw evidence is
+`.build-cache/k4-frozen-positions.log`, SHA-256
+`b57e4982919e8704849c778b5fb55ae1635f8e6082ca3202ce70188aa9d7f2a7`.
+This is focused production-library integration coverage, not the broad unit suite
+or final independent-graph qualification. The test supplies its own replay verdict;
+automatic bounded verdict generation, full live driver, startup recovery and old
+unit-fixture adaptation remain. Consolidated independent review remains at the
+complete K4 group, with no additional microreview, push or CI campaign here.
+
+## K4 automatic finality checkpoint
+
+From checkpoint `a6f4ba1d9bbcc5409df30a738b5993afb802ed34`, bounded planning now
+captures overdue direct seeds, freezes branch-specific replay subsets with indexed
+availability, seals the verdict into the work identity, and publishes seeds and
+work atomically with the owned finality stage. A new driver consumes those saved
+items and reevaluates finality before closure completion. The lead traced staging
+rollback, publication atomicity, pre-state binding, historical interval selection,
+exact-subset consumption, descendant attribution and completion ordering.
+
+The actual parent/child fixture, including injected seed-write and publication
+failures and reopened-connection planning, passed with the existing branch check:
+2 passed, 0 failed, 75.36 seconds, 29.83-second build. Raw log:
+`.build-cache/k4-finality-final.log`, SHA-256
+`eb7a5ce6bb39920c2dcdeeae00f7bef0ece32a96db8ae192553dd6a95d0d053c`.
+The unreleased coordinator definition is
+`a01ccde289e4df99d46654136f252b19a921292a0bba7b56b04cdaf3339168cc`.
+Retained executor sources and definitions are unchanged.
+
+An oversized async qualification poll frame caused a debug host-stack overflow.
+Local GDB evidence is in `.build-cache/k4-finality-gdb.log` and
+`.build-cache/k4-finality-frames.log`. Splitting the test into sequential phase
+helpers resolved the failure without raising thread or guest stack limits. The
+first split was insufficient; the final split passed twice, with the second run
+also covering transactional planner-write failure. These are correctness checks,
+not a renewed Pulley performance or stack qualification campaign.
+
+Live consensus still uses the old volatile finality driver, and startup still
+rejects an unfinished closure. Both require integration before K4 is complete.
+Broader replay cases, proof transport, old unit-fixture adaptation, independent
+graph qualification and the one consolidated review remain. No push, PR, remote
+CI run or new Daybreak assignment accompanies this intermediate checkpoint.
+
+## K4 live closure integration checkpoint
+
+From `2a98f6851465fedc394670f70ec10087bf31c167`, the live reactor advances durable
+certified closure work instead of an in-memory replay queue. Finalized verifies the
+saved decision and retains its callback until completion; repeated callbacks cannot
+repeat committed effects. The lead checked Decided/Finalized ordering, historical
+committee selection before Next, post-commit notification timing, cancelled reply
+handling, local candidate versus certified input separation, and obsolete volatile
+replay removal. Optional observer tracking does not control canonical finality.
+
+Both focused tests passed in 75.36 seconds (29.13-second build), including live-stage
+failure/retry, a conflicting local block, cleared proposal cache, callback redelivery,
+execution before Finalized, and one empty-batch heartbeat. Raw evidence:
+`.build-cache/k4-live-final.log`, SHA-256
+`eda706f0c076b58f07bf1a510120897fcc4687586286f4acf23835060f44a46b`.
+Unreleased coordinator definition:
+`6e791a6c5478a918f74c13bfc960dda8ad81de66a3c2904dd54cfaefefc4f3d0`.
+The earlier live test also passed; the final run adds proposal cancellation at the
+durable decision and removes an obsolete unbounded history helper.
+
+No broad unit-suite pass, full engine restart, cluster run or independent linked
+qualification is claimed. Old fixtures require adaptation, and the compiler still
+reports unused legacy executor resolution/redelivery capabilities awaiting removal.
+Startup recovery remains unimplemented. The sole planning reviewer explicitly agreed
+to the shared engine-independent canonical execution context, with one owner of
+execution state, bounded progression, settled ownership, committed outcomes separate
+from notifications, and pruning/tip reconstruction before engine startup. The detailed
+conditions and recovery acceptance are recorded in the certified-history plan. This
+is planning agreement, not an implementation verdict. Consolidated review and CI
+remain at the complete K4 group. No
+push, PR, CI run or Daybreak assignment was made for this checkpoint.
+
+### K4 shared execution context and startup recovery
+
+Extracted engine-independent ownership of canonical execution from Reactor, moved
+actual owned block/batch/rollback handlers onto that context, and made both live
+execution and startup recovery consume the same bounded closure step. Startup
+loads pruning bounds and validates/replays saved work before mempool recognition
+and engine creation, then moves the recovered context into Reactor. Notifications
+consume committed results; rollback reads its new tip before committing.
+
+Lead inspection covered unique mutable session/tip ownership, retained-input
+selection, original owned transaction boundaries, stage-before-notification ordering,
+prune-watermark loading with pruning disabled, baseline H0 scheduling, recovered
+mempool selection and successor authority. The agreed planning boundary is retained.
+Consolidated independent K4 implementation review has not yet been requested.
+
+Focused local qualification: 2 passed in 87.91s, build 41.05s, terminal exit 0.
+Evidence `.build-cache/k4-recovery-test3.log`, SHA-256
+`d875160300c64ceca2ef9523662b67493a4f5e671518c36199bdadc227a8ecd5`.
+Source definition `f38d0deeee0199208889046c695bf02e1e2eab10d2c110305e8b78f7da657016`.
+The new scenario stops Malachite, reopens executor sessions around a replacement
+rollback, injected block/lifecycle and finality-publication failures, and verifies
+recovered position, lineage, cursor and historical successor committee without
+Bitcoin RPC. Shutdown and persisted pruning rejection are covered. Full startup
+supervisor/cluster behavior and interrupted multi-page/batch replay parity still
+need acceptance coverage. Existing broad fixtures still require K4 API adaptation.
+No remote CI or new performance work was launched.
+
+### K4 interrupted planning/replay equivalence
+
+Added a frozen-input comparison of uninterrupted closure recovery against fresh
+executor sessions reopened after planning pages, rollback and replayed batches,
+including a failed replay-stage publication. All persistent SQL tables must match;
+closure identity, applied position and ownership settlement are checked separately.
+The test uses the same production step/recovery methods as the live reactor.
+
+Focused qualification passed: 2 tests, 115.15s, 40.67s build, terminal exit 0.
+Log `.build-cache/k4-replay-parity.log`, SHA-256
+`212aeeb8bce16da71c31a33c6d049305fe20f6a5f6c387e7cc9961aa8e69bd10`.
+Definition `346ff34104c8241da63abc0661945a72d55831b8f793e06b47cf81bddc1d54ef`.
+Separate broader unit compile (`.build-cache/k4-unit-fixtures-build.log`) failed
+with 136 errors in old fixtures and moved test accessors. This is an outstanding
+integration task, not a skipped acceptance gate. No CI campaign or review round
+was started for this intermediate checkpoint.
+
+### K4 existing fixture migration (in progress)
+
+Routed existing test access through the shared execution context. Updated isolated
+stream, proposal-signature and replay-model fixtures to construct exact values
+with explicit era context. The mempool verdict fixture now carries its original
+value. Retained-row witness tests use the database API after removal of the old
+reactor resolver.
+
+Removed the obsolete test-only volatile-queue persistence implementation and its
+self-test. Added a certified-journal regression that persists an unexecuted
+witness-bearing decision, reopens the database, checks exact input retention
+without canonical batch rows, and rejects a different witness at the same
+consensus height. This new regression has not yet executed.
+
+The broad unit compile progressed from 136 to 30 errors, then to 12 errors
+(terminal exit 101, `.build-cache/k4-unit-fixtures-build3.log`). Remaining errors
+were old synthetic block constructors, an obsolete rollback-cache method and
+volatile-queue assertions. After that compile, the archived deadline fixture was
+updated to expect completed durable replay without Bitcoin redelivery, and the
+frozen block fixture was changed to use its retained raw Bitcoin body. Those last
+edits have formatting/diff validation only. No passing broad-suite claim is made.
+
+Next: migrate real Reactor setup to authenticated genesis and signed exact-input
+decisions, including the mock Bitcoin chain and handoff/fault/storage fixtures.
+Do not restore synthetic-input acceptance or fabricate certified history for
+legacy runtime snapshots. Then compile and run the affected regressions before
+consolidated K4 review. No remote CI, performance workload or new review round
+was launched for these intermediate edits.
+
+### K4 authenticated handoff fixtures and empty successor authority
+
+The full indexer unit-test executable now compiles. Handoff fixtures use the real
+native genesis/session setup, signed certificates and exact Bitcoin bodies,
+including witness commitments. They exercise immediate and delayed decided input,
+execution before Finalized, early proposals, publisher authentication and bounded
+buffer admission. The witness-retention regression now starts with a certified
+block, respecting the rule that a batch cannot precede the first Bitcoin block.
+
+Aggregate database faults and synthetic storage-penalty tests now use an explicit
+execution-only fixture. It requires unavailable canonical history, starts no
+consensus engine and fabricates no certified records. It exercises the shared
+block transaction and owned execution/rollback operations. Its coverage is
+accounting and failure behavior, not authenticated consensus or recovery.
+The production block transaction helper now receives the decision height and
+certificate explicitly; its live caller supplies the same validated decision.
+Archived workload setup still needs authentic history migration.
+
+Before the observer correction, the focused run in
+`.build-cache/k4-fixture-regressions7.log` passed all 11 tests in 274.26 seconds
+(build 56.13 seconds, session 16435, exit 0). It covers witness retention,
+aggregate failure/retry and positional errors, normal handoff/early proposals,
+and storage settlement, rollback, reopen and last-validator penalties.
+Log SHA-256: `4db9ac60cc7f8bbec26fcd20126d56d915c0e2d3fdcf52a11b6439a3a3c1eb17`.
+This result is bound to the source before the observer correction below.
+
+The real certified last-validator exit test exposed a regression: the observer
+called nonempty committee derivation inside the block transaction and rolled back
+the valid exit. The sole planning reviewer explicitly agreed that the existing
+unreleased K4 observer should accept an empty observed set while continuing to
+validate every watched holder. Frozen P1 committee derivation and frozen K3
+sources/references are unchanged. The existing authority constructor still
+rejects emptiness, so publication halts after execution commits. This was a
+targeted architectural agreement, not consolidated K4 implementation approval.
+
+The observer reference was explicitly refreshed to definition
+`cc6739c0387a9a5cf2eda7b82c668598ebc7d16c8b6d644d90683f231939d194`.
+The refreshed draft coordinator definition is
+`fc1ca26f92899f065d90effedcb6bb47aa4cd3f68f929ee4296142eea16e5b07`.
+No existing database identity was rewritten. The focused post-correction run in
+`.build-cache/k4-exit-recovery8.log` passed 2 tests in 82.17 seconds (build 67
+seconds, session 40950, exit 0). It verifies the unchanged nonempty projection
+with public view gas set to zero, and immediate/delayed certified exit flows:
+durable empty staking state and observation, absent successor committee/closure,
+withheld Next, reopen through executor startup and engine-free recovery,
+unchanged canonical lineage/stage/observation after retry, and zero live roots.
+An injected observation-persistence failure rolls back the exit before a
+successful retry. Authority failure is checked by its typed error.
+Log SHA-256: `8c4a04f5c2e091a03362288661589a2e9bc672af99e934ad24a190dc2357bddf`.
+Ten execution-definition tooling tests and three coordinator-definition tooling
+tests also passed locally. Formatting and diff checks passed for the changed files.
+
+K4 remains incomplete. Database/closure fixtures that still start with an
+uncertified batch need migration, as do the broader reactor/mock-cluster/archive
+fixtures. Broader replay cases, bounded proof transport, consolidated lead and
+independent review, and scoped final-candidate CI/merge remain required. This
+checkpoint does not establish a passing full unit suite or linked cross-platform
+qualification. No remote CI or additional review round was launched.
+
+### K4 journal fixture repair and certified A-B-A replacement
+
+The journal fixture check on checkpoint `1f77e52e` reported 4 passing and 10 failing
+tests, all failures caused by fixtures beginning with a batch before the first
+certified Bitcoin block (`.build-cache/k4-journal-fixtures9.log`, 17.04 seconds).
+The common database fixture now starts with an exact block. Closure fixtures
+record both the block-transaction application and its lifecycle application, and
+the owned-stage fixture checks the block selection envelope. Their rollback,
+corrupt-record, stale-ticket, substituted-input and invented-work assertions
+remain. One negative control initially failed too early because its substituted
+lifecycle used a different storage height; it now remains structurally valid so
+the closure's semantic check must reject it.
+
+The corrected journal/owned-stage family passed 14 tests in 17.24 seconds,
+session 36031, exit 0, `.build-cache/k4-journal-fixtures11.log`, SHA-256
+`4011ac2e6570ab4044fbde612bd95f3515ae58041ba55eb22be87cb34bac2743`.
+This evidence precedes the additional branch-restoration test and resulting draft
+coordinator identity update.
+
+Added an actual executor/reactor callback test of certified A-B-A replacement at
+the initial Bitcoin height. Each decision has a real signature and retained raw
+Bitcoin body. The test awaits Next after each completed closure, then reopens
+through executor/consensus startup. It checks all three immutable closure records,
+each decision's historical Bitcoin branch, the final authenticated/closed frontier,
+equal canonical lineage/cursor for the two A executions, and equal token supply
+(no duplicate emission). The first and third closure IDs remain distinct despite
+equal canonical output. This is baseline replacement coverage with empty user
+transaction bodies, not cross-upgrade or all finality-replay acceptance.
+
+That test passed in 41.83 seconds, build 57.72 seconds, session 43062, exit 0,
+`.build-cache/k4-branch-restoration12.log`, SHA-256
+`7396e6529fdcebc302cbced96feb05c1fecc6763272db6559f96c51464c031f3`.
+The tested draft coordinator definition is
+`360a32f8e8f58c0b571ef488423f3932436c0ecbdbf1c18d742a9ff20efbe717`.
+Formatting and diff checks passed. No production semantic rule was changed by
+this fixture work, and no remote CI or additional independent review was started.
+
+The operator asked whether first-block admission was only a test requirement.
+Clarified that it is a K4 production startup restriction already recorded in the
+agreed plan: the initial H0-1/zero-hash scheduling placeholder is not a Bitcoin
+anchor. After the first certified block, multiple batches can anchor to the same
+block. This is not a requirement to wait for a new Bitcoin block for each batch.
+
+Remaining K4 work includes migration of older reactor/mock-cluster/archive
+fixtures, further finality replay cases (kept batches, parent redeclaration,
+reorg healing and many small batches), proof paging and resource admission,
+consolidated review, scoped CI and merge. The full unit suite has not passed.
+
+### K4 mock Bitcoin retains complete blocks
+
+The cluster's mock Bitcoin source now emits complete Bitcoin bodies through the
+shared certified fixture builder, with actual header-derived hashes, transaction
+Merkle roots, unique coinbases and witness commitments. Its generated stub
+transactions have non-coinbase inputs and outputs so Bitcoin consensus decoding
+is unambiguous. Reorgs preserve the surviving block's actual hash, discard removed
+transaction lookup entries, and use a new fork nonce for replacement bodies.
+Reset cannot invent a height outside the generated chain. The configured starting
+parent remains a fixture boundary, not a claimed certified Bitcoin block.
+
+The lightweight executor ignores coinbases instead of counting the newly retained
+coinbase as a counter-contract call. The pending-buffer flood fixture now obtains
+complete blocks from MockBitcoin rather than constructing synthetic hash-only
+inputs. The mock does not validate proof-of-work, UTXOs or Bitcoin scripts.
+
+Two focused tests passed in 0.02 seconds, build 66 seconds, session 33395, exit 0,
+`.build-cache/k4-mock-bitcoin13.log`, SHA-256
+`13dd4c14de0fcff506e3f8df8f1b179c3f0ba14c5759f6c91e8cb7eaa2a0f10e`.
+They establish exact witness/body round trips through the production certified
+codec, rejection of a changed expected block hash, retained late-join events,
+surviving-parent consistency, removed transaction lookup cleanup and replacement
+at both an interior height and the configured starting boundary. The compiled
+draft coordinator definition is
+`a760f4715bc4a520bcc9bc809cf8f99d6e49db018776656e9888311cee76a3d4`.
+Formatting and diff checks passed.
+
+This does not establish passing cluster integration. LiteExecutor's direct native
+and counter-contract seeding still produces unavailable history, and the cluster
+readiness barrier still assumes a pre-first-block batch. Both need migration to
+authenticated genesis and appropriately ordered real setup inputs. Other reactor
+fixtures and the remaining K4 replay/transport/review/CI work are still pending.
+No remote CI or new independent review cycle was started.
+
+### K4 cluster authenticated startup and real transaction execution
+
+The preceding goal turn made progress: complete mock Bitcoin bodies were committed
+as `44e957de`. This continuation replaces the cluster's synthetic genesis/counter
+seeding. LiteExecutor now mocks Bitcoin I/O and configured validation latency only;
+transaction recognition and execution use the normal retained operations. Fresh
+and restarted nodes run the native genesis journal, then engine-free certified
+recovery before Malachite starts. A shared session factory retains the component
+cache across nodes without sharing their mutable storage sessions.
+
+The cluster's first mock Bitcoin block carries an actual Kontor issuance and
+counter publication transaction. Subsequent generated transactions carry counter
+calls. The counter address is `counter_1_1`, after the coinbase. Replacing the first
+block repeats its setup input so state comes from ordered execution, not fixture
+seeding. The mock still does not validate Bitcoin scripts, PoW or UTXOs. The old
+readiness barrier that expected an empty Batch(0) has been removed. Test readiness
+means reactors initialized; each test must explicitly supply its first block.
+
+The migrated three-validator case establishes first certified Block(1), then two
+batches anchored to Bitcoin 1 without intervening blocks. It verifies each batch's
+persisted certificate/input and the first decision's block command, reads counter
+value 6 through the normal selected view path on all three nodes, confirms those
+transactions in Bitcoin 2 and checks the value stays 6, then restarts one node on
+its existing database and reads 6 again. The final local run passed in 46.00s,
+session 73927 exit 0, `.build-cache/k4-cluster-startup17.log`, SHA-256
+`b9f567a11b98be19b78a9a300e2255959efd4b8dd11e787ad89a12232b045111`.
+The same binary's two mock-body/reorg regression tests passed in 0.00s,
+`.build-cache/k4-mock-bitcoin18.log`, SHA-256
+`f8a81a380aeb2ae5be77f2061821ca7e56fccfc315ce0d32198243710672c71a`.
+Draft coordinator definition:
+`d76e2709c9b5fd3e18c111014a0df2900ea45116e22b9913a92d5e43ddbb2688`.
+Formatting and diff checks passed. Earlier run15 passed the smaller notification
+case; runs14 and16 exposed fixture compilation errors corrected before run17.
+
+This is not full cluster acceptance. Other cases still assume Batch(0), synthetic
+counter funding, or volatile rollback/replay behavior and require migration with
+their assertions preserved. The existing fixed-delay node-stop helper also needs
+an explicit task-completion handshake for reliable restart evidence under faults.
+The ordinary successful restart above is limited evidence, not a teardown-race
+qualification. Remaining K4 finality/replay, bounded proof transport/admission,
+consolidated review and scoped CI/merge remain required. No PR, push or remote CI
+was started for this checkpoint.
+
+### K4 explicit initial anchors and node task completion
+
+Continuing from `bcb7460e` (a progress turn), migrated ten cluster cases that
+expected Batch(0): each now explicitly processes setup Block(1), with subsequent
+Bitcoin heights and anchors shifted while preserving transaction counts and
+assertions. The stuck-validation case also establishes its anchor before starting
+the delayed I/O job. The dropped-startup-proposal fixture supplies Block(1) after
+its existing round-zero readiness barrier. No production ordering rule changed.
+
+Cluster restart now waits for the old node future's completion signal before
+reopening its database, replacing the fixed 500ms delay. Timeout or premature
+channel closure fails the test. This checks node-task completion, not the future
+K5 engine-handoff timeout/signing qualification.
+
+Seven selected local tests passed, 335.12s, session 18418 exit 0:
+anchor transition; blocks progressing during stuck validation; happy finality;
+missing transaction rollback with complete and partial submission; actual counter
+state/confirmation/restart; dropped initial proposal with a delayed retry proposer.
+Evidence: `.build-cache/k4-cluster-migration19.log`, SHA-256
+`30c148b135ecf9c07865bd6deeb0519ec42e852d3c3307cab42836b009c05ca8`.
+Draft coordinator definition:
+`34aeafc15480afc156004a584c66031a575e81040eaab6f6782f2aa8bd3e6656`.
+Formatting/diff checks passed. Other migrated cases still need execution evidence.
+
+Remaining old reorg cases incorrectly expect a local Bitcoin rollback notification
+to immediately undo canonical state. They must preserve their assertions while
+applying them after certification of the replacement block. The simulation case
+still uses an ambiguous empty Bitcoin encoding and should execute a real counter
+call with a no-state-leak assertion. Full cluster, late-join/deep recovery, remaining
+K4 transport/admission and final review/CI remain incomplete. No remote run or PR
+was created for this local checkpoint.
+
+
+### K4 certified reorg, simulation and catch-up fixture migration
+
+Continued from `060a058c`, a progress turn. Cluster reorg cases now submit and
+await the certified replacement block before asserting rollback. The combined
+wait retains each node's rollback and replacement events. A real counter proves
+that a reorg below a batch anchor removes its effects, preserves its certificate,
+and permits re-submission under a later decision. Reorg at the anchor preserves
+its effects and still delivers the original batch's finality verdict. Every old
+certificate and completed closure remains verifiable after branch replacement.
+Simulation executes a real counter increment and proves no state leak, including
+agreement of the following block's checkpoints.
+
+Cluster startup now obtains its ordered committee from `certified_startup` after
+recovery, as the production node does. Separately constructing a genesis set gave
+the four-validator fixture a different member order and correctly failed the
+existing authority check. No production authority check was relaxed. Deep-reorg
+catch-up compares every retained decision and exact input and verifies the joining
+node's completed closures while its Bitcoin feed contains only the surviving
+branch. Ordinary catch-up selects the checkpoint at the requested height and
+checks the joining node's real counter state.
+
+The reward test preserves emission arithmetic, stake totals, empty reward pools,
+rollback/restart and late-join equality. Its deposit assertion is now scoped to
+lifecycle writes (`tx_id IS NULL`), since real contract publication creates user
+deposits. Inspection uses an existing read-only database connection rather than
+rerunning schema initialization beside the active writer. Sampling waits for the
+source's authenticated consensus height to close locally: Bitcoin height alone
+can transiently match while the joining node replays an abandoned branch.
+
+Local evidence, all logs under `.build-cache/`:
+
+- `k4-cluster-reorg20.log`: session 5171 exit 0, four passed in 214.67s:
+  batch rollback/re-submission, receipt-stream rollback boundary, immutable
+  decisions/closures across reorg, and real simulation. SHA-256
+  `f10349a8500f674aaf40f46e40cd8c9f6789583e0171ddc0b74070c4dd30958a`.
+  Draft definition `88692a8597e5bb893590e6e603d99b467ad68bebd876c4ac518588a4f1972082`.
+- `k4-cluster-catchup21.log`: same binary, session 11721 exit 101,
+  retained-anchor finality passed; three startup committee-order failures.
+  SHA-256 `682da7fd8a34f7fd5cb6a2dde0107eaa238af04c8cf84b15cee2dabdf4e7b7c1`.
+- `k4-cluster-catchup22.log`: session 81937 exit 101, deep-reorg catch-up passed;
+  reward deposit assertion and wrong-height checkpoint selection failed.
+  SHA-256 `b7952888d483ffa1407afb12404976957c8e2fae2676f059c63f38471b784303`.
+  Draft definition `84587596342d7eaa760910b3957bb568d12b602ecfaed9a8eb61ff9e60f358f0`.
+- `k4-cluster-catchup23.log`: session 24115 exit 101, ordinary catch-up passed;
+  reward inspection hit schema-initialization lock contention.
+  SHA-256 `f44493bc654221bccc60fc57cd5847843598330d694b07a6ff9f3bc7fcac28e8`.
+  Draft definition `9f8a4418e3028a8caaa3ffd8088788099910ef06fd186fd848464aca487aa2f8`.
+- `k4-cluster-rewards24.log`: session 33425 exit 101, reward arithmetic, rollback
+  and restart passed before late-join sampling crossed a rollback stage.
+  SHA-256 `cdb6a1c89f3828e84178ac71015c476c9a9f46a0afb030d246c7ccced4ea5b33`.
+  Draft definition `c58140ec81b1aaabe69f2a1e363a0d97c3d91cf6307c056a2ef40a9a5f54c215`.
+- `k4-cluster-rewards25.log`: session 69315 exit 0, reward rollback, restart and
+  late-join case passed in 129.26s with the certified-closure barrier.
+  SHA-256 `b7453ea4a188c118d2849761fa545a3141bfe60440275069179738289842f72a`.
+  Draft definition `9873c85ac4cdd37d3f0dddab1982bf86aaf2c5b35104dc71e8cac63b48de96e5`.
+
+These are scoped results at the listed source definitions, not a complete suite
+pass at the final checkpoint. Follow-up runs targeted explained failures and
+preserved prior evidence. Formatting and diff checks passed. The obsolete
+shutdown-during-replay gate still intercepts unused `replay_blocks_after`; migrate
+it to an active owned closure stage and retain the shutdown/drain assertions.
+Remaining cluster cases, bounded proof paging/admission, real-graph integration,
+lead and consolidated independent review, and final CI remain incomplete. No PR,
+push or remote CI campaign was launched.
+
+
+### K4 active rollback ownership and remaining finality regressions
+
+Continuing from `7811b2ff`, moved the cluster's obsolete replay pause from the
+unused poller replay method onto the real executor maintenance call. The fixture
+pauses after rollback work but before the owned closure stage settles. Before
+shutdown it verifies all three nodes have one active root, a non-autocommit SQL
+connection, and a pending certified Rollback(0) stage. Shutdown must remain pending
+until release; afterward the drivers join, transactions settle, batch rows are
+removed, and no active, quarantined or fatal roots remain. The expected subsequent
+root-admission-closed errors are retained rather than hidden.
+
+`k4-cluster-shutdown26.log`: session 24082 exit 0, one passed in 56.65s.
+SHA-256 `5ee6f4e8451ee142c43c9c149b1349ae1e1b7b7cae2d27a505f7d9cd892e1c67`.
+Draft definition `362d47fb6fa8368c6dab27a1e23ba66b4efee06bd25b7cd062c501fcb448af73`.
+
+Fixed the pre-anchor preservation setup to confirm the earlier batch in Block(2),
+so only the later batch is missing. Its rollback assertion now compares the exact
+checkpoint captured after the earlier batch, rather than merely requiring some
+checkpoint. Five local regressions passed in one subsequent group: delayed
+validation with mempool removal, cascade invalidation, cross-block cascade,
+restart inside the finality window with receipt recovery, and exact preservation
+of the earlier checkpoint.
+
+`k4-cluster-finality27.log`: session 22034 exit 0, five passed in 307.68s.
+Draft definition `7080540f26ea843de0f9cbd5c48c54b5b24d3246274fa4344139f5b58fa664c2`.
+These scoped results preserve the prior source bindings; only the pre-anchor test
+changed between runs 26 and 27. Formatting and diff checks passed. Remaining
+cluster/old unit fixtures, obsolete executor capabilities, bounded proof paging
+and admission, real-graph integration, consolidated review and CI remain pending.
+No remote CI run or PR was created.
+
+### K4 missing-local-input recovery and pre-anchor proposal deadline
+
+From `dd2be2b6`, replaced the obsolete regression that merely kept a lagging node
+alive with a four-validator recovery check. Node 3 receives no local Bitcoin
+BlockInsert events for blocks 1 and 2. All four must nevertheless process them
+with matching checkpoints. The test reads node 3's own certified journal, compares
+retained decision IDs and exact inputs with the source, and requires completed
+closures. Blocks 3 through 5 then prove continuing execution/checkpoint agreement.
+The target is a captured authenticated consensus frontier, not Bitcoin height:
+empty anchored batches may occupy intervening consensus heights.
+
+The first run exposed a real startup liveness defect. Node 3 was the initial
+proposer but had no local block and no certified anchor. `try_fulfill_pending_proposal`
+kept its GetValue sender even after the hard deadline. Malachite's serial connector
+was awaiting that reply, so later round/decision callbacks could not reach the
+node. The other three validators advanced while the test timed out at only three
+block-processing events. The pre-anchor path now drops the pending reply at its
+hard deadline. The engine proceeds to the next round without an invalid empty
+batch. The dependency connector logs the cancelled reply as `channel closed`,
+handles that error, and remains alive; this log is retained in the evidence.
+No change to post-anchor batching, gas, Bitcoin ordering or protocol validity.
+
+Local evidence:
+
+- `k4-cluster-ordering28.log`: session 11714 exit 101, five passed and the new
+  recovery check failed in 296.39s. Scoped passes cover checkpoint agreement,
+  confirmation deduplication, multiple batches at one anchor, bounded pending
+  blocks, and progress after stale block redelivery.
+  SHA-256 `c811b004a9f054dd8ba78fe04e08bc78ca6b0fd1b1b4706ec6f36e0e36953fb9`.
+  Draft definition `ef6a3efac9638e95551124e1a89632f7d0a24e6a549a719ba3294a1021cc587a`.
+- `k4-cluster-recovery29.log`: session 55888 exit 0, the focused four-validator
+  missing-local-input case passed in 51.38s after the deadline correction.
+  SHA-256 `374940439b4ee24cce7f2080edf29a2ee5f4cbdbf168de608a154bbed31a36f5`.
+  Draft definition `35bc74c27aacf103c55edb73381a35f333e04483e91e0119549b21f91508c988`.
+
+For the preceding finality group, the retained log SHA-256 is
+`383a580327f86847aeb43bb33b38e9bad883609220c623158bffd2d156d63404`.
+Removed the unused decided-only wait helper and stale poller-replay commentary.
+Formatting and diff checks passed. These are scoped evidence bindings, not a full
+suite claim on the new source. K4 still needs the remaining synthetic fixture
+migration, obsolete replay interfaces removed, bounded proof paging/admission,
+real-graph integration, lead and consolidated independent review, and final CI.
+No PR, push or remote CI campaign was launched.
+
+### K4 execution-only state fixtures and certified mempool startup
+
+Continuing from `dc049146`, moved simulation selection, owned simulation execution,
+and inspection from `Reactor` to `ExecutionContext`. Reactor entry points delegate
+without changing selection, unit ownership, failure handling or result assembly.
+The four context-restoration tests now use the existing execution-only fixture;
+seeded runtime state is never promoted to certified authority. The pruning test
+uses the same fixture and the real runtime maintenance operation, without an
+unused consensus engine. Its pruning watermark, injected failure, SQL rollback
+and reconfiguration assertions remain intact.
+
+The five mempool tests now construct a real certified fixture, authenticate a
+signed first-block decision, finalize and execute its closure, and require the
+next global consensus height to be 2. Their proposal anchors use that block's
+actual hash. Delayed witness replacement, stale selections after rollback,
+retained-recognizer dispatch, and event-loop backpressure assertions remain.
+The backpressure test initially failed because the migration accidentally supplied
+an empty second block, removing its intended transaction-removal stimulus. Restored
+that staged non-Kontor transaction in the second block. It is a synthetic spend;
+this test establishes reactor event handling, not Bitcoin UTXO/script acceptance.
+The assertion that late recognition cannot restore a removed transaction was not
+weakened. No mempool implementation change was needed.
+
+Local evidence (one Cargo/runtime operation at a time, two build jobs):
+
+- `k4-state-fixtures30.log`: session 48099 exit 0, six passed in 142.10s: pruning,
+  four simulation-context cases, and real-cluster simulation with unchanged state.
+  SHA-256 `8f08de46542610297384763c4719bc91e5d6d460134d7833fc83063e5c74b1ef`.
+  Draft definition `33c14ac215b83324b568b79264857acb24045a80ba5c3d5a4b46dfe3e365487e`.
+- `k4-mempool31.log`: session 72490 exit 101, four passed and the explained
+  block-removal fixture failure in 85.29s.
+  SHA-256 `7567b51322c24ad7a4571ecf59597dd8b7b3ab0e5b77fa4adef27fc59db58c92`.
+  Draft definition `427330bfeaf49b202bca75db34a63e0a31e0e549468b949f395954076a29bd12`.
+- `k4-mempool-removal32.log`: session 15325 exit 0, corrected pending-recognition,
+  block/request liveness and channel-backpressure case passed in 17.22s.
+  SHA-256 `562980707e90857a5df35737047d572cc5d72e1ec63921c251f9348d0e47aa21`.
+  Draft definition `4ee41619d3562b9e508823ccd8570368596f71152319ac5d157303b1f36cab20`.
+
+Formatting and diff checks passed. These are scoped results at the listed source
+bindings, not a full final-head suite claim. The only source differences after
+run 31 are the corrected block-removal stimulus and field shorthand. Confirmation
+position/parity and archive fixture migration, obsolete replay interfaces, bounded
+proof paging/admission, real-graph integration, consolidated review and CI remain
+unfinished. No PR, push or remote CI campaign was launched.
+
+### K4 certified confirmation and reorg accounting fixtures
+
+Continuing from `f3006af6503c6a73fb99f7ed85d7af8ca3014cf1`, the two automatic
+confirmation-position regressions now initialize certified history from genesis,
+execute an issuance and publication in certified Bitcoin Block 1, and use signed
+batch/block decisions with exact retained inputs. The test advances the production
+closure one settled step at a time, allowing inspection immediately after the
+replacement block's rollback stage. No seeded runtime is promoted to authority.
+
+Both paths retain successful contract output and gas assertions, raw Bitcoin
+position versus recognized-transaction ordinal checks, and actual execution/op
+counts. The batched path proves unchanged transaction effects and charges on
+confirmation, preserved batch identity after rollback, cleared confirmation,
+receipt-stream recovery to the pre-block cursor, and reconfirmation at a different
+raw position with zero repeated operations. The batch is now consensus height 2,
+after the certified initial block. Its Bitcoin execution height remains 1.
+
+Full certified block processing also runs native lifecycle operations. The effects
+snapshot therefore compares transaction-associated state and receipts, all gas
+usage and depositor footprints, contract/provenance rows, and the target contract's
+current-state projection. Lifecycle-only state and receipts are excluded from the
+equality assertion because a new block legitimately changes them. Receipt recovery
+uses the captured pre-block maximum receipt ID, including the surviving batch,
+rather than the later maximum that can include rolled-back lifecycle receipts.
+The fixtures still do not establish Bitcoin PoW, UTXO or script acceptance.
+
+Local evidence: `k4-confirmation33.log`, session 83147, exit 0, two passed in 49.82s.
+The existing manual cross-revision parity test was ignored, as intended by its
+explicit-run marker; this result does not cover that test or its legacy seed.
+Log SHA-256 `4b96ff0149fc635fc9d4a6c92d4ec9f0f720f15ee8d6e758e2acfed73b1b3dcb`.
+Draft definition `a0fff15b64e949ce6634b1c6698a864f76fcc607f3318ad3642a24ad6ebb578c`.
+Formatting and diff checks passed. Lead inspection traced certificate retention,
+closure stepping, rollback and receipt recovery; the consolidated independent
+K4 review remains pending. No production execution changes, PR, push or remote CI
+were made for this fixture migration. Manual historical parity/archive migration,
+obsolete replay interfaces, bounded proof transport/admission and the rest of K4
+integration/review/CI remain unfinished.
+
+### K4 obsolete Bitcoin replay plumbing removal
+
+Continuing from `f195f21650213cd31f248bf383c2ae7e22ce42a1`, removed the unused
+`Executor::resolve_transactions` and `replay_blocks_after` interfaces and all three
+implementations. Certified application/recovery already reads retained exact
+inputs. Removed the replay sender from RuntimeExecutor, node startup and session
+constructors, the follower's returned channels, and the poller's rewind request
+branch. Ordinary Bitcoin polling, ZMQ wakeups, startup hash reconciliation, reorg
+rollback and shutdown retain their existing paths. No Bitcoin RPC API was removed.
+
+Removed the now-unreachable mock executor block sender and corresponding cluster
+plumbing. The maintenance pause used to test ownership during rollback remains.
+The manual deadline archive still checks that certified closure finishes before
+advance returns; its obsolete assertion against an unused replay receiver is gone.
+Four tests solely for the removed poller replay-request API were removed with that
+API. All 25 remaining poller tests were retained and passed, including ordering,
+header/witness retention, live/offline reorgs, chain shrink, reorg during catch-up,
+and cancellation. This does not claim that the older manual archive setup has
+been migrated to certified startup.
+
+Local validation, one Cargo/runtime operation at a time and at most two jobs:
+
+- `k4-replay-removal34.log`, session 38385, exit 0: 27 tests passed in 93.61s.
+  In addition to the poller suite, this includes certified A-to-B-to-A replacement
+  and the four-validator missing-local-block recovery regression. Both now run
+  without an executor or poller replay request interface.
+  SHA-256 `f9248e06a5b4b1257726b81315798c1bb3d6160164ff4cc2c6dfcaea11978351`.
+- `k4-replay-main35.log`, session 74962, exit 0: locked `indexer` production
+  `kontor` binary check with the protocol-qualification feature passed in 9.20s.
+- Draft coordinator definition for both checks:
+  `c5273daeae767579060ae9579ed4f322b3e068d899ef11b6c6ae65f9a7dd5e1c`.
+
+Formatting and diff checks passed. Lead inspection traced all removed interface
+call sites and confirmed certified recovery is independent of local Bitcoin
+redelivery. No independent microreview, PR, push or remote CI was started. Remaining
+K4 work includes bounded proof transport/admission, required real-graph integration,
+historical fixture reconciliation, and consolidated review/CI/merge.
+
+
+### K4 incremental proof verification and bounded journal reads
+
+Continuing from `0de8855863af41a3965ad2be7fe7db4056b127e0`, replaced the
+whole-slice certificate parser with an incremental verifier. Existing contiguous
+verification uses the same verifier. It retains one fixed 107-byte wire-field
+buffer, the established committee lookup and duplicate-signer tracking. Declared
+length is checked against `1024 + 96*N`; field order, minimal varints, round,
+value identity, canonical signature records, known distinct signers, signatures
+and strict supermajority retain their previous rules. Finishing requires all
+declared bytes and a complete field, even after a quorum prefix. A failed stream
+cannot be reused to obtain a successful verdict.
+
+Added `load_verified_input` for journal consumers that need authenticated input
+and decision identities but not proof bytes. It checks both original and optional
+augmentation proofs using SQL slices of at most 1 MiB each, then exposes the
+input. Closure planning/recovery/completion, finality/replay validation and the
+block/batch retained-input checks now use it. The existing whole-proof load still
+serves callers that require proof bytes, with a committee-based length check
+before loading those blobs. This bounds the application's proof-read buffers, not
+SQLite's page cache or all memory proportional to the historical committee.
+
+Local validation, one Cargo/runtime operation at a time and at most two jobs:
+
+- `k4-proof-stream36.log`, session 32235, exit 0: 22 tests passed in 44.36s
+  after a 1m49s test build. This includes all certified-decision and journal tests,
+  splitting valid proofs at every byte boundary for rounds 0, 128 and u32::MAX,
+  malformed split prefixes, incomplete/failed stream rejection, original and
+  augmentation corruption checks, and actual certified A-to-B-to-A recovery.
+  SHA-256 `ad08760ab7978dfeb09eb726d8cb61a6032addf7415c7f1a4c01064b11f19d65`.
+- `k4-proof-stream-main37.log`, session 80876, exit 0: locked production
+  `kontor` binary check with protocol-qualification passed in 9.26s.
+  SHA-256 `4dc20531836ac02acc2f95f7d566579d2bdafcc681d872b0df98bf1a0704dd62`.
+- Draft coordinator definition for both checks:
+  `3c4b9097960fc32e319f0b3e1e2c2160bbc261fbc88331555db62b8b3991fab9`.
+
+Lead inspection compared all parser acceptance checks with the preceding parser,
+traced converted journal consumers, checked failure poisoning and bounded field
+arithmetic, and confirmed no proof verification is skipped when returning input.
+Formatting and diff checks passed. No independent microreview, PR, push or remote
+CI was started. The sole planning reviewer was asked to scrutinize the concrete
+network/engine integration because the current Malachite app-channel interface
+only transports complete native certificates. No engine adaptation was selected
+or implemented in this checkpoint.
+
+This is not complete proof paging or K4 acceptance. Network request/page binding,
+bounded disk staging and admission, large-proof journal publication and actual
+engine integration remain. The native-sync serving path and the execution path
+that populates the legacy batch certificate projection still load whole proofs.
+Required real-graph integration, historical fixture reconciliation and the
+consolidated K4 review/CI/merge also remain unfinished.
+
+
+### Operator deferral of oversized-certificate paging
+
+The operator explicitly instructed the lead to stop pursuing oversized-certificate
+paging as a current need and to update the goal. Appended the refinement to the
+existing objective file without replacing the goal or touching its statistics.
+Updated the active K4 and implementation-plan requirements. Earlier ledger and
+checkpoint requirements are superseded rather than erased.
+
+No proof-page wire protocol, HTTP history source configuration, page staging,
+giant-committee test or early engine replacement was implemented. The preceding
+incremental-verifier checkpoint b3ba8306 remains, with its 22 passing tests and
+production build check. Ordinary bounded native sync and cross-era historical
+verification/catch-up remain in scope. This deferral adds no committee cap and
+does not claim oversized-certificate support.
+
+The sole reviewer was informed to end the paging-driven planning work. Its source
+investigation supports reusing the previously qualified ManagedEngine fork pin
+6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09 in K5, with complete join, preserved WAL,
+callback fencing and no replacement after timeout or lifecycle faults. The
+reviewer agreed that dependency choice, but no node dependency or engine change
+was made. Preserve that research for K5 instead of treating it as a new K4 gate.
+
+This is an operator-directed scope change, not an assertion that K4 is complete.
+Remaining K4 work includes historical fixture reconciliation, real retained-graph
+integration, ordinary framing/admission checks, consolidated review, scoped CI and
+merge. No new test or CI campaign is needed for these documentation-only edits.
+
+
+### K4 retained and certified acceptance harness repair, 1 November 2026
+The sole planning reviewer explicitly agreed the split against 8d59b615:
+retained first/second/observer execution and journal adapters retain per-graph
+qualification; the current K4 certified baseline runs separately using the actual
+observer factory. The original first lacks registration observation and cannot
+honestly serve as the current certified baseline. No certificates or committee
+history are manufactured for the old graphs.
+
+The old history fixture failed locally at consensus startup with missing
+certified_history_state. It now exercises the production block transaction,
+lifecycle, linked root/ownership, maintenance and journal adapters without a
+consensus engine. Empty/all-excluded synthetic batch applications check journal
+integration and surviving anchor prefixes, not current Reactor construction.
+The existing fifteen-decision certified fixture retains the real caller checks
+for admission, empty/excluded batches, closure, finality/replacement replay,
+atomicity and engine-free recovery. It runs separately in k4-node before the
+node-capacity check shuts down the shared owner service.
+
+Both execution and cross-platform comparison gates require this separate result,
+including all completion assertions and observer definition/manifest/protocol/era
+bindings. Legacy qualification cannot claim this coverage. The case formerly
+named reactor-canonical-history is now retained-canonical-history-adapters.
+The semantic oracle fixture was restored byte-for-byte to K3; the new issuance
+helper lives in the certified fixture instead of invalidating historical evidence.
+
+Validation: the pre-fix fixture failed (session55735, exit101); repaired adapter
+fixture passed (session51807, exit0, 1 test,29.41s after79s build); Python gates
+passed 7+16 tests including missing/altered certified-result rejection; certified
+integration passed (session32313, exit0,2 tests,115.50s after27.16s build); node
+binary check passed after ordering the certified check before shutdown
+(session69411,exit0,4.33s). Draft coordinator definition:
+0b4e50018cb248f7b265f0c5d20bc1b14cc307c42bd42f316d6a643ec1df075f.
+
+Local raw logs under .build-cache, SHA-256:
+
+- `k4-history-fixture38-before.log`: `71642b29b16d8886b80eada5d0467d62c917269f623c779a9d3cd47194716f6d`.
+- `k4-history-adapters39.log`: `bd4465fa901a651f83a62c4ff9ceb8f5ef098275db40bd83d82bf6c82de24d94`.
+- `k4-history-execution-gates39.log`: `9b281161641fb306d267739bbb724e97c30d21afe1248d97f7c24024b1b05ad9`.
+- `k4-history-comparison-gates39.log`: `481fc384c2826a04e5a708c778b878b61a1f10ae57860998d7293d1d411e5688`.
+- `k4-certified-integration40.log`: `41a2cc29e11827eb7fd98ffa1dfbde994331e1096cc9d5c1812e32ca41833477`.
+- `k4-history-node41.log`: `b13cd986951eb77e137539db06ce42225c8e30c5e90a24609b19f59cfd1eab04`.
+
+These results do not yet prove the separately linked k4-node executable passes.
+The certified fixture uses supplied signed certificates and a disabled-consensus
+engine; it is not multi-validator networking evidence. The combined independent
+build/run, manual historical-fixture reconciliation, final K4 review and scoped
+CI remain. No PR, push or remote CI was started for this checkpoint. Oversized
+certificate paging remains deferred; K5 lifecycle work remains in K5/K6.
+
+
+### Operator-approved proportional scope, 1 November 2026
+
+Updated the original goal file in place and the active implementation plan after
+the operator agreed to reducing/postponing all four identified areas. K6 retains
+manual isolated migration rehearsal instead of six-height automation/readiness
+expiry. K9 retains verified sequential bounded catch-up without advanced download
+machinery. K10 defers a new user transaction format while retaining existing
+format discovery and required control codecs. K11 retains distinct correctness
+and recovery boundaries under scoped release3/bounded-dev CI, not exhaustive
+combinations or stress/performance campaigns. The full core upgrade implementation,
+lead plus one independent review and verified green merges remain required.
+The private Site will be reconciled at final publication as already instructed.
+
+Before the independent K4 build, inspected the shared Cargo cache with no active
+Cargo/runtime and removed only incremental directories whose newest content
+predated 1 November. The deletion manifest is `.build-cache/k4-incremental-cleanup.json`;
+228 directories, 21.65 GiB logical bytes. Filesystem free space rose from25 to35 GiB
+(the filesystem shares extents). Sources, binaries and qualification evidence
+were preserved. The observer's immutable execution definition verified unchanged:
+cc6739c0387a9a5cf2eda7b82c668598ebc7d16c8b6d644d90683f231939d194.
+
+
+### K4 linked-node success and preserved archive comparison, 1 November 2026
+
+The actual independent first/observer node at `17172bb7` passed ARM64 dev
+qualification (session95197, exit0, runtime192.32s): both graphs matched the
+retained semantic baseline, all25 named cases completed, and the separate
+observer-certified fixture authenticated and closed15 decisions. Its result binds
+the observer definition, manifest, protocol and era. Executable SHA-256:
+`18b67b474bab731a156b89e910b711fe13e706c287c8c4de2ed018cab308fe0a`.
+Raw reports remain under `.build-cache/k4-bundles/aarch64-unknown-linux-gnu/dev/executors/k4-node/`.
+The expected injected callback/constructor/export panics were contained and
+verified by the harness. This is one local platform/profile, not the final scoped
+platform campaign or multi-validator networking evidence.
+
+Reconciled the older pre-extraction archive comparator with certified history.
+It now uses ExecutionContext without starting consensus or fabricating committee
+history. Factored the unchanged batch transaction body out of the certified
+caller; production retains its exact retained-input, replay-subset, anchor and
+closure checks before invoking that private body. The feature-only legacy wrapper
+requires unavailable canonical history and owns the usual execution lease and
+transaction. Block execution, rollback and simulation use their existing owned
+paths. The manual test shares the comparator; baseline recording remains on the
+preserved historical source. Removed the duplicated recorder and unused old
+consensus fixture, and restricted the remaining test constructor to tests.
+
+The original archive at source `c7554ca8b7a104d28f41eb1e9a0c48200c34d5f1`
+was not regenerated. In-tree comparison passed all11 complete state/receipt
+stages, including simulation isolation and confirmation/reconfirmation without
+reexecution or additional charges (session9032, exit0,6.88s after88s build).
+Certified callback integration then passed both tests, including15-decision
+closure/recovery (session76987,exit0,115.21s after23.41s build).
+The first compile caught an omitted test import, which was fixed. An initial
+library test filter selected zero tests; it provides no acceptance evidence and
+was corrected to the actual certified_callbacks integration target.
+
+Lead inspection compared the extracted body ignoring indentation, traced its
+production/qualification callers and root lifecycle, and checked that original
+archive hashes and exact expected observations remain enforced. The in-tree
+archive result is not yet both-independent-graph evidence. The linked archive
+comparison, remaining ordinary framing acceptance, consolidated K4 independent
+review and scoped final-candidate CI remain. No PR, push or remote CI was started.
+
+Raw local evidence SHA-256:
+
+- `k4-linked-node42.log`: `637b8e24fd1bdcc33a3141beab32211b0e45f980254a248a893ac9f8b311e03a`.
+- `k4-historical-parity44.log`: `17d62e210fc2ccf1208c4d670fadd37b253402283d5db196b33522d89f862117`.
+- `k4-historical-parity44.json`: `323276dc7ea5bd56f71b0e860559863153004df005a06be31479bad5d08c62aa`.
+- `k4-certified-batch-regression46.log`: `45cbc8a765bfb7c009e3bf0fbc9c0b70ae3a931972ce2230cc8fe0641492086a`.
+
+
+### K4 linked archive and signed gossip acceptance, 1 November 2026
+
+The actual independently linked first/observer node at `e9033433` matched all
+11 preserved archive stages in each graph (session55533, exit0, 11.11s execution).
+The original archive was not regenerated. The build and comparison records are
+under `.build-cache/k4-archive-bundles/`, including `archive-comparison.json`,
+`archive.stdout.json` and `archive.stderr.log`; the full build log is
+`.build-cache/k4-linked-archive47.log`. Executable SHA-256:
+`1824912eaa44378b2cff9422fe9cc11f78696c0f1133b64e772127725572351b`.
+The comparison record binds the source, build report, binary and raw outputs.
+This closes the earlier linked archive comparison gap; it is not evidence of
+committee authority for the uncertified old archive or of other platforms.
+
+Added actual two-peer signed GossipSub delivery to `certified_value_wire` using
+the production engine/network configuration. Both maximum framed batch shapes
+(one maximum-size transaction plus filler, and many small transactions) cross
+the transport and retain exact encoded bytes and authenticated publisher identity.
+The readiness barrier observes a small message on the same channel before sending
+each large message once. Peers use temporary WAL directories and ephemeral ports;
+normal teardown stops and joins each engine. No framing limit or fork changed.
+All six wire tests passed (session68750, exit0, 3.27s; 13.90s compilation), recorded
+in `.build-cache/k4-gossip50.log`. Attempt48 caught a PeerId type mismatch. Attempt49
+incorrectly awaited mesh membership for persistent peers; the corrected fixture
+uses bidirectional persistent connections and actual message delivery. Neither
+failed attempt is acceptance evidence.
+
+Clippy53 passed the indexer tests with `protocol-qualification` and `-D warnings`
+(session45355, exit0, 27.84s), after removing unused test adapters, redundant borrows
+and test-only lint issues. Ordinary workspace formatting exposed remaining
+formatting differences in two fixture files, subsequently formatted. These are not execution
+rule changes. Removing the unused runtime test helper nevertheless changes the
+unreleased observer source definition to
+`7026414e4530a26af9768253beea0e4bd426d28d6bcccec15d494c2014d1a82a`.
+Historical first/second definitions and frozen sources remain untouched. The
+updated draft coordinator definition is
+`c918d397b03749c18d0de2aafe9c9aa50adebbffaeaae9788304a87e1446e6b5`.
+Earlier linked results remain bound to their tested sources; final candidate CI
+must rebuild and qualify the current definitions.
+
+Lead inspection traced durable append before acknowledgement, retained input use
+at Finalized, closure completion before next-height publication, and atomic
+successor committee/closure/frontier persistence. The framing test deliberately
+isolates transport from consensus authority; signed certificate/closure tests
+cover that distinct invariant. The cleanup removes only unused test paths or
+changes borrow/formatting structure. Prior scoped recovery, accounting and cluster
+results remain recorded above with their source bindings. Full grouped independent
+review, final-candidate scoped platform checks and merge remain outstanding.
+
+The focused source-root, coordinator-definition, node comparison/build/execution
+tooling checks also passed: 41 tests in 6.70s (session98795, exit0). Final local
+workspace formatting and diff whitespace checks passed. Raw evidence SHA-256:
+
+- `k4-linked-archive47.log`: `a659f65f14144698d15d70d92bc95bc6e558215a8b25b5d334570c70b5a6199c`.
+- `k4-gossip50.log`: `24a00863e09f187cb0f4bdc99384a9e90e55b346e2449131e268142a756334b3`.
+- `k4-clippy53.log`: `c49257ed31e9632265ab9ff69b1e1ccfe86f95f97b189e21947c623d14d09ebd`.
+- `k4-build-tools54.log`: `5c64aa92104b4181fcfe809af823004f10eb651068548acf863e9de67860fc83`.
+
+
+### K4 normal workspace configuration, 1 November 2026
+
+The CI-default `cargo clippy --locked --workspace --tests -- -D warnings` exposed
+helpers that qualification-feature builds legitimately use but normal builds do
+not. Scoped those committee adapters and reactor fixture wrappers to their actual
+test/qualification configurations. Definition-specific session dispatch remains
+compiled for real linked nodes. The historical committee operation stays in the
+export ABI; its local adapter field has an explicit dead-code allowance only in
+builds that do not exercise historical qualification. Live authority still comes
+from trusted registration observations.
+
+Clippy55 identified eight unused items; Clippy56 identified two wrappers used only
+by qualification, rather than ordinary unit tests. After the corresponding cfg
+corrections, the complete default workspace Clippy57 passed (session27614, exit0,
+25.95s). No execution rule or retained bundle definition changed in this follow-up.
+The draft coordinator reference is now
+`a49ebd6b121d1cdc40d9cf264dbbd537db13357e6c339dc51abf15ee4680b3d7`.
+The source-only correction will be included in the consolidated review, not sent
+through a separate independent review campaign.
+
+Raw `k4-default-clippy57.log` SHA-256: `0a8f51e7cd08db8e6e474c64fcc36b46becfb5015f74f413932cbddf8bf3bfbd`.
+
+
+### K4 consolidated review and original-bundle acceptance, 1 November 2026
+
+The single independent reviewer examined the complete K4 group from merge-base
+`fdf6a65d3a14cf88af7271d666bf13b001849d2f` through `f6d1b320` (including the
+normal-build cfg corrections). Remote main was independently checked and remained
+that K3 merge; no K4 PR existed. Review covered durable acknowledgement, exact
+input/proof bindings, genesis/unavailable legacy state, stage/observation atomicity,
+closure/Next ordering, historical authority, branch replacement, frozen replay
+intervals/exclusions, recovery, ownership, factory mapping and qualification gates.
+The reviewer compared all 1,264 frozen entries against the K3 source with no
+mismatches and inspected prior linked evidence hashes. No runtime work was rerun
+by the reviewer.
+
+One material finding was accepted: proposal reassembly had stream/part count caps
+but no aggregate raw-body byte admission before proposer authentication. Five
+unfinished near-4-MiB Data streams exceed the agreed 16-MiB budget. The post-completion
+early-proposal limits do not cover those streams. The bounded correction is
+assigned as `K4-REASSEMBLY-BOUND` to the existing defensive implementer in an isolated
+worktree; integration, lead review and focused independent follow-up remain
+required. This is an identified resource-bound failure, not a new paging project.
+No other material state, authority or compatibility regression was found.
+
+The reviewer also identified repeated full-batch decoding and membership scanning
+in finality seed validation, quadratic in transaction count when many transactions
+fail in one batch. The lead confirmed the source path in `finality::seed`, `probe`
+and `capture`. Practical latency has not been measured. Retain this scalability
+limitation without adding a performance campaign or merge gate, consistent with the
+operator's performance disposition. It is not a claim of acceptable worst-case
+throughput or a reason to change gas or ordering.
+
+The explicit `legacy-qualification` link set then built both relocated original
+executors at `f6d1b320`, passed native ownership/interface controls and executed all
+25 existing qualification cases (session45836, exit0, 99.91s runtime). First and
+second matched each other and the preserved semantic baseline; no current K4
+certified-history result is claimed by this legacy link set. The original execution
+definitions remain `a69902e230dfa7ae50079838c5d90cf33c6a00de9fc901bf2c26e363449e19e4`
+and `0565ceaf03d95097c02f86ad4bfb6f0c352900ecdfcf071960a408404a81bc48`.
+Artifacts are under `.build-cache/k4-legacy-bundles/aarch64-unknown-linux-gnu/dev/executors/legacy-qualification/`.
+The lead independently verified the build report, stdout, stderr and installed
+binary hashes. Executable SHA-256:
+`09d63f7fb9d33aafa9fc4628aebec9b11fafb375f33eaf58b563b11d67fe5915`.
+This closes relocated original-second linked execution, not final production
+platform CI. Existing first/observer evidence and pending final candidate checks
+retain their distinct scopes. The reviewer will inspect this evidence and the
+buffering fix in a focused follow-up, preserving the rest of the completed review.
+
+Raw `k4-linked-legacy58.log` SHA-256: `c30380665c360a466203081cc629a07b2cbab1dbc5507bf21f2116f2d83ace90`.
+
+The independent follow-up verified the legacy build/output/binary and ownership
+report hashes, checked all 536 qualification source entries against `f6d1b320`,
+and confirmed both original definitions, the 25 cases, the semantic baseline and
+explicitly absent certified-history claim. It accepted this acceptance gap as
+closed. The reassembly correction and final-candidate CI remain outstanding.
+
+
+### K4 proposal reassembly review correction, 1 November 2026
+
+Integrated the bounded defensive implementation `e696f75b` as `9a48cb91` after
+lead source inspection and terminal validation. The changed files are the proposal
+reassembly map, its export and the reactor caller. Admission now limits aggregate
+retained stream IDs, descriptor/body bytes and a conservative 256-byte per-part
+allowance to 16 MiB. The existing stream and part count limits remain. Duplicate
+sequences do not recharge, refusal leaves no empty stream or seen sequence, and
+completion or explicit discard releases the stream's exact accumulated charge.
+Impossible Fin sequence values are refused before sequence arithmetic. Local
+saturation maps to the existing no-completed-proposal reply, not invalid consensus
+work. Round changes do not clear live streams.
+
+Lead review traced Value::size_bytes, the stream-ID ownership path, accounting
+before retention, completion/removal and the handler's reply classification. The
+budget is not total RSS: decoded transactions and transient decoding add memory.
+Abandoned streams remain bounded but can stay until completion, explicit discard
+or map destruction. There is no new production discard caller, eviction policy,
+transport retry protocol or guarantee of fair admission under a flood.
+
+The implementer ran the exact source without edits during execution: 11 reassembly
+unit tests passed in0.54s (after2m25s compilation); the maximal proposal encoding
+test passed in1.66s; the real reactor early-proposal/committee handoff regression
+passed in69.47s; package Clippy for lib/tests with warnings denied passed in42.73s.
+The lead inspected the raw logs and unchanged three-file cherry-pick. Formatting
+and whitespace checks pass. These bounded checks address the identified regression;
+they do not replace the pending final-candidate platform campaign.
+
+The observer execution definition remains unchanged. Refreshed only the unreleased
+draft coordinator source reference, now
+`3d06eb32c3a3b61ccbe9b3a7c56910b7ec52a84d1771bafd1366bdfa1365f3a4`.
+No historical definition or frozen source changed. Focused independent review of
+this delta is required before opening the PR; the remainder of the consolidated
+K4 review and its evidence remain valid within their recorded source scope.
+
+Raw evidence is in the main workspace `.build-cache/`:
+
+- `k4-reassembly-part-streams.log`: `8bcb9f6ca112c8e1c1f4ddd4f5bfba2d5e6f53309ae2044016809689df63a5c3`.
+- `k4-reassembly-max-wire.log`: `495266944574e1531b9179de0a2b42abff33dde334a403838912d448eb05dc12`.
+- `k4-reassembly-ingress.log`: `f9c9eb7594dd9e4ee5473b6d995ec29d53cf48f88d772b5cd5e1addab13fedea`.
+- `k4-reassembly-clippy.log`: `8897a241bfc3ba545619877250003ba2c8df5d7ef8b2cb22ab4579a397cfa9fa`.
+
+The sole independent reviewer closed the reassembly finding at `34bd03ea` and
+approved K4 source review, retaining the completed consolidated coverage and
+legacy-link-set acceptance. It verified admission ordering, duplicate handling,
+checked accounting, completion/discard release, Fin bounds, local reply semantics,
+the identical cherry-pick, raw test results and exactly three updated coordinator
+source hashes. No further workloads were run and no new material finding remained.
+Final-candidate CI is still required. Before the first push, remote main remained
+`fdf6a65d` and GitHub reported no existing K4 PR or branch workflow runs. One scoped
+candidate campaign is needed for the changed coordinator, observer and linked-node
+builds, retaining the automatic release-three/bounded-dev policy.
+
+### K4 first-campaign qualification-control correction
+
+PR620 first candidate `e3bcef78` failed native-stack evidence controls in run
+41334668424 before executing the platform matrix. The sole source-registry drift
+was the indexer build-script hash: K4 declares the `kontor_observer` check-cfg,
+but the generated resource manifest still named the earlier bytes. Refreshed
+that one input hash and its dependent v2, boundary and suite-registry hashes.
+No source code, case policy, measured result, frozen executor or historical
+qualification artifact changed. The comparator correctly rejected skipped jobs.
+
+The exact CI control command now passes locally: 235 tests in 23.127 seconds,
+exit zero, `.build-cache/k4-ci-evidence-controls60.log`. The initial sandboxed
+check passed the manifest controls but six local Unix-socket tests could not bind;
+the complete check then passed with local socket access. Lead inspected the four
+generated-file diffs; this nonmaterial metadata correction retains the completed
+source-review coverage. No new runtime tests or performance campaign were added.
+
+Push the consolidated correction promptly so workflow concurrency cancels the
+superseded active candidate, rather than paying for both full campaigns. The
+corrected candidate still requires its own passing CI, including the stack matrix
+that did not execute in the first campaign.
+
+### K4 regtest first-block startup correction
+
+SDK job 124933441505 in CI run 41335140236 failed while starting the real
+`kontor regtest` devnet. Its harness waited for `/api` availability before mining
+height 102; K4 now needs the first certified block before publishing chain-state
+availability. Move the existing one-block mining operation immediately after all
+active node processes spawn and before the availability barrier. Keep the seed
+listen-address barrier, quorum, readiness predicate and later height check intact.
+This is a harness ordering correction, not a consensus-rule change.
+
+Lead traced the CI log and caller flow. The sole reviewer checked the focused
+diff and accepted the correction. Local dev binary build passed in 55.29 seconds
+(`k4-regtest-startup-build61.log`). A real `kontor regtest` process then reached
+its SDK readiness marker with eight funded identities in 18.676 seconds, served
+`/api` at height 103 and exited zero on SIGTERM. Evidence:
+`.build-cache/k4-regtest-startup63.json` and `.log`; binary SHA-256
+`17dc82ea029bdce22a77a1ec27161cd02c2fef4081e89cf09409fd2457109ebd`,
+log SHA-256 `2404d654c57fdbe38e2d23c2b91076f24e50328ad3c4e235332fa4b21879d670`.
+The first local probe reached readiness but its checker used the wrong API JSON
+envelope; correcting the checker to read `result.height` produced the recorded
+pass. This focused startup check is not a claim that the complete SDK suite ran
+locally. The corrected candidate still requires CI. No executor definition or
+coordinator reference binds this harness file, and none was regenerated.
+
+### K4 ordinary-CI test representation and startup corrections
+
+Both ordinary release CI jobs at `bd3b3b78` reported the same twelve failures:
+eleven replay tests still inspected the certified value as if it were the filtered
+execution body, and the delayed-proposal test bypassed certified genesis setup.
+Correct the assertions to inspect `execution_txs()` while retaining the original
+certified-body assertions. Correct the repeated-filter fixture to keep its full
+original body in `value`. The startup fixture now uses the real executor session,
+certifies and applies block 1, then delays the height-2 GetValue callback by five
+seconds and still requires a round-zero decision within the original proposal
+deadline. No production execution or consensus rule changed.
+
+The initial replay check passed 21 tests. The sandboxed startup attempt could not
+listen on its local socket and timed out; with socket access it passed. A broader
+local dev reactor run was deliberately stopped after a SQLite lock failure in
+the rollback cluster test. Isolating that test also exposed its unsupported
+assumption that two separately recognized transactions enter one batch. The
+fixture now submits and observes each transaction separately, checks preservation
+of both certified decision IDs across branch replacement, and verifies fresh
+higher-height execution plus counter state `2 -> 0 -> 2` on all three nodes.
+Its read helper opens and uses the pool in a blocking task so SQLite's synchronous
+busy handler cannot freeze the current-thread test runtime driving writer commits.
+The failed and stopped attempts remain recorded, not counted as passes.
+
+Final bounded local regression: 24 passed, zero failed or ignored, 1031 filtered,
+61.75 seconds, exit zero (`k4-ci-regressions69.log`). This covers the 21 replay
+cases, both startup tests and the rollback cluster case. Lead review and the sole
+independent review accepted the corrections and retained the prior consolidated
+K4 approval. The unreleased coordinator reference changes exactly the hashes of
+these three test source files; dependency fields, retained executor definitions
+and the observer definition are unchanged. Current-head CI remains required.
+
+Evidence record: `.build-cache/k4-ci-test-correction.json`. Raw log hashes:
+- `k4-replay-ci-correction64.log`: `6c423fcb76977f79ef798077fd9e9ca446ff72c8ed34730611e216b4dc3ab700`.
+- `k4-startup-deadline65.log`: `1407fd4cccde43488fe04cf669ab84345ff026d469031b6ea8c5d6e91028dc53`.
+- `k4-startup-deadline66.log`: `8ec0532d8a0b6e459837e9e692cce147b33b93c46b2315443d309d286a865e06`.
+- `k4-reactor-ci-correction67.log`: `e56ec29d76fca026edc4002185f35acece29dd42d8e32ef9a8f3fd846a37e5e3`.
+- `k4-rollback-lock-isolation68.log`: `543cced63e12dd26ca246c218ce17e8f8ff4c7604b6e881071adf08c83f6576d`.
+- `k4-ci-regressions69.log`: `a6c48471f9b9f6bfc5a0402209fd2829a40d5148b8ccc14e4fd3253c7b8e8960`.
