@@ -66,7 +66,7 @@
         "blocking_decode"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_brotli_raw_ceiling_evidence.py",
         "sha256": "a35dd29132d08634f1e8719cea7a3b436bd87de7be03961c95fc0492fc6d217b"
@@ -87,7 +87,7 @@
         "canonical_abi"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_canonical_evidence.py",
         "sha256": "0121c164b067bdca1497f2b98861bc5bbeb393d55acd6321b42476a62f646aa4"
@@ -106,7 +106,7 @@
         "canonical_abi"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_type_value_evidence.py",
         "sha256": "2451ac3992604107b37a9246e5ad8d51113f581a0fcdca531fdbcd3c314e7f59"
@@ -136,7 +136,7 @@
         "distinct_contract_chain"
       ],
       "manifest": "v2",
-      "manifest_sha256": "1baabc9257f319301bda46a88ee67d4a92553b1013cc8b23c4a8489534cf6f3b",
+      "manifest_sha256": "dadbd0c390e1d2d31a35517445a9f95db2576e87bcb528e594a3e7b0c1e21954",
       "validator": {
         "path": "tools/native-stack/resource_evidence_v2.py",
         "sha256": "d7b22eb8a4e90485a60c96aa74f40ae774485ffc77d58bd20720a9147260b814"
@@ -157,7 +157,7 @@
         "cold_compile"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_cold_publication_evidence.py",
         "sha256": "12e6bba8e1e41545c17cc00c1d9df106ca8524e3690b045958e87d8d894741dd"
@@ -178,7 +178,7 @@
         "paid_limit"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_finite_evidence.py",
         "sha256": "b5771c046b0cebb678628dd96b589bc63355386c0db7256eef5d1c7d12aace89"
@@ -197,7 +197,7 @@
         "foreign_call"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_foreign_wave_evidence.py",
         "sha256": "3a860d2423bccab8a315984c945221f5c3af0eedb96d6c1b2092daba3a0b1f59"
@@ -216,7 +216,7 @@
         "initialization"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_initialization_evidence.py",
         "sha256": "9591f4252ad462ab9d5633eeee21c3c97d3221c5278ef60d423cb855f9c0d562"
@@ -235,7 +235,7 @@
         "native_core"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_native_filestorage_lifecycle_evidence.py",
         "sha256": "f0fd30b156ec8a5620f118efe8f001cd74ef3955bd2b81b292ccb91ea2fc14dc"
@@ -254,7 +254,7 @@
         "native_core"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_native_staking_rewards_evidence.py",
         "sha256": "7ecad976d3a11605343446a87c09e1a7d15a09647c10f9470cdfcd0bb21dadd7"
@@ -273,7 +273,7 @@
         "suspension"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_pending_evidence.py",
         "sha256": "869b86058904910bc9e3641adb12f271561bf7fe141d42ba0dfd239187bf9f65"
@@ -301,7 +301,7 @@
         "pulley_host_callback"
       ],
       "manifest": "boundary",
-      "manifest_sha256": "cd8dbd1b117e519a2729a796a3dbda1e35e516f6b3f66eda7fbac0404eaefe68",
+      "manifest_sha256": "5cc85593c542bd236e7c21bb6402e908cf4c12d8c97d5a74ad3e265a23eb6e8d",
       "validator": {
         "path": "tools/native-stack/resource_boundary_evidence.py",
         "sha256": "4ab4bc0e28c3c4e844781352fa9e736ebdbeb65ea5b04027c12f855f6db643a7"
@@ -321,7 +321,7 @@
         "resource_lifecycle"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_lifecycle_evidence.py",
         "sha256": "599e27044864e6da78ab2cd13b2471ce47a1c931a7d8ac89acceb6168d9cede5"
@@ -340,7 +340,7 @@
         "sqlite"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_sqlite_large_values_evidence.py",
         "sha256": "b504ef177bd8e7f5c70be75ee212e45acfc6eaf6dcbd9e816620234ef1aad340"
@@ -359,7 +359,7 @@
         "sqlite"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_sqlite_pagination_evidence.py",
         "sha256": "298afbb34824e800426c30e60f37292752a264dbbe8748187c32a81b1dd19d70"
@@ -378,7 +378,7 @@
         "sqlite"
       ],
       "manifest": "v1",
-      "manifest_sha256": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
+      "manifest_sha256": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
       "validator": {
         "path": "tools/native-stack/resource_sqlite_ranges_evidence.py",
         "sha256": "5af70b117ad430cb2562d176a3647eedccb139a66f343b620127df9e94adef5c"
@@ -386,9 +386,9 @@
     }
   },
   "parent_manifests": {
-    "boundary": "cd8dbd1b117e519a2729a796a3dbda1e35e516f6b3f66eda7fbac0404eaefe68",
-    "v1": "dcf02ef47d8771e40b27f8d601d7006ed551c63e7522dd68cb3059f126623f4e",
-    "v2": "1baabc9257f319301bda46a88ee67d4a92553b1013cc8b23c4a8489534cf6f3b"
+    "boundary": "5cc85593c542bd236e7c21bb6402e908cf4c12d8c97d5a74ad3e265a23eb6e8d",
+    "v1": "0652745dc8c2705871a39465deef44c4aa3a3b7e216e8b9e087e04b6c451e1ca",
+    "v2": "dadbd0c390e1d2d31a35517445a9f95db2576e87bcb528e594a3e7b0c1e21954"
   },
   "remaining_gates": {
     "boundary_discovery": "candidate_only",

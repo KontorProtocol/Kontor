@@ -7,6 +7,7 @@ use crate::runtime::pool::LinkedSession;
 use anyhow::Result;
 use bitcoin::{Network, Transaction as BitcoinTransaction, Txid};
 
+use crate::database::canonical_history::{self, HistoryState};
 use crate::database::queries::{
     contract_has_state, get_transaction_by_txid, insert_block, insert_contract, insert_transaction,
 };
@@ -133,6 +134,14 @@ impl LiteExecutor {
                 .build(),
         )
         .await?;
+
+        // This cluster seeds synthetic state outside the coordinator's genesis
+        // journal, so it must not claim an authentic, pending initialization.
+        canonical_history::initialize(&conn).await?;
+        assert_eq!(
+            canonical_history::state(&conn).await?,
+            HistoryState::Unavailable
+        );
 
         let storage = Storage::builder().height(0).conn(conn).build();
         let linkers = Runtime::new_linkers(&engine)?;

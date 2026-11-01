@@ -183,6 +183,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::database::canonical_history::{self, HistoryState};
     use crate::database::init::CREATE_SCHEMA;
     use crate::database::queries::insert_block;
     use crate::reg_tester::random_x_only_pubkey;
@@ -399,6 +400,13 @@ mod tests {
             params!["a".repeat(64)],
         )
         .await?;
+        // Direct publication here intentionally predates the coordinator's
+        // journal. Reopening must preserve this same unavailable-history state.
+        canonical_history::initialize(&conn).await?;
+        assert_eq!(
+            canonical_history::state(&conn).await?,
+            HistoryState::Unavailable
+        );
         runtime_on(warm, conn).await
     }
 
