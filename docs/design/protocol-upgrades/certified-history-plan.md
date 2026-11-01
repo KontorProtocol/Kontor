@@ -31,6 +31,12 @@ records. These checks do not establish complete reactor behavior or cross-platfo
 qualification. The live Decided/Finalized and next-height gates, final closure and
 committee publication, baseline composition, certified-branch rules, startup
 integration and oversized-proof transport remain to be connected and qualified.
+The Bitcoin poller now retains the complete decoded Bitcoin block, including its
+header and transaction witnesses. Its checked history conversion validates the
+requested hash, parent, size and Bitcoin commitments, and replay reconstructs the
+same block from the retained body. Synthetic transaction-only ingress is test-only.
+The poller-to-history round trip is covered locally, but proposal signing and
+ValueId still require integration with the canonical descriptor.
 Both explicit link sets still need their complete integration acceptance evidence.
 
 ## Result and boundaries

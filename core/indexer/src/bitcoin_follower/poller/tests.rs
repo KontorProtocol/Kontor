@@ -1,9 +1,12 @@
 use super::*;
 use crate::bitcoin_client::mock::MockBitcoinRpc;
+use crate::protocol::coordinator::certified_input::EraContext;
 use crate::protocol::coordinator::linked::PreparedTransaction;
+use crate::protocol::identity::{ChainId, ProtocolId};
 use crate::stopper::Shutdown;
 use crate::test_utils::new_numbered_blockchain;
 use bitcoin::blockdata::constants::genesis_block;
+use bitcoin::consensus::serialize;
 use bitcoin::hashes::Hash;
 use bitcoin::{Network, Witness};
 use indexer_types::{Block, Transaction};
@@ -333,6 +336,37 @@ fn delivery_preserves_unknown_transactions_and_witnesses_until_recognition() {
         (parsed.height, parsed.hash, parsed.prev_hash),
         (1, hash(1), hash(0))
     );
+}
+
+#[tokio::test]
+async fn fetched_block_preserves_original_header_and_body_for_certification() {
+    let first = genesis_block(Network::Regtest);
+    let mut second = first.clone();
+    second.header.prev_blockhash = first.block_hash();
+    second.header.time += 1;
+    let rpc = MockBitcoinRpc::from_bitcoin_blocks(vec![(0, first.clone()), (1, second.clone())]);
+    let block = fetch_and_process(rpc, 1).await.unwrap();
+    let mut pending = HashMap::from([(1, block)]);
+    let mut cache = BlockHashCache::new(10);
+    cache.insert(0, first.block_hash());
+    let DeliveryResult::Ok { mut events, .. } = deliver_blocks(&mut pending, &mut cache, 1, 2, 1)
+    else {
+        panic!("expected complete block delivery");
+    };
+    let BlockEvent::BlockInsert { block, .. } = events.remove(0) else {
+        panic!("expected raw block");
+    };
+    let context = EraContext {
+        chain: ChainId([1; 32]),
+        era: [2; 32],
+        protocol: ProtocolId([3; 32]),
+        codec: 1,
+    };
+    let exact = block.exact_input(context).unwrap();
+    assert_eq!(exact.body(), serialize(&second));
+    assert_eq!(BlockInput::from_exact(&exact).unwrap(), block);
+    assert_eq!(block.hash, second.block_hash());
+    assert_eq!(block.prev_hash, first.block_hash());
 }
 
 // -- run() integration tests --

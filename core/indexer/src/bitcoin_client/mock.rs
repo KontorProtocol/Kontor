@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use bitcoin::{
-    BlockHash, CompactTarget, TxMerkleNode, Txid,
+    Block as BitcoinBlock, BlockHash, CompactTarget, TxMerkleNode, Txid,
     block::{Header, Version},
     hashes::Hash,
 };
@@ -33,6 +33,7 @@ fn stub_entry() -> MempoolEntry {
 #[derive(Clone, Debug)]
 pub struct MockBitcoinRpc {
     blocks: Arc<Mutex<Vec<Block>>>,
+    raw_blocks: Arc<Mutex<HashMap<BlockHash, BitcoinBlock>>>,
     mempool_txs: Arc<Mutex<Vec<bitcoin::Transaction>>>,
     mempool_sequence: Arc<Mutex<u64>>,
     mempool_entries: Arc<Mutex<HashMap<Txid, MempoolEntry>>>,
@@ -46,12 +47,32 @@ impl MockBitcoinRpc {
     pub fn new(blocks: Vec<Block>) -> Self {
         Self {
             blocks: Arc::new(Mutex::new(blocks)),
+            raw_blocks: Arc::new(Mutex::new(HashMap::new())),
             mempool_txs: Arc::new(Mutex::new(vec![])),
             mempool_sequence: Arc::new(Mutex::new(0)),
             mempool_entries: Arc::new(Mutex::new(HashMap::new())),
             mempool_min_fee_btc_per_kvb: Arc::new(Mutex::new(0.00001)),
             test_mempool_accept_overrides: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn from_bitcoin_blocks(blocks: Vec<(u64, BitcoinBlock)>) -> Self {
+        let client = Self::new(
+            blocks
+                .iter()
+                .map(|(height, block)| Block {
+                    height: *height,
+                    hash: block.block_hash(),
+                    prev_hash: block.header.prev_blockhash,
+                    transactions: Vec::new(),
+                })
+                .collect(),
+        );
+        *client.raw_blocks.lock().unwrap() = blocks
+            .into_iter()
+            .map(|(_, block)| (block.block_hash(), block))
+            .collect();
+        client
     }
 
     pub fn set_mempool(&self, txs: Vec<bitcoin::Transaction>) {
@@ -152,6 +173,9 @@ impl BitcoinRpc for MockBitcoinRpc {
     }
 
     async fn get_block(&self, hash: &BlockHash) -> Result<bitcoin::Block, Error> {
+        if let Some(block) = self.raw_blocks.lock().unwrap().get(hash).cloned() {
+            return Ok(block);
+        }
         self.find_by_hash(hash)
             .map(|b| to_bitcoin_block(&b))
             .ok_or_else(|| Error::Unexpected(format!("no block with hash {hash}")))

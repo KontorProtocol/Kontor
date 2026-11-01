@@ -109,8 +109,7 @@ async fn fetch_and_process<C: BitcoinRpc>(bitcoin: C, height: u64) -> Result<Blo
     )
     .await?;
 
-    let prev_hash = block.header.prev_blockhash;
-    Ok(BlockInput::new(height, block_hash, prev_hash, block.txdata))
+    Ok(BlockInput::from_bitcoin(height, block_hash, block))
 }
 
 // -- Delivery: validate block ordering and detect reorgs --

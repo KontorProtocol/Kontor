@@ -171,7 +171,7 @@ pub(crate) async fn run(
         raw.header.prev_blockhash = anchor;
         let hash = raw.block_hash();
         let input = CanonicalInput::bitcoin(&raw.txdata)?;
-        let block = BlockInput::new(2, hash, anchor, raw.txdata);
+        let block = BlockInput::from_bitcoin(2, hash, raw);
         let decision = DeferredDecision { consensus_height: Height::new(3), value: Value::Block { height: 2, hash },
             certificate: Vec::new(), certified_txs: None };
         // Fail the second journal append, after transactions and lifecycle ran.

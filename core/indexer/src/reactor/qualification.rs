@@ -78,12 +78,7 @@ fn raw_confirmation_block(tx: &Transaction, position: usize) -> Result<BlockInpu
     assert!(raw.txdata[0].is_coinbase());
     assert!(raw.check_merkle_root());
     let hash = raw.block_hash();
-    Ok(BlockInput::new(
-        2,
-        hash,
-        raw.header.prev_blockhash,
-        raw.txdata,
-    ))
+    Ok(BlockInput::from_bitcoin(2, hash, raw))
 }
 
 async fn state(conn: &Connection) -> Result<Json> {

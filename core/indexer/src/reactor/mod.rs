@@ -18,6 +18,7 @@ mod mempool;
 pub mod mempool_fee_index;
 #[cfg(test)]
 mod mempool_tests;
+#[cfg(test)]
 pub mod mock_bitcoin;
 #[cfg(test)]
 mod pruning_tests;
