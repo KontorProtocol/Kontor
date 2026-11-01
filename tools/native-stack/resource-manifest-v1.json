@@ -226,7 +226,7 @@
     },
     "indexer_build_script": {
       "path": "core/indexer/build.rs",
-      "sha256": "ed8ed78fb607fbac0322990ac64a5fef5f5aa571590c34f6b77012121be33fb7"
+      "sha256": "1569d8ef19e36af2c762b5aed1e471c6b3226d87c2b79aa37a30b23fac2ef1e7"
     },
     "indexer_manifest": {
       "path": "core/indexer/Cargo.toml",

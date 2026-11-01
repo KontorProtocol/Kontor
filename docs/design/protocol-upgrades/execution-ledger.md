@@ -2304,3 +2304,25 @@ Final-candidate CI is still required. Before the first push, remote main remaine
 `fdf6a65d` and GitHub reported no existing K4 PR or branch workflow runs. One scoped
 candidate campaign is needed for the changed coordinator, observer and linked-node
 builds, retaining the automatic release-three/bounded-dev policy.
+
+### K4 first-campaign qualification-control correction
+
+PR620 first candidate `e3bcef78` failed native-stack evidence controls in run
+41334668424 before executing the platform matrix. The sole source-registry drift
+was the indexer build-script hash: K4 declares the `kontor_observer` check-cfg,
+but the generated resource manifest still named the earlier bytes. Refreshed
+that one input hash and its dependent v2, boundary and suite-registry hashes.
+No source code, case policy, measured result, frozen executor or historical
+qualification artifact changed. The comparator correctly rejected skipped jobs.
+
+The exact CI control command now passes locally: 235 tests in 23.127 seconds,
+exit zero, `.build-cache/k4-ci-evidence-controls60.log`. The initial sandboxed
+check passed the manifest controls but six local Unix-socket tests could not bind;
+the complete check then passed with local socket access. Lead inspected the four
+generated-file diffs; this nonmaterial metadata correction retains the completed
+source-review coverage. No new runtime tests or performance campaign were added.
+
+Push the consolidated correction promptly so workflow concurrency cancels the
+superseded active candidate, rather than paying for both full campaigns. The
+corrected candidate still requires its own passing CI, including the stack matrix
+that did not execute in the first campaign.
