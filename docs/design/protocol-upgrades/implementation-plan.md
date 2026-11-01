@@ -591,8 +591,12 @@ real deliberately different P2 migration and activation.
 
 The lead and sole planning reviewer agreed the concrete revision-2 design in
 [the certified-history plan](certified-history-plan.md). It retains this milestone's
-scope, adds explicit restartable closure stages and specifies the bounded baseline
-history transport required here. K9 remains responsible for cross-era cold catch-up.
+scope and adds explicit restartable closure stages. The operator's 1 November
+scope correction defers oversized-certificate paging and its giant-committee
+acceptance tests outside this goal. Preserve ordinary bounded Malachite sync;
+K9 remains responsible for necessary cross-era history retrieval and cold catch-up.
+Do not pull K5 managed engine integration into K4 solely for the deferred paging
+case. See the current correction in the certified-history plan.
 
 Dependencies: K2b/K3. Modules: consensus values/codecs, reactor proposal/decision/startup,
 database durable journal and committee records. Result: stable bounded value/control

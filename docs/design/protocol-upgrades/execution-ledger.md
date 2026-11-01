@@ -1,5 +1,10 @@
 # Protocol upgrade implementation ledger
 
+Current scope override, 1 November 2026: oversized-certificate paging and its
+greater-than-10-MiB proof acceptance tests are deferred outside this goal by the
+operator. Earlier entries describing those as unfinished requirements are
+historical. See the latest scope-correction entry and certified-history plan.
+
 ## K2b local checkpoint, 31 October 2026
 
 K2b remains unmerged. The current implementation and outstanding phase gates are
@@ -1960,3 +1965,31 @@ engine integration remain. The native-sync serving path and the execution path
 that populates the legacy batch certificate projection still load whole proofs.
 Required real-graph integration, historical fixture reconciliation and the
 consolidated K4 review/CI/merge also remain unfinished.
+
+
+### Operator deferral of oversized-certificate paging
+
+The operator explicitly instructed the lead to stop pursuing oversized-certificate
+paging as a current need and to update the goal. Appended the refinement to the
+existing objective file without replacing the goal or touching its statistics.
+Updated the active K4 and implementation-plan requirements. Earlier ledger and
+checkpoint requirements are superseded rather than erased.
+
+No proof-page wire protocol, HTTP history source configuration, page staging,
+giant-committee test or early engine replacement was implemented. The preceding
+incremental-verifier checkpoint b3ba8306 remains, with its 22 passing tests and
+production build check. Ordinary bounded native sync and cross-era historical
+verification/catch-up remain in scope. This deferral adds no committee cap and
+does not claim oversized-certificate support.
+
+The sole reviewer was informed to end the paging-driven planning work. Its source
+investigation supports reusing the previously qualified ManagedEngine fork pin
+6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09 in K5, with complete join, preserved WAL,
+callback fencing and no replacement after timeout or lifecycle faults. The
+reviewer agreed that dependency choice, but no node dependency or engine change
+was made. Preserve that research for K5 instead of treating it as a new K4 gate.
+
+This is an operator-directed scope change, not an assertion that K4 is complete.
+Remaining K4 work includes historical fixture reconciliation, real retained-graph
+integration, ordinary framing/admission checks, consolidated review, scoped CI and
+merge. No new test or CI campaign is needed for these documentation-only edits.

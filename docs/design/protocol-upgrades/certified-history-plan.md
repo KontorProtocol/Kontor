@@ -12,6 +12,22 @@ authority together. K5/K6 add signing coordination and authorized upgrade contro
 K7/K8 add activation and cross-upgrade recovery; K9 extends history transport to
 cross-era cold catch-up. None of those capabilities is claimed complete by K4.
 
+### Operator scope correction, 1 November 2026
+
+Oversized-certificate paging is deferred outside this goal. It is not a K4 or
+later-phase prerequisite or acceptance gate. The operator rejected pursuing this
+extreme-committee case as a current need. Earlier checkpoint references below to
+proof paging, oversized-proof recovery or bounded proof serving are historical
+and superseded by this correction.
+
+Keep normal bounded proposal streaming/sync batching, verified exact history and
+cross-era catch-up. Do not claim oversized-certificate support, silently truncate
+certified work or introduce a consensus committee cap. No new page protocol, HTTP
+source configuration, disk-staging project or early engine handoff is required
+solely for oversized proofs. The tested incremental verifier and bounded journal
+reads remain useful. Managed lifecycle integration and signing/generation fences
+remain in K5/K6; K9 retains necessary cross-era history retrieval.
+
 ### Local implementation checkpoint
 
 K4 is not yet fully integrated into the production reactor or ready for a PR. The local
@@ -33,7 +49,7 @@ connected, as are certified-branch admission rules. Live block and batch handler
 now commit through owned stages, and completed-closure/committee publication has a
 validated persistence API. Certified replacements now plan and execute owned
 rollback stages. The reactor finality/replay driver, post-genesis startup recovery
-and oversized-proof transport still need complete integration and qualification.
+still need complete integration and qualification in this historical checkpoint.
 The Bitcoin poller now retains the complete decoded Bitcoin block, including its
 header and transaction witnesses. Its checked history conversion validates the
 requested hash, parent, size and Bitcoin commitments, and replay reconstructs the
@@ -303,9 +319,6 @@ production node, revisit the namespace design explicitly.
 | Full raw Bitcoin block | 4,000,000 bytes, plus existing Bitcoin validity/weight checks |
 | Complete pubsub wire message | 4,194,304 bytes |
 | Existing native sync request / response | 1,048,576 / 10,485,760 bytes |
-| History request | 1,024 bytes |
-| History page payload | 1,048,576 bytes |
-| Complete history response frame | 1,056,768 bytes |
 | Retained proofs per decision | Original plus one augmentation |
 
 Transaction count is bounded by remaining framed bytes divided by four before
@@ -321,13 +334,10 @@ encoders passed, but it does not replace tests of K4's completed encoding. Corre
 the implementation or explicitly revise the limit before freezing the baseline if
 those tests fail.
 
-Proof paging is required in K4, including proofs exceeding the native 10 MiB sync
-frame. Requests/pages bind decision, proof digest, position and total. Reject gaps,
-overlap and mixed proofs. Validate total size from the known committee before
-accepting it; verify incrementally with bounded buffers and duplicate-signer
-tracking. Disk staging remains untrusted until validation completes. Integrate
-this into actual journal/engine recovery, not an oversized reassembled native sync
-message. K9 adds cross-era exchange, cold catch-up orchestration and discovery.
+Individual-proof paging and its proposed request/page frame formats are deferred
+by the operator correction above. Existing native sync batches remain bounded by
+their response limit; do not assemble an oversized native response or claim it is
+supported. K9 still implements the required cross-era historical exchange.
 
 Pending descriptors: at most 16 and 8 MiB in total. Unverified descriptors: at most
 four and 1 MiB. Raw untrusted reassembly: at most 16 MiB. Separate body/proof staging
@@ -364,8 +374,9 @@ Required evidence includes:
 - Both old definitions reproduced from frozen inputs; both old graphs still
   build and qualify; actual K4 adapters run original first and the new observer;
   source-root mutation, escape and substitution rejection; unchanged native audits.
-- Complete framing limits and real proof recovery above 10 MiB, including mixed,
-  reordered/interrupted pages, duplicates, saturation, cancellation and restart.
+- Existing complete framing limits and bounded native sync behavior, including
+  saturation, cancellation and restart. Oversized-proof paging qualification is
+  explicitly deferred.
 
 Use the existing mock Bitcoin service and real linked-node qualification harness.
 Complete focused local checks and one consolidated lead plus independent review
