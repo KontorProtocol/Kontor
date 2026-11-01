@@ -1,0 +1,325 @@
+use alloc::{string::String, vec::Vec};
+
+use crate::keycodec::KeyElement;
+use crate::scalar_storage::{narrow_i32, narrow_u32};
+use crate::{KeyPath, ScalarStorage};
+
+pub trait ReadStorage {
+    fn __get_str(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<String>;
+
+    fn __get_u64(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<u64>;
+
+    fn __get_s64(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<i64>;
+
+    fn __get_bool(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<bool>;
+
+    fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<Vec<u8>>;
+
+    // The returned iterator owns its key source (see `make_keys_iterator`), so it
+    // does not borrow `path`. `use<Self, T>` makes that explicit — capturing only
+    // the types, not the `self`/`path` lifetimes — so callers can scan a
+    // freshly-built path (e.g. an index bucket) and still return the iterator.
+    // `T` is decoded from each child's codec element (the map key, or an
+    // `(sort, pk)` tuple for a sorted-index member), so it sorts and round-trips
+    // natively — no stringify/parse.
+    //
+    // `lo`/`hi` are the half-open `[lo, hi)` byte range (child-element bytes relative
+    // to `path`; FDB-style `get-range`). `lo` is an INCLUSIVE lower-bound seek and `hi`
+    // an EXCLUSIVE upper bound, both applied host-side so out-of-range members are
+    // skipped WITHOUT pulling-and-discarding them (each pulled key is metered). `None`
+    // on either side is open (whole subtree). A sorted-index range query passes
+    // `Some((sort, pk)-prefix)` bounds so `sort` filtering is a host seek, not a guest
+    // `skip_while`/`take_while`. `descending` reverses only the iteration ORDER — the
+    // range is identical either way — so a `.rev()` scan yields highest-first.
+    fn __get_keys_range<T: KeyElement + Clone>(
+        self: &alloc::rc::Rc<Self>,
+        path: &[u8],
+        lo: Option<&[u8]>,
+        hi: Option<&[u8]>,
+        descending: bool,
+    ) -> impl Iterator<Item = T> + use<Self, T>;
+
+    /// Whole-subtree ascending scan — [`__get_keys_range`] with no bounds.
+    fn __get_keys<T: KeyElement + Clone>(
+        self: &alloc::rc::Rc<Self>,
+        path: &[u8],
+    ) -> impl Iterator<Item = T> + use<Self, T> {
+        self.__get_keys_range(path, None, None, false)
+    }
+
+    /// Direct live leaves with host-decoded values. Scalars and covering
+    /// projections share this metered cursor.
+    /// Compound children are invalid; use the key cursor to enumerate their keys.
+    fn __get_storage_rows_range<V: ScalarStorage>(
+        self: &alloc::rc::Rc<Self>,
+        path: &[u8],
+        lo: Option<&[u8]>,
+        hi: Option<&[u8]>,
+        descending: bool,
+    ) -> impl Iterator<Item = (Vec<u8>, V)> + use<Self, V>;
+
+    fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
+
+    fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T>;
+}
+
+pub trait Retrieve<T: ?Sized>: Clone {
+    fn __get(ctx: &alloc::rc::Rc<T>, base_path: KeyPath) -> Option<Self>;
+}
+
+impl<T: ReadStorage + ?Sized> Retrieve<T> for u64 {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
+        ctx.__get_u64(&path)
+    }
+}
+
+impl<T: ReadStorage + ?Sized> Retrieve<T> for i64 {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
+        ctx.__get_s64(&path)
+    }
+}
+
+// u32/i32 use 64-bit host slots. Match the checked narrowing used by entry
+// scans so a mismatched stored value cannot silently change on a point read.
+impl<T: ReadStorage + ?Sized> Retrieve<T> for u32 {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
+        ctx.__get_u64(&path).map(narrow_u32)
+    }
+}
+
+impl<T: ReadStorage + ?Sized> Retrieve<T> for i32 {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
+        ctx.__get_s64(&path).map(narrow_i32)
+    }
+}
+
+impl<T: ReadStorage + ?Sized> Retrieve<T> for String {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
+        ctx.__get_str(&path)
+    }
+}
+
+impl<T: ReadStorage + ?Sized> Retrieve<T> for bool {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
+        ctx.__get_bool(&path)
+    }
+}
+
+impl<T: ReadStorage + ?Sized> Retrieve<T> for Vec<u8> {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
+        ctx.__get_list_u8(&path)
+    }
+}
+
+pub trait WriteStorage {
+    fn __set_str(self: &alloc::rc::Rc<Self>, path: &[u8], value: &str);
+
+    fn __set_u64(self: &alloc::rc::Rc<Self>, path: &[u8], value: u64);
+
+    fn __set_s64(self: &alloc::rc::Rc<Self>, path: &[u8], value: i64);
+
+    fn __set_bool(self: &alloc::rc::Rc<Self>, path: &[u8], value: bool);
+
+    fn __set_list_u8(self: &alloc::rc::Rc<Self>, path: &[u8], value: Vec<u8>);
+
+    fn __set_void(self: &alloc::rc::Rc<Self>, path: &[u8]);
+
+    fn __set<T: Store<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath, value: T);
+
+    /// Tombstone a path and its whole subtree (every live descendant), so a
+    /// struct/map value stored under child paths is fully removed — not just the
+    /// exact path. Returns true if any live row was tombstoned. (A leaf path,
+    /// e.g. an index void, has no descendants, so this is a single tombstone.)
+    fn __delete(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
+}
+
+pub trait Store<T: WriteStorage + ?Sized> {
+    /// Whether storing this type supplies a value at the exact root path.
+    #[doc(hidden)]
+    const STORES_ROOT: bool;
+
+    #[doc(hidden)]
+    fn __set_variant_payload(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: Self)
+    where
+        Self: Sized,
+    {
+        if Self::STORES_ROOT {
+            Self::__set(ctx, path, value);
+        } else {
+            Self::__set(ctx, path.clone(), value);
+            // Keep the variant present even after its last descendant is removed.
+            // Write after the payload, whose Store implementation may clear its subtree.
+            ctx.__set_void(&path);
+        }
+    }
+
+    fn __set(ctx: &alloc::rc::Rc<T>, base_path: KeyPath, value: Self);
+}
+
+/// A writable storage handle that can derive its read-side view — what a
+/// generated write model builds its embedded read model from (mirrors the
+/// `proc-storage.view-storage` resource method). Implemented for each
+/// contract's `ProcStorage` by the `contract!` glue; keeping it as a trait is
+/// what lets the model codegen stay generic over the storage handle instead of
+/// naming `crate::context::*` (so the `Storage` derive can expand in crates
+/// with no context of their own, e.g. `built-in-types`).
+pub trait HasViewStorage {
+    type View: ReadStorage;
+    fn view_storage(&self) -> Self::View;
+}
+
+/// `ctx.model()` — access to a contract's root storage model from its
+/// Proc/View contexts. Implemented by the `Root`/`StorageRoot` derive in the
+/// contract crate; generic over the root type `R` because the context types
+/// are foreign there (the shared `built-in-types` wrappers), so the local root
+/// appearing as a trait parameter is what satisfies the orphan rule.
+pub trait HasRootModel<R> {
+    type Model;
+    fn model(&self) -> Self::Model;
+}
+
+impl<T: WriteStorage + ?Sized> Store<T> for u64 {
+    const STORES_ROOT: bool = true;
+
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: u64) {
+        ctx.__set_u64(&path, value);
+    }
+}
+
+impl<T: WriteStorage + ?Sized> Store<T> for i64 {
+    const STORES_ROOT: bool = true;
+
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: i64) {
+        ctx.__set_s64(&path, value);
+    }
+}
+
+impl<T: WriteStorage + ?Sized> Store<T> for u32 {
+    const STORES_ROOT: bool = true;
+
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: u32) {
+        ctx.__set_u64(&path, value as u64);
+    }
+}
+
+impl<T: WriteStorage + ?Sized> Store<T> for i32 {
+    const STORES_ROOT: bool = true;
+
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: i32) {
+        ctx.__set_s64(&path, value as i64);
+    }
+}
+
+impl<T: WriteStorage + ?Sized> Store<T> for &str {
+    const STORES_ROOT: bool = true;
+
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: &str) {
+        ctx.__set_str(&path, value);
+    }
+}
+
+impl<T: WriteStorage + ?Sized> Store<T> for String {
+    const STORES_ROOT: bool = true;
+
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: String) {
+        ctx.__set_str(&path, &value);
+    }
+}
+
+impl<T: WriteStorage + ?Sized> Store<T> for bool {
+    const STORES_ROOT: bool = true;
+
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: bool) {
+        ctx.__set_bool(&path, value);
+    }
+}
+
+impl<T: WriteStorage + ?Sized> Store<T> for Vec<u8> {
+    const STORES_ROOT: bool = true;
+
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: Vec<u8>) {
+        ctx.__set_list_u8(&path, value);
+    }
+}
+
+impl<T: WriteStorage + ?Sized> Store<T> for () {
+    const STORES_ROOT: bool = true;
+
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, _: ()) {
+        ctx.__set_void(&path);
+    }
+}
+
+impl<S: WriteStorage + ?Sized, T: Store<S>> Store<S> for Option<T> {
+    const STORES_ROOT: bool = false;
+
+    fn __set(ctx: &alloc::rc::Rc<S>, path: KeyPath, value: Self) {
+        ctx.__delete(&path);
+        match value {
+            Some(inner) => T::__set_variant_payload(ctx, path.push("some"), inner),
+            None => ctx.__set_void(&path.push("none")),
+        }
+    }
+}
+
+pub trait HasNext {
+    /// The next child key's codec element bytes (a string element), or `None`.
+    fn next(&self) -> Option<Vec<u8>>;
+}
+
+pub fn make_keys_iterator<K, T>(keys: K) -> impl Iterator<Item = T>
+where
+    K: HasNext,
+    T: KeyElement,
+{
+    struct KeysIterator<K, T>
+    where
+        K: HasNext,
+        T: KeyElement,
+    {
+        keys: K,
+        _phantom: core::marker::PhantomData<T>,
+    }
+
+    impl<K, T> Iterator for KeysIterator<K, T>
+    where
+        K: HasNext,
+        T: KeyElement,
+    {
+        type Item = T;
+        fn next(&mut self) -> Option<Self::Item> {
+            // Each child segment is one codec element; decode it directly into `T`
+            // (the map key, or a `(sort, pk)` tuple for a sorted member).
+            self.keys.next().map(|elem| {
+                let (v, _) = T::decode_from(&elem).expect("keys() element decodes into T");
+                v
+            })
+        }
+    }
+
+    KeysIterator {
+        keys,
+        _phantom: core::marker::PhantomData,
+    }
+}
+
+pub trait HasNextRow {
+    fn next_str(&self) -> Option<(Vec<u8>, String)>;
+    fn next_u64(&self) -> Option<(Vec<u8>, u64)>;
+    fn next_s64(&self) -> Option<(Vec<u8>, i64)>;
+    fn next_bool(&self) -> Option<(Vec<u8>, bool)>;
+    fn next_list_u8(&self) -> Option<(Vec<u8>, Vec<u8>)>;
+}
+
+pub fn make_storage_rows_iterator<V: ScalarStorage>(
+    rows: impl HasNextRow,
+) -> impl Iterator<Item = (Vec<u8>, V)> {
+    core::iter::from_fn(move || V::next_row(&rows))
+}
+
+storage_placeholder!(
+    /// The declared `Map<K, V>` field placeholder. The generated field model is the
+    /// real accessor; this only holds entries for a wholesale `Store` write. The
+    /// index-aware `Store` impl lives in `map` (next to `apply_index_diff`).
+    StorageMap
+);

@@ -1,0 +1,134 @@
+[workspace]
+members = [
+    "bls-crypto",
+    "built-in-types",
+    "indexer",
+    "indexer-types",
+    "kontor-sdk",
+    "kontor-sdk-native",
+    "kontor-sdk-wasm",
+    "kontor-build",
+    "macros",
+    "numerics",
+    "stdlib",
+    "testlib",
+    "wit-validator",
+]
+# Cargo Chef must preserve this build dependency's real API when cooking the
+# workspace skeleton used by vendored native build scripts.
+exclude = ["vendor/kontor-native-build"]
+resolver = "2"
+
+[workspace.lints.clippy]
+new_without_default = "allow"
+uninlined_format_args = "allow"
+too_many_arguments = "allow"
+
+[workspace.dependencies]
+# Keep our WIT tools aligned with wit-bindgen; Wasmtime owns its internal versions.
+# Pulley is not in Wasmtime's defaults. Keep the execution feature closure
+# explicit so cache, profiling, and debug builtins stay absent. The threads
+# feature exposes the setter needed to assert guest threads are disabled.
+wasmtime = { git = "https://github.com/wilfreddenton/wasmtime", rev = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7", version = "=51.0.0-kontor.2", default-features = false, features = [
+    "anyhow", "async", "backtrace", "component-model", "component-model-async",
+    "cranelift", "gc-copying", "gc-drc", "gc-null", "pooling-allocator",
+    "pulley", "runtime", "std", "threads", "wat", "wave", "wit-parser",
+] }
+wit-bindgen = "=0.63.0"
+wit-bindgen-core = "=0.63.0"
+wit-bindgen-rust = "=0.63.0"
+wit-component = "=0.262.0"
+wit-parser = "=0.262.0"
+wasmparser = { version = "=0.262.0", default-features = false, features = ["std", "component-model"] }
+wasm-encoder = "=0.262.0"
+wasm-wave = { version = "=0.262.0", default-features = false }
+# Match the UniFFI metadata ABI used by uniffi-bindgen-react-native 0.31.0-6.
+uniffi = "=0.31.2"
+
+anyhow = { version = "=1.0.104", default-features = false }
+fastnum = "=0.7.5"
+num = "=0.4.3"
+async-trait = "=0.1.92"
+axum = { version = "=0.8.9", features = ["http2"] }
+# Version is workspace-pinned; each crate selects its own features (bls-crypto
+# and indexer-types stay default-features = false for the wasm build).
+bitcoin = { version = "=0.32.102", default-features = false }
+# Version is workspace-pinned; bls-crypto adds the `portable` feature for wasm.
+blst = "=0.3.17"
+bon = { version = "=3.10.2", default-features = false, features = ["alloc"] }
+bytes = "=1.12.1"
+clap = { version = "=4.6.7", features = ["derive"] }
+eyre = "=0.6.14"
+glob = "=0.3.4"
+indexmap = { version = "=2.14.2", features = ["serde"] }
+libsql = { version = "=0.10.0", default-features = false, features = ["core", "serde", "stream"] }
+postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
+# Held at 0.13: the malachite consensus crates (arc-malachitebft-proto) are on
+# prost 0.13, and the codec boundary requires our proto types to implement the
+# same prost major's Name trait. Bump in lockstep with malachite.
+prost = "=0.13.5"
+serde = { version = "=1.0.229", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "=1.0.154", default-features = false, features = ["alloc"] }
+serde_with = { version = "=3.24.0", default-features = false, features = ["alloc", "macros"] }
+sha3 = "=0.12.0"
+tempfile = "=3.27.0"
+tokio = { version = "=1.53.3", features = ["full"] }
+tokio-util = "=0.7.20"
+tower = "=0.5.3"
+tower-http = { version = "=0.7.1", features = [
+  "fs",
+  "trace",
+  "compression-full",
+  "request-id",
+  "timeout",
+  "catch-panic",
+  "cors",
+] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
+ts-rs = { version = "=12.0.1", features = ["format"] }
+
+# Malachite BFT consensus
+malachitebft-app-channel = { version = "=0.8.2", package = "arc-malachitebft-app-channel" }
+
+[patch.crates-io]
+wasmtime = { git = "https://github.com/wilfreddenton/wasmtime", rev = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7", version = "=51.0.0-kontor.2" }
+psm = { path = "vendor/psm" }
+wit-bindgen = { path = "vendor/wit-bindgen" }
+# Opt-in native namespaces keep independently built protocol graphs separate.
+blst = { path = "vendor/blst" }
+ring = { path = "vendor/ring" }
+secp256k1-sys = { path = "vendor/secp256k1-sys" }
+# Preserve resolved /tcp/0 listen addresses until upstream includes the fix.
+arc-malachitebft-network = { path = "vendor/arc-malachitebft-network" }
+# Use ZeroMQ 4.3.5's alignment fix until zmq-sys releases its zeromq-src 0.3 update.
+zmq-sys = { git = "https://github.com/erickt/rust-zmq", rev = "d96de8f5e964e9096e1575a38cde5472c53bde6e" }
+
+# Optimize the proof-system crates even in dev/test builds. Proof
+# generation (kontor-crypto's Nova prover) is exercised only in tests and
+# is ~20-30x slower unoptimized; compiling just these deps at opt-level=3
+# keeps test proving near release speed while the rest stays debug.
+[profile.dev.package.kontor-crypto]
+opt-level = 3
+[profile.dev.package.kontor-crypto-core]
+opt-level = 3
+[profile.dev.package.nova-snark]
+opt-level = 3
+[profile.dev.package.halo2curves]
+opt-level = 3
+[profile.dev.package.ff]
+opt-level = 3
+[profile.dev.package.group]
+opt-level = 3
+[profile.dev.package.generic-array]
+opt-level = 3
+
+# Profile for the mobile binaries shipped inside apps (@kontor/sdk-native:
+# build-mobile.sh, ubrn, .github/workflows/mobile.yml). A dedicated profile
+# (not [profile.release]) so tuning for on-device size never perturbs other
+# release artifacts — notably the reproducible contract builds.
+[profile.mobile]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

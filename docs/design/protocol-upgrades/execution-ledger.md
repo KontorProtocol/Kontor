@@ -1168,3 +1168,104 @@ test now reports the actual WIT error when it fails; this is diagnostic detail,
 not a claimed fix for an unestablished cause. No new CI campaign has run for K3.
 Final release-platform checks and merge verification remain
 required. Local dev samples do not establish all-platform or all-input correctness.
+
+## K3 merged, 1 November 2026
+
+[PR 619](https://github.com/KontorProtocol/Kontor/pull/619) merged as
+`fdf6a65d3a14cf88af7271d666bf13b001849d2f`. Its final head was
+`c5481a2f168eb45407052eebfdde6f3e96b6f68e`, based on
+`aad23bccdaa300ed207bb328abc8c124e68efbe9`. GitHub tested synthetic merge
+`168510224e7310f742269b4e8c5ff2f94fd14601`. Both that tree and the actual merged
+tree are `32b14250524f795904b736cfd605da3bb934147b`; equality was verified before
+requesting cancellation of duplicate post-merge qualification.
+
+The lead and sole independent reviewer completed the consolidated review and
+accepted the real-reactor caller follow-up. Later corrections were confined to
+legacy test fixture initialization, generated source bindings, and reproducible
+migration fixture metadata. The lead inspected those corrections and preserved
+review coverage for unchanged production behavior. No material finding remains
+for K3. This is completion of K3, not completion of the protocol-upgrade goal.
+
+Two fixture problems were reproduced and fixed without weakening comparisons.
+Synthetic legacy fixtures now initialize unavailable canonical history consistently
+on first use and reopen; all 27 formerly failing ordinary tests passed on both
+platforms. Separately, independent migration qualification runs had random
+node-local receipt-stream epochs. The original test copied one seed database to
+both graphs and therefore missed the cross-run difference. The strengthened test
+uses independent seeds and failed before the correction. The qualification seed
+now fixes that metadata before execution, while production still creates random
+epochs. The test passed after the change and continues to compare every table.
+
+Final required evidence:
+
+- [Ordinary CI 41287408200](https://github.com/KontorProtocol/Kontor/actions/runs/41287408200)
+  passed, including Linux/macOS tests, lint/security, SDK and reproducible outputs.
+- [Stack qualification 41287408254](https://github.com/KontorProtocol/Kontor/actions/runs/41287408254)
+  passed all three release platforms, eight bounded dev smoke tests on each of
+  three platforms, and the explicit cross-platform comparison.
+- [Linked-node qualification 41287408362](https://github.com/KontorProtocol/Kontor/actions/runs/41287408362)
+  passed both actual retained graphs on Linux x86-64, Linux ARM64 and macOS ARM64,
+  including all 23 required scenario groups and the historical semantic baseline.
+  The final common observation digest is
+  `b32bd8ba109f9ffa8e169b866e3e4d8dc2b7ce8d9ba10df6fdd877bc107906a2`.
+- [Docker cache qualification 41287408495](https://github.com/KontorProtocol/Kontor/actions/runs/41287408495)
+  and [diagnostics 41287408246](https://github.com/KontorProtocol/Kontor/actions/runs/41287408246)
+  passed. Expected unselected image/S2 jobs remained skipped.
+
+Raw final evidence is retained in the `protocol-migrations` worktree under
+`.build-cache/k3-ci-c5481a2f/`. The lead independently reran both comparators over
+those downloaded artifacts, validating source/lock/compiler/component identities,
+raw log hashes, native ownership, type boundaries, exact cases and preserved
+historical observations. The reproduced stack comparison equals CI's output.
+The linked comparison agrees on all platforms, observation digest and compiler;
+only local report paths differ from CI's artifact paths.
+
+Earlier failed or incomplete evidence remains bound to its original source.
+The superseded `653ad035` linked run was canceled after its fixture mismatch was
+identified. It was not relabeled as a successful final-candidate comparison.
+Post-merge qualification runs 41290216054 and 41290216114 duplicate the verified
+successful tree; cancellation was requested only after retaining final evidence
+and verifying the actual merge. Main CI remains separate because it includes the
+production image path absent from PR CI. Both duplicate qualification runs were
+subsequently verified as completed with conclusion `cancelled`.
+
+## K4 implementation entry
+
+K4 begins in isolated branch `feat/protocol-certified-history` from verified merge
+`fdf6a65d3a14cf88af7271d666bf13b001849d2f`. The lead and sole planning reviewer
+already agreed [revision 2 of the concrete plan](certified-history-plan.md),
+including restartable closure stages, historical registration provenance, two
+explicit executor link sets, and bounded proof paging in K4 rather than deferring
+all recovery transport to K9. No repeated planning review is needed for these
+unchanged decisions.
+
+A pre-implementation source relocation experiment reproduced the original first
+and second definition bytes and IDs from a copied source root using locked offline
+resolution. It did not establish compilation or link acceptance. A framing preflight
+used actual existing Bitcoin/protobuf/stream/GossipSub encoders with maximum and
+many-small transaction inputs. It passed, with a minimum 7,977 bytes of headroom
+for the existing signed message. It did not qualify the final K4 schema or complete
+RPC aggregation. Both limitations remain explicit implementation acceptance work.
+
+K4 production changes and final acceptance remain unfinished. Publication stays
+at the end of the full goal. The Daybreak agent has no new assignment.
+
+The first packaging implementation now freezes the K3 executor input closure from
+the exact merged commit in `protocol-bundles/retained/k3`. Its 1,264 recorded files
+include local packages, semantic includes, inherited manifests, build support and
+unused path patches that Cargo still reads during resolution. The snapshot digest
+is `fc85d7f7479662012faef9bc43e3efaf7c9299ddc940ffd5ef5865abe5667592`.
+Both definitions reproduce byte for byte after locked offline resolution. Their
+IDs remain `a69902e230dfa7ae50079838c5d90cf33c6a00de9fc901bf2c26e363449e19e4`
+and `0565ceaf03d95097c02f86ad4bfb6f0c352900ecdfcf071960a408404a81bc48`.
+
+Build recipes can now select a separate, inventory-checked source root. Local
+dependencies and semantic symlinks cannot escape that root; inherited local
+manifest discovery stops at the explicit boundary even without a Git marker.
+Current compiler tooling is recorded separately from historical source inputs.
+The 119 local build-tool controls pass, including source substitution, mutation,
+added-file, escape and cycle rejection, and reference self-exclusion for newly
+named executors. The first test invocation encountered a read-only ccache directory;
+disabling ccache allowed the C-object controls to run successfully. This is not
+relocated compilation/link acceptance. CLI link-set selection, observer exports,
+node integration and the rest of K4 remain outstanding; no new CI was launched.

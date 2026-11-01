@@ -1,0 +1,137 @@
+package root:component;
+
+world root {
+  use kontor:built-in/pagination.{cursor-request};
+  include kontor:built-in/built-in;
+  use kontor:built-in/context.{view-context, proc-context, contract};
+  use kontor:built-in/context-types.{holder-ref};
+  use kontor:built-in/error.{error};
+  use kontor:built-in/file-registry-types.{raw-file-descriptor};
+
+  record nft-info {
+    nft-id: string,
+    owner: holder-ref,
+    creator: holder-ref,
+    agreement-id: string,
+  }
+
+  /// The next cursor is the last returned NFT id when another item exists.
+  /// None means this page exhausted the query (or limit was zero).
+  record nft-page {
+    items: list<nft-info>,
+    next: option<string>,
+  }
+
+  /// Cursor order is NFT-id order, even though items contain agreement ids.
+  record agreement-page {
+    items: list<string>,
+    next: option<string>,
+  }
+
+  record nft-transfer {
+    nft-id: string,
+    src: holder-ref,
+    dst: holder-ref,
+  }
+
+  record attribute {
+    key: string,
+    value: string,
+  }
+
+  export init: func(ctx: borrow<proc-context>) -> contract;
+
+  /// Mint a new NFT backed by a filestorage agreement created from `file-descriptor`.
+  ///
+  /// Validation rules enforced by the contract:
+  /// - `nft-id` must be non-empty and at most 64 bytes (UTF-8 length, no
+  ///   trim, case-sensitive, globally unique across all NFTs in this contract).
+  /// - `attributes` describe the NFT as an immutable map of string-to-string
+  ///   pairs (set once at mint, never updated afterwards). The list must
+  ///   contain at most 32 entries; every `key` must be non-empty and at most
+  ///   64 bytes; every `value` must be at most 2048 bytes; keys must be
+  ///   unique within the list (duplicate keys cause `mint` to fail).
+  /// - `file-descriptor.file-id` is freely chosen by the caller and validated
+  ///   by `filestorage::create-agreement` (non-empty, etc.); it shares its
+  ///   global namespace with all other agreements but is decoupled from
+  ///   `nft-id`.
+  ///
+  /// On success the returned `agreement-id` is the agreement id created by
+  /// filestorage (which equals `file-descriptor.file-id`) and is stored
+  /// alongside the NFT as a link to the underlying file.
+  export mint: func(
+    ctx: borrow<proc-context>,
+    nft-id: string,
+    attributes: list<attribute>,
+    file-descriptor: raw-file-descriptor
+  ) -> result<nft-info, error>;
+
+  export transfer: func(
+    ctx: borrow<proc-context>,
+    nft-id: string,
+    new-owner: holder-ref
+  ) -> result<nft-transfer, error>;
+
+  export attach: func(
+    ctx: borrow<proc-context>,
+    nft-id: string,
+    vout: u32
+  ) -> result<nft-transfer, error>;
+
+  export detach: func(
+    ctx: borrow<proc-context>,
+    nft-id: string
+  ) -> result<nft-transfer, error>;
+
+  export get-info: func(ctx: borrow<view-context>, nft-id: string) -> option<nft-info>;
+  export total-minted: func(ctx: borrow<view-context>) -> u64;
+
+  /// List NFTs in lexicographic NFT-id order, strictly after `after` when set.
+  /// Start with after = none; pass the returned next cursor to continue.
+  /// An absent limit defaults to 100. Limit is capped at 100; zero returns an empty page with no next cursor.
+  /// Each call reads current state, not a snapshot spanning all pages. Inserts
+  /// before the cursor and transfers between holder buckets may change later pages.
+  /// The cursor need not identify an existing NFT.
+  export list-nfts: func(
+    ctx: borrow<view-context>,
+    pagination: cursor-request
+  ) -> nft-page;
+
+  /// Same cursor and limit rules as list-nfts, restricted to the immutable creator.
+  /// An invalid or unknown holder reference returns an empty page.
+  export list-nfts-by-creator: func(
+    ctx: borrow<view-context>,
+    creator: holder-ref,
+    pagination: cursor-request
+  ) -> nft-page;
+
+  export count-nfts-by-creator: func(
+    ctx: borrow<view-context>,
+    creator: holder-ref
+  ) -> u64;
+
+  /// Same cursor and limit rules as list-nfts, restricted to the current holder.
+  /// Transfers change this bucket. Invalid or unknown references return an empty page.
+  export list-nfts-by-holder: func(
+    ctx: borrow<view-context>,
+    holder: holder-ref,
+    pagination: cursor-request
+  ) -> nft-page;
+
+  export count-nfts-by-holder: func(
+    ctx: borrow<view-context>,
+    holder: holder-ref
+  ) -> u64;
+
+  /// List a creator's agreement ids using the same NFT-id cursor as list-nfts.
+  /// Pass next back unchanged; it is not an agreement id. Same limit/input rules
+  /// as list-nfts-by-creator. Reads the covering index without fetching NFT records.
+  export agreement-ids-by-creator: func(
+    ctx: borrow<view-context>,
+    creator: holder-ref,
+    pagination: cursor-request
+  ) -> agreement-page;
+
+  export get-attributes: func(ctx: borrow<view-context>, nft-id: string) -> list<attribute>;
+  export get-attribute: func(ctx: borrow<view-context>, nft-id: string, key: string) -> option<string>;
+}

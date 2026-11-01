@@ -1,0 +1,79 @@
+use proc_macro::TokenStream;
+use quote::quote;
+use syn::{Path, parse_macro_input};
+
+pub fn generate(input: TokenStream) -> TokenStream {
+    let ty = parse_macro_input!(input as Path);
+    // OutPoint lives beside the target type; derive its path from the parent
+    // so the expansion needs nothing in scope.
+    let parent = ty.segments.iter().take(ty.segments.len() - 1);
+    let out_point = if ty.segments.len() > 1 {
+        let parent = parent.collect::<Vec<_>>();
+        quote! { #(#parent)::*::OutPoint }
+    } else {
+        quote! { OutPoint }
+    };
+
+    let expanded = quote! {
+        #[automatically_derived]
+        impl core::fmt::Display for #ty {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                match self {
+                    Self::XOnlyPubkey(s) => write!(f, "{s}"),
+                    Self::SignerId(id) => write!(f, "{id}"),
+                    Self::Core => write!(f, "core"),
+                    Self::Burner => write!(f, "burn"),
+                    Self::OrderingPool => write!(f, "ordering_pool"),
+                    Self::StoragePool => write!(f, "storage_pool"),
+                    Self::Utxo(out_point) => write!(f, "{}:{}", out_point.txid, out_point.vout),
+                }
+            }
+        }
+
+        #[automatically_derived]
+        impl core::str::FromStr for #ty {
+            type Err = alloc::string::String;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                Ok(if s == "core" {
+                    Self::Core
+                } else if s == "burn" {
+                    Self::Burner
+                } else if s == "ordering_pool" {
+                    Self::OrderingPool
+                } else if s == "storage_pool" {
+                    Self::StoragePool
+                } else if let Ok(id) = s.parse::<u64>() {
+                    Self::SignerId(id)
+                } else if let Some((txid, vout)) = s.rsplit_once(':') {
+                    let vout = vout.parse::<u32>()
+                        .map_err(|e| alloc::format!("invalid vout: {e}"))?;
+                    Self::Utxo(#out_point { txid: alloc::string::ToString::to_string(txid), vout })
+                } else {
+                    Self::XOnlyPubkey(alloc::string::ToString::to_string(s))
+                })
+            }
+        }
+
+        #[automatically_derived]
+        impl core::cmp::PartialEq for #ty {
+            fn eq(&self, other: &Self) -> bool {
+                match (self, other) {
+                    (Self::XOnlyPubkey(a), Self::XOnlyPubkey(b)) => a == b,
+                    (Self::SignerId(a), Self::SignerId(b)) => a == b,
+                    (Self::Core, Self::Core) => true,
+                    (Self::Burner, Self::Burner) => true,
+                    (Self::OrderingPool, Self::OrderingPool) => true,
+                    (Self::StoragePool, Self::StoragePool) => true,
+                    (Self::Utxo(a), Self::Utxo(b)) => a.txid == b.txid && a.vout == b.vout,
+                    _ => false,
+                }
+            }
+        }
+
+        #[automatically_derived]
+        impl core::cmp::Eq for #ty {}
+    };
+
+    TokenStream::from(expanded)
+}

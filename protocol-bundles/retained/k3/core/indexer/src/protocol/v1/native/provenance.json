@@ -1,0 +1,33 @@
+{
+  "source": {
+    "forge": "GitHub",
+    "owner": "KontorProtocol",
+    "repo": "Kontor",
+    "commit": {
+      "Sha1": [
+        223,
+        172,
+        190,
+        253,
+        172,
+        34,
+        184,
+        152,
+        197,
+        186,
+        213,
+        178,
+        202,
+        229,
+        226,
+        81,
+        62,
+        20,
+        122,
+        253
+      ]
+    }
+  },
+  "image": "docker.io/kontorprotocol/kontor-build@sha256:c6a881f42d4dc05483041271040d56abc8f0af18a448db7221846a0e8c6640f7",
+  "platform": "LinuxArm64"
+}

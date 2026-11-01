@@ -1,11 +1,13 @@
 """Bind separately linked graphs to immutable sources and execution settings."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
+from pathlib import PurePosixPath
 import tomllib
 
 from audit import suffix
+from freeze_sources import verify_snapshot
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,21 @@ class Graph:
     kind: str = "proof"
     native_patches: tuple[str, ...] = ("blst", "ring", "secp256k1-sys")
     malachite_engine: bool = True
+    source_root: str = "."
+    source_snapshot: str | None = None
+
+
+def graph_root(root, graph):
+    relative = PurePosixPath(graph.source_root)
+    if relative.is_absolute() or ".." in relative.parts or str(relative) != graph.source_root:
+        raise RuntimeError("graph source root must be a canonical repository-relative path")
+    root = root.resolve()
+    selected = (root / relative).resolve(strict=True)
+    if not selected.is_relative_to(root) or not selected.is_dir():
+        raise RuntimeError("graph source root escapes the repository")
+    if graph.source_snapshot is not None:
+        verify_snapshot(selected, graph.source_snapshot)
+    return selected
 
 
 GRAPHS = {
@@ -33,6 +50,11 @@ EXECUTOR_GRAPHS = {
     "second": Graph("executor-second", "0dbc68b31c0bcf1a05c93122f1939fb8784e4e48",
                     "51.0.0-kontor.3", None, 512, kind="executor",
                     native_patches=("blst", "secp256k1-sys", "psm", "wit-bindgen"), malachite_engine=False),
+}
+RETAINED_EXECUTOR_GRAPHS = {
+    label: replace(graph, source_root="protocol-bundles/retained/k3",
+                   source_snapshot="fc85d7f7479662012faef9bc43e3efaf7c9299ddc940ffd5ef5865abe5667592")
+    for label, graph in EXECUTOR_GRAPHS.items()
 }
 HISTORICAL = {
     "first": ("75a06735d294f3fc04a4ffff54492d3bf80e4121faa2e2aae64434e5b252db6b",
@@ -66,7 +88,7 @@ def verify_reservations(root, graphs=None):
             raise RuntimeError(f"reserved Wasmtime version or native prefix: {label}")
         versions.add(graph.version)
         prefixes.add(suffix(graph.version))
-        manifest = root / "protocol-bundles" / graph.directory / "Cargo.toml"
+        manifest = graph_root(root, graph) / "protocol-bundles" / graph.directory / "Cargo.toml"
         dependency = tomllib.loads(manifest.read_text())["dependencies"]["wasmtime"]
         if dependency.get("rev") != graph.revision or dependency.get("version") != "=" + graph.version:
             raise RuntimeError(f"proof manifest has the wrong immutable identity: {label}")
@@ -74,8 +96,10 @@ def verify_reservations(root, graphs=None):
 
 def identity(root, label, graphs=None):
     graph = (GRAPHS if graphs is None else graphs)[label]
-    base = root / "protocol-bundles" / graph.directory
+    base = graph_root(root, graph) / "protocol-bundles" / graph.directory
     return {"directory": graph.directory, "wasmtime_revision": graph.revision,
+            "source_root": graph.source_root,
+            "source_snapshot": graph.source_snapshot,
             "wasmtime_version": graph.version, "manifest_sha256": sha(base / "Cargo.toml"),
             "lock_sha256": sha(base / "Cargo.lock"), "execution": dict(EXECUTION),
             "lift_rate": graph.lift_rate}

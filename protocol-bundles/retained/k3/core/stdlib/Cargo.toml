@@ -1,0 +1,16 @@
+[package]
+name = "stdlib"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+macros = { path = "../macros" }
+wit-bindgen = { workspace = true }
+wasm-wave = { workspace = true }
+
+[dev-dependencies]
+macrotest = "=1.2.1"
+trybuild = "=1.0.122"

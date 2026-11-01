@@ -1,0 +1,769 @@
+//! WIT Validator for Kontor
+//!
+//! Validates WIT (WebAssembly Interface Types) files against Kontor-specific rules
+//! that are stricter than standard WIT.
+
+#![no_std]
+
+extern crate alloc;
+
+use alloc::string::String;
+use alloc::vec::Vec;
+
+mod error;
+pub mod pagination;
+mod rules;
+mod types;
+
+pub use error::{ValidationError, ValidationResult};
+pub use wit_parser::Resolve;
+
+// User-land surface only (no file-registry / registry): user contracts are
+// validated against this, so referencing native-only registries fails to resolve.
+const BUILT_IN_WIT: &str = include_str!("../../indexer/src/runtime/wit/deps/built-in/common.wit");
+
+// The native-only built-in interfaces (file-registry, system, deposit) and the
+// `built-in-native` world. NOT part of the user surface — only `validate_str_full`
+// pulls it in, for tools (the SDK codec) that must parse NATIVE contract WITs (e.g.
+// the token, which imports `deposit` for `storage-floor`). Its first line repeats
+// the `package kontor:built-in;` decl; we strip it so the two files concatenate into
+// one package source rather than two conflicting package declarations.
+const BUILT_IN_NATIVE_WIT: &str =
+    include_str!("../../indexer/src/runtime/wit/deps/built-in/native.wit");
+
+/// Validates WIT files against Kontor-specific rules.
+pub struct Validator;
+
+/// Error returned when WIT parsing fails.
+#[derive(Debug)]
+pub struct ParseError {
+    pub message: String,
+}
+
+impl core::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl core::error::Error for ParseError {}
+
+impl Validator {
+    /// Validate a WIT string against Kontor rules, resolving `kontor:built-in`
+    /// imports against the USER-LAND surface (context, foreign, numbers, …). A
+    /// contract importing a native-only interface fails to resolve here — this is
+    /// the WIT-level half of the publish check for user contracts.
+    pub fn validate_str(wit_content: &str) -> Result<(ValidationResult, Resolve), ParseError> {
+        Self::validate_with_surface(wit_content, false)
+    }
+
+    /// Like [`Self::validate_str`] but also resolves the NATIVE-only built-in
+    /// interfaces (`built-in-native` world: file-registry, system, deposit). For
+    /// tools that must parse native contract WITs — the SDK codec generates client
+    /// bindings for the native token, which imports `deposit`. NOT a publish path:
+    /// the node gates native imports at the linker, so the wider surface here only
+    /// affects off-chain codegen, never what a user contract may publish.
+    pub fn validate_str_full(wit_content: &str) -> Result<(ValidationResult, Resolve), ParseError> {
+        Self::validate_with_surface(wit_content, true)
+    }
+
+    fn validate_with_surface(
+        wit_content: &str,
+        include_native: bool,
+    ) -> Result<(ValidationResult, Resolve), ParseError> {
+        let mut resolve = Resolve::new();
+
+        let built_in = if include_native {
+            // Concatenate into ONE `kontor:built-in` source: strip native.wit's
+            // repeated package decl so the result is a single package, not two.
+            let native_body = BUILT_IN_NATIVE_WIT
+                .trim_start()
+                .strip_prefix("package kontor:built-in;")
+                .unwrap_or(BUILT_IN_NATIVE_WIT);
+            alloc::format!("{BUILT_IN_WIT}\n{native_body}")
+        } else {
+            alloc::string::String::from(BUILT_IN_WIT)
+        };
+
+        resolve
+            .push_str("built-in.wit", &built_in)
+            .map_err(|e| ParseError {
+                message: alloc::format!("Failed to parse built-in.wit: {}", e),
+            })?;
+
+        resolve
+            .push_str("contract.wit", wit_content)
+            .map_err(|e| ParseError {
+                message: alloc::format!("Failed to parse contract WIT: {}", e),
+            })?;
+
+        Ok((Self::validate_resolve(&resolve), resolve))
+    }
+
+    /// Validate an already-parsed `Resolve` against Kontor rules.
+    pub fn validate_resolve(resolve: &Resolve) -> ValidationResult {
+        let mut errors = Vec::new();
+        errors.extend(rules::validate_all(resolve));
+        errors.extend(pagination::validate(resolve));
+        ValidationResult { errors }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use std::format;
+    use wit_parser::TypeDefKind;
+
+    use super::*;
+
+    /// Wraps fixture content in standard WIT boilerplate
+    fn wrap(content: &str) -> std::string::String {
+        format!(
+            r#"package root:component;
+
+world root {{
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{{proc-context, view-context, fall-context, contract}};
+    use kontor:built-in/error.{{error}};
+
+{content}
+}}"#
+        )
+    }
+
+    fn validate(content: &str) -> ValidationResult {
+        let wit = wrap(content);
+        let (result, _resolve) = Validator::validate_str(&wit).expect("Failed to parse WIT");
+        result
+    }
+
+    #[test]
+    fn test_empty_resolve_is_valid() {
+        let resolve = Resolve::new();
+        let result = Validator::validate_resolve(&resolve);
+        assert!(result.is_valid());
+    }
+
+    // The surface split: a contract importing the native-only `deposit` interface
+    // (via the `built-in-native` world) is UNRESOLVABLE under the user surface
+    // (`validate_str`) but parses cleanly under the full surface (`validate_str_full`,
+    // used by the SDK codec for native contracts like the token).
+    #[test]
+    fn native_only_surface_split() {
+        let native_contract = r#"package root:component;
+
+world root {
+    include kontor:built-in/built-in-native;
+    use kontor:built-in/context.{proc-context, view-context, holder-ref, contract};
+    use kontor:built-in/numbers.{decimal};
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export floor: func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
+}"#;
+        // User surface can't resolve `built-in-native`/`deposit` → parse error.
+        assert!(Validator::validate_str(native_contract).is_err());
+        // Full surface resolves it and the WIT is valid.
+        let (result, _resolve) =
+            Validator::validate_str_full(native_contract).expect("full surface parses native WIT");
+        assert!(
+            result.is_valid(),
+            "native WIT must validate under full surface"
+        );
+    }
+
+    #[test]
+    fn test_valid_basic() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get-value: func(ctx: borrow<view-context>) -> string;
+    export set-value: func(ctx: borrow<proc-context>, val: string) -> result<_, error>;
+"#,
+        );
+        assert!(result.is_valid(), "Expected valid, got errors: {}", result);
+    }
+
+    #[test]
+    fn validates_named_and_inline_exported_interface_signatures() {
+        let template = r#"package test:interfaces;
+interface api {
+    use kontor:built-in/context.{view-context};
+    BODY
+}
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, contract};
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export api;
+    export inline: interface {
+        use kontor:built-in/context.{view-context};
+        BODY
+    }
+}"#;
+        for (body, expected) in [
+            ("get: func(ctx: borrow<view-context>) -> string;", None),
+            (
+                "get: async func(ctx: borrow<view-context>) -> string;",
+                Some("must be synchronous"),
+            ),
+            ("get: func() -> string;", Some("context parameter")),
+            (
+                "get: func(ctx: string) -> string;",
+                Some("borrow of a context"),
+            ),
+            (
+                "get: func(ctx: borrow<view-context>, value: f64);",
+                Some("floating point"),
+            ),
+            (
+                "get: func(ctx: borrow<view-context>) -> f64;",
+                Some("floating point"),
+            ),
+            (
+                "get: func(ctx: borrow<view-context>) -> stream<u8>;",
+                Some("stream types"),
+            ),
+            (
+                "get: func(ctx: borrow<view-context>, value: future<string>);",
+                Some("future types"),
+            ),
+            ("init: func(ctx: borrow<view-context>) -> bool;", None),
+            ("fallback: func(ctx: borrow<view-context>) -> bool;", None),
+        ] {
+            let wit = template.replace("BODY", body);
+            let (result, _) = Validator::validate_str(&wit).expect("parse interface WIT");
+            if let Some(expected) = expected {
+                let errors: Vec<_> = result
+                    .errors
+                    .iter()
+                    .filter(|error| error.message.contains(expected))
+                    .collect();
+                assert_eq!(
+                    errors.len(),
+                    2,
+                    "both interfaces must be checked: {body}: {result}"
+                );
+            } else {
+                assert!(result.is_valid(), "{body}: {result}");
+            }
+        }
+    }
+
+    #[test]
+    fn exported_interface_pagination_is_validated() {
+        let template = r#"package test:interfaces;
+interface api {
+    use kontor:built-in/context.{proc-context, view-context};
+    use kontor:built-in/pagination.{cursor-request};
+    record page { items: list<u64>, next: option<string> }
+    entries: func(ctx: borrow<CONTEXT>, pagination: cursor-request) -> page;
+}
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, contract};
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export api;
+}"#;
+        let (result, _) = Validator::validate_str(&template.replace("CONTEXT", "view-context"))
+            .expect("parse valid interface pagination");
+        assert!(result.is_valid(), "{result}");
+        let (result, _) = Validator::validate_str(&template.replace("CONTEXT", "proc-context"))
+            .expect("parse invalid interface pagination");
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.message.contains("only allowed on a view-context")),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn imported_interface_functions_keep_their_host_signatures() {
+        let wit = r#"package test:interfaces;
+interface service {
+    get: func() -> string;
+}
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, contract};
+    import service;
+    export init: func(ctx: borrow<proc-context>) -> contract;
+}"#;
+        let (result, _) = Validator::validate_str(wit).expect("parse imported interface");
+        assert!(result.is_valid(), "{result}");
+    }
+
+    #[test]
+    fn test_invalid_reserved_type_name_record() {
+        // A user record named like a built-in would be silently misrouted by the
+        // macro layer's bare-identifier matching (`is_primitive_type`, the
+        // `import!` skip list) — must be rejected here instead.
+        let result = validate(
+            r#"
+    record integer {
+        value: u64,
+    }
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get-data: func(ctx: borrow<view-context>) -> integer;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("'integer' shadows the Kontor built-in")),
+            "expected reserved-name error, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_invalid_reserved_type_name_shadowing_alias() {
+        // An alias with a reserved name pointing at a NON-built-in target is
+        // shadowing too; only aliases that resolve to the built-in itself (what
+        // `use kontor:built-in/...` creates — exercised by every test here via
+        // `wrap`) keep the name legitimately.
+        let result = validate(
+            r#"
+    type decimal = u64;
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get-data: func(ctx: borrow<view-context>) -> decimal;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("'decimal' shadows the Kontor built-in")),
+            "expected reserved-name error, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_valid_list_u8_in_record() {
+        let result = validate(
+            r#"
+    record my-data {
+        bytes: list<u8>,
+        name: string,
+    }
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get-data: func(ctx: borrow<view-context>) -> my-data;
+"#,
+        );
+        assert!(
+            result.is_valid(),
+            "list<u8> should be allowed in records, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_invalid_no_context_parameter() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad-func: func() -> string;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("context")));
+    }
+
+    #[test]
+    fn test_invalid_wrong_context_type() {
+        let result = validate(
+            r#"
+    resource my-context {}
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad-func: func(ctx: borrow<my-context>) -> string;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("context type"))
+        );
+    }
+
+    #[test]
+    fn test_invalid_resource_param() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    resource gadget {}
+
+    export bad-func: func(ctx: borrow<proc-context>, s: borrow<gadget>) -> string;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("resource types cannot appear"))
+        );
+    }
+
+    #[test]
+    fn test_invalid_resource_return() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    resource widget {}
+
+    export bad-func: func(ctx: borrow<view-context>) -> widget;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("resource types cannot appear"))
+        );
+    }
+
+    #[test]
+    fn test_invalid_empty_record() {
+        let wit = wrap(
+            r#"
+    record empty {}
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> empty;
+"#,
+        );
+        let error = Validator::validate_str(&wit).unwrap_err();
+        assert!(error.message.contains("empty record"));
+
+        // Binary decoding can supply a Resolve without going through the WIT parser.
+        let (_, mut resolve) =
+            Validator::validate_str(&wit.replace("record empty {}", "record empty { value: u64 }"))
+                .unwrap();
+        let (_, definition) = resolve
+            .types
+            .iter_mut()
+            .find(|(_, definition)| definition.name.as_deref() == Some("empty"))
+            .unwrap();
+        let TypeDefKind::Record(record) = &mut definition.kind else {
+            panic!("expected record");
+        };
+        record.fields.clear();
+        let result = Validator::validate_resolve(&resolve);
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("at least one field"))
+        );
+    }
+
+    #[test]
+    fn test_invalid_wrong_error_type() {
+        let result = validate(
+            r#"
+    record my-error { msg: string }
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad: func(ctx: borrow<proc-context>) -> result<string, my-error>;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("'error'")));
+    }
+
+    #[test]
+    fn test_invalid_nested_list() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad: func(ctx: borrow<view-context>) -> list<list<string>>;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("nested list"))
+        );
+    }
+
+    #[test]
+    fn test_list_in_response_record() {
+        let result = validate(
+            r#"
+    record page { names: list<string>, next: option<string> }
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> page;
+"#,
+        );
+        assert!(!result.has_errors(), "{:?}", result.errors);
+    }
+
+    #[test]
+    fn test_invalid_result_in_param() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad: func(ctx: borrow<proc-context>, r: result<string, error>) -> string;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("return type"))
+        );
+    }
+
+    #[test]
+    fn test_invalid_float() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad: func(ctx: borrow<view-context>) -> f64;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("floating point"))
+        );
+    }
+
+    #[test]
+    fn test_invalid_flags() {
+        let result = validate(
+            r#"
+    flags perms { read, write, exec }
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> perms;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("flags")));
+    }
+
+    #[test]
+    fn test_invalid_cycle() {
+        let result = Validator::validate_str(&wrap(
+            r#"
+    record node { value: string, next: node }
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> node;
+"#,
+        ));
+        assert!(result.is_err(), "Expected parse error for cyclic type");
+        assert!(format!("{}", result.unwrap_err()).contains("depends on itself"));
+    }
+
+    #[test]
+    fn test_invalid_async_export() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad: async func(ctx: borrow<view-context>) -> string;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("synchronous"))
+        );
+    }
+
+    #[test]
+    fn test_valid_init_fallback() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export fallback: func(ctx: borrow<fall-context>, expr: string) -> string;
+    export get-value: func(ctx: borrow<view-context>) -> string;
+"#,
+        );
+        assert!(result.is_valid(), "Expected valid, got errors: {}", result);
+    }
+
+    #[test]
+    fn test_invalid_init_wrong_context() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<view-context>);
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("proc-context"))
+        );
+    }
+
+    #[test]
+    fn test_invalid_init_has_return() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> string;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("return")));
+    }
+
+    #[test]
+    fn test_invalid_fallback_wrong_context() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export fallback: func(ctx: borrow<proc-context>, expr: string) -> string;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("fall-context"))
+        );
+    }
+
+    #[test]
+    fn test_invalid_fallback_wrong_return() {
+        let result = validate(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export fallback: func(ctx: borrow<fall-context>, expr: string) -> u64;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("string")));
+    }
+
+    #[test]
+    fn test_render_includes_source_location() {
+        let wit = wrap(
+            r#"
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export bad: async func(ctx: borrow<view-context>) -> string;
+"#,
+        );
+        let mut resolve = Resolve::new();
+        resolve
+            .push_str("built-in.wit", BUILT_IN_WIT)
+            .expect("Failed to parse built-in.wit");
+        resolve
+            .push_str("contract.wit", &wit)
+            .expect("Failed to parse contract WIT");
+        let result = Validator::validate_resolve(&resolve);
+
+        assert!(result.has_errors());
+        let error = &result.errors[0];
+        assert_eq!(
+            error.render(&resolve),
+            "contract.wit:10:12: error: exported functions must be synchronous"
+        );
+    }
+
+    #[test]
+    fn test_invalid_missing_init() {
+        let result = validate(
+            r#"
+    export get-value: func(ctx: borrow<view-context>) -> string;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("init")));
+    }
+
+    /// The init-required rule must skip *all* built-in worlds — `built-in` and
+    /// `built-in-native` (the privileged native surface). Native contracts'
+    /// resolves include `world built-in-native`, which has no `init`; flagging
+    /// it would break every native contract's compile-time validation.
+    #[test]
+    fn test_built_in_native_world_skipped_by_init_rule() {
+        let mut resolve = Resolve::new();
+        resolve
+            .push_str(
+                "bi.wit",
+                "package kontor:built-in;\n\
+                 interface error { variant error { generic(string) } }\n\
+                 world built-in { import error; }\n\
+                 world built-in-native { import error; }\n",
+            )
+            .expect("parse built-in package");
+        let result = Validator::validate_resolve(&resolve);
+        // Neither built-in world exports init, but both must be skipped.
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("init function")),
+            "built-in/built-in-native worlds must be skipped by the init-required rule, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_cross_type_cycle_record_variant() {
+        let result = Validator::validate_str(&wrap(
+            r#"
+    record wrapper { data: my-variant }
+    variant my-variant { some(wrapper), none }
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> wrapper;
+"#,
+        ));
+        assert!(result.is_err() || result.unwrap().0.has_errors());
+    }
+
+    #[test]
+    fn test_variant_self_reference() {
+        let result = Validator::validate_str(&wrap(
+            r#"
+    variant tree { leaf(string), branch(tree) }
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> tree;
+"#,
+        ));
+        assert!(result.is_err() || result.unwrap().0.has_errors());
+    }
+
+    #[test]
+    fn test_indirect_cycle_three_types() {
+        let result = Validator::validate_str(&wrap(
+            r#"
+    record a { b-field: b }
+    record b { c-field: c }
+    record c { a-field: a }
+
+    export init: func(ctx: borrow<proc-context>) -> contract;
+    export get: func(ctx: borrow<view-context>) -> a;
+"#,
+        ));
+        assert!(result.is_err() || result.unwrap().0.has_errors());
+    }
+}

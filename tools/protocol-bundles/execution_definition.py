@@ -92,6 +92,7 @@ def reference(root, manifest, metadata):
     excluded = {
         root / f"protocol-bundles/executor-{graph}/definition.bin" for graph in ("first", "second")
     }
+    excluded.add(manifest.with_name("definition.bin"))
 
     def add(path):
         path.relative_to(root)

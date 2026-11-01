@@ -144,15 +144,19 @@ K3 starts from this verified merge using the agreed revision2 design below.
 Activation, authorization, consensus handoff, migration, historical verification
 and recovery remain required; K2b does not implement those features.
 
-The local K3 candidate adds canonical application lineage, immutable execution
-and storage requirements, durable genesis stages and an owned atomic migration
-entry point. Both independently linked executors pass 22 bounded scenario groups
-and the preserved full logical-state comparison on Linux ARM64 dev. The focused
-K3 suite passes 62 tests, including process crash/retry, rollback, cleanup failure
-and migration while the API view pool is saturated. These are local results;
-consolidated independent review, final-candidate CI and merge remain pending.
+K3 merged in [PR 619](https://github.com/KontorProtocol/Kontor/pull/619), commit
+`fdf6a65d3a14cf88af7271d666bf13b001849d2f`. It adds canonical application lineage,
+immutable execution and storage requirements, durable genesis stages and an owned
+atomic migration entry point. Both independently linked executors pass 23 bounded
+scenario groups and the preserved historical semantic comparison on Linux x86-64,
+Linux ARM64 and macOS ARM64 release builds. Lead and consolidated independent
+review are complete. Current-candidate ordinary CI, release stack comparison and
+bounded dev smoke checks passed; the merged tree matches the qualified PR tree.
 The live upgrade controller, validator authorization and after-H activation are
 still later milestones. K3 does not expose a public migration execution route.
+
+K4 starts from this verified merge. Its agreed concrete scope and acceptance
+criteria are recorded in [the certified-history plan](certified-history-plan.md).
 
 Publication of the Site and SDK remains deferred until the end of the goal and
 review of the complete work. Current evidence and exact revision records are
@@ -178,8 +182,8 @@ Native-stack, linked-node, native-crypto and mobile qualification retain their
 existing coverage in this amendment. In particular, changing retained behavior
 still requires release qualification plus bounded dev smoke. The narrower ordinary
 checks do not claim that unrelated node paths can never affect linked execution.
-Local selector tests and workflow validation are recorded with the K3 candidate;
-this amendment does not claim the unmerged workflows have run in GitHub yet.
+Selector tests and workflow validation are recorded with K3. These workflows ran
+successfully on PR 619's final candidate before its verified merge.
 
 ## Planning baseline evidence, 27 October 2026
 
@@ -487,8 +491,8 @@ state/receipt comparisons validate equivalent replay beyond checkpoint coverage.
 The following concrete K3 decisions were agreed by the lead and the system
 planning reviewer on 1 November 2026 (plan revision 2, SHA-256
 `ed4b9805db24d250621b098ff33b516995b5612d8f058130d57e53e1ee6e85c2`).
-They define the K3 candidate implemented from the verified K2b merge. Local
-validation is recorded in the execution ledger; review and merge remain pending.
+They define K3, implemented from the verified K2b merge and merged in PR 619.
+Validation, completed review and merge evidence are recorded in the execution ledger.
 Authorization and live activation remain K6/K7.
 
 Use distinct chain, execution-definition, migration-definition, protocol and
@@ -584,6 +588,11 @@ bounded qualification routines proves the substrate; K7 must still demonstrate a
 real deliberately different P2 migration and activation.
 
 ### K4. Certified history and baseline consensus envelope
+
+The lead and sole planning reviewer agreed the concrete revision-2 design in
+[the certified-history plan](certified-history-plan.md). It retains this milestone's
+scope, adds explicit restartable closure stages and specifies the bounded baseline
+history transport required here. K9 remains responsible for cross-era cold catch-up.
 
 Dependencies: K2b/K3. Modules: consensus values/codecs, reactor proposal/decision/startup,
 database durable journal and committee records. Result: stable bounded value/control

@@ -1,0 +1,28 @@
+[package]
+name = "built-in-types"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# Host embedding: wasmtime component derives on the generated types (injected
+# via targeted attributes in lib.rs) plus the `host_facade*` modules the host
+# `bindgen!`'s interface-level `with:` points at.
+host = ["dep:wasmtime", "serde"]
+serde = ["dep:serde"]
+
+[dependencies]
+stdlib = { path = "../stdlib" }
+wit-bindgen = { workspace = true }
+# The embedding workspace pins its fork through [patch.crates-io]. Inheriting
+# core's exact Git revision here would also pull that VM into newer executors.
+wasmtime = { version = "51.0.0-kontor.2", default-features = false, features = ["component-model", "runtime", "std"], optional = true }
+serde = { workspace = true, optional = true }
+
+# The native arithmetic backend (the same pure-math crate the host functions
+# run): impls compiled for non-wasm targets delegate here instead of calling
+# the wasm import stubs.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+numerics = { path = "../numerics" }
+
+[lints]
+workspace = true

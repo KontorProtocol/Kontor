@@ -1,0 +1,5 @@
+error: `price` is the sort field — it is already covered for free; drop it from `include`
+ --> tests/ui/covering_include_sort_field.rs:5:57
+  |
+5 | #[index(cheapest, by = active, sort = price, include = (price, title))]
+  |                                                         ^^^^^

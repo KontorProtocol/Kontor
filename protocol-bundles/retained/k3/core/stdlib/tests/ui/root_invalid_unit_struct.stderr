@@ -1,0 +1,11 @@
+error: Root derive only supports structs with named fields
+ --> tests/ui/root_invalid_unit_struct.rs:4:8
+  |
+4 | struct Unit;
+  |        ^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> tests/ui/root_invalid_unit_struct.rs:4:13
+  |
+4 | struct Unit;
+  |             ^ consider adding a `main` function to `$DIR/tests/ui/root_invalid_unit_struct.rs`
