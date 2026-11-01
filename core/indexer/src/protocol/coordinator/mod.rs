@@ -9,6 +9,7 @@ pub(crate) mod closure_work;
 #[cfg(any(test, feature = "protocol-qualification"))]
 pub(crate) mod committee;
 pub(crate) mod decision;
+pub(crate) mod durable_signer;
 pub(crate) mod genesis;
 pub(crate) mod linked;
 #[cfg(kontor_managed)]

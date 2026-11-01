@@ -1,4 +1,6 @@
 pub mod api;
+mod authority;
+pub mod authority_api;
 mod bridge;
 mod bridge_types;
 mod channel_bridge;
