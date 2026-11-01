@@ -875,30 +875,6 @@ impl ReactorCluster {
         assert!(errors.is_empty(), "reactor(s) died: {errors:?}");
     }
 
-    /// Wait until `height` is DECIDED by consensus, without requiring every node
-    /// to have executed it.
-    ///
-    /// `wait_for_block` demands `BlockProcessed` from all `node_count` nodes,
-    /// which is the right check when everyone is healthy but cannot express
-    /// "the chain advanced even though one node could not follow" — the exact
-    /// property at stake when a node is deliberately left behind.
-    async fn wait_for_block_decided(&mut self, height: u64, timeout: Duration) {
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
-        loop {
-            tokio::select! {
-                _ = &mut deadline => {
-                    panic!("wait_for_block_decided(height={height}) timed out");
-                }
-                Some(d) = self.decided_rx.recv() => {
-                    if d.value.is_block() && d.value.block_height() == height {
-                        return;
-                    }
-                }
-            }
-        }
-    }
-
     /// Wait until a block is decided, processed by all nodes, and events emitted.
     /// Cross-checks: decided_rx (Value::Block), state_rx (BlockProcessed × node_count),
     /// event_rx (Event::Processed × node_count).
@@ -2325,73 +2301,58 @@ async fn prod_reactor_pending_blocks_bounded_under_stalled_consensus() -> Result
     Ok(())
 }
 
-/// A node whose execution has fallen behind heights the network already decided
-/// must PARK the out-of-order decision, not die on it.
-///
-/// This is the signet halt of 2026-08. One validator's executor was 128 blocks
-/// behind while its buffer held the whole window, so a decision for the network's
-/// tip found that block cached and went straight to the executor — whose height
-/// guard is a `bail!`, taken *after* the `batches` row was already committed.
-/// The reactor exited, the pod restarted, and because that validator held the
-/// third of three usable votes in a 3/4 quorum, each restart bought exactly one
-/// decided height before dying again: 121 restarts, 20 h, chain stopped.
-///
-/// The property is asymmetric on purpose. The lagging node stays stuck — the
-/// heights it missed will not be re-decided, and value-sync will not backfill a
-/// node whose *consensus* height is current — but it stays UP, keeps voting, and
-/// the chain keeps moving. A stuck node is an operator problem; a crash-looping
-/// one takes the network down with it.
+/// Missing local Bitcoin events must not strand execution behind consensus.
+/// The certified input carries the bytes needed to close each decision.
 #[tokio::test]
-async fn prod_reactor_out_of_order_block_decision_parks_instead_of_dying() -> Result<()> {
+async fn prod_reactor_missing_local_blocks_recover_from_certified_inputs() -> Result<()> {
     crate::logging::setup();
 
     let mut cluster = ReactorCluster::start(4).await?;
     cluster.wait_for_ready().await;
 
-    // Blocks 1 and 2 reach only nodes 0-2. Node 3 has no block at all, so it
-    // rejects both proposals and votes nil; 3 of 4 still clears the 2/3
-    // threshold, so consensus decides and executes them without it. Node 3's
-    // consensus height advances with every decision — which is precisely why it
-    // will never be re-sent these heights.
     let lagging = 3;
     for height in 1..=2u64 {
         let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
         for event in blk_events {
             for (i, tx) in cluster.block_txs.iter().enumerate() {
                 if i != lagging {
-                    let _ = tx.try_send(event.clone());
+                    tx.try_send(event.clone())?;
                 }
             }
         }
-        cluster
-            .wait_for_block_decided(height, Duration::from_secs(60))
+        let result = cluster
+            .wait_for_block(height, Duration::from_secs(60))
             .await;
+        ReactorCluster::assert_checkpoints_match(&result, height, 4);
     }
 
-    // Block 3 goes to everyone. Node 3 now holds a block for height 3 with a tip
-    // of 0 — buffered, but 2 heights out of reach. It accepts the proposal (the
-    // block IS the canonical one at that height, which is all a `Value::Block`
-    // asserts) and votes for it, so the decision lands on a node that cannot
-    // execute it. Before the ordering gate, this is the line that killed the
-    // reactor: "Unexpected block height 3, expected 1".
-    let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
-    for event in blk_events {
-        cluster.send_block_event(event);
-    }
-    cluster
-        .wait_for_block_decided(3, Duration::from_secs(60))
-        .await;
-
-    // The chain keeps advancing afterwards — the lagging node still votes, so
-    // quorum survives. Two more heights prove it is not a one-off.
-    for height in 4..=5u64 {
-        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
-        for event in blk_events {
-            cluster.send_block_event(event);
+    let source = cluster.node_conn(0).await.clone();
+    let recovered = cluster.node_conn(lagging).await.clone();
+    let source_height = certified_history::frontier(&source)
+        .await?
+        .authenticated_height;
+    assert!(source_height >= 2);
+    timeout(Duration::from_secs(10), async {
+        while certified_history::frontier(&recovered).await?.closed_height < source_height {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        cluster
-            .wait_for_block_decided(height, Duration::from_secs(60))
+        Ok::<(), anyhow::Error>(())
+    })
+    .await??;
+    for height in 1..=source_height {
+        let retained = certified_history::load(&source, height).await?;
+        let replayed = certified_history::load(&recovered, height).await?;
+        assert_eq!(replayed.decision().id()?, retained.decision().id()?);
+        assert_eq!(replayed.input(), retained.input());
+        certified_history::completion::completed(&recovered, height).await?;
+    }
+
+    for height in 3..=5u64 {
+        cluster.mine_empty_and_send();
+        let result = cluster
+            .wait_for_block(height, Duration::from_secs(60))
             .await;
+        ReactorCluster::assert_checkpoints_match(&result, height, 4);
     }
 
     cluster.assert_no_reactor_errors();
@@ -2399,23 +2360,8 @@ async fn prod_reactor_out_of_order_block_decision_parks_instead_of_dying() -> Re
     Ok(())
 }
 
-/// A block re-delivered AFTER the node already executed it must not stop the
-/// chain.
-///
-/// This is not a synthetic poke: `replay_blocks_after` re-sends every stored
-/// block event above a height, and the finality path deliberately keeps
-/// `pending_blocks` across a rollback. A replayed `BlockInsert` can therefore
-/// land after the deferred decisions have already drained and carried the tip
-/// past that height — the poller redelivering a block the node has since
-/// applied.
-///
-/// `process_block_event` buffers it with no tip check, and `make_value`
-/// proposes `pending_blocks.first_key_value()` with no tip check either, so the
-/// proposer offers an already-applied height. Nothing consumes it: the finalize
-/// gate only removes from `pending_blocks` when the decision is in order, and
-/// the drain's tip gate drops the decision without touching the buffer. If that
-/// is a closed loop, the stale entry stays the minimum forever, newer blocks
-/// are never proposed, and the chain stops.
+/// A poller may redeliver an already applied block. Its stale candidate must
+/// not pin the proposal queue ahead of newer blocks.
 #[tokio::test]
 async fn prod_reactor_replayed_block_below_tip_does_not_stall_the_chain() -> Result<()> {
     crate::logging::setup();

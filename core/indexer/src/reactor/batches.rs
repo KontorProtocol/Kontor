@@ -892,6 +892,12 @@ impl<E: Executor> Reactor<E> {
         }
 
         if branch::tip(&self.db_conn()).await?.is_none() {
+            if past_deadline {
+                // No batch is legal before the first certified block. Release
+                // GetValue so Malachite's serial connector can deliver the next
+                // round or another proposer's block instead of waiting forever.
+                self.consensus.pending_proposal = None;
+            }
             return Ok(false);
         }
 

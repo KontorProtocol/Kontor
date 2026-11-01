@@ -1743,3 +1743,47 @@ changed between runs 26 and 27. Formatting and diff checks passed. Remaining
 cluster/old unit fixtures, obsolete executor capabilities, bounded proof paging
 and admission, real-graph integration, consolidated review and CI remain pending.
 No remote CI run or PR was created.
+
+### K4 missing-local-input recovery and pre-anchor proposal deadline
+
+From `dd2be2b6`, replaced the obsolete regression that merely kept a lagging node
+alive with a four-validator recovery check. Node 3 receives no local Bitcoin
+BlockInsert events for blocks 1 and 2. All four must nevertheless process them
+with matching checkpoints. The test reads node 3's own certified journal, compares
+retained decision IDs and exact inputs with the source, and requires completed
+closures. Blocks 3 through 5 then prove continuing execution/checkpoint agreement.
+The target is a captured authenticated consensus frontier, not Bitcoin height:
+empty anchored batches may occupy intervening consensus heights.
+
+The first run exposed a real startup liveness defect. Node 3 was the initial
+proposer but had no local block and no certified anchor. `try_fulfill_pending_proposal`
+kept its GetValue sender even after the hard deadline. Malachite's serial connector
+was awaiting that reply, so later round/decision callbacks could not reach the
+node. The other three validators advanced while the test timed out at only three
+block-processing events. The pre-anchor path now drops the pending reply at its
+hard deadline. The engine proceeds to the next round without an invalid empty
+batch. The dependency connector logs the cancelled reply as `channel closed`,
+handles that error, and remains alive; this log is retained in the evidence.
+No change to post-anchor batching, gas, Bitcoin ordering or protocol validity.
+
+Local evidence:
+
+- `k4-cluster-ordering28.log`: session 11714 exit 101, five passed and the new
+  recovery check failed in 296.39s. Scoped passes cover checkpoint agreement,
+  confirmation deduplication, multiple batches at one anchor, bounded pending
+  blocks, and progress after stale block redelivery.
+  SHA-256 `c811b004a9f054dd8ba78fe04e08bc78ca6b0fd1b1b4706ec6f36e0e36953fb9`.
+  Draft definition `ef6a3efac9638e95551124e1a89632f7d0a24e6a549a719ba3294a1021cc587a`.
+- `k4-cluster-recovery29.log`: session 55888 exit 0, the focused four-validator
+  missing-local-input case passed in 51.38s after the deadline correction.
+  SHA-256 `374940439b4ee24cce7f2080edf29a2ee5f4cbdbf168de608a154bbed31a36f5`.
+  Draft definition `35bc74c27aacf103c55edb73381a35f333e04483e91e0119549b21f91508c988`.
+
+For the preceding finality group, the retained log SHA-256 is
+`383a580327f86847aeb43bb33b38e9bad883609220c623158bffd2d156d63404`.
+Removed the unused decided-only wait helper and stale poller-replay commentary.
+Formatting and diff checks passed. These are scoped evidence bindings, not a full
+suite claim on the new source. K4 still needs the remaining synthetic fixture
+migration, obsolete replay interfaces removed, bounded proof paging/admission,
+real-graph integration, lead and consolidated independent review, and final CI.
+No PR, push or remote CI campaign was launched.
