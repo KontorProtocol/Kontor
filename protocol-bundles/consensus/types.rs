@@ -37,3 +37,6 @@ pub(crate) use proposal_part::{ProposalData, ProposalFin, ProposalInit, Proposal
 pub(crate) use validator_set::{Validator, ValidatorSet};
 pub(crate) use value::{Value, ValueId};
 pub(crate) use vote::Vote;
+
+#[cfg(test)]
+pub(crate) type CommitCertificate<C> = malachitebft_core_types::CommitCertificate<C>;

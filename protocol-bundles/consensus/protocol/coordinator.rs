@@ -1,2 +1,8 @@
+#[path = "../../../core/indexer/src/protocol/coordinator/certified_decision.rs"]
+pub(crate) mod certified_decision;
 #[path = "../../../core/indexer/src/protocol/coordinator/certified_input.rs"]
 pub(crate) mod certified_input;
+#[path = "../../../core/indexer/src/protocol/coordinator/control.rs"]
+pub(crate) mod control;
+#[path = "../../../core/indexer/src/protocol/coordinator/manifest.rs"]
+pub(crate) mod manifest;
