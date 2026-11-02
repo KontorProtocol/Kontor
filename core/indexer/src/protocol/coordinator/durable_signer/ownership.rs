@@ -872,7 +872,7 @@ mod tests {
 
     #[test]
     fn missing_or_truncated_state_and_chain_mismatch_fail_closed() {
-        for damage in ["missing", "header", "partial"] {
+        for damage in ["missing", "partial"] {
             let root = TempDir::new().unwrap();
             let owner = open_owner(&root);
             let generation = owner.reserve(None).unwrap();
@@ -881,11 +881,6 @@ mod tests {
             let path = directory(&root).join("generations.log");
             match damage {
                 "missing" => fs::remove_file(path).unwrap(),
-                "header" => {
-                    let file = OpenOptions::new().write(true).open(path).unwrap();
-                    file.set_len(HEADER_BYTES as u64).unwrap();
-                    file.sync_all().unwrap();
-                }
                 "partial" => {
                     let file = OpenOptions::new().write(true).open(path).unwrap();
                     file.set_len((HEADER_BYTES + 5) as u64).unwrap();
@@ -899,6 +894,19 @@ mod tests {
         }
 
         let root = TempDir::new().unwrap();
+        let (owner, _, signer_journal) = retained_history(&root, true);
+        assert!(signer_journal.exists());
+        drop(owner);
+        let path = directory(&root).join("generations.log");
+        let file = OpenOptions::new().write(true).open(path).unwrap();
+        file.set_len(HEADER_BYTES as u64).unwrap();
+        file.sync_all().unwrap();
+        assert!(matches!(
+            GenerationOwner::open(&directory(&root), test_fixtures::context().chain),
+            Err(SigningError::Fault(_))
+        ));
+
+        let root = TempDir::new().unwrap();
         let owner = open_owner(&root);
         let generation = owner.reserve(None).unwrap();
         drop(generation);
@@ -907,6 +915,26 @@ mod tests {
             GenerationOwner::open(&directory(&root), ChainId([99; 32])),
             Err(SigningError::Fault(_))
         ));
+    }
+
+    #[test]
+    fn follower_only_header_truncation_reopens_as_unreserved() {
+        let root = TempDir::new().unwrap();
+        let owner = open_owner(&root);
+        let network_key = owner.network_key;
+        let generation = owner.reserve(None).unwrap();
+        drop(generation);
+        drop(owner);
+        let path = directory(&root).join("generations.log");
+        let file = OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(HEADER_BYTES as u64).unwrap();
+        file.sync_all().unwrap();
+
+        // Without signer artifacts, a lost follower reservation is indistinguishable from
+        // a crash before the first reservation; reopening must allow that safe state.
+        let reopened = open_owner(&root);
+        assert_eq!(reopened.network_key, network_key);
+        assert_eq!(reopened.reserve(None).unwrap().generation(), 1);
     }
 
     #[test]
