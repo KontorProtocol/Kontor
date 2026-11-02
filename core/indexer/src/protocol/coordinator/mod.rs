@@ -6,9 +6,9 @@ pub(crate) mod certified_input;
 pub(crate) mod closure_execution;
 pub(crate) mod closure_record;
 pub(crate) mod closure_work;
-pub(crate) mod control;
 #[cfg(any(test, feature = "protocol-qualification"))]
 pub(crate) mod committee;
+pub(crate) mod control;
 pub(crate) mod decision;
 pub(crate) mod durable_signer;
 pub(crate) mod genesis;
@@ -17,6 +17,7 @@ pub(crate) mod linked;
 pub(crate) mod managed;
 pub(crate) mod manifest;
 pub(crate) mod migration;
+mod migration_export;
 pub(crate) mod registration_history;
 pub(crate) mod replay_input;
 pub(crate) mod selection;

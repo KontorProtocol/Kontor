@@ -23,6 +23,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 #[cfg(any(test, feature = "protocol-qualification"))]
 use super::committee::materialize_committee;
 use super::genesis::bind_identity;
+use super::migration_export::MigrationExport;
 use super::selection::{
     ApplicationPosition, ExecutionSelection, ExecutorVersion, select_legacy_p1,
 };
@@ -36,6 +37,8 @@ use crate::protocol::canonical_codec::CodecError;
 use crate::protocol::canonical_input::CanonicalInput;
 use crate::protocol::identity::DefinitionReference;
 use crate::protocol::identity::{ExecutionDefinitionId, ExecutionIdentity};
+#[cfg(kontor_linked)]
+use crate::protocol::operations::MigrationCall;
 #[cfg(any(test, feature = "protocol-qualification"))]
 use crate::protocol::operations::{AddressEnvelope, ViewOutcome};
 use crate::protocol::operations::{GenesisEnvelope, RecognitionCall, SessionOwner};
@@ -77,13 +80,13 @@ pub(crate) fn link_runtime(runtime: Runtime, canonical: bool) -> ExecutorSession
     session
 }
 
-fn adapt_session(
+fn adapt_session<M: MigrationExport>(
     origin: ExecutorVersion,
     execution_definition: Result<ExecutionDefinitionId, CodecError>,
     network: Network,
     conn: Connection,
     canonical: bool,
-    exports: SessionExports,
+    exports: SessionExports<M>,
 ) -> ExecutorSession {
     let (operations, owner, roots, recycle) = exports;
     let (
@@ -110,7 +113,7 @@ fn adapt_session(
         contract_wit,
         view,
         committee,
-        migration,
+        migration: migration.into_current(),
         registrations: None,
     };
     let make_root = Arc::new(
@@ -282,14 +285,15 @@ pub(crate) fn with_registration_observer(factory: SessionFactory) -> SessionFact
 }
 
 #[cfg(kontor_linked)]
-pub(crate) type RetainedFactory =
-    Arc<dyn Fn(StorageCallbacks, [u8; 4], Option<u64>) -> HostFuture<SessionExports> + Send + Sync>;
+pub(crate) type RetainedFactory<M = MigrationCall> = Arc<
+    dyn Fn(StorageCallbacks, [u8; 4], Option<u64>) -> HostFuture<SessionExports<M>> + Send + Sync,
+>;
 
 #[cfg(kontor_linked)]
-pub(crate) fn retained_session_factory(
+pub(crate) fn retained_session_factory<M: MigrationExport>(
     network: Network,
     view_gas_limit: Option<u64>,
-    constructor: fn() -> Result<RetainedFactory, HostError>,
+    constructor: fn() -> Result<RetainedFactory<M>, HostError>,
     definition: &[u8],
 ) -> Result<SessionFactory> {
     let reference = DefinitionReference::decode(definition)?;
@@ -324,10 +328,10 @@ pub(crate) fn retained_session_factory(
 }
 
 #[cfg(all(kontor_linked, feature = "protocol-qualification"))]
-pub(crate) fn retained_session_factory_with_callbacks(
+pub(crate) fn retained_session_factory_with_callbacks<M: MigrationExport>(
     network: Network,
     view_gas_limit: Option<u64>,
-    constructor: fn() -> Result<RetainedFactory, HostError>,
+    constructor: fn() -> Result<RetainedFactory<M>, HostError>,
     definition: &[u8],
     decorate: Arc<dyn Fn(StorageCallbacks) -> StorageCallbacks + Send + Sync>,
 ) -> Result<SessionFactory> {

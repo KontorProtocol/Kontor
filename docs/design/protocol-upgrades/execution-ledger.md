@@ -3475,3 +3475,32 @@ The current production mapping uses the maintained observer executor, which has
 the richer result. Resolve the retained interface, regenerate the applicable
 unreleased definitions, then run the actual linked build/CLI checks and the
 consolidated group review. No PR, merge or publication occurred.
+
+### K6 typed retained migration-result adaptation
+
+On base `fe8bb228`, the session tuple and factory adapter accept an explicit
+migration-export type. The maintained callback passes through unchanged; the
+retained callback preserves successful work receipts, rejection tags and host
+errors while marking unavailable failed-attempt work as absent. No retained
+source or dependency snapshot was changed. The current executor reports charged
+work as present on its failure paths. The coordinator preserves that distinction
+through transaction settlement and error context. Rehearsal serializes unavailable
+historical failure work as null, never zero; current execution still reports its
+actual work. This adds no intermediate database compatibility obligation.
+
+The focused migration suite passed 35 tests in 17.28s, with one subprocess entry
+point exercised by its crash-recovery parent. This includes old-result mapping,
+current partial-work failures, atomic rollback, ownership and isolated rehearsal.
+An initial test-only mock still used the old nonoptional work payload; compilation
+caught it, the mock was updated, and the corrected suite passed. Evidence and the
+initial failure log are retained in `.build-cache/k6-migration-adapter-validation.json`
+and the adjacent logs. These tests precede generated-definition refresh and do not
+claim independent linking or final candidate qualification.
+
+The observer executor and managed consensus definitions were explicitly refreshed
+as unreleased definitions. The linked qualification now also checks that the
+maintained executor supplies partial charged work and the frozen executor does
+not invent it on budget failure. Lead review checked the typed conversion,
+unchanged successful receipts and error tags, absence versus zero in diagnostics,
+and preservation of old sources. Actual managed build/runtime evidence is pending;
+consolidated independent review and grouped CI/merge are still required.

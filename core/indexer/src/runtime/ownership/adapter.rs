@@ -105,7 +105,7 @@ impl Default for ExecutorOperations {
                 Box::pin(async { Err((2, "mock has no view operation".into())) })
             }),
             migration: Arc::new(|_, _, _, _| {
-                Box::pin(async { Err((2, "mock has no migration operation".into(), [0; 5])) })
+                Box::pin(async { Err((2, "mock has no migration operation".into(), Some([0; 5]))) })
             }),
             committee: Arc::new(|_, _| {
                 Box::pin(async { Err((2, "mock has no committee operation".into())) })

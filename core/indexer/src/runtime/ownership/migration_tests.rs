@@ -343,7 +343,7 @@ async fn retained_migration_operation_requires_exact_definition() -> Result<()> 
         )
         .await
         .map_err(|(_, message, _)| anyhow!(message))?,
-        Err((0, [0; 5]))
+        Err((0, Some([0; 5])))
     );
     lease.drain().await?;
     lease.settle(false).await?;

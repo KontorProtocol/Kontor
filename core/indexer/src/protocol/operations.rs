@@ -81,9 +81,10 @@ pub(crate) type InitializeCall = Arc<
 // Deterministic rejection: 0 = unknown definition, 1 = exhausted budget,
 // 2 = invalid routine operation. Both rejection and the outer host-failure
 // channel retain work already charged, including work whose writes roll back.
-pub(crate) type MigrationOutcome = Result<[u64; 5], (u8, [u64; 5])>;
+// None is reserved for retained interfaces that did not report failure work.
+pub(crate) type MigrationOutcome = Result<[u64; 5], (u8, Option<[u64; 5]>)>;
 pub(crate) type MigrationFuture =
-    Pin<Box<dyn Future<Output = Result<MigrationOutcome, (u8, String, [u64; 5])>> + Send>>;
+    Pin<Box<dyn Future<Output = Result<MigrationOutcome, (u8, String, Option<[u64; 5]>)>> + Send>>;
 pub(crate) type MigrationCall = Arc<
     dyn Fn(SessionOwner, SelectionEnvelope, Vec<u8>, InputCallbacks) -> MigrationFuture
         + Send

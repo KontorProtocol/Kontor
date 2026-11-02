@@ -34,9 +34,9 @@ impl BundleSession {
                     .map_err(unstarted)?;
                 runtime.storage.height = selection.3.1;
                 let execution =
-                    execution_definition().map_err(|error| (2, error.to_string(), [0; 5]))?;
+                    execution_definition().map_err(|error| (2, error.to_string(), Some([0; 5])))?;
                 let Ok(definition) = MigrationDefinition::decode(&definition) else {
-                    return Ok(Err((0, [0; 5])));
+                    return Ok(Err((0, Some([0; 5]))));
                 };
                 let rewrite = if definition == migration_definition::noop(execution) {
                     false
@@ -47,7 +47,7 @@ impl BundleSession {
                 {
                     true
                 } else {
-                    return Ok(Err((0, [0; 5])));
+                    return Ok(Err((0, Some([0; 5]))));
                 };
                 let mut used = MigrationWork::default();
                 let result = async {
@@ -73,10 +73,10 @@ impl BundleSession {
                 .await;
                 match result {
                     Ok(work) => Ok(Ok(work.values())),
-                    Err(MigrationFailure::Budget) => Ok(Err((1, used.values()))),
-                    Err(MigrationFailure::InvalidOperation(_)) => Ok(Err((2, used.values()))),
+                    Err(MigrationFailure::Budget) => Ok(Err((1, Some(used.values())))),
+                    Err(MigrationFailure::InvalidOperation(_)) => Ok(Err((2, Some(used.values())))),
                     Err(MigrationFailure::Infrastructure(message)) => {
-                        Err((0, message, used.values()))
+                        Err((0, message, Some(used.values())))
                     }
                 }
             })
@@ -84,8 +84,8 @@ impl BundleSession {
     }
 }
 
-fn unstarted((tag, message): (u8, String)) -> (u8, String, [u64; 5]) {
-    (tag, message, [0; 5])
+fn unstarted((tag, message): (u8, String)) -> (u8, String, Option<[u64; 5]>) {
+    (tag, message, Some([0; 5]))
 }
 
 async fn qualification_rewrite(context: &mut MigrationContext) -> Result<(), MigrationFailure> {

@@ -99,6 +99,10 @@ strings. Failed operations report earlier charged work even when their state
 changes roll back; a rejected over-budget charge is not included. Missing executors
 and unregistered routines fail rather than falling back to another implementation.
 An attempted migration failure produces a report and a nonzero CLI exit status.
+The maintained executor reports charged work even when the migration fails.
+`work_consumed` is null if a retained executor's older interface cannot supply
+failure work. It must not be read as zero. Successful migrations retain their
+exact work receipt regardless of the executor interface version.
 Invalid files or an unusable source snapshot fail before execution.
 
 Success means only that this migration succeeded against this snapshot. It does

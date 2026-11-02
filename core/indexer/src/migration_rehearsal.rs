@@ -98,7 +98,7 @@ pub struct RehearsalReport {
     pub migration_definition_id: String,
     pub migration_definition_hex: String,
     pub work_budget: WorkReport,
-    pub work_consumed: WorkReport,
+    pub work_consumed: Option<WorkReport>,
     pub outcome: &'static str,
     pub error: Option<String>,
     pub output_lineage: Option<String>,
@@ -227,7 +227,7 @@ async fn rehearse(
         migration_definition_id: hex::encode(definition.id()?.0),
         migration_definition_hex: hex::encode(definition.encode()?),
         work_budget: definition.budget.into(),
-        work_consumed: MigrationWork::default().into(),
+        work_consumed: Some(MigrationWork::default().into()),
         outcome: "failed",
         error: None,
         output_lineage: None,
@@ -277,7 +277,7 @@ async fn rehearse(
     match result {
         Ok(receipt) => {
             report.target_support.migration_registered = Some(true);
-            report.work_consumed = receipt.work.into();
+            report.work_consumed = Some(receipt.work.into());
             match receipt.application.lineage() {
                 Ok(lineage) => {
                     report.output_lineage = Some(hex::encode(lineage));
@@ -295,7 +295,7 @@ async fn rehearse(
                 _ => None,
             };
             if let Some(work) = error.downcast_ref::<MigrationAttemptWork>() {
-                report.work_consumed = work.0.into();
+                report.work_consumed = work.0.map(Into::into);
             }
             report.error = Some(format!("{error:#}"));
         }

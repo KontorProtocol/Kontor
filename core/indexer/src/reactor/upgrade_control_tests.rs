@@ -841,7 +841,10 @@ async fn migration_rehearsal_reports_real_snapshot_without_mutating_source() -> 
             report.source_protocol_id,
             hex::encode(state.context.protocol.0)
         );
-        assert_eq!(report.work_consumed.computation_steps, "0");
+        assert_eq!(
+            report.work_consumed.as_ref().unwrap().computation_steps,
+            "0"
+        );
         assert!(!report.authorizes_upgrade);
         assert_eq!(report.target_support.executor_registered, case != 2);
         assert_eq!(report.target_support.consensus_registered, case != 3);

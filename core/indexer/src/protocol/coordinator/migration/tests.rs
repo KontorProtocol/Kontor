@@ -533,7 +533,8 @@ async fn migration_coordinator_rejects_budget_and_production_test_registry() -> 
         let used = error
             .downcast_ref::<MigrationAttemptWork>()
             .context("missing work report")?
-            .0;
+            .0
+            .context("missing charged work")?;
         if qualification {
             assert_eq!(used.write_operations, 1);
             assert!(used.read_operations > 0 && used.computation_steps > 0);
@@ -622,7 +623,8 @@ async fn migration_reports_partial_work_on_storage_failure_and_preserves_retry()
     let used = error
         .downcast_ref::<MigrationAttemptWork>()
         .context("missing work report")?
-        .0;
+        .0
+        .context("missing charged work")?;
     assert_eq!(used.write_operations, 1);
     assert!(used.read_operations > 0 && used.read_bytes > 0 && used.computation_steps > 0);
     assert_eq!(ready(&session.conn).await?, request.expected);
@@ -772,7 +774,7 @@ async fn migration_coordinator_reopen_returns_durable_result_without_reexecution
     runtime.network = Network::Regtest;
     let mut executor = link_runtime(runtime, true);
     executor.operations.migration = Arc::new(|_, _, _, _| {
-        Box::pin(async { Err((2, "retry executed a routine".into(), [0; 5])) })
+        Box::pin(async { Err((2, "retry executed a routine".into(), Some([0; 5]))) })
     });
     let session = LinkedSession::new(conn, executor);
     let service = OwnerService::new();

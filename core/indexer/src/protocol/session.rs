@@ -38,7 +38,7 @@ pub(crate) type OwnerCapabilities = (
 );
 pub(crate) type RootFactory =
     Arc<dyn Fn(OwnerCapabilities, bool, SelectionSource) -> RootHooks + Send + Sync>;
-pub(crate) type Operations = (
+pub(crate) type Operations<M = MigrationCall> = (
     InitializeCall,
     InspectCall,
     MaintenanceCall,
@@ -49,9 +49,10 @@ pub(crate) type Operations = (
     ContractWitCall,
     ViewCall,
     CommitteeCall,
-    MigrationCall,
+    M,
 );
 
 // Only structural standard-library types cross the independently built graphs.
 // Each graph wraps these values in its own nominal types after receiving them.
-pub(crate) type SessionExports = (Operations, SharedOwner, RootFactory, SessionAction);
+pub(crate) type SessionExports<M = MigrationCall> =
+    (Operations<M>, SharedOwner, RootFactory, SessionAction);
