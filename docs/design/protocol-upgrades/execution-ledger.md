@@ -3219,3 +3219,44 @@ CLI and SDK interfaces, operator migration dry-run/support diagnostics, remainin
 postpone/cancel undo and Bitcoin reorg/committee cases, and consolidated K5/K6
 integration and review. K7/K8 activation/handoff remains the next dependent group.
 No CI, PR, merge, fork changes or publication were performed for this checkpoint.
+
+### K6 unsigned preparation, SDK and control undo checkpoint (1 November 2026)
+
+Local continuation of `33a0116b`. `POST /api/protocol/upgrades/prepare` constructs
+unsigned KUA1 action bytes and their ID from one consistent closed-history
+snapshot. Callers supply an explicit Bitcoin expiry and Schedule manifest/H,
+Postpone H, or Cancel request. Preparation binds current head, nonce, pending
+plan and closed reference, then reuses admission with empty approvals: only the
+final insufficient-quorum result is expected. Other operation/reference errors
+reject preparation. It never changes canonical state, queues work or grants
+approval. Heights must be canonical decimal u64 strings. Operators must inspect
+and approve the exact returned bytes before submission.
+
+The SDK now exports a separate `UpgradeClient` for state, preparation and envelope
+submission. It takes an API URL and optional fetch/headers, without requiring a
+Bitcoin wallet identity or signer. It preserves decimal strings and explicit
+approved envelope bytes, supports caller cancellation, and does not poll, retry,
+regenerate approvals or imply consensus acceptance from a local queue reply.
+No SDK release was published.
+
+The real-executor preparation/reorg test passed in 42.56s: it applies Schedule,
+Postpone and Cancel, replaces Bitcoin block 3 to undo Cancel and restore Postpone,
+then replaces block 2 to undo Postpone and restore Schedule. Old approvals are
+rejected against restored state, retained closures remain recoverable, and a
+freshly prepared/signed postponement succeeds. Preparation is checked to leave
+canonical control state and the certified frontier unchanged. Invalid short notice,
+Cancel without a pending plan and Schedule over a pending plan are rejected.
+The canonical-u64 preparation test and existing HTTP submission test passed too.
+SDK build and eight focused client tests passed with no type errors. The existing
+SDK dependency directory was reused only after verifying its lockfile digest
+matches this worktree; no dependency or lockfile change was made.
+
+Evidence: `.build-cache/k6-prepare-validation.json`, raw Rust log
+`.build-cache/k6-prepare-reorg-test.log`, focused binary report
+`.build-cache/k6-prepare-regressions.json`, and SDK build/test logs. These are
+focused local checks, not full managed-bundle or live-quorum qualification.
+Offline signing/assembly is being implemented separately by the Daybreak agent
+under K6-APPROVAL-CLI and is not yet integrated at this checkpoint. Migration
+rehearsal/support diagnostics, remaining committee coverage, the agreed pre-K7
+activation guard and consolidated K5/K6 review/qualification remain unfinished.
+No new independent review, CI, PR, merge, fork change or publication was requested.

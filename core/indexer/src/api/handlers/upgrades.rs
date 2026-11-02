@@ -4,8 +4,8 @@ use tokio::sync::oneshot;
 
 use crate::api::{Env, error::HttpError, result::Result};
 use crate::upgrade_control::{
-    QueuedUpgrade, SubmissionError, SubmitUpgrade, UpgradeState, UpgradeSubmission,
-    decode_submission, snapshot,
+    PrepareUpgrade, PreparedUpgrade, QueuedUpgrade, SubmissionError, SubmitUpgrade, UpgradeState,
+    UpgradeSubmission, decode_submission, prepare, snapshot,
 };
 
 fn submission_error(error: SubmissionError) -> HttpError {
@@ -47,6 +47,24 @@ pub async fn get_upgrade_state(State(env): State<Env>) -> Result<UpgradeState> {
     })?;
     transaction.commit().await?;
     Ok(state.into())
+}
+
+pub async fn post_prepare_upgrade(
+    State(env): State<Env>,
+    Json(request): Json<PrepareUpgrade>,
+) -> Result<PreparedUpgrade> {
+    let conn = env.reader.connection().await?;
+    let transaction = conn
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .await?;
+    let prepared = prepare(&transaction, request).await.map_err(|error| {
+        match error.downcast::<SubmissionError>() {
+            Ok(error) => anyhow::Error::from(submission_error(error)),
+            Err(error) => error,
+        }
+    })?;
+    transaction.commit().await?;
+    Ok(prepared.into())
 }
 
 #[cfg(test)]

@@ -83,3 +83,11 @@ export { Integer } from "./canonical/Integer.js";
 export { HolderRef } from "./canonical/HolderRef.js";
 export type { OutPoint } from "./canonical/HolderRef.js";
 export { ContractAddress } from "./canonical/ContractAddress.js";
+export { UpgradeClient } from "./upgrades.js";
+export type {
+  UpgradeClientOptions,
+  UpgradeState,
+  PrepareUpgrade,
+  PreparedUpgrade,
+  QueuedUpgrade,
+} from "./upgrades.js";

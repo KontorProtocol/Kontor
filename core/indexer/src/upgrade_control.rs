@@ -1,3 +1,8 @@
+mod preparation;
+
+pub(crate) use preparation::prepare;
+pub use preparation::{PrepareUpgrade, PreparedUpgrade, RequestedUpgrade};
+
 use anyhow::{Context, Result};
 use libsql::Connection;
 use serde::{Deserialize, Serialize};

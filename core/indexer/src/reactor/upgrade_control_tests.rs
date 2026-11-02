@@ -1,7 +1,8 @@
 use super::consensus_state::PendingProposal;
 use crate::consensus::Height;
 use crate::upgrade_control::{
-    SubmissionError, SubmitUpgrade, UpgradeSubmission, decode_submission, snapshot,
+    PrepareUpgrade, RequestedUpgrade, SubmissionError, SubmitUpgrade, UpgradeSubmission,
+    decode_submission, prepare, snapshot,
 };
 use malachitebft_core_types::Round;
 use std::path::Path;
@@ -474,5 +475,232 @@ async fn operator_queue_proposes_exact_approval_before_pending_block_and_drops_c
             .await?
     );
     reactor.execution.owner_service.shutdown();
+    Ok(())
+}
+
+async fn prepared_input(
+    execution: &ExecutionContext<RuntimeExecutor>,
+    key: &PrivateKey,
+    operation: RequestedUpgrade,
+) -> Result<ExactInput> {
+    let conn = execution.db_conn();
+    let prepared = prepare(
+        &conn,
+        PrepareUpgrade {
+            expires_at: (execution.last_height + 100).to_string(),
+            operation,
+        },
+    )
+    .await?;
+    let action = ControlAction::decode(&hex::decode(prepared.action_hex)?)?;
+    assert_eq!(prepared.action_id, hex::encode(action.id()?));
+    let frontier = certified_history::frontier(&conn).await?;
+    let authority = certified_history::committee(&conn, frontier.closed_height + 1).await?;
+    let member = authority
+        .members
+        .iter()
+        .find(|member| member.key == *key.public_key().as_bytes())
+        .context("approval member")?;
+    let envelope = UpgradeControl {
+        approvals: vec![ApprovalSigner::new(key.clone()).sign(&action, member.generation)?],
+        action,
+    };
+    Ok(ExactInput::control(
+        execution.protocol_context,
+        execution.last_height,
+        execution.last_hash.context("Bitcoin tip")?,
+        &envelope,
+    )?)
+}
+
+#[tokio::test]
+async fn prepared_controls_and_bitcoin_reorg_restore_postponed_then_original_schedule() -> Result<()>
+{
+    let directory = TempDir::new()?;
+    let key = PrivateKey::from([23; 32]);
+    let owner = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[79; 32])?);
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: owner.x_only_public_key().0.to_string(),
+        ed25519_pubkey: key.public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }]);
+    let mut execution = open(directory.path(), &genesis).await?;
+    let first = certified_fixture::empty_block(1);
+    let height = append(
+        &execution,
+        first.exact_input(execution.protocol_context)?,
+        &key,
+    )
+    .await?;
+    finish(&mut execution, height).await?;
+    let conn = execution.db_conn();
+    let before = certified_history::frontier(&conn).await?;
+    let state = control::admission::state(&conn, execution.protocol_context).await?;
+    let mut manifest = state.current_manifest.clone();
+    manifest.protocol_number += 1;
+    manifest.predecessor = state.context.protocol;
+    let manifest_hex = hex::encode(manifest.encode()?);
+    assert!(
+        prepare(
+            &conn,
+            PrepareUpgrade {
+                expires_at: "101".into(),
+                operation: RequestedUpgrade::Schedule {
+                    manifest_hex: manifest_hex.clone(),
+                    activation_height: "2".into(),
+                }
+            }
+        )
+        .await
+        .unwrap_err()
+        .is::<SubmissionError>()
+    );
+    assert!(
+        prepare(
+            &conn,
+            PrepareUpgrade {
+                expires_at: "101".into(),
+                operation: RequestedUpgrade::Cancel
+            }
+        )
+        .await
+        .is_err()
+    );
+    let schedule = prepared_input(
+        &execution,
+        &key,
+        RequestedUpgrade::Schedule {
+            manifest_hex: manifest_hex.clone(),
+            activation_height: "4000".into(),
+        },
+    )
+    .await?;
+    assert_eq!(certified_history::frontier(&conn).await?, before);
+    assert_eq!(
+        control::admission::state(&conn, execution.protocol_context).await?,
+        state
+    );
+    let height = append(&execution, schedule, &key).await?;
+    finish(&mut execution, height).await?;
+    let scheduled = control::current(&conn).await?.context("scheduled state")?;
+    assert!(
+        prepare(
+            &conn,
+            PrepareUpgrade {
+                expires_at: "101".into(),
+                operation: RequestedUpgrade::Schedule {
+                    manifest_hex,
+                    activation_height: "5000".into(),
+                }
+            }
+        )
+        .await
+        .is_err()
+    );
+
+    let second = certified_fixture::block(2, first.hash, 0, vec![]);
+    let height = append(
+        &execution,
+        second.exact_input(execution.protocol_context)?,
+        &key,
+    )
+    .await?;
+    finish(&mut execution, height).await?;
+    let postpone = prepared_input(
+        &execution,
+        &key,
+        RequestedUpgrade::Postpone {
+            activation_height: "5000".into(),
+        },
+    )
+    .await?;
+    let postpone_height = append(&execution, postpone.clone(), &key).await?;
+    finish(&mut execution, postpone_height).await?;
+    let postponed = control::current(&conn).await?.context("postponed state")?;
+    assert_eq!(postponed.pending.as_ref().unwrap().activation, 5000);
+
+    let third = certified_fixture::block(3, second.hash, 0, vec![]);
+    let height = append(
+        &execution,
+        third.exact_input(execution.protocol_context)?,
+        &key,
+    )
+    .await?;
+    finish(&mut execution, height).await?;
+    let cancel = prepared_input(&execution, &key, RequestedUpgrade::Cancel).await?;
+    let cancel_height = append(&execution, cancel.clone(), &key).await?;
+    finish(&mut execution, cancel_height).await?;
+    assert!(control::current(&conn).await?.unwrap().pending.is_none());
+
+    let replacement = certified_fixture::block(3, second.hash, 1, vec![]);
+    let height = append(
+        &execution,
+        replacement.exact_input(execution.protocol_context)?,
+        &key,
+    )
+    .await?;
+    finish(&mut execution, height).await?;
+    assert_eq!(control::current(&conn).await?, Some(postponed));
+    let replacement = certified_fixture::block(2, first.hash, 2, vec![]);
+    let height = append(
+        &execution,
+        replacement.exact_input(execution.protocol_context)?,
+        &key,
+    )
+    .await?;
+    finish(&mut execution, height).await?;
+    assert_eq!(control::current(&conn).await?, Some(scheduled));
+    for original in [&postpone, &cancel] {
+        let reanchored = ExactInput::control(
+            execution.protocol_context,
+            2,
+            replacement.hash,
+            &original.upgrade_control()?,
+        )?;
+        assert!(
+            control::admission::verify(
+                &conn,
+                &reanchored,
+                height + 1,
+                control::Position {
+                    decision: height + 1,
+                    stage: 0
+                }
+            )
+            .await
+            .is_err()
+        );
+    }
+    closure::recover(&conn, postpone_height).await?;
+    closure::recover(&conn, cancel_height).await?;
+    assert_eq!(
+        snapshot(&conn).await?.minimum_reference_height,
+        height.to_string()
+    );
+
+    let fresh = prepared_input(
+        &execution,
+        &key,
+        RequestedUpgrade::Postpone {
+            activation_height: "5000".into(),
+        },
+    )
+    .await?;
+    assert_ne!(
+        fresh.upgrade_control()?.action.id()?,
+        postpone.upgrade_control()?.action.id()?
+    );
+    let height = append(&execution, fresh, &key).await?;
+    finish(&mut execution, height).await?;
+    assert_eq!(
+        control::current(&conn)
+            .await?
+            .unwrap()
+            .pending
+            .unwrap()
+            .activation,
+        5000
+    );
+    execution.owner_service.shutdown();
     Ok(())
 }

@@ -26,7 +26,8 @@ use crate::api::handlers::{
     get_fees, get_healthz_live, get_healthz_ready, get_index, get_metrics, get_receipt_stream,
     get_result, get_results, get_signer, get_signer_footprint, get_status, get_transaction,
     get_transaction_inspect, get_transactions, get_upgrade_state, post_compose, post_contract,
-    post_simulate, post_transaction_broadcast, post_transaction_hex_inspect, post_upgrade,
+    post_prepare_upgrade, post_simulate, post_transaction_broadcast, post_transaction_hex_inspect,
+    post_upgrade,
 };
 
 use crate::upgrade_control::SUBMISSION_BODY_LIMIT;
@@ -150,6 +151,7 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
                 .post(post_upgrade)
                 .layer(DefaultBodyLimit::max(SUBMISSION_BODY_LIMIT)),
         )
+        .route("/protocol/upgrades/prepare", post(post_prepare_upgrade))
         .nest(
             "/blocks",
             Router::new()
