@@ -105,7 +105,7 @@ impl NodeCoordinator {
         config: &EngineConfig,
         conn: &Connection,
     ) -> Result<EngineOutput> {
-        let (context, _, _) = certified_startup(conn).await?;
+        let (context, height, _) = certified_startup(conn).await?;
         ensure!(
             certified_history::eras::genesis(conn).await? == self.genesis,
             "engine genesis differs from admitted context"
@@ -124,6 +124,18 @@ impl NodeCoordinator {
         // No signing state is opened until closure recovery has established the
         // next engine's exact era and installed implementation.
         let prepared = PreparedGeneration::reserve(&self.owner, context, key)?;
+        if let Some(signer) = prepared.signer.clone() {
+            let committee = certified_history::committee(conn, height.as_u64()).await?;
+            let completed_closure = certified_history::frontier(conn)
+                .await?
+                .closure_id
+                .context("startup lacks completed closure")?;
+            tokio::task::spawn_blocking(move || {
+                signer.authorize_height(&committee, completed_closure)
+            })
+            .await
+            .context("startup signing authorization task failed")??;
+        }
         let address = Address::from_public_key(&config.private_key.public_key());
         let input = Configuration {
             generation: prepared.ownership.generation(),
@@ -132,11 +144,13 @@ impl NodeCoordinator {
             network_key: prepared.ownership.network_key(),
             listen_address: config.listen_addr.clone(),
             persistent_peers: config.persistent_peers.clone(),
-            // A restart reopens this era's WAL. A protocol switch uses a new
-            // era path, even if the two engines happen to share a WAL codec.
-            wal_path: self
-                .directory
-                .join(format!("consensus-{}.wal", hex::encode(context.era))),
+            // Nonvalidator startup resets its WAL. Never let catch-up discard
+            // the validator's durable votes, including across protocol changes.
+            wal_path: self.directory.join(if config.consensus_enabled {
+                "consensus-validator.wal"
+            } else {
+                "consensus-catchup.wal"
+            }),
             discovery_enabled: config.discovery.enabled,
             bootstrap: match config.discovery.bootstrap_protocol {
                 BootstrapProtocol::Kademlia => Bootstrap::Kademlia,

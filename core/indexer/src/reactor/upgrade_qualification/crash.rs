@@ -140,11 +140,7 @@ pub(crate) async fn child(path: &Path, stage: &str) -> Result<()> {
         NodeCoordinator::open_database(&config, DATABASE, NETWORK, 1, &genesis()).await?;
     let mut output = coordinator.start(&config, &execution.db_conn()).await?;
     let (listener, _ready) = ready(&mut output.engine).await?;
-    let (context, _, _) = certified_startup(&execution.db_conn()).await?;
-    ensure!(
-        path.join(format!("consensus-{}.wal", hex::encode(context.era)))
-            .exists()
-    );
+    ensure!(path.join("consensus-validator.wal").exists());
     // Keep ConsensusReady unanswered so no unsolicited proposal races this
     // first proposal-Fin signature through the production managed transport.
     let signature = if stage == "signed" {

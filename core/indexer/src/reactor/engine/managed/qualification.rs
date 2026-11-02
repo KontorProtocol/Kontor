@@ -160,13 +160,7 @@ pub(crate) async fn run() -> Result<Value> {
             reservation.generation() == 3,
             "restart did not consume exactly two generations"
         );
-        ensure!(
-            fs::metadata(dir.path().join(format!(
-                "consensus-{}.wal",
-                hex::encode(coordinator.genesis.era)
-            )))
-            .is_ok()
-        );
+        ensure!(fs::metadata(dir.path().join("consensus-validator.wal")).is_ok());
         let baseline = Baseline::for_node(coordinator.genesis.chain)?;
         Ok(json!({
             "chain": hex::encode(coordinator.genesis.chain.0),

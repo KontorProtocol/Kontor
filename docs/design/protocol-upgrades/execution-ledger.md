@@ -4607,3 +4607,68 @@ The initial audit failures came from ccache attempting a read-only cache write.
 The only source correction was adding the required activation input to the
 managed-definition fixture and its source-mutation assertion. All three current
 references verify. These local results do not replace final platform CI.
+
+### Single-runtime proof started (2 November 2026)
+
+Operator resumed the amended goal. Verified PR622 base
+`8c757a8625e8f71f5eceb03c1b3710c849d46207` and created isolated branch
+`feat/protocol-single-runtime`. The uncommitted HTTP K9 draft remains untouched
+in `protocol-historical-catchup`. K9 now follows the single-runtime proof in the
+implementation plan, superseding the previous transport plan. No new build, CI
+or proof result is claimed yet. Fork cleanup remains deferred.
+
+The only delegated implementation is security-specific durable per-height signer
+authorization (`SINGLE-RUNTIME-SIGNER-1`), assigned to the existing Daybreak agent
+in its own worktree. Lead owns reactor integration and final review. One
+independent reviewer covers the coherent result; no duplicate planning review.
+
+Initial proof changes remove protocol-triggered stop/start from the reactor's
+advance path, retain the live transport, refresh execution preparation at the
+next-height gate, and reject stale round/proposal callbacks after certification.
+The focused local handoff suite passed four tests (114.22 seconds runtime),
+including closure-before-Finalized and the new late-callback regression. This run
+preceded the subsequent signer-call integration and is preliminary evidence only.
+Log: `.build-cache/single-runtime-handoff-tests.log`. Initial compilation needed
+`CCACHE_DISABLE=1` because the sandbox cannot write the user's ccache directory.
+
+The live transition qualification now includes a fresh follower with no injected
+history, syncing from an already-P2 peer, plus generation-journal equality and
+separate validator/follower WAL assertions. The proof temporarily retains the existing dual-graph
+build scaffolding while selecting the first pinned engine for both protocols;
+removing that scaffolding and separating semantic identity from build provenance
+belong to the coherent refactor only after the bounded proof succeeds.
+
+The integrated signer suite passed 30 tests, including idempotent recovery after
+an authenticated height gap. The managed release build then passed locally on
+Linux arm64 with both independent historical executors. The live activation,
+Malachite catch-up and restart command passed using binary SHA-256
+`cd2b10d2e12e056467f155ebe95027ca06fcf2a13e0e69ccbff89c4474eafac8`.
+Evidence: `.build-cache/single-runtime-transition-r3.json`, SHA-256
+`8f75c4b8fda8de504347f1e3dadaa31a016b89c7d47f04c49082a2b2661c27f0`.
+It confirms unchanged engine generation and network owner across activation,
+continuous validator WAL, a non-signing fresh follower retrieving the identical
+certified prefix and application position through height 2 from an already-P2
+peer, and production restart followed by processing Bitcoin height 3. This fixture
+seeds the accepted schedule on both nodes; it does not prove upgrade authorization
+or follower promotion. Source and follower may advance beyond the checked prefix.
+
+Earlier attempts exposed two harness assumptions about moving consensus tips,
+corrected by comparing the same completed height and checking retained records on
+restart. A sandboxed attempt could not bind local network sockets; the successful
+run used authorized local network access. These were local checks, not CI reruns.
+The existing crash/recovery suite also passed against this same binary. Evidence:
+`.build-cache/single-runtime-recovery.json`, SHA-256
+`ddf91e98e6c9ff389f55d9c99c555c1e5ad1e28262380ed147ed74e7e3c9fbd8`.
+All five process-kill checkpoints passed (certified, activated, closed, engine-ready
+and signed), preserving certified history, matching recovered state and refusing
+conflicting signatures. The signed checkpoint also preserved the exact retry.
+Migration failure atomicity, cross-upgrade replay, confirmation without execution,
+token accounting, empty-successor gating and unsupported-upgrade cancellation
+passed in that suite. Startup authorization recovery is covered; this does not
+claim a process kill precisely inside a running engine's Next callback.
+
+The bounded proof supports proceeding with the coherent single-runtime refactor.
+K9 remains incomplete: remove dual-consensus build scaffolding, separate semantic
+identity from build provenance, complete joining/promotion and targeted historical
+sync rejection/resumption coverage, then consolidate lead and independent review
+before scoped final-candidate CI. No PR was pushed and no CI launched for this proof.

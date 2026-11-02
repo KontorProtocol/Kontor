@@ -20,6 +20,16 @@ pub(super) struct PendingDecision {
 }
 
 impl ConsensusState {
+    pub(super) async fn height_is_open(&self, conn: &Connection, height: Height) -> Result<bool> {
+        if height != self.current_height || self.pending_next_height.is_some() {
+            return Ok(false);
+        }
+        let frontier = certified_history::frontier(conn).await?;
+        Ok(frontier.status == Status::Ready
+            && frontier.context == Some(self.protocol_context)
+            && frontier.authenticated_height < height.as_u64())
+    }
+
     pub(super) async fn receive_decision(
         &mut self,
         conn: &Connection,
@@ -128,7 +138,7 @@ impl ConsensusState {
     ) -> Result<Option<Next<Ctx>>> {
         let frontier = certified_history::frontier(conn).await?;
         ensure!(
-            frontier.status == Status::Ready && frontier.context == Some(self.protocol_context),
+            frontier.status == Status::Ready,
             "next height lacks ready certified history"
         );
         if frontier.closed_height < completed.as_u64() {
@@ -138,11 +148,27 @@ impl ConsensusState {
             frontier.closed_height == completed.as_u64(),
             "next-height callback is stale"
         );
+        let completed_authority = certified_history::committee(conn, completed.as_u64()).await?;
+        ensure!(
+            completed_authority.context == self.protocol_context,
+            "completed height protocol context differs"
+        );
         let (context, next, authority) = certified_startup(conn).await?;
+        #[cfg(not(kontor_managed))]
         ensure!(
             context == self.protocol_context,
-            "next-height protocol context differs"
+            "protocol transition requires managed execution"
         );
+        let committee = certified_history::committee(conn, next.as_u64()).await?;
+        self.engine
+            .authorize_height(
+                committee,
+                frontier
+                    .closure_id
+                    .context("next height lacks completed closure")?,
+            )
+            .await?;
+        self.protocol_context = context;
         self.current_validator_set = authority;
         self.validator_index = self
             .current_validator_set

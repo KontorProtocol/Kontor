@@ -1030,21 +1030,45 @@ receipts, execution identities, committee/registration generations and retained
 history across uninterrupted, restart and reconstructed execution. K9 later adds
 cross-era transport, not a new mechanism for deciding the results of replay.
 
-### K9. Stable history transport and cold catch-up
+### K9. Single-runtime proof and verified cold catch-up
 
-Dependencies: K4/K7/K8. Modules: node history service, sequential bounded peer synchronization,
-archive storage and startup. Result: current-era peers serve exact historical input
-and certificate envelopes independent of live Malachite codecs. Fresh nodes verify
-from original genesis through all eras and recovery before signing. Limit chunks,
-total decoded sizes and peer work; retain progress across retries and restart.
-Defer parallel scheduling, peer scoring, speculative prefetching and generalized
-staging. Test entirely new-era peers,
-missing middle records, tampered values/certificates/input/committee claims, unsupported
-codecs and restored snapshots. Keep separate received/verified/applied/era/signer
-frontiers. Re-execute committee-changing prefixes before trusting successor
-certificates; missing target support cannot advance authentication beyond its
-unknown derived committee.
-Do not use trusted snapshots as evidence of full genesis verification.
+Operator refinement, 2 November 2026, supersedes the earlier requirement for
+separate live consensus bundles, incompatible codecs and protocol-triggered
+engine restarts. Planning review `SINGLE-MALACHITE-PLAN-1` accepted this direction
+with the boundary and signing conditions below. Historical execution bundles
+remain independently resolved, locked and linked.
+
+First prove real P1-to-P2 activation/migration with one pinned Malachite runtime
+and common wire format. Keep the same engine generation and network owner through
+the next-height callback. A fresh node must use Malachite sync from peers already
+on P2 and verify/replay P1, the upgrade and P2 with historical committees and
+executors. Test closure-before-Finalized ordering and recovery around authorization
+and Next. If the proof requires substantial machinery or exposes a fundamental
+obstacle, report evidence before broadening the architecture.
+
+Validate Finalized under C's original context before installing C+1 state.
+Callbacks are not globally quiescent: reject stale work by position/context.
+Persist per-height signing authority (context, committee, completed predecessor)
+under the signing lock before Next, retaining global anti-equivocation slots and
+exact historical retries only. Engine generation remains a lifetime fence.
+Keep validator WAL continuous across activation; follower catch-up has a separate
+WAL. Promotion reconciles database/signing/validator WAL and may stop/join the
+engine if required. Unsigned peer tips are hints, never freshness authority.
+Distinguish explicit genesis bootstrap from joining an existing chain.
+
+If the bounded proof succeeds, complete this replacement K9 and then K10/K11.
+Retain exact certified inputs, sequential verification, missing/corrupt-history
+rejection, persisted progress, unsupported-protocol rejection and restart recovery.
+Do not add a parallel HTTP transport, custom multi-peer scheduler or old-engine
+archive service. Preserve the separate HTTP draft until replacement is proven.
+Separate semantic certificate rules from runtime build provenance; future runtime
+updates require historical compatibility evidence. Defer Malachite fork cleanup
+until after this initiative, retaining current lifecycle fixes.
+
+Use focused local checks and one consolidated independent review, then scoped
+final-candidate CI. Reuse prior research and valid unchanged evidence; do not
+restart performance campaigns or exhaustive diagnostics. This is a plan, not
+completed implementation or acceptance evidence.
 
 ### K10. Protocol-aware clients, caches and operations
 

@@ -1,6 +1,8 @@
+use std::fs;
 use std::time::Duration;
 
 pub(crate) mod authorization;
+mod catchup;
 pub(crate) mod cluster;
 mod committee;
 mod confirmation;
@@ -31,7 +33,7 @@ use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::signing::PrivateKey;
 use crate::database::canonical_history;
-use crate::database::certified_history::{self, closure, control, eras};
+use crate::database::certified_history::{self, branch, closure, completion, control, eras};
 use crate::database::connection::new_read_only_connection;
 use crate::database::queries::insert_block;
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
@@ -141,7 +143,9 @@ async fn restart(
         NodeCoordinator::open_database(&config, DATABASE, NETWORK, 1, &genesis).await?;
     let observer = new_read_only_connection(&config.data_dir, DATABASE).await?;
     let frontier = certified_history::frontier(&observer).await?;
-    ensure!(frontier.closed_height == 2);
+    ensure!(frontier.closed_height >= 2);
+    let retained = certified_history::load(&observer, frontier.authenticated_height).await?;
+    let completed = completion::completed(&observer, frontier.closed_height).await?;
     let expected_context = frontier.context.context("restart context")?;
     ensure!(expected_context.protocol == protocol);
     let service = OwnerService::new();
@@ -193,9 +197,21 @@ async fn restart(
                 addresses.changed().await?;
             }
             ensure!(addresses.borrow().as_ref() == Some(&config.listen_addr));
+            let recovered = certified_history::frontier(&observer).await?;
             ensure!(
-                certified_history::frontier(&observer).await? == frontier,
-                "restart changed certified history before new input"
+                recovered.closed_height >= frontier.authenticated_height,
+                "restart did not finish the retained decision prefix"
+            );
+            ensure!(
+                certified_history::load(&observer, frontier.authenticated_height)
+                    .await?
+                    .decision()
+                    == retained.decision(),
+                "restart changed retained decision history"
+            );
+            ensure!(
+                completion::completed(&observer, frontier.closed_height).await? == completed,
+                "restart changed a completed closure"
             );
             let view = execute_view(
                 &service,
@@ -214,20 +230,28 @@ async fn restart(
                 block.header.prev_blockhash = block.block_hash();
                 block.header.nonce = block.header.nonce.wrapping_add(1);
             }
+            let block_hash = block.block_hash();
             block_tx
                 .send(BlockEvent::BlockInsert {
                     target_height: 3,
-                    block: BlockInput::from_bitcoin(3, block.block_hash(), block),
+                    block: BlockInput::from_bitcoin(3, block_hash, block),
                 })
                 .await?;
-            wait_closed(&observer, protocol, 3).await?;
-            let decision = certified_history::load(&observer, 3).await?;
+            let closed = loop {
+                let frontier = certified_history::frontier(&observer).await?;
+                if branch::at(&observer, 3, frontier.closed_height).await? == Some(block_hash) {
+                    break frontier.closed_height;
+                }
+                sleep(Duration::from_millis(25)).await;
+            };
+            let decision = certified_history::load(&observer, closed).await?;
             ensure!(
                 decision.input().descriptor().context == expected_context,
                 "restart changed the era or selected an obsolete protocol"
             );
             Ok::<_, Error>(json!({"same_listener": true, "same_era": true,
-                "persisted_view": view, "closed_decisions": 3,
+                "persisted_view": view, "closed_decisions": closed,
+                "resumed_bitcoin_height": 3,
                 "production_startup": true}))
         };
         let observed = tokio::select! {
@@ -294,6 +318,8 @@ pub(crate) async fn run() -> Result<Value> {
         ensure!(before.is_err(), "P1 unexpectedly exposes the P2 token interface");
         let consensus = start_linked_consensus(config.clone(), Some(&coordinator),
             &session, &service, NETWORK, None, None, 0, MempoolFeeIndex::new(None)).await?;
+        let generation_journal = directory.path().join("consensus-authority/generations.log");
+        let original_generation = fs::read(&generation_journal)?;
         let execution = ExecutionContext::new(
             RuntimeExecutor::new(Client::new("http://127.0.0.1:1".into(), String::new(), String::new())?),
             session, NETWORK, service.clone(), baseline.context,
@@ -336,7 +362,8 @@ pub(crate) async fn run() -> Result<Value> {
                 let transition = eras::at(&observer, 1).await?.context("era transition")?;
                 ensure!(transition.start_height()? == 2);
                 ensure!(addresses.borrow().as_ref() == Some(&original_address));
-                Ok::<_, Error>((after, original_address))
+                let caught_up = catchup::run(&genesis, target, original_address.clone(), &observer).await?;
+                Ok::<_, Error>((after, original_address, caught_up))
             }).await.context("live activation qualification timed out")?;
             result
         };
@@ -358,14 +385,18 @@ pub(crate) async fn run() -> Result<Value> {
         };
         let (running, observed) = tokio::join!(running, observe);
         running?;
-        let (after, listener) = observed?;
+        let (after, listener, caught_up) = observed?;
         ensure!(reactor.consensus.protocol_context.protocol == target);
+        ensure!(fs::read(&generation_journal)? == original_generation,
+            "protocol activation replaced the engine generation");
+        ensure!(directory.path().join("consensus-validator.wal").exists());
         ensure!(reactor.consensus.engine.stop(Duration::ZERO).await?);
         ensure!(reactor.consensus.engine.next().await?.is_none());
         ensure!(reactor.consensus.engine.sign_proposal_fin(3, 0, vec![], [0; 32]).await.is_err());
         ensure!(reactor.execution.session.executor.execution_definition?
             == successor::manifest(baseline.context.chain)?.executor);
         ensure!(service.active_roots().await == 0);
+        let closed_decisions = certified_history::frontier(&observer).await?.closed_height;
         let expected_view = after.as_ref().map_err(|error| anyhow!("{error:?}"))?.clone();
         drop(reactor);
         drop(pool);
@@ -376,11 +407,13 @@ pub(crate) async fn run() -> Result<Value> {
         let mut restarted_config = config;
         restarted_config.listen_addr = listener.clone();
         let restarted = restart(restarted_config, genesis, target, &expected_view).await?;
-        Ok(json!({"scope": "one live validator, accepted schedule fixture, real P1/P2 engines and executors",
+        Ok(json!({"scope": "one continuous Malachite engine, accepted schedule fixture, real P1/P2 executors",
             "authorization_test": false, "first_protocol": hex::encode(baseline.context.protocol.0),
             "second_protocol": hex::encode(target.0), "handoff_height": 2,
             "first_view": before, "second_view": after, "listener": listener,
-            "closed_decisions": 2, "reused_reader_pool": true, "restart": restarted}))
+            "closed_decisions": closed_decisions, "verified_prefix": 2, "same_engine_generation": true,
+            "same_network_owner": true, "continuous_validator_wal": true,
+            "reused_reader_pool": true, "restart": restarted, "cold_catchup": caught_up}))
     }.await;
     service.shutdown();
     result

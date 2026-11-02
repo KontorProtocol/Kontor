@@ -1393,9 +1393,6 @@ impl<E: Executor> Reactor<E> {
             self.prune_finalized_bodies(&conn).await;
         }
         gauge!(DEFERRED_DECISIONS).set(0.0);
-        if self.handoff_if_needed().await? {
-            return Ok(());
-        }
         self.resume_next_height().await
     }
 
@@ -1411,6 +1408,8 @@ impl<E: Executor> Reactor<E> {
         else {
             return Ok(());
         };
+        self.refresh_protocol_execution(self.consensus.protocol_context)
+            .await?;
         let (_, reply) = self
             .consensus
             .pending_next_height
@@ -1449,6 +1448,14 @@ impl<E: Executor> Reactor<E> {
         timeout: std::time::Duration,
         reply: tokio::sync::oneshot::Sender<LocallyProposedValue<Ctx>>,
     ) -> Result<()> {
+        if round != self.consensus.current_round
+            || !self
+                .consensus
+                .height_is_open(&self.db_conn(), height)
+                .await?
+        {
+            return Ok(());
+        }
         info!(%height, %round, "Building value to propose");
 
         if let Some(existing) = self

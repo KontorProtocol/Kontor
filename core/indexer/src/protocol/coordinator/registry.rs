@@ -40,7 +40,7 @@ pub(crate) fn resolve(manifest: &ProtocolManifest) -> Result<InstalledProtocol> 
         return Ok(InstalledProtocol {
             executor: ExecutorVersion::P2,
             migration: p2_migration::token_count(manifest.executor),
-            consensus: Bundle::Second,
+            consensus: Bundle::First,
         });
     }
     bail!(UnavailableProtocol(manifest.id()?))
