@@ -43,6 +43,9 @@ use crate::upgrade_approval_cli::{
     self, ApprovalOutput, UpgradeApprovalArgs, UpgradeApprovalCommand,
 };
 
+#[path = "upgrade_control_tests/committee.rs"]
+mod committee;
+
 async fn open(
     directory: &Path,
     genesis: &GenesisParameters,

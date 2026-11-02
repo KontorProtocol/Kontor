@@ -3430,3 +3430,48 @@ single independent review remains consolidated around completed K5/K6. No CI,
 PR, merge, publication or new Daybreak assignment occurred. Remaining K6 work is
 committee-churn integration coverage, actual linked CLI/bundle evidence, and the
 grouped review and scoped final CI campaign.
+
+### K6 real registration continuity through replacement and recovery
+
+On base `3bca59a0`, added a real certified-execution fixture that registers a
+validator through the staking contract in block 2 and activates it at block 14.
+Two successive replacements of block 14, including restoration of its original
+hash, traverse an observed pending-join state before restoring the same active
+key, holder, activation height and committee. Each return obtains a fresh
+registration generation. The unrelated genesis validator retains its generation
+and unchanged approval. An envelope retaining the returning validator's old
+approval is rejected specifically as `ControlError::Approval`; a freshly signed
+approval for its current generation passes admission without changing the action.
+This fixture never applies that scheduling action, so it does not substitute
+reapproval of a registration for the separate fresh-action requirement after
+rollback of a previously applied control.
+
+The first replacement restarts after the durable rollback stage. Fresh replay
+from genesis matches every retained registration stage and completed closure
+across all sixteen certified decisions. This exercises intermediate observations
+through actual owned closure execution and persistent history, rather than
+comparing only the final committee. The test passed in 94.26s. The existing five
+registration-history unit tests also passed after adding explicit key A-to-B-to-A
+continuity assertions. The added checks required no production behavior change.
+Evidence, source bindings, both tested binary hashes and logs are recorded in
+`.build-cache/k6-committee-reorg-validation.json`. The integration run predates
+only the additional unit-test assertions; its source and production code are
+unchanged. No CI or new independent review was launched for this increment.
+
+Lead inspection traced stage finish through the actual registration observer,
+atomic observation persistence and successor validation; checked typed stale
+approval rejection and the unchanged-signer positive control; and compared
+interrupted recovery against stage-by-stage cold reconstruction. The fixture is
+an in-tree executor check. It does not qualify a managed engine handoff or a
+cross-protocol activation, which remain in K7/K8.
+
+Before the final K5/K6 linked build, source inspection identified an outstanding
+interface mismatch: the retained K3 executor exports the old migration result
+shape, while the current executor now reports charged work on rejection and host
+failure. The node currently expects the latter for both factories. This needs
+explicit typed adaptation before linked acceptance; do not mutate the immutable
+retained snapshot or invent zero work for an unreported historical failure.
+The current production mapping uses the maintained observer executor, which has
+the richer result. Resolve the retained interface, regenerate the applicable
+unreleased definitions, then run the actual linked build/CLI checks and the
+consolidated group review. No PR, merge or publication occurred.
