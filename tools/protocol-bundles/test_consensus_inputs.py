@@ -105,7 +105,7 @@ class ConsensusInputs(unittest.TestCase):
         self.assertIn(str(ROOT / "core/indexer/src/consensus/codec.rs"), paths)
 
     def test_process_tripwire_distinguishes_enum_variants_and_read_only_pid(self):
-        for source in ("Command::Block { height }", "Command :: Batch { anchor }", "std::process:: id()"):
+        for source in ("Command::Block { height }", "Command :: Batch { anchor }", "Command::Control { anchor }", "std::process:: id()"):
             self.assertIsNone(CONTROL.search(source), source)
         for source in ('Command::new("child")', "std::process::exit(1)", "tokio::process::Command",
                        "tokio::signal::ctrl_c()", "waitpid(pid)"):

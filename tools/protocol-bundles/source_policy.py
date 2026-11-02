@@ -16,7 +16,7 @@ from provenance import RETAINED_TREES, consensus_sources
 CONTROL = re.compile(
     r"\b(?:tokio\s*::\s*(?:signal|process)|signal_hook|ctrl_c|"
     r"SIGCHLD|SIGTERM|SIGINT|sigaction|sighandler|"
-    r"Command\s*::(?!\s*(?:Block|Batch)\b)|(?:std|tokio)\s*::\s*process\s*::(?!\s*id\b)|"
+    r"Command\s*::(?!\s*(?:Block|Batch|Control)\b)|(?:std|tokio)\s*::\s*process\s*::(?!\s*id\b)|"
     r"(?:fork|vfork|posix_spawn|execve|waitpid|signal)\s*\()"
 )
 
