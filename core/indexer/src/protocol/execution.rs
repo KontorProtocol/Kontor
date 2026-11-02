@@ -1,12 +1,14 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ExecutorVersion {
     LegacyP1,
+    P2,
 }
 
 impl ExecutorVersion {
     pub(crate) const fn tag(self) -> u32 {
         match self {
             Self::LegacyP1 => 1,
+            Self::P2 => 2,
         }
     }
 }

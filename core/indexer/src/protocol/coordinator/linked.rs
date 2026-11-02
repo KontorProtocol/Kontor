@@ -1,8 +1,9 @@
+use std::collections::{BTreeMap, btree_map::Entry};
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Error, Result, anyhow, ensure};
 use bitcoin::{BlockHash, Network, Txid, hashes::Hash};
 use deadpool::managed::{Object, Pool};
 #[cfg(kontor_linked)]
@@ -10,11 +11,17 @@ use futures_util::FutureExt;
 use indexer_types::Block;
 #[cfg(test)]
 use indexer_types::Transaction;
+#[cfg(kontor_managed)]
+use kontor_executor_first::registration_observer as first_registration_observer;
 #[cfg(kontor_linked)]
 use kontor_executor_first::{execution_definition as first_definition, factory as first_factory};
+#[cfg(all(kontor_linked, kontor_observer, not(kontor_managed)))]
+use kontor_executor_observer::factory as observer_factory;
+#[cfg(kontor_managed)]
+use kontor_executor_observer::p2_factory;
 #[cfg(all(kontor_linked, kontor_observer))]
 use kontor_executor_observer::{
-    execution_definition as observer_definition, factory as observer_factory, registration_observer,
+    execution_definition as observer_definition, registration_observer,
 };
 use libsql::Connection;
 #[cfg(kontor_linked)]
@@ -25,7 +32,7 @@ use super::committee::materialize_committee;
 use super::genesis::bind_identity;
 use super::migration_export::MigrationExport;
 use super::selection::{
-    ApplicationPosition, ExecutionSelection, ExecutorVersion, select_legacy_p1,
+    ApplicationPosition, ExecutionSelection, ExecutorVersion, select_current, select_legacy_p1,
 };
 #[cfg(any(test, feature = "protocol-qualification"))]
 use crate::consensus::ValidatorSet;
@@ -42,6 +49,8 @@ use crate::protocol::operations::MigrationCall;
 #[cfg(any(test, feature = "protocol-qualification"))]
 use crate::protocol::operations::{AddressEnvelope, ViewOutcome};
 use crate::protocol::operations::{GenesisEnvelope, RecognitionCall, SessionOwner};
+#[cfg(all(kontor_linked, kontor_observer))]
+use crate::protocol::registration::RegistrationCall;
 use crate::protocol::registration::RegistrationObservation;
 #[cfg(kontor_linked)]
 use crate::protocol::session::{HostError, HostFuture};
@@ -129,8 +138,13 @@ fn adapt_session<M: MigrationExport>(
                 Arc::new(move || {
                     let conn = conn.clone();
                     Box::pin(async move {
-                        let selection = select_legacy_p1(&conn, network, ApplicationPosition::View)
+                        let selection = select_current(&conn, network, ApplicationPosition::View)
                             .await
+                            .map_err(|error| (0, format!("{error:#}")))?;
+                        selection
+                            .execution_identity(
+                                execution_definition.map_err(|error| (0, error.to_string()))?,
+                            )
                             .map_err(|error| (0, format!("{error:#}")))?;
                         selection
                             .ensure_runtime(network, origin)
@@ -210,9 +224,9 @@ pub(crate) fn session_factory(
     network: Network,
     view_gas_limit: Option<u64>,
 ) -> Result<SessionFactory> {
-    #[cfg(kontor_observer)]
+    #[cfg(all(kontor_observer, not(kontor_managed)))]
     let reference = observer_definition();
-    #[cfg(not(kontor_observer))]
+    #[cfg(any(not(kontor_observer), kontor_managed))]
     let reference = first_definition();
     if reference != REFERENCE {
         return Err(anyhow!(
@@ -247,21 +261,34 @@ pub(crate) fn session_factory_for_definition(
                 ));
             }
             if definition == observer_id {
-                return Ok(with_registration_observer(retained_session_factory(
+                #[cfg(kontor_managed)]
+                let factory = retained_session_factory_for_version(
+                    network,
+                    view_gas_limit,
+                    p2_factory,
+                    observer_definition(),
+                    ExecutorVersion::P2,
+                )?;
+                #[cfg(not(kontor_managed))]
+                let factory = retained_session_factory(
                     network,
                     view_gas_limit,
                     observer_factory,
                     observer_definition(),
-                )?));
+                )?;
+                return Ok(with_registration_observer(factory));
             }
         }
         if definition == first_id {
-            return retained_session_factory(
+            let factory = retained_session_factory(
                 network,
                 view_gas_limit,
                 first_factory,
                 first_definition(),
-            );
+            )?;
+            #[cfg(kontor_managed)]
+            let factory = with_registration_export(factory, first_registration_observer);
+            return Ok(factory);
         }
     }
     // The historical second graph is qualification-only. Merely linking a
@@ -272,15 +299,21 @@ pub(crate) fn session_factory_for_definition(
 
 #[cfg(all(kontor_linked, kontor_observer))]
 pub(crate) fn with_registration_observer(factory: SessionFactory) -> SessionFactory {
+    with_registration_export(factory, registration_observer)
+}
+
+#[cfg(all(kontor_linked, kontor_observer))]
+fn with_registration_export(
+    factory: SessionFactory,
+    export: fn(SessionOwner) -> Result<RegistrationCall, HostError>,
+) -> SessionFactory {
     Arc::new(move |conn| {
         let factory = factory.clone();
         Box::pin(async move {
             let mut session = factory(conn).await?;
-            let observer = catch_unwind(AssertUnwindSafe(|| {
-                registration_observer(session.owner.clone())
-            }))
-            .map_err(|_| HostFailure::from((1, "registration export panicked".into())))?
-            .map_err(HostFailure::from)?;
+            let observer = catch_unwind(AssertUnwindSafe(|| export(session.owner.clone())))
+                .map_err(|_| HostFailure::from((1, "registration export panicked".into())))?
+                .map_err(HostFailure::from)?;
             session.operations.registrations = Some(observer);
             Ok(session)
         })
@@ -298,6 +331,23 @@ pub(crate) fn retained_session_factory<M: MigrationExport>(
     view_gas_limit: Option<u64>,
     constructor: fn() -> Result<RetainedFactory<M>, HostError>,
     definition: &[u8],
+) -> Result<SessionFactory> {
+    retained_session_factory_for_version(
+        network,
+        view_gas_limit,
+        constructor,
+        definition,
+        ExecutorVersion::LegacyP1,
+    )
+}
+
+#[cfg(kontor_linked)]
+fn retained_session_factory_for_version<M: MigrationExport>(
+    network: Network,
+    view_gas_limit: Option<u64>,
+    constructor: fn() -> Result<RetainedFactory<M>, HostError>,
+    definition: &[u8],
+    version: ExecutorVersion,
 ) -> Result<SessionFactory> {
     let reference = DefinitionReference::decode(definition)?;
     let storage_contract = StorageContract::resolve(&reference)?;
@@ -319,7 +369,7 @@ pub(crate) fn retained_session_factory<M: MigrationExport>(
             .map_err(|_| HostFailure::from((1, "executor session export panicked".into())))?
             .map_err(HostFailure::from)?;
             Ok(adapt_session(
-                ExecutorVersion::LegacyP1,
+                version,
                 Ok(definition),
                 network,
                 conn,
@@ -371,7 +421,34 @@ pub(crate) fn retained_session_factory_with_callbacks<M: MigrationExport>(
 }
 
 pub(crate) fn read_only_factory(network: Network, view_gas_limit: u64) -> Result<SessionFactory> {
-    session_factory(network, Some(view_gas_limit))
+    let default_definition = execution_definition()?;
+    let factories = Arc::new(Mutex::new(BTreeMap::from([(
+        default_definition,
+        session_factory(network, Some(view_gas_limit))?,
+    )])));
+    Ok(Arc::new(move |conn| {
+        let factories = factories.clone();
+        Box::pin(async move {
+            let selection = select_current(&conn, network, ApplicationPosition::View).await?;
+            let definition = selection
+                .canonical_execution()
+                .unwrap_or(default_definition);
+            let factory = {
+                let mut factories = factories
+                    .lock()
+                    .map_err(|_| anyhow!("read factory cache poisoned"))?;
+                if let Entry::Vacant(entry) = factories.entry(definition) {
+                    entry.insert(session_factory_for_definition(
+                        network,
+                        definition,
+                        Some(view_gas_limit),
+                    )?);
+                }
+                factories[&definition].clone()
+            };
+            factory(conn).await
+        })
+    }))
 }
 
 pub(crate) async fn canonical_session(conn: Connection, network: Network) -> Result<LinkedSession> {
@@ -398,7 +475,7 @@ pub(crate) fn new_read_pool(
 // inside ExecutorSession cross into the retained implementation.
 pub(crate) async fn read_snapshot<T, F, Fut>(
     service: &OwnerService,
-    object: Object<LinkedManager>,
+    mut object: Object<LinkedManager>,
     network: Network,
     read: F,
 ) -> Result<T>
@@ -408,15 +485,33 @@ where
     Fut: Future<Output = Result<T>> + Send + 'static,
 {
     let capacity = service.reserve_root_capacity().await?;
-    let selection = select_legacy_p1(&object.conn, network, ApplicationPosition::View).await?;
+    let selection = select_current(&object.conn, network, ApplicationPosition::View).await?;
+    let pool = Object::pool(&object).ok_or_else(|| anyhow!("read executor pool is unavailable"))?;
+    let admission = selection.clone();
+    // Cancellation must not return the physical reader to its pool while a
+    // replacement executor is still being constructed on that connection.
+    let (object, capacity) = tokio::spawn(async move {
+        pool.manager()
+            .select(&mut object, &admission, network)
+            .await?;
+        Ok::<_, Error>((object, capacity))
+    })
+    .await??;
     let conn = object.conn.clone();
     let executor = object.executor.clone();
     let operation: LinkedOperation = Box::new(move |_, _| {
         Box::pin(async move {
             // Root preparation pins its selection after opening this snapshot,
             // so a writer advancing while admission waits cannot mix contexts.
-            let selected = select_legacy_p1(&conn, network, ApplicationPosition::View)
+            let selected = select_current(&conn, network, ApplicationPosition::View)
                 .await
+                .map_err(|error| (0, format!("{error:#}")))?;
+            selected
+                .execution_identity(
+                    executor
+                        .execution_definition
+                        .map_err(|error| (0, error.to_string()))?,
+                )
                 .map_err(|error| (0, format!("{error:#}")))?;
             selected
                 .verify_view(&conn, network, executor.origin)
@@ -799,6 +894,7 @@ mod tests {
     use crate::config::DEFAULT_VIEW_GAS_LIMIT;
     use crate::consensus::{Validator, signing::PrivateKey};
     use crate::database::queries::insert_block;
+    use crate::protocol::coordinator::activation_execution::tests::fixture as activation_fixture;
     use crate::reactor::executor::{Executor, NoopExecutor};
     use crate::reg_tester::random_x_only_pubkey;
     use crate::runtime::pool::new_linked;
@@ -807,7 +903,7 @@ mod tests {
     use crate::test_utils::{new_mock_block_hash, test_runtime_with_genesis};
     use indexer_types::BlockRow;
     use libsql::Value;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::sync::Notify;
     use tokio::time::timeout;
@@ -826,6 +922,100 @@ mod tests {
                 definition
             );
         }
+    }
+
+    #[tokio::test]
+    async fn selected_read_replaces_obsolete_pool_session_before_snapshot() -> Result<()> {
+        let (directory, writer, service, _) = Box::pin(activation_fixture()).await?;
+        let expected = writer.executor.execution_definition?;
+        let original = read_only_factory(Network::Regtest, 25_000)?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let created = calls.clone();
+        let entered = Arc::new(Notify::new());
+        let resume = Arc::new(Notify::new());
+        let constructor_entered = entered.clone();
+        let constructor_resume = resume.clone();
+        let factory: SessionFactory = Arc::new(move |conn| {
+            let original = original.clone();
+            let created = created.clone();
+            let entered = constructor_entered.clone();
+            let resume = constructor_resume.clone();
+            Box::pin(async move {
+                let index = created.fetch_add(1, Ordering::SeqCst);
+                if index == 1 {
+                    entered.notify_one();
+                    resume.notified().await;
+                }
+                let mut executor = original(conn).await?;
+                // Model an idle entry left in the pool by the previous protocol.
+                // This is an admission test, not two-bundle execution evidence.
+                if index == 0 {
+                    executor.execution_definition = Ok(ExecutionDefinitionId([0xff; 32]));
+                }
+                Ok(executor)
+            })
+        });
+        let pool = new_linked(
+            directory.path().to_path_buf(),
+            "activation.db".into(),
+            factory,
+            1,
+        )?;
+        let object = pool.get().await?;
+        let waiting_service = service.clone();
+        let callback_ran = Arc::new(AtomicBool::new(false));
+        let cancelled_callback = callback_ran.clone();
+        let waiting = tokio::spawn(async move {
+            read_snapshot(
+                &waiting_service,
+                object,
+                Network::Regtest,
+                move |_, _, _| async move {
+                    cancelled_callback.store(true, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .await
+        });
+        timeout(Duration::from_secs(5), entered.notified()).await?;
+        waiting.abort();
+        assert!(waiting.await.unwrap_err().is_cancelled());
+        assert_eq!(pool.status().available, 0);
+        resume.notify_one();
+        let recovered = timeout(Duration::from_secs(5), pool.get()).await??;
+        assert_eq!(recovered.executor.execution_definition?, expected);
+        assert!(!callback_ran.load(Ordering::SeqCst));
+        drop(recovered);
+        for _ in 0..2 {
+            let actual = read_snapshot(
+                &service,
+                pool.get().await?,
+                Network::Regtest,
+                |conn, executor, selected| async move {
+                    ensure!(!conn.is_autocommit(), "read did not pin a snapshot");
+                    ensure!(
+                        conn.execute("CREATE TABLE forbidden(value INTEGER)", ())
+                            .await
+                            .is_err()
+                    );
+                    ensure!(selected.canonical_execution() == Some(executor.execution_definition?));
+                    Ok(executor.execution_definition?)
+                },
+            )
+            .await?;
+            assert_eq!(actual, expected);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(!service.is_fatal());
+        let object = pool.get().await?;
+        assert!(object.conn.is_autocommit());
+        let retained = object
+            .executor
+            .owner
+            .downcast_ref::<BundleSession>()
+            .unwrap();
+        assert_eq!(retained.test_runtime().await.view_gas_limit, 25_000);
+        Ok(())
     }
 
     async fn lifecycle_state(conn: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {

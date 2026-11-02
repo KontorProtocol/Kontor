@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 import test_coordinator_definition
-from managed_definition import BUILD_INPUTS, DESTINATION, GRAPH, reference, verify
+from managed_definition import BUILD_INPUTS, DESTINATION, GRAPH, destination, graph_manifest, reference, verify
 
 
 class ManagedDefinitionTests(unittest.TestCase):
@@ -41,6 +41,30 @@ class ManagedDefinitionTests(unittest.TestCase):
             for package in packages]}
         graph_lock['package'][-1]['checksum'] = '01' * 32
         return node, node_lock, graph, graph_lock
+
+    def test_second_graph_is_distinct_and_verified_against_its_own_reference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node, node_lock, first, first_lock = self.fixture(root)
+            second, second_lock = copy.deepcopy(first), copy.deepcopy(first_lock)
+            second['packages'][0]['name'] = 'kontor-consensus-second'
+            second['packages'][0]['manifest_path'] = str(root / graph_manifest('second'))
+            second_lock['package'][0]['name'] = 'kontor-consensus-second'
+            path = root / graph_manifest('second')
+            path.parent.mkdir(parents=True)
+            path.write_text('second graph manifest')
+            original = reference(root, node, node_lock, first, first_lock)
+            successor = reference(root, node, node_lock, second, second_lock, 'second')
+            self.assertNotEqual(original, successor)
+            output = root / destination('second')
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(successor)
+            verify(root, node, node_lock, second, second_lock, 'second')
+            with self.assertRaisesRegex(ValueError, 'requires the consensus-first'):
+                reference(root, node, node_lock, second, second_lock)
+            output.write_bytes(original)
+            with self.assertRaisesRegex(ValueError, 'reference differs'):
+                verify(root, node, node_lock, second, second_lock, 'second')
 
     def test_consensus_dependency_identity_features_and_edges_are_bound(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -942,9 +942,10 @@ with changed exclusions/pre-lineage reruns the migration on the changed prestate
 **Selection during replay and requests.** Resolve the executor for each canonical
 application position, not once at process startup. Verify retained decisions using
 their original era, committee and codec; execute their still-eligible inputs using
-the protocol reconstructed at that application position. In particular, a retained
-P2-era batch cannot force P2 after removal of the schedule that originally enabled
-it. Apply normal recognition/validity with the selected executor and retain the new
+the protocol reconstructed at that application position. In particular, a retained certificate cannot select execution independently of
+reconstructed canonical state. Only decisions eligible on the surviving branch
+incarnation enter replay; returning identical Bitcoin hashes does not revive an
+orphaned batch. Apply normal recognition/validity with the selected executor and retain the new
 execution identity and existing frozen exclusions. Already surviving canonical
 transactions confirm without reexecution or charging. Use the same validated
 selection for recognition, block/batch work, lifecycle, migration, committee reads,
@@ -1020,8 +1021,8 @@ plus one independent review and a batched final-candidate CI run. Reuse unaffect
 K5 ownership evidence while adding actual multi-validator upgrade evidence.
 
 Use focused traces for surviving versus removed schedule, rollback restoring
-Cancel/Postpone, same H/hash with changed pre-lineage, retained P2-era batch under
-restored P1, confirmation without recharge, migration failure and zero successor
+Cancel/Postpone, same H/hash with changed pre-lineage, exclusion of orphaned P2-era batches under
+restored P1 and fresh P1 submission/replay, confirmation without recharge, migration failure and zero successor
 power. Exercise unsupported-target Cancel progress, same-port incompatible-engine
 handoff with RPC/ingestion alive, two upgrades, restored historical protocol in a
 fresh era, and crash recovery at the durable transitions above. Compare final state,
@@ -1472,3 +1473,26 @@ builds, and two Docker cache jobs passed. The reserved historical first and
 second bundle recipes remain byte-identical; the active proof graphs now use
 the pinned Pulley fork identities. S2 is based on this merged state for final
 qualification and does not reinterpret K1 proof success as S2 acceptance.
+
+
+#### K7/K8 branch-eligible replay acceptance clarification (2 November 2026)
+
+The lead and existing single planning reviewer `/root/k2b_system_review` agree
+that the earlier illustrative P2-certificate-under-restored-P1 trace must respect
+branch eligibility. A full signed Schedule requires 1,008 heights of notice;
+normal proposals anchor at the current tip and each decision completes closure
+before advancement. Ordinary due finality near scheduling therefore settles
+before activation. A later Bitcoin replacement deep enough to remove Schedule
+also closes the descendant branch intervals containing the P2 batch. Returning
+the same hashes creates new intervals and cannot resurrect that batch. Finality's
+query has no syntactic maximum age; this reasoning relies on normal admission and
+completed closures, not an invented age cutoff.
+
+The concrete trace checks real signed authorization, full notice, P2 activation,
+Schedule removal on deep rollback, retained but ineligible original P2 batch,
+fresh P1 submission, confirmation, finality reconstruction and reopen equality.
+Keep surviving-schedule finality tests proving P1 execution before H, migration,
+and P2 execution after H. The general invariant remains: verify original
+certificates in their ordering context and execute branch-eligible replay using
+reconstructed canonical selection. No production ordering, branch eligibility,
+notice, finality or approval rule changes are authorized by this clarification.

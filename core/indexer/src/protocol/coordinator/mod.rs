@@ -1,6 +1,7 @@
 pub(crate) mod activation;
 pub(crate) mod activation_execution;
 pub(crate) mod application_closure;
+pub(crate) mod artifacts;
 pub(crate) mod baseline;
 pub(crate) mod bootstrap;
 pub(crate) mod certified_decision;
@@ -35,3 +36,5 @@ pub(crate) const fn minimum_prune_retention_blocks() -> u64 {
 }
 #[cfg(all(test, not(kontor_node)))]
 pub(crate) mod view;
+
+pub(crate) mod successor;

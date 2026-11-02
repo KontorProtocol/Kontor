@@ -23,7 +23,7 @@ pub(super) struct SelectedGasPolicy {
 impl SelectedGasPolicy {
     fn resolve(version: ExecutorVersion, public_view_allowance: Option<u64>) -> Self {
         match version {
-            ExecutorVersion::LegacyP1 => Self {
+            ExecutorVersion::LegacyP1 | ExecutorVersion::P2 => Self {
                 non_proc_allowance: DEFAULT_NON_PROC_GAS_LIMIT,
                 untrusted_allowance: MAX_UNTRUSTED_GAS_LIMIT,
                 fuel_multiplier: GAS_TO_FUEL_MULTIPLIER,
@@ -114,10 +114,10 @@ impl Runtime {
                     (selection.3.0 == 0).then_some(self.view_gas_limit),
                 ),
                 memory: match self.executor_version() {
-                    ExecutorVersion::LegacyP1 => GuestMemoryLimits::default(),
+                    ExecutorVersion::LegacyP1 | ExecutorVersion::P2 => GuestMemoryLimits::default(),
                 },
                 pricing: match self.executor_version() {
-                    ExecutorVersion::LegacyP1 => Pricing::default(),
+                    ExecutorVersion::LegacyP1 | ExecutorVersion::P2 => Pricing::default(),
                 },
             }),
         })

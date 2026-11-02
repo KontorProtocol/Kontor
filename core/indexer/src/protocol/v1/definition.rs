@@ -6,12 +6,26 @@ use crate::protocol::identity::{DefinitionReference, ExecutionDefinitionId};
 #[cfg(kontor_retained)]
 pub(crate) const REFERENCE: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/definition.bin"));
-#[cfg(all(not(kontor_retained), any(not(kontor_linked), kontor_observer)))]
+#[cfg(all(
+    not(kontor_retained),
+    not(kontor_managed),
+    any(not(kontor_linked), kontor_observer)
+))]
 pub(crate) const REFERENCE: &[u8] =
     include_bytes!("../../../../../protocol-bundles/executor-observer/definition.bin");
-#[cfg(all(not(kontor_retained), kontor_linked, not(kontor_observer)))]
+#[cfg(all(
+    not(kontor_retained),
+    not(kontor_managed),
+    kontor_linked,
+    not(kontor_observer)
+))]
 pub(crate) const REFERENCE: &[u8] = include_bytes!(
     "../../../../../protocol-bundles/retained/k3/protocol-bundles/executor-first/definition.bin"
+);
+
+#[cfg(all(not(kontor_retained), kontor_managed))]
+pub(crate) const REFERENCE: &[u8] = include_bytes!(
+    "../../../../../protocol-bundles/retained/p1/protocol-bundles/executor-first/definition.bin"
 );
 
 pub(crate) fn execution_definition() -> Result<ExecutionDefinitionId, CodecError> {

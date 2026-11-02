@@ -56,11 +56,13 @@ RETAINED_EXECUTOR_GRAPHS = {
                    source_snapshot="fc85d7f7479662012faef9bc43e3efaf7c9299ddc940ffd5ef5865abe5667592")
     for label, graph in EXECUTOR_GRAPHS.items()
 }
+P1_GRAPH = replace(EXECUTOR_GRAPHS["first"], source_root="protocol-bundles/retained/p1",
+                   source_snapshot="4df4b75941b026b19a6dffcf2371afdd4d997e2b8cd33322002c782e3bc36cfc")
 OBSERVER_GRAPH = replace(EXECUTOR_GRAPHS["second"], directory="executor-observer")
 EXECUTOR_LINK_SETS = {
     "legacy-qualification": RETAINED_EXECUTOR_GRAPHS,
     "k4-node": {"first": RETAINED_EXECUTOR_GRAPHS["first"], "observer": OBSERVER_GRAPH},
-    "managed-node": {"first": RETAINED_EXECUTOR_GRAPHS["first"], "observer": OBSERVER_GRAPH},
+    "managed-node": {"first": P1_GRAPH, "observer": OBSERVER_GRAPH},
 }
 
 MALACHITE_REVISION = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"

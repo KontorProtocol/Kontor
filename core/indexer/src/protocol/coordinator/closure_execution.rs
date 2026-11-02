@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use bitcoin::Network;
+use libsql::Connection;
 
 use super::application_closure::{StageOutcome, StageRecord, WorkItem};
 use super::certified_input::Command;
@@ -7,7 +8,9 @@ use super::closure_work::WorkCursor;
 use super::linked::{begin_canonical_unit, finish_canonical_unit, observe_registrations};
 use super::registration_history::RegistrationSnapshot;
 use super::selection::{ApplicationPosition, ExecutionSelection, select_canonical};
-use crate::database::certified_history::{closure, load, registrations};
+use crate::database::certified_history::{
+    activation, closure, load, load_verified_input, registrations,
+};
 use crate::runtime::ownership::{LinkedCanonicalRootLease, OwnerService};
 use crate::runtime::pool::LinkedSession;
 
@@ -93,33 +96,13 @@ pub(crate) async fn begin_stage(
     let Some((action, _)) = progress.next else {
         return Ok(None);
     };
-    let position = match action {
-        WorkItem::Execute { decision } | WorkItem::Replay { decision, .. } => {
-            let input = load(&session.conn, decision).await?;
-            match input.decision().descriptor.command {
-                Command::Control { .. } => ApplicationPosition::Committee,
-                Command::Batch {
-                    anchor_height,
-                    anchor_hash,
-                } => ApplicationPosition::Batch {
-                    anchor_height,
-                    anchor_hash,
-                    consensus_height: decision,
-                },
-                Command::Block { height, hash, .. } => ApplicationPosition::Block {
-                    height,
-                    hash,
-                    consensus_height: decision,
-                },
-            }
-        }
-        WorkItem::Rollback { height } => ApplicationPosition::Maintenance {
-            rollback_height: Some(height),
-        },
-        WorkItem::Finality | WorkItem::Observe => ApplicationPosition::Committee,
-        WorkItem::Activate { .. } => ApplicationPosition::Committee,
+    let selection = if matches!(action, WorkItem::Activate { .. }) {
+        // Only the no-activation outcome uses this root. Actual migration owns
+        // its transaction and stage record together in activation_execution.
+        select_canonical(&session.conn, network, ApplicationPosition::Committee).await?
+    } else {
+        select_stage(&session.conn, network, action).await?
     };
-    let selection = select_canonical(&session.conn, network, position).await?;
     let lease = begin_canonical_unit(service, session, &selection, network, false).await?;
     let admission = closure::prepare(&session.conn, height)
         .await
@@ -145,6 +128,53 @@ pub(crate) async fn begin_stage(
         selection,
         network,
     }))
+}
+
+pub(crate) async fn select_stage(
+    conn: &Connection,
+    network: Network,
+    action: WorkItem,
+) -> Result<ExecutionSelection> {
+    let position = match action {
+        WorkItem::Execute { decision } | WorkItem::Replay { decision, .. } => {
+            let input = load(conn, decision).await?;
+            match input.decision().descriptor.command {
+                Command::Control { .. } => ApplicationPosition::Committee,
+                Command::Batch {
+                    anchor_height,
+                    anchor_hash,
+                } => ApplicationPosition::Batch {
+                    anchor_height,
+                    anchor_hash,
+                    consensus_height: decision,
+                },
+                Command::Block { height, hash, .. } => ApplicationPosition::Block {
+                    height,
+                    hash,
+                    consensus_height: decision,
+                },
+            }
+        }
+        WorkItem::Rollback { height } => ApplicationPosition::Maintenance {
+            rollback_height: Some(height),
+        },
+        WorkItem::Finality | WorkItem::Observe => ApplicationPosition::Committee,
+        WorkItem::Activate { decision } => {
+            let input = load_verified_input(conn, decision).await?;
+            let Command::Block { height, hash, .. } = input.decision().descriptor.command else {
+                anyhow::bail!("activation work does not name a block");
+            };
+            if activation::pending(conn, height, hash).await?.is_some() {
+                ApplicationPosition::Migration {
+                    anchor_height: height,
+                    anchor_hash: hash,
+                }
+            } else {
+                ApplicationPosition::Committee
+            }
+        }
+    };
+    select_canonical(conn, network, position).await
 }
 
 #[cfg(test)]

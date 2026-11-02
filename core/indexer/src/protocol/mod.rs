@@ -25,3 +25,4 @@ pub(crate) mod storage_rows;
 pub(crate) mod storage_session;
 pub(crate) mod storage_state;
 pub(crate) mod v1;
+pub(crate) mod v2;

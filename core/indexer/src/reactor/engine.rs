@@ -22,6 +22,7 @@ pub use managed::NodeCoordinator;
 #[cfg(all(kontor_managed, feature = "protocol-qualification"))]
 pub(crate) use managed::qualification::run as qualify_managed_startup;
 
+#[derive(Clone)]
 pub struct EngineConfig {
     pub private_key: PrivateKey,
     pub listen_addr: String,

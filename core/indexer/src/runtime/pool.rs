@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::Context;
+use anyhow::{Context, Result, ensure};
+use bitcoin::Network;
 use deadpool::managed::{self, Pool, RecycleError, RecycleResult};
 use libsql::Connection;
 use thiserror::Error;
@@ -17,7 +18,7 @@ use super::{ComponentCache, Linkers, Runtime};
 use super::ownership::adapter::{ExecutorSession, SessionFactory};
 use crate::{
     database::connection::new_read_only_connection,
-    protocol::coordinator::selection::ExecutorVersion,
+    protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion},
 };
 
 #[cfg(test)]
@@ -82,6 +83,30 @@ impl LinkedManager {
             filename,
             factory,
         }
+    }
+
+    pub(crate) async fn select(
+        &self,
+        session: &mut LinkedSession,
+        selection: &ExecutionSelection,
+        network: Network,
+    ) -> Result<()> {
+        ensure!(
+            session.conn.is_autocommit() && !session.canonical_busy.load(Ordering::SeqCst),
+            "read executor selection requires an idle session"
+        );
+        if selection.canonical_execution().is_some_and(|definition| {
+            session.executor.execution_definition.as_ref().ok() != Some(&definition)
+        }) {
+            let executor = (self.factory)(session.conn.clone()).await?;
+            selection.execution_identity(executor.execution_definition?)?;
+            selection.ensure_runtime(network, executor.origin)?;
+            let mut replacement = LinkedSession::new(session.conn.clone(), executor);
+            replacement.canonical_busy = session.canonical_busy.clone();
+            *session = replacement;
+        }
+        selection.execution_identity(session.executor.execution_definition?)?;
+        selection.ensure_runtime(network, session.origin())
     }
 }
 

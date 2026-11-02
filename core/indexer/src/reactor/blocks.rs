@@ -25,7 +25,7 @@ use crate::protocol::coordinator::closure_execution::begin_stage;
 use crate::protocol::coordinator::linked::{self, PreparedBlock, PreparedTransaction};
 use crate::protocol::coordinator::minimum_prune_retention_blocks;
 use crate::protocol::coordinator::selection::{
-    ApplicationPosition, ExecutionSelection, select_legacy_p1,
+    ApplicationPosition, ExecutionSelection, select_current,
 };
 use crate::runtime::ownership::adapter::HostFailure;
 
@@ -598,6 +598,7 @@ impl<E: Executor> ExecutionContext<E> {
         // Recognition belongs at admission, since the protocol may change while
         // an RPC request waits in the bounded simulation queue.
         let selection = self.simulation_selection().await?;
+        self.select_session(&selection).await?;
         let tx = match self
             .executor
             .prepare_simulation(&self.recognizer, &selection, raw)?
@@ -621,7 +622,7 @@ impl<E: Executor> ExecutionContext<E> {
                     .checked_add(1)
                     .context("simulation height overflow")
             })?;
-            select_legacy_p1(&conn, network, ApplicationPosition::Simulation { height }).await
+            select_current(&conn, network, ApplicationPosition::Simulation { height }).await
         }
     }
 

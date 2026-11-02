@@ -1,0 +1,17 @@
+error: Store derive does not support Result field types
+ --> tests/ui/store_invalid_result_field.rs:4:8
+  |
+4 | struct Test {
+  |        ^^^^
+
+error: Store derive does not support Result field types
+ --> tests/ui/store_invalid_result_field.rs:9:8
+  |
+9 | struct Test1 {
+  |        ^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+  --> tests/ui/store_invalid_result_field.rs:11:2
+   |
+11 | }
+   |  ^ consider adding a `main` function to `$DIR/tests/ui/store_invalid_result_field.rs`

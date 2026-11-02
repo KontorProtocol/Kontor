@@ -26,15 +26,26 @@ BUILD_INPUTS = (
 )
 
 
-def graph_reference(root, metadata, lock):
+def graph_manifest(label):
+    if label not in ('first', 'second'):
+        raise ValueError('unknown managed consensus graph')
+    return f'protocol-bundles/consensus-{label}/Cargo.toml'
+
+
+def destination(label):
+    graph_manifest(label)
+    return REFERENCE_DIRECTORY + label + '.json'
+
+
+def graph_reference(root, metadata, lock, label='first'):
     root = root.resolve()
     packages = {item['id']: item for item in metadata['packages']}
     nodes = {item['id']: item for item in metadata['resolve']['nodes']}
     graph_root = metadata['resolve']['root']
     package = packages[graph_root]
-    if (package['name'] != 'kontor-consensus-first' or package.get('source') is not None
-            or Path(package['manifest_path']).resolve(strict=True) != root / GRAPH):
-        raise ValueError('managed definition requires the consensus-first graph')
+    if (package['name'] != 'kontor-consensus-' + label or package.get('source') is not None
+            or Path(package['manifest_path']).resolve(strict=True) != root / graph_manifest(label)):
+        raise ValueError(f'managed definition requires the consensus-{label} graph')
     selected = set()
     pending = [graph_root]
     while pending:
@@ -76,7 +87,7 @@ def graph_reference(root, metadata, lock):
             'sources': sources, 'dependencies': dependencies}
 
 
-def reference(root, node_metadata, node_lock, graph_metadata, graph_lock):
+def reference(root, node_metadata, node_lock, graph_metadata, graph_lock, label='first'):
     root = root.resolve()
     coordinator = json.loads(coordinator_reference(root, node_metadata, node_lock))
     # Generated references are outputs, not recursively hashed source inputs.
@@ -88,12 +99,12 @@ def reference(root, node_metadata, node_lock, graph_metadata, graph_lock):
         coordinator['sources'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
     return canonical({'schema': 1, 'policy': 'kontor/managed-consensus-v1; locked all-target closure',
                       'coordinator': coordinator,
-                      'consensus': graph_reference(root, graph_metadata, graph_lock)})
+                      'consensus': graph_reference(root, graph_metadata, graph_lock, label)})
 
 
-def verify(root, node_metadata, node_lock, graph_metadata, graph_lock):
-    expected = reference(root, node_metadata, node_lock, graph_metadata, graph_lock)
-    if (root / DESTINATION).read_bytes() != expected:
+def verify(root, node_metadata, node_lock, graph_metadata, graph_lock, label='first'):
+    expected = reference(root, node_metadata, node_lock, graph_metadata, graph_lock, label)
+    if (root / destination(label)).read_bytes() != expected:
         raise ValueError('managed consensus reference differs; never overwrite a released definition')
     return {'bytes': len(expected), 'consensus_definition': hashlib.sha256(
         b'kontor/consensus-definition/v1\0' + expected).hexdigest()}
@@ -108,20 +119,22 @@ def metadata(root, manifest):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--write', action='store_true')
+    parser.add_argument('--graph', choices=('first', 'second'), default='first')
     parser.add_argument('--node-metadata', type=Path)
     parser.add_argument('--graph-metadata', type=Path)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     node_manifest = 'protocol-bundles/node/Cargo.toml'
+    selected_graph = graph_manifest(args.graph)
     node = json.loads(args.node_metadata.read_bytes()) if args.node_metadata else metadata(root, node_manifest)
-    graph = json.loads(args.graph_metadata.read_bytes()) if args.graph_metadata else metadata(root, GRAPH)
+    graph = json.loads(args.graph_metadata.read_bytes()) if args.graph_metadata else metadata(root, selected_graph)
     node_lock = tomllib.loads((root / node_manifest).with_name('Cargo.lock').read_text())
-    graph_lock = tomllib.loads((root / GRAPH).with_name('Cargo.lock').read_text())
+    graph_lock = tomllib.loads((root / selected_graph).with_name('Cargo.lock').read_text())
     if args.write:
-        destination = root / DESTINATION
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(reference(root, node, node_lock, graph, graph_lock))
-    print(json.dumps(verify(root, node, node_lock, graph, graph_lock)))
+        output = root / destination(args.graph)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(reference(root, node, node_lock, graph, graph_lock, args.graph))
+    print(json.dumps(verify(root, node, node_lock, graph, graph_lock, args.graph)))
 
 
 if __name__ == '__main__':

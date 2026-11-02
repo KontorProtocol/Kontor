@@ -1,0 +1,374 @@
+# Kontor WIT Validation Rules
+
+This document describes the validation rules that Kontor enforces on WIT (WebAssembly Interface Types) signatures. These rules are **stricter than standard WIT** and are specific to the Kontor metaprotocol.
+
+## 1. Function Signature Rules
+
+- Contract functions must be exported directly by the world or belong to an exported interface. The synchronous-function, context, parameter, return type, and pagination rules apply to both forms. Imported host interface functions retain their host signatures.
+- Functions **must** be synchronous `func` declarations. Host implementations may suspend for asynchronous I/O; the guest resumes only after the host call completes.
+- First parameter **must** be `ctx: borrow<proc-context|view-context|core-context|fall-context>` (standard WIT allows any parameters)
+- Context types `proc-context`, `view-context`, `core-context`, `fall-context` are required Kontor resources (these don't exist in standard WIT)
+
+### Valid Function Signature Format
+
+```wit
+export <name>: func(ctx: borrow<proc-context|view-context|core-context|fall-context>, ...params) -> <return>;
+```
+
+### Special Functions: `init` and `fallback`
+
+The directly exported `init` and `fallback` functions have fixed signatures. Interface functions with those names follow the ordinary signature rules:
+
+```wit
+// init - called once when contract is deployed (REQUIRED)
+export init: func(ctx: borrow<proc-context>) -> contract;
+
+// fallback - called when no matching function is found (optional)
+export fallback: func(ctx: borrow<fall-context>, expr: string) -> string;
+```
+
+- `init` is **required** - every contract must export it
+- `init` must have exactly one parameter (`borrow<proc-context>`) and return the built-in `contract` resource obtained via `ctx.self()`
+- `fallback` is optional
+- `fallback` must have exactly two parameters (`borrow<fall-context>`, `string`) and return `string`
+
+### Examples
+
+```wit
+// Valid
+export transfer: func(ctx: borrow<proc-context>, dst: string, amt: decimal) -> result<transfer, error>;
+export balance: func(ctx: borrow<view-context>, acc: string) -> option<decimal>;
+
+// Invalid - missing export
+transfer: func(ctx: borrow<proc-context>, dst: string) -> result<transfer, error>;
+
+// Invalid - missing context parameter
+export transfer: func(dst: string, amt: decimal) -> result<transfer, error>;
+
+// Invalid - wrong context type
+export transfer: func(ctx: borrow<my-context>, dst: string) -> result<transfer, error>;
+
+// Invalid - asynchronous contract function
+export transfer: async func(ctx: borrow<proc-context>, dst: string) -> result<transfer, error>;
+```
+
+---
+
+### Cursor iteration
+
+A view explicitly opts into generated cursor iteration by importing
+`kontor:built-in/pagination.{cursor-request}` and taking it as its final parameter:
+
+```wit
+use kontor:built-in/pagination.{cursor-request};
+export balances: func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
+```
+
+- The request must be the imported built-in type, including through aliases.
+- Exactly one request parameter is allowed, and it must be last.
+- The function must borrow `view-context`; procedures cannot opt in.
+- The response must be a record with `items: list<T>` and `next: option<string>`,
+  optionally wrapped in `result<record, error>` using the built-in error type.
+- Additional response fields and filter parameters are allowed.
+- `cursor-request` contains `after: option<string>` and `limit: option<u64>`.
+  An absent cursor starts at the beginning. An absent limit selects the contract's
+  default. Each contract remains responsible for enforcing its maximum limit.
+- Similar parameter names or response shapes alone do not enable iteration.
+
+These checks run in contract macros, import macros, SDK parsing, and publication
+validation. The imported request type survives normal component encoding and WIT
+extraction; it requires no separate pagination metadata.
+
+## 2. Generic Type Restrictions
+
+- `result<T, E>` must have **exactly 2** type parameters (standard WIT allows `result<T>` with 1 param)
+- `result<T, E>` error type **must be `error`** (standard WIT allows any error type)
+- User publication also rejects stream and future type definitions and canonical operations throughout the encoded component, including nested components and nested type declarations. Internal features are checked independently of the extracted WIT. Guest async functions, async canonical operations, threading and stack switching are also disabled by the runtime engine, including inside nested components. Native test and client APIs remain asynchronous.
+- Only these generics are recognized: `borrow`, `list`, `option`, `result` (standard WIT also has `own`, `stream`, `future`, `tuple`)
+
+### Examples
+
+```wit
+// Valid
+result<string, error>
+result<my-record, error>
+option<decimal>
+list<string>
+list<my-record>
+
+// Invalid - result with 1 parameter
+result<string>
+
+// Invalid - result with non-error second parameter
+result<string, my-error>
+result<string, string>
+
+// Invalid - unsupported generic
+stream<u8>
+future<string>
+tuple<u64, string>
+```
+
+---
+
+## 3. Supported Primitive Types
+
+Kontor supports a **restricted subset** of WIT primitive types.
+
+### Fully Supported
+
+- `bool` - Boolean
+- `string` - UTF-8 string
+- `s64` - Signed 64-bit integer
+- `u64` - Unsigned 64-bit integer
+- `integer` - Arbitrary precision integer (Kontor-specific)
+- `decimal` - Fixed-point decimal as `[bigint, number]` (Kontor-specific)
+- `_` - Unit type
+
+### Not Supported
+
+- `char` - Single Unicode character
+- `f32`, `f64` - Floating point numbers
+
+---
+
+## 4. Record Restrictions
+
+- Records **must have at least one field** (standard WIT allows empty records)
+
+### Examples
+
+```wit
+// Valid
+record transfer { src: string, dst: string, amt: decimal }
+record balance { acc: string, amt: decimal }
+
+// Valid - nested records
+record token-pair { a: contract-address, b: contract-address }
+
+// Invalid - empty record
+record empty { }
+```
+
+---
+
+## 5. Enum/Variant/Flags
+
+- `enum` - Fully supported
+- `variant` - Supported with restrictions
+- `flags` - Not yet implemented
+
+### Enums
+
+Enums are fully supported. They represent a set of named values without payloads.
+
+```wit
+// Valid
+enum status { pending, approved, rejected }
+```
+
+### Variants
+
+Variants are supported but with restrictions:
+
+1. Each variant case can have **0 or 1** payload (not multiple)
+2. Payloads **cannot be inline records** - they must reference a named type
+
+
+```wit
+// Valid - no payloads
+variant event { started, stopped }
+
+// Valid - single primitive payload
+variant my-result { ok(string), err(string) }
+
+// Valid - reference to a named record
+variant response { success(my-record), failure }
+
+// Invalid - inline record in a case
+variant bad { success { message: string, code: u64 }, failure }
+
+// Invalid - multiple payloads in a case
+variant bad { item(string, u64) }
+```
+
+### Flags
+
+Flags are not yet implemented.
+
+---
+
+## 6. No Cyclic Type References
+
+Type definitions **cannot contain cycles**. This applies to all types - records, variants, enums, etc. Neither direct self-references nor indirect cycles through other types are allowed.
+
+```wit
+// Invalid - direct self-reference
+record node { value: string, next: node }
+
+// Invalid - direct self-reference in variant
+variant tree { leaf(string), branch(tree) }
+
+// Invalid - indirect cycle (record -> variant -> record)
+record wrapper { data: my-variant }
+variant my-variant { some(wrapper), none }
+
+// Invalid - indirect cycle (record -> record -> record)
+record a { b-field: b }
+record b { a-field: a }
+```
+
+---
+
+## 7. Reserved Type Names
+
+User WIT **cannot define a type whose name is reserved for a Kontor built-in**
+(`types::RESERVED_TYPE_NAMES`): `transaction`, `contract`, `contract-address`,
+`view-context`, `view-storage`, `fall-context`, `proc-context`, `proc-storage`,
+`core-context`, `signer`, `holder`, `holder-ref`, `file-descriptor`,
+`raw-file-descriptor`, `proof`, `challenge-input`, `verify-result`, `error`, `keys`,
+`storage-rows`, `integer`, `decimal`.
+
+Rationale: the macro layer (`is_primitive_type`, the `import!` skip list) recognizes
+built-in types by their bare Rust identifier in generated code, so a same-named user
+type would be silently misrouted down the built-in path — a latent miscompile. This
+rule rejects the collision at validation time instead.
+
+Aliases that resolve to the built-in itself — what `use kontor:built-in/...` creates
+in the world — legitimately carry the name and are allowed. An alias with a reserved
+name pointing anywhere else (`type integer = u64`) is shadowing and rejected.
+
+```wit
+// Invalid - defines a record named like a built-in
+record integer { value: u64 }
+
+// Invalid - reserved name aliased to a non-built-in target
+type decimal = u64;
+
+// Valid - the alias `use` creates resolves to the built-in itself
+use kontor:built-in/context.{proc-context};
+```
+
+---
+
+## 8. Context-Specific Type Restrictions
+
+Some types have restrictions on where they can be used.
+
+### `list<u8>` (bytes)
+
+`list<u8>` is treated as a primitive byte array type, not a generic list. It can be used anywhere:
+- Function inputs
+- Function outputs
+- Record fields
+- Variant payloads
+
+### `list<T>` (where T is not u8)
+
+Generic lists are call data and can appear in function signatures, record fields,
+and variant payloads. Records containing them (including through aliases or nested
+records) do not receive persistent storage models. `list<u8>` remains a scalar
+storage type. Directly nested lists are still unsupported.
+
+```wit
+record page { items: list<my-record>, next: option<string> }
+variant response { page(page), missing }
+export get-page: func(ctx: borrow<view-context>) -> response;
+```
+
+### `option<T>`
+
+Options can be used anywhere:
+- Function inputs
+- Function outputs
+- Record fields
+- Variant payloads
+
+### `result<T, error>`
+
+Results can **only** be used as function return values:
+- Function inputs - **not allowed**
+- Function outputs - allowed
+- Record fields - **not allowed**
+- Variant payloads - **not allowed**
+
+```wit
+// Valid - result as return type
+export transfer: func(ctx: borrow<proc-context>, dst: string) -> result<my-record, error>;
+
+// Invalid - result as input parameter
+export bad: func(ctx: borrow<proc-context>, r: result<string, error>) -> bool;
+
+// Invalid - result as record field
+record bad { outcome: result<string, error> }
+
+// Invalid - result as variant payload
+variant bad { success(result<string, error>) }
+```
+
+---
+
+## 9. Nesting Restrictions
+
+The encoding/decoding layer has strict limits on generic nesting depth.
+
+### Allowed Nesting
+
+```wit
+list<string>
+list<decimal>
+list<my-record>
+option<string>
+option<decimal>
+option<my-record>
+result<string, error>
+result<my-record, error>
+result<list<my-record>, error>
+```
+
+### Not Allowed (Implementation Limitation)
+
+```wit
+// Nested lists
+list<list<string>>
+
+// Nested options
+option<option<string>>
+
+// Nested results
+result<result<string, error>, error>
+
+// Complex nesting in error channel
+result<string, list<option<my-record>>>
+```
+
+---
+
+## 10. Kontor-Specific Types
+
+These types are unique to Kontor and do not exist in standard WIT:
+
+- `integer` - Arbitrary precision integer (`bigint` in JS)
+- `decimal` - Fixed-point decimal (`[bigint, number]` in JS, representing value and scale)
+- `contract-address` - Kontor contract address (`string` in JS)
+- `proc-context` - State-changing execution context (not user-facing)
+- `view-context` - Read-only execution context (not user-facing)
+- `core-context` - Core execution context (not user-facing)
+- `fall-context` - Fallback execution context (not user-facing)
+- `error` - Standard error type for result's error channel (`string` in JS)
+
+---
+
+## Summary
+
+The key differences from standard WIT:
+
+1. **Mandatory context parameter** - All functions must have `ctx: borrow<X-context>` as first parameter
+2. **Fixed result error type** - `result<T, E>` must always be `result<T, error>`
+3. **Limited primitives** - No 8/16/32-bit ints, no floats, no char
+4. **Variant restrictions** - No inline records, max 1 payload per case
+5. **No deep nesting** - Complex nested generics are not supported
+6. **No cyclic types** - Type definitions cannot contain cycles
+7. **Non-empty records** - Records must have at least one field
+8. **Context-specific types** - `result` only in returns; non-byte lists are call data, not persistent storage
+9. **Custom types** - `integer`, `decimal`, `contract-address`, and context types

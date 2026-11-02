@@ -27,6 +27,31 @@ class NodeBuild(unittest.TestCase):
             {'graph': 'first', 'facade': str(self.facade), 'facade_sha256': digest(self.facade),
              'link_inputs': str(self.root)}]}
 
+    def test_embedded_attestation_matches_compiler_target_and_linked_inputs(self):
+        self.spec['link_set'] = 'managed-node'
+        prototype = dict(self.spec['graphs'][0], build_inputs_sha256='a' * 64)
+        self.spec['graphs'] = [dict(prototype, role=role, graph=graph) for role, graph in (
+            ('executor', 'first'), ('executor', 'observer'),
+            ('consensus', 'first'), ('consensus', 'second'))]
+        arguments = ['--target', 'aarch64-unknown-linux-gnu']
+        with self.assertRaisesRegex(RuntimeError, 'requires'):
+            wrapper.attestation_environment(arguments, self.spec)
+        record = {'schema': 1, 'link_set': 'managed-node', 'target': arguments[1],
+                  'graphs': [{key: graph[key] for key in
+                              ('role', 'graph', 'facade_sha256', 'build_inputs_sha256')}
+                             for graph in self.spec['graphs']]}
+        self.spec['attestation'] = record
+        environment = wrapper.attestation_environment(arguments, self.spec)
+        self.assertEqual(json.loads(environment['KONTOR_NODE_ATTESTATION']), record)
+        with self.assertRaisesRegex(RuntimeError, 'target'):
+            wrapper.attestation_environment(['--target', 'x86_64-unknown-linux-gnu'], self.spec)
+        for index in range(4):
+            for field in ('role', 'graph', 'facade_sha256', 'build_inputs_sha256'):
+                changed = copy.deepcopy(self.spec)
+                changed['attestation']['graphs'][index][field] = 'wrong'
+                with self.subTest(index=index, field=field), self.assertRaisesRegex(RuntimeError, 'differs'):
+                    wrapper.attestation_environment(arguments, changed)
+
     def test_library_and_binary_receive_retained_search_paths(self):
         for crate in ('indexer', 'kontor'):
             with self.subTest(crate=crate):

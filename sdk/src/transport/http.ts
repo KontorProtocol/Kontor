@@ -58,6 +58,8 @@ import type {
 import { executionCoordinates } from "../confirmation.js";
 import {
   type ProvenanceEntry,
+  type ContractProvenance,
+  effectiveArtifactFromWire,
   provenanceEntryFromWire,
 } from "../provenance.js";
 
@@ -216,6 +218,32 @@ export class HttpTransport implements KontorTransport {
   }
 
   async provenance(contract: ContractAddress): Promise<ProvenanceEntry[]> {
+    return (await this.provenanceResponse(contract)).entries.map(
+      provenanceEntryFromWire,
+    );
+  }
+
+  async contractProvenance(
+    contract: ContractAddress,
+  ): Promise<ContractProvenance> {
+    const response = await this.provenanceResponse(contract);
+    if (!response.effective_artifact) {
+      throw new TransportError(
+        "Node did not report the effective contract artifact",
+        {
+          docsPath: "/sdk/transport",
+        },
+      );
+    }
+    return {
+      entries: response.entries.map(provenanceEntryFromWire),
+      effectiveArtifact: effectiveArtifactFromWire(response.effective_artifact),
+    };
+  }
+
+  private async provenanceResponse(
+    contract: ContractAddress,
+  ): Promise<ContractProvenanceResponse> {
     const url = `${this.baseUrl}/contracts/${contract.toWire()}/provenance`;
     let res: Response;
     try {
@@ -242,7 +270,7 @@ export class HttpTransport implements KontorTransport {
     const resp = (
       JSON.parse(text) as ResultResponse<ContractProvenanceResponse>
     ).result;
-    return resp.entries.map(provenanceEntryFromWire);
+    return resp;
   }
 
   /**

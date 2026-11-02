@@ -70,6 +70,7 @@ impl<E: Executor> ExecutionContext<E> {
         selection: &ExecutionSelection,
         simulation: bool,
     ) -> Result<LinkedCanonicalRootLease> {
+        self.select_session(selection).await?;
         linked::begin_canonical_unit(
             &self.owner_service,
             &self.session,
@@ -160,6 +161,7 @@ impl<E: Executor> ExecutionContext<E> {
     pub(super) fn replace_test_runtime(&mut self, runtime: Runtime) {
         assert!(self.session.conn.is_autocommit());
         self.network = runtime.network;
+        self.sessions.clear();
         self.session = LinkedSession::new(
             runtime.get_storage_conn(),
             linked::link_runtime(runtime, true),

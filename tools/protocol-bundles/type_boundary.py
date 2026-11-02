@@ -6,6 +6,7 @@ import re
 import subprocess
 
 from provenance import fingerprint, sha
+from recipes import P1_GRAPH, RETAINED_EXECUTOR_GRAPHS
 
 
 PROBES = {
@@ -117,7 +118,15 @@ def probes_for(graphs):
             raise RuntimeError('consensus interface controls require both consensus graphs')
         return CONSENSUS_PROBES
     if [graph['graph'] for graph in graphs] == ['first', 'observer']:
-        return ADAPTED_EXECUTOR_PROBES
+        identity = graphs[0].get('identity', {})
+        # K3 predates migration failure accounting; the frozen release P1
+        # already exports that interface. Graph labels alone cannot distinguish them.
+        for retained, probes in ((P1_GRAPH, PROBES),
+                                 (RETAINED_EXECUTOR_GRAPHS['first'], ADAPTED_EXECUTOR_PROBES)):
+            if (identity.get('source_root') == retained.source_root
+                    and identity.get('source_snapshot') == retained.source_snapshot):
+                return probes
+        raise RuntimeError('unknown retained executor interface')
     return PROBES
 
 
@@ -195,7 +204,10 @@ def verify(graphs, target, env, output):
         result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=60)
         log = directory / f'{name}.log'
         log.write_text(result.stderr)
-        check_diagnostics(result.returncode, result.stderr, expected)
+        try:
+            check_diagnostics(result.returncode, result.stderr, expected)
+        except RuntimeError as error:
+            raise RuntimeError(f'{name}: {error}; diagnostics: {log}') from error
         controls[name] = {'expected_error': expected, 'returncode': result.returncode,
                           'source_sha256': sha(path), 'diagnostics_sha256': sha(log)}
     result = {'schema': 1, 'status': 'passed', 'target': target, 'libraries': inputs,

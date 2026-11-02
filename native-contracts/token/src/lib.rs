@@ -19,6 +19,7 @@ struct TokenStorage {
     pub dev_mint_enabled: bool,
     pub last_emission_height: Option<u64>,
     pub storage_emission_budget: Option<Decimal>,
+    pub positive_balance_count: u64,
 }
 
 fn utxo_holder(out_point: context::OutPoint) -> Holder {
@@ -33,6 +34,32 @@ fn assert_gt_zero(n: Decimal) -> Result<(), Error> {
     Ok(())
 }
 
+fn set_balance(
+    model: &TokenStorageWriteModel<context::ProcStorage>,
+    holder: &Holder,
+    amount: Decimal,
+) -> Result<(), Error> {
+    let ledger = model.ledger();
+    // Read the actual entry before each write. A transfer can write the same
+    // holder twice, so its original source/destination snapshots are insufficient.
+    let was_positive = ledger.get(holder).unwrap_or_default() > Decimal::default();
+    let is_positive = amount > Decimal::default();
+    if was_positive != is_positive {
+        model.try_update_positive_balance_count(|count| {
+            if is_positive {
+                count.checked_add(1)
+            } else {
+                count.checked_sub(1)
+            }
+            .ok_or(Error::Message(
+                "positive balance count overflow".to_string(),
+            ))
+        })?;
+    }
+    ledger.set(holder, amount);
+    Ok(())
+}
+
 fn mint(
     model: &TokenStorageWriteModel<context::ProcStorage>,
     dst: Holder,
@@ -41,7 +68,7 @@ fn mint(
     assert_gt_zero(amt)?;
     let ledger = model.ledger();
     let new_amt = ledger.get(&dst).unwrap_or_default().add(amt)?;
-    ledger.set(&dst, new_amt);
+    set_balance(model, &dst, new_amt)?;
     model.try_update_total_supply(|t| t.add(amt))?;
     Ok(Mint {
         dst: dst.into(),
@@ -69,8 +96,8 @@ fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result
         return Err(Error::Message("storage deposit floor exceeded".to_string()));
     }
 
-    ledger.set(&src, remaining);
-    ledger.set(&dst, dst_amt.add(amt)?);
+    set_balance(&ctx.model(), &src, remaining)?;
+    set_balance(&ctx.model(), &dst, dst_amt.add(amt)?)?;
     Ok(Transfer {
         src: src.into(),
         dst: dst.into(),
@@ -79,6 +106,10 @@ fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result
 }
 
 impl Guest for Token {
+    fn positive_balance_count(ctx: &ViewContext) -> u64 {
+        ctx.model().positive_balance_count()
+    }
+
     fn init(ctx: &ProcContext) -> Contract {
         TokenStorage::default().init(ctx);
         // Public dev mint is a dev/test affordance — enabled on every network

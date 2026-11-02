@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "definition": "legacy-p1-native-genesis",
+  "source_commit": "dfacbefdac22b898c5bad5b2cae5e2513e147afd",
+  "contracts": [
+    {
+      "id": 1,
+      "name": "token",
+      "sha256": "4b5a443f5b26740e61c0ac8fe6bab0b1132b7d6a0f4ae21036166beacb01e500",
+      "privileged": true,
+      "deposit_exempt": true,
+      "unrecorded_results": [
+        "hold",
+        "release"
+      ],
+      "signer_id": 2
+    },
+    {
+      "id": 2,
+      "name": "filestorage",
+      "sha256": "99d32c4b4951531952fa3d4d02473fd3ae4d5b295130a7669bb103e21f60eecd",
+      "privileged": true,
+      "deposit_exempt": false,
+      "unrecorded_results": [],
+      "signer_id": 3
+    },
+    {
+      "id": 3,
+      "name": "staking",
+      "sha256": "11bba975a24cdfe022610c6ff219c1cc699864608180081d7634766cef55e278",
+      "privileged": true,
+      "deposit_exempt": false,
+      "unrecorded_results": [],
+      "signer_id": 4
+    },
+    {
+      "id": 4,
+      "name": "system",
+      "sha256": "2a5a19d5ae14f6c9c56ea552869c1a335f6b0ab68be47fb8764c4af304a170fb",
+      "privileged": true,
+      "deposit_exempt": false,
+      "unrecorded_results": [],
+      "signer_id": 5
+    },
+    {
+      "id": 5,
+      "name": "nft",
+      "sha256": "902c8f0674281b9cc88bb631cea895165aeea8747668f25d9eb225c6861547f3",
+      "privileged": true,
+      "deposit_exempt": false,
+      "unrecorded_results": [],
+      "signer_id": 6
+    }
+  ],
+  "files": {
+    "build.json": "9d927b68696a24aa94bf1d873bbbda7fa77158c6de277f555a58b08150bc0997",
+    "toolchain.json": "3db02c6cec87ef86895528f2d2e966427e2281875e350d787942da919926cb9c",
+    "provenance.json": "e63c00f17f4d235c4e79f539288277cac5cef52ba16aa6c1f5c1db35d7ce927d",
+    "provenance.bin": "466b7ef1f1b0922a48d1d4b385ce9a16e677e7dff1074ddd834e85073f6fd120"
+  },
+  "core_signer_id": 1
+}

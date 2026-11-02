@@ -123,7 +123,7 @@ pub(crate) async fn run() -> Result<Value> {
         );
         drop(state);
 
-        let mut next = coordinator.start(&next_config, coordinator.context)?;
+        let mut next = coordinator.start(&next_config, &session.conn).await?;
         let ready = timeout(Duration::from_secs(15), next.engine.next())
             .await
             .context("restarted managed engine readiness timed out")??;
@@ -163,15 +163,15 @@ pub(crate) async fn run() -> Result<Value> {
         ensure!(
             fs::metadata(dir.path().join(format!(
                 "consensus-{}.wal",
-                hex::encode(coordinator.context.era)
+                hex::encode(coordinator.genesis.era)
             )))
             .is_ok()
         );
-        let baseline = Baseline::for_node(coordinator.context.chain)?;
+        let baseline = Baseline::for_node(coordinator.genesis.chain)?;
         Ok(json!({
-            "chain": hex::encode(coordinator.context.chain.0),
-            "protocol": hex::encode(coordinator.context.protocol.0),
-            "era": hex::encode(coordinator.context.era),
+            "chain": hex::encode(coordinator.genesis.chain.0),
+            "protocol": hex::encode(coordinator.genesis.protocol.0),
+            "era": hex::encode(coordinator.genesis.era),
             "executor_definition": hex::encode(baseline.manifest.executor.0),
             "rounds_started": 2, "engines_joined": 2, "next_generation": reservation.generation(),
             "same_listener": true, "same_era_wal": true, "database_remained_available": true,

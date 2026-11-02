@@ -8,7 +8,7 @@ use libsql::Connection;
 
 use super::registry;
 use crate::database::canonical_history::{self, ApplicationCursor, HistoryState};
-use crate::database::certified_history::{activation, eras, protocol};
+use crate::database::certified_history::{self, Status, activation, eras, protocol};
 use crate::protocol::identity::{ExecutionDefinitionId, ExecutionIdentity, ProtocolId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,6 +140,14 @@ impl ExecutionSelection {
 
     pub(crate) fn version(&self) -> ExecutorVersion {
         self.version
+    }
+
+    pub(crate) fn canonical_execution(&self) -> Option<ExecutionDefinitionId> {
+        self.canonical.as_ref().map(|binding| binding.execution)
+    }
+
+    pub(crate) fn protocol_id(&self) -> Option<ProtocolId> {
+        self.canonical.as_ref().map(|binding| binding.protocol)
     }
 
     pub(crate) fn execution_identity(
@@ -372,6 +380,35 @@ pub(crate) async fn select_legacy_p1(
         position,
         canonical: None,
     })
+}
+
+pub(crate) async fn select_current(
+    conn: &Connection,
+    network: Network,
+    position: ApplicationPosition,
+) -> Result<ExecutionSelection> {
+    #[cfg(not(kontor_managed))]
+    if conn
+        .query(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'certified_history_state'",
+            (),
+        )
+        .await?
+        .next()
+        .await?
+        .is_none()
+    {
+        return select_legacy_p1(conn, network, position).await;
+    }
+    if certified_history::frontier(conn).await?.status == Status::Ready {
+        return select_canonical(conn, network, position).await;
+    }
+    // Unmanaged fixtures and qualification recipes also run without a certified
+    // journal. A managed node must never use that path for admitted live work.
+    #[cfg(kontor_managed)]
+    bail!("managed executor selection requires ready certified history");
+    #[cfg(not(kontor_managed))]
+    select_legacy_p1(conn, network, position).await
 }
 
 // The ordering era authenticates decisions; it does not select execution during

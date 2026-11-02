@@ -23,7 +23,11 @@ use crate::protocol::canonical_application::{
     ApplicationSource, CanonicalApplication, DecisionExclusions,
 };
 use crate::protocol::canonical_input::CanonicalInput;
+#[cfg(not(kontor_managed))]
 use crate::protocol::coordinator::baseline::Baseline;
+#[cfg(kontor_managed)]
+use crate::protocol::coordinator::bootstrap;
+#[cfg(not(kontor_managed))]
 use crate::protocol::coordinator::genesis::bind_identity;
 use crate::protocol::coordinator::linked::{PreparedBlock, initialize};
 use crate::protocol::coordinator::selection::ApplicationPosition;
@@ -133,7 +137,10 @@ pub(crate) async fn run(
     let dir = TempDir::new()?;
     let conn = new_connection(dir.path(), "reactor-history.db").await?;
     let network = Network::Regtest;
-    let chain = bind_identity(&conn, network, 1, &genesis).await?;
+    #[cfg(kontor_managed)]
+    let (baseline, _) = bootstrap::prepare(&conn, network, 1, &genesis).await?;
+    #[cfg(not(kontor_managed))]
+    let baseline = Baseline::current(bind_identity(&conn, network, 1, &genesis).await?)?;
     let anchor = BlockHash::from_byte_array([1; 32]);
     for height in 0..=1 {
         insert_block(
@@ -154,6 +161,14 @@ pub(crate) async fn run(
                 .iter()
                 .all(|record| matches!(record.source, ApplicationSource::Genesis { .. }))
     );
+    #[cfg(kontor_managed)]
+    bootstrap::complete(service, &session, network, &baseline).await?;
+    #[cfg(kontor_managed)]
+    let execution = ExecutionIdentity::Protocol {
+        protocol: baseline.context.protocol,
+        execution: session.executor.execution_definition?,
+    };
+    #[cfg(not(kontor_managed))]
     let execution = ExecutionIdentity::Baseline(session.executor.execution_definition?);
     let client = Client::new("http://127.0.0.1:1".into(), String::new(), String::new())?;
     let mut reactor = ExecutionContext::new(
@@ -161,7 +176,7 @@ pub(crate) async fn run(
         session,
         network,
         service.clone(),
-        Baseline::current(chain)?.context,
+        baseline.context,
         PruneConfig {
             enabled: false,
             retain_blocks: 144,

@@ -133,7 +133,7 @@ pub(crate) trait Executor: Sync {
         selection.ensure_block(block.height, block.hash)?;
         let mut runtime = runtime.bind_selection(&selection.envelope())?;
         match selection.version() {
-            ExecutorVersion::LegacyP1 => {
+            ExecutorVersion::LegacyP1 | ExecutorVersion::P2 => {
                 lifecycle::run_block_lifecycle(
                     &mut runtime,
                     block.height,
@@ -412,7 +412,7 @@ impl Executor for RuntimeExecutor {
         tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
         match selection.version() {
-            ExecutorVersion::LegacyP1 => {
+            ExecutorVersion::LegacyP1 | ExecutorVersion::P2 => {
                 execution::execute_transaction(runtime, height, tx_id, tx).await
             }
         }

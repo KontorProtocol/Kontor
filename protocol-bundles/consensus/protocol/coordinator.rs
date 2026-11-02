@@ -1,3 +1,5 @@
+#[path = "../../../core/indexer/src/protocol/coordinator/activation.rs"]
+pub(crate) mod activation;
 #[path = "../../../core/indexer/src/protocol/coordinator/certified_decision.rs"]
 pub(crate) mod certified_decision;
 #[path = "../../../core/indexer/src/protocol/coordinator/certified_input.rs"]

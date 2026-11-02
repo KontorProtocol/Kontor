@@ -259,7 +259,7 @@ pub(super) async fn qualify_graph(
         let error = apply(&service, &session, &selected, NETWORK, &request).await.unwrap_err();
         ensure!(error.downcast_ref::<MigrationRejected>() == Some(&MigrationRejected::Budget), "expected migration budget rejection");
         let charged = error.downcast_ref::<MigrationAttemptWork>().context("missing migration work diagnostic")?.0;
-        if name == "observer" || name == "in-tree" {
+        if cfg!(kontor_managed) || name == "observer" || name == "in-tree" {
             let charged = charged.context("maintained executor omitted failure work")?;
             ensure!(charged.write_operations == 1 && charged.read_operations > 0 && charged.computation_steps > 0,
                 "maintained executor lost charged work before exhaustion");

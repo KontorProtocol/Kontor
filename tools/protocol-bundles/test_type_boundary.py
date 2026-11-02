@@ -4,16 +4,30 @@ import tempfile
 import unittest
 
 from provenance import sha
+from recipes import P1_GRAPH, RETAINED_EXECUTOR_GRAPHS
 from type_boundary import ADAPTER_TESTS, ADAPTED_EXECUTOR_PROBES, CONSENSUS_PROBES, PROBES, adapter_tests_passed, check_diagnostics, inputs_for, probes_for
 
 
 class Diagnostics(unittest.TestCase):
     def test_executor_interface_controls_follow_the_explicit_graph_pair(self):
         self.assertIs(probes_for([{'graph': name} for name in ('first', 'second')]), PROBES)
-        selected = probes_for([{'graph': name} for name in ('first', 'observer')])
+        graphs = [{'graph': name} for name in ('first', 'observer')]
+        retained = RETAINED_EXECUTOR_GRAPHS['first']
+        graphs[0]['identity'] = {'source_root': retained.source_root,
+                                 'source_snapshot': retained.source_snapshot}
+        selected = probes_for(graphs)
         self.assertIs(selected, ADAPTED_EXECUTOR_PROBES)
         self.assertEqual(selected['structural-factories'][0], 'E0308')
         self.assertIsNone(selected['adapted-factories'][0])
+        graphs[0]['identity'] = {'source_root': P1_GRAPH.source_root,
+                                 'source_snapshot': P1_GRAPH.source_snapshot}
+        self.assertIs(probes_for(graphs), PROBES)
+        graphs[0]['identity']['source_snapshot'] = retained.source_snapshot
+        with self.assertRaisesRegex(RuntimeError, 'unknown retained executor interface'):
+            probes_for(graphs)
+        del graphs[0]['identity']
+        with self.assertRaisesRegex(RuntimeError, 'unknown retained executor interface'):
+            probes_for(graphs)
 
     def test_adapter_test_evidence_requires_both_bundles_and_successful_exit(self):
         summary = f'test result: ok. {len(ADAPTER_TESTS)} passed; 0 failed; 0 ignored;'

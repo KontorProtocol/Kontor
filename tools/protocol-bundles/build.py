@@ -16,7 +16,7 @@ from audit import audit_final, audit_inputs
 from common_ownership import verify as verify_common_ownership
 from execution_definition import verify_reference
 from coordinator_definition import verify as verify_coordinator_reference
-from managed_definition import GRAPH as MANAGED_GRAPH, verify as verify_managed_reference
+from managed_definition import graph_manifest, verify as verify_managed_reference
 from metadata_control import proc_macro_hashes
 from provenance import fingerprint, locked_packages, runtime_libraries, source_inputs
 from provenance import tools as toolchain_inputs
@@ -415,14 +415,18 @@ def build_node(graphs, args, base_env, output, consensus=()):
     coordinator_data = metadata(manifest, None, env, args.offline, features)
     coordinator_lock = tomllib.loads(lock.read_text())
     if managed:
-        consensus_manifest = ROOT / MANAGED_GRAPH
-        consensus_data = metadata(consensus_manifest, None, env, args.offline)
-        consensus_lock = tomllib.loads(consensus_manifest.with_name("Cargo.lock").read_text())
+        consensus_definitions = {}
+        for label in CONSENSUS_GRAPHS:
+            consensus_manifest = ROOT / graph_manifest(label)
+            consensus_data = metadata(consensus_manifest, None, env, args.offline)
+            consensus_lock = tomllib.loads(consensus_manifest.with_name("Cargo.lock").read_text())
+            consensus_definitions[label] = (consensus_data, consensus_lock)
 
     def verify_definition():
         if managed:
-            return verify_managed_reference(ROOT, coordinator_data, coordinator_lock,
-                                            consensus_data, consensus_lock)
+            return {label: verify_managed_reference(
+                ROOT, coordinator_data, coordinator_lock, data, lock, label)
+                for label, (data, lock) in consensus_definitions.items()}
         return verify_coordinator_reference(ROOT, coordinator_data, coordinator_lock)
 
     coordinator = verify_definition()
@@ -442,6 +446,20 @@ def build_node(graphs, args, base_env, output, consensus=()):
             "source_inputs_sha256": fingerprint(sources),
             "lock_sha256": lock_hash, "root_objects": str(directory / "root-objects.json"),
             "graphs": libraries}
+    if managed:
+        spec["attestation"] = {
+            "schema": 1, "link_set": args.link_set, "target": args.target, "profile": args.profile,
+            "compiler_sha256": digest(Path(env["RUSTC"])),
+            "source_inputs_sha256": fingerprint(sources), "lock_sha256": lock_hash,
+            "graphs": [
+                {**{key: library[key] for key in
+                    ("role", "graph", "facade_sha256", "build_inputs_sha256")},
+                 "definition": (graphs[index]["execution_definition"]["execution_definition_id"]
+                                if index < 2 else coordinator[library["graph"]]["consensus_definition"]),
+                 "wire_codec": None if index < 2 else index - 1}
+                for index, library in enumerate(libraries)
+            ],
+        }
     spec_path = directory / "link-spec.json"
     write_json(spec_path, spec)
     # Cargo does not know that external --extern inputs changed. A content-keyed

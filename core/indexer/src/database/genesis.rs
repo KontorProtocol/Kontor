@@ -1,16 +1,17 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use bitcoin::Network;
 use libsql::{Builder, Connection, OpenFlags, params};
 
 use super::canonical_history::{self, HistoryState};
-use super::certified_history::{self, Status};
+use super::certified_history::{self, Status, eras};
 use super::native_bootstrap::bootstrap_reader;
 use super::{Reader, Writer};
 use crate::protocol::coordinator::baseline::Baseline;
 use crate::protocol::coordinator::genesis::{InitialProtocol, configured_chain, envelope};
+use crate::protocol::coordinator::registry;
 use crate::protocol::coordinator::selection::ExecutorVersion;
 use crate::protocol::v1::native::{NATIVE_CONTRACTS, NATIVE_PROVENANCE, native_provenance};
 use crate::protocol::v1::native_bootstrap;
@@ -83,6 +84,7 @@ async fn preflight_with_protocol(
         ExecutorVersion::LegacyP1 => {
             native_provenance()?;
         }
+        ExecutorVersion::P2 => bail!("P2 requires activation from P1 genesis"),
     }
     if !path.try_exists()? {
         return Ok(());
@@ -122,14 +124,21 @@ async fn validate_protocol(conn: &Connection, baseline: &Baseline) -> Result<()>
         );
         if let Some(context) = state.context {
             ensure!(
-                context == baseline.context,
-                "stored protocol {} is not supported for this configured chain by this binary",
-                hex::encode(context.protocol.0)
+                eras::genesis(conn).await? == baseline.context,
+                "stored genesis differs from the supported configured chain"
             );
             ensure!(
-                certified_history::protocol(conn, context.protocol).await? == baseline.manifest,
-                "stored protocol manifest differs from supported definition"
+                certified_history::protocol(conn, baseline.context.protocol).await?
+                    == baseline.manifest,
+                "stored genesis manifest differs from supported definition"
             );
+            registry::resolve(&certified_history::protocol(conn, context.protocol).await?)?;
+            if state.status == Status::Ready {
+                // A crash during closure can leave canonical execution ahead of
+                // the ordering era. Recovery must support both before mutation.
+                let selected = eras::selected_protocol(conn).await?;
+                registry::resolve(&certified_history::protocol(conn, selected).await?)?;
+            }
             return Ok(());
         }
         ensure!(
@@ -306,7 +315,11 @@ mod tests {
 
     use super::*;
     use crate::database::init::CREATE_SCHEMA;
-    use crate::database::queries::insert_block;
+    use crate::database::queries::{insert_block, select_block_latest};
+    use crate::protocol::coordinator::activation_execution::{
+        apply, tests::fixture as activation_fixture,
+    };
+    use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
     use crate::protocol::identity::ChainId;
     use crate::reg_tester::random_x_only_pubkey;
     use crate::runtime::ownership::OwnerService;
@@ -315,6 +328,52 @@ mod tests {
         Decimal, GenesisValidator, Runtime, Storage, TransactionContext, staking,
     };
     use crate::test_utils::{new_mock_block_hash, test_genesis, test_runtime};
+
+    #[tokio::test]
+    async fn protocol_admission_checks_canonical_target_before_ordering_handoff() -> Result<()> {
+        let (directory, session, service, migration) = Box::pin(activation_fixture()).await?;
+        let conn = &session.conn;
+        let context = eras::genesis(conn).await?;
+        let baseline = Baseline::for_node(context.chain)?;
+        let definition = InitialProtocol::for_network(Network::Regtest);
+        let path = directory.path().join("activation.db");
+        preflight_with_protocol(&path, &definition, Some(&baseline)).await?;
+        let block = select_block_latest(conn).await?.unwrap();
+        let selected = select_legacy_p1(
+            conn,
+            Network::Regtest,
+            ApplicationPosition::Migration {
+                anchor_height: block.height,
+                anchor_hash: block.hash,
+            },
+        )
+        .await?;
+        // This fixture deliberately installs application state for an unknown
+        // target. Its old ordering era must not hide it from restart admission.
+        apply(
+            &service,
+            &session,
+            &selected,
+            Network::Regtest,
+            1,
+            migration,
+        )
+        .await?;
+        let before = snapshot(conn).await?;
+        assert_eq!(
+            certified_history::frontier(conn).await?.context,
+            Some(context)
+        );
+        let error = preflight_with_protocol(&path, &definition, Some(&baseline))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("protocol is not installed"),
+            "{error:#}"
+        );
+        assert_eq!(snapshot(conn).await?, before);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn protocol_admission_accepts_empty_and_interrupted_supported_genesis_without_writing()

@@ -3905,3 +3905,662 @@ mapping, session switching, startup recovery and complete cross-upgrade acceptan
 remain. Live proposal callbacks must also follow the completed ordering context
 during managed handoff. No PR, CI campaign, publication or additional independent
 review round was started.
+
+### K7/K8 P1 preservation and P2 token implementation, 2 November 2026
+
+Local checkpoint `2c26410e8419844bddf3d4967d157ce240f8b9c1` contains the canonical
+activation/replay and transition-admission work above. It is not merged or a
+completed grouped review. The existing snapshot tool preserved that exact source
+under `protocol-bundles/retained/p1`; relocation verified both executor definitions.
+Snapshot digest: `4df4b75941b026b19a6dffcf2371afdd4d997e2b8cd33322002c782e3bc36cfc`.
+The production build recipe has not yet switched to this snapshot.
+
+The pinned Podman native build produced P2's token artifact, with positive-balance
+count at field 5 and all three ledger writes routed through the count-maintaining
+helper. P1's retained token and genesis publication remain unchanged. The current
+executor now has an explicit P2 factory/version and selects the pinned replacement
+at the shared component-byte lookup, so execution, WIT and component-cache inputs
+agree. Raw publication bytes remain available separately. Ordinary gas constants,
+amount arithmetic and non-token native artifacts are unchanged.
+
+The P2 session migration registry accepts only its exact count-backfill definition.
+The fixed migration allowance is 67,108,864 computation steps, 1,000,000 reads,
+67,108,864 read bytes, one write and 32 write bytes. These are migration work units,
+not ordinary call gas or a block budget. The routine scans the pinned input, rejects
+malformed complete keys/balances and an existing count, preserves balances, and
+writes the checked count. Exhaustion fails the owned migration rather than retaining
+partial state.
+
+Focused local evidence is recorded in `.build-cache/k7-p2-runtime-evidence.json`
+with source-manifest, binary and raw-log hashes. The owned backfill test passed
+(0.09 seconds), covering positive, zero and negative balances, system/UTXO holders,
+malformed and already-migrated input, write-budget exhaustion, unchanged ledger and
+rollback settlement. Three P2 codec/native tests passed (35.01 seconds), including
+real calls with a shared P1/P2 cache, additive P2 WIT, P1 missing-method behavior,
+unchanged publication and repeated issuance to existing holders. The initial test
+compile failed on a fixture error conversion and was corrected before these runs.
+No CI campaign was launched.
+
+These are component-level checks. The native test seeds the derived count directly;
+the backfill test uses the existing owned P1 fixture to exercise the routine. They
+do not prove registered P2 activation or independently linked execution. Remaining
+work includes the P1/P2 production graph recipe, manifest and session selection,
+effective-artifact provenance API, refreshed executor references, actual activation
+and rollback, incompatible engine handoff/recovery, and the grouped acceptance and
+review. P2 is not yet installed in the node's manifest registry.
+
+### K7/K8 managed graph routing and P2 manifest, 2 November 2026
+
+The managed build recipe now selects the preserved `retained/p1` first executor
+and the current observer graph as P2, retaining exactly two conflicting Wasmtime
+graphs. Legacy qualification and K4 recipes keep their existing snapshots. Managed
+P1 is the default factory; the observer definition explicitly selects the P2
+factory/version. Both managed executors expose their originating registration
+observer. The node's managed P1 reference points to the same frozen graph.
+
+Added exact P2 manifest construction and managed registry admission. Its commitments
+include the independent executor, second consensus definition, predecessor P1,
+positive-balance migration, storage schema transition and selected token artifact
+digest. User transaction format and canonical certificate codec remain version 1.
+The managed-definition generator accepts an explicit first/second graph, and the
+node builder checks both references rather than trusting the second graph merely
+because it was linked. Generated references remain explicit pre-release outputs;
+refresh both managed references after the remaining source changes settle.
+
+The Rust manifest-composition test passed against real retained/current references
+(0.09 seconds). This was an unmanaged local test: it checks the commitments and
+unmanaged P2 rejection, not managed installation or factory invocation. Focused
+Python tests passed for node evidence admission (11), retained source roots (7),
+managed definitions (6), node comparison (17), and node compiler-wrapper behavior.
+The node evidence gate now rejects the wrong genesis executor even when the supplied
+manifest/protocol/era hashes are self-consistent. One comparator attempt overlapped
+an observer-reference refresh, invalidating its already-built synthetic fixture;
+with reference writes stopped, the same 17 tests passed. Keep reference writes and
+evidence tests sequential.
+
+Raw logs, current source and test-binary bindings, and limitations are recorded in
+`.build-cache/k7-p2-routing-evidence.json`. No new managed binary, independent-graph
+execution, activation/handoff acceptance, CI run or merge is claimed. The next work
+is per-position session/view selection, actual managed handoff/recovery, effective
+native provenance, qualification-harness updates and the grouped integration run.
+
+### K7/K8 per-position executor and read selection, 2 November 2026
+
+The reactor now resolves each closure action before entering its owned stage,
+including the target migration executor. It caches writer sessions by immutable
+execution definition, shares the physical writer's admission gate across them,
+and changes recognition together with execution. After each settled stage and
+startup recovery it restores the surviving canonical executor, including after
+rollback. Preparation and simulation use the canonical selector when certified
+history is ready. Managed nodes reject non-ready history; unmanaged qualification
+fixtures retain an explicit path for absent or uninitialized journals.
+
+Pooled reads select factories by execution definition and retain the configured
+view limit. An obsolete idle session is replaced before root admission. Root
+preparation and the read callback both check the executor identity against their
+pinned snapshot. A cross-protocol change before pinning rejects that request;
+automatic retry is not implemented. Replacement construction retains the pooled
+object and admission permit until completion even if the requesting task cancels.
+
+Eleven focused tests pass on the current local binary: five linked read/lifecycle
+checks (61.25 seconds), and six selection/admission checks (17.18 seconds). They
+include cancellation while replacing a reader, pool reuse, read-only SQL, retained
+view gas limit, actual views, stale lineage, busy-root rejection and unavailable
+target rejection without closure advancement. Thirteen related activation,
+closure, selection and mempool regressions passed on the preceding source before
+the read-pool changes (69.93 seconds). Source and binary hashes, raw logs and exact
+coverage are in `.build-cache/k7-session-routing-evidence.json`.
+
+The first build required a Result type annotation and clearing the affected Rust
+incremental cache after a compiler fingerprint error. The first read-test run
+identified the absent journal in an unmanaged legacy fixture; the explicit fixture
+path fixed it without weakening managed admission. No CI, push or merge occurred.
+
+These checks do not establish independent P1/P2 dispatch. The pool replacement
+test uses deliberately obsolete session metadata, not a second linked executor.
+Managed-only mapping, actual activation/reorg views, completion-driven engine
+handoff, current-era startup/recovery, native artifact provenance and the grouped
+linked acceptance remain outstanding. `NodeCoordinator` still assumes its initial
+context and first engine bundle; that is the next integration work.
+
+### K7/K8 managed startup and live handoff integration, 2 November 2026
+
+Local implementation now selects the engine from validated completed-era history.
+Admission checks immutable genesis separately from current ordering and canonical
+execution selection, including an unfinished closure whose canonical executor has
+already changed. Signing state opens only after recovery establishes the next
+engine's context. The reactor joins the outgoing engine, discards its callbacks and
+parsed candidates, retains raw inputs and Bitcoin ingestion, and starts the selected
+engine at C+1 on the bound port with its own era WAL.
+
+Focused unmanaged checks passed: three admission tests and four recovery/handoff
+regressions (`.build-cache/k7-handoff-local-evidence.json`). These establish their
+specific state invariants, not independently linked P1/P2 activation. Twelve build
+input tests also pass after including activation descriptor types in the extracted
+consensus graph and its provenance inventory.
+
+The real managed ARM64 dev node, both executor graphs and both consensus graphs
+compiled successfully. Native ownership, five executor interface controls, seven
+consensus interface controls and seven actual node adapter tests passed in the
+286-second local build, bound to an unchanged source inventory. Its preserved record
+is `.build-cache/k7-transition-build-before-release.json`. The first interface
+attempt incorrectly inferred an old migration interface from graph labels. Frozen
+P1 already exports failure accounting, so its structural factory matches P2's. The
+check now selects expectations from the bound retained source identity, preserves
+K3's adapter control, and still rejects foreign Wasmtime/Tokio/private types. Six
+focused tool tests pass, as do the controls against actual built libraries.
+
+A new feature-gated `qualify-protocol-transition` command drives a live validator's
+real event loop through H, target migration, engine replacement and H+1, checking
+P1/P2 views using the same reader pool. It deliberately starts from a fixture
+accepted schedule, so it is not authorization/notice or multi-validator evidence.
+The sandbox run could not create sockets, confirmed by an independent EPERM probe.
+With loopback permitted, the same binary reached handoff and exposed a real resource
+lifetime bug: the stopped transport/control handles retained the durable signer,
+keeping its journal locked when the new generation opened it. The failed evidence
+is `.build-cache/k7-transition-before-release.json`.
+
+The local correction replaces a managed transport with an inert stopped state only
+after signing revocation and confirmed join. This drops the old handle references
+before replacement; timeout/error paths retain ownership. Stopped transports reject
+publication/signing and allow idempotent stop. No signer journal format, fencing
+rule or cryptographic operation changes. The corrected linked build passed in
+288 seconds and the live transition passed in 27.45 seconds. The preserved record
+`.build-cache/k7-transition-pass.json` binds the tested binary and unchanged build
+sources. P1 rejects the added view; after activation the same reader pool returns
+the migrated count `1`. Decision 1 uses P1, decision 2 uses P2, and the bound listener
+is retained. Stopped-engine operations reject signing and permit repeated stop.
+The fixture now stops observation promptly on reactor failure instead of waiting
+for its deadline after an already-known error.
+
+The fixture extension drops the original reactor, sessions and coordinator,
+reopens the same database and starts through the production reactor startup path.
+It checks persisted P2 selection, unchanged history before new input, the same era
+and listener, and successful decision 3. The extended local ARM64 dev build passed
+in 284.59 seconds with unchanged sources, and the full handoff/restart command passed
+in 33.81 seconds. `.build-cache/k7-transition-restart-pass.json` preserves the
+binary-bound result, raw output/logs and build-source inventory. Archived hashes
+were checked after preservation. This is an in-process clean restart, not
+process-crash, cold-sync, full HTTP RPC or multi-validator evidence. No additional
+production change was needed for the restart to pass.
+
+No CI, push or merge occurred. The older equivalence helper still needs adaptation
+because its managed alternate path selects default P1; it cannot establish P2
+coverage. Full grouped acceptance still requires actual multi-validator handoff,
+restart/reorg and migration recovery, effective native provenance and the remaining
+agreed scenarios. The new command does not replace those requirements.
+
+
+### K7/K8 three-validator managed handoff, 2 November 2026
+
+The linked qualification command now has a `--cluster` mode using three live
+validators, independently initialized databases and real managed P1/P2 execution
+and consensus bundles. The local ARM64 dev build passed in 289.68 seconds with
+unchanged source inputs, including the ownership/interface checks. The cluster
+passed in 73.46 seconds. `.build-cache/k7-cluster-pass.json` preserves the binary,
+source inventory, raw result and log hashes. All three completed decision 1 under
+P1 and decision 2 under P2, kept their bound listener addresses and agreed on the
+completed closure, era transition and typed digests of 14 application-state tables.
+The same reader pools rejected the added view before activation and returned the
+migrated count afterward.
+
+This fixture seeds an accepted schedule before genesis authority is published.
+It isolates actual multi-validator migration/handoff and is not an authorization,
+notice, HTTP RPC, crash or cold-catch-up test. No CI, push or merge was performed.
+Cross-upgrade rollback/replay and the other grouped acceptance requirements remain
+open. The grouped review must also assess whether existing ownership/type checks
+sufficiently enforce handoff sequencing and whether a small typestate refinement
+would remove a concrete risk without unnecessary complexity.
+
+
+The extended cluster scenario places activation at Bitcoin height 2, executes
+height 3 under P2, then certifies a replacement branch from height 1. The earlier
+seeded schedule survives, but its activation and migration do not. All validators
+restore P1 in a fresh era, and their existing reader pools stop exposing the P2
+view. Reaching replacement height 2 reruns migration with a distinct receipt key
+and starts a fresh P2 era. A sixth certified decision proves that final engine
+can make progress after the last handoff. The three engine boundaries are global
+Kontor consensus heights 3, 5 and 6; Bitcoin height rolls back independently.
+Original decisions 1 through 3 remain unchanged. All nodes agree on the final
+closure, activation, era and 14 compared application-state tables.
+
+The final local ARM64 dev build passed in 279.96 seconds with unchanged inputs;
+the six-decision run passed in 114.35 seconds with an unchanged binary. Evidence
+is `.build-cache/k7-cluster-reorg-pass.json`, with archived source, build and raw
+output/log hashes verified. The earlier five-decision run is retained separately
+as `k7-cluster-reorg-five-decisions.json`; it established final migration
+publication but not a subsequent decision by the final P2 engine. Neither record
+is a new approval, removed-schedule, same-H/hash changed-prestate, process-crash,
+HTTP RPC or cold-catch-up test. Those distinct acceptance cases remain open where
+not already covered by other evidence. No production change was required for
+this surviving-schedule rollback scenario to pass, and no CI/push/merge occurred.
+
+
+### K7/K8 effective native artifact provenance, 2 November 2026
+
+Contract provenance now returns the original append-only publication claims and
+a separate effective-artifact record. The same owned pinned read snapshot selects
+the executor and reads the publication. The record reports the selected protocol
+and execution definition, SHA-256 of published and effective stored artifact
+bytes, and whether a protocol-native mapping supplied the effective bytes. The
+P2 hash comes from its independently built executor export and the same native
+replacement function used by runtime loading. P1 continues using publication
+bytes. No publication row or old provenance claim is rewritten or presented as
+an attestation of P2's replacement. SDK `getContractProvenance` exposes both
+records; `getProvenance` retains publication-log behavior. Missing full provenance
+support produces an explicit SDK error. SDK publication remains deferred.
+
+Rust type/export tests passed (72), regenerating the wire declarations. SDK web
+and native bundle builds passed, as did both focused transport tests and changed
+TypeScript formatting checks. A direct all-files `tsc` check encountered the
+absent optional mobile `@kontor/sdk-native` peer; the repository's web declaration
+build excludes those mobile-only imports and passed. Initial Rust setup attempts
+used the wrong offline Cargo cache and a read-only ccache location; the corrected
+local type/export command passed. The linked build correctly rejected the stale
+unreleased P2 definition after adding its export. Regenerating that pre-release
+definition fixed the check without changing frozen P1.
+
+The final managed local ARM64 dev build passed in 287.92 seconds with unchanged
+inputs. The three-validator six-decision fixture passed in 178.49 seconds. It
+checks provenance before activation, after P2 activation, after P1 restoration,
+and after reactivation, using the same reader pools. Unaffected staking remains
+on publication bytes. Independently comparing raw reported hashes against the
+pinned compressed P1/P2 token files passed. Publication claims are equal before
+and after; the live state/closure/history assertions also passed. The evidence
+record `.build-cache/k7-native-provenance-pass.json` binds source, binary, build,
+raw runtime output, artifact files and SDK/type-test logs. This exercises the
+actual helper called by the HTTP handler, not a running HTTP server. Seeded
+schedule, crash/recovery and cold-sync limitations remain as stated above.
+
+Inactive compiler incremental cache was removed under the shared build lock,
+recovering roughly 9 GB of actual filesystem space while preserving source,
+binaries and evidence. No CI, push, merge or publication occurred. Grouped review
+and remaining K7/K8 acceptance are pending.
+
+### K7/K8 retained-baseline and transition qualification, 2 November 2026
+
+The old managed qualification helper selected the default P1 factory for both
+`first` and `observer`. Matching outputs therefore could not demonstrate two
+production protocols. Managed qualification now compares only the actual frozen
+P1 graph against the unchanged historical semantic oracle. The original fixture
+source and oracle hashes remain intact. Legacy two-graph qualification retains
+its existing equality checks. Managed P1 view and history fixtures initialize
+certified history through normal bootstrap; production admission was not relaxed.
+The frozen P1 now exports registration observation and failed-migration work, so
+its fixture expectations were updated accordingly. The first runtime attempt
+confirmed the latter stale expectation, failed, and is retained as diagnostic
+rather than acceptance evidence.
+
+The managed runner separately requires `qualify-protocol-transition --cluster`
+from the same audited executable. Its six-decision P1/P2/P1/P2 result must include
+three validators, all three handoffs, matching state/closure, retained history,
+restored/reapplied migration and the effective native artifact records. The
+verifier binds both executor definitions and native artifact hashes to the actual
+source files. Original publication claims must remain unchanged. Raw transition
+stdout/stderr are hashed into the execution record and checked by the platform
+comparator, which also compares the transition observations across required cells.
+Missing, altered or failed transition evidence cannot satisfy the managed gate.
+The generic shared-capacity test still exercises two independently owned library
+roots; it does not claim that its unversioned fixture authorizes production P2.
+
+Focused Python checks passed: transition verifier (1 test with negative cases),
+historical semantics (5), node execution (13), and node comparison (18). The
+corrected local ARM64 dev linked build passed in 286.53 seconds, with unchanged
+source inputs. The complete local runtime runner passed in 274.01 seconds:
+P1 matched the preserved oracle, certified history closed 15 decisions, managed
+startup joined both tested engines, and the three-validator transition completed
+all six decisions. Loading the actual evidence through the full single-cell
+comparator also passed, including source inventories, graph/interface checks,
+artifact bindings and raw logs. Archive:
+`.build-cache/k7-helper-qualified-pass.json`, with ten bound evidence files.
+
+This is one local dev cell, not cross-platform CI. The transition retains the
+seeded-schedule scope and does not establish approval flow, HTTP server continuity,
+crash recovery or cold catch-up. Other required K7/K8 scenarios and grouped review
+remain outstanding. The separate archived unversioned `compare-baseline` command
+also needs its managed-versus-legacy invocation scope reconciled; its old archive
+must not acquire invented certified authority. No CI, push, merge or publication
+occurred.
+
+### K7/K8 actual P2 migration recovery, 2 November 2026
+
+Added `qualify-protocol-transition --recovery`, using the independently linked
+P1/P2 factories and production certified-closure driver. The accepted schedule
+is a fixture precondition, as in the existing transition test. A real verified
+block certificate is persisted before execution. An uninterrupted copy completes
+H, its lifecycle, actual P2 token-count migration and closure. A second copy
+reopens executor sessions at durable boundaries, injects a SQL failure while
+persisting activation after migration execution, and requires exact equality of
+every persistent table with the pre-attempt state. It then retries, reopens after
+migration commit but before closure publication, and completes to the same full
+database and closure as the uninterrupted copy. Successor committee/startup is
+unavailable until closure completion. No owner root or writer transaction leaks.
+
+A separate preactivation copy deliberately contains P2's reserved count field.
+The real registered migration rejects it with `InvalidOperation` and consumed-work
+diagnostics, preserving every table. A fresh session rejects it again after
+reopening. This is invalid-input fault injection, not a reachable P1 transaction
+claim, operator repair procedure, or authorization to modify production data.
+
+The local ARM64 dev linked build and native ownership/interface checks passed in
+290.64 seconds. The focused runtime passed in 44.02 seconds with the binary and
+source inventory unchanged. Binary SHA-256:
+`f3d826d714a4fd463bc3148a2f6f122d47ef32d4fc04ccdcf62f7df694329334`.
+Archive `.build-cache/k7-recovery-qualified-pass.json` binds seven evidence files,
+including source inventory, build, node audit, runtime and raw output; archive
+SHA-256 `c32ddf2dd1618c5fc5bb4a0b8c17730b8d0074fc7658dd22e79481ad3e231ed4`.
+Separate CLI checks verified rejection of simultaneous cluster/recovery options
+and the managed build's explicit legacy-archive diagnostic, before archive access.
+That resolves the archived command-scope issue noted above without relaxing
+production admission or changing the historical oracle.
+
+This evidence covers transaction failure and fresh database/executor sessions,
+not abrupt OS-process crashes, engine/WAL recovery, live approval or cold sync.
+The command is available for focused qualification; inclusion in the final
+grouped acceptance invocation remains to be wired alongside the other remaining
+K7/K8 cases. The previous cluster evidence remains bound to its own earlier source
+inventory, not relabeled as a rerun here. No CI, push, merge or publication occurred.
+
+
+### K7/K8 same-H finality and control-effect replay, 2 November 2026
+
+Extended the actual linked-executor recovery command with three seven-block
+scenarios. Each executes an unconfirmed issuance batch at H=1, retains the Bitcoin
+history, and triggers the ordinary finality expiry at height 7. The surviving
+schedule case activates P2 at H=2 both before and after finality reconstruction;
+its H hash stays identical while pre-lineage and migration receipt key change.
+The other cases apply an actually signed, admission-verified Cancel or Postpone
+against the fixture's initial schedule. H=2 originally executes without a
+transition descriptor. Finality undo removes the later control effect, records
+its retraction, restores the surviving schedule, and derives P2 activation while
+replaying that same H. Retained control inputs remain unchanged and their replay
+stages explicitly report `RetractedControl`, rather than resurrecting old consent.
+
+All three cases assert P1 execution identity for H's lifecycle, P2 for migration
+and subsequent block lifecycle, and equality of every persistent table, closure
+and era after fresh-session recovery paused immediately after owned rollback.
+They close 8, 9 and 9 certified decisions respectively. The existing actual-P2
+migration atomicity/rejection checks still run in the same command. Shared seed,
+certificate append, session open and snapshot helpers were extracted without
+changing the accepted-schedule precondition or the historical oracle.
+
+The managed qualification runner now requires this recovery command, retains its
+raw output hashes and rejects missing/incomplete/altered recovery evidence in the
+comparator. Focused Python controls passed: evidence verifier 2 tests, process
+runner 14 tests, node comparator 19 tests, including nonzero-exit rejection and
+missing/altered/rehashed-but-incomplete recovery data. The actual Rust output also
+passed the recovery evidence verifier. The local ARM64 dev linked build and
+ownership/interface checks passed in 294.89 seconds with source inputs unchanged.
+
+The initial combined runtime hit its 240-second harness timeout. That result is
+retained as failed in `.build-cache/k7-replay-timeout.json`; it is not acceptance
+evidence. Its remaining fixture was created near the timeout, consistent with
+later scenario setup. One rerun of the unchanged source and binary with a
+360-second bound passed in 328.56 seconds. The checked-in runner now allows 420
+seconds for this combined correctness suite, with no protocol/runtime limit
+change and no performance acceptance claim. This timeout-only runner adjustment
+and documentation followed the source-bound execution, so the archive retains
+the exact earlier source inventory rather than claiming a later source rerun.
+
+Archive `.build-cache/k7-finality-replay-qualified-pass.json` binds eight evidence
+files, including the exact local runner and both build/runtime source bindings.
+Archive SHA-256: `7cf815013ae260cbc5bf01e1ad205e6f985ec911e3a5fb98caab70c47ce1a321`.
+Binary SHA-256: `8524cf572b0471004ae89bc4860d0f7d0e67fb266936b7c776fa683ca91724e3`.
+This resolves the recovery-command gate wiring noted in the preceding entry.
+It does not establish initial Schedule approval through activation, schedule
+removal after activation, confirmation without recharge, abrupt process/engine
+crash recovery, live HTTP continuity, or K9 cold transport. Those remaining
+requirements and the grouped reviews/CI/merge are still open. No CI, push, merge
+or publication occurred during this work.
+
+
+### K7/K8 paid confirmation across activation, 2 November 2026
+
+Extended the existing surviving-schedule fixture with a snapshot branch after H=2.
+The original P1 batch contains issuance followed by a successful gas-paying token
+mint. The branch records Batch(H) under P2, then confirms the original transaction
+in H+1. Actual block application reports zero new transactions and zero executed
+operations. The original execution height, batch identity, transaction ID, fuel
+usage and complete transaction receipts remain unchanged, while the raw Bitcoin
+confirmation position is recorded. Database/session reopen preserves every table
+and the completed closure. This reuses the accepted-schedule fixture, not initial
+Schedule authorization or a live-engine test.
+
+The first runtime attempt failed at canonical Bitcoin validation because the new
+fixture used a coinbase-shaped transaction input and omitted the SegWit commitment.
+Corrected the fixture using the existing block-test conventions, without changing
+production validation. Lead inspection also narrowed receipt comparison to the
+transaction, since block lifecycle work produces its own legitimate receipts.
+The corrected independent linked-node build passed in 283.80 seconds, and the
+complete recovery command passed in 340.38 seconds within its 420-second harness
+limit. Existing migration atomicity, same-H finality replay, signed Cancel/Postpone
+undo and reopen checks passed in the same run. Source and binary remained unchanged
+during validation. The strengthened raw-result verifier accepted the actual output;
+35 focused Python evidence/runner/comparator checks passed, including rejection of
+missing or false confirmation observations.
+
+Evidence archive: `.build-cache/k7-confirmation-qualified-pass.json`, SHA-256
+`b479220e3590eaf84616dd5c9c755407c9adcf59eda5bb78666f8889b6adbf04`.
+It binds eight build/source/runtime/raw-output files. Tested binary SHA-256:
+`b566e25e7d82624bec03584cfe6a2566aceed636f9fb6ca8f180dab687a9d3d5`.
+This is local ARM64 dev evidence, not final cross-platform CI or grouped review.
+No PR was pushed, merged or published for this increment. Outstanding K7/K8
+requirements remain recorded separately, including removed-schedule replay of a
+retained P2 batch, initial authorization through activation, HTTP/ingestion
+continuity, engine recovery, zero successor power and P2 balance-count paths.
+
+
+### K7/K8 signed authorization trace and branch eligibility, 2 November 2026
+
+The local ARM release build passed in 1,380.11 seconds with source hashes
+unchanged. Its first authorization runtime failed after 67.30 seconds at the
+assertion that an old P2 batch should execute under restored P1. The preceding
+real signature, full 1,008-height notice, P2 activation, deep rollback removing
+Schedule, and return of the original Bitcoin hashes all completed. Preserve
+`.build-cache/k7-authorization-first-failed.json` and its hashed raw records as a
+failed run, not acceptance evidence.
+
+Lead investigation and the existing planning reviewer agree that the expectation
+was incorrect: the original batch belongs to a superseded branch interval.
+Hash equality does not reopen that interval. The updated scenario requires its
+certificate to remain exact and its application to remain absent, then submits
+a new P1 batch and checks finality replay and reopen equality. The implementation
+plan records this acceptance clarification. Production semantics are unchanged.
+Corrected runtime acceptance is pending; synthetic verifier tests do not prove it.
+
+The lead also inspected engine handoff ownership in control, reactor transport,
+coordinator startup and the closure driver. Generation ownership and the stopped
+backend state provide concrete Rust boundaries, while asynchronous stale messages
+and durable recovery still require runtime fences. This was intermediate
+inspection, not completion of the grouped review. Its source hashes and remaining
+RPC/ingestion and crash-recovery gaps are recorded in
+`.build-cache/k7-handoff-ownership-lead-inspection.json`.
+
+
+The corrected ARM release build passed in 237.15 seconds. Its runtime passed in
+71.50 seconds with binary/source hashes unchanged, completing 2,028 decisions.
+The raw-result verifier confirmed all required fields: actual authorization,
+1,008-height notice, H1009 activation, schedule retraction, orphaned P2 batch
+exclusion, fresh P1 batch replay, unchanged certificates and reopened-state
+equality. Nine archived files bind build logs, source inventory, node build,
+runtime, runner, raw output/log and the planning clarification in
+`.build-cache/k7-authorization-qualified-pass.json` (SHA-256
+`5e23a34407d76c3d71904fc0b308e28eaf1b973cdab8862d4da6e2bd1124afdc`).
+This paragraph was added after that source-bound run; it is a documentation-only
+status update, not a claim that later implementation was tested.
+
+The managed node runner/comparator now require this scenario's raw evidence,
+reject nonzero process exits even with valid output, verify raw hashes and reject
+missing or incomplete checks. The 38 focused Python tests passed (3 transition
+verifier, 15 execution-gate, 20 comparator tests). The actual full node runner and
+cross-platform comparison have not been rerun for this candidate. No new CI run,
+push, grouped review or merge occurred. Actual HTTP/Bitcoin-follower continuity,
+remaining native count mutation paths and meaningful crash/committee coverage
+remain open; do not claim these from this database-recovery trace.
+
+
+### K7/K8 HTTP and Bitcoin follower continuity, 2 November 2026
+
+The existing three-validator cluster now uses the production Bitcoin follower,
+including its poller and initial ZMQ handshake, against the existing in-memory
+Bitcoin RPC fixture. It serves the production HTTP router over loopback with the
+normal readiness, info and event wiring. Continuous liveness requests run during
+all three engine handoffs; contract views and effective-native provenance are
+queried through HTTP before activation, after activation and after rollback.
+
+The first runtime failed after 15.18 seconds at a fixed consensus-height
+assertion. Follower polling permits ordinary idle batches, so Bitcoin height and
+consensus height are not interchangeable. The fixture now finds each exact
+Bitcoin block/hash in authenticated branch history, waits for its decision to
+close, and checks every handoff at that actual C+1. No production ordering or
+engine behavior changed. The failed result remains in
+`.build-cache/k7-services-fixed-height-failure.json`.
+
+The corrected ARM64 release build passed in 241.34 seconds. Runtime passed in
+36.31 seconds, with six Bitcoin block decisions at consensus heights
+`[1, 3, 4, 5, 6, 7]` and handoffs at `[4, 6, 7]`. All three validators agreed on
+final application state and closure, preserved original certificates, restored
+P1 in a fresh era on rollback, and reapplied P2 with a new migration receipt.
+HTTP traffic, views/provenance and the same Bitcoin follower tasks survived.
+The actual raw-result verifier passed; 40 focused Python verifier/runner/comparator
+checks passed, including incorrect C+1 and missing continuity negative controls.
+Cross-platform live comparison validates each actual transcript's positions,
+then compares semantic outcomes rather than timing-dependent idle-batch counts.
+Fixed-input historical qualification remains separate and unchanged.
+
+Eight source/build/runtime files are bound by
+`.build-cache/k7-services-qualified-pass.json`, SHA-256
+`09d74d03b584480495aa7d22d89bfbbe15c3327c6f74582fb00a10dce8bace6b`.
+This documentation was added after the source-bound run. The fixture seeds its
+schedule; it does not use actual Bitcoin Core or prove process-crash recovery or
+cold catch-up. No CI, PR, merge or publication was performed for this increment.
+Remaining K7/K8 coverage includes actual P2 count mutation paths, meaningful
+crash recovery and successor/unsupported committee cases, followed by grouped
+lead and independent review and the final scoped CI campaign.
+
+### K7/K8 token mutations and corrected paid-call evidence, 2 November 2026
+
+The full-ledger count scenario initially failed because its raw calls supplied
+integer WAVE arguments for decimal-record parameters. Only issuance executed.
+The earlier confirmation fixture had the same argument error, and its broad
+paid-receipt predicate could accept issuance alone. That earlier evidence still
+showed unchanged receipts on confirmation, but did not establish the claimed paid
+mint. Those paid-mint claims are superseded by this corrected evidence.
+
+The fixtures now use `to_wave_expr(Decimal)` and require the actual successful
+paid `mint` receipt at instruction index 1, both before confirmation and after
+fresh authorized P1 replay. No production execution or gas rules changed. The
+new scenario checks P1 populated-ledger migration, P2 mint/transfer/self-transfer/
+burn, gas escrow refund, UTXO attach/detach, failed transfer consistency and full
+database reopen. Seven snapshots independently scan all stored positive balances,
+including system holders, and compare them with the maintained field-5 count.
+
+The ARM64 release build passed in 238.00 seconds, recovery and token checks in
+26.60 seconds, and signed authorization/finality replay in 72.01 seconds. Both
+actual raw-result verifiers passed. Source and binary hashes stayed unchanged.
+Thirteen files are archived in `.build-cache/k7-token-qualified-pass.json`,
+SHA-256 `6c4014c60f149e197737ad6c35f0130c8ae0533b3b1460f736715b7f97b25ae2`.
+The diagnostic failure is retained under `.build-cache/k7-token-decimal-diagnostic-*`.
+This ledger entry was added after the source-bound runs.
+
+These are local linked-executor and database-reopen checks, not abrupt process
+crash, live consensus transport, cold catch-up or final cross-platform evidence.
+Existing migration tests actually kill a subprocess after effects and after commit;
+the existing managed-engine restart check instead uses clean stop/join, and the
+generation reservation test uses object drop/reopen. Do not conflate their scopes.
+Meaningful handoff crash and successor/unsupported-committee cases remain, then
+consolidated lead plus one independent review and final scoped CI. No CI campaign,
+push, merge or publication was performed for this increment.
+
+### K7/K8 empty successor at activation, 2 November 2026
+
+The linked-executor recovery scenario now covers the last validator leaving at
+the upgrade boundary through an actual paid `leave-validation()` call. The call
+executes in Batch(H1), confirms in H2 and takes effect after its normal twelve
+blocks in H13's P1 lifecycle. The accepted schedule is seeded for this focused
+case. Actual P2 migration then commits, but closure publication rejects the empty
+successor committee. No C15 authority, new era or consensus startup is admitted.
+The authenticated frontier remains C14 and the closed frontier remains C13.
+
+Reopening the database encounters the same typed `InvalidNextAuthority` error.
+Canonical state, completed stage chain, inactive registration and retained C14
+certificate remain unchanged. This verifies a zero-authority stop at an actual
+protocol boundary, not merely the existing same-protocol exit test. It does not
+claim automatic repair, a process kill, a live empty-quorum network, or authorization
+of the seeded schedule.
+
+The ARM64 release build passed in 234.05 seconds and recovery run in 29.00 seconds,
+including the prior token-count, finality and confirmation cases. The raw-result
+verifier passed, with source/binary hashes unchanged. Forty-two focused Python
+checks passed (7 evidence validation, 20 comparison, 15 node-runner checks), including
+missing/false empty-successor observations and incorrect boundary counts.
+Nine build/source/runtime files are retained in
+`.build-cache/k7-committee-qualified-pass.json`, SHA-256
+`b22e985166b491c848aea1a99ed8b5aa8523207aa093eb6b079f734b74dc8445`.
+This documentation was added after the source-bound run. Unsupported-target Cancel
+progress and focused process interruption remain, then grouped lead plus one
+independent review and final scoped CI. No CI, push, merge or publication occurred.
+
+### K7/K8 unsupported target cancellation and process interruption, 2 November 2026
+
+The linked release recovery scenario now starts an actual single-validator engine
+with a seeded schedule for an unavailable executor. The production proposal path
+does not propose its activation block and rejects a proposal carrying that
+transition. A freshly signed Cancel is submitted through the live reactor,
+certified before the blocked block, and permits Bitcoin H2 to close under P1.
+
+Five child processes are killed after distinct durable checkpoints: retained
+certificate, committed activation, published closure, successor engine readiness
+with WAL present, and its first proposal-Fin signature. Each restart matches an
+uninterrupted reference state and closure, preserves the original certificate,
+starts P2 at C2, and rejects a conflicting proposal signature. Previously bound
+listeners are reused. The signed checkpoint retries the identical signature.
+Its signature is requested through production managed transport while holding
+ConsensusReady, not an assertion that Malachite autonomously produced its first
+vote. These cases do not inject inside old-engine shutdown or the migration
+transaction; existing lifecycle and migration fault tests cover separate paths
+and remain part of the combined review. Cold catch-up remains K9.
+
+The initial sandbox run failed at readiness after 61.24 seconds. A direct socket
+probe confirmed socket creation was forbidden. That failure is retained. The
+same binary then passed with loopback networking permitted in 47.23 seconds.
+The ARM64 release build passed in 238.94 seconds. Source and binary hashes stayed
+unchanged through the successful run, and its raw output passed the strict
+verifier. Forty-four focused Python checks passed (9 evidence, 20 comparison,
+15 runner), including omitted, reordered and false crash checkpoints.
+
+Thirteen source/build/runtime files, including the failed sandbox run, are
+archived in `.build-cache/k7-failure-qualified-pass.json`, SHA-256
+`b8332aa2fcf96e85561ab10104260f3d5ab0664ded70652293cb6302c7523e89`. This ledger entry was added after the source-bound run.
+Next is consolidated lead review of the full K7/K8 change and its coverage,
+then the single independent review and final scoped CI. No CI, push, merge or
+publication occurred.
+
+### K7/K8 lead review and embedded builder record, 2 November 2026
+
+Consolidated lead inspection traced activation/closure ordering, atomic migration,
+canonical rollback versus retained authority, branch-eligible replay, writer/read
+executor selection, generation ownership, stale queues and native token accounting.
+The detailed scope and limits are in `.build-cache/k7-k8-lead-review.json`, against
+base `b3e0fc246d7a859e30b836630372e5658f45afb8` and the current working tree.
+
+Finding LEAD-K7-BUILD-1: the required embedded startup build verification was absent.
+The builder now supplies its input record through the content-keyed compiler
+wrapper, which checks four role-bound facade/input hashes and the compiler target.
+Startup and managed database admission check that record against both installed
+executor definitions, both consensus definitions and linked wire codecs before
+opening database/signing state. Missing, malformed, mismatched and incomplete
+records fail. Compiler/source/lock/facade hashes retain provenance; this is not a
+signature by an external authority, nor a self-hash of the final executable.
+Final executable/native ownership auditing remains enforced by the builder.
+
+The revised ARM64 release build passed in 241.69 seconds and the
+full recovery run in 47.47 seconds. Its build-record negative controls,
+live unavailable-target Cancel and five process interruptions passed with unchanged
+source/binary hashes. Fifty-seven Python checks passed (12 builder, 10 evidence,
+20 comparison, 15 runner). Eleven input/build/runtime files are archived in
+`.build-cache/k7-attestation-qualified-pass.json`, SHA-256
+`36397e8ffe1b79f815afaa4af47078622b30f0b55f274f2349cac8fb728877a3`. This ledger entry was added afterward.
+
+No independent implementation approval, final cross-platform CI, PR or merge is
+claimed by this review. Those are the next grouped delivery gates.

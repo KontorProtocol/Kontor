@@ -25,6 +25,7 @@ use super::resource_diagnostics;
 use super::storage_host::StorageHost;
 #[cfg(not(kontor_retained))]
 use crate::database::storage_callbacks_v1::storage_callbacks;
+use crate::protocol::execution::ExecutorVersion;
 use crate::protocol::storage_identity::SignerRecord;
 use crate::protocol::v1::native_bootstrap::{self, BootstrapProgress};
 use crate::protocol::v1::storage_contracts;
@@ -38,6 +39,7 @@ use crate::protocol::v1::storage_session;
 use crate::protocol::v1::storage_state::{
     LiveRow, exists, live_subtree, tombstone_rows, write_value,
 };
+use crate::protocol::v2::native as p2_native;
 use crate::runtime::{ContractAddress, counter::Counter, stack::Stack};
 
 #[cfg(test)]
@@ -116,6 +118,8 @@ pub struct TransactionContext {
 
 #[derive(Builder, Clone)]
 pub struct Storage {
+    #[builder(default = ExecutorVersion::LegacyP1, setters(vis = "pub(super)"))]
+    pub(super) executor_version: ExecutorVersion,
     #[cfg(not(kontor_retained))]
     pub conn: Connection,
     #[cfg_attr(not(kontor_retained), builder(default = StorageHost::from(storage_callbacks(&conn))))]
@@ -373,14 +377,23 @@ impl Storage {
         &self,
         contract_id: u64,
     ) -> std::result::Result<Vec<u8>, ComponentDecodeError> {
-        self.contract_bytes(contract_id)
+        let published = self
+            .contract_bytes(contract_id)
             .await
             .map_err(ComponentDecodeError::Infrastructure)?
             .ok_or_else(|| {
                 ComponentDecodeError::Infrastructure(anyhow!(
                     "Contract not found when trying to load component"
                 ))
-            })
+            })?;
+        // Require the original publication even when this executor replaces its
+        // implementation. Raw contract_bytes remains the publication accessor.
+        Ok(match self.executor_version {
+            ExecutorVersion::LegacyP1 => published,
+            ExecutorVersion::P2 => {
+                p2_native::replacement(contract_id).map_or(published, <[u8]>::to_vec)
+            }
+        })
     }
 
     pub(crate) async fn decode_stored_component_bytes(

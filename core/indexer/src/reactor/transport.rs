@@ -31,6 +31,8 @@ pub(super) struct Engine {
 }
 
 enum Backend {
+    #[cfg(kontor_managed)]
+    Stopped,
     Legacy {
         channels: Channels<Ctx>,
         handle: EngineHandle,
@@ -68,6 +70,8 @@ impl Engine {
 
     pub(super) async fn next(&mut self) -> Result<Option<Message>> {
         match &mut self.backend {
+            #[cfg(kontor_managed)]
+            Backend::Stopped => Ok(None),
             Backend::Legacy { channels, .. } => Ok(channels.consensus.recv().await.map(Into::into)),
             #[cfg(kontor_managed)]
             Backend::Managed { engine, .. } => Ok(engine.next().await?),
@@ -76,6 +80,8 @@ impl Engine {
 
     pub(super) async fn publish(&mut self, part: StreamMessage<ProposalPart>) -> Result<()> {
         match &mut self.backend {
+            #[cfg(kontor_managed)]
+            Backend::Stopped => Err(anyhow!("consensus engine is stopped")),
             Backend::Legacy { channels, .. } => channels
                 .network
                 .send(NetworkMsg::PublishProposalPart(part))
@@ -107,6 +113,8 @@ impl Engine {
     pub(super) async fn listen_address(&mut self) -> Result<Option<String>> {
         timeout(Duration::from_secs(5), async {
             match &mut self.backend {
+                #[cfg(kontor_managed)]
+                Backend::Stopped => Ok(None),
                 Backend::Legacy { channels, .. } => {
                     Ok(NetworkRequest::dump_state(&channels.net_requests)
                         .await?
@@ -138,6 +146,8 @@ impl Engine {
         digest: [u8; 32],
     ) -> Result<Signature> {
         match &mut self.backend {
+            #[cfg(kontor_managed)]
+            Backend::Stopped => Err(anyhow!("consensus engine is stopped")),
             Backend::Legacy { signer, .. } => {
                 let _ = (height, round, descriptor);
                 Ok(signer.sign(&digest))
@@ -157,6 +167,8 @@ impl Engine {
 
     pub(super) async fn stop(&mut self, deadline: Duration) -> Result<bool> {
         match &mut self.backend {
+            #[cfg(kontor_managed)]
+            Backend::Stopped => Ok(true),
             Backend::Legacy { handle, .. } => {
                 handle.actor.stop(Some("Reactor shutting down".into()));
                 match timeout(deadline, &mut handle.handle).await {
@@ -176,7 +188,16 @@ impl Engine {
                 })
                 .await
                 {
-                    Ok(result) => Ok(result?),
+                    Ok(result) => {
+                        let joined = result?;
+                        if joined {
+                            // The stopped transport and control handles still own signer
+                            // references. Release them only after revocation and join,
+                            // before the replacement opens the same durable journal.
+                            self.backend = Backend::Stopped;
+                        }
+                        Ok(joined)
+                    }
                     Err(_) => Ok(false),
                 }
             }
@@ -216,6 +237,8 @@ impl Drop for Engine {
         // Construction can fail before the reactor gets a chance to run its shutdown path.
         match &mut self.backend {
             Backend::Legacy { handle, .. } => handle.actor.stop(None),
+            #[cfg(kontor_managed)]
+            Backend::Stopped => {}
             #[cfg(kontor_managed)]
             Backend::Managed { engine, .. } => engine.retire(),
         }

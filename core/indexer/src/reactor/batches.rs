@@ -1393,6 +1393,9 @@ impl<E: Executor> Reactor<E> {
             self.prune_finalized_bodies(&conn).await;
         }
         gauge!(DEFERRED_DECISIONS).set(0.0);
+        if self.handoff_if_needed().await? {
+            return Ok(());
+        }
         self.resume_next_height().await
     }
 

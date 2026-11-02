@@ -329,9 +329,27 @@ impl Runtime {
         component_cache: ComponentCache,
         storage: Storage,
     ) -> Result<Self> {
+        Self::new_for_version(
+            engine,
+            linkers,
+            component_cache,
+            storage,
+            ExecutorVersion::LegacyP1,
+        )
+        .await
+    }
+
+    pub(crate) async fn new_for_version(
+        engine: Engine,
+        linkers: Arc<Linkers>,
+        component_cache: ComponentCache,
+        mut storage: Storage,
+        executor_version: ExecutorVersion,
+    ) -> Result<Self> {
+        storage.executor_version = executor_version;
         Ok(Self {
             engine,
-            executor_version: ExecutorVersion::LegacyP1,
+            executor_version,
             selected_context: None,
             linkers,
             table: Arc::new(Mutex::new(ResourceTable::new())),

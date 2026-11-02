@@ -4,6 +4,8 @@ pub mod bitcoin_follower;
 pub mod bitcoin_helpers;
 pub mod block;
 pub mod bls;
+#[cfg(kontor_managed)]
+pub mod build_record;
 pub mod built_info;
 pub mod config;
 pub mod confirmation_backfill;

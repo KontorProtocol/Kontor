@@ -3,8 +3,8 @@ use axum::{
     extract::{Path, Query, State},
 };
 use indexer_types::{
-    ContractListRow, ContractProvenanceResponse, ContractResponse, PaginatedResponse,
-    ProvenanceEntry, ViewExpr, ViewResult,
+    ContractListRow, ContractProvenanceResponse, ContractResponse, PaginatedResponse, ViewExpr,
+    ViewResult,
 };
 use libsql::Connection;
 
@@ -12,6 +12,7 @@ use super::validate_query;
 use crate::api::{Env, error::HttpError, result::Result};
 use crate::database::queries;
 use crate::database::types::ContractQuery;
+use crate::protocol::coordinator::artifacts::contract_provenance;
 use crate::protocol::coordinator::linked::read_snapshot;
 use crate::runtime::ContractAddress;
 use crate::runtime::ownership::adapter::HostFailure;
@@ -166,22 +167,13 @@ pub async fn get_contract_provenance(
     let contract_address = address
         .parse::<ContractAddress>()
         .map_err(|_| HttpError::BadRequest("Invalid contract address".to_string()))?;
-    let conn = env.reader.connection().await?;
-    let contract_id = queries::get_contract_id_from_address(&conn, &contract_address)
-        .await?
-        .ok_or(HttpError::NotFound("Contract not found".to_string()))?;
-    let entries = queries::get_contract_provenance_log(&conn, contract_id)
-        .await?
-        .into_iter()
-        .map(|row| {
-            let provenance = postcard::from_bytes(&row.provenance)?;
-            Ok::<_, anyhow::Error>(ProvenanceEntry {
-                height: row.height,
-                tx_index: row.tx_index,
-                author_signer_id: row.author_signer_id,
-                provenance,
-            })
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    Ok(ContractProvenanceResponse { entries }.into())
+    let provenance = contract_provenance(
+        &env.owner_service,
+        env.runtime_pool.get().await?,
+        env.config.network,
+        contract_address,
+    )
+    .await?
+    .ok_or(HttpError::NotFound("Contract not found".to_string()))?;
+    Ok(provenance.into())
 }

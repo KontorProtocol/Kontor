@@ -32,7 +32,11 @@
  */
 
 import { ContractAddress } from "./canonical/ContractAddress.js";
-import type { BuildProvenance, ProvenanceEntry } from "./provenance.js";
+import type {
+  BuildProvenance,
+  ContractProvenance,
+  ProvenanceEntry,
+} from "./provenance.js";
 import { canSignSchnorr, type Signing } from "./signing.js";
 import type { Identity } from "./identity.js";
 import type { FundingSource } from "./funding.js";
@@ -48,7 +52,7 @@ import type {
   Inst as WireInst,
 } from "./bindings.js";
 import { blsAggregateSignatures } from "./backend/index.js";
-import { ContractError, SignerError } from "./errors.js";
+import { ContractError, SignerError, TransportError } from "./errors.js";
 import { Inst, type InstDecoder, wireInstToInst } from "./inst.js";
 import { Insts } from "./insts.js";
 import { IncomingOffer, type OfferData } from "./offer.js";
@@ -277,6 +281,18 @@ export class KontorSession {
    */
   getProvenance(contract: ContractAddress): Promise<ProvenanceEntry[]> {
     return this.transport.provenance(contract);
+  }
+
+  /** Read publication claims and the artifact selected by the active protocol. */
+  async getContractProvenance(
+    contract: ContractAddress,
+  ): Promise<ContractProvenance> {
+    if (!this.transport.contractProvenance) {
+      throw new TransportError(
+        "Transport does not support effective contract provenance",
+      );
+    }
+    return this.transport.contractProvenance(contract);
   }
 
   /**

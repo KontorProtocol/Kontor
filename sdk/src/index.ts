@@ -43,6 +43,8 @@ export type { Inst } from "./inst.js";
 export { ContractBase } from "./contract-base.js";
 export type {
   BuildProvenance,
+  ContractProvenance,
+  EffectiveArtifact,
   Forge,
   Platform,
   ProvenanceEntry,

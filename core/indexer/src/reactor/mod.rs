@@ -14,6 +14,9 @@ mod execution;
 mod execution_fixture;
 pub mod executor;
 mod handlers;
+mod handoff;
+#[cfg(all(kontor_managed, feature = "protocol-qualification"))]
+pub(crate) mod upgrade_qualification;
 #[cfg(test)]
 mod handoff_tests;
 #[cfg(feature = "protocol-qualification")]
@@ -88,7 +91,7 @@ use crate::protocol::coordinator::committee::build_validator_set;
 use crate::protocol::coordinator::genesis::envelope;
 use crate::protocol::coordinator::linked;
 use crate::protocol::coordinator::selection::{
-    ApplicationPosition, ExecutionSelection, select_legacy_p1,
+    ApplicationPosition, ExecutionSelection, select_current,
 };
 #[cfg(test)]
 use crate::protocol::v1::committee::stake_to_voting_power;
@@ -153,6 +156,8 @@ pub struct PruneConfig {
 pub(crate) struct Reactor<E: Executor> {
     #[cfg(kontor_managed)]
     coordinator: Option<Arc<NodeCoordinator>>,
+    #[cfg(kontor_managed)]
+    engine_config: Option<engine::EngineConfig>,
     execution: ExecutionContext<E>,
     node_label: String,
     shutdown: ShutdownSignal,
@@ -294,6 +299,8 @@ impl<E: Executor> Reactor<E> {
         Self {
             #[cfg(kontor_managed)]
             coordinator: None,
+            #[cfg(kontor_managed)]
+            engine_config: None,
             execution,
             node_label,
             shutdown,
@@ -319,7 +326,7 @@ impl<E: Executor> Reactor<E> {
     ) -> impl Future<Output = Result<ExecutionSelection>> + Send + 'static {
         let conn = self.db_conn();
         let network = self.execution.network;
-        async move { select_legacy_p1(&conn, network, position).await }
+        async move { select_current(&conn, network, position).await }
     }
 
     fn preparation_selection(
@@ -943,20 +950,17 @@ async fn start_linked_consensus(
     last_block_height: u64,
     mempool_fee_index: mempool_fee_index::MempoolFeeIndex,
 ) -> Result<consensus_state::ConsensusState> {
-    let (context, _, validator_set) = consensus_state::certified_startup(&session.conn).await?;
+    let (_, _, validator_set) = consensus_state::certified_startup(&session.conn).await?;
     #[cfg(kontor_managed)]
     let output = match coordinator {
-        Some(coordinator) => coordinator.start(&engine_config, context)?,
+        Some(coordinator) => coordinator.start(&engine_config, &session.conn).await?,
         #[cfg(any(test, feature = "protocol-qualification"))]
         None => engine::start(engine_config).await?.into(),
         #[cfg(not(any(test, feature = "protocol-qualification")))]
         None => bail!("managed consensus requires node ownership before database startup"),
     };
     #[cfg(not(kontor_managed))]
-    let output = {
-        let _ = context;
-        engine::start(engine_config).await?.into()
-    };
+    let output = { engine::start(engine_config).await?.into() };
     consensus_from_engine(
         output,
         session.conn.clone(),
@@ -1138,7 +1142,7 @@ pub fn run(
                 }).await?;
                 let initial_mempool = execution.executor.parse_mempool(&execution.recognizer,
                     &selection, initial_raw_txs).await?;
-                let mut consensus = start_linked_consensus(engine_config,
+                let mut consensus = start_linked_consensus(engine_config.clone(),
                     #[cfg(kontor_managed)] Some(&coordinator), &execution.session,
                     &owner_service, network, observation_channels, timeouts, execution.last_height,
                     fee_index).await.context("start_consensus failed")?;
@@ -1147,7 +1151,10 @@ pub fn run(
                     shutdown.clone(), ready_tx, event_tx, simulate_rx, consensus, consensus_listen_addr);
                 reactor.upgrade_rx = upgrade_rx;
                 #[cfg(kontor_managed)]
-                { reactor.coordinator = Some(coordinator); }
+                {
+                    reactor.coordinator = Some(coordinator);
+                    reactor.engine_config = Some(engine_config);
+                }
 
                 reactor.run().await
             }

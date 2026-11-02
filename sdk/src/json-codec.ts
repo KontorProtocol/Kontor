@@ -39,7 +39,7 @@ import type { Transaction } from "@scure/btc-signer";
 
 import type { ContractAddress } from "./canonical/ContractAddress.js";
 import type { ContractError } from "./errors.js";
-import type { ProvenanceEntry } from "./provenance.js";
+import type { ContractProvenance, ProvenanceEntry } from "./provenance.js";
 import type { ExtraOutput } from "./outputs.js";
 import type { ExecutionCoordinates } from "./confirmation.js";
 import type {
@@ -151,6 +151,9 @@ export interface KontorTransport {
    * entry is the current claim). Empty if the contract has no provenance.
    */
   provenance(contract: ContractAddress): Promise<ProvenanceEntry[]>;
+
+  /** Publication claims and protocol-selected artifact from one node snapshot. */
+  contractProvenance?(contract: ContractAddress): Promise<ContractProvenance>;
 
   /**
    * Static analysis on a wire-Insts bundle. Does not execute against

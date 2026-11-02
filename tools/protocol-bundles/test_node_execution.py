@@ -7,16 +7,18 @@ import tempfile
 import unittest
 
 from build import ROOT, digest
-from qualify_node import CASES, CERTIFIED_CHECKS, execute_node, verify_certified_history, verify_managed_startup
+from qualify_node import CASES, CERTIFIED_CHECKS, execute_node, verify_certified_history, verify_managed_startup, verify_executor_observations, execute_transition, execute_recovery, execute_authorization
 from test_semantic_baseline import sample_observation
+from test_transition_evidence import transition_sample, recovery_sample, authorization_sample
 
 
 def certified_sample(link_set="k4-node"):
     """Synthetic gate input, never evidence that the Rust fixture ran."""
     def hashed(domain, value):
         return hashlib.sha256(domain + b'\0' + value).hexdigest()
-    executor = hashed(b'kontor/execution-definition/v1',
-                      (ROOT / 'protocol-bundles/executor-observer/definition.bin').read_bytes())
+    executor_path = ('protocol-bundles/retained/p1/protocol-bundles/executor-first/definition.bin'
+                     if link_set == 'managed-node' else 'protocol-bundles/executor-observer/definition.bin')
+    executor = hashed(b'kontor/execution-definition/v1', (ROOT / executor_path).read_bytes())
     chain = bytes([7]) * 32
     consensus_path = ('core/indexer/src/protocol/coordinator/managed/definitions/first.json'
                       if link_set == 'managed-node' else
@@ -38,6 +40,64 @@ def managed_sample(history):
 
 
 class NodeExecution(unittest.TestCase):
+    def test_managed_genesis_rejects_observer_as_p1_even_with_consistent_hashes(self):
+        sample = certified_sample('managed-node')
+        manifest = bytearray.fromhex(sample['manifest'])
+        wrong = hashlib.sha256(b'kontor/execution-definition/v1\0' +
+                              (ROOT / 'protocol-bundles/executor-observer/definition.bin').read_bytes()).digest()
+        manifest[76:108] = wrong
+        sample['manifest'] = manifest.hex()
+        sample['executor_definition'] = wrong.hex()
+        protocol = hashlib.sha256(b'kontor/protocol-manifest/v1\0' + manifest).digest()
+        sample['protocol'] = protocol.hex()
+        sample['era'] = hashlib.sha256(b'kontor/genesis-era/v1\0' +
+                                       bytes.fromhex(sample['chain']) + protocol).hexdigest()
+        with self.assertRaisesRegex(RuntimeError, 'selected genesis executor'):
+            verify_certified_history({'certified_history': sample}, 'managed-node')
+
+    def test_managed_baseline_cannot_claim_p2_as_a_second_p1(self):
+        first = {'graph': 'first', 'observations': sample_observation()}
+        verify_executor_observations({'executors': [first]}, 'managed-node')
+        with self.assertRaisesRegex(RuntimeError, 'mislabeled'):
+            verify_executor_observations({'executors': [first,
+                {'graph': 'observer', 'observations': sample_observation()}]}, 'managed-node')
+
+    def test_transition_process_failure_cannot_pass_with_valid_output(self):
+        sample = transition_sample()
+        for code in (0, 1):
+            self.binary.write_text(f'#!{sys.executable}\nimport sys\nassert sys.argv[1:] == ["qualify-protocol-transition", "--cluster"]\nprint({json.dumps(sample)!r})\nsys.exit({code})\n')
+            self.binary.chmod(0o755)
+            if code:
+                with self.assertRaisesRegex(RuntimeError, 'node transition failed'):
+                    execute_transition(self.binary, self.root)
+            else:
+                result = execute_transition(self.binary, self.root)
+                self.assertEqual(result['stdout_sha256'], digest(self.root / 'node-transition.stdout.json'))
+
+    def test_recovery_process_failure_cannot_pass_with_valid_output(self):
+        sample = recovery_sample()
+        for code in (0, 1):
+            self.binary.write_text(f'#!{sys.executable}\nimport sys\nassert sys.argv[1:] == ["qualify-protocol-transition", "--recovery"]\nprint({json.dumps(sample)!r})\nsys.exit({code})\n')
+            self.binary.chmod(0o755)
+            if code:
+                with self.assertRaisesRegex(RuntimeError, 'node recovery failed'):
+                    execute_recovery(self.binary, self.root)
+            else:
+                result = execute_recovery(self.binary, self.root)
+                self.assertEqual(result['stdout_sha256'], digest(self.root / 'node-recovery.stdout.json'))
+
+    def test_authorization_process_failure_cannot_pass_with_valid_output(self):
+        sample = authorization_sample()
+        for code in (0, 1):
+            self.binary.write_text(f'#!{sys.executable}\nimport sys\nassert sys.argv[1:] == ["qualify-protocol-transition", "--authorized-replay"]\nprint({json.dumps(sample)!r})\nsys.exit({code})\n')
+            self.binary.chmod(0o755)
+            if code:
+                with self.assertRaisesRegex(RuntimeError, 'node authorization failed'):
+                    execute_authorization(self.binary, self.root)
+            else:
+                result = execute_authorization(self.binary, self.root)
+                self.assertEqual(result['stdout_sha256'], digest(self.root / 'node-authorization.stdout.json'))
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
