@@ -2390,3 +2390,1297 @@ Evidence record: `.build-cache/k4-ci-test-correction.json`. Raw log hashes:
 - `k4-reactor-ci-correction67.log`: `e56ec29d76fca026edc4002185f35acece29dd42d8e32ef9a8f3fd846a37e5e3`.
 - `k4-rollback-lock-isolation68.log`: `543cced63e12dd26ca246c218ce17e8f8ff4c7604b6e881071adf08c83f6576d`.
 - `k4-ci-regressions69.log`: `a6c48471f9b9f6bfc5a0402209fd2829a40d5148b8ccc14e4fd3253c7b8e8960`.
+
+### K4 merge and final qualification, 1 November 2026
+
+PR [620](https://github.com/KontorProtocol/Kontor/pull/620) merged as
+`0a2cbd89e8ebdd8acc74b514e6d5e85e4c9466dd`. Its tree
+`00391db8c5665c82c0601a8a749253d4f37e569f` exactly matches candidate
+`25fee2f6d56afdb20d72f5dbb4180b398704e7a7` and the qualified PR test merge
+`364a3d4776778536d332c6e52241c257e73038a3`. Lead and sole independent
+review coverage includes the final regression-fixture corrections above.
+
+All four final-candidate workflows completed successfully: ordinary CI
+`41339806743`, native stack `41339806784`, linked-node qualification
+`41339806858`, and Docker cache qualification `41339806748`. Both comparison
+jobs and `CI required checks` passed. The lead downloaded the raw release and
+dev-smoke evidence, validated it against the checked-out source and artifacts,
+and reproduced both CI comparisons locally without rerunning workloads.
+All three linked-node release platforms produced the same observations digest,
+`2dff48679c667cfe78a8db2076a6a0139435a69e03f1aab586af416f5915b2cc`.
+This qualifies the recorded cases, not all possible executions or throughput.
+
+Evidence is retained in the preceding worktree under
+`protocol-certified-history/.build-cache/k4-final-25fee2f6/`, including raw
+reports, comparison records, ordinary CI logs, terminal workflow checks and the
+merge response. Duplicate post-merge stack and linked qualification runs
+`41343775884` and `41343775867` were requested cancelled only after verifying
+tree equality. Main CI `41343775846` remains responsible for its unique image
+publication. No SDK or Site publication was performed.
+
+The next grouped phase, K5/K6, starts from this verified merge in the isolated
+`protocol-upgrade-control` worktree. Its agreed revision-2 plan preserves the K4
+development baseline without silently relabeling existing databases, introduces
+independently locked real managed consensus graphs, and implements durable
+signing, engine coordination and explicit upgrade authorization. Actual
+after-H activation and cross-boundary recovery remain in K7/K8.
+
+### K5/K6 baseline preservation, 1 November 2026
+
+The extended existing snapshot tool captured K4 from the exact merge, using locked
+offline node and observer metadata under the shared Cargo lock. It verified both
+definitions before and after relocation. Snapshot
+`protocol-bundles/retained/k4/snapshot.json` has SHA-256
+`9359c0b7cdca0d9e2852262337061ce43a0856b32e36c173a41c4b874ba1ebf9`.
+It preserves coordinator definition
+`f02def02f91e190b72103d6d2a77c9521d86c0c1b7d814b9b792415fd8f9b4af`
+and observer definition
+`7026414e4530a26af9768253beea0e4bd426d28d6bcccec15d494c2014d1a82a`.
+The selected historical executor reference is included; its complete existing K3
+snapshot remains separately hash-bound rather than copied again. This preserves
+development-baseline interpretation, not a claim that an old K4 live engine is
+linked into the managed baseline.
+
+Focused source-root and coordinator-definition tests passed (7 and 3 tests).
+They check the frozen inventory, every coordinator source digest, historical
+executor reference, and baseline composition/lock inputs. The original snapshot
+checks still reject mutations, extra files and substituted inventories.
+No Rust build or runtime workload was started. Managed consensus adapters,
+durable signing and upgrade control remain to be implemented and reviewed as one
+group before its final-candidate CI campaign.
+
+### K5/K6 real consensus graph foundation, 1 November 2026
+
+Added independent `consensus-first` and `consensus-second` workspaces pinned to
+managed Malachite `6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09`. They compile the
+production Kontor context, validators, certified values, proposal/vote types and
+protobuf codecs. Their local protocol subset includes the exact descriptor/body
+validation and identity codecs. Neither resolved graph contains Wasmtime, libsql
+or Malachite's TestContext crate. The production signing module in these graphs
+contains public-key/address types only; private keys are available solely to tests.
+
+The first wire codec preserves the existing protobuf framing. The second wraps
+all codec messages in its distinct versioned envelope. A representative real
+Kontor block value keeps its certified identity across round-trip, and the two
+wire formats reject each other's input. This does not change historical value or
+certificate encodings. The wrapper also accounts for envelope bytes in sync
+response length reporting.
+
+Each independently locked graph passed 24 library tests, including inherited
+certificate, committee arithmetic, descriptor/body, identity and work-accounting
+checks, plus wire incompatibility. The first check encountered a read-only ccache
+configuration; disabling ccache allowed the build to proceed. Isolated resolution
+exposed Serde's previously indirect `rc` feature, now explicit in both manifests.
+An explicit test-module path enables reuse of the production certified-input
+tests from the new crate. Earlier failed attempts remain logs, not passes.
+Evidence: `.build-cache/k5-consensus-graph-foundation.json`, with raw log and lock
+hashes. New Rust files pass formatting checks.
+
+This is an intermediate local checkpoint. The crates are not yet linked into the
+node, and managed lifecycle, node event/reply bridge, durable signer and authorized
+control remain unfinished. Unused-code warnings reflect that unwired state and
+are not suppressed. The existing live baseline reference remains unchanged;
+its replacement and old-database preflight belong to the managed-baseline
+integration, so this checkpoint is not a final-candidate node build.
+
+### K5/K6 private consensus event bridge, 1 November 2026
+
+Added the graph-private adapter for the real Malachite application messages and
+proposal-publication channel. Events cross the intended boundary as owned bytes
+with generation, operation and one-use reply token. The private registry keeps
+Tokio reply senders inside their resolved graph. Retirement closes both delivered
+and queued requests, and rejects subsequent event delivery and publication.
+Nonblocking channel polling and publication preserve bounded queue backpressure.
+
+The adapter preserves actual Kontor value encoding, decision certificates,
+committee order, height parameters and separate peer-fault/local-transient sync
+outcomes. It checks reply positions, history ranges and trailing adapter bytes.
+Vote extensions remain disabled. Finalization misbehavior evidence remains a
+diagnostic string, matching its existing logging-only reactor use. Network wire
+envelopes remain separate from the in-process adapter encoding.
+
+Reply results distinguish stale generation, unknown token, wrong operation,
+malformed payload and ordinary receiver expiry without text comparisons. A
+malformed addressed reply consumes its capability and retires the bridge; normal
+GetValue expiry does not fault it. The lifecycle owner must act on bridge faults
+and retain engine ownership until join, which is still pending integration.
+
+Both independent locked graphs passed 39 library tests (zero ignored or failed),
+including real-value/certificate translation, delayed and duplicate replies,
+retirement of buffered requests, bounded publication, malformed framing,
+committee-order retention and unsupported extensions. Formatting and whitespace
+checks pass. Raw logs and source/lock bindings are recorded in
+`.build-cache/k5-consensus-bridge.json`. No CI was launched for this intermediate
+local checkpoint.
+
+These tests exercise the real graph types and channels, not a live managed engine
+or the node reactor. Managed owner/start/join, node adapter, linked graph
+provenance, the new baseline/preflight, durable signing and upgrade authorization
+remain unfinished. This is progress within the agreed K5/K6 group, not its
+acceptance or a production integration claim. Consolidated review remains pending.
+
+### K5/K6 managed owner lifecycle, 1 November 2026
+
+Added a graph-private owner around the fork's actual `ManagedEngine<Ctx>`, using
+Kontor's real context and each graph's wire codec. The owner is non-Send so it
+stays on the calling control thread. It retains the managed engine on startup or
+shutdown timeout, retires reply/publication channels before shutdown, preserves
+faults through join and makes repeated join queries stable. Drop retires pending
+application replies before the managed engine's blocking destructor runs.
+
+Channel availability is explicitly `ChannelsReady`, not consensus readiness.
+The node adapter must separately await the actual `ConsensusReady` event before
+exposing a running engine, with a bounded deadline that keeps ownership on timeout.
+An initial occupied-port test incorrectly expected all listener failures to
+surface as immediate managed-start errors. The fork can instead leave channels
+available without that readiness event. This is a required case for the node's
+readiness deadline, not evidence of successful startup and not a reason to start
+a competing engine. A separate invalid-WAL-path test establishes actual partial
+startup failure after network construction, joined cleanup and sticky fault state.
+
+Both independently locked graphs pass 42 library tests, zero failed or ignored.
+The new lifecycle cases exercise real follower engines, the real Kontor codec,
+WAL reopening, the same TCP listening port, deterministic startup/shutdown gates,
+retired callbacks and partial-start failure. A test-only verifier rejects all
+signatures and followers have no consensus signer; these are lifecycle tests,
+not cryptographic acceptance or multi-validator consensus evidence.
+
+The first sandboxed run could not bind localhost and failed the three lifecycle
+tests. Running with local socket permission passed the ordinary lifecycle and
+timeout cases; the occupied-port assertion above was then investigated and
+corrected. Raw failed attempts are retained. Final-source logs and hashes are in
+`.build-cache/k5-consensus-owner.json`. Formatting and whitespace checks pass.
+No CI, PR or publication was triggered.
+
+The owner is not yet connected to the node reactor or a public linked factory.
+Node-side durable signing/generation revocation, authorization, immutable managed
+definitions and build/link integration remain pending. The node coordinator must
+revoke signing independently of this owner's potentially blocking join. The
+operator's discussion clarified that linking does not require IPC or a generic
+serialized internal RPC layer; typed per-bundle adapters are possible. Keep the
+interface narrow and do not infer a requirement to serialize every operation.
+
+### K5/K6 typed consensus facade refinement, 1 November 2026
+
+The sole independent reviewer explicitly agreed the interface refinement against
+`de7a03d35c4afe07dc2c38232495726791ee606b`, before implementation. Each consensus
+bundle owns public Rust DTOs composed only of standard-library types. The node
+will translate between their distinct types without casts or a shared semantic
+crate. This replaces the unmerged generic operation-code and outer-byte encoding;
+it does not change network codecs, signing bytes or the merged executor API.
+
+Events now carry named request variants and an optional generation-bound reply
+token whose fields are private to the bundle. Responses carry named variants;
+the private registry checks the response kind before consuming a token. Canonical
+value, proposal, proposal-part, certificate and sync payloads retain their existing
+codecs in distinct byte wrapper types. Heights, rounds, timeouts, roles and committee
+parameters pass directly as typed data. Parameter conversion still validates
+committee order, membership uniqueness and voting-power arithmetic. Existing
+u32 collection/byte ceilings remain checked, with bounded queues and pending replies.
+
+Both independent locked consensus implementations pass 45 library tests, zero
+failed or ignored. These retain the real managed-engine lifecycle cases and add
+coverage for malformed inner payload retirement, history range/order checks and
+synced verdict height/round/proposer checks. Formatting and diff checks pass.
+Source/lock/log hashes are in `.build-cache/k5-consensus-typed.json`; no remote CI
+or publication was triggered. Lead inspection traced all ten application event
+variants, internal disabled-extension handling, one-use response ownership,
+receiver expiry, stale-generation rejection, malformed-response retirement and
+owner shutdown. No material regression was found in this intermediate scope.
+
+Public factory configuration, typed public errors/callbacks, node integration and
+actual independently linked facade type controls remain part of K5/K6, not proven
+by these library tests. In particular, the real-node readiness deadline must still
+cover a listener that never produces ConsensusReady, and signing revocation must
+remain callable independently of blocking join. The final grouped implementation
+review and required CI remain outstanding.
+
+### K5/K6 typed factory and readiness ownership, 1 November 2026
+
+Added typed engine configuration and a concrete non-Send engine facade. Public
+operations return bundle-owned errors and standard-library data. The internal
+factory maps settings to the private Malachite configuration, derives a separate
+network peer identity and preserves follower mode without a consensus signer.
+Invalid settings fail before engine construction or WAL creation. No consensus
+private key is accepted by the configuration.
+
+The facade distinguishes starting, initializing, running, stopping and joined.
+Private channel availability is insufficient for running: the actual ConsensusReady
+event and successful initialization reply are both required. Polling and replies
+check a bounded readiness deadline; expiry retires pending callbacks and requests
+stop while retaining the owner. Publication requires the current running
+generation. Public stateful operations contain unwinding panics, retain a sticky
+failure and request stop without giving up join ownership. A failed joined engine
+still reports its failure, separately from the joined state.
+
+Both independently locked graphs passed 50 library tests, zero failed or ignored.
+New real-engine cases establish follower settings, readiness acknowledgement,
+occupied-listener failure without false readiness, initialization timeout,
+panic containment with joined cleanup and configuration refusal before WAL
+creation. These run alongside the existing timeout, WAL/port reopen and typed
+reply tests. Raw logs and source/lock bindings are recorded in
+`.build-cache/k5-consensus-factory.json`. Formatting and whitespace checks pass.
+No CI or publication was launched.
+
+The internal start function still accepts the graph-private consensus context.
+Its public authority-based entry point awaits the bounded durable-signer callback
+integration; the node control thread and reactor wiring also remain unfinished.
+The lifecycle tests continue to use a reject-all verifier, so they establish no
+signature acceptance claim. Actual independently linked type controls, durable
+node transitions, signing fences and combined group acceptance remain required.
+
+The operator-designated Daybreak implementer confirmed availability and accepted
+an explicitly bounded security-sensitive durable-signing assignment. It owns new
+authority API/adapter and node durable-signer files in its isolated worktree. The
+lead retains ordinary factory/coordinator work and final integration. The agreed
+callback carries typed roles and canonical preimages, never the consensus key;
+node signing state validates and persists before returning signatures. Proposal
+and proposal-part signatures share a value commitment, and generation fencing
+remains independently callable during control-thread joins. The single Cargo
+slot was released after both local suites exited successfully. Delegated work
+still requires lead review and the one consolidated independent group review.
+
+### K5 consensus build integration, tooling checkpoint
+
+The builder now has an explicit `--build-consensus` mode for the independently
+locked `consensus-first` and `consensus-second` production graphs. Their identity
+binds the managed Malachite revision, manifest, lock and source root without
+inventing a Wasmtime identity or execution settings. Resolved consensus graphs
+reject Wasmtime and node storage dependencies, require the pinned Malachite
+closure and patched native crypto, and inventory the shared crate, imported
+production types and protobuf sources outside each manifest directory.
+
+The native input audit accepts explicitly identified VM-free graphs while still
+rejecting shared namespaces, colliding definitions, unowned native symbols and
+process allocators. Mixed final-link attribution retains each Wasmtime helper's
+actual graph owner. The source ownership tripwire distinguishes certified-input
+`Command::Block`/`Batch` variants and read-only PID access from process control.
+
+Consensus staging also compiles interface controls against its actual libraries:
+explicit typed DTO conversion and engine operations must compile; implicit
+cross-bundle DTO/engine conversion, private consensus/owner access, private Tokio
+type exchange and moving the engine owner across threads must be rejected for
+their expected compiler errors. Missing dependencies cannot count as successful
+negative controls. Report bindings preserve the library hashes and diagnostics.
+
+Local tooling validation passed 74 focused tests covering consensus recipes,
+sources, ownership and interface inputs together with existing executor recipes,
+dependency checks and node build/ownership controls. The log is
+`.build-cache/k5-consensus-build-tooling-tests.log`. The initial native fixture
+run could not write the default compiler cache; rerunning with `CCACHE_DISABLE=1`
+passed. No Rust bundle build, actual consensus interface compilation, node link,
+CI or handoff qualification ran in this checkpoint. The durable-signing agent
+has the reserved Cargo/runtime slot in its isolated worktree; source-only
+tooling tests do not establish production integration. Actual staged builds,
+linked node adapters, signer integration and grouped acceptance remain open.
+
+### K5 typed node adapter checkpoint
+
+Added node-owned coordination messages and explicit adapters for both production
+consensus facades. Each adapter moves canonical payload bytes without decoding
+or re-encoding them, preserves request generation, round distinctions, committee
+order and timeout fields, and maps typed errors without matching their text.
+Reply tokens retain their originating bundle tag; a token from the other bundle
+is rejected before invoking either engine. The selected owner remains non-Send
+and exposes poll, respond, publication, readiness diagnostics and stop/join
+operations for the upcoming control-thread integration.
+
+The maintained `tools/kontor protocol-bundles` command now forwards
+`--build-consensus`. Consensus staging compiles the actual node adapter sources
+against both independently staged libraries and runs seven focused conversion
+tests. The checker requires both bundles' named tests to execute with no failures
+or ignored tests, and records source, library, executable and log hashes. Node
+adapter sources are included in the staging provenance inventory.
+
+Formatting/whitespace checks and 75 focused Python/C tooling tests passed
+(`.build-cache/k5-node-adapter-tooling-tests.log`). After the signer agent returned
+the slot, the maintained CLI compiled and the local staging run built both real
+consensus graphs, passed their native input ownership audit, and passed all seven
+actual-library type/privacy checks. The stored interface report was verified
+against the staged graph reports and raw diagnostics.
+
+The subsequent adapter test compile failed with E0583: importing the parent module
+through an external `#[path]` changed Rust's child-module lookup directory. The
+harness now explicitly imports the actual adapter and DTO files. Seventeen focused
+tooling checks passed after this fix. The next compile exposed publication's
+borrowed argument requirement. Publication now returns the original owned payload
+on full, closed or failed delivery, allowing retry without copying or loss.
+
+A focused rerun verified the staged library hashes, compiled the actual adapters,
+and passed all seven adapter tests, with zero failed, ignored or filtered out.
+The payload retry test checks the original allocation is retained. Evidence and
+source/library/binary/log bindings are in
+`.build-cache/k5-node-adapter-validation/result.json`; raw output is under its
+`node-adapter` directory. The earlier partial runs remain failures, not relabeled
+passes. No full node handoff qualification marker is claimed by this focused run.
+
+The node module is gated by `kontor_managed`; the production builder does not
+enable it yet. Production reactor wiring, control-thread implementation, managed
+baseline activation and a successful linked handoff remain part of this grouped
+implementation, followed by the consolidated review and required CI.
+
+### K5 durable signer and public authority startup
+
+Integrated delegated signer commit `55df953b` after lead inspection of its six
+files and the canonical codecs and ownership paths they depend on. The journal
+records bounded message commitments and signatures, preserves exact retries and
+cross-generation conflict history, and serializes durable signing and fencing.
+Proposal and proposal-part Fin share a value commitment. The node retains the
+validator key; each bundle receives only typed signing callbacks. The network key
+is separate. The journal lives outside reversible canonical state.
+
+The inspected delegated node log records 12 passing signer tests. Both integrated
+consensus graphs now pass 54 tests each through the public authority-based startup
+path, including actual follower/validator startup, invalid configuration before
+signing, signing failure and panic before WAL creation, readiness and stop/join.
+Local evidence is `.build-cache/k5-authority-factory.json` and its two raw logs.
+The older sandbox owner/readiness timeouts remain recorded; these complete runs
+succeeded with localhost networking available. No new CI campaign was started.
+
+The lead review is recorded in `.build-cache/k5-durable-lead-review.md`. Torn
+journal frames fail closed; deleting or rolling back the entire signing directory
+cannot be detected without an external monotonic anchor. Journal history grows.
+These are limitations, not claims of automatic repair or bounded total history.
+The node must still connect generation selection, independent revocation,
+control-thread lifetime and reactor replies. The new public startup entry point
+and component tests do not establish a working protocol activation yet.
+
+The node now has explicit startup adapters for each bundle's configuration and
+signing request/error enums. The actual node library and test executable were
+compiled with both independently staged consensus libraries. Eight focused tests
+passed, including startup through the real node durable signer for both bundles,
+Ready delivery, independent node fencing, stop/join, releasing the old signing
+owner, and reopening the same journal under the next generation. Seven existing
+adapter conversion/backpressure tests also passed in that executable.
+
+The first local test build failed because `testlib`, a reverse dependency of the
+node, lacked the separate library search paths. Correcting the local compiler
+wrapper resolved E0463; the retry reused verified staged artifacts instead of
+rebuilding or reauditing unchanged dependencies. Raw successful evidence and
+source/library-wrapper/binary/log bindings are in
+`.build-cache/k5-node-authority-test-rerun.json`. This check uses the real node
+sources with `kontor_managed` enabled, but does not enable the production builder,
+change the preserved K4 baseline, execute a consensus decision, or establish the
+remaining live reactor handoff. No PR or CI run has been launched for this group.
+The same linked test executable also passed all 12 durable-signer tests locally,
+including conflicting retries after reopen, fencing races and failed writes.
+This reused the compiled binary without another Cargo build; its hash and raw log
+are recorded alongside the adapter result.
+
+### K5 node control-thread checkpoint
+
+The node now constructs the selected non-Send engine on a dedicated control
+thread. Bounded node-owned event and command queues carry typed messages and
+reply tokens; bundle Tokio and Malachite types remain private. The node can
+request stop and revoke signing independently of that thread. Node async tasks
+poll for thread completion without blocking on a running thread's join.
+
+The engine slot is released only after an explicit successful join. A timeout
+retains its handle and slot. An abandoned handle requests stop, but leaves the
+slot unavailable; failed startup or teardown also fails closed. The worker
+retains and drains the actual engine. Pending commands are rejected before
+blocking teardown, returning publication buffers where non-publication is known.
+A lost acknowledgement after admission is represented as unconfirmed, rather
+than incorrectly reported as a definitely unsent publication. Readiness expiry
+is enforced even when the event queue is full.
+
+Twelve focused managed-node tests passed in the actual node test executable
+linked to both independently staged consensus bundles. Four new tests cover
+ordinary control-thread startup/replies/listener discovery/stop for both bundles,
+a blocked real engine startup while node signing is independently revoked,
+timeout retention and rejected competing startup, failed and abandoned owners,
+and unacknowledged Ready expiry. These tests run on the node's single-threaded
+async test runtime, so the blocked control thread does not occupy that runtime.
+The existing startup and adapter tests also passed. Evidence is
+`.build-cache/k5-control-test.json` and `.build-cache/k5-control-test.log`.
+
+This is still component integration. The reactor must adopt these events/replies,
+reject stale generations before applying work, persist the selected managed
+baseline/generation, and use the stop/revoke/join sequence for live handoff. The
+production builder and K6 control path remain unfinished. No new CI or independent
+microreview was requested; the grouped PR still needs its consolidated review.
+
+
+### K5 reactor reply bridge checkpoint
+
+A node-owned reactor bridge now converts managed bundle events into the existing
+handler types, retaining canonical payload codecs. Reply futures and any response
+already being submitted remain owned by the bridge across cancellation of a
+reactor poll. Pending replies are bounded. Dropping a handler reply explicitly
+abandons its private engine sender; abandoning startup fails the engine instead
+of acknowledging readiness. Stale-generation cancellation cannot consume another
+generation's reply. Finalized evidence remains diagnostic text and the existing
+certificate/finalization handler remains authoritative.
+
+The actual node test executable, linked with both independent consensus bundles,
+passed 15 managed tests. The three new tests cover delayed replies across canceled
+polls for both bundles, retained outgoing response futures, and dropped startup
+replies followed by engine join. Both bundle suites passed all 56 tests, including
+explicit cancellation, stale and repeated cancellation, and abandoned readiness.
+Evidence is `.build-cache/k5-reactor-test.json` and
+`.build-cache/k5-abandon-tests.json`, with their raw logs. The initial role-name
+compile mismatch is preserved in `.build-cache/k5-reactor-initial-compile.json`.
+
+This checkpoint does not switch production startup or complete K5/K6. The live
+reactor loop, durable generation selection, proposal signing, managed baseline
+identity, production build wiring, authorization and final grouped review remain.
+No PR or CI campaign was launched for this checkpoint.
+
+### K5 live reactor transport checkpoint
+
+The reactor now receives consensus events, publishes proposal parts, discovers
+the listener, signs proposal Fin messages and stops the engine through a
+node-owned transport. Managed engines use the same durable signer for Fin and
+engine signatures. Publication backpressure retains the original buffer;
+shutdown retires callbacks, independently fences signing and awaits the worker.
+Construction failure also requests engine shutdown. Legacy startup remains
+selected until managed protocol identity and durable ownership are integrated.
+
+The actual node linked with both independent consensus bundles passed 18 selected
+tests (zero failures or ignored tests, 72.09 seconds): 15 managed component tests,
+a new real signing/publication/decision test through each bundle, existing
+validator agreement, and the delayed-proposal deadline regression. The new test
+authenticates reassembled proposal parts and verifies the decided precommit
+signature. Evidence and lead review are in
+`.build-cache/k5-live-transport-test.json` with its raw log. Subsequent formatting
+only changed whitespace in three fixture files, verified and recorded there.
+This local driver did not record the test binary checksum; final grouped
+acceptance must retain complete candidate provenance.
+
+This does not establish full managed database application or activation. Managed
+startup/identity, persistent generation ownership, production build wiring, K6
+authorization and operator dry run remain unfinished. No CI or independent
+microreview was requested; consolidated grouped review is still required.
+
+### K5 persistent ownership and managed lifecycle checkpoint
+
+The node now has an exclusive persistent generation owner, separate network
+identity, and per-validator signing history. Reserving a generation appends and
+syncs its identity before use. Restart advances the generation; within a process,
+only successful engine join releases the active reservation. Follower mode retains
+the same ownership lease without receiving a signing capability. Managed startup
+checks the reserved generation, network seed, validator/follower mode and exact
+signer ownership. Unowned control/reactor startup helpers are test-only.
+
+Both the control handle and worker retain the lease. Dropping the public handle
+while construction or teardown is blocked does not release the OS lock. A timeout
+does not permit another reservation or engine. The real two-bundle transport test
+now uses this persistent owner and verifies that node and both bundle graphs
+derive the same network peer identity from its seed.
+
+Lead review found that opening an existing journal with a missing lock could
+create a replacement lock before rejecting the inconsistent state. Both the
+generation owner and signer journal now check presence before lock creation.
+Regressions remove each lock while its original owner remains live and verify
+that repeated attempts fail without recreating it. These fixes were integrated
+from the delegated ownership work and reviewed by the lead.
+
+The combined actual-node suite passed 39 tests, zero failed or ignored, in
+2.45 seconds after a 1m28s build. Coverage includes signer conflicts and retries,
+crash/reopen generation advance, stale tokens, exact owner admission, missing and
+truncated state, independent revocation during blocked engine startup, dropped
+follower-handle lock retention, reply cancellation, and real proposal/decision
+signatures through both bundles. `.build-cache/k5-owned-control-test.json` records
+source, binary, wrapper, link specification and log hashes, plus lead review.
+The prior 37-test result is retained separately as evidence before the lock fixes.
+The delegated ordinary non-managed signer target also passed 20 tests before
+those two fixes; it is not represented as final-source coverage.
+
+Limitations: wholesale deletion or complete-prefix rollback of local authority
+history requires an external monotonic anchor to detect. Missing/truncated state,
+including a header-only journal after interrupted first initialization, fails
+closed rather than being automatically repaired. Production managed baseline
+admission, coordinator startup, builder wiring, K6 controls and dry run remain
+unfinished. This is not final handoff/activation evidence. Consolidated independent
+K5/K6 review and final scoped CI remain required; neither was launched here.
+
+### K5 managed identity and database admission checkpoint
+
+The operator clarified that intermediate pre-release implementations do not need
+compatibility support. The goal and plan now exclude a K4 live compatibility or
+migration project while retaining the final managed P1/P2 historical guarantees.
+
+The managed definition now binds the actual coordinator sources and independently
+locked consensus-first graph, including transitive dependencies, resolved features,
+dependency aliases/target conditions, local sources and build inputs. Generated
+references are excluded from their own source closure. The existing K4 reference
+is unchanged. The managed reference is still unreleased and will be finalized
+with the complete K5/K6 implementation, before registering its successor.
+
+Daemon startup reads configured genesis once and checks existing protocol state
+through a read-only database snapshot before opening the schema-initializing
+writer. Supported initialization and restart retain their identity. Unsupported
+contexts, changed manifests and populated state without protocol history are
+refused without database initialization or relabeling. Pure genesis conversion
+and chain derivation are shared with actual bootstrap to avoid divergent startup
+identities.
+
+Eighteen focused Python definition tests passed. Generation using the real
+locked, unfiltered metadata covered 468 consensus and 493 coordinator packages.
+Nine actual-node Rust tests passed, zero failed or ignored, in 17.60 seconds
+after a 1m17s build. These cover identity separation, read-only admission,
+interrupted genesis, unsupported/malformed state, atomic genesis reservation and
+reopening a fully published native genesis through the daemon's admission API
+without replaying publication. `.build-cache/k5-protocol-admission-test.json`
+binds the source, binary, runner, wrapper, link specification and raw log. The
+first run also passed nine tests, but its evidence driver incorrectly expected
+ten and exited nonzero. That result is preserved separately; the final rerun
+adds the ready-database admission path and uses the correct expected count.
+
+This remains single-managed-protocol K5 startup. K7 must separate original genesis
+verification from persisted current-era selection and interrupted activation
+recovery. Production engine ownership before canonical mutation, managed engine
+startup, final independent-graph node builder, K6 and grouped acceptance/review
+remain unfinished. The local library tests do not establish final production
+binary or cross-platform qualification. No CI was launched.
+
+### K5 managed daemon startup and ownership checkpoint
+
+The managed daemon now acquires its persistent generation owner and initial
+signer before opening the schema-initializing writer. Read-only protocol
+admission runs first, and runs again after the exclusive owner is acquired.
+Unsupported intermediate databases remain untouched. A competing node cannot
+create a second database in the owned directory. Network identity persists
+independently of validator identity.
+
+The reactor retains the node coordinator and starts the real first consensus
+bundle through its typed adapter. Restart reserves a fresh generation only after
+the previous engine has joined. The WAL path is era-specific and stable across
+restarts within an era. Production managed startup requires the coordinator;
+legacy startup remains available to existing isolated test/qualification fixtures.
+There is no new Malachite fork change in this checkpoint.
+
+Twelve focused Rust tests passed, zero failed or ignored, in 53.20 seconds. The
+new live test publishes actual native genesis, starts a consensus round, joins
+the engine, restarts another round using the same node owner and WAL, joins again,
+and verifies the next reservation is generation three. Admission, preserved
+network identity, exclusive ownership, bootstrap and owned-genesis shutdown are
+also covered. Two earlier attempts failed at initial network readiness inside a
+sandbox that denied localhost socket creation, independently reproduced with
+`socket.socket()`. Their failed logs are preserved. The successful run used
+localhost access without increasing startup timeouts.
+
+`.build-cache/k5-managed-startup-test.json` binds the test source, binary, raw log,
+runner, wrapper and staged-library specification. The actual daemon entry point
+also compiled successfully with the managed configuration; its final evidence is
+`.build-cache/k5-managed-daemon-build.json`. After the tests, only a conditional
+import in `main.rs` changed to remove a managed-build warning. The final daemon
+build covers that correction; the tested library sources are unchanged.
+
+Lead review traced admission before initialization, owner/signer lifetimes,
+reactor startup and shutdown, generation reuse after join, and same-era WAL
+selection. This is component integration using independently staged consensus
+libraries, not final independent executor-plus-consensus production-link evidence.
+The production builder, K6 authorization/rehearsal, activation/recovery and the
+consolidated K5/K6 review remain outstanding. Existing warnings for unselected
+later-phase helpers remain visible. No PR or CI campaign was launched.
+
+### K5 combined managed-node builder and evidence checkpoint
+
+From base `5721f50f88453a29ca3ec559758b79cbcd22b5a8`, the production builder
+now defaults to `managed-node`. It builds retained `first` and current `observer`
+executors plus `consensus-first` and `consensus-second` independently, and links
+all four into the daemon with managed startup enabled. Role-qualified audit
+labels prevent the two `first` graphs from aliasing. Their original identities,
+source inventories and staged-library fingerprints remain separate. Node Cargo
+resolution rejects accidental inclusion of an executor or consensus facade.
+There is no IPC, dependency unification or Malachite fork change.
+
+The builder applies existing common-resource and final native-symbol ownership
+checks to the combined graph set. It verifies the managed definition against the
+locked all-target coordinator and first-consensus metadata. Qualification now
+requires both consensus source inventories, link bindings, interface controls
+and actual typed-adapter test logs. Certified-history evidence must match the
+selected consensus definition as well as the observer executor. The CI artifact
+paths include this evidence in the existing scoped job and comparison; no new
+matrix or always-on PR job was added.
+
+Local Linux ARM dev evidence is `.build-cache/k5-managed-node-qualification.json`
+and the raw reports under
+`.build-cache/k5-node-linked/aarch64-unknown-linux-gnu/dev/`.
+The combined build/audits/controls passed in 279.68 seconds. The installed daemon
+hash is `cc16228b8eae58b5af8068b38402e402f0282a738a38588c3951926c761c1db0`.
+The 25-case executor harness passed in 190.21 seconds, including equality against
+the preserved semantic baseline and all 17 certified-history checks, with 15
+certified and closed decisions. The current comparator accepted the actual local
+cell, including both consensus graphs and seven adapter tests. This is one local
+dev cell, not cross-platform qualification or a performance acceptance campaign.
+
+The first local driver omitted `--install-node`, so it stopped after the successful
+build with a missing installation record, before executing any runtime cases.
+`.build-cache/k5-managed-node-before-install.json` preserves that failure. The
+recovery driver used the existing hash-checking `install_node` helper on the same
+audited executable, preserved the pre-install report, then executed and verified
+it without rebuilding or changing its source evidence. The normal CI runner
+already supplies `--install-node`.
+
+Thirty-six node builder/runner/comparator tests passed. Five interface-control
+and twelve consensus-input tests also passed. Negative controls cover missing or
+substituted consensus graphs, stale interface and adapter bindings, incomplete
+adapter test logs, and substitution between K4 and managed consensus identities.
+The workflow YAML parses and `git diff --check` passes. Lead review traced the
+four graph roles through compilation, audit input sets, source bindings, installed
+binary hashes and uploaded evidence paths. Independent review remains consolidated
+around the complete K5/K6 group.
+
+The certified-history fixture deliberately retains its isolated legacy engine
+path. This result does not turn that fixture into managed-engine startup evidence;
+the prior managed startup tests cover that separately. Integrated managed runtime
+acceptance in the final independently linked daemon, K6 authorization/rehearsal,
+and grouped review/CI/merge remain outstanding. No PR or CI campaign was launched.
+
+### K5 managed startup in the independently linked daemon
+
+From base `64ae83c24ff28b8b69d8e476b13f9a824afaa130`, the existing
+managed startup test now shares its implementation with the node qualification
+entry point. The installed daemon starts the actual managed first consensus
+bundle, answers readiness and round-start requests, stops and joins it, then
+starts and joins a second generation using the exact same listener and era WAL.
+The test also rejects concurrent generation ownership and a competing database
+writer before that writer can create its database. Certified history stays
+available and unchanged through the restart. The runner and comparator require
+these results to match the selected chain, protocol, era and executor definition.
+
+The local Linux ARM dev run passed. Combined independent builds, ownership audits,
+interface checks and typed-adapter checks took 284.24 seconds; the installed
+daemon completed the retained 25 executor cases, certified-history checks and
+managed startup/restart in 205.62 seconds. Its SHA-256 is
+`1cfc3185c7006ce01c5d1ba170b6771d5df608cb09f10d02a15f91832fd3e0da`.
+The result is `.build-cache/k5-managed-runtime.json`, with raw build and runtime
+logs and the actual comparator result bound to that binary and the tested source
+hashes. Thirty-seven focused Python node tests passed, including rejection of
+missing startup evidence, changed protocol identity, incomplete joins, listener
+changes and incorrect generation counts. `git diff --check` passes.
+
+Lead inspection traced the shared helper through the actual linked runtime,
+confirmed that the comparator requires its output, and verified all ten recorded
+source hashes after the run. The ordinary Rust test wrapper was not rerun for
+this checkpoint; the same helper was compiled and executed in the linked daemon.
+The previous builder checkpoint's raw files and executable are preserved under
+`.build-cache/k5-combined-builder-checkpoint-64ae83c2` before reuse of the build
+output directory. This is one local dev cell and same-era restart evidence, not
+cross-platform acceptance or the incompatible-protocol activation handoff.
+K6 control integration, K7 activation, and the grouped review/CI/merge remain
+outstanding. No CI campaign or fork change was needed for this checkpoint.
+
+### K6 reversible approval and control persistence checkpoint
+
+The operator replaced irreversible upgrade effects with canonical rollback and
+fresh validator reapproval. The single independent reviewer agreed
+K6-ROLLBACK-PLAN revision 1 after tracing K4 branch intervals, frozen finality
+replay and owned rollback. The implementation plan now records the signed-reference
+floor, action-ID retractions at the correct historical prefix, and K7/K8's
+post-closure protocol selection with fresh engine eras. Existing authenticated
+history and signing safety remain monotonic. The superseded uncommitted Bitcoin
+high-water draft was archived in `.build-cache/k6-superseded-high-water` and removed.
+No merged prerequisite or completed K5 implementation was reverted.
+
+Authorization draft `7288c9c0` was integrated as `98cda5bb`. Its bounded revision
+`f89967b8` was integrated as `0065676f`: canonical Bitcoin reference/inclusion
+heights replace high-water, a rollback-derived minimum closed reference rejects
+old consent after nonce/head restoration, and KUS1 encodes reversible snapshots.
+The signed KUA1/KUC1 action/envelope formats are unchanged. All 14 focused verifier
+and codec tests passed in the isolated worktree. The three integrated source
+hashes match that tested source. Raw log: `/tmp/k6-auth-2-focused-cargo.log`.
+This is verifier evidence; callers still authenticate references and committees.
+
+The lead added canonical control application records and snapshots, action-ID
+retractions bound to rollback origin/stage, indexed prefix-scoped invalidation
+and reference-floor queries, and the retraction call inside the owned reactor
+rollback transaction. Canonical-history deletion cannot bypass a retraction.
+Reconstruction accepts an original action before its recorded rollback but checks
+that rederiving the same retraction produces exactly the same disposition. A
+changed signature subset cannot evade invalidation by changing the envelope ID.
+Snapshots and retractions roll back together if canonical undo fails. Effects at
+the target Bitcoin height survive, matching existing application-suffix rules.
+
+All five new persistence tests passed, including failure injection, reopen,
+nonce/state restoration prerequisites, duplicate/retracted action rejection,
+historical-prefix reconstruction and a rollback spanning more than one read page.
+The combined test build took 2m03s; these tests ran in 0.06s. The same compiled
+binary then passed 19 certified-history tests (including those five), eight
+canonical-history tests, six canonical-application tests and the actual owned
+closure-stage test (16.84s). Evidence and source hashes are in
+`.build-cache/k6-control-persistence-validation.json`; regression command/log and
+binary bindings are in `.build-cache/k6-control-regressions.json`.
+
+Lead review checked canonical suffix selection, restored snapshots, atomic
+rollback/error behavior, action versus envelope identity, prefix-scoped floor
+queries and exact reconstruction. Planning agreement is not code approval;
+independent implementation review remains consolidated around complete K5/K6.
+Live typed control proposals, authorization/application integration, explicit
+control replay disposition, operator APIs/rehearsal and K7/K8 activation are still
+unfinished. The persistence tests invoke the storage primitive and do not establish
+end-to-end control consensus or cross-upgrade recovery. No CI campaign, PR, merge,
+publication or new fork change was performed for this checkpoint.
+
+### K6 typed command and reactor rollback checkpoint (1 November 2026)
+
+Local implementation based on `049115e0`, not a completed K5/K6 group or merge.
+Upgrade controls now have their own certified command tag and exact KUC1 body.
+The execution index and replay selector distinguish Block, Batch and Control.
+Controls cannot decode as Bitcoin transactions or enter transaction-exclusion
+filtering. Old intermediate boolean-command schemas are refused during read-only
+node admission, without relabeling or deleting their data.
+
+Proposal admission and owned application use the same verifier integration:
+closed authenticated reference, current inclusion committee, canonical Bitcoin
+position, current reversible state, action-ID retraction and historical reference
+floor. Application persists its snapshot and canonical lineage with the closure
+stage. Finality replay carries controls as explicit commands and records a
+RetractedControl outcome after owned undo; it does not reauthorize old envelopes.
+Historical stage recovery validates the original envelope/application binding,
+not the latest canonical snapshot. The live snapshot check occurs at commit.
+
+The expanded owned-closure test passed (17.21s). It covers signed schedule and
+cancel, invalid signature/anchor, interrupted application, atomic retry, restart,
+duplicate rejection, typed replay selection and recovery of an earlier control
+closure after a later action changes the state. The same production source passed
+seven certified-input tests, 14 approval tests, 20 certified-history tests and two
+read-only protocol-admission tests. Two additional filters selected zero tests;
+they provide no coverage and are excluded from the 44-test count. Commands,
+results and binary binding: `.build-cache/k6-control-command-regressions.json`;
+owned-unit raw log: `.build-cache/k6-control-inclusion-tests-final.log`.
+
+A new real-executor reactor test then passed (69.07s, build 1m12s). It executes an
+unconfirmed issuance batch, applies a schedule, reaches the six-block finality
+deadline, and interrupts after owned rollback removes the schedule. A reopened
+executor recovers the remaining frozen work. The old envelope and the same
+approval reanchored at the current tip are rejected. A new signed action using
+the completed rollback decision succeeds. A separate fresh database reconstructs
+all the original retained inputs/certificates; closed records and canonical
+control state match recovery, including after the fresh submission. The original
+schedule's certificate and original application history remain verifiable after
+retraction. Raw log: `.build-cache/k6-control-reactor-recovery.log`.
+
+This test uses the real reactor closure/executor/database path and authenticated
+fixture certificates, without a live multi-validator network. It does not yet
+prove operator submission, live proposal transport, all postpone/cancel undo and
+Bitcoin-reorg cases, or cross-activation migration/engine handoff. Those remain
+in scope. The focused local build encountered a Rust incremental fingerprint ICE;
+only disposable indexer incremental caches were removed before a successful
+rebuild. No fork changes, CI runs, PRs, merges or publication were performed.
+Consolidated lead and single independent review remain required for complete
+K5/K6. Source/binary hashes and limitations are recorded in
+`.build-cache/k6-control-command-validation.json`.
+
+### K6 operator submission and proposal production checkpoint (1 November 2026)
+
+Local work based on `1991e61d`, with K5/K6 still incomplete. The daemon now wires
+`GET /api/protocol/upgrades` and `POST /api/protocol/upgrades` to the live reactor.
+GET reads one deferred database snapshot and reports the closed reference,
+canonical Bitcoin position, current control head/nonce/pending plan, reference
+floor and next inclusion committee. Heights, nonce and voting powers are decimal
+strings. Canonical state/manifest bytes accompany their displayed identifiers.
+The endpoint returns unavailable while authenticated history has unfinished work.
+
+POST accepts `{"envelope_hex":"<canonical KUC1 hex>"}` under an explicit body
+limit. It does not sign, collect approvals or amend signed fields. A capacity-one
+submission channel and one pending approved action bound local queue storage.
+Successful responses contain action ID, envelope ID and `status: "queued"`;
+this means queued on that node, not consensus acceptance or durable storage.
+The queue is volatile across restart. Identical pending submissions are
+idempotent; another valid pending action receives a temporary busy response.
+An HTTP timeout does not prove that a submission was not queued; retrying the
+identical envelope is safe while it remains valid. A rolled-back or otherwise
+invalidated action requires fresh approvals as specified by the control protocol.
+
+The proposer reuses live admission on every use and prioritizes a valid control
+before a pending Bitcoin block. Unfinished closure temporarily defers the queue;
+action expiry, changed state, committee changes or retraction invalidate it.
+Malformed or mismatched request context is an ordinary rejection, while database
+and history failures remain fatal infrastructure errors. Lead review caught and
+fixed a potential unsupported-codec error escaping the ordinary rejection path.
+No approval semantics, thresholds, signature domains or rollback rules changed.
+
+Five focused checks passed on the final source: malformed/oversized decoding;
+HTTP bounds, backpressure, closed channel and local acknowledgement; real-executor
+queue/proposal publication with a local Malachite engine; existing banked-verdict
+rollback protection; and pending-recognition/channel-backpressure behavior. The
+proposal test covers bad signatures and codecs, duplicate and competing actions,
+retention through an unrelated closed decision, priority over a pending block,
+exact signed-envelope publication, and rejection after canonical consumption.
+It passed in 18.28s. HTTP validation passed in 0.29s; the two existing regressions
+passed in 17.19s and 17.18s. The daemon test entry point compiled but its filter
+selected zero binary tests, which is not counted as test coverage.
+
+Initial failures were a missing startup-test argument, a disabled-network test
+fixture, sandbox socket restrictions, and an HTTP fixture lacking certified-history
+schema. The final real-engine run used local socket access. These tests use real
+execution/database and proposal publication, but fixture certificates rather than
+a live multi-validator quorum. The managed independent-bundle node has not been
+rebuilt for this checkpoint. Raw commands, source/binary bindings and results are
+in `.build-cache/k6-operator-validation.json` and the referenced logs.
+
+Lead inspection covered input-error versus infrastructure-error handling, queue
+bounds and lifetime, revalidation and proposal ordering, and read snapshot
+consistency. Remaining K6 work includes approval preparation/signing/assembly
+CLI and SDK interfaces, operator migration dry-run/support diagnostics, remaining
+postpone/cancel undo and Bitcoin reorg/committee cases, and consolidated K5/K6
+integration and review. K7/K8 activation/handoff remains the next dependent group.
+No CI, PR, merge, fork changes or publication were performed for this checkpoint.
+
+### K6 unsigned preparation, SDK and control undo checkpoint (1 November 2026)
+
+Local continuation of `33a0116b`. `POST /api/protocol/upgrades/prepare` constructs
+unsigned KUA1 action bytes and their ID from one consistent closed-history
+snapshot. Callers supply an explicit Bitcoin expiry and Schedule manifest/H,
+Postpone H, or Cancel request. Preparation binds current head, nonce, pending
+plan and closed reference, then reuses admission with empty approvals: only the
+final insufficient-quorum result is expected. Other operation/reference errors
+reject preparation. It never changes canonical state, queues work or grants
+approval. Heights must be canonical decimal u64 strings. Operators must inspect
+and approve the exact returned bytes before submission.
+
+The SDK now exports a separate `UpgradeClient` for state, preparation and envelope
+submission. It takes an API URL and optional fetch/headers, without requiring a
+Bitcoin wallet identity or signer. It preserves decimal strings and explicit
+approved envelope bytes, supports caller cancellation, and does not poll, retry,
+regenerate approvals or imply consensus acceptance from a local queue reply.
+No SDK release was published.
+
+The real-executor preparation/reorg test passed in 42.56s: it applies Schedule,
+Postpone and Cancel, replaces Bitcoin block 3 to undo Cancel and restore Postpone,
+then replaces block 2 to undo Postpone and restore Schedule. Old approvals are
+rejected against restored state, retained closures remain recoverable, and a
+freshly prepared/signed postponement succeeds. Preparation is checked to leave
+canonical control state and the certified frontier unchanged. Invalid short notice,
+Cancel without a pending plan and Schedule over a pending plan are rejected.
+The canonical-u64 preparation test and existing HTTP submission test passed too.
+SDK build and eight focused client tests passed with no type errors. The existing
+SDK dependency directory was reused only after verifying its lockfile digest
+matches this worktree; no dependency or lockfile change was made.
+
+Evidence: `.build-cache/k6-prepare-validation.json`, raw Rust log
+`.build-cache/k6-prepare-reorg-test.log`, focused binary report
+`.build-cache/k6-prepare-regressions.json`, and SDK build/test logs. These are
+focused local checks, not full managed-bundle or live-quorum qualification.
+Offline signing/assembly is being implemented separately by the Daybreak agent
+under K6-APPROVAL-CLI and is not yet integrated at this checkpoint. Migration
+rehearsal/support diagnostics, remaining committee coverage, the agreed pre-K7
+activation guard and consolidated K5/K6 review/qualification remain unfinished.
+No new independent review, CI, PR, merge, fork change or publication was requested.
+
+### K6 offline approval integration checkpoint (1 November 2026)
+
+Integrated Daybreak task `K6-APPROVAL-CLI`, source commit
+`7f60ac3050e1dcc8e7152a089c2abab4ee12922b`, as `2523c388` over `06499d1e`.
+The bounded delegation added inspection, explicit-hash file-based approval signing,
+and canonical assembly. Lead inspection covered the entire CLI and its tests,
+bounded file reads, exact action and registration binding, duplicate rejection,
+canonical sorting, safe key error reporting and honest offline verification status.
+The shared `Approval::verify_for` helper preserves the previous signature preimage
+and consensus verifier ordering; committee membership and generation checks still
+precede signature verification. The delegated work remains included in the eventual
+single independent K5/K6 review rather than receiving a separate microreview.
+
+The node executable now exposes `kontor upgrade-approval inspect|sign|assemble`.
+The real preparation/reorg test now uses the CLI's public file-based sign and
+assemble interface for Schedule, Postpone, Cancel and fresh retry. It passed in
+42.43s, including both rollback restorations, rejection of stale consent and fresh
+postponement. The six CLI and 14 authorization tests also passed on the integrated
+test binary. The executable built successfully and a five-command smoke check
+matched the independent golden action/signature/envelope, rejected the wrong
+expected action ID before reading a missing key, and required the expected-ID
+argument. Formatting and diff checks passed. Existing compiler warnings remain.
+
+Evidence is in `.build-cache/k6-cli-integration-validation.json`, the reorg and
+focused-test logs, `.build-cache/k6-cli-main-build.log` and
+`.build-cache/k6-cli-executable-smoke.json`. The focused checks use the ordinary
+local build, not a rebuilt managed independent-bundle node or live multi-validator
+quorum. The [operator workflow](upgrade-approvals.md) documents preparation,
+inspection, explicit approval, assembly, submission and fresh authorization after
+rollback, including the API result wrapper and exact submission object.
+
+K6 still needs migration rehearsal/support diagnostics with failure work accounting,
+the agreed scheduled-height guard, remaining committee and cross-language codec
+coverage, and consolidated K5/K6 qualification and review. K7/K8 activation and
+migration handoff remain subsequent work. No CI, PR, merge or publication occurred.
+
+### K6 scheduled-height guard checkpoint (1 November 2026)
+
+Continued from `e8dcdf9b`. The agreed intermediate guard now rejects ordinary
+Block commands at or above a surviving pending activation height. Proposal
+selection skips these blocks, proposal validation rejects them without stopping
+the reactor, and new certified append rejects before input, certificate or branch
+mutation. Owned block application checks again before preparation or execution.
+Existing certified retries retain their original historical verification path.
+Control commands continue through their separate authorization checks and retain
+priority over pending blocks. No activation, executor switch or migration is
+claimed by this guard; K7's authorized boundary transition must implement them.
+
+The guard reads the latest canonical control snapshot at or below the block's
+parent height. This matches the actual replacement-block rollback order, preserves
+all controls at the retained height, and removes later Schedule/Postpone/Cancel
+effects from the decision. It neither creates an irreversible schedule nor changes
+reference clocks, authorization thresholds or retained certificates.
+
+Six database-control tests passed, including the new exact H-1/H/H+1 and u64
+boundary checks, projected surviving snapshots, cancellation/postponement, and
+actual rollback restoring or removing the boundary. These are direct persistence
+fixtures, not live-quorum authorization evidence. The real preparation/CLI/reorg
+test passed in 42.56s with explicit append rejection and unchanged frontier/control
+checks. Its boundary candidates also contain a height gap, so the test requires
+the specific activation error to distinguish guard execution from branch rejection.
+It does not claim a thousand-block approach-to-H run or activation handoff. The
+existing local-engine control proposal-priority test passed in 17.32s.
+
+Lead review traced the block proposal, new certified append and owned application
+paths; rollback order and target-height inclusion; typed normal rejection versus
+infrastructure failures; and the unchanged control proposal path. Validation used
+one serialized Cargo/runtime slot with at most two build jobs. Evidence is in
+`.build-cache/k6-boundary-validation.json` and its three raw logs. Formatting and
+diff checks passed. Managed-bundle qualification and the consolidated independent
+K5/K6 review remain pending. Migration rehearsal, failure work reporting, support
+diagnostics, remaining committee and codec coverage remain the next K6 work.
+No CI, PR, merge, fork change or publication occurred.
+
+### K6 operator migration rehearsal and failed-attempt work accounting
+
+On base `2c610a40389d780f53a1a1370c1654b761153fc8`, added
+`kontor rehearse-migration --database ... --network ... --target ...`.
+It opens the existing database read-only, makes a consistent SQLite snapshot
+including committed WAL contents, verifies closed certified/canonical input
+bindings, and runs the exact manifest-bound migration through its registered
+executor with a separate storage owner. The temporary writer enables the ordinary
+foreign-key and checkpoint-function setup without schema initialization. Source
+database bytes and WAL remain unchanged in the real certified-state fixture.
+
+Reports bind the source protocol, era, decision, Bitcoin position, application
+lineage and checkpoint to the target manifest and migration definition. They
+include budget and charged work on success and failure, with decimal-string
+counters. Missing executors and unregistered routines fail explicitly. Reports
+are advisory migration results, not consensus-support qualification, authorization
+or a prediction about future activation state. No recurring rehearsal service,
+live engine, signer or automatic approval was introduced.
+
+The migration boundary now carries consumed work on deterministic rejection and
+host failure. Original error downcasts remain available through an anyhow context.
+Metering, rejected-charge semantics, state rollback and stored successful receipts
+are unchanged. The injected storage failure test verifies partial work, original
+host-error classification, rolled-back data and a successful fresh retry.
+
+Validation: 34 focused migration tests passed, with one ignored subprocess entry
+point exercised by its passing crash-recovery parent. Coverage includes committed
+WAL/uncommitted transaction separation, snapshot writes and source isolation,
+checkpoint hashing and foreign-key enforcement, real certified-state rehearsal,
+unknown routine/unavailable executor reports, and the existing migration substrate
+regressions. `cargo check -p indexer --bin kontor --locked --offline -j 2` passed.
+Raw logs, exact source hashes and the test-binary hash are recorded in
+`.build-cache/k6-migration-rehearsal-validation.json`. The first compile caught an
+old mock error tuple; the new checkpoint fixture initially omitted its referenced
+block. Both were corrected before the passing run. An initial CLI check named
+the package instead of its `kontor` binary and was corrected without rerunning
+the passing tests.
+
+Lead review traced charged-work retention through routine failure, finish and
+transaction settlement; typed error preservation; read-only source access and
+consistent snapshot acquisition; exact target selection; isolated ownership and
+shutdown; checkpoint/foreign-key behavior; and rejection rather than fallback.
+This is in-tree evidence, not a rebuilt independent-bundle qualification or an
+executed CLI-binary smoke test. The changed structural migration result must be
+checked across the independently built graphs before the grouped merge. Installed
+support/last-rehearsal diagnostics, remaining committee/codec coverage, consolidated
+independent review and final K5/K6 integration/CI remain outstanding. No CI run,
+PR, merge or publication occurred for this increment.
+
+### K6 advisory support and cross-language control vectors
+
+On base `7f6d62832df273b1276444be77635a446f152be6`, rehearsal reports now
+include the target executor/consensus definition IDs, production-registration
+checks, and migration recognition when the attempt can establish it. Executor
+lookup uses the actual production factory selector. Consensus lookup uses the
+same definition as node admission; the second engine remains qualification-only
+until K7 registers its protocol mapping. Migration recognition is nullable when
+the attempt cannot establish it. No diagnostic authorizes activation or upgrades
+a linked qualification component into a production mapping.
+
+The extended real certified-state fixture passed all four cases: successful
+migration, unknown routine, unavailable executor, and successful migration with
+an unregistered consensus definition. All preserve source database and WAL bytes.
+The last case proves that migration success is not presented as complete target
+support. The four rehearsal tests passed in 17.14s. The operator retains the JSON
+report as the last-rehearsal record, with its exact target and source bindings.
+No node import, automatic refresh, readiness-expiry or persistence service was
+added. API-wide diagnostics remain in K10's integration scope.
+
+Added independent JavaScript encoding of KPM1, KUA1, KUC1 and KUS1 fixtures and
+SHA-256 domain digests. WebCrypto independently verifies the existing approval
+signature and rejects changed action and registration-generation bindings.
+Postpone/Cancel fixtures exercise optional plan identity, values beyond 2^53 and
+u64::MAX. These wide fixtures establish codec behavior, not semantically valid
+upgrade approvals at those artificial positions. Rust encodes, decodes and checks
+the same bytes and IDs. No new SDK signing or transaction-format API was added.
+
+Validation passed: 15 Rust control tests; 12 JavaScript vector/operator-client
+tests; four vector tests in local headless Chromium. The default browser command
+could not start because Playwright's expected revision1248 was absent. A temporary
+local config selected the already installed revision1243, and all four tests then
+ran and passed. Repository configuration and browser installations were unchanged.
+Raw logs and scoped source/evidence bindings are recorded in
+`.build-cache/k6-support-codec-validation.json`. The rehearsal test log predates
+the test-only vector additions, and its original binary was not retained; it is
+not represented as a current full-binary qualification. Final managed-bundle
+integration remains required.
+
+Lead review checked the production selector and baseline definition bindings,
+unknown versus missing migration recognition, advisory report semantics, wide
+integer encoding, byte order, domain separation and browser compatibility. The
+single independent review remains consolidated around completed K5/K6. No CI,
+PR, merge, publication or new Daybreak assignment occurred. Remaining K6 work is
+committee-churn integration coverage, actual linked CLI/bundle evidence, and the
+grouped review and scoped final CI campaign.
+
+### K6 real registration continuity through replacement and recovery
+
+On base `3bca59a0`, added a real certified-execution fixture that registers a
+validator through the staking contract in block 2 and activates it at block 14.
+Two successive replacements of block 14, including restoration of its original
+hash, traverse an observed pending-join state before restoring the same active
+key, holder, activation height and committee. Each return obtains a fresh
+registration generation. The unrelated genesis validator retains its generation
+and unchanged approval. An envelope retaining the returning validator's old
+approval is rejected specifically as `ControlError::Approval`; a freshly signed
+approval for its current generation passes admission without changing the action.
+This fixture never applies that scheduling action, so it does not substitute
+reapproval of a registration for the separate fresh-action requirement after
+rollback of a previously applied control.
+
+The first replacement restarts after the durable rollback stage. Fresh replay
+from genesis matches every retained registration stage and completed closure
+across all sixteen certified decisions. This exercises intermediate observations
+through actual owned closure execution and persistent history, rather than
+comparing only the final committee. The test passed in 94.26s. The existing five
+registration-history unit tests also passed after adding explicit key A-to-B-to-A
+continuity assertions. The added checks required no production behavior change.
+Evidence, source bindings, both tested binary hashes and logs are recorded in
+`.build-cache/k6-committee-reorg-validation.json`. The integration run predates
+only the additional unit-test assertions; its source and production code are
+unchanged. No CI or new independent review was launched for this increment.
+
+Lead inspection traced stage finish through the actual registration observer,
+atomic observation persistence and successor validation; checked typed stale
+approval rejection and the unchanged-signer positive control; and compared
+interrupted recovery against stage-by-stage cold reconstruction. The fixture is
+an in-tree executor check. It does not qualify a managed engine handoff or a
+cross-protocol activation, which remain in K7/K8.
+
+Before the final K5/K6 linked build, source inspection identified an outstanding
+interface mismatch: the retained K3 executor exports the old migration result
+shape, while the current executor now reports charged work on rejection and host
+failure. The node currently expects the latter for both factories. This needs
+explicit typed adaptation before linked acceptance; do not mutate the immutable
+retained snapshot or invent zero work for an unreported historical failure.
+The current production mapping uses the maintained observer executor, which has
+the richer result. Resolve the retained interface, regenerate the applicable
+unreleased definitions, then run the actual linked build/CLI checks and the
+consolidated group review. No PR, merge or publication occurred.
+
+### K6 typed retained migration-result adaptation
+
+On base `fe8bb228`, the session tuple and factory adapter accept an explicit
+migration-export type. The maintained callback passes through unchanged; the
+retained callback preserves successful work receipts, rejection tags and host
+errors while marking unavailable failed-attempt work as absent. No retained
+source or dependency snapshot was changed. The current executor reports charged
+work as present on its failure paths. The coordinator preserves that distinction
+through transaction settlement and error context. Rehearsal serializes unavailable
+historical failure work as null, never zero; current execution still reports its
+actual work. This adds no intermediate database compatibility obligation.
+
+The focused migration suite passed 35 tests in 17.28s, with one subprocess entry
+point exercised by its crash-recovery parent. This includes old-result mapping,
+current partial-work failures, atomic rollback, ownership and isolated rehearsal.
+An initial test-only mock still used the old nonoptional work payload; compilation
+caught it, the mock was updated, and the corrected suite passed. Evidence and the
+initial failure log are retained in `.build-cache/k6-migration-adapter-validation.json`
+and the adjacent logs. These tests precede generated-definition refresh and do not
+claim independent linking or final candidate qualification.
+
+The observer executor and managed consensus definitions were explicitly refreshed
+as unreleased definitions. The linked qualification now also checks that the
+maintained executor supplies partial charged work and the frozen executor does
+not invent it on budget failure. Lead review checked the typed conversion,
+unchanged successful receipts and error tags, absence versus zero in diagnostics,
+and preservation of old sources. Actual managed build/runtime evidence is pending;
+consolidated independent review and grouped CI/merge are still required.
+
+### K6 independent consensus build integration
+
+The combined build exposed missing shared control-decoding dependencies in the
+consensus graphs. The graph now imports the control, manifest and certificate
+authority modules, declares the already-locked `thiserror` dependency directly,
+and uses explicit child-module paths that resolve both in the node and through
+the independent graph's `#[path]` imports. Source provenance includes those
+modules and their children, including the certificate verifier and test vector;
+the process-ownership tripwire also scans imported child modules. The tripwire
+recognizes `Command::Control` as an enum variant, preserving its rejection of
+process-launch calls.
+
+On base `ae91fc03`, 12 consensus-input, six executor-input, five managed-definition
+and ten execution-definition tooling tests passed. Existing mutation checks now
+cover the imported child module and control fixture. An initial managed-definition
+fixture omitted the new imports and failed; its corrected fixture passes, and the
+failure log is retained. The previous linked build and source-inventory failures
+remain recorded, not accepted as qualification. The unreleased managed definition
+was regenerated after its source inventory and dependency graph changed; frozen
+executor snapshots remain unchanged. The next acceptance step is the actual
+combined build and runtime, followed by the group's consolidated review and CI.
+
+The next build compiled both consensus graphs and the node, then correctly failed
+the old factory-identity positive control: retained and maintained migration
+exports no longer have identical result types. The observer link set now requires
+direct factory substitution to fail and an explicit typed conversion to compile.
+The frozen first/second pair still requires structural factory identity. Actual
+staged-library checks passed all six executor controls after correcting the probe's
+closure coercion. This is interface evidence, not a successful whole-node build.
+The earlier consensus adapter result files were from the preserved prior build
+and are not current-candidate evidence.
+
+The managed qualification also now invokes the real rehearsal CLI on its existing
+fully closed certified database fixture, after the engine stops. It checks a
+registered no-op and an unknown routine, JSON results and process exit status,
+advisory authority, source identity, and unchanged database/WAL bytes and logical
+state. The verifier requires the explicit managed rehearsal result. Six interface
+tooling and ten node-evidence tooling tests passed; the new Rust CLI integration
+still requires the rebuilt binary to execute. No new CI matrix or performance
+workload was added.
+
+At `e2ec3283`, the complete Linux ARM64 dev managed-node build passed, including
+native ownership, six executor interface controls, seven consensus interface
+controls and seven actual node-to-consensus adapter tests. The installed binary
+SHA-256 is `be4453eab3c2e8deff3e39fab23be5c00cb31ff4e0ecbe559ad3bdd7f74e448b`.
+Its real runtime qualification passed in 206.41s: both executor graphs agreed on
+all 25 scenarios and the historical semantic baseline; 15 certified decisions
+authenticated and closed; engine-free recovery and interrupted replay passed;
+managed startup joined both engine generations, retained the listener/WAL and
+database service, and rejected a competing writer. Both rehearsal CLI cases
+passed with unchanged source bytes and state. Intentional panic-injection output
+is retained in the raw log alongside the successful terminal result.
+
+The build, runtime reports, raw output and binary are preserved under
+`.build-cache/k6-linked-acceptance-e2ec3283`; the adjacent acceptance record binds
+their hashes to the source. This supersedes the earlier missing linked acceptance
+for this candidate, not the final cross-platform CI gate or K7/K8 activation work.
+The default branch was verified through GitHub as the K4 merge `0a2cbd89`.
+Consolidated lead and single independent K5/K6 review, scoped final CI and merge
+remain required. No CI, push, publication or new Daybreak assignment occurred.
+
+### K5/K6 consolidated review and final local checks
+
+The lead consolidated review and the single independent review covered base
+`0a2cbd89` through `b0548353`, with no unresolved material source finding. The
+independent reviewer checked 1,634 frozen K4 entries against the base, all 46
+indexed evidence-record hashes, and eight archived linked file/binary bindings.
+Coverage included durable signing and ownership, managed lifecycle, control
+thresholds and committee generations, reversible snapshots/retractions, ordered
+replay and cold reconstruction, and operator API/CLI/SDK/rehearsal behavior.
+Actual cross-era activation remains K7/K8 work, not implied by startup evidence.
+
+Final local workspace Clippy exposed unused managed-only code in ordinary builds,
+style warnings, and an existing gossip integration fixture still consuming the
+old raw startup result. Managed-only declarations now follow their actual cfg;
+legacy startup retains raw channels/handle and moves them into the reactor wrapper
+through a consuming conversion. No managed ownership is cloned or weakened. Other
+corrections preserve lock-file contents explicitly, simplify equivalent conditions
+and assertions, and box CLI report values without changing JSON. The unreleased
+managed definition was regenerated; frozen references are unchanged. The reviewer
+inspected this correction separately and found no material concern.
+
+Core workspace Clippy including tests now passes. All 155 bundle-tool checks,
+38 CI-control checks, six certified-value wire tests (including real signed gossip)
+and six approval-CLI tests pass. The initial tooling attempt failed because the
+host ccache directory was read-only; disabling that wrapper allowed the native
+negative controls to execute. Failed lint/tool logs remain recorded. Final local
+records and review reports are under `.build-cache/k5-k6-*` and
+`.build-cache/k6-final-*`. Previous linked acceptance retains its original
+`e2ec3283` source binding rather than being relabeled as this corrected candidate.
+
+GitHub main remains `0a2cbd89`; no prior branch PR or run existed at the preflight
+check. The existing selectors require one final release-three-platform campaign
+plus bounded dev coverage for the changed execution/build/coordinator inputs.
+There is no automatic exhaustive dev sweep or new performance campaign. Required
+candidate CI and verified merge still gate K7/K8 implementation.
+
+PR 621 opened at `7c5609b1`. Its first control jobs correctly rejected two packaging
+and provenance omissions before starting their expensive matrices. Four frozen K4
+sqlean libraries existed locally but were omitted from Git by the shared-library
+ignore rules. Each matches both its unchanged snapshot digest and the original
+K4 commit bytes. They are now tracked, with narrow retained-sqlean ignore exceptions.
+A clean staged Git export verifies all 1,634 entries against the unchanged inventory.
+The stack manifests also needed refreshed hashes for the changed indexer build
+script and genesis admission sources, plus their dependent manifest hashes. No
+resource cases, settings, thresholds or accepted historical results changed.
+
+After these corrections, seven source-root checks and all 235 stack-control unit
+tests pass. The first local stack-control retry reached all manifest checks but
+six socket fixtures were blocked by the sandbox; the rerun with local sockets
+available passed. Logs and the clean-export/hash comparison are retained under
+`.build-cache/k6-ci-*`. This is packaging/control evidence, not a new workload or
+performance qualification. The original CI lint/security audit passed while the
+remaining ordinary tests continued. The correction is batched locally until those
+jobs expose any additional failures; the failed control matrices are not blindly
+rerun on the unchanged PR candidate.
+
+### K5/K6 CI reader initialization correction
+
+The first PR621 candidate (`7c5609b1`) passed lint/security, SDK, reproducible
+contracts/SDK and both Docker-cache jobs. Both standard Rust jobs failed only
+`cluster_late_joiner_sync` in their 129-test integration suites. The Linux log
+exposed the reactor's original failure: a locked database while inserting the
+block batch decision. macOS observed the subsequent closed operation admission.
+Two focused local dev runs reproduced that shutdown. Logging the supervisor's
+fatal cause before draining prevents test cleanup from hiding it.
+
+Reader-pool creation called the schema-initializing writer constructor. Its
+metadata writes could invalidate a canonical writer's deferred transaction
+snapshot. A deterministic regression established this failure before the fix:
+open/read a writer transaction, open a Reader pool connection, then attempt the
+writer insert. Both database and runtime reader pools now open the existing
+file read-only, preserving connection timeout, foreign-key and crypto-extension
+setup while leaving schema installation to the writer. Existing startup orders
+initialize the writer first. Pool fixtures now do so explicitly as well.
+
+The regression and connection checks passed (2), all runtime-pool checks passed
+(5, including held/fresh snapshots after contract ID reuse), and the original
+late-joiner cluster test passed in 127.18 seconds. These are local dev diagnostics,
+not release qualification. Before/after logs and source hashes are preserved in
+`.build-cache/k6-ci-reader-correction.json`. The temporary diagnostic binary-path
+symlink was removed. Workspace Clippy including tests and formatting passed.
+The single independent reviewer traced startup and reader consumers and found
+no material concerns in the four-file behavioral/diagnostic correction atop
+`98bd1e4a`. The lead verified the failing-before/passing-after regression,
+actual cluster recovery and reader restrictions. The unreleased managed
+reference and derived stack source bindings were refreshed; retained references
+and historical acceptance evidence keep their original source identities.
+
+This fix is batched with the already validated frozen-library/source-pin
+correction for the next PR candidate. Current-head CI remains required before
+merge. No expensive failed campaign was rerun without diagnosing its failures.
+
+### K5/K6 ownership fixture initialization correction
+
+On candidate `99234cab`, the macOS library suite passed 1,035 tests and failed
+ten ownership tests before their assertions: their shared `one_object_pool`
+helper opened a nonexistent `owner.db` through the newly read-only pool manager.
+The helper now initializes the database through the existing writer constructor
+before creating the reader pool. This is a one-line change inside `cfg(test)`;
+production ownership behavior is unchanged. Other directly constructed runtime
+pools were checked for prior writer initialization.
+
+The Linux library job subsequently reported the identical ten fixture failures,
+with 1,041 other tests passing. No additional failure required a separate fix.
+
+All 55 ownership tests passed locally in the dev profile (434.23 seconds),
+including all ten failed CI cases. Formatting passed. The four stack manifests
+were regenerated and their 22 changed values verified to be source and
+parent/group hashes only, with no case or threshold changes. The 235 Python
+controls produced 229 passes and six sandbox socket errors; rerunning the two
+socket modules outside the sandbox passed all seven tests in those modules.
+Raw logs and the exact test-only diff check are recorded in
+`.build-cache/k6-ci-owner-fixture-correction.json` and its referenced files.
+
+The lead reviewed this nonmaterial fixture correction; existing independent
+production review coverage remains applicable. Running CI evidence is retained
+while the correction is validated and remaining failures are collected. These
+local results do not replace the final candidate's required CI checks.

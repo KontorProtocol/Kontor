@@ -3,7 +3,8 @@ use bitcoin::hashes::Hash;
 use libsql::{Connection, TransactionBehavior, params};
 
 use super::{
-    Status, durable_writer, fixed, frontier, load_verified_input, registrations, replay_input, work,
+    Status, control, durable_writer, fixed, frontier, load_verified_input, registrations,
+    replay_input, work,
 };
 use crate::database::canonical_history::{self, HistoryState};
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
@@ -356,6 +357,52 @@ async fn validate_application_source(conn: &Connection, record: &StageRecord) ->
         );
         return Ok(());
     }
+    if let Command::Control { anchor_height, .. } = command {
+        ensure!(
+            frozen.is_none(),
+            "control cannot use transaction replay input"
+        );
+        let envelope = certified.input().upgrade_control()?;
+        if record.outcome == StageOutcome::RetractedControl {
+            ensure!(
+                height < record.height
+                    && control::is_retracted(
+                        conn,
+                        envelope.action.id()?,
+                        control::Position {
+                            decision: record.height,
+                            stage: record.stage
+                        }
+                    )
+                    .await?,
+                "control skip lacks historical retraction"
+            );
+        } else {
+            ensure!(
+                record.outcome == StageOutcome::Applied && height == record.height,
+                "control application is not its original inclusion"
+            );
+            let [application] = record.applications.as_slice() else {
+                anyhow::bail!("control requires one canonical application");
+            };
+            ensure!(
+                application.source
+                    == (ApplicationSource::UpgradeControl {
+                        decision: height,
+                        action: envelope.action.id()?,
+                        control: envelope.id()?,
+                    })
+                    && application.input.is_none()
+                    && application.storage_height == *anchor_height,
+                "control stage differs from certified envelope"
+            );
+        }
+        return Ok(());
+    }
+    ensure!(
+        record.outcome != StageOutcome::RetractedControl,
+        "transaction work skipped as control"
+    );
     let input = CanonicalInput::bitcoin(&certified.input().transactions()?)?;
     match (command, record.applications.as_slice()) {
         (
@@ -471,6 +518,23 @@ pub(crate) async fn commit_stage(
     record.validate()?;
     advance(conn, &previous, &record).await?;
     validate_application_source(conn, &record).await?;
+    if let [application] = record.applications.as_slice()
+        && let ApplicationSource::UpgradeControl {
+            decision,
+            control: id,
+            ..
+        } = application.source
+    {
+        let input = load_verified_input(conn, decision).await?;
+        let envelope = input.input().upgrade_control()?;
+        let state = control::current(conn)
+            .await?
+            .context("control snapshot unavailable")?;
+        ensure!(
+            state.head == id && state.nonce == envelope.action.nonce,
+            "control stage lacks matching snapshot"
+        );
+    }
     registrations::record(conn, observation).await?;
     conn.execute("INSERT INTO closure_stages (height, stage, stage_id, observation_id, record) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![record.height.to_be_bytes().to_vec(), index.to_be_bytes().to_vec(), record.id()?.to_vec(),

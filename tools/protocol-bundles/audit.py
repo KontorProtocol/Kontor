@@ -90,7 +90,7 @@ def owner(name, graph, version, path=None, value=None):
         raise RuntimeError(f"bundle defines process allocator: {name}")
     if RUST.fullmatch(name) or ANONYMOUS.fullmatch(name):
         return graph["graph"]
-    if name.startswith("wasmtime_") and name.endswith("_" + suffix(version)):
+    if version is not None and name.startswith("wasmtime_") and name.endswith("_" + suffix(version)):
         return graph["graph"]
     if name.startswith(graph["namespace"] + "_"):
         return graph["graph"]
@@ -144,8 +144,18 @@ def private_local_inputs(graphs):
 
 
 def audit_inputs(graphs, output):
-    versions = [next(p["version"] for p in graph["packages"] if p["name"] == "wasmtime") for graph in graphs]
-    if len(set(versions)) != len(graphs) or len({suffix(v) for v in versions}) != len(graphs):
+    if (len({graph["graph"] for graph in graphs}) != len(graphs)
+            or len({graph["namespace"] for graph in graphs}) != len(graphs)):
+        raise RuntimeError("independent graphs must have unique names and namespaces")
+    versions = []
+    for graph in graphs:
+        resolved = [p["version"] for p in graph["packages"] if p["name"] == "wasmtime"]
+        consensus = graph.get("identity", {}).get("kind") == "consensus"
+        if len(resolved) != (0 if consensus else 1):
+            raise RuntimeError("graph role does not match resolved Wasmtime dependencies")
+        versions.append(None if consensus else resolved[0])
+    vm_versions = [version for version in versions if version is not None]
+    if len(set(vm_versions)) != len(vm_versions) or len({suffix(v) for v in vm_versions}) != len(vm_versions):
         raise RuntimeError("independent Wasmtime graphs must have unique versions and native prefixes")
     inventories = []
     sets = []
@@ -201,7 +211,10 @@ def audit_final(executable, graphs, sets, versions, output, common, kind="proof"
         else:
             raise RuntimeError(f"ambiguous or unowned final definition: {name}: {matches}")
         attributed[name] = dict(value, owner=attribution)
-    helpers = ["wasmtime_libunwind_" + suffix(version) for version in versions]
+    vm_graphs = [(graph, names, "wasmtime_libunwind_" + suffix(version))
+                 for graph, names, version in zip(graphs, sets, versions, strict=True)
+                 if version is not None]
+    helpers = [helper for _, _, helper in vm_graphs]
     crypto = []
     for graph in graphs:
         crypto.extend(graph["namespace"] + "_" + name for name in (
@@ -246,7 +259,7 @@ def audit_final(executable, graphs, sets, versions, output, common, kind="proof"
             for previous in range(index):
                 if addresses & graph_addresses[previous]:
                     raise RuntimeError("independent graph-private native definitions alias one address")
-        for name, names, graph in zip(helpers, sets, graphs, strict=True):
+        for graph, names, name in vm_graphs:
             if name in local_symbols:
                 if name not in names or local_symbols[name]["address"] is None:
                     raise RuntimeError(f"unowned graph-private Wasmtime native helper: {name}")

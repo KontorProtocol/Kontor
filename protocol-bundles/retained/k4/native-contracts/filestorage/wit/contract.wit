@@ -1,0 +1,219 @@
+package root:component;
+
+world root {
+  include kontor:built-in/built-in-native;
+  use kontor:built-in/context.{view-context, proc-context, core-context, contract};
+  use kontor:built-in/context-types.{holder-ref};
+  use kontor:built-in/error.{error};
+  use kontor:built-in/numbers-types.{decimal};
+  use kontor:built-in/file-registry-types.{raw-file-descriptor};
+
+  // ─────────────────────────────────────────────────────────────────
+  // Output/Storage Types
+  // ─────────────────────────────────────────────────────────────────
+
+  export accrue-storage-rewards: func(ctx: borrow<core-context>) -> result<decimal, error>;
+  export claim-rewards: func(ctx: borrow<proc-context>) -> result<decimal, error>;
+  export reward-balance: func(ctx: borrow<view-context>, node-id: u64) -> result<decimal, error>;
+
+  record node-info {
+    node-id: u64,
+    active: bool,
+  }
+
+  record agreement-data {
+    agreement-id: string,
+    // ── File descriptor (folded in; was the host `file_metadata` row). The
+    // contract is now the file registry: it owns this metadata and recomputes
+    // the aggregated ledger root from it. `file-id` is also the map key /
+    // `agreement-id`. ──
+    file-id: string,
+    object-id: string,
+    nonce: list<u8>,
+    root: list<u8>,
+    padded-len: u64,
+    original-size: u64,
+    filename: string,
+    // Stable, append-only ledger slot assigned at create time from a
+    // monotonic counter (never reused, even after removal). The file's leaf in
+    // the aggregated ledger tree lives at this slot (kontor-crypto 0.3.0
+    // append-only model), replacing the old lexicographic-`file-id` position.
+    ledger-index: u64,
+    active: bool,
+    // The agreement's currently-open challenge, if any. Co-located so
+    // "is this agreement already challenged?" is a point read, not a scan of
+    // the active-challenge set. Maintained on challenge create/terminate.
+    active-challenge: option<string>,
+    storage-weight: decimal,
+    required-collateral: decimal,
+  }
+
+  record create-agreement-result {
+    agreement-id: string,
+  }
+
+  record join-agreement-result {
+    agreement-id: string,
+    node-id: u64,
+    activated: bool,
+  }
+
+  record leave-agreement-result {
+    agreement-id: string,
+    node-id: u64,
+  }
+
+  // Challenge types
+  enum challenge-status {
+    active,
+    proven,
+    expired,
+    failed,
+    invalid,
+    // Failed obligation settled, including write-off after bond exhaustion.
+    settled,
+  }
+
+  record challenge-data {
+    challenge-id: string,
+    agreement-id: string,
+    block-height: u64,
+    num-challenges: u64,
+    seed: list<u8>,
+    prover-id: u64,
+    deadline-height: u64,
+    status: challenge-status,
+  }
+
+  record verify-proof-result {
+    verified-count: u64,
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Functions
+  // ─────────────────────────────────────────────────────────────────
+
+  export init: func(ctx: borrow<proc-context>) -> contract;
+
+  // Agreement management
+  export create-agreement: func(
+    ctx: borrow<proc-context>,
+    descriptor: raw-file-descriptor
+  ) -> result<create-agreement-result, error>;
+
+  export get-agreement: func(
+    ctx: borrow<view-context>,
+    agreement-id: string
+  ) -> option<agreement-data>;
+
+  export agreement-count: func(ctx: borrow<view-context>) -> u64;
+
+  export get-all-active-agreements: func(
+    ctx: borrow<view-context>
+  ) -> list<agreement-data>;
+
+  // Node participation
+  // The node identity is the signer (one slot per signer per agreement); it is
+  // not a caller-supplied parameter.
+  export join-agreement: func(
+    ctx: borrow<proc-context>,
+    agreement-id: string
+  ) -> result<join-agreement-result, error>;
+
+  export leave-agreement: func(
+    ctx: borrow<proc-context>,
+    agreement-id: string
+  ) -> result<leave-agreement-result, error>;
+
+  // Node queries
+  // Includes live memberships and unresolved challenges after a node leaves.
+  export has-storage-obligations: func(
+    ctx: borrow<view-context>,
+    node-id: u64
+  ) -> bool;
+
+  export get-node-reservation: func(
+    ctx: borrow<view-context>,
+    node-id: u64
+  ) -> decimal;
+
+  export is-bond-cleanup-pending: func(ctx: borrow<view-context>, node-id: u64) -> bool;
+
+  export get-agreement-nodes: func(
+    ctx: borrow<view-context>,
+    agreement-id: string
+  ) -> list<node-info>;
+
+  export is-node-in-agreement: func(
+    ctx: borrow<view-context>,
+    agreement-id: string,
+    node-id: u64
+  ) -> bool;
+
+  // Protocol parameters
+  export get-min-nodes: func(ctx: borrow<view-context>) -> u64;
+  export get-c-target: func(ctx: borrow<view-context>) -> u64;
+  export get-blocks-per-year: func(ctx: borrow<view-context>) -> u64;
+  export get-s-chal: func(ctx: borrow<view-context>) -> u64;
+
+  // ─────────────────────────────────────────────────────────────────
+  // Challenge Management
+  // ─────────────────────────────────────────────────────────────────
+
+  export get-challenge: func(
+    ctx: borrow<view-context>,
+    challenge-id: string
+  ) -> option<challenge-data>;
+
+  export get-active-challenges: func(
+    ctx: borrow<view-context>
+  ) -> list<challenge-data>;
+
+  export expire-challenges: func(
+    ctx: borrow<core-context>,
+    current-height: u64
+  ) -> u64;
+
+  // Bounded penalty/cleanup work; all nested effects are atomic with this call.
+  export settle-expired-challenges: func(ctx: borrow<core-context>) -> result<u64, error>;
+
+  export generate-challenges-for-block: func(
+    ctx: borrow<core-context>,
+    block-height: u64,
+    block-hash: list<u8>
+  ) -> list<challenge-data>;
+
+  // Per-block core hook: recompute & record the aggregated ledger root for the
+  // block's file-set changes (no-op if none). Keeps create-agreement O(1) and
+  // unbilled; run after the block's transactions.
+  export record-block-root: func(
+    ctx: borrow<core-context>
+  ) -> result<_, error>;
+
+  // Create a challenge for a specific agreement and prover (deterministic, for testing)
+  export create-challenge-for-agreement: func(
+    ctx: borrow<proc-context>,
+    agreement-id: string,
+    prover-id: u64,
+    block-height: u64,
+    seed: list<u8>
+  ) -> result<challenge-data, error>;
+
+  // ─────────────────────────────────────────────────────────────────
+  // Proof Verification
+  // ─────────────────────────────────────────────────────────────────
+
+  // `challenge-ids` are the challenges the submitter claims this proof answers.
+  // kontor-crypto 0.3.0's constant-size proof no longer carries them (nor the
+  // per-file ledger indices), so the submitter declares them and the contract
+  // rebuilds the challenge set + the file-registry snapshot it feeds to verify.
+  // The SNARK binds both, so a wrong/extra/missing challenge id makes
+  // verification fail — the submitter cannot get credit for challenges the
+  // proof doesn't actually answer.
+  export verify-proof: func(
+    ctx: borrow<proc-context>,
+    proof-bytes: list<u8>,
+    challenge-ids: list<string>
+  ) -> result<verify-proof-result, error>;
+
+}

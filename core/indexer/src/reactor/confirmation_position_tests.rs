@@ -183,7 +183,7 @@ async fn run_case(batched: bool) -> Result<()> {
     }]);
     let dir = TempDir::new()?;
     let mut reactor = certified_fixture::reactor(dir.path(), &genesis, key, 1).await?;
-    let cleanup = StopEngine(reactor.consensus.engine_handle.actor.clone());
+    let cleanup = StopEngine(reactor.consensus.engine.legacy_handle().actor.clone());
     let conn = reactor.db_conn();
     let result = async {
         let setup = certified_fixture::transaction(
@@ -327,7 +327,7 @@ async fn run_case(batched: bool) -> Result<()> {
     cleanup.0.stop(None);
     timeout(
         Duration::from_secs(30),
-        &mut reactor.consensus.engine_handle.handle,
+        &mut reactor.consensus.engine.legacy_handle_mut().handle,
     )
     .await??;
     result

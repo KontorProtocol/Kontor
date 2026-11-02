@@ -1,3 +1,4 @@
+use crate::protocol::coordinator::certified_input::CommandKind;
 use anyhow::{Context, Result, ensure};
 use libsql::{Connection, params};
 
@@ -11,7 +12,7 @@ async fn validate(conn: &Connection, input: &ReplayInput) -> Result<()> {
         .await?
         .context("replay input is on a superseded branch interval")?;
     ensure!(
-        !selected.is_block
+        selected.kind == CommandKind::Batch
             && selected.id == input.decision
             && selected.interval_since == input.interval_since,
         "replay input branch or decision differs"

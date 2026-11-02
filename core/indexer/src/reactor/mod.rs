@@ -24,6 +24,7 @@ mod mempool;
 pub mod mempool_fee_index;
 #[cfg(test)]
 mod mempool_tests;
+pub(crate) mod message;
 #[cfg(test)]
 pub mod mock_bitcoin;
 #[cfg(test)]
@@ -39,13 +40,23 @@ mod simulation_context_tests;
 mod startup_tests;
 #[cfg(test)]
 mod storage_penalty_tests;
+mod transport;
+#[cfg(all(test, kontor_managed))]
+mod transport_tests;
 pub mod types;
+#[cfg(test)]
+mod upgrade_control_tests;
+mod upgrades;
 #[cfg(test)]
 mod workload_tests;
 
+#[cfg(kontor_managed)]
+use self::engine::NodeCoordinator;
 use std::collections::VecDeque;
 use std::future::Future;
-use std::time::Instant;
+#[cfg(kontor_managed)]
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use futures_util::future::{self, pending};
@@ -60,7 +71,6 @@ use tokio::{
 };
 
 use bitcoin::{BlockHash, Network};
-use malachitebft_app_channel::NetworkMsg;
 use malachitebft_app_channel::app::types::LocallyProposedValue;
 use malachitebft_core_types::{LinearTimeouts, Round};
 use metrics::gauge;
@@ -75,18 +85,19 @@ use crate::metrics::PENDING_BLOCKS;
 use crate::protocol::coordinator::bootstrap;
 #[cfg(test)]
 use crate::protocol::coordinator::committee::build_validator_set;
+use crate::protocol::coordinator::genesis::envelope;
 use crate::protocol::coordinator::linked;
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
 };
 #[cfg(test)]
 use crate::protocol::v1::committee::stake_to_voting_power;
-use crate::runtime::numerics::decimal_to_string;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::pool::LinkedSession;
 #[cfg(test)]
 use crate::runtime::{ComponentCache, Runtime, Storage};
 use crate::stopper::ShutdownSignal;
+use crate::upgrade_control::{PendingControl, UpgradeSubmission};
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
     bitcoin_helpers::new_mock_block_hash,
@@ -140,6 +151,8 @@ pub struct PruneConfig {
 }
 
 pub(crate) struct Reactor<E: Executor> {
+    #[cfg(kontor_managed)]
+    coordinator: Option<Arc<NodeCoordinator>>,
     execution: ExecutionContext<E>,
     node_label: String,
     shutdown: ShutdownSignal,
@@ -148,6 +161,8 @@ pub(crate) struct Reactor<E: Executor> {
     ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
+    upgrade_rx: Option<Receiver<UpgradeSubmission>>,
+    pending_control: PendingControl,
     consensus: consensus_state::ConsensusState,
 
     /// Shared with the API (`Env.consensus_listen_addr`); written on the first
@@ -277,12 +292,16 @@ impl<E: Executor> Reactor<E> {
             .map(|i| format!("node_{i}"))
             .unwrap_or_else(|| "follower".to_string());
         Self {
+            #[cfg(kontor_managed)]
+            coordinator: None,
             execution,
             node_label,
             shutdown,
             block_rx,
             mempool_rx,
             simulate_rx,
+            upgrade_rx: None,
+            pending_control: PendingControl::default(),
             ready_tx,
             event_tx,
             consensus,
@@ -322,13 +341,12 @@ impl<E: Executor> Reactor<E> {
         proposal: &LocallyProposedValue<Ctx>,
         valid_round: Round,
     ) -> Result<()> {
-        for stream_msg in self.consensus.stream_proposal(proposal, valid_round) {
-            self.consensus
-                .channels
-                .network
-                .send(NetworkMsg::PublishProposalPart(stream_msg))
-                .await
-                .context("Failed to send proposal part to network")?;
+        for stream_msg in self
+            .consensus
+            .stream_proposal(proposal, valid_round)
+            .await?
+        {
+            self.consensus.engine.publish(stream_msg).await?;
         }
         Ok(())
     }
@@ -447,7 +465,15 @@ impl<E: Executor> Reactor<E> {
                 }
             };
 
-            let consensus_rx = self.consensus.channels.consensus.recv();
+            let upgrade_rx = async {
+                if let Some(rx) = self.upgrade_rx.as_mut() {
+                    rx.recv().await
+                } else {
+                    pending().await
+                }
+            };
+
+            let consensus_rx = self.consensus.engine.next();
 
             // EVERY in-flight I/O job's verdict future, raced — or never.
             // All of them, not just the front: a stalled BuildProposal against
@@ -585,7 +611,7 @@ impl<E: Executor> Reactor<E> {
                     // surfaces through the supervisor's `first_exit`, while the
                     // in-process Malachite actor has no handle of its own and
                     // this channel is the only way its death reaches anyone.
-                    let Some(msg) = msg else {
+                    let Some(msg) = msg? else {
                         return if self.shutdown.is_cancelled() {
                             Ok(())
                         } else {
@@ -613,6 +639,14 @@ impl<E: Executor> Reactor<E> {
                         .context("advance failed after consensus message")?;
                     // Yield to allow other channels (block_rx, mempool_rx) to be polled
                     tokio::task::yield_now().await;
+                }
+                submission = upgrade_rx => {
+                    if let Some(submission) = submission {
+                        self.submit_upgrade(submission).await?;
+                        self.try_fulfill_pending_proposal().await?;
+                    } else {
+                        self.upgrade_rx = None;
+                    }
                 }
                 option_event = simulate_rx => {
                     if let Some((tx, ret_tx)) = option_event {
@@ -691,24 +725,12 @@ impl<E: Executor> Reactor<E> {
             self.run_event_loop().await
         };
 
-        // Gracefully stop the Malachite consensus engine — BOUNDED. This wait
-        // sits between a reactor fatal and the exit status that reports it, so
-        // an engine that never acknowledges the stop must not stand there
-        // indefinitely: that is the immortal green-probed node again, one layer
-        // down. On timeout, say so and go — the process is exiting either way,
-        // and the loop result, not the engine's teardown, is the story.
-        if let Err(e) = self
-            .consensus
-            .engine_handle
-            .actor
-            .get_cell()
-            .stop_and_wait(
-                Some("Reactor shutting down".to_string()),
-                Some(std::time::Duration::from_secs(5)),
-            )
-            .await
-        {
-            warn!(error = %e, "Malachite engine did not stop cleanly within 5s; exiting without it");
+        match self.consensus.engine.stop(Duration::from_secs(5)).await {
+            Ok(true) => {}
+            Ok(false) => warn!(
+                "Malachite engine did not join within 5s; retaining ownership until process exit"
+            ),
+            Err(error) => warn!(%error, "Malachite engine shutdown failed"),
         }
 
         result
@@ -853,20 +875,7 @@ pub(crate) async fn create_executor_session(
     u64,
     Option<BlockHash>,
 )> {
-    let genesis = (
-        decimal_to_string(genesis.sigma_min),
-        genesis
-            .validators
-            .iter()
-            .map(|v| {
-                (
-                    v.x_only_pubkey.clone(),
-                    decimal_to_string(v.stake),
-                    v.ed25519_pubkey.clone(),
-                )
-            })
-            .collect(),
-    );
+    let genesis = envelope(genesis);
     let (baseline, initialize) = bootstrap::prepare(
         &writer.connection(),
         network,
@@ -911,8 +920,8 @@ pub(crate) async fn start_consensus(
         .await
         .context("Failed to build genesis from staking contract")?;
 
-    start_consensus_with_genesis(
-        engine_config,
+    consensus_from_engine(
+        engine::start(engine_config).await?.into(),
         runtime.get_storage_conn(),
         genesis,
         observation_channels,
@@ -925,6 +934,7 @@ pub(crate) async fn start_consensus(
 
 async fn start_linked_consensus(
     engine_config: engine::EngineConfig,
+    #[cfg(kontor_managed)] coordinator: Option<&NodeCoordinator>,
     session: &LinkedSession,
     _service: &OwnerService,
     _network: Network,
@@ -933,9 +943,22 @@ async fn start_linked_consensus(
     last_block_height: u64,
     mempool_fee_index: mempool_fee_index::MempoolFeeIndex,
 ) -> Result<consensus_state::ConsensusState> {
-    let (_, _, validator_set) = consensus_state::certified_startup(&session.conn).await?;
-    start_consensus_with_genesis(
-        engine_config,
+    let (context, _, validator_set) = consensus_state::certified_startup(&session.conn).await?;
+    #[cfg(kontor_managed)]
+    let output = match coordinator {
+        Some(coordinator) => coordinator.start(&engine_config, context)?,
+        #[cfg(any(test, feature = "protocol-qualification"))]
+        None => engine::start(engine_config).await?.into(),
+        #[cfg(not(any(test, feature = "protocol-qualification")))]
+        None => bail!("managed consensus requires node ownership before database startup"),
+    };
+    #[cfg(not(kontor_managed))]
+    let output = {
+        let _ = context;
+        engine::start(engine_config).await?.into()
+    };
+    consensus_from_engine(
+        output,
         session.conn.clone(),
         Genesis { validator_set },
         observation_channels,
@@ -946,8 +969,8 @@ async fn start_linked_consensus(
     .await
 }
 
-async fn start_consensus_with_genesis(
-    engine_config: engine::EngineConfig,
+async fn consensus_from_engine(
+    engine_output: engine::EngineOutput,
     conn: Connection,
     genesis: Genesis,
     observation_channels: Option<consensus_state::ObservationChannels>,
@@ -955,9 +978,6 @@ async fn start_consensus_with_genesis(
     last_block_height: u64,
     mempool_fee_index: mempool_fee_index::MempoolFeeIndex,
 ) -> Result<consensus_state::ConsensusState> {
-    let engine_output = engine::start(engine_config)
-        .await
-        .context("Failed to start Malachite consensus engine")?;
     info!(address = %engine_output.address, "Consensus engine started");
 
     let validator_index = genesis
@@ -968,12 +988,10 @@ async fn start_consensus_with_genesis(
 
     let mut state = consensus_state::ConsensusState::new(
         conn.clone(),
-        engine_output.signing_provider,
         genesis,
         engine_output.address,
         last_block_height,
-        engine_output.channels,
-        engine_output._handle,
+        engine_output.engine,
         validator_index,
         mempool_fee_index,
     )
@@ -1001,7 +1019,9 @@ pub fn run(
     ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
+    upgrade_rx: Option<Receiver<UpgradeSubmission>>,
     engine_config: engine::EngineConfig,
+    #[cfg(kontor_managed)] coordinator: Arc<NodeCoordinator>,
     bitcoin_client: Client,
     genesis: GenesisParameters,
     observation_channels: Option<consensus_state::ObservationChannels>,
@@ -1118,12 +1138,16 @@ pub fn run(
                 }).await?;
                 let initial_mempool = execution.executor.parse_mempool(&execution.recognizer,
                     &selection, initial_raw_txs).await?;
-                let mut consensus = start_linked_consensus(engine_config, &execution.session,
+                let mut consensus = start_linked_consensus(engine_config,
+                    #[cfg(kontor_managed)] Some(&coordinator), &execution.session,
                     &owner_service, network, observation_channels, timeouts, execution.last_height,
                     fee_index).await.context("start_consensus failed")?;
                 consensus.mempool.replace(initial_mempool);
                 let mut reactor = Reactor::from_execution(execution, block_rx, mempool_rx,
                     shutdown.clone(), ready_tx, event_tx, simulate_rx, consensus, consensus_listen_addr);
+                reactor.upgrade_rx = upgrade_rx;
+                #[cfg(kontor_managed)]
+                { reactor.coordinator = Some(coordinator); }
 
                 reactor.run().await
             }

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use axum::{
     Json, Router,
-    extract::{Request as AxumRequest, State},
+    extract::{DefaultBodyLimit, Request as AxumRequest, State},
     http::{HeaderName, Request, Response},
     middleware::{Next, from_fn_with_state},
     response::IntoResponse,
@@ -25,9 +25,12 @@ use crate::api::handlers::{
     get_block_transactions, get_blocks, get_contract, get_contract_provenance, get_contracts,
     get_fees, get_healthz_live, get_healthz_ready, get_index, get_metrics, get_receipt_stream,
     get_result, get_results, get_signer, get_signer_footprint, get_status, get_transaction,
-    get_transaction_inspect, get_transactions, post_compose, post_contract, post_simulate,
-    post_transaction_broadcast, post_transaction_hex_inspect,
+    get_transaction_inspect, get_transactions, get_upgrade_state, post_compose, post_contract,
+    post_prepare_upgrade, post_simulate, post_transaction_broadcast, post_transaction_hex_inspect,
+    post_upgrade,
 };
+
+use crate::upgrade_control::SUBMISSION_BODY_LIMIT;
 
 use super::{
     API_REQUEST_TIMEOUT_MS, Env,
@@ -142,6 +145,13 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
     let chain_routes = Router::new()
         .route("/", get(get_index))
         .route("/fees", get(get_fees))
+        .route(
+            "/protocol/upgrades",
+            get(get_upgrade_state)
+                .post(post_upgrade)
+                .layer(DefaultBodyLimit::max(SUBMISSION_BODY_LIMIT)),
+        )
+        .route("/protocol/upgrades/prepare", post(post_prepare_upgrade))
         .nest(
             "/blocks",
             Router::new()

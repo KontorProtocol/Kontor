@@ -253,8 +253,10 @@ is explicit and separate from binary installation or ordinary consensus voting.
    Cancel needs strictly more than 2/3. Use checked u128 arithmetic and bounded,
    unique sorted approval entries. The action binds chain/domain, tag, control head,
    nonce, expected pending plan, exact target/H, an authenticated reference R
-   (consensus height and decision digest), and high-water expiry. R bounds expiry
-   to high_water(R)+144 and must precede inclusion; it does not freeze voting weights.
+   (consensus height and decision digest), and Bitcoin-height expiry. R bounds expiry
+   to canonical_height(R)+144 and must precede inclusion; it does not freeze voting weights.
+   The reversible-control refinement below supersedes the original high-water and
+   irreversible-control policy. Its implementation revision was agreed by the single independent reviewer.
    Each entry signs action ID, signer key and that key's registration generation.
    The monotonic committee journal advances a key's generation on effective exit
    and re-registration/key reuse, including a changed registration identity
@@ -264,8 +266,10 @@ is explicit and separate from binary installation or ordinary consensus voting.
    at the same numerical activation height; tuple equality alone is not sufficient. Count only matching current registrations.
    Other validators' churn does not invalidate an approval. A-B-A key reuse cannot
    revive old consent. No contract-state counter is introduced into frozen P1.
-2. Notice is 1,008 Bitcoin heights from certified monotonic high-water. One pending
-   plan, compare-and-swap expected plan and monotonic nonce serialize actions.
+2. Notice is 1,008 Bitcoin heights from the canonical Bitcoin position at inclusion.
+   One pending plan, compare-and-swap expected plan and a reversible control nonce
+   serialize actions. Retained rollback invalidations prevent old approvals from
+   becoming usable again when the nonce and prior state are restored.
    Readiness is advisory. Operators can dry-run the target migration against an
    isolated consistent snapshot under its work budget before approving it and
    repeat the rehearsal near activation. Report the exact target, tested lineage,
@@ -273,8 +277,8 @@ is explicit and separate from binary installation or ordinary consensus voting.
    procedure but never authorizes that action. Automatic periodic rehearsal and
    readiness refresh/expiry are deferred. No expedited upgrade or emergency
    maintainer authority.
-   Consume a plan when its transition Block H is authenticated and recorded in
-   consensus decision order, even if execution lags. Cancellation must precede it. UpgradeControl validity bypasses pending/deferred
+   Consume a plan through canonical activation application, not certificate receipt.
+   Cancellation must precede the authorized transition decision. UpgradeControl validity bypasses pending/deferred
    Block gates that apply to batches. Proposers prioritize eligible control actions
    before Block work, including H with insufficient target support. They do not wait
    for the H round to fail before proposing Cancel/Postpone.
@@ -286,7 +290,9 @@ is explicit and separate from binary installation or ordinary consensus voting.
    validators prevote nil. After C is certified, gate C+1 until old H/lifecycle and
    deterministic due finality settle, migration and atomic intent commit, fencing,
    complete join and selected-engine readiness. No migration execution inside voting
-   timeouts. Future finality deadlines may replay H without repeating engine handoff.
+   timeouts. Future finality deadlines may replay H without repeating engine handoff
+   when the schedule survives and the completed closure selects the same protocol.
+   See the reversible-control refinement for rollback that removes the schedule.
 4. Canonical rollback is decision-driven. D is the chain determined by the ordered
    Block decisions (including exact raw-input commitments): a replacement at h
    truncates D above h-1 then appends the new block. BlockV1 includes explicit
@@ -312,10 +318,11 @@ is explicit and separate from binary installation or ordinary consensus voting.
    newly eligible prior decisions, not merely the deferred Block numbered C. It changes
    only at the next-height gate. Persist it outside reversible canonical state.
    No BeginRecovery/RecoveryExit ceremony or temporary committee authority. Current
-   engine orders replacement blocks, retaining its era and monotonically increasing
-   consensus/signing heights. Replay selects old executors/migrations by position.
-   New user batches below the latest activated H are invalid until reconstruction
-   re-crosses H. Ed25519 CommitteeV1 is the defined v1 bridge; other key systems need
+   engine orders replacement blocks at monotonically increasing consensus/signing
+   heights. Replay selects old executors/migrations by position. A changed protocol
+   after closure requires a fresh era and handoff, never reuse of an old era/WAL.
+   New batches wait for closure and its selected protocol; a removed schedule cannot
+   impose a permanent wait for its old activation height. Ed25519 CommitteeV1 is the defined v1 bridge; other key systems need
    a future bridge/protocol definition. Zero power halts NO_ACTIVE_VALIDATORS.
 6. An activated migration replays under identity (plan, H hash, pre_lineage,
    pre_checkpoint, migration definition). A different finality exclusion must produce
@@ -326,9 +333,10 @@ is explicit and separate from binary installation or ordinary consensus voting.
    deterministic execution identity, NOT a certified full-state root. Preserve legacy
    ordered checkpoints separately; their partial state coverage is not a full-state
    proof. Validate final state/receipts independently in differential replay tests.
-7. Control/decision/signer history and engine eras never roll back. Record control
-   actions after authenticating their ordered prefix; received bytes alone do not
-   advance authority. Keep separate received, contiguous verified, applied, live-era
+7. Retain authenticated decision records and durable signing protection. Canonical
+   control effects do roll back, as specified in the refinement below. Record control
+   effects only through authenticated ordered application; received bytes alone do
+   not advance authority. Keep separate received, contiguous verified, applied, live-era
    and signing frontiers. Because committees are execution-derived, historical
    certificate verification must replay each committee-changing prefix. Peer-supplied
    committee records/snapshots are claims, not proofs. Unsupported nodes may verify
@@ -645,6 +653,75 @@ changes are explicitly prelaunch; no claim of compatibility with older dev netwo
 
 ### K5. Durable signer and engine coordinator
 
+K4 merged as `0a2cbd89e8ebdd8acc74b514e6d5e85e4c9466dd` (PR 620).
+The operator clarified on 1 November 2026 that nothing is in production and
+intermediate pre-release implementations do not need compatibility support.
+K4 is such an intermediate baseline, not a required supported predecessor.
+Do not add legacy K4 extraction, live resumption or migration work merely to
+preserve this milestone. Existing development data must not be silently relabeled
+or deleted. Preserve existing references and useful evidence without treating
+them as a commitment to support an intermediate database in the final binary.
+For released protocols, startup selects the implementation required by validated
+persisted history, not whichever protocol is newest in the binary. Retain the
+goal's managed P1/P2 upgrade, restart and historical replay acceptance coverage.
+
+The sole independent reviewer explicitly agreed the following K5/K6 packaging
+and integration refinement, revision 2, before production implementation:
+
+- Preserve K4's consensus reference, node lock, source closure, baseline
+  composition and observer definition. K4 is a prelaunch development baseline,
+  without live upgrade authorization. The new managed baseline gets a distinct
+  consensus, protocol and era identity. Existing K4 databases are rejected before
+  any canonical, journal, identity or signer mutation. Do not relabel data,
+  automatically delete it, or create a replacement datadir for an operator.
+- Build independently locked `consensus-first` and `consensus-second` graphs using
+  the already merged managed Malachite revision
+  `6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09`. Both use real Kontor contexts;
+  the second has a deliberately incompatible wire codec. Preserve historical
+  certificate verification. Consensus graphs do not need a Wasmtime dependency.
+- Keep each graph's Tokio, ractor, Malachite types and runtime private. The node
+  boundary uses bundle-owned typed Rust data and generation-bound one-use reply
+  tokens. Composite protocol dispatch selects engine, coordinator rules and
+  certificate/control codecs together. Freeze the first final managed protocol
+  before constructing its successor; retain runnable historical managed protocols.
+- Keep signing admission and generation fencing serialized with durable commit.
+  Fencing remains callable while another thread waits for engine join. A timeout
+  retains ownership and never licenses a second engine. Proposal Fin and engine
+  SignProposal share one proposal-value commitment despite their different
+  encodings. Disable unsupported vote extensions; constrain ValidatorProof to its
+  membership role and distinct network identity. Approval signing is an explicit
+  operator capability, and followers have no consensus signing capability.
+- The original revision-2 requirement to mutate irreversible control state and a
+  Bitcoin high-water clock during certified append is superseded by the reversible
+  control refinement below. Append retains the authenticated input; canonical
+  control head/nonce/pending changes belong to owned application transactions.
+  Schedule requires no pending plan; Postpone keeps its target and moves H strictly
+  later with fresh notice; Cancel matches the pending plan. Accepted authorization
+  is not reweighted merely because the committee changes, but its effect is undone
+  if canonical application rolls back past it. Until K7, reaching scheduled H fails
+  closed while valid Cancel/Postpone remains prioritized. Ordinary Block H cannot
+  consume the plan; K7's authorized transition descriptor does so.
+- Rehearsal uses an isolated consistent copy with independent storage authority
+  and no live signer or engine capability. Report source, target, lineage and work
+  accounting even on failure. No automatic rehearsal service is added.
+
+The sole reviewer agreed the typed-facade refinement at `de7a03d3` on
+1 November 2026. This supersedes revision 2's generic opaque-handle/byte-message
+boundary for production consensus. Each bundle exports its own Rust structs,
+enums and concrete owner, using only standard-library types in public fields and
+signatures. Node adapters translate explicitly between distinct bundle types.
+This is a same-compiler interface, not a stable ABI. Never use layout casts to
+bridge dependency identities. Keep Tokio, Malachite, configuration implementations
+and dependency error types private. Retain existing canonical payload encodings,
+reply-kind and generation validation, count/byte admission bounds, bounded queues,
+independent signing revocation and control-thread ownership through timeout/join.
+The final linked integration must demonstrate usable public DTOs and rejection of
+private cross-graph dependency types. This does not rewrite merged executor APIs
+or require a new qualification matrix.
+
+This refinement preserves the grouped scope and representative acceptance checks.
+No additional fork change, performance campaign or broad review round is implied.
+
 Dependencies: F3/K4. Modules: signing/proposal-part paths, engine adapters, reactor
 next-height gate, node startup. Result: one node signer with separately durable slots,
 round/step/high-water checks, exact retry signatures and generation leases. All
@@ -660,6 +737,102 @@ coordinator ownership. A transient lock error never authorizes a second writer.
 This F3 follow-up was identified in Interlink receipt
 20ada81588f8fc1a137cf6f1e1b84e0d.
 
+### Reversible upgrade control, K6-ROLLBACK-PLAN revision 1
+
+Operator policy and concrete implementation revision agreed on 1 November 2026
+by the lead and single independent reviewer (`/root/k2b_system_review`).
+Review covered lead `91e8215593893e69b65182a90ed72afbdb8f14ed`, authorization
+draft `7288c9c033bb118e7b2ee6f82b0fe39aa1878315`, and the operator amendment. This section supersedes
+irreversible upgrade effects and the monotonic Bitcoin clock in earlier plans.
+It preserves authenticated decision history, signing safety and completed K5 work.
+
+**Application and authorization.** Add a distinct typed control command carrying
+its exact canonical envelope, not a disguised empty transaction batch. Proposals
+and application verify the current inclusion committee, signed reference R,
+expected control head/nonce/pending state, target, notice and expiry. R names a
+closed authenticated consensus decision strictly before inclusion. Use the
+canonical Bitcoin height at that reference and at inclusion; no highest-ever
+Bitcoin clock or requirement that those heights can only increase. Keep the
+144-height reference expiry bound and 1,008-height notice, with checked arithmetic.
+Require the reference Bitcoin height not to exceed inclusion Bitcoin height; a
+fresh post-rollback reference permits a lower clock without reviving old consent.
+Persist the envelope/certificate through ordinary certified append. Apply the
+control mutation and canonical lineage entry atomically through owned closure
+application. The next-height gate cannot advance past unfinished application.
+Preserve upgrade-specific signature domains and thresholds; no new user format.
+
+**Undo and fresh consent.** Store reversible control snapshots/effects in canonical
+application order with their Bitcoin storage height. An owned rollback to h restores
+control state below the removed ordinal/lineage suffix and retracts each removed
+control action. Preserve every application at the rollback target Bitcoin height,
+matching existing canonical rollback semantics.
+Store each retraction by ACTION ID, original application position, and deterministic
+rollback decision/stage identity in retained history in the SAME transaction as
+undo and stage progress. A different signature subset cannot evade retraction.
+Queries are indexed and bounded; do not scan all historical controls per proposal.
+Surviving effects below the rollback point do not need reauthorization.
+
+Derive a minimum reference consensus height from the latest relevant control
+retraction at the current reconstruction prefix. New submissions require a closed
+R at or after that rollback decision. A restored nonce/head alone cannot revive
+old or alternate pre-rollback approvals. A replacement action uses the updated R
+and current state and obtains fresh quorum signatures. There is no automatic
+inference of consent from old certificates. This reuses the signed reference,
+without introducing an extra signed epoch or Bitcoin-hash anchor. Duplicate
+proposals cannot apply an action twice. Do not invalidate unused approvals merely
+because an unrelated rollback occurred without removing any control effect.
+
+**Replay and recovery.** Existing certified branch intervals exclude decisions on
+replaced branch incarnations, including A-to-B-to-A. Finality replay additionally
+needs to filter retracted controls even when their Bitcoin anchor survives.
+Retractions/fresh-reference floors must be resolved AS OF the reconstruction
+verdict, not from a future global latest row. Historical reconstruction applies
+an original action at its original position, then derives its retraction when
+processing the actual rollback. It does not delete or rewrite certificates.
+Frozen work publication, undo, retractions and stage restart must agree after
+crash. If the current work representation needs a control item or explicit
+inapplicable outcome, extend it directly; do not funnel controls through Bitcoin
+transaction dependency filtering or create a parallel replay service.
+
+Concrete trace: decision 10 applies Schedule(P2,H) at Bitcoin 100; decision 11
+orders Bitcoin 101. Decision 12 either replaces Bitcoin 100 or produces a finality
+verdict rolling application back to 99. Undo removes the schedule, records its
+action-ID retraction and reference floor 12, and leaves no pending upgrade after
+closure. Retained decision 10 cannot reinstate it. After decision 12 closes,
+validators may sign a new schedule referencing decision 12 and the restored control
+state, with fresh notice/expiry, and propose it at 13 or later. Fresh genesis
+reconstruction, restart after undo and an uninterrupted node must agree. A rollback
+to 100 that does not remove the control application must preserve it.
+
+**Activation and engine consequences (K7/K8).** Resolve the effective protocol from
+canonical state after each complete decision closure, including all due finality
+rollback/replay. If that is the running protocol, do not restart the engine. If it
+differs, including restoration of a historical protocol after removal of its
+successor's schedule, persist a handoff intent, stop/join the outgoing engine and
+start the selected implementation at C+1 in a fresh era/generation. Bind the era
+to predecessor era, certified decision C, closed lineage and selected protocol.
+Never reuse an old era/WAL or rewind signing/consensus heights. The outgoing
+committee certifies C; closure derives the next committee and implementation.
+A descriptor in Block H alone does not force activation if its schedule was
+invalidated by H's complete closure. A surviving schedule still governs migration
+replay at H with the existing exact pre-state identity. A removed schedule cannot
+reactivate just by reaching H again or permanently gate batches waiting for H.
+The normal after-H rule and actual incompatible-engine handoff evidence remain.
+
+**Scope and validation.** Lead owns persistence, typed command integration and
+reactor/API work. Cryptographic authorization changes can be delegated as a bounded
+revision of the existing signer/verifier task after plan agreement. Remove the
+uncommitted high-water cache draft; adapt the 11-test authorization branch instead
+of discarding its useful codecs, threshold checks and vectors. Focus tests on
+reversible schedule/postpone/cancel, affected versus unaffected rollback, alternate
+old approvals after nonce restoration, duplicate proposers, canonical clocks,
+branch reincarnation, finality rollback with unchanged anchor, atomic failure and
+prefix-correct restart/cold replay. K7/K8 adds activation removal, restoration of
+historical protocol with fresh era, activation of schedules restored by undoing
+Cancel/Postpone, surviving-schedule migration replay and actual
+engine handoff. Use existing scoped CI and grouped lead plus one review. No new
+fork, mempool/retry service, performance campaign or certificate paging is implied.
+
 ### K6. Validator-authorized upgrade control
 
 Dependencies: K4/K5. Modules: protocol registry/control state, proposal validation,
@@ -671,8 +844,10 @@ threshold boundaries, duplicate/unknown signers, overflow, weight drift across t
 actions, expiry, cancellation cutoff and superseded plans are tested. Include exit/rejoin
 inside one replay span, same-height replacement registration, and valid control
 ordering despite pending/deferred blocks. Test dry-run isolation, exact input/target
-binding, work-budget reporting and honest failure diagnostics. Existing plans
-retain their original authorization as certified history changes.
+binding, work-budget reporting and honest failure diagnostics. Surviving canonical
+plans retain their original authorization; removed plans require a fresh action
+and fresh approvals. Reorg and finality rollback, replay filtering, stale consent
+after nonce restoration, restart and cold reconstruction are part of K6 acceptance.
 
 ### K7. After-H activation and deterministic migration
 
@@ -697,8 +872,10 @@ unless its embedded builder attestation verifies. No live switch before these pa
 Dependencies: K7 and K4's decision-driven branch/committee foundation. Modules:
 reorg/finality scheduler, journal/committee/control, snapshot restore and migration
 replay. Result: ordinary current-era consensus orders replacement blocks without
-rewinding eras/heights/authority; no recovery ceremony. Replay across one or several
-activated H boundaries; below latest H gate new batches. Test earlier/later local
+rewinding signing or consensus heights; no recovery ceremony. Replay across one or
+several activated H boundaries. If closure restores an older protocol, hand off to
+it in a fresh era rather than reusing its old era/WAL. Gate new batches on completed
+closure and selected-protocol readiness. Test earlier/later local
 notifications around decision/application/resume, including orphan X never seen by
 local bitcoind, shorter higher-work branches, second reorg, finality exclusions,
 expired batches and same H hash/different pre-lineage. Independent state/receipt/

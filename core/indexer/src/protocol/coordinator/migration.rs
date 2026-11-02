@@ -39,6 +39,10 @@ pub(crate) enum MigrationRejected {
     UnknownOutcome(u8),
 }
 
+#[derive(Debug, Error)]
+#[error("migration work consumed: {0:?}")]
+pub(crate) struct MigrationAttemptWork(pub(crate) Option<MigrationWork>);
+
 impl MigrationRequest {
     fn application(&self) -> Result<CanonicalApplication> {
         ensure!(
@@ -88,6 +92,20 @@ pub(crate) async fn apply(
     selection: &ExecutionSelection,
     network: Network,
     request: &MigrationRequest,
+) -> Result<MigrationReceipt> {
+    let mut used = Some(MigrationWork::default());
+    apply_inner(service, session, selection, network, request, &mut used)
+        .await
+        .map_err(|error| error.context(MigrationAttemptWork(used)))
+}
+
+async fn apply_inner(
+    service: &OwnerService,
+    session: &LinkedSession,
+    selection: &ExecutionSelection,
+    network: Network,
+    request: &MigrationRequest,
+    used: &mut Option<MigrationWork>,
 ) -> Result<MigrationReceipt> {
     selection.ensure_runtime(network, session.origin())?;
     ensure!(
@@ -170,6 +188,7 @@ pub(crate) async fn apply(
         input
             .pin(request.expected, request.anchor_height, request.anchor_hash)
             .await?;
+        *used = None;
         let outcome = (session.executor.operations.migration)(
             session.executor.owner.clone(),
             selection.envelope(),
@@ -177,14 +196,21 @@ pub(crate) async fn apply(
             input.callbacks(),
         )
         .await
-        .map_err(HostFailure::from)?;
-        let values = outcome.map_err(|tag| match tag {
-            0 => MigrationRejected::UnknownDefinition,
-            1 => MigrationRejected::Budget,
-            2 => MigrationRejected::InvalidOperation,
-            tag => MigrationRejected::UnknownOutcome(tag),
+        .map_err(|(tag, message, values)| {
+            *used = values.map(MigrationWork::from_values);
+            HostFailure::from((tag, message))
+        })?;
+        let values = outcome.map_err(|(tag, values)| {
+            *used = values.map(MigrationWork::from_values);
+            match tag {
+                0 => MigrationRejected::UnknownDefinition,
+                1 => MigrationRejected::Budget,
+                2 => MigrationRejected::InvalidOperation,
+                tag => MigrationRejected::UnknownOutcome(tag),
+            }
         })?;
         let work = MigrationWork::from_values(values);
+        *used = Some(work);
         MigrationMeter::new(request.definition.budget).charge(work)?;
         canonical_history::append_migration(&session.conn, &application, work).await?;
         Ok(MigrationReceipt { application, work })

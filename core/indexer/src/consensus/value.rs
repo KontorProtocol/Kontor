@@ -95,7 +95,10 @@ impl Value {
     pub(crate) fn from_input(input: ExactInput) -> Result<Self, CodecError> {
         let descriptor = input.descriptor().encode()?;
         let id = ValueId(input.descriptor().id()?);
-        let transactions = input.transactions()?;
+        let transactions = match input.descriptor().command {
+            Command::Control { .. } => Vec::new(),
+            Command::Batch { .. } | Command::Block { .. } => input.transactions()?,
+        };
         Ok(Self(Arc::new(AvailableValue {
             input,
             descriptor,
@@ -149,14 +152,18 @@ impl Value {
 
     pub fn block_height(&self) -> u64 {
         match self.command() {
-            Command::Batch { anchor_height, .. } => *anchor_height,
+            Command::Batch { anchor_height, .. } | Command::Control { anchor_height, .. } => {
+                *anchor_height
+            }
             Command::Block { height, .. } => *height,
         }
     }
 
     pub fn block_hash(&self) -> BlockHash {
         match self.command() {
-            Command::Batch { anchor_hash, .. } => *anchor_hash,
+            Command::Batch { anchor_hash, .. } | Command::Control { anchor_hash, .. } => {
+                *anchor_hash
+            }
             Command::Block { hash, .. } => *hash,
         }
     }

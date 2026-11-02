@@ -20,7 +20,7 @@ impl<E: Executor> Reactor<E> {
                 let started_at = Instant::now();
                 match self.execution.step_certified_closure(height).await? {
                     ExecutionStep::Complete => return Ok(()),
-                    ExecutionStep::Planning | ExecutionStep::Observed => {}
+                    ExecutionStep::Planning | ExecutionStep::Observed | ExecutionStep::Control => {}
                     ExecutionStep::RolledBack(height) => {
                         self.observe_rollback(height).await;
                         let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;

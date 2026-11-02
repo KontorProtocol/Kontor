@@ -226,7 +226,7 @@
     },
     "indexer_build_script": {
       "path": "core/indexer/build.rs",
-      "sha256": "1569d8ef19e36af2c762b5aed1e471c6b3226d87c2b79aa37a30b23fac2ef1e7"
+      "sha256": "9b5793597b7cde86815b04d729a642e142cd5ed8d32a7adb6152e26cf585aa11"
     },
     "indexer_manifest": {
       "path": "core/indexer/Cargo.toml",
@@ -234,7 +234,7 @@
     },
     "initial_protocol_definition": {
       "path": "core/indexer/src/protocol/coordinator/genesis.rs",
-      "sha256": "18542d88c717587ea277eb020229fde272925081e6bcde6f58e32408bf1c3ed3"
+      "sha256": "f562a0db3c1539dbf14c66890301e3b433370d47dc59e7d7aae574355fa6d9e3"
     },
     "initialization_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/initialization.rs",
@@ -310,7 +310,7 @@
     },
     "native_genesis_preflight": {
       "path": "core/indexer/src/database/genesis.rs",
-      "sha256": "11c7a68b89517cdc415a56cbb57edea6c293572a6fd0d1cff3254f35bd313982"
+      "sha256": "21dfec4ed2da2d703c84fd2305e2b8117a49f204df1fd35564dc5716424d51a2"
     },
     "native_staking": {
       "path": "native-contracts/staking/src/lib.rs",
@@ -358,7 +358,7 @@
     },
     "operation_ownership": {
       "path": "core/indexer/src/runtime/ownership.rs",
-      "sha256": "13f26e74c12040896d44d95f536184438cbaed1e2db2bb3b4b4d7e404fe1a7b3"
+      "sha256": "2d8f5b37ab64813eac3943a1635c00976a88b3c6fe2ac0107e576844618d27e7"
     },
     "pending_host_capture": {
       "path": "tools/native-stack/capture_resource_pending.py",
@@ -550,7 +550,7 @@
     },
     "runtime_pool": {
       "path": "core/indexer/src/runtime/pool.rs",
-      "sha256": "f5e6e6623887c49d2772efef660e52cfa79ba4a458d0be323cf45461774388b3"
+      "sha256": "a5f1e9281de50a25ee3e8fc4c57d04616f7e0795e21c389ea034c28dcc0799c7"
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",

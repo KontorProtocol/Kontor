@@ -1,0 +1,46 @@
+{
+  "reference_commit": "2c5cff0ddc3eada52f143f61109b6360d3732c6f",
+  "reference_wasm_sha256": "5c7dae8392a235347573ee2e29b810e27eaef8bdaedbba34051d14c9f8d2b869",
+  "node": "v24.22.1",
+  "vectors_sha256": "7a2558a9f4948c0678f8bfcaf13ee59c395dfd8c01df95348b253daca33d99db",
+  "vectors": {
+    "secret": "23360db7e337b0a32b264e06bc11c1b474d16f55665373de1ce93cf15ddb3456",
+    "publicKey": "acfd749941a5bea56796745d1fc91668d63f9522374cb6e9c033433e3216dcad48b4fc1ab7000a365f2861565daa6b0819fd041ac58eed8c441c8b3478df6ceeaf89cc02c8119f63891a1368d7ec1d0c7e2abaaae2ac8579b7eece473478dac7",
+    "signature": "896c0c0946139468b751259d13be3b6b19ffdae67166f0b0c4fc3ae20b83b9f2301c7d7a4461bec745d7523ae9d8180f",
+    "aggregate": "a75256e403643691e4e6c28acb8919574b7e08f126d3aa8dae3831c426e6f0d8067b2001438dc4b0325c707e0365ec51",
+    "derivedRoot": "23360db7e337b0a32b264e06bc11c1b474d16f55665373de1ce93cf15ddb3456",
+    "derivedChild": "5aac88c5666746c23c1a93259833c9c5760dc6146e89a79b30f30a8dcd7010e0",
+    "errors": {
+      "shortSeed": {
+        "name": "Error",
+        "message": "BLS key_gen requires >= 32 bytes of IKM, got 31",
+        "payload": "BLS key_gen requires >= 32 bytes of IKM, got 31"
+      },
+      "zeroSecret": {
+        "name": "Error",
+        "message": "invalid BLS secret: BLST_BAD_ENCODING",
+        "payload": "invalid BLS secret: BLST_BAD_ENCODING"
+      },
+      "invalidPublicKey": {
+        "name": "Error",
+        "message": "invalid BLS pubkey: BLST_BAD_ENCODING",
+        "payload": "invalid BLS pubkey: BLST_BAD_ENCODING"
+      },
+      "invalidSignature": {
+        "name": "Error",
+        "message": "invalid BLS signature: BLST_BAD_ENCODING",
+        "payload": "invalid BLS signature: BLST_BAD_ENCODING"
+      },
+      "shortSignature": {
+        "name": "Error",
+        "message": "invalid BLS signature: BLST_BAD_ENCODING",
+        "payload": "invalid BLS signature: BLST_BAD_ENCODING"
+      },
+      "emptyAggregate": {
+        "name": "Error",
+        "message": "bls_aggregate_signatures: need at least one signature",
+        "payload": "bls_aggregate_signatures: need at least one signature"
+      }
+    }
+  }
+}

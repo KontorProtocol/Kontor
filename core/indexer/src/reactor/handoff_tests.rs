@@ -110,7 +110,8 @@ async fn certified_a_b_a_replacement_preserves_history_and_restores_execution() 
     }
     reactor
         .consensus
-        .engine_handle
+        .engine
+        .legacy_handle()
         .actor
         .get_cell()
         .stop_and_wait(None, Some(Duration::from_secs(5)))
@@ -144,7 +145,8 @@ async fn certified_a_b_a_replacement_preserves_history_and_restores_execution() 
     assert_eq!(saved[0].output, saved[2].output);
     reactor
         .consensus
-        .engine_handle
+        .engine
+        .legacy_handle()
         .actor
         .get_cell()
         .stop_and_wait(None, Some(Duration::from_secs(5)))
@@ -304,7 +306,8 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
     }
     reactor
         .consensus
-        .engine_handle
+        .engine
+        .legacy_handle()
         .actor
         .get_cell()
         .stop_and_wait(None, Some(Duration::from_secs(5)))
@@ -339,7 +342,8 @@ async fn check_exit_recovery(
     let context = reactor.execution.protocol_context;
     reactor
         .consensus
-        .engine_handle
+        .engine
+        .legacy_handle()
         .actor
         .get_cell()
         .stop_and_wait(None, Some(Duration::from_secs(5)))

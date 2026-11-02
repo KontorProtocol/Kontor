@@ -13,16 +13,21 @@ use clap::{Parser, Subcommand};
 use futures_util::{FutureExt, future};
 use indexer::config::GenesisConfig;
 use indexer::confirmation_backfill::{self, ConfirmationBackfillArgs};
+#[cfg(not(kontor_managed))]
+use indexer::database;
 use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
 use indexer::info::{compute_info_core, run_info_publisher};
 use indexer::keygen::{self, KeygenArgs};
+use indexer::migration_rehearsal::{self, MigrationRehearsalArgs};
 #[cfg(feature = "protocol-qualification")]
 use indexer::protocol_qualification;
 use indexer::receipt_stream_rotation::{self, ReceiptStreamRotationArgs};
+use indexer::runtime::GenesisParameters;
 use indexer::stopper::{self, Shutdown};
+use indexer::upgrade_approval_cli::{self, UpgradeApprovalArgs};
 use indexer::{api, built_info, reactor, reg_tester, runtime};
-use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging};
+use indexer::{bitcoin_client, bitcoin_follower, config::Config, logging};
 use indexer_types::{Inst, InstKind};
 use kontor_build::{BuildArgs, run as build};
 use malachitebft_app_channel::app::config::{BootstrapProtocol, DiscoveryConfig, Selector};
@@ -57,6 +62,10 @@ enum Command {
     Run(Box<Config>),
     /// Generate validator keys deterministically from a master seed.
     Keygen(KeygenArgs),
+    /// Inspect, sign or assemble an exact upgrade action offline.
+    UpgradeApproval(UpgradeApprovalArgs),
+    /// Rehearse an exact migration on an isolated snapshot without authorizing it.
+    RehearseMigration(MigrationRehearsalArgs),
     /// Recover confirmation positions from one verified canonical raw block.
     BackfillConfirmations(ConfirmationBackfillArgs),
     /// Invalidate receipt resume tokens after restoring a node database backup.
@@ -86,6 +95,17 @@ async fn main() -> Result<()> {
         Command::Build(args) => build(args),
         Command::Run(config) => run_daemon(*config).await,
         Command::Keygen(args) => keygen::run(args),
+        Command::UpgradeApproval(args) => {
+            let result = upgrade_approval_cli::run(args)?;
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
+        Command::RehearseMigration(args) => {
+            let report = migration_rehearsal::run(args).await?;
+            println!("{}", serde_json::to_string(&report)?);
+            anyhow::ensure!(report.outcome == "succeeded", "migration rehearsal failed");
+            Ok(())
+        }
         Command::BackfillConfirmations(args) => {
             let result = confirmation_backfill::run(args).await?;
             println!("{}", serde_json::to_string(&result)?);
@@ -264,8 +284,49 @@ async fn run_daemon(config: Config) -> Result<()> {
         let _ = panic_tx.send(format!("panic at {location}: {message}"));
     }));
     let filename = "state.db";
-    let (reader, writer) =
-        database::open_node_database(&config.data_dir, filename, config.network).await?;
+    let genesis: GenesisParameters = GenesisConfig::load(&config.genesis_file)?.try_into()?;
+    let private_key = indexer::consensus::signing::resolve_consensus_private_key(
+        config.consensus_mode,
+        config.consensus_private_key.as_deref(),
+        config.consensus_private_key_file.as_deref(),
+    )?;
+    let consensus_enabled =
+        config.consensus_mode == indexer::consensus::signing::ConsensusMode::Validator;
+    if !consensus_enabled {
+        info!("Consensus mode: follower — sync-only, will not sign");
+    }
+    let engine_config = reactor::engine::EngineConfig {
+        private_key,
+        listen_addr: config.consensus_listen_addr.clone(),
+        persistent_peers: config.consensus_peers.clone(),
+        data_dir: config.data_dir.clone(),
+        consensus_enabled,
+        discovery: DiscoveryConfig {
+            enabled: true,
+            bootstrap_protocol: BootstrapProtocol::Full,
+            selector: Selector::Random,
+            ..Default::default()
+        },
+    };
+
+    #[cfg(kontor_managed)]
+    let (coordinator, reader, writer) = reactor::engine::NodeCoordinator::open_database(
+        &engine_config,
+        filename,
+        config.network,
+        config.starting_block_height,
+        &genesis,
+    )
+    .await?;
+    #[cfg(not(kontor_managed))]
+    let (reader, writer) = database::open_node_database_for_genesis(
+        &config.data_dir,
+        filename,
+        config.network,
+        config.starting_block_height,
+        &genesis,
+    )
+    .await?;
     let reactor_ready = Arc::new(AtomicBool::new(false));
     // Whether we are stopping because something died — see `Env::failed`.
     let failed = Arc::new(AtomicBool::new(false));
@@ -287,6 +348,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         reader.clone(),
         info_tx,
     );
+    let (upgrade_tx, upgrade_rx) = mpsc::channel(1);
     let (simulate_tx, simulate_rx) = mpsc::channel(available_parallelism()?.into());
     let (fees_tx, fees_rx) = tokio::sync::watch::channel(indexer_types::Fees::floor(1));
     let event_subscriber_handle = event_subscriber.run(shutdown.signal(), event_rx);
@@ -306,6 +368,7 @@ async fn run_daemon(config: Config) -> Result<()> {
             bitcoin: bitcoin.clone(),
             owner_service: owner_service.clone(),
             simulate_tx,
+            upgrade_tx,
             fees_rx,
             info_rx,
             database_name: filename.to_string(),
@@ -333,30 +396,6 @@ async fn run_daemon(config: Config) -> Result<()> {
     )
     .await;
 
-    let private_key = indexer::consensus::signing::resolve_consensus_private_key(
-        config.consensus_mode,
-        config.consensus_private_key.as_deref(),
-        config.consensus_private_key_file.as_deref(),
-    )?;
-    let consensus_enabled =
-        config.consensus_mode == indexer::consensus::signing::ConsensusMode::Validator;
-    if !consensus_enabled {
-        info!("Consensus mode: follower — sync-only, will not sign");
-    }
-    let engine_config = reactor::engine::EngineConfig {
-        private_key,
-        listen_addr: config.consensus_listen_addr.clone(),
-        persistent_peers: config.consensus_peers.clone(),
-        data_dir: config.data_dir.clone(),
-        consensus_enabled,
-        discovery: DiscoveryConfig {
-            enabled: true,
-            bootstrap_protocol: BootstrapProtocol::Full,
-            selector: Selector::Random,
-            ..Default::default()
-        },
-    };
-
     let (ready_tx, ready_rx) = oneshot::channel();
     let reactor_handle = reactor::run(
         config.starting_block_height,
@@ -368,9 +407,12 @@ async fn run_daemon(config: Config) -> Result<()> {
         Some(ready_tx),
         Some(event_tx),
         Some(simulate_rx),
+        Some(upgrade_rx),
         engine_config,
+        #[cfg(kontor_managed)]
+        coordinator,
         bitcoin.clone(),
-        GenesisConfig::load(&config.genesis_file)?.try_into()?,
+        genesis,
         None,
         config.consensus_propose_timeout_ms,
         Some(fees_tx),
@@ -448,7 +490,9 @@ async fn run_daemon(config: Config) -> Result<()> {
     // enough BECAUSE of that ordering — `cancel()` is a release store and every
     // reader that acts on the token's cancellation acquires it, so this store
     // is visible to anything that saw the cancel. Not a coincidence to tidy.
-    if matches!(stop, Stop::Fatal(_)) {
+    if let Stop::Fatal(cause) = &stop {
+        // A caller can terminate us during draining, before exit_status logs the cause.
+        error!("Initiating shutdown after failure: {cause:#}");
         failed.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     info!("Initiating shutdown");

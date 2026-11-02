@@ -162,6 +162,7 @@ pub(crate) enum StageOutcome {
     Applied,
     UnrecognizedBatch,
     ReplacedAnchorBatch,
+    RetractedControl,
     RolledBack,
     FinalityEvaluated,
     Observed,
@@ -196,6 +197,7 @@ impl StageRecord {
                     StageOutcome::Applied
                         | StageOutcome::UnrecognizedBatch
                         | StageOutcome::ReplacedAnchorBatch
+                        | StageOutcome::RetractedControl
                 ) | (WorkItem::Rollback { .. }, StageOutcome::RolledBack)
                     | (WorkItem::Finality, StageOutcome::FinalityEvaluated)
                     | (WorkItem::Observe, StageOutcome::Observed)
@@ -279,6 +281,7 @@ impl StageRecord {
             StageOutcome::FinalityEvaluated => 3,
             StageOutcome::Observed => 4,
             StageOutcome::ReplacedAnchorBatch => 5,
+            StageOutcome::RetractedControl => 6,
         })?;
         output.count(self.applications.len())?;
         for application in &self.applications {
@@ -309,6 +312,7 @@ impl StageRecord {
             3 => StageOutcome::FinalityEvaluated,
             4 => StageOutcome::Observed,
             5 => StageOutcome::ReplacedAnchorBatch,
+            6 => StageOutcome::RetractedControl,
             _ => anyhow::bail!("unknown closure stage outcome"),
         };
         let count = input.count(4)?;

@@ -16,17 +16,18 @@ from audit import audit_final, audit_inputs
 from common_ownership import verify as verify_common_ownership
 from execution_definition import verify_reference
 from coordinator_definition import verify as verify_coordinator_reference
+from managed_definition import GRAPH as MANAGED_GRAPH, verify as verify_managed_reference
 from metadata_control import proc_macro_hashes
 from provenance import fingerprint, locked_packages, runtime_libraries, source_inputs
 from provenance import tools as toolchain_inputs
 from source_policy import check as check_source_policy
 from symbol_tool import TOOLCHAIN
-from recipes import EXECUTOR_LINK_SETS, GRAPHS, executor_graphs, graph_root, identity, verify_engine_observations, verify_identity, verify_reservations
+from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, GRAPHS, MALACHITE_REVISION, MALACHITE_VERSION, executor_graphs, graph_root, identity, verify_engine_observations, verify_identity, verify_reservations
 from capabilities import verify as verify_capabilities
-from type_boundary import verify as verify_type_boundary
+from type_boundary import verify as verify_type_boundary, verify_node_adapter
 
 ROOT = Path(__file__).resolve().parents[2]
-MALACHITE = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+MALACHITE = MALACHITE_REVISION
 TARGETS = {"aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "aarch64-apple-darwin"}
 FORBIDDEN = {"cache", "profiling", "debug-builtins"}
 
@@ -81,11 +82,20 @@ def identities(graph, data, graphs=None):
         if len(found) != 1:
             raise RuntimeError(f"{graph}: expected one {name}, found {len(found)}")
         return found[0]
-    vm = one("wasmtime")
-    if vm["version"] != version or not vm["source"].endswith("#" + revision):
-        raise RuntimeError(f"{graph}: immutable Wasmtime identity changed")
-    if FORBIDDEN & set(nodes[vm["id"]]["features"]):
-        raise RuntimeError(f"{graph}: forbidden Wasmtime feature")
+    if recipe.kind == "consensus":
+        if {"wasmtime", "libsql"} & {p["name"] for p in selected}:
+            raise RuntimeError(f"{graph}: consensus graph contains execution or storage services")
+        for package in selected:
+            if package["name"].startswith("arc-malachite"):
+                if (package["version"] != MALACHITE_VERSION
+                        or not (package["source"] or "").endswith("#" + MALACHITE)):
+                    raise RuntimeError(f"{graph}: unqualified {package['name']} source or version")
+    else:
+        vm = one("wasmtime")
+        if vm["version"] != version or not vm["source"].endswith("#" + revision):
+            raise RuntimeError(f"{graph}: immutable Wasmtime identity changed")
+        if FORBIDDEN & set(nodes[vm["id"]]["features"]):
+            raise RuntimeError(f"{graph}: forbidden Wasmtime feature")
     for name in (("arc-malachitebft-app-channel", "if-watch") if recipe.malachite_engine else ()):
         package = one(name)
         if not package["source"].endswith("#" + MALACHITE):
@@ -330,7 +340,7 @@ def verify_staged_inputs(graph):
 
 def node_dependencies(data):
     names = {package["name"] for package in data["packages"]}
-    if any(name.startswith(("wasmtime", "kontor-executor-")) for name in names):
+    if any(name.startswith(("wasmtime", "kontor-executor-", "kontor-consensus-")) for name in names):
         raise RuntimeError("node Cargo graph contains a retained execution implementation")
     for package in data["packages"]:
         if package["name"] in {"blst", "secp256k1-sys", "ring", "psm", "wit-bindgen"}:
@@ -365,8 +375,29 @@ def node_codegen_objects(path, spec):
     return [Path(item["path"]) for item in record["objects"]]
 
 
-def build_node(graphs, args, base_env, output):
+def node_link_inputs(graphs, consensus):
+    # Audit ownership is global across the final executable, even when two
+    # independently resolved roles both call their first version "first".
+    audited = []
+    libraries = []
+    for role, reports in (("executor", graphs), ("consensus", consensus)):
+        for graph in reports:
+            audited.append(dict(graph, graph=role + "-" + graph["graph"]) if consensus else graph)
+            libraries.append({"role": role, "graph": graph["graph"], "facade": graph["facade"],
+                              "facade_sha256": digest(Path(graph["facade"])),
+                              "link_inputs": graph["link_inputs"],
+                              "build_inputs_sha256": fingerprint(graph)})
+    return audited, libraries
+
+
+def build_node(graphs, args, base_env, output, consensus=()):
     recipes = executor_graphs(args.link_set)
+    managed = args.link_set == "managed-node"
+    if managed != bool(consensus):
+        raise RuntimeError("managed node requires independently built consensus graphs")
+    if ([graph["graph"] for graph in graphs] != list(recipes)
+            or (managed and [graph["graph"] for graph in consensus] != list(CONSENSUS_GRAPHS))):
+        raise RuntimeError("node graph set differs from the selected build recipe")
     manifest = ROOT / "protocol-bundles/node/Cargo.toml"
     lock = manifest.with_name("Cargo.lock")
     recipe = tomllib.loads(manifest.read_text())
@@ -383,7 +414,18 @@ def build_node(graphs, args, base_env, output):
     node_dependencies(data)
     coordinator_data = metadata(manifest, None, env, args.offline, features)
     coordinator_lock = tomllib.loads(lock.read_text())
-    coordinator = verify_coordinator_reference(ROOT, coordinator_data, coordinator_lock)
+    if managed:
+        consensus_manifest = ROOT / MANAGED_GRAPH
+        consensus_data = metadata(consensus_manifest, None, env, args.offline)
+        consensus_lock = tomllib.loads(consensus_manifest.with_name("Cargo.lock").read_text())
+
+    def verify_definition():
+        if managed:
+            return verify_managed_reference(ROOT, coordinator_data, coordinator_lock,
+                                            consensus_data, consensus_lock)
+        return verify_coordinator_reference(ROOT, coordinator_data, coordinator_lock)
+
+    coordinator = verify_definition()
     sources = source_inputs(ROOT, data, kind="node")
     lock_hash = digest(lock)
     write_json(directory / "metadata.json", data)
@@ -391,14 +433,15 @@ def build_node(graphs, args, base_env, output):
     for graph in graphs:
         verify_identity(ROOT, graph, recipes)
         verify_staged_inputs(graph)
-    sets, versions = audit_inputs(graphs, directory)
+    for graph in consensus:
+        verify_identity(ROOT, graph, CONSENSUS_GRAPHS)
+        verify_staged_inputs(graph)
+    audited, libraries = node_link_inputs(graphs, consensus)
+    sets, versions = audit_inputs(audited, directory)
     spec = {"compiler": env["RUSTC"], "features": features, "link_set": args.link_set,
             "source_inputs_sha256": fingerprint(sources),
             "lock_sha256": lock_hash, "root_objects": str(directory / "root-objects.json"),
-            "graphs": [{"graph": graph["graph"], "facade": graph["facade"],
-                        "facade_sha256": digest(Path(graph["facade"])),
-                        "link_inputs": graph["link_inputs"], "build_inputs_sha256": fingerprint(graph)}
-                       for graph in graphs]}
+            "graphs": libraries}
     spec_path = directory / "link-spec.json"
     write_json(spec_path, spec)
     # Cargo does not know that external --extern inputs changed. A content-keyed
@@ -423,20 +466,23 @@ def build_node(graphs, args, base_env, output):
     node_inputs.update(root_objects)
     for script in native_outputs:
         node_inputs.update(Path(script["out_dir"]).rglob("*.a"))
-    common, node = verify_common_ownership(graphs, sets, [], executable, env, directory,
+    common, node = verify_common_ownership(audited, sets, [], executable, env, directory,
                                           kind="executor", node_objects=sorted(node_inputs),
                                           compiler_objects=root_objects)
-    helpers = audit_final(executable, graphs, sets, versions, directory, common,
+    helpers = audit_final(executable, audited, sets, versions, directory, common,
                           kind="executor", node=node)
-    libraries = runtime_libraries(executable, env, graphs)
+    libraries = runtime_libraries(executable, env, audited)
     if digest(lock) != lock_hash or source_inputs(ROOT, data, kind="node") != sources:
         raise RuntimeError("node source or lock changed during compilation")
     if metadata(manifest, args.target, env, args.offline, features) != data:
         raise RuntimeError("node dependency metadata changed during compilation")
-    if verify_coordinator_reference(ROOT, coordinator_data, coordinator_lock) != coordinator:
+    if verify_definition() != coordinator:
         raise RuntimeError("coordinator definition changed during compilation")
     for graph in graphs:
         verify_identity(ROOT, graph, recipes)
+        verify_staged_inputs(graph)
+    for graph in consensus:
+        verify_identity(ROOT, graph, CONSENSUS_GRAPHS)
         verify_staged_inputs(graph)
     result = {"coordinator_definition": coordinator, "qualification_command": args.node_qualification, "executable": str(executable), "executable_sha256": digest(executable),
               "source_inputs_sha256": fingerprint(sources), "lock_sha256": lock_hash,
@@ -450,6 +496,11 @@ def build_node(graphs, args, base_env, output):
               "status": "node linked and native ownership checked; execution qualification required"}
     if args.node_qualification:
         result["interface_checks"] = verify_type_boundary(graphs, args.target, env, directory)
+        if managed:
+            controls = directory / "consensus"
+            controls.mkdir(exist_ok=True)
+            result["consensus_interface_checks"] = verify_type_boundary(consensus, args.target, env, controls)
+            result["consensus_adapter_checks"] = verify_node_adapter(ROOT, consensus, args.target, env, controls)
     write_json(directory / "build-inputs.json", result)
     return result
 
@@ -486,6 +537,8 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--build-executors", action="store_true",
                         help="stage production executor libraries for the node linker; does not qualify a node")
+    mode.add_argument("--build-consensus", action="store_true",
+                      help="stage production consensus libraries; does not qualify a node or handoff")
     mode.add_argument("--build-node", action="store_true",
                       help="build the production node with retained executors and audit native ownership")
     parser.add_argument("--node-qualification", action="store_true",
@@ -497,11 +550,12 @@ def main():
         parser.error("--node-qualification requires --build-node")
     if args.install_node and not args.build_node:
         parser.error("--install-node requires --build-node")
-    production = args.build_executors or args.build_node
-    if args.link_set and not production:
+    execution = args.build_executors or args.build_node
+    production = execution or args.build_consensus
+    if args.link_set and not execution:
         parser.error("--link-set requires --build-executors or --build-node")
-    if production and args.link_set is None:
-        args.link_set = "k4-node"
+    if execution and args.link_set is None:
+        args.link_set = "managed-node" if args.build_node else "k4-node"
     if not 1 <= args.jobs <= 2:
         parser.error("protocol qualification uses one or two compiler jobs")
     env = dict(os.environ, RUSTUP_TOOLCHAIN=TOOLCHAIN, RUSTC_WRAPPER="", CCACHE_DISABLE="1",
@@ -522,7 +576,9 @@ def main():
         parser.error("qualification must execute natively on a supported target")
     toolchain = toolchain_inputs(env, args.target)
     output = args.output.resolve() / args.target / args.profile
-    if production:
+    if args.build_consensus:
+        output /= "consensus"
+    elif execution:
         output /= "executors"
         if args.link_set:
             output /= args.link_set
@@ -535,41 +591,68 @@ def main():
     (output / "qualification.json").unlink(missing_ok=True)
     if production:
         (output / "executor-build.json").unlink(missing_ok=True)
+        (output / "consensus-build.json").unlink(missing_ok=True)
         (output / "node-build.json").unlink(missing_ok=True)
-    graphs = executor_graphs(args.link_set) if production else GRAPHS
+    graphs = (CONSENSUS_GRAPHS if args.build_consensus else
+              executor_graphs(args.link_set) if execution else GRAPHS)
     verify_reservations(ROOT, graphs)
-    verify_capabilities(ROOT)
+    if not args.build_consensus:
+        verify_capabilities(ROOT)
     reports = [build_graph(graph, args, env, output, graphs) for graph in graphs]
     write_json(output / "build-inputs.json", {"compiler": compiler, "target": args.target,
                "profile": args.profile, "graphs": reports})
     proof = None if production else qualify(reports, args, env, output)
-    node = build_node(reports, args, env, output) if args.build_node else None
+    consensus_reports = []
+    if args.build_node and args.link_set == "managed-node":
+        consensus_output = args.output.resolve() / args.target / args.profile / "consensus"
+        consensus_output.mkdir(parents=True, exist_ok=True)
+        verify_reservations(ROOT, CONSENSUS_GRAPHS)
+        consensus_reports = [build_graph(graph, args, env, consensus_output, CONSENSUS_GRAPHS)
+                             for graph in CONSENSUS_GRAPHS]
+    node = build_node(reports, args, env, output, consensus_reports) if args.build_node else None
+    consensus_controls = None
+    if args.build_consensus:
+        audit_inputs(reports, output)
+        consensus_controls = {"interfaces": verify_type_boundary(reports, args.target, env, output),
+                              "node_adapter": verify_node_adapter(ROOT, reports, args.target, env, output),
+                              "input_ownership_sha256": digest(output / "input-ownership.json")}
     for report in reports:
         data = json.loads((output / report["graph"] / "metadata.json").read_text())
         recipe = graphs[report["graph"]]
         if fingerprint(source_inputs(graph_root(ROOT, recipe), data, kind=recipe.kind,
                                      tool_root=ROOT)) != report["source_inputs_sha256"]:
             raise RuntimeError("source inputs changed before qualification finished")
+    for report in consensus_reports:
+        data = json.loads((consensus_output / report["graph"] / "metadata.json").read_text())
+        if fingerprint(source_inputs(ROOT, data, kind="consensus")) != report["source_inputs_sha256"]:
+            raise RuntimeError("consensus source inputs changed before node build finished")
+        verify_identity(ROOT, report, CONSENSUS_GRAPHS)
+        verify_staged_inputs(report)
     if toolchain_inputs(env, args.target) != toolchain:
         raise RuntimeError("common compiler inputs changed during qualification")
     verify_reservations(ROOT, graphs)
-    verify_capabilities(ROOT)
+    if not args.build_consensus:
+        verify_capabilities(ROOT)
     if production:
         for report in reports:
             verify_identity(ROOT, report, graphs)
             verify_staged_inputs(report)
-        write_json(output / "executor-build.json", {"compiler": compiler, "toolchain_inputs": toolchain,
+        report_name = "consensus-build.json" if args.build_consensus else "executor-build.json"
+        build_report = {"compiler": compiler, "toolchain_inputs": toolchain,
                    "target": args.target, "profile": args.profile, "link_set": args.link_set, "graphs": reports,
-                   "status": "staged libraries; final node link and execution qualification required"})
+                   "status": "staged libraries; final node link and execution qualification required"}
+        if consensus_controls is not None:
+            build_report["consensus_controls"] = consensus_controls
+        write_json(output / report_name, build_report)
         if node is not None:
             if args.install_node:
                 node["installed"] = install_node(node, args.install_node)
             write_json(output / "node-build.json", {"compiler": compiler, "toolchain_inputs": toolchain,
                        "target": args.target, "profile": args.profile, "link_set": args.link_set,
-                       "graphs": reports, "node": node})
+                       "graphs": reports, "consensus_graphs": consensus_reports, "node": node})
             print(f"Node built at {node['executable']}; execution qualification has not run.", flush=True)
             return
-        print(f"Executor libraries staged at {output}; node qualification has not run.", flush=True)
+        print(f"{'Consensus' if args.build_consensus else 'Executor'} libraries staged at {output}; node qualification has not run.", flush=True)
         return
     write_json(output / "qualification.json", {"compiler": compiler, "toolchain_inputs": toolchain, "target": args.target,
                "profile": args.profile, "graphs": reports, "proof": proof})

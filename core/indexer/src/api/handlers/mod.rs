@@ -9,6 +9,7 @@ mod receipt_stream;
 mod results;
 mod signers;
 mod transactions;
+mod upgrades;
 
 pub use blocks::*;
 pub use checkpoints::*;
@@ -21,6 +22,7 @@ pub use receipt_stream::*;
 pub use results::*;
 pub use signers::*;
 pub use transactions::*;
+pub use upgrades::*;
 
 use crate::api::error::HttpError;
 

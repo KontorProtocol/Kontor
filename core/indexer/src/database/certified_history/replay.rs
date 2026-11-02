@@ -4,6 +4,7 @@ use libsql::{Connection, Row, params};
 
 use super::{fixed, frontier};
 use crate::protocol::coordinator::certified_decision::Decision;
+use crate::protocol::coordinator::certified_input::CommandKind;
 
 pub(crate) const PAGE_DECISIONS: usize = 64;
 
@@ -18,7 +19,7 @@ pub(crate) struct SelectedDecision {
     pub(crate) position: ReplayPosition,
     pub(crate) id: [u8; 32],
     pub(crate) hash: BlockHash,
-    pub(crate) is_block: bool,
+    pub(crate) kind: CommandKind,
     pub(crate) interval_since: u64,
 }
 
@@ -27,7 +28,7 @@ fn selected(row: &Row, verdict: u64) -> Result<SelectedDecision> {
     let id = fixed::<32>(row.get(1)?)?;
     let height = u64::from_be_bytes(fixed(row.get(2)?)?);
     let hash = BlockHash::from_byte_array(fixed(row.get(3)?)?);
-    let kind = row.get::<i64>(4)?;
+    let kind = CommandKind::try_from(row.get::<i64>(4)?)?;
     let since = u64::from_be_bytes(fixed(row.get(5)?)?);
     let until = row
         .get::<Option<Vec<u8>>>(6)?
@@ -37,8 +38,7 @@ fn selected(row: &Row, verdict: u64) -> Result<SelectedDecision> {
     ensure!(
         decision.id()? == id
             && decision.height == indexed_decision
-            && decision.descriptor.command.position() == (height, hash, kind == 1)
-            && matches!(kind, 0 | 1),
+            && decision.descriptor.command.position() == (height, hash, kind),
         "replay decision index binding differs"
     );
     ensure!(
@@ -46,7 +46,7 @@ fn selected(row: &Row, verdict: u64) -> Result<SelectedDecision> {
             && since <= decision.height
             && since <= verdict
             && until.is_none_or(|end| verdict < end)
-            && (kind == 0 || decision.height == since),
+            && (kind != CommandKind::Block || decision.height == since),
         "replay decision belongs to another branch incarnation"
     );
     Ok(SelectedDecision {
@@ -56,7 +56,7 @@ fn selected(row: &Row, verdict: u64) -> Result<SelectedDecision> {
         },
         id,
         hash,
-        is_block: kind == 1,
+        kind,
         interval_since: since,
     })
 }
@@ -78,14 +78,14 @@ pub(crate) async fn page(
         decision: 0,
     });
     let mut rows = conn.query(
-        "SELECT d.record, d.decision_id, d.bitcoin_height, d.bitcoin_hash, d.is_block,
+        "SELECT d.record, d.decision_id, d.bitcoin_height, d.bitcoin_hash, d.command_kind,
                 b.since_decision, b.until_decision, d.height
          FROM certified_decisions d INDEXED BY certified_decision_execution_order
          JOIN certified_bitcoin_branch b ON b.bitcoin_height = d.bitcoin_height AND b.block_hash = d.bitcoin_hash
          WHERE d.bitcoin_height >= ?1 AND (d.bitcoin_height, d.height) > (?2, ?3)
            AND d.height <= ?4 AND b.since_decision <= ?4
            AND (b.until_decision IS NULL OR b.until_decision > ?4)
-           AND d.height >= b.since_decision AND (d.is_block = 0 OR d.height = b.since_decision)
+           AND d.height >= b.since_decision AND (d.command_kind != 1 OR d.height = b.since_decision)
          ORDER BY d.bitcoin_height, d.height LIMIT ?5",
         params![from_height.to_be_bytes().to_vec(), after.bitcoin_height.to_be_bytes().to_vec(),
             after.decision.to_be_bytes().to_vec(), verdict.to_be_bytes().to_vec(), PAGE_DECISIONS as u64],
@@ -127,13 +127,13 @@ pub(crate) async fn eligible(
         "exclusion decision history unavailable"
     );
     let mut rows = conn.query(
-        "SELECT d.record, d.decision_id, d.bitcoin_height, d.bitcoin_hash, d.is_block,
+        "SELECT d.record, d.decision_id, d.bitcoin_height, d.bitcoin_hash, d.command_kind,
                 b.since_decision, b.until_decision, d.height
          FROM certified_decisions d
          JOIN certified_bitcoin_branch b ON b.bitcoin_height = d.bitcoin_height AND b.block_hash = d.bitcoin_hash
          WHERE d.height = ?1 AND b.since_decision <= ?2
            AND (b.until_decision IS NULL OR b.until_decision > ?2)
-           AND d.height >= b.since_decision AND (d.is_block = 0 OR d.height = b.since_decision)",
+           AND d.height >= b.since_decision AND (d.command_kind != 1 OR d.height = b.since_decision)",
         params![height.to_be_bytes().to_vec(), verdict.to_be_bytes().to_vec()],
     ).await?;
     let entry = rows
@@ -195,7 +195,7 @@ pub(crate) async fn exclusion_page(
     for entry in candidates {
         if let Some(selected) = eligible(conn, verdict, entry.decision).await? {
             ensure!(
-                !selected.is_block,
+                selected.kind == CommandKind::Batch,
                 "exclusion attributed to a block decision"
             );
             entries.push(entry);

@@ -1,5 +1,7 @@
 mod fixture;
 mod recovery;
+#[cfg(all(kontor_managed, not(test)))]
+mod rehearsal;
 
 use std::path::Path;
 use std::time::Duration;
@@ -131,6 +133,8 @@ pub(crate) async fn run(
             consensus_enabled: false,
             discovery: Default::default(),
         },
+        #[cfg(kontor_managed)]
+        None,
         &execution.session,
         service,
         network,
@@ -140,7 +144,7 @@ pub(crate) async fn run(
         MempoolFeeIndex::new(None),
     )
     .await?;
-    let engine = state.engine_handle.actor.clone();
+    let engine = state.engine.legacy_handle().actor.clone();
     let result = async {
         ensure!(state.current_height == Height::new(1));
         ensure!(conn.query("SELECT 1 FROM batches WHERE consensus_height = 99", ()).await?.next().await?.is_some());
@@ -312,6 +316,13 @@ pub(crate) async fn run(
     stopped.context("qualification engine shutdown")?;
     let (evidence, reactor) = result?;
     qualify_engine_free_recovery(reactor.execution, &factory, dir.path()).await?;
+    #[cfg(all(kontor_managed, not(test)))]
+    let evidence = {
+        rehearsal::run(dir.path(), &conn).await?;
+        let mut evidence = evidence;
+        evidence["migration_rehearsal_cli"] = json!(true);
+        evidence
+    };
     Ok(evidence)
 }
 

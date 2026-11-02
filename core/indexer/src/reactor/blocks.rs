@@ -12,6 +12,7 @@ use crate::bitcoin_helpers::new_mock_block_hash;
 use crate::consensus::finality_types::StateEvent;
 use crate::database::canonical_history;
 use crate::database::certified_history;
+use crate::database::certified_history::{closure, control};
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
@@ -108,6 +109,8 @@ impl<E: Executor> ExecutionContext<E> {
                 stage.action() == (WorkItem::Rollback { height }),
                 "rollback differs from closure work item"
             );
+            let progress = closure::progress(&conn, frontier.authenticated_height).await?;
+            control::retract(&conn, &progress).await?;
             (self.session.executor.operations.maintenance)(
                 self.session.executor.owner.clone(),
                 stage.selection().envelope(),
@@ -356,6 +359,12 @@ impl<E: Executor> ExecutionContext<E> {
                 *retained.input() == block.exact_input(self.protocol_context)?,
                 "block application differs from retained certified bytes"
             );
+            control::check_block_boundary(
+                &self.db_conn(),
+                self.protocol_context,
+                &retained.input().descriptor().command,
+            )
+            .await?;
             let block = self
                 .executor
                 .prepare_block(&self.recognizer, stage.selection(), block)

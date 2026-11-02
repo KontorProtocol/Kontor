@@ -10,13 +10,15 @@ use malachitebft_engine::host::Next;
 use metrics::{counter, gauge};
 use tracing::{debug, error, info, warn};
 
+use crate::protocol::coordinator::control::ControlError;
+
 use crate::consensus::finality_types::{
     DecidedBatch, FINALITY_WINDOW, StateEvent, UnfinalizedBatch, deadline_for,
 };
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, ProposalData, Value};
 #[cfg(feature = "protocol-qualification")]
 use crate::database::canonical_history::{self, HistoryState};
-use crate::database::certified_history::{self, branch, replay_input, work};
+use crate::database::certified_history::{self, branch, control, replay_input, work};
 use crate::database::queries::{
     delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids, insert_transaction,
     insert_unconfirmed_batch_tx, min_unfinalized_batch_height, select_block_at_height,
@@ -663,8 +665,19 @@ impl<E: Executor> Reactor<E> {
             )
             .await
             {
-                Ok(()) => return Ok(Some(Value::from_input(input)?)),
+                Ok(()) => {}
                 Err(error) if error.downcast_ref::<branch::Rejected>().is_some() => continue,
+                Err(error) => return Err(error),
+            }
+            match control::check_block_boundary(
+                &conn,
+                self.consensus.protocol_context,
+                &input.descriptor().command,
+            )
+            .await
+            {
+                Ok(()) => return Ok(Some(Value::from_input(input)?)),
+                Err(error) if error.is::<control::ActivationRequired>() => continue,
                 Err(error) => return Err(error),
             }
         }
@@ -807,7 +820,46 @@ impl<E: Executor> Reactor<E> {
             let _ = reply.send(None);
             return Ok(());
         }
+        if let Err(error) = control::check_block_boundary(
+            &conn,
+            self.consensus.protocol_context,
+            data.value().command(),
+        )
+        .await
+        {
+            if !error.is::<control::ActivationRequired>() {
+                return Err(error);
+            }
+            warn!(%error, "Rejecting ordinary block at upgrade boundary");
+            let _ = reply.send(None);
+            return Ok(());
+        }
         let value = match data.value().command() {
+            Command::Control { .. } => {
+                if let Err(error) = control::admission::verify(
+                    &conn,
+                    data.value().input(),
+                    height.as_u64(),
+                    control::Position {
+                        decision: height.as_u64(),
+                        stage: 0,
+                    },
+                )
+                .await
+                {
+                    if error
+                        .downcast_ref::<control::admission::Rejected>()
+                        .is_none()
+                        && error.downcast_ref::<ControlError>().is_none()
+                    {
+                        return Err(error);
+                    }
+                    warn!(%error, "Rejecting upgrade control proposal");
+                    let _ = reply.send(None);
+                    return Ok(());
+                }
+                data.value().clone()
+            }
             Command::Block {
                 height: bh, hash, ..
             } => {
@@ -957,6 +1009,11 @@ impl<E: Executor> Reactor<E> {
             Some(p) => Instant::now() >= p.hard_deadline,
             None => return Ok(false),
         };
+
+        if let Some(value) = self.pending_upgrade_value().await? {
+            self.fulfill_pending_with(value).await?;
+            return Ok(true);
+        }
 
         // Block proposals require only local branch checks, so pending bitcoind
         // validation must not delay them.

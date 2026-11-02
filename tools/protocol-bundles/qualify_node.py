@@ -11,7 +11,8 @@ import sys
 import time
 
 from build import ROOT, digest, write_json
-from recipes import EXECUTOR_LINK_SETS, executor_graphs
+from managed_definition import DESTINATION as MANAGED_DEFINITION
+from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, executor_graphs
 from semantic_baseline import verify as verify_semantics
 from symbol_tool import TOOLCHAIN
 
@@ -39,15 +40,16 @@ CERTIFIED_CHECKS = {
 
 def verify_certified_history(observations, link_set, root=ROOT):
     result = observations.get('certified_history')
-    if link_set != 'k4-node':
+    if link_set not in ('k4-node', 'managed-node'):
         if result is not None:
             raise RuntimeError('legacy qualification cannot claim certified baseline coverage')
         return
-    expected_keys = CERTIFIED_CHECKS | {'authenticated', 'closed', 'executor_definition',
+    checks = CERTIFIED_CHECKS | ({'migration_rehearsal_cli'} if link_set == 'managed-node' else set())
+    expected_keys = checks | {'authenticated', 'closed', 'executor_definition',
                                       'protocol', 'chain', 'manifest', 'era'}
     if not isinstance(result, dict) or set(result) != expected_keys:
         raise RuntimeError('certified history evidence missing or incomplete')
-    if any(result[key] is not True for key in CERTIFIED_CHECKS) or result['authenticated'] != 15 or result['closed'] != 15:
+    if any(result[key] is not True for key in checks) or result['authenticated'] != 15 or result['closed'] != 15:
         raise RuntimeError('certified history checks did not complete')
     def hashed(domain, value):
         return hashlib.sha256(domain + b'\0' + value).hexdigest()
@@ -57,12 +59,16 @@ def verify_certified_history(observations, link_set, root=ROOT):
         protocol = bytes.fromhex(result['protocol'])
         executor = hashed(b'kontor/execution-definition/v1',
                           (root / 'protocol-bundles/executor-observer/definition.bin').read_bytes())
+        consensus_path = (MANAGED_DEFINITION if link_set == 'managed-node' else
+                          'core/indexer/src/protocol/coordinator/baseline/consensus.json')
+        consensus = hashed(b'kontor/consensus-definition/v1', (root / consensus_path).read_bytes())
         # KPM1 baseline uses one transaction format and one host ABI.
         valid = (len(manifest) == 272 and len(chain) == len(protocol) == 32
                  and manifest[:4] == b'KPM1' and manifest[4:36] == chain
                  and manifest[36:44] == (1).to_bytes(8, 'big')
                  and manifest[44:76] == bytes(32)
                  and manifest[76:108].hex() == result['executor_definition'] == executor
+                 and manifest[108:140].hex() == consensus
                  and hashed(b'kontor/protocol-manifest/v1', manifest) == result['protocol']
                  and hashed(b'kontor/genesis-era/v1', chain + protocol) == result['era'])
     except (ValueError, TypeError):
@@ -77,6 +83,22 @@ def verify_storage_contracts(observations, link_set=None):
     if observations.get('storage_contracts') != {'rejected_before_construction': expected}:
         raise RuntimeError('storage contract construction checks missing or incomplete')
 
+
+def verify_managed_startup(observations, link_set):
+    result = observations.get('managed_startup')
+    if link_set != 'managed-node':
+        if result is not None:
+            raise RuntimeError('unmanaged qualification cannot claim managed startup')
+        return
+    history = observations['certified_history']
+    expected = {name: history[name] for name in ('chain', 'protocol', 'era', 'executor_definition')}
+    expected.update(rounds_started=2, engines_joined=2, next_generation=3,
+                    same_listener=True, same_era_wal=True, database_remained_available=True,
+                    competing_writer_rejected=True)
+    if result != expected:
+        raise RuntimeError('managed startup evidence missing, incomplete or bound to another protocol')
+
+
 def execute_node(report_path, link_set=None):
     directory = report_path.parent
     success = directory / "node-execution.json"
@@ -89,6 +111,9 @@ def execute_node(report_path, link_set=None):
     expected_graphs = list(executor_graphs(link_set))
     if [graph['graph'] for graph in report['graphs']] != expected_graphs or not node['qualification_command']:
         raise RuntimeError('node build does not contain the required qualification graphs')
+    expected_consensus = list(CONSENSUS_GRAPHS) if link_set == 'managed-node' else []
+    if [graph['graph'] for graph in report.get('consensus_graphs', [])] != expected_consensus:
+        raise RuntimeError('node build does not contain the required consensus graphs')
     executable = Path(node['installed']['path'])
     if digest(executable) != node['executable_sha256'] or node['installed']['sha256'] != node['executable_sha256']:
         raise RuntimeError('installed node differs from the audited executable')
@@ -109,6 +134,7 @@ def execute_node(report_path, link_set=None):
         raise RuntimeError('node execution case set changed')
     verify_storage_contracts(observations, link_set)
     verify_certified_history(observations, link_set)
+    verify_managed_startup(observations, link_set)
     semantic_baseline = verify_semantics(observations, ROOT, expected_graphs)
     if digest(executable) != node['executable_sha256'] or digest(report_path) != report_hash:
         raise RuntimeError('node executable or build report changed during execution')
@@ -127,7 +153,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--profile', choices=('release', 'dev'), default='release')
     parser.add_argument('--offline', action='store_true')
-    parser.add_argument('--link-set', choices=sorted(EXECUTOR_LINK_SETS), default='k4-node')
+    parser.add_argument('--link-set', choices=sorted(EXECUTOR_LINK_SETS), default='managed-node')
     args = parser.parse_args()
     output = args.output.resolve()
     env = dict(os.environ, RUSTUP_TOOLCHAIN=TOOLCHAIN)

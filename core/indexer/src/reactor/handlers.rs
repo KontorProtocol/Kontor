@@ -1,12 +1,12 @@
 use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
+use malachitebft_app_channel::AppMsg;
 use malachitebft_app_channel::app::engine::host::SyncedValueOutcome;
 use malachitebft_app_channel::app::streaming::StreamMessage;
 use malachitebft_app_channel::app::types::codec::Codec;
 use malachitebft_app_channel::app::types::sync::RawDecidedValue;
 use malachitebft_app_channel::app::types::{LocallyProposedValue, PeerId, ProposedValue};
-use malachitebft_app_channel::{AppMsg, NetworkRequest};
 use malachitebft_core_consensus::Role;
 use malachitebft_core_types::{ExtendedCommitCertificate, Round, Validity, VoteExtensions};
 use tracing::{info, warn};
@@ -20,6 +20,7 @@ use crate::database::certified_history::branch;
 use super::Reactor;
 use super::consensus_state;
 use super::executor::Executor;
+use super::message::Message;
 
 /// Answer a `ReceivedProposalPart` with "not a complete, accepted proposal".
 fn reply_none(reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>) -> Result<()> {
@@ -271,9 +272,24 @@ impl<E: Executor> Reactor<E> {
 
     pub(super) async fn handle_consensus_msg(
         &mut self,
-        msg: AppMsg<Ctx>,
+        msg: impl Into<Message>,
     ) -> Result<consensus_state::ConsensusResult> {
         let mut result = consensus_state::ConsensusResult::None;
+        #[cfg(not(kontor_managed))]
+        let Message::Application(msg) = msg.into();
+        #[cfg(kontor_managed)]
+        let msg = match msg.into() {
+            Message::Application(msg) => msg,
+            Message::Finalized {
+                certificate,
+                evidence,
+                reply,
+            } => {
+                info!(height = %certificate.height, round = %certificate.round,
+                    value = %certificate.value_id, %evidence, "Finalized");
+                return self.handle_finalized(certificate, reply).await;
+            }
+        };
         match msg {
             AppMsg::ConsensusReady { reply } => {
                 let start_height = self.consensus.current_height;
@@ -293,11 +309,9 @@ impl<E: Executor> Reactor<E> {
                 // unexpected failure paths we just warn and leave it unset rather
                 // than block or crash — a genuinely dead swarm surfaces through
                 // consensus liveness, not here.
-                match NetworkRequest::dump_state(&self.consensus.channels.net_requests).await {
-                    Ok(Some(dump)) => {
-                        let _ = self
-                            .consensus_listen_addr
-                            .send(Some(dump.local_node.listen_addr.to_string()));
+                match self.consensus.engine.listen_address().await {
+                    Ok(Some(address)) => {
+                        let _ = self.consensus_listen_addr.send(Some(address));
                     }
                     Ok(None) => {
                         warn!("Network state dump empty; consensus listen address left unset");

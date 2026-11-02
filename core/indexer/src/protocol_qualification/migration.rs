@@ -23,7 +23,9 @@ use crate::protocol::canonical_input::CanonicalInput;
 use crate::protocol::coordinator::linked::retained_session_factory;
 #[cfg(not(kontor_linked))]
 use crate::protocol::coordinator::linked::session_factory;
-use crate::protocol::coordinator::migration::{MigrationRejected, MigrationRequest, apply};
+use crate::protocol::coordinator::migration::{
+    MigrationAttemptWork, MigrationRejected, MigrationRequest, apply,
+};
 use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
 use crate::protocol::identity::{ChainId, ExecutionIdentity, PlanId};
 use crate::protocol::v1::migration_definition;
@@ -256,6 +258,14 @@ pub(super) async fn qualify_graph(
         request.definition = migration_definition::qualification(session.executor.execution_definition?, true);
         let error = apply(&service, &session, &selected, NETWORK, &request).await.unwrap_err();
         ensure!(error.downcast_ref::<MigrationRejected>() == Some(&MigrationRejected::Budget), "expected migration budget rejection");
+        let charged = error.downcast_ref::<MigrationAttemptWork>().context("missing migration work diagnostic")?.0;
+        if name == "observer" || name == "in-tree" {
+            let charged = charged.context("maintained executor omitted failure work")?;
+            ensure!(charged.write_operations == 1 && charged.read_operations > 0 && charged.computation_steps > 0,
+                "maintained executor lost charged work before exhaustion");
+        } else {
+            ensure!(charged.is_none(), "retained executor fabricated failure work");
+        }
         ensure!(comparable_state(&conn, &request, 2).await? == before, "exhaustion changed state");
         request.definition = migration_definition::qualification(session.executor.execution_definition?, false);
         let receipt = apply(&service, &session, &selected, NETWORK, &request).await?;

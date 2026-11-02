@@ -40,6 +40,16 @@ pub(super) async fn reactor(
     key: PrivateKey,
     first_height: u64,
 ) -> Result<Reactor<RuntimeExecutor>> {
+    reactor_with_consensus(directory, genesis, key, first_height, false).await
+}
+
+pub(super) async fn reactor_with_consensus(
+    directory: &Path,
+    genesis: &GenesisParameters,
+    key: PrivateKey,
+    first_height: u64,
+    consensus_enabled: bool,
+) -> Result<Reactor<RuntimeExecutor>> {
     let writer = Writer::new(directory, "certified-fixture.db").await?;
     let service = OwnerService::new();
     let (executor, session, height, hash) = create_executor_session(
@@ -57,9 +67,11 @@ pub(super) async fn reactor(
             listen_addr: "/ip4/127.0.0.1/tcp/0".into(),
             persistent_peers: Vec::new(),
             data_dir: directory.to_path_buf(),
-            consensus_enabled: false,
+            consensus_enabled,
             discovery: Default::default(),
         },
+        #[cfg(kontor_managed)]
+        None,
         &session,
         &service,
         Network::Regtest,

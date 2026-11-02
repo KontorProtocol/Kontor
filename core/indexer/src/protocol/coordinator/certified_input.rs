@@ -5,6 +5,8 @@ use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::Hash;
 use bitcoin::{Block, BlockHash, Transaction};
 
+use super::control::UpgradeControl;
+
 use crate::protocol::canonical_codec::{CodecError, Decoder, Encoder};
 use crate::protocol::identity::{ChainId, ProtocolId, domain_digest};
 
@@ -38,8 +40,33 @@ impl EraContext {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum CommandKind {
+    Batch = 0,
+    Block = 1,
+    Control = 2,
+}
+
+impl TryFrom<i64> for CommandKind {
+    type Error = CodecError;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Batch),
+            1 => Ok(Self::Block),
+            2 => Ok(Self::Control),
+            _ => Err(CodecError::InvalidTag),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Command {
+    Control {
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+    },
     Batch {
         anchor_height: u64,
         anchor_hash: BlockHash,
@@ -53,13 +80,17 @@ pub(crate) enum Command {
 }
 
 impl Command {
-    pub(crate) fn position(&self) -> (u64, BlockHash, bool) {
+    pub(crate) fn position(&self) -> (u64, BlockHash, CommandKind) {
         match self {
-            Self::Block { height, hash, .. } => (*height, *hash, true),
+            Self::Control {
+                anchor_height,
+                anchor_hash,
+            } => (*anchor_height, *anchor_hash, CommandKind::Control),
+            Self::Block { height, hash, .. } => (*height, *hash, CommandKind::Block),
             Self::Batch {
                 anchor_height,
                 anchor_hash,
-            } => (*anchor_height, *anchor_hash, false),
+            } => (*anchor_height, *anchor_hash, CommandKind::Batch),
         }
     }
 }
@@ -80,6 +111,11 @@ impl Descriptor {
         }
         let length = self.body_length as usize;
         match &self.command {
+            Command::Control { .. } => {
+                if length == 0 || length > MAX_BATCH_BYTES || self.input_count != 1 {
+                    return Err(CodecError::InvalidValue);
+                }
+            }
             Command::Batch { .. } => {
                 if !(4..=MAX_BATCH_BYTES).contains(&length)
                     || self.input_count as usize > (length - 4) / 4
@@ -114,6 +150,14 @@ impl Descriptor {
         output.fixed(b"KVD1")?;
         self.context.encode(&mut output)?;
         match &self.command {
+            Command::Control {
+                anchor_height,
+                anchor_hash,
+            } => {
+                output.tag(2)?;
+                output.u64(*anchor_height)?;
+                output.fixed(&anchor_hash.to_byte_array())?;
+            }
             Command::Batch {
                 anchor_height,
                 anchor_hash,
@@ -161,6 +205,10 @@ impl Descriptor {
                 parent: BlockHash::from_byte_array(input.fixed()?),
                 header: input.fixed()?,
             },
+            2 => Command::Control {
+                anchor_height: input.u64()?,
+                anchor_hash: BlockHash::from_byte_array(input.fixed()?),
+            },
             _ => return Err(CodecError::InvalidTag),
         };
         let value = Self {
@@ -187,6 +235,33 @@ pub(crate) struct ExactInput {
 }
 
 impl ExactInput {
+    pub(crate) fn control(
+        context: EraContext,
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        control: &UpgradeControl,
+    ) -> Result<Self, CodecError> {
+        let body = control.encode()?;
+        let descriptor = Descriptor {
+            context,
+            command: Command::Control {
+                anchor_height,
+                anchor_hash,
+            },
+            input_count: 1,
+            body_length: u32::try_from(body.len()).map_err(|_| CodecError::LengthOverflow)?,
+            body_digest: body_digest(&body),
+        };
+        Self::validate(descriptor, body)
+    }
+
+    pub(crate) fn upgrade_control(&self) -> Result<UpgradeControl, CodecError> {
+        if !matches!(self.descriptor.command, Command::Control { .. }) {
+            return Err(CodecError::InvalidTag);
+        }
+        UpgradeControl::decode(&self.body)
+    }
+
     pub(crate) fn batch(
         context: EraContext,
         anchor_height: u64,
@@ -260,6 +335,12 @@ impl ExactInput {
             return Err(CodecError::InvalidValue);
         }
         match &descriptor.command {
+            Command::Control { .. } => {
+                let control = UpgradeControl::decode(&body)?;
+                if control.action.context != descriptor.context {
+                    return Err(CodecError::InvalidValue);
+                }
+            }
             Command::Batch { .. } => {
                 if decode_batch(&body)?.len() != descriptor.input_count as usize {
                     return Err(CodecError::InvalidValue);
@@ -284,6 +365,7 @@ impl ExactInput {
 
     pub(crate) fn transactions(&self) -> Result<Vec<Transaction>, CodecError> {
         match self.descriptor.command {
+            Command::Control { .. } => Err(CodecError::InvalidTag),
             Command::Batch { .. } => decode_batch(&self.body),
             Command::Block { .. } => Ok(decode_block(&self.body)?.txdata),
         }
@@ -357,4 +439,5 @@ fn decode_block(bytes: &[u8]) -> Result<Block, CodecError> {
 }
 
 #[cfg(test)]
+#[path = "certified_input/tests.rs"]
 mod tests;

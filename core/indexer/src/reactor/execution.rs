@@ -12,7 +12,7 @@ use super::executor::Executor;
 use crate::bitcoin_follower::block::BlockInput;
 use crate::consensus::{Height, Value};
 use crate::database::certified_history::{
-    self, Status, branch, closure, completion, finality, replay_input, work,
+    self, Status, branch, closure, completion, control, finality, replay_input, work,
 };
 use crate::database::queries::{PRUNE_WATERMARK_KEY, get_meta_u64, select_block_latest};
 use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
@@ -101,6 +101,7 @@ pub(super) enum ExecutionStep {
         selected: Option<Vec<Transaction>>,
     },
     Finality,
+    Control,
     Observed,
     Complete,
 }
@@ -132,6 +133,26 @@ impl<E: Executor> ExecutionContext<E> {
                     let retained = certified_history::load(&conn, decision).await?;
                     let value = Value::from_input(retained.input().clone())?;
                     match *value.command() {
+                        Command::Control { .. } => {
+                            ensure!(
+                                matches!(action, WorkItem::Execute { .. }),
+                                "control has transaction replay work"
+                            );
+                            let stage = begin_stage(
+                                &self.owner_service,
+                                &self.session,
+                                self.network,
+                                height,
+                            )
+                            .await?
+                            .context("control stage disappeared")?;
+                            let remaining = stage.remaining_after();
+                            let result = control::admission::apply(&conn, height, decision)
+                                .await
+                                .map(|outcome| ((), outcome, remaining));
+                            stage.finish(result).await?;
+                            Ok(ExecutionStep::Control)
+                        }
                         Command::Block { .. } => {
                             ensure!(
                                 matches!(action, WorkItem::Execute { .. }),

@@ -1,0 +1,494 @@
+use std::convert::Infallible;
+use std::time::Duration;
+
+use eyre::Result;
+use libp2p::connection_limits;
+pub use libp2p::identity::Keypair;
+use libp2p::kad::{Addresses, KBucketKey, KBucketRef};
+use libp2p::request_response::{OutboundRequestId, ResponseChannel};
+use libp2p::swarm::behaviour::toggle::Toggle;
+use libp2p::swarm::NetworkBehaviour;
+use libp2p::{gossipsub, identify, ping};
+pub use libp2p::{Multiaddr, PeerId};
+use libp2p_broadcast as broadcast;
+
+use malachitebft_discovery as discovery;
+use malachitebft_metrics::Registry;
+use malachitebft_sync as sync;
+use tracing::info;
+
+use crate::validator_proof;
+use crate::{
+    ip_limits, peer_scoring, pubsub, Channel, ChannelNames, Config, GossipSubConfig,
+    PubSubMaxSizeError, PubSubMaxSizePerTopic,
+};
+
+/// Gossipsub behaviour that only records subscriptions for this node's
+/// configured channel names. The default filter accepts any topic a peer
+/// advertises and grows an unbounded per-peer set.
+pub type GossipsubBehaviour =
+    gossipsub::Behaviour<gossipsub::IdentityTransform, gossipsub::WhitelistSubscriptionFilter>;
+
+/// Multiplier for connection limits.
+/// Connection limits are higher than discovery limits to allow headroom for ephemeral
+/// connections, persistent peers, and connection churn.
+const CONNECTION_LIMITS_MULTIPLIER: u32 = 4;
+
+/// Derive libp2p connection limits from network config.
+/// Uses 4x multiplier to provide headroom above discovery-level limits.
+fn connection_limits(config: &Config) -> connection_limits::ConnectionLimits {
+    let multiplier = CONNECTION_LIMITS_MULTIPLIER;
+    let max_pending_incoming = (config.discovery.num_inbound_peers as u32) * multiplier;
+    let max_pending_outgoing = (config.discovery.num_outbound_peers as u32) * multiplier;
+    let max_established_incoming = (config.discovery.num_inbound_peers as u32) * multiplier;
+    let max_established_outgoing = (config.discovery.num_outbound_peers as u32) * multiplier;
+    let max_established_per_peer = (config.discovery.max_connections_per_peer as u32) * multiplier;
+
+    connection_limits::ConnectionLimits::default()
+        .with_max_pending_incoming(Some(max_pending_incoming))
+        .with_max_pending_outgoing(Some(max_pending_outgoing))
+        .with_max_established_incoming(Some(max_established_incoming))
+        .with_max_established_outgoing(Some(max_established_outgoing))
+        .with_max_established_per_peer(Some(max_established_per_peer))
+}
+
+#[derive(Debug)]
+pub enum NetworkEvent {
+    Identify(Box<identify::Event>),
+    Ping(ping::Event),
+    GossipSub(gossipsub::Event),
+    Broadcast(broadcast::Event),
+    Sync(sync::Event),
+    Discovery(Box<discovery::NetworkEvent>),
+    ValidatorProof(validator_proof::Event),
+}
+
+impl From<identify::Event> for NetworkEvent {
+    fn from(event: identify::Event) -> Self {
+        Self::Identify(Box::new(event))
+    }
+}
+
+impl From<ping::Event> for NetworkEvent {
+    fn from(event: ping::Event) -> Self {
+        Self::Ping(event)
+    }
+}
+
+impl From<gossipsub::Event> for NetworkEvent {
+    fn from(event: gossipsub::Event) -> Self {
+        Self::GossipSub(event)
+    }
+}
+
+impl From<broadcast::Event> for NetworkEvent {
+    fn from(event: broadcast::Event) -> Self {
+        Self::Broadcast(event)
+    }
+}
+
+impl From<sync::Event> for NetworkEvent {
+    fn from(event: sync::Event) -> Self {
+        Self::Sync(event)
+    }
+}
+
+impl From<discovery::NetworkEvent> for NetworkEvent {
+    fn from(network_event: discovery::NetworkEvent) -> Self {
+        Self::Discovery(Box::new(network_event))
+    }
+}
+
+impl From<validator_proof::Event> for NetworkEvent {
+    fn from(event: validator_proof::Event) -> Self {
+        Self::ValidatorProof(event)
+    }
+}
+
+// connection_limits::Behaviour never emits events (uses Infallible),
+// but the NetworkBehaviour derive macro requires this implementation.
+impl From<Infallible> for NetworkEvent {
+    fn from(event: Infallible) -> Self {
+        match event {}
+    }
+}
+
+#[derive(NetworkBehaviour)]
+#[behaviour(to_swarm = "NetworkEvent")]
+pub struct Behaviour {
+    pub connection_limits: connection_limits::Behaviour,
+    pub ip_limits: ip_limits::Behaviour,
+    pub identify: identify::Behaviour,
+    pub ping: ping::Behaviour,
+    pub gossipsub: Toggle<GossipsubBehaviour>,
+    pub broadcast: Toggle<broadcast::Behaviour>,
+    pub sync: Toggle<sync::Behaviour>,
+    pub discovery: Toggle<discovery::Behaviour>,
+    pub validator_proof: Toggle<validator_proof::Behaviour>,
+}
+
+/// Dummy implementation of Debug for Behaviour.
+impl std::fmt::Debug for Behaviour {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Behaviour").finish()
+    }
+}
+
+impl discovery::DiscoveryClient for Behaviour {
+    fn add_address(&mut self, peer: &PeerId, address: Multiaddr) -> libp2p::kad::RoutingUpdate {
+        self.discovery
+            .as_mut()
+            .expect("Discovery behaviour should be available")
+            .kademlia
+            .as_mut()
+            .expect("Kademlia behaviour should be available")
+            .add_address(peer, address)
+    }
+
+    fn kbuckets(&mut self) -> impl Iterator<Item = KBucketRef<'_, KBucketKey<PeerId>, Addresses>> {
+        self.discovery
+            .as_mut()
+            .expect("Discovery behaviour should be available")
+            .kademlia
+            .as_mut()
+            .expect("Kademlia behaviour should be available")
+            .kbuckets()
+    }
+
+    fn send_request(&mut self, peer_id: &PeerId, req: discovery::Request) -> OutboundRequestId {
+        self.discovery
+            .as_mut()
+            .expect("Discovery behaviour should be available")
+            .request_response
+            .send_request(peer_id, req)
+    }
+
+    fn send_response(
+        &mut self,
+        ch: ResponseChannel<discovery::Response>,
+        rs: discovery::Response,
+    ) -> Result<(), discovery::Response> {
+        self.discovery
+            .as_mut()
+            .expect("Discovery behaviour should be available")
+            .request_response
+            .send_response(ch, rs)
+    }
+}
+
+fn message_id(message: &gossipsub::Message) -> gossipsub::MessageId {
+    use seahash::SeaHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = SeaHasher::new();
+    message.hash(&mut hasher);
+    gossipsub::MessageId::new(hasher.finish().to_be_bytes().as_slice())
+}
+
+fn gossipsub_config(
+    config: GossipSubConfig,
+    keypair: &Keypair,
+    channel_names: &ChannelNames,
+    max_transmit_size: usize,
+    max_payload_size_per_topic: PubSubMaxSizePerTopic,
+) -> Result<gossipsub::Config> {
+    let mut builder = gossipsub::ConfigBuilder::default();
+
+    builder
+        .max_transmit_size(max_transmit_size)
+        .opportunistic_graft_ticks(peer_scoring::OPPORTUNISTIC_GRAFT_TICKS)
+        .opportunistic_graft_peers(peer_scoring::OPPORTUNISTIC_GRAFT_PEERS)
+        .heartbeat_interval(Duration::from_secs(1))
+        .validation_mode(gossipsub::ValidationMode::Strict)
+        .history_gossip(3)
+        .history_length(5)
+        .mesh_n_high(config.mesh_n_high)
+        .mesh_n_low(config.mesh_n_low)
+        .mesh_outbound_min(config.mesh_outbound_min)
+        .mesh_n(config.mesh_n)
+        .flood_publish(config.enable_flood_publish)
+        .message_id_fn(message_id);
+
+    for (field, channel, max_payload_size) in [
+        (
+            "consensus",
+            Channel::Consensus,
+            max_payload_size_per_topic.consensus,
+        ),
+        (
+            "proposal_parts",
+            Channel::ProposalParts,
+            max_payload_size_per_topic.proposal_parts,
+        ),
+        (
+            "liveness",
+            Channel::Liveness,
+            max_payload_size_per_topic.liveness,
+        ),
+    ] {
+        if let Some(max_payload_size) = max_payload_size {
+            if max_payload_size >= max_transmit_size {
+                return Err(PubSubMaxSizeError::ExceedsGlobal {
+                    field,
+                    payload_size: max_payload_size,
+                    global: max_transmit_size,
+                }
+                .into());
+            }
+
+            let signed_size =
+                pubsub::signed_message_size(keypair, channel, channel_names, max_payload_size)?;
+            if signed_size > max_transmit_size {
+                return Err(PubSubMaxSizeError::ExceedsGlobal {
+                    field,
+                    payload_size: max_payload_size,
+                    global: max_transmit_size,
+                }
+                .into());
+            }
+
+            builder.max_transmit_size_for_topic(
+                signed_size,
+                channel.to_gossipsub_topic(channel_names).hash(),
+            );
+        }
+    }
+
+    builder.build().map_err(Into::into)
+}
+
+impl Behaviour {
+    pub fn new_with_metrics(
+        config: &Config,
+        identity: &crate::NetworkIdentity,
+        registry: &mut Registry,
+    ) -> Result<Self> {
+        // Build agent_version for peer identification (moniker only)
+        let agent_version = format!("moniker={}", identity.moniker);
+
+        // Validate consensus protocol name and use it for identify (and compatibility check in event loop)
+        let consensus_protocol =
+            libp2p::StreamProtocol::try_from_owned(config.protocol_names.consensus.clone())?;
+
+        // Use signed peer records to prevent peer ID spoofing.
+        // Peers will sign their addresses with their private key, allowing verification.
+        let identify = identify::Behaviour::new(
+            identify::Config::new_with_signed_peer_record(
+                consensus_protocol.to_string(),
+                &identity.keypair,
+            )
+            .with_agent_version(agent_version),
+        );
+
+        let ping = ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(5)));
+
+        let enable_gossipsub = config.pubsub_protocol.is_gossipsub() && config.enable_consensus;
+        let gossipsub = enable_gossipsub
+            .then(|| -> Result<_> {
+                let subscription_filter = gossipsub::WhitelistSubscriptionFilter(
+                    Channel::gossipsub_topic_hashes(&config.channel_names),
+                );
+                let mut behaviour = gossipsub::Behaviour::new_with_subscription_filter(
+                    gossipsub::MessageAuthenticity::Signed(identity.keypair.clone()),
+                    gossipsub_config(
+                        config.gossipsub,
+                        &identity.keypair,
+                        &config.channel_names,
+                        config.pubsub_max_size,
+                        config.pubsub_max_size_per_topic,
+                    )?,
+                    subscription_filter,
+                )
+                .map_err(|error| eyre::eyre!(error))?;
+
+                // Enable peer scoring if configured
+                if config.gossipsub.enable_peer_scoring {
+                    info!("Enabling peer scoring for GossipSub");
+                    behaviour
+                        .with_peer_score(
+                            peer_scoring::peer_score_params(),
+                            peer_scoring::peer_score_thresholds(),
+                        )
+                        .expect("Failed to enable peer scoring");
+                } else {
+                    info!("Peer scoring is disabled for GossipSub");
+                }
+
+                Ok(behaviour.with_metrics(
+                    registry.sub_registry_with_prefix("gossipsub"),
+                    Default::default(),
+                ))
+            })
+            .transpose()?;
+
+        let enable_broadcast = (config.pubsub_protocol.is_broadcast() && config.enable_consensus)
+            || config.enable_sync;
+        let broadcast = enable_broadcast.then(|| {
+            broadcast::Behaviour::new_with_metrics(
+                broadcast::Config {
+                    max_buf_size: config.pubsub_max_size,
+                },
+                registry.sub_registry_with_prefix("broadcast"),
+            )
+        });
+
+        let sync = if config.enable_sync {
+            Some(sync::Behaviour::new(
+                config.sync_transport_config(),
+                config.protocol_names.sync.clone(),
+            )?)
+        } else {
+            None
+        };
+
+        let discovery = if config.discovery.enabled {
+            Some(discovery::Behaviour::new(
+                &identity.keypair,
+                config.discovery,
+                config.protocol_names.discovery_kad.clone(),
+                config.protocol_names.discovery_regres.clone(),
+            )?)
+        } else {
+            None
+        };
+
+        // Enable validator proof verification if consensus is enabled
+        let validator_proof = if config.enable_consensus {
+            let protocol = libp2p::StreamProtocol::try_from_owned(
+                config.protocol_names.validator_proof.clone(),
+            )?;
+            Some(validator_proof::Behaviour::new(protocol))
+        } else {
+            None
+        };
+
+        // Limits for transport layer defense against connection attacks
+        let connection_limits = connection_limits::Behaviour::new(connection_limits(config));
+
+        // Per-IP connection limits and reconnect throttle
+        let ip_limits = ip_limits::Behaviour::new(
+            config.discovery.max_connections_per_ip,
+            config.discovery.ip_throttle_duration,
+            &config.persistent_peers,
+        );
+
+        Ok(Self {
+            connection_limits,
+            ip_limits,
+            identify,
+            ping,
+            sync: Toggle::from(sync),
+            gossipsub: Toggle::from(gossipsub),
+            broadcast: Toggle::from(broadcast),
+            discovery: Toggle::from(discovery),
+            validator_proof: Toggle::from(validator_proof),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gossipsub_config_applies_only_configured_topic_limits() {
+        let keypair = Keypair::generate_ed25519();
+        let channel_names = ChannelNames::default();
+        let default_max_size = 4 * 1024 * 1024;
+        let proposal_parts_max_payload_size = 130 * 1024;
+        let proposal_parts_max_signed_size = pubsub::signed_message_size(
+            &keypair,
+            Channel::ProposalParts,
+            &channel_names,
+            proposal_parts_max_payload_size,
+        )
+        .unwrap();
+
+        let config = gossipsub_config(
+            GossipSubConfig::default(),
+            &keypair,
+            &channel_names,
+            default_max_size,
+            PubSubMaxSizePerTopic {
+                proposal_parts: Some(proposal_parts_max_payload_size),
+                ..Default::default()
+            },
+        )
+        .expect("valid GossipSub configuration");
+
+        assert_eq!(
+            config.max_transmit_size_for_topic(
+                &Channel::ProposalParts
+                    .to_gossipsub_topic(&channel_names)
+                    .hash()
+            ),
+            proposal_parts_max_signed_size
+        );
+
+        for channel in [Channel::Consensus, Channel::Liveness] {
+            assert_eq!(
+                config.max_transmit_size_for_topic(
+                    &channel.to_gossipsub_topic(&channel_names).hash()
+                ),
+                default_max_size
+            );
+        }
+    }
+
+    #[test]
+    fn gossipsub_config_rejects_signed_topic_limit_above_global_limit() {
+        let keypair = Keypair::generate_ed25519();
+        let channel_names = ChannelNames::default();
+        let payload_size = 1024;
+        let signed_size = pubsub::signed_message_size(
+            &keypair,
+            Channel::ProposalParts,
+            &channel_names,
+            payload_size,
+        )
+        .unwrap();
+
+        let error = gossipsub_config(
+            GossipSubConfig::default(),
+            &keypair,
+            &channel_names,
+            signed_size - 1,
+            PubSubMaxSizePerTopic {
+                proposal_parts: Some(payload_size),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.downcast_ref::<PubSubMaxSizeError>(),
+            Some(&PubSubMaxSizeError::ExceedsGlobal {
+                field: "proposal_parts",
+                payload_size,
+                global: signed_size - 1,
+            })
+        );
+    }
+
+    #[test]
+    fn gossipsub_config_propagates_builder_errors() {
+        let keypair = Keypair::generate_ed25519();
+        let channel_names = ChannelNames::default();
+        let config = GossipSubConfig {
+            mesh_n: 1,
+            ..Default::default()
+        };
+
+        assert!(gossipsub_config(
+            config,
+            &keypair,
+            &channel_names,
+            4 * 1024 * 1024,
+            PubSubMaxSizePerTopic {
+                proposal_parts: Some(1024),
+                ..Default::default()
+            },
+        )
+        .is_err());
+    }
+}

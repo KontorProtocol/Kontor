@@ -1,0 +1,1033 @@
+pub use crate::bitcoin_helpers::{
+    new_mock_block_hash, participant_tap_script, sign_key_spend, sign_script_spend,
+    sign_script_spend_with_sighash,
+};
+mod confirmation;
+pub use confirmation::signed_confirmation_call;
+#[cfg(test)]
+mod owned_runtime_tests;
+
+use anyhow::{Result, anyhow};
+
+use bitcoin::hashes::Hash;
+use bitcoin::key::TapTweak;
+use bitcoin::key::{CompressedPublicKey, Secp256k1};
+use bitcoin::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
+use bitcoin::opcodes::{OP_0, OP_FALSE};
+use bitcoin::script::{Builder, PushBytesBuf};
+use bitcoin::secp256k1::Message;
+use bitcoin::secp256k1::{All, Keypair};
+use bitcoin::sighash::{Prevouts, SighashCache};
+use bitcoin::taproot::{ControlBlock, LeafVersion};
+use bitcoin::{
+    BlockHash, Psbt, ScriptBuf, TapLeafHash, TapSighashType, TxOut, Txid, Witness, XOnlyPublicKey,
+};
+use indexer_types::{Block, BlockRow, Payment, Transaction, TransactionRow};
+use libsql::Connection;
+use rand::prelude::*;
+use sha2::{Digest, Sha256};
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tempfile::TempDir;
+use tokio::sync::oneshot;
+use tokio::time::{Duration, sleep};
+use wasmtime::Engine;
+
+use crate::database::canonical_history;
+use crate::database::native_contracts::NATIVE_CONTRACTS;
+use crate::database::queries::insert_block;
+use crate::database::types::{ContractRow, FileMeta};
+use crate::database::{Reader, Writer, queries};
+use crate::protocol::coordinator::selection::ExecutorVersion;
+use crate::reg_tester::random_x_only_pubkey;
+use crate::runtime::token::api as token_api;
+use crate::runtime::wit::{Signer, prover_challenge_key};
+use crate::runtime::{
+    ComponentCache, ComponentSource, ContractAddress, Decimal, ExecutionError, GenesisParameters,
+    GenesisValidator, RawFileDescriptor, Runtime, Storage, TransactionContext,
+    ownership::{OwnedRuntimeSession, OwnerService},
+};
+use kontor_crypto::{
+    FileLedger, PorSystem,
+    api::{self, Challenge, FieldElement},
+    field_from_uniform_bytes,
+};
+
+pub enum PublicKey<'a> {
+    Segwit(&'a CompressedPublicKey),
+    Taproot(&'a XOnlyPublicKey),
+}
+
+fn build_script_after_pubkey(
+    base_witness_script: Builder,
+    serialized_token_balance: Vec<u8>,
+) -> Result<Builder> {
+    Ok(base_witness_script
+        .push_opcode(OP_FALSE)
+        .push_opcode(OP_IF)
+        .push_slice(b"kon")
+        .push_opcode(OP_0)
+        .push_slice(PushBytesBuf::try_from(serialized_token_balance)?)
+        .push_opcode(OP_ENDIF))
+}
+
+pub fn build_inscription_without_checksig(
+    serialized_token_balance: Vec<u8>,
+    key: PublicKey,
+) -> Result<Builder> {
+    let base_witness_script = match key {
+        PublicKey::Segwit(compressed) => Builder::new().push_slice(compressed.to_bytes()),
+        PublicKey::Taproot(x_only) => Builder::new().push_slice(x_only.serialize()),
+    };
+
+    build_script_after_pubkey(base_witness_script, serialized_token_balance)
+}
+
+pub fn build_inscription(serialized_token_balance: Vec<u8>, key: PublicKey) -> Result<ScriptBuf> {
+    let base_witness_script = match key {
+        PublicKey::Segwit(compressed) => Builder::new()
+            .push_slice(compressed.to_bytes())
+            .push_opcode(OP_CHECKSIG),
+        PublicKey::Taproot(x_only) => Builder::new()
+            .push_slice(x_only.serialize())
+            .push_opcode(OP_CHECKSIG),
+    };
+
+    let tap_script = build_script_after_pubkey(base_witness_script, serialized_token_balance)?;
+    Ok(tap_script.into_script())
+}
+
+pub fn sign_multiple_key_spend(
+    secp: &Secp256k1<All>,
+    key_spend_tx: &mut bitcoin::Transaction,
+    prevouts: &[TxOut],
+    keypair: &Keypair,
+) -> Result<()> {
+    let sighash_type = TapSighashType::Default;
+    let tweaked_sender = keypair.tap_tweak(secp, None);
+
+    // Create a single sighasher instance
+    let mut sighasher = SighashCache::new(key_spend_tx.clone());
+
+    // Collect all signatures first
+    let mut signatures = Vec::new();
+    for input_index in 0..key_spend_tx.input.len() {
+        let sighash = sighasher
+            .taproot_key_spend_signature_hash(input_index, &Prevouts::All(prevouts), sighash_type)
+            .expect("Failed to construct sighash");
+
+        let msg = Message::from_digest(sighash.to_byte_array());
+        let signature = secp.sign_schnorr(&msg, &tweaked_sender.to_keypair());
+
+        let signature = bitcoin::taproot::Signature {
+            signature,
+            sighash_type,
+        };
+
+        signatures.push(signature);
+    }
+
+    // Apply all signatures to the transaction
+    for (input_index, signature) in signatures.into_iter().enumerate() {
+        key_spend_tx.input[input_index]
+            .witness
+            .push(signature.to_vec());
+    }
+
+    Ok(())
+}
+
+pub fn sign_seller_side_psbt(
+    secp: &Secp256k1<All>,
+    seller_psbt: &mut Psbt,
+    tap_script: &ScriptBuf,
+    seller_internal_key: XOnlyPublicKey,
+    control_block: ControlBlock,
+    seller_keypair: &Keypair,
+    prevouts: &[TxOut],
+) {
+    // Sign the PSBT with seller's key for script path spending
+    let sighash = SighashCache::new(&seller_psbt.unsigned_tx)
+        .taproot_script_spend_signature_hash(
+            0,
+            &Prevouts::All(prevouts),
+            TapLeafHash::from_script(tap_script, LeafVersion::TapScript),
+            TapSighashType::SinglePlusAnyoneCanPay,
+        )
+        .expect("Failed to create sighash");
+
+    let msg = Message::from_digest(sighash.to_byte_array());
+    let signature = secp.sign_schnorr(&msg, seller_keypair);
+    let signature = bitcoin::taproot::Signature {
+        signature,
+        sighash_type: TapSighashType::SinglePlusAnyoneCanPay,
+    };
+
+    // Not necessary for test, but this is where the signature would be stored in the marketplace until it was ready to be spent
+    seller_psbt.inputs[0].tap_script_sigs.insert(
+        (
+            seller_internal_key,
+            TapLeafHash::from_script(tap_script, LeafVersion::TapScript),
+        ),
+        signature,
+    );
+
+    let mut witness = Witness::new();
+    witness.push(signature.to_vec());
+    witness.push(tap_script.as_bytes());
+    witness.push(control_block.serialize());
+    seller_psbt.inputs[0].final_script_witness = Some(witness);
+}
+
+pub fn sign_buyer_side_psbt(
+    secp: &Secp256k1<All>,
+    buyer_psbt: &mut Psbt,
+    buyer_keypair: &Keypair,
+    prevouts: &[TxOut],
+) {
+    // Sign the buyer's input (key path spending)
+    let buyer_sighash = {
+        // Create a new SighashCache for the transaction
+        let mut sighasher = SighashCache::new(&buyer_psbt.unsigned_tx);
+
+        // Calculate the sighash for key path spending
+        sighasher
+            .taproot_key_spend_signature_hash(
+                1, // Buyer's input index (back to 1)
+                &Prevouts::All(prevouts),
+                TapSighashType::Default,
+            )
+            .expect("Failed to create sighash")
+    };
+
+    // Sign with the buyer's tweaked key
+    let msg = Message::from_digest(buyer_sighash.to_byte_array());
+
+    // Create the tweaked keypair
+    let buyer_tweaked = buyer_keypair.tap_tweak(secp, None);
+    // Sign with the tweaked keypair since we're doing key path spending
+    let buyer_signature = secp.sign_schnorr(&msg, &buyer_tweaked.to_keypair());
+
+    let buyer_signature = bitcoin::taproot::Signature {
+        signature: buyer_signature,
+        sighash_type: TapSighashType::Default,
+    };
+
+    // Add the signature to the PSBT
+    buyer_psbt.inputs[1].tap_key_sig = Some(buyer_signature);
+
+    // Construct the witness stack for key path spending
+    let mut buyer_witness = Witness::new();
+    buyer_witness.push(buyer_signature.to_vec());
+    buyer_psbt.inputs[1].final_script_witness = Some(buyer_witness);
+}
+
+pub fn new_mock_transaction(txid_num: u32) -> Transaction {
+    let mut bytes = [0u8; 32];
+    bytes[0..4].copy_from_slice(&txid_num.to_le_bytes()); // Use the 4 bytes of txid_num
+    Transaction {
+        txid: Txid::from_slice(&bytes).unwrap(),
+        index: 0,
+        inputs: vec![],
+        op_return_raw: None,
+    }
+}
+
+/// A fresh directory and database name for a node, owned by the caller so the
+/// database can outlive the process that used it — which is what a restart needs.
+pub fn new_test_db_dir() -> Result<(TempDir, String)> {
+    let temp_dir = TempDir::new()?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_nanos()
+        .to_string();
+    Ok((temp_dir, format!("test_db_{timestamp}.db")))
+}
+
+/// Reopen an EXISTING test database, as a restart would. `new_test_db` always
+/// creates a fresh directory, so it cannot express a node coming back up on the
+/// state it left behind — which is the whole shape of issue #515.
+pub async fn open_test_db(data_dir: &std::path::Path, db_name: &str) -> Result<(Reader, Writer)> {
+    let writer = Writer::new(data_dir, db_name).await?;
+    let reader = Reader::new(data_dir, db_name).await?;
+    Ok((reader, writer))
+}
+
+pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
+    let (temp_dir, db_name) = new_test_db_dir()?;
+    let (reader, writer) = open_test_db(temp_dir.path(), &db_name).await?;
+    Ok((reader, writer, (temp_dir, db_name)))
+}
+
+/// A prewarmed native contract: id, compiled component, and its cache weight
+/// (encoded binary size).
+type PrewarmedComponent = (ComponentSource, wasmtime::component::Component, u32);
+
+/// Shared engine + pre-compiled native contract components.
+/// First caller compiles all native contracts; subsequent callers get cached results.
+async fn shared_test_engine() -> (wasmtime::Engine, Vec<PrewarmedComponent>) {
+    static ONCE: tokio::sync::OnceCell<(wasmtime::Engine, Vec<PrewarmedComponent>)> =
+        tokio::sync::OnceCell::const_new();
+
+    ONCE.get_or_init(|| async {
+        let engine = Runtime::new_engine().expect("Failed to create engine");
+        let cache = ComponentCache::new();
+
+        let (_reader, writer, (_db_dir, _db_name)) = new_test_db().await.expect("test db");
+        let conn = writer.connection();
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(0)
+                .hash(new_mock_block_hash(0))
+                .relevant(true)
+                .build(),
+        )
+        .await
+        .expect("insert block");
+
+        let storage = Storage::builder().height(0).conn(conn).build();
+        let linkers = Runtime::new_linkers(&engine).expect("linkers");
+        let mut runtime = Runtime::new_with(engine.clone(), linkers, cache.clone(), storage)
+            .await
+            .expect("runtime");
+        runtime
+            .publish_native_contracts(&test_genesis(&[]))
+            .await
+            .expect("publish native");
+
+        // Extract compiled components from cache. Native contract IDs start
+        // at 1 and are assigned in publish order; see
+        // `Runtime::publish_native_contracts`.
+        let mut components = Vec::new();
+        for id in 1..=NATIVE_CONTRACTS.len() as u64 {
+            if let Some((source, component, size, true)) = cache.get_weighted(&id).await {
+                components.push((source, component, size));
+            }
+        }
+
+        (engine, components)
+    })
+    .await
+    .clone()
+}
+
+#[cfg(test)]
+pub(crate) async fn test_runtime() -> Result<(Runtime, TempDir, String)> {
+    test_runtime_with_genesis(&[]).await
+}
+
+pub struct OwnedTestRuntime {
+    session: OwnedRuntimeSession,
+}
+
+impl OwnedTestRuntime {
+    pub async fn new(gas_limit: u64) -> Result<(Self, TempDir, String)> {
+        Self::new_with_network(gas_limit, bitcoin::Network::Regtest).await
+    }
+
+    pub async fn new_with_network(
+        gas_limit: u64,
+        network: bitcoin::Network,
+    ) -> Result<(Self, TempDir, String)> {
+        Self::new_with_service(gas_limit, network, OwnerService::new(), None).await
+    }
+
+    async fn new_with_service(
+        gas_limit: u64,
+        network: bitcoin::Network,
+        service: OwnerService,
+        completed: Option<oneshot::Sender<Option<PathBuf>>>,
+    ) -> Result<(Self, TempDir, String)> {
+        // A caller can drop the constructor during native publication. Keep
+        // the Runtime and owner alive until that work has settled.
+        tokio::spawn(async move {
+            let result = Self::build_with_service(gas_limit, network, service).await;
+            if let Some(completed) = completed {
+                let directory = result
+                    .as_ref()
+                    .ok()
+                    .map(|(_, directory, _)| directory.path().to_path_buf());
+                let _ = completed.send(directory);
+            }
+            result
+        })
+        .await?
+    }
+
+    async fn build_with_service(
+        gas_limit: u64,
+        network: bitcoin::Network,
+        service: OwnerService,
+    ) -> Result<(Self, TempDir, String)> {
+        let (runtime, directory, name) = test_runtime_with_network_owned(network, &service).await?;
+        let session = OwnedRuntimeSession::with_service(runtime, service);
+        session
+            .run(true, move |runtime| {
+                Box::pin(async move {
+                    runtime.gas_limit_for_non_procs = gas_limit;
+                    let height = 1u64;
+                    let tx_index = 1u32;
+                    let txid = new_mock_transaction(0).txid;
+                    let tx_id = queries::insert_transaction(
+                        &runtime.storage.conn,
+                        TransactionRow::builder()
+                            .height(height)
+                            .txid(txid.to_string())
+                            .tx_index(tx_index)
+                            .confirmed_height(height)
+                            .build(),
+                    )
+                    .await?;
+                    runtime
+                        .set_context(
+                            height,
+                            Some(
+                                TransactionContext::builder()
+                                    .tx_id(tx_id)
+                                    .tx_index(tx_index)
+                                    .txid(txid)
+                                    .build(),
+                            ),
+                            None,
+                            None,
+                        )
+                        .await;
+                    Ok(())
+                })
+            })
+            .await?;
+        Ok((Self { session }, directory, name))
+    }
+
+    pub async fn dev_mint_enabled(&self) -> Result<bool> {
+        self.session
+            .run(false, |runtime| {
+                Box::pin(async move { token_api::dev_mint_enabled(runtime).await })
+            })
+            .await
+    }
+
+    pub async fn identity(&self) -> Result<Signer> {
+        let x_only_pubkey = random_x_only_pubkey();
+        self.session
+            .run(true, move |runtime| {
+                Box::pin(async move {
+                    let identity = queries::ensure_identity(
+                        &runtime.storage.conn,
+                        &x_only_pubkey,
+                        runtime.storage.height,
+                    )
+                    .await?;
+                    let signer = Signer::Id(identity);
+                    runtime
+                        .issuance(&signer)
+                        .await
+                        .map_err(anyhow::Error::from)?;
+                    Ok(signer)
+                })
+            })
+            .await
+    }
+
+    pub async fn load_contracts(&self, signer: &Signer, contracts: &[(&str, &[u8])]) -> Result<()> {
+        let signer = signer.clone();
+        let contracts: Vec<(String, Vec<u8>)> = contracts
+            .iter()
+            .map(|(name, bytes)| ((*name).to_string(), (*bytes).to_vec()))
+            .collect();
+        self.session
+            .run(true, move |runtime| {
+                Box::pin(async move {
+                    let conn = runtime.get_storage_conn();
+                    let tx = new_mock_transaction(1);
+                    if queries::get_transaction_by_txid(&conn, &tx.txid.to_string())
+                        .await?
+                        .is_none()
+                    {
+                        queries::insert_transaction(
+                            &conn,
+                            TransactionRow::builder()
+                                .height(1)
+                                .tx_index(0)
+                                .txid(tx.txid.to_string())
+                                .build(),
+                        )
+                        .await?;
+                    }
+                    for (name, bytes) in contracts {
+                        let signer_id = queries::create_contract_signer(&conn, 1).await?;
+                        let contract_id = queries::insert_contract(
+                            &conn,
+                            ContractRow::builder()
+                                .height(1)
+                                .tx_index(0)
+                                .name(name.clone())
+                                .bytes(bytes)
+                                .signer_id(signer_id)
+                                .build(),
+                        )
+                        .await?;
+                        if !queries::contract_has_state(&conn, contract_id).await? {
+                            let payment = Payment {
+                                signer_id: signer.signer_id().expect("test signer must have id"),
+                                gas_limit: runtime.gas_limit_for_non_procs,
+                            };
+                            runtime
+                                .execute(
+                                    Some(&signer),
+                                    Some(payment),
+                                    &ContractAddress {
+                                        name,
+                                        height: 1,
+                                        tx_index: 0,
+                                    },
+                                    "init()",
+                                )
+                                .await
+                                .map_err(anyhow::Error::from)?;
+                        }
+                    }
+                    Ok(())
+                })
+            })
+            .await
+    }
+
+    pub async fn wit(&self, address: &ContractAddress) -> Result<String> {
+        let address = address.clone();
+        self.session
+            .run(false, move |runtime| {
+                Box::pin(async move {
+                    let contract_id = runtime
+                        .storage
+                        .contract_id(&address)
+                        .await?
+                        .ok_or_else(|| anyhow!("Contract not found"))?;
+                    runtime.storage.component_wit(contract_id).await
+                })
+            })
+            .await
+    }
+
+    pub async fn execute(
+        &self,
+        signer: Option<&Signer>,
+        address: &ContractAddress,
+        expr: &str,
+        api: bool,
+    ) -> Result<String> {
+        let commit = signer.is_some();
+        let signer = signer.cloned();
+        let address = address.clone();
+        let expr = expr.to_string();
+        self.session
+            .run(commit, move |runtime| {
+                Box::pin(async move {
+                    let result = if api {
+                        runtime.execute_api(signer.as_ref(), &address, &expr).await
+                    } else {
+                        let payment = signer.as_ref().and_then(|signer| signer.signer_id()).map(
+                            |signer_id| Payment {
+                                signer_id,
+                                gas_limit: runtime.gas_limit_for_non_procs,
+                            },
+                        );
+                        runtime
+                            .execute(signer.as_ref(), payment, &address, &expr)
+                            .await
+                    };
+                    if let Some(context) = runtime.tx_context_mut() {
+                        context.op_index += 1;
+                    }
+                    // A deterministic failure still owns its settled gas and receipt.
+                    // Only infrastructure failure aborts the enclosing operation.
+                    match result {
+                        Err(error @ ExecutionError::NonDeterministic(_)) => Err(error.into()),
+                        outcome => Ok(outcome),
+                    }
+                })
+            })
+            .await?
+            .map_err(Into::into)
+    }
+
+    pub async fn issuance(&self, signer: &Signer) -> Result<()> {
+        let signer = signer.clone();
+        self.session
+            .run(true, move |runtime| {
+                Box::pin(async move { runtime.issuance(&signer).await.map_err(Into::into) })
+            })
+            .await
+    }
+
+    pub async fn checkpoint(&self) -> Result<Option<String>> {
+        self.session
+            .run(false, |runtime| {
+                Box::pin(async move {
+                    Ok(queries::get_checkpoint_latest(&runtime.storage.conn)
+                        .await?
+                        .map(|row| row.hash))
+                })
+            })
+            .await
+    }
+}
+
+#[cfg(test)]
+mod ownership_constructor_tests {
+    use super::*;
+    use crate::runtime::BlockingGate;
+    use anyhow::ensure;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use tokio::time::timeout;
+
+    struct ReleaseGate(Arc<BlockingGate>);
+
+    impl Drop for ReleaseGate {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
+    #[tokio::test]
+    async fn dropped_constructor_waits_for_owned_native_publication_cleanup() -> Result<()> {
+        shared_test_engine().await;
+        let service = OwnerService::new();
+        let gate = Arc::new(BlockingGate::default());
+        let _release = ReleaseGate(gate.clone());
+        service.set_startup_compile_gate(gate.clone());
+        let (completed, finished) = oneshot::channel();
+
+        let constructor = tokio::spawn(OwnedTestRuntime::new_with_service(
+            100_000,
+            bitcoin::Network::Regtest,
+            service.clone(),
+            Some(completed),
+        ));
+        timeout(Duration::from_secs(30), async {
+            while !gate.entered.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        constructor.abort();
+        let stopped = constructor
+            .await
+            .err()
+            .ok_or_else(|| anyhow!("constructor unexpectedly returned"))?;
+        ensure!(stopped.is_cancelled(), "constructor task was not cancelled");
+        ensure!(
+            !service.is_fatal(),
+            "dropped constructor quarantined native publication"
+        );
+        gate.release();
+        let directory = timeout(Duration::from_secs(30), finished)
+            .await??
+            .ok_or_else(|| anyhow!("constructor did not complete after cancellation"))?;
+        timeout(Duration::from_secs(30), async {
+            while directory.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        ensure!(
+            !service.is_fatal()
+                && service.active_roots().await == 0
+                && service.quarantined_roots().await == 0,
+            "native publication did not cleanly finish after constructor cancellation"
+        );
+        Ok(())
+    }
+}
+
+pub fn test_genesis(validators: &[GenesisValidator]) -> GenesisParameters {
+    GenesisParameters {
+        sigma_min: Decimal::from("1"),
+        validators: validators.to_vec(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn test_runtime_with_genesis(
+    genesis_validators: &[GenesisValidator],
+) -> Result<(Runtime, TempDir, String)> {
+    test_runtime_with_genesis_config(&test_genesis(genesis_validators), bitcoin::Network::Regtest)
+        .await
+}
+
+/// Like [`test_runtime`] but runs contract `init` under a specific network, so
+/// tests can exercise network-conditioned defaults (e.g. the token contract's
+/// `dev_mint_enabled` is off at mainnet genesis).
+#[cfg(test)]
+pub(crate) async fn test_runtime_with_network(
+    network: bitcoin::Network,
+) -> Result<(Runtime, TempDir, String)> {
+    test_runtime_with_genesis_config(&test_genesis(&[]), network).await
+}
+
+async fn test_runtime_with_network_owned(
+    network: bitcoin::Network,
+    service: &OwnerService,
+) -> Result<(Runtime, TempDir, String)> {
+    test_runtime_with_genesis_config_and_engine(&test_genesis(&[]), network, None, Some(service))
+        .await
+}
+
+#[cfg(test)]
+pub(crate) async fn test_runtime_with_genesis_config(
+    genesis: &GenesisParameters,
+    network: bitcoin::Network,
+) -> Result<(Runtime, TempDir, String)> {
+    test_runtime_with_genesis_config_and_engine(genesis, network, None, None).await
+}
+
+#[cfg(test)]
+pub async fn test_runtime_with_engine(engine: Engine) -> Result<(Runtime, TempDir, String)> {
+    test_runtime_with_genesis_config_and_engine(
+        &test_genesis(&[]),
+        bitcoin::Network::Regtest,
+        Some(engine),
+        None,
+    )
+    .await
+}
+
+async fn test_runtime_with_genesis_config_and_engine(
+    genesis: &GenesisParameters,
+    network: bitcoin::Network,
+    alternate_engine: Option<Engine>,
+    owner_service: Option<&OwnerService>,
+) -> Result<(Runtime, TempDir, String)> {
+    let (_reader, writer, (db_dir, db_name)) = new_test_db().await?;
+    let conn = writer.connection();
+
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(0)
+            .hash(new_mock_block_hash(0))
+            .relevant(true)
+            .build(),
+    )
+    .await?;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(1)
+            .hash(new_mock_block_hash(1))
+            .relevant(true)
+            .build(),
+    )
+    .await?;
+
+    let storage = Storage::builder().height(1).conn(conn).build();
+    let (engine, prewarmed) = match alternate_engine {
+        // Components compiled for the shared engine cannot be installed in a
+        // cache used by the reduced-capacity diagnostic engine.
+        Some(engine) => (engine, Vec::new()),
+        None => shared_test_engine().await,
+    };
+    let cache = ComponentCache::new();
+    for (source, component, size) in &prewarmed {
+        cache
+            .put_selected(
+                *source,
+                ExecutorVersion::LegacyP1,
+                component.clone(),
+                *size as usize,
+            )
+            .await?;
+    }
+    let linkers = Runtime::new_linkers(&engine)?;
+    let mut runtime = Runtime::new_with(engine, linkers, cache, storage).await?;
+    // Set before publish so contract `init` sees it (the `network()` built-in).
+    runtime.network = network;
+    if let Some(service) = owner_service {
+        #[cfg(test)]
+        service.apply_startup_compile_gate(&mut runtime);
+        runtime
+            .publish_native_contracts_owned(genesis, service)
+            .await?;
+    } else {
+        runtime.publish_native_contracts(genesis).await?;
+    }
+
+    // This fixture writes directly through the legacy runtime without a raw-input
+    // journal. Preserve that distinction instead of fabricating canonical history.
+    canonical_history::initialize(&runtime.storage.conn).await?;
+    Ok((runtime, db_dir, db_name))
+}
+
+pub fn gen_numbered_block(height: u64, prev_hash: &BlockHash) -> Block {
+    let hash = BlockHash::from_byte_array([height as u8; 32]);
+
+    Block {
+        height,
+        hash,
+        prev_hash: *prev_hash,
+        transactions: vec![new_mock_transaction(height as u32)],
+    }
+}
+
+pub fn gen_numbered_blocks(start: u64, end: u64, prev_hash: BlockHash) -> Vec<Block> {
+    let mut blocks = vec![];
+    let mut prev = prev_hash;
+
+    for _i in start..end {
+        let block = gen_numbered_block(_i + 1, &prev);
+        prev = block.hash;
+        blocks.push(block.clone());
+    }
+
+    blocks
+}
+
+pub fn new_numbered_blockchain(n: u64) -> Vec<Block> {
+    gen_numbered_blocks(0, n, BlockHash::from_byte_array([0x00; 32]))
+}
+
+pub fn gen_random_block(height: u64, prev_hash: Option<BlockHash>) -> Block {
+    let mut hash = [0u8; 32];
+    rand::rng().fill_bytes(&mut hash);
+
+    let prev = match prev_hash {
+        Some(h) => h,
+        None => BlockHash::from_byte_array([0x00; 32]),
+    };
+
+    Block {
+        height,
+        hash: BlockHash::from_byte_array(hash),
+        prev_hash: prev,
+        transactions: vec![],
+    }
+}
+
+pub fn gen_random_blocks(start: u64, end: u64, prev_hash: Option<BlockHash>) -> Vec<Block> {
+    let mut blocks = vec![];
+    let mut prev = prev_hash;
+
+    for _i in start..end {
+        let block = gen_random_block(_i + 1, prev);
+        prev = Some(block.hash);
+        blocks.push(block.clone());
+    }
+
+    blocks
+}
+
+pub fn new_random_blockchain(n: u64) -> Vec<Block> {
+    gen_random_blocks(0, n, None)
+}
+
+pub async fn await_block_at_height(conn: &Connection, height: u64) -> BlockRow {
+    loop {
+        match queries::select_block_at_height(conn, height).await {
+            Ok(Some(row)) => return row,
+            Ok(None) => {}
+            Err(e) => panic!("error: {:?}", e),
+        };
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidSeed {
+    pub bytes: [u8; 64],
+    pub field: FieldElement,
+}
+
+pub fn valid_seed_field(n: u64) -> ValidSeed {
+    let mut bytes = [0u8; 64];
+    bytes[..8].copy_from_slice(&n.to_le_bytes());
+
+    // Fill the rest deterministically from SHA256 chaining to avoid obvious structure.
+    let h1 = Sha256::digest(&bytes[..8]);
+    let h2 = Sha256::digest(h1);
+    bytes[8..40].copy_from_slice(&h1);
+    bytes[40..64].copy_from_slice(&h2[..24]);
+
+    let field = field_from_uniform_bytes(&bytes);
+    ValidSeed { bytes, field }
+}
+
+/// Helper to create a fake FileMeta for testing.
+pub fn create_fake_file_metadata(file_id: &str, filename: &str) -> FileMeta {
+    // Create a simple valid root (32 bytes, small enough to be a valid field element)
+    let mut root = [0u8; 32];
+    root[0] = 1; // Non-zero but small value
+
+    // Create a simple nonce
+    let mut nonce = [0u8; 32];
+    nonce[0] = 2;
+
+    FileMeta::builder()
+        .file_id(file_id.to_string())
+        .object_id(format!("obj_{}", file_id))
+        .nonce(nonce.to_vec())
+        .root(root)
+        .padded_len(1024)
+        .original_size(512)
+        .filename(filename.to_string())
+        .build()
+}
+
+pub fn make_descriptor(
+    file_id: String,
+    root: Vec<u8>,
+    padded_len: u64,
+    original_size: u64,
+    filename: String,
+) -> RawFileDescriptor {
+    let object_id = format!("object_{}", file_id);
+    let mut nonce = [0u8; 32];
+    for (i, b) in file_id.bytes().enumerate().take(32) {
+        nonce[i] = b;
+    }
+
+    RawFileDescriptor {
+        file_id,
+        object_id,
+        nonce: nonce.to_vec(),
+        root,
+        padded_len,
+        original_size,
+        filename,
+    }
+}
+
+// Pre-computed lucky block hashes for challenge generation tests.
+// Each hash guarantees a challenge when there's 1 eligible file.
+// Stored as hex strings for readability; use `lucky_hash()` to decode.
+
+/// Lucky hash for block height 1000 (roll = 7)
+pub const LUCKY_HASH_1000: &str =
+    "8db6b1269eab0af290543fc6cc3945018ba7332085b18a71170ee234e4f43676";
+
+/// Lucky hash for block height 10000 (roll = 10)
+pub const LUCKY_HASH_10000: &str =
+    "dda7bbc8c286d5f8a390fc7a9918a83eefd7046ad878a8feef7297560929c75d";
+
+/// Lucky hash for block height 50000 (roll = 1)
+pub const LUCKY_HASH_50000: &str =
+    "d998f2928dab53f43cda61ed3bd6f2ebdbae001df799175ab28601bf16187e52";
+
+/// Lucky hash for block height 100000 (roll = 2)
+pub const LUCKY_HASH_100000: &str =
+    "10adb611e366cab60d827a935bb4ced6431e36bd7576d38eb568084ab39d6bb1";
+
+/// Lucky hash for block height 500000 (roll = 8)
+pub const LUCKY_HASH_500000: &str =
+    "e68680749dc7fd55901397031d27304d63d4efd3cb67e78a7cdb8e206a17c35b";
+
+/// Decode a hex-encoded lucky hash to a 32-byte array.
+pub fn lucky_hash(hex: &str) -> [u8; 32] {
+    hex::decode(hex)
+        .expect("Invalid hex string")
+        .try_into()
+        .expect("Hash must be exactly 32 bytes")
+}
+
+/// BLS test helpers shared between unit and regtest attack vector tests.
+pub mod bls_test {
+    use blst::min_sig::{AggregatePublicKey, PublicKey as BlsPublicKey};
+
+    pub fn derive_test_key(seed_byte: u8) -> blst::min_sig::SecretKey {
+        let seed = [seed_byte; 64];
+        crate::bls::derive_bls_secret_key_eip2333(
+            &seed,
+            &crate::bls::bls_derivation_path(bitcoin::Network::Regtest),
+        )
+        .expect("failed to derive EIP-2333 secret key")
+    }
+
+    pub fn construct_rogue_g2_pubkey(
+        beta_pk_compressed: &[u8; 96],
+        victim_pk_compressed: &[u8; 96],
+    ) -> [u8; 96] {
+        let beta_pk =
+            BlsPublicKey::key_validate(beta_pk_compressed).expect("beta pk must be valid G2");
+        let mut neg_victim_bytes = *victim_pk_compressed;
+        neg_victim_bytes[0] ^= 0x20;
+        let neg_victim_pk = BlsPublicKey::key_validate(&neg_victim_bytes)
+            .expect("negated victim pk must be valid G2");
+        let agg = AggregatePublicKey::aggregate(&[&beta_pk, &neg_victim_pk], false)
+            .expect("aggregation must succeed");
+        agg.to_public_key().to_bytes()
+    }
+}
+
+/// Deterministically prepare a file for PoR proving (filename doubles as the
+/// nonce, matching the e2e tests so the resulting metadata/root line up with
+/// the agreements they register).
+fn prepare_por_file(content: &[u8], filename: &str) -> (api::PreparedFile, api::FileMetadata) {
+    let mut nonce = [0u8; 32];
+    for (i, b) in filename.bytes().enumerate().take(32) {
+        nonce[i] = b;
+    }
+    api::prepare_file(content, filename, &nonce).expect("prepare_file")
+}
+
+/// A single-file proof for file2.txt at height 20,000 with seed 99.
+pub fn por_single_file_proof_bytes(prover_id: u64, num_challenges: usize) -> Result<Vec<u8>> {
+    let (prepared, metadata) = prepare_por_file(b"Second file with different content", "file2.txt");
+    let mut ledger = FileLedger::new();
+    ledger.add_file(&metadata)?;
+    let challenge = Challenge::new(
+        metadata,
+        20000u64,
+        num_challenges,
+        valid_seed_field(99).field,
+        prover_challenge_key(prover_id),
+    );
+    let system = PorSystem::new(&ledger);
+    let proof = system
+        .prove(vec![&prepared], std::slice::from_ref(&challenge))
+        .map_err(|e| anyhow!("prove (single file): {e}"))?;
+    proof
+        .to_bytes()
+        .map_err(|e| anyhow!("serialize proof: {e}"))
+}
+
+/// A valid aggregated PoR proof over files A and B for a single `prover_id` —
+/// mirrors the e2e cross-block test's file contents, block height (40000), and
+/// per-file seeds (200/201). The ledger is built A, B, C (C present but not
+/// proven) to match the on-chain ledger state at verify time.
+/// `num_challenges` must equal the contract's `s_chal`.
+pub fn por_cross_block_proof_bytes(prover_id: u64, num_challenges: usize) -> Result<Vec<u8>> {
+    let (prepared_a, metadata_a) =
+        prepare_por_file(b"Content of file A for cross-block", "cross_a.txt");
+    let (prepared_b, metadata_b) =
+        prepare_por_file(b"Content of file B for cross-block", "cross_b.txt");
+    let (_prepared_c, metadata_c) =
+        prepare_por_file(b"Content of file C - new agreement", "cross_c.txt");
+    let mut ledger = FileLedger::new();
+    ledger.add_file(&metadata_a)?;
+    ledger.add_file(&metadata_b)?;
+    ledger.add_file(&metadata_c)?;
+    let challenges = vec![
+        Challenge::new(
+            metadata_a,
+            40000u64,
+            num_challenges,
+            valid_seed_field(200).field,
+            prover_challenge_key(prover_id),
+        ),
+        Challenge::new(
+            metadata_b,
+            40000u64,
+            num_challenges,
+            valid_seed_field(201).field,
+            prover_challenge_key(prover_id),
+        ),
+    ];
+    let system = PorSystem::new(&ledger);
+    let proof = system
+        .prove(vec![&prepared_a, &prepared_b], &challenges)
+        .map_err(|e| anyhow!("prove (cross-block): {e}"))?;
+    proof
+        .to_bytes()
+        .map_err(|e| anyhow!("serialize proof: {e}"))
+}

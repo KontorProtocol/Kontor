@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
+use crate::upgrade_control::UpgradeSubmission;
 use anyhow::Result;
 use bitcoin::Network;
 use deadpool::managed::Pool;
@@ -25,6 +26,7 @@ pub struct Env {
     pub(crate) runtime_pool: Pool<runtime::pool::LinkedManager>,
     pub owner_service: runtime::ownership::OwnerService,
     pub simulate_tx: Sender<Simulation>,
+    pub upgrade_tx: Sender<UpgradeSubmission>,
     /// Set true once the reactor signals ready (consensus up + initial
     /// mempool sync complete). Half of the `require_available` middleware
     /// check; the other half is `info_rx.borrow().height.is_some()`.
@@ -63,6 +65,7 @@ pub struct DaemonEnv {
     pub bitcoin: Client,
     pub owner_service: runtime::ownership::OwnerService,
     pub simulate_tx: Sender<Simulation>,
+    pub upgrade_tx: Sender<UpgradeSubmission>,
     pub reactor_ready: Arc<AtomicBool>,
     pub failed: Arc<AtomicBool>,
     pub consensus_listen_addr: watch::Receiver<Option<String>>,
@@ -88,6 +91,7 @@ impl Env {
             runtime_pool,
             owner_service: parts.owner_service,
             simulate_tx: parts.simulate_tx,
+            upgrade_tx: parts.upgrade_tx,
             reactor_ready: parts.reactor_ready,
             failed: parts.failed,
             consensus_listen_addr: parts.consensus_listen_addr,
@@ -125,6 +129,7 @@ impl Env {
             owner_service: runtime::ownership::OwnerService::new(),
             reader,
             simulate_tx,
+            upgrade_tx: tokio::sync::mpsc::channel(1).0,
             fees_rx,
             // No reactor in unit tests — the sender is dropped, so the
             // snapshot stays at its default and long-polls return at once.

@@ -1,0 +1,238 @@
+// TODO: Switch to interior mutability (e.g. use Mutexes or thread-local
+// RefCells) and remove this, since even in single-threaded mode `static mut`
+// references can be a hazard due to recursive access.
+#![allow(static_mut_refs)]
+
+use super::cabi;
+use crate::rt::async_support::BoxFuture;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use core::future::Future;
+use core::pin::Pin;
+use core::ptr;
+use core::task::{Context, Poll};
+use futures::channel::oneshot;
+use futures::future::{AbortHandle, Abortable, Aborted};
+use futures::stream::{FuturesUnordered, StreamExt};
+
+/// Any newly-deferred work queued by calls to the `spawn` function while
+/// polling the current task.
+static mut SPAWNED: Vec<BoxFuture> = Vec::new();
+
+#[derive(Default)]
+pub struct Tasks<'a> {
+    tasks: FuturesUnordered<BoxFuture<'a>>,
+    root: Option<AbortHandle>,
+}
+
+impl<'a> Tasks<'a> {
+    pub fn new(root: impl Future<Output = ()> + 'a) -> Tasks<'a> {
+        let (abort, registration) = AbortHandle::new_pair();
+        let root: BoxFuture<'a> = Box::pin(async move {
+            let _ = Abortable::new(root, registration).await;
+        });
+        Tasks {
+            tasks: [root].into_iter().collect(),
+            root: Some(abort),
+        }
+    }
+
+    pub fn cancel_root(&mut self) {
+        if let Some(root) = self.root.take() {
+            root.abort();
+        }
+    }
+
+    pub fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        loop {
+            // Perform some work by seeing what's next in this
+            // `FuturesUnordered`. Afterwards check the set of spawned tasks
+            // and, if any, add them to our set of tasks being done.
+            let poll = self.tasks.poll_next_unpin(cx);
+            let spawned = unsafe {
+                if SPAWNED.is_empty() {
+                    false
+                } else {
+                    self.tasks.extend(SPAWNED.drain(..));
+                    true
+                }
+            };
+            match poll {
+                // If no tasks were ready, and if we didn't spawn any work,
+                // then there's nothing left to do so return pending.
+                //
+                // If no tasks were ready, and if we spawned some work, then
+                // turn the loop again to register interest in the work and
+                // ensure that it's not forgotten about.
+                Poll::Pending => {
+                    if !spawned {
+                        return Poll::Pending;
+                    }
+                }
+
+                // If our set of tasks is empty it shouldn't be possible to have
+                // spawned anything, and return saying that we're done.
+                Poll::Ready(None) => {
+                    assert!(!spawned);
+                    return Poll::Ready(());
+                }
+
+                // If a task finished, then turn the loop again to see if there
+                // are any other completed tasks. This also serves double-duty
+                // to ensure that we look at everything in our set of tasks
+                // before concluding that we're finished.
+                Poll::Ready(Some(())) => {}
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+}
+
+pub(super) fn push(task: BoxFuture<'static>) {
+    unsafe {
+        SPAWNED.push(task);
+    }
+}
+
+/// Spawn the provided `future` to get executed concurrently with the
+/// currently-running async computation.
+///
+/// This API is somewhat similar to `tokio::task::spawn` for example but has a
+/// number of limitations to be aware of. If possible it's recommended to avoid
+/// this, but it can be convenient if these limitations do not apply to you:
+///
+/// * Spawned tasks do not work when the version of the `wit-bindgen` crate
+///   managing the export bindings is different from the version of this crate.
+///   To work correctly the `spawn` function and export executor must be at
+///   exactly the same version. Given the major-version-breaking nature of
+///   `wit-bindgen` this is not always easy to rely on. This is tracked in
+///   [#1305].
+///
+/// * Spawned tasks do not outlive the scope of the async computation they are
+///   spawned within. For example with an async export function spawned tasks
+///   will be polled within the context of that component-model async task. For
+///   computations executing within a [`block_on`] call, however, the spawned
+///   tasks will be executed within that scope. This notably means that for
+///   [`block_on`] spawned tasks will prevent the [`block_on`] function from
+///   returning, even if a value is available to return. If `spawn_local` is
+///   called within a component-model async task which is then terminated (e.g.
+///   by the host) before the future resolves, awating the `JoinHandle` will return
+///   `None`.
+///
+/// * The task spawned here is executed *concurrently*, not in *parallel*. This
+///   means that while one future is being polled no other future can be polled
+///   at the same time. This is similar to a single-thread executor in Tokio.
+///
+/// With these restrictions in mind this can be used to express
+/// execution-after-returning in the component model. For example once an
+/// exported async function has produced a value this can be used to continue to
+/// execute some more code before the component model async task exits.
+///
+/// # Cancellation
+///
+/// Dropping the resulting [`JoinHandle`] will detach the task and allow it to
+/// continue running in the background. It can also be explicitly cancelled with
+/// [`JoinHandle::cancel`].
+///
+/// [`block_on`]: crate::block_on
+/// [#1305]: https://github.com/bytecodealliance/wit-bindgen/issues/1305
+pub fn spawn_local<T: 'static>(future: impl Future<Output = T> + 'static) -> JoinHandle<T> {
+    let (sender, receiver) = oneshot::channel();
+    let (abort, registration) = AbortHandle::new_pair();
+    let future = Box::new(async move {
+        let _ = sender.send(Abortable::new(future, registration).await);
+    });
+
+    // This isn't quite as easy as just pushing onto the `SPAWNED` static within
+    // this file because the request for spawning a task can come from any
+    // version of the `wit-bindgen` crate but only the version that's running
+    // the exported task is actually capable of handling the request to spawn
+    // something. This means that our `SPAWNED` static may not actually be read
+    // by the export running because it might be a different version of
+    // `wit-bindgen`. To arbitrate this the `cabi` module has a hook, which is
+    // configured by exports, to receive Rust futures to spawn.
+    //
+    // This itself is a bit thorny to handle a few cases:
+    //
+    // * The hook for spawn was added after `cabi` was created, so a revision
+    //   was necessary with a bumped number. Historical versions don't have a
+    //   spawn hook at all.
+    //
+    // * The `async-spawn` feature is a conditional feature of this crate that
+    //   may not be enabled at compile time. If it's not enabled then the
+    //   `rust_spawn` hook won't be specified.
+    //
+    // For now this just panics if something can't be spawned. In both cases it
+    // means that there's some other version of `wit-bindgen` running the export
+    // that this request to spawn can't be satisfied with, and there's really
+    // not much that can be done.
+    //
+    // TODO: this is a pretty awful error to run into as a developer and a
+    // pretty awful experience. There's nothing that can be done to solve this
+    // other than "update wit-bindgen somewhere else" which is not always easy
+    // to do. Not that I've got a better idea of what to do here.
+    let ok = unsafe {
+        let task = cabi::wasip3_task_set(ptr::null_mut());
+        assert!(!task.is_null());
+        assert!((*task).version >= cabi::WASIP3_TASK_V1);
+
+        let ok = if (*task).version >= cabi::WASIP3_TASK_V3 {
+            let task = task.cast::<cabi::wasip3_task_v3>();
+            match (*task).vtable.rust_spawn {
+                Some(f) => {
+                    f((*task).v1.ptr, future);
+                    true
+                }
+                None => false,
+            }
+        } else {
+            false
+        };
+        cabi::wasip3_task_set(task);
+        ok
+    };
+
+    if !ok {
+        panic!(
+            "failed to `spawn_local` because there's a different version of \
+             the `wit-bindgen` crate running the export than this \
+             `wit-bindgen` crate and that one is either too old \
+             or has the `async-spawn` feature disabled"
+        );
+    }
+    JoinHandle { receiver, abort }
+}
+
+/// A handle to a spawned task which can be awaited for its result.
+///
+/// Dropping the handle allows the task to continue running in the background.
+/// Awaiting the handle returns `None` if the task was cancelled or otherwise
+/// terminated without producing a result.
+pub struct JoinHandle<T> {
+    receiver: oneshot::Receiver<Result<T, Aborted>>,
+    abort: AbortHandle,
+}
+
+impl<T> JoinHandle<T> {
+    /// Cancels the spawned task. It is possible the task resolved and produced
+    /// a result before cancelation completed and the [`JoinHandle`] can still
+    /// be awaited to check for that case.
+    pub fn cancel(&mut self) {
+        self.abort.abort();
+    }
+}
+
+impl<T> Future for JoinHandle<T> {
+    type Output = Option<T>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        match Pin::new(&mut self.receiver).poll(cx) {
+            Poll::Ready(Ok(Ok(result))) => Poll::Ready(Some(result)),
+            Poll::Ready(Ok(Err(_)) | Err(_)) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}

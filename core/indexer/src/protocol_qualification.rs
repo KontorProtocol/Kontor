@@ -27,6 +27,8 @@ use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy
 use crate::protocol::identity::DefinitionReference;
 use crate::protocol::identity::ExecutionDefinitionId;
 use crate::protocol::operations::{AddressEnvelope, SessionOwner};
+#[cfg(kontor_managed)]
+use crate::reactor::engine::qualify_managed_startup;
 use crate::reactor::{certified, history_qualification, qualification};
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
@@ -448,6 +450,10 @@ pub async fn run() -> Result<Value> {
         let export_panics = ownership::qualify_export_panics().await?;
         #[cfg(not(kontor_linked))]
         let export_panics = json!({});
+        #[cfg(kontor_managed)]
+        let managed_startup = qualify_managed_startup().await?;
+        #[cfg(not(kontor_managed))]
+        let managed_startup = Value::Null;
         let cases = vec![
             "retained-canonical-history-adapters",
             "atomic-migration-and-retry",
@@ -484,7 +490,8 @@ pub async fn run() -> Result<Value> {
         };
         Ok(json!({"schema": 1, "cases": cases, "executors": outputs,
             "node_capacity": node_capacity, "export_panics": export_panics,
-            "storage_contracts": storage_contracts, "certified_history": certified_history}))
+            "storage_contracts": storage_contracts, "certified_history": certified_history,
+            "managed_startup": managed_startup}))
     }
     .await;
     service.shutdown();

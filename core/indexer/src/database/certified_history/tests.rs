@@ -605,3 +605,37 @@ async fn bounded_input_load_checks_original_and_augmentation_before_exposing_inp
     assert_eq!(load_verified_input(&conn, 1).await?.input(), &input);
     Ok(())
 }
+
+#[tokio::test]
+async fn intermediate_boolean_command_schema_is_refused_without_relabeling() -> Result<()> {
+    let directory = TempDir::new()?;
+    let conn = new_connection(directory.path(), "old-commands.db").await?;
+    conn.execute_batch("CREATE TABLE certified_decisions (is_block INTEGER NOT NULL); INSERT INTO certified_decisions VALUES (1);").await?;
+    assert!(
+        initialize(&conn)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported intermediate")
+    );
+    assert_eq!(
+        conn.query("SELECT is_block FROM certified_decisions", ())
+            .await?
+            .next()
+            .await?
+            .unwrap()
+            .get::<i64>(0)?,
+        1
+    );
+    assert!(
+        conn.query(
+            "SELECT name FROM sqlite_schema WHERE name = 'upgrade_control_retractions'",
+            ()
+        )
+        .await?
+        .next()
+        .await?
+        .is_none()
+    );
+    Ok(())
+}

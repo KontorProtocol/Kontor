@@ -6,6 +6,8 @@ use bitcoin::opcodes::all::OP_PUSHNUM_1;
 use bitcoin::transaction::Version;
 use bitcoin::{Amount, Network, ScriptBuf, TxIn, TxOut, Witness};
 
+use crate::consensus::Value;
+
 use super::*;
 
 fn context() -> EraContext {
@@ -225,4 +227,51 @@ fn stripped_and_altered_segwit_bodies_are_not_historical_inputs() {
     assert!(ExactInput::validate(input.descriptor().clone(), serialize(&stripped)).is_err());
     block.txdata[0].input[0].witness = Witness::from_slice(&[[1; 32]]);
     assert!(ExactInput::block(context(), 1, serialize(&block)).is_err());
+}
+
+#[test]
+fn control_is_distinct_from_transactions_and_binds_exact_envelope() {
+    let vector: serde_json::Value =
+        serde_json::from_str(include_str!("../control/test-vector.json")).unwrap();
+    let bytes = hex::decode(vector["control_hex"].as_str().unwrap()).unwrap();
+    let control = UpgradeControl::decode(&bytes).unwrap();
+    let input = ExactInput::control(
+        control.action.context,
+        100,
+        BlockHash::all_zeros(),
+        &control,
+    )
+    .unwrap();
+    let descriptor = Descriptor::decode(&input.descriptor().encode().unwrap()).unwrap();
+    assert_eq!(descriptor.command.position().2, CommandKind::Control);
+    assert_eq!(
+        ExactInput::validate(descriptor.clone(), bytes.clone()).unwrap(),
+        input
+    );
+    assert_eq!(input.upgrade_control().unwrap(), control);
+    assert!(input.transactions().is_err());
+    assert!(batch(&[]).upgrade_control().is_err());
+    let value = Value::from_input(input.clone()).unwrap();
+    assert!(!value.is_batch() && !value.is_block());
+    assert!(value.batch_raw_txs().is_empty());
+    let mut wrong = descriptor.clone();
+    wrong.context.era = [99; 32];
+    assert!(ExactInput::validate(wrong, bytes.clone()).is_err());
+    let mut wrong = descriptor.clone();
+    wrong.input_count = 0;
+    assert!(wrong.encode().is_err());
+    let mut wrong = descriptor;
+    wrong.command = Command::Batch {
+        anchor_height: 100,
+        anchor_hash: BlockHash::all_zeros(),
+    };
+    assert!(ExactInput::validate(wrong, bytes.clone()).is_err());
+    let mut malformed = bytes;
+    malformed.push(0);
+    let mut descriptor = input.descriptor().clone();
+    descriptor.body_length = malformed.len() as u32;
+    descriptor.body_digest = body_digest(&malformed);
+    assert!(ExactInput::validate(descriptor, malformed).is_err());
+    assert!(CommandKind::try_from(-1).is_err());
+    assert!(CommandKind::try_from(3).is_err());
 }

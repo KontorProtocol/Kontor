@@ -7,11 +7,12 @@ from pathlib import Path
 
 from build import ROOT, digest, write_json
 from provenance import fingerprint, package_sources, repository_sources
-from qualify_node import CASES, verify_storage_contracts, verify_certified_history
-from recipes import EXECUTOR_LINK_SETS, executor_graphs, graph_root, identity
+from qualify_node import CASES, verify_storage_contracts, verify_certified_history, verify_managed_startup
+from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, executor_graphs, graph_root, identity
 from semantic_baseline import verify as verify_semantics
 from symbol_tool import TOOLCHAIN
 from type_boundary import verify_report as verify_interface_report
+from type_boundary import verify_node_adapter_report
 
 TARGETS = {'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu', 'aarch64-apple-darwin'}
 OWNERSHIP = {'common-reference-ownership.json', 'node-input-ownership.json', 'input-ownership.json',
@@ -112,6 +113,7 @@ def load_cell(path, root, link_set=None):
     require(observations['cases'] == execution['cases'], 'case record differs from raw output')
     verify_storage_contracts(observations, link_set)
     verify_certified_history(observations, link_set, root)
+    verify_managed_startup(observations, link_set)
     graphs = list(recipes)
     require(execution['graphs'] == graphs and [item['graph'] for item in observations['executors']] == graphs,
             'missing or duplicate execution graph')
@@ -138,19 +140,30 @@ def load_cell(path, root, link_set=None):
     require(set(node['ownership']) == OWNERSHIP, 'missing ownership audit')
     for name, expected in node['ownership'].items():
         file_hash(node_dir / name, expected)
-    require([item['graph'] for item in spec['graphs']] == graphs, 'link graph set changed')
-    for graph, linked in zip(build['graphs'], spec['graphs'], strict=True):
+    consensus = build.get('consensus_graphs', [])
+    expected_consensus = list(CONSENSUS_GRAPHS) if link_set == 'managed-node' else []
+    require([graph['graph'] for graph in consensus] == expected_consensus, 'consensus graph set changed')
+    expected_roles = [('executor', name) for name in graphs] + [('consensus', name) for name in expected_consensus]
+    require([(item.get('role', 'executor'), item['graph']) for item in spec['graphs']] == expected_roles,
+            'link graph set changed')
+    for graph, linked in zip(build['graphs'] + consensus, spec['graphs'], strict=True):
         name = graph['graph']
-        expected_identity = identity(root, name, recipes)
+        role = linked.get('role', 'executor')
+        selected = CONSENSUS_GRAPHS if role == 'consensus' else recipes
+        graph_dir = directory.parents[1] / 'consensus' / name if role == 'consensus' else directory / name
+        expected_identity = identity(root, name, selected)
         require(graph['identity'] == expected_identity, f'{name} graph identity changed')
         require(graph['lock_sha256'] == expected_identity['lock_sha256']
                 and graph['manifest_sha256'] == expected_identity['manifest_sha256'], f'{name} lock/manifest mismatch')
         require(linked['build_inputs_sha256'] == fingerprint(graph), f'{name} link graph inputs differ')
-        require(read(directory / name / 'build-inputs.json') == graph, f'{name} graph report differs')
-        sources(directory / name, graph, graph_root(root, recipes[name]), 'executor', tool_root=root)
-        file_hash(directory / name / 'build.log', graph['build_log_sha256'])
+        require(read(graph_dir / 'build-inputs.json') == graph, f'{role}/{name} graph report differs')
+        sources(graph_dir, graph, graph_root(root, selected[name]), role, tool_root=root)
+        file_hash(graph_dir / 'build.log', graph['build_log_sha256'])
         file_hash(root / 'tools/protocol-bundles/rustc-wrapper.py', graph['wrapper_sha256'])
     verify_interface_report(node_dir / 'type-boundary', node['interface_checks'], build['graphs'], cell[0])
+    if consensus:
+        verify_interface_report(node_dir / 'consensus/type-boundary', node['consensus_interface_checks'], consensus, cell[0])
+        verify_node_adapter_report(node_dir / 'consensus/node-adapter', node['consensus_adapter_checks'], consensus)
     return cell, observations, {key: compiler[key] for key in ('release', 'commit-hash', 'LLVM version')}
 
 
@@ -185,7 +198,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--profiles', choices=('release', 'full'), required=True)
     parser.add_argument('--upstream-status', required=True)
-    parser.add_argument('--link-set', choices=sorted(EXECUTOR_LINK_SETS), default='k4-node')
+    parser.add_argument('--link-set', choices=sorted(EXECUTOR_LINK_SETS), default='managed-node')
     args = parser.parse_args()
     args.output.unlink(missing_ok=True)
     try:

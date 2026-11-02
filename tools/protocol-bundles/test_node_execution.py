@@ -7,22 +7,34 @@ import tempfile
 import unittest
 
 from build import ROOT, digest
-from qualify_node import CASES, CERTIFIED_CHECKS, execute_node, verify_certified_history
+from qualify_node import CASES, CERTIFIED_CHECKS, execute_node, verify_certified_history, verify_managed_startup
 from test_semantic_baseline import sample_observation
 
 
-def certified_sample():
+def certified_sample(link_set="k4-node"):
     """Synthetic gate input, never evidence that the Rust fixture ran."""
     def hashed(domain, value):
         return hashlib.sha256(domain + b'\0' + value).hexdigest()
     executor = hashed(b'kontor/execution-definition/v1',
                       (ROOT / 'protocol-bundles/executor-observer/definition.bin').read_bytes())
     chain = bytes([7]) * 32
-    manifest = b'KPM1' + chain + (1).to_bytes(8, 'big') + bytes(32) + bytes.fromhex(executor) + bytes(164)
+    consensus_path = ('core/indexer/src/protocol/coordinator/managed/definitions/first.json'
+                      if link_set == 'managed-node' else
+                      'core/indexer/src/protocol/coordinator/baseline/consensus.json')
+    consensus = bytes.fromhex(hashed(b'kontor/consensus-definition/v1', (ROOT / consensus_path).read_bytes()))
+    manifest = b'KPM1' + chain + (1).to_bytes(8, 'big') + bytes(32) + bytes.fromhex(executor) + consensus + bytes(132)
     protocol = hashed(b'kontor/protocol-manifest/v1', manifest)
-    return {**{key: True for key in CERTIFIED_CHECKS}, 'authenticated': 15, 'closed': 15,
+    checks = CERTIFIED_CHECKS | ({'migration_rehearsal_cli'} if link_set == 'managed-node' else set())
+    return {**{key: True for key in checks}, 'authenticated': 15, 'closed': 15,
             'executor_definition': executor, 'manifest': manifest.hex(), 'chain': chain.hex(),
             'protocol': protocol, 'era': hashed(b'kontor/genesis-era/v1', chain + bytes.fromhex(protocol))}
+
+
+def managed_sample(history):
+    return {**{name: history[name] for name in ('chain', 'protocol', 'era', 'executor_definition')},
+            'rounds_started': 2, 'engines_joined': 2, 'next_generation': 3,
+            'same_listener': True, 'same_era_wal': True, 'database_remained_available': True,
+            'competing_writer_rejected': True}
 
 
 class NodeExecution(unittest.TestCase):
@@ -68,6 +80,42 @@ class NodeExecution(unittest.TestCase):
                 verify_certified_history({'certified_history': altered}, 'k4-node')
         with self.assertRaisesRegex(RuntimeError, 'legacy qualification'):
             verify_certified_history({'certified_history': original}, 'legacy-qualification')
+
+    def test_consensus_definition_cannot_be_substituted_between_link_sets(self):
+        for selected, other in (('managed-node', 'k4-node'), ('k4-node', 'managed-node')):
+            verify_certified_history({'certified_history': certified_sample(selected)}, selected)
+            substituted = certified_sample(other)
+            if selected == 'managed-node':
+                substituted['migration_rehearsal_cli'] = True
+            else:
+                substituted.pop('migration_rehearsal_cli')
+            with self.assertRaisesRegex(RuntimeError, 'baseline identity'):
+                verify_certified_history({'certified_history': substituted}, selected)
+
+    def test_managed_history_requires_successful_rehearsal_cli(self):
+        original = certified_sample('managed-node')
+        for replacement in (False, None):
+            changed = dict(original, migration_rehearsal_cli=replacement)
+            with self.assertRaises(RuntimeError):
+                verify_certified_history({'certified_history': changed}, 'managed-node')
+        del original['migration_rehearsal_cli']
+        with self.assertRaises(RuntimeError):
+            verify_certified_history({'certified_history': original}, 'managed-node')
+
+    def test_managed_startup_requires_actual_results_for_the_selected_protocol(self):
+        history = certified_sample('managed-node')
+        original = managed_sample(history)
+        observations = {'certified_history': history, 'managed_startup': original}
+        verify_managed_startup(observations, 'managed-node')
+        for field, replacement in (('protocol', 'another protocol'), ('engines_joined', 1),
+                                   ('same_listener', False), ('next_generation', 2),
+                                   ('competing_writer_rejected', False)):
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'managed startup evidence'):
+                verify_managed_startup(dict(observations, managed_startup={**original, field: replacement}), 'managed-node')
+        with self.assertRaisesRegex(RuntimeError, 'managed startup evidence'):
+            verify_managed_startup({'certified_history': history}, 'managed-node')
+        with self.assertRaisesRegex(RuntimeError, 'unmanaged qualification'):
+            verify_managed_startup(observations, 'k4-node')
 
     def test_k4_execution_rejects_missing_certified_evidence(self):
         self.observations['executors'][1]['graph'] = 'observer'

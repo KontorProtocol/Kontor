@@ -16,7 +16,8 @@ use super::{ComponentCache, Linkers, Runtime};
 
 use super::ownership::adapter::{ExecutorSession, SessionFactory};
 use crate::{
-    database::connection::new_connection, protocol::coordinator::selection::ExecutorVersion,
+    database::connection::new_read_only_connection,
+    protocol::coordinator::selection::ExecutorVersion,
 };
 
 #[cfg(test)]
@@ -89,12 +90,9 @@ impl managed::Manager for LinkedManager {
     type Error = RuntimeError;
 
     async fn create(&self) -> Result<Self::Type, Self::Error> {
-        let conn = new_connection(&self.data_dir, &self.filename)
+        let conn = new_read_only_connection(&self.data_dir, &self.filename)
             .await
             .map_err(|error| RuntimeError::DatabaseConnection(error.to_string()))?;
-        conn.query("PRAGMA query_only = ON;", ())
-            .await
-            .map_err(|error| RuntimeError::CreationFailed(error.to_string()))?;
         let factory = self.factory.clone();
         let construction_conn = conn.clone();
         // Retain the physical connection in the task if the pool cancels create.
@@ -161,7 +159,7 @@ impl managed::Manager for Manager {
     type Error = RuntimeError;
 
     async fn create(&self) -> Result<Self::Type, Self::Error> {
-        let conn = new_connection(&self.data_dir, &self.filename)
+        let conn = new_read_only_connection(&self.data_dir, &self.filename)
             .await
             .map_err(|e| RuntimeError::DatabaseConnection(e.to_string()))?;
         // `new_read_only` pins the connection `query_only` — this pool serves only
@@ -249,6 +247,7 @@ pub(crate) fn new_linked(
 mod tests {
     use super::*;
     use crate::config::DEFAULT_VIEW_GAS_LIMIT;
+    use crate::database::connection::new_connection;
     use crate::database::queries::{footprint_cache_get, footprint_cache_set, insert_block};
     use crate::runtime::MAX_UNTRUSTED_GAS_LIMIT;
     use crate::runtime::Storage;
@@ -272,6 +271,8 @@ mod tests {
             custom, DEFAULT_VIEW_GAS_LIMIT,
             "test needs a non-default cap"
         );
+
+        let _writer = new_connection(dir.path(), "view_cap.db").await?;
 
         let pool = Manager::new(
             dir.path().to_path_buf(),
@@ -316,9 +317,8 @@ mod tests {
     // must NOT be discarded.
     #[tokio::test]
     async fn recycle_resets_leaked_transaction_before_reuse() -> anyhow::Result<()> {
-        use deadpool::managed::{Manager as _, Metrics};
-
         let dir = TempDir::new()?;
+        let _writer = new_connection(dir.path(), "recycle.db").await?;
         let manager = Manager::new(
             dir.path().to_path_buf(),
             "recycle.db".into(),
@@ -360,6 +360,7 @@ mod tests {
     #[tokio::test]
     async fn recycle_clears_leaked_cursor_that_pinned_the_snapshot() -> anyhow::Result<()> {
         let dir = TempDir::new()?;
+        let writer = new_connection(dir.path(), "leak.db").await?;
         let manager = Manager::new(
             dir.path().to_path_buf(),
             "leak.db".into(),
@@ -370,7 +371,6 @@ mod tests {
 
         // Seed via a separate writer connection: a block (FK), contract_state rows for
         // the cursor to stream, and a footprint row to read back.
-        let writer = new_connection(dir.path(), "leak.db").await?;
         let signer = 1u64;
         insert_block(
             &writer,

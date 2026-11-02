@@ -1,0 +1,230 @@
+use anyhow::Result;
+use testlib::*;
+use tracing::info;
+
+#[path = "compose_tests/mod.rs"]
+#[allow(dead_code)]
+mod compose_tests;
+
+use compose_tests::commit_reveal::test_commit_reveal;
+use compose_tests::commit_reveal_random_keypair::test_commit_reveal_ordinals;
+use compose_tests::compose_api::{
+    test_compose, test_compose_all_fields, test_compose_duplicate_address_and_duplicate_utxo,
+    test_compose_insufficient_funds, test_compose_invalid_address, test_compose_missing_params,
+    test_compose_nonexistent_utxo, test_compose_param_bounds_and_fee_rate,
+    test_reveal_with_op_return_mempool_accept,
+};
+use compose_tests::compose_commit_unit::test_compose_commit_psbt_inputs_have_metadata;
+use compose_tests::compose_helpers::{
+    test_build_tap_script_address_type_is_p2tr,
+    test_build_tap_script_and_script_address_empty_data_errs,
+    test_build_tap_script_and_script_address_multi_push_and_structure,
+    test_build_tap_script_chunk_boundaries_push_count,
+    test_compose_reveal_op_return_size_validation,
+    test_estimate_participant_commit_fees_change_output_difference,
+    test_estimate_participant_commit_fees_deterministic,
+    test_estimate_participant_commit_fees_does_not_modify_base_tx,
+    test_estimate_participant_commit_fees_empty_utxos,
+    test_estimate_participant_commit_fees_fee_rate_scaling,
+    test_estimate_participant_commit_fees_high_fee_rate,
+    test_estimate_participant_commit_fees_input_vsize_delta,
+    test_estimate_participant_commit_fees_many_utxos,
+    test_estimate_participant_commit_fees_minimum_fee_rate,
+    test_estimate_participant_commit_fees_multiple_utxos,
+    test_estimate_participant_commit_fees_output_vsize,
+    test_estimate_participant_commit_fees_single_utxo,
+    test_estimate_participant_commit_fees_with_existing_base_tx,
+    test_estimate_participant_commit_fees_with_real_utxos,
+    test_select_utxos_for_commit_change_above_dust, test_select_utxos_for_commit_change_below_dust,
+    test_select_utxos_for_commit_deterministic,
+    test_select_utxos_for_commit_edge_case_change_equals_envelope,
+    test_select_utxos_for_commit_empty_utxos_errors,
+    test_select_utxos_for_commit_envelope_affects_change_threshold,
+    test_select_utxos_for_commit_exact_amount_no_change,
+    test_select_utxos_for_commit_fee_rate_affects_selection,
+    test_select_utxos_for_commit_insufficient_with_fees,
+    test_select_utxos_for_commit_many_small_utxos,
+    test_select_utxos_for_commit_multiple_utxos_selects_minimum,
+    test_select_utxos_for_commit_returns_correct_subset,
+    test_select_utxos_for_commit_script_output_value_affects_selection,
+    test_select_utxos_for_commit_selects_in_order,
+    test_select_utxos_for_commit_single_utxo_insufficient,
+    test_select_utxos_for_commit_single_utxo_sufficient,
+    test_select_utxos_for_commit_with_existing_base_tx,
+    test_select_utxos_for_commit_with_real_utxo,
+};
+use compose_tests::legacy_commit_reveal_p2wsh::test_legacy_commit_reveal_p2wsh;
+// legacy_segwit tests skipped — need identity_p2wpkh which requires admin funding
+// use compose_tests::legacy_segwit_envelope::*;
+// use compose_tests::legacy_segwit_swap::*;
+use compose_tests::legacy_taproot_envelope::{
+    test_legacy_taproot_envelope_psbt_inscription,
+    test_legacy_taproot_inscription_with_wrong_internal_key_without_checksig,
+    test_legacy_taproot_inscription_without_checksig,
+    test_legacy_taproot_inscription_wrong_internal_key,
+    test_legacy_tapscript_inscription_invalid_token_data,
+};
+use compose_tests::legacy_taproot_swap::{
+    test_legacy_taproot_swap, test_taproot_swap_psbt_with_incorrect_prefix,
+    test_taproot_swap_with_long_witness_stack, test_taproot_swap_with_wrong_token,
+    test_taproot_swap_with_wrong_token_amount, test_taproot_swap_without_control_block,
+    test_taproot_swap_without_tapscript, test_taproot_swap_without_token_balance,
+};
+use compose_tests::multi_psbt_integration::test_portal_coordinated_commit_reveal_flow_integration;
+use compose_tests::multi_psbt_security::{
+    test_async_node_sign_and_merge_flows, test_commit_outputs_whitelist_including_portal,
+    test_commit_psbt_security_invariants,
+    test_commit_shortfall_is_offset_by_reveal_surplus_after_signing, test_inputs_sequences_are_rbf,
+    test_portal_reveal_fairness_base_plus_witness, test_pre_sign_estimated_commit_fee_is_covered,
+    test_psbt_hygiene_and_witness_utxo_presence, test_reveal_outputs_whitelist_and_counts,
+    test_reveal_psbt_security_invariants, test_script_address_hrp_across_networks,
+    test_script_address_hrp_matches_network,
+    test_script_output_funds_dust_plus_reveal_fee_estimate,
+    test_sighash_default_encoding_for_signatures,
+    test_tap_internal_key_set_on_commit_and_reveal_inputs,
+    test_tapscript_builder_rejects_empty_data,
+    test_tapscript_prefix_structure_pubkey_then_op_checksig,
+    test_witness_stack_shapes_commit_and_reveal,
+};
+use compose_tests::multi_psbt_tx_validation::{
+    test_node_cannot_steal_in_reveal_rejected, test_portal_cannot_steal_change_rejected,
+    test_portal_reorders_commit_inputs_before_sign_rejected,
+    test_pre_sign_node_refuses_on_reveal_output_remap,
+    test_pre_sign_node_refuses_on_underfunded_script_output,
+    test_reordering_commit_inputs_rejected, test_reordering_commit_outputs_rejected,
+};
+use compose_tests::regtest_commit_reveal::test_taproot_transaction_regtest;
+
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
+async fn test_compose_regtest() -> Result<()> {
+    let reg_tester = runtime.reg_tester().unwrap();
+
+    info!("commit_reveal_random_keypair");
+    test_commit_reveal_ordinals(&mut reg_tester.clone()).await?;
+
+    info!("commit_reveal");
+    test_commit_reveal(&mut reg_tester.clone()).await?;
+
+    info!("compose_commit_unit");
+    test_compose_commit_psbt_inputs_have_metadata(&mut reg_tester.clone()).await?;
+
+    info!("compose_helpers");
+    test_build_tap_script_and_script_address_empty_data_errs(&mut reg_tester.clone()).await?;
+    test_build_tap_script_and_script_address_multi_push_and_structure(&mut reg_tester.clone())
+        .await?;
+    test_build_tap_script_address_type_is_p2tr(&mut reg_tester.clone()).await?;
+    test_compose_reveal_op_return_size_validation(&mut reg_tester.clone()).await?;
+    test_build_tap_script_chunk_boundaries_push_count(&mut reg_tester.clone()).await?;
+
+    info!("estimate_participant_commit_fees");
+    test_estimate_participant_commit_fees_empty_utxos();
+    test_estimate_participant_commit_fees_single_utxo();
+    test_estimate_participant_commit_fees_multiple_utxos();
+    test_estimate_participant_commit_fees_fee_rate_scaling();
+    test_estimate_participant_commit_fees_with_existing_base_tx();
+    test_estimate_participant_commit_fees_deterministic();
+    test_estimate_participant_commit_fees_does_not_modify_base_tx();
+    test_estimate_participant_commit_fees_minimum_fee_rate();
+    test_estimate_participant_commit_fees_high_fee_rate();
+    test_estimate_participant_commit_fees_many_utxos();
+    test_estimate_participant_commit_fees_change_output_difference();
+    test_estimate_participant_commit_fees_input_vsize_delta();
+    test_estimate_participant_commit_fees_output_vsize();
+    test_estimate_participant_commit_fees_with_real_utxos(&mut reg_tester.clone()).await?;
+
+    info!("select_utxos_for_commit");
+    test_select_utxos_for_commit_empty_utxos_errors();
+    test_select_utxos_for_commit_single_utxo_sufficient();
+    test_select_utxos_for_commit_single_utxo_insufficient();
+    test_select_utxos_for_commit_multiple_utxos_selects_minimum();
+    test_select_utxos_for_commit_selects_in_order();
+    test_select_utxos_for_commit_change_above_dust();
+    test_select_utxos_for_commit_change_below_dust();
+    test_select_utxos_for_commit_fee_rate_affects_selection();
+    test_select_utxos_for_commit_script_output_value_affects_selection();
+    test_select_utxos_for_commit_with_existing_base_tx();
+    test_select_utxos_for_commit_returns_correct_subset();
+    test_select_utxos_for_commit_exact_amount_no_change();
+    test_select_utxos_for_commit_many_small_utxos();
+    test_select_utxos_for_commit_envelope_affects_change_threshold();
+    test_select_utxos_for_commit_deterministic();
+    test_select_utxos_for_commit_insufficient_with_fees();
+    test_select_utxos_for_commit_edge_case_change_equals_envelope();
+    test_select_utxos_for_commit_with_real_utxo(&mut reg_tester.clone()).await?;
+
+    info!("legacy_taproot_envelope");
+    test_legacy_taproot_envelope_psbt_inscription(&mut reg_tester.clone()).await?;
+    test_legacy_taproot_inscription_without_checksig(&mut reg_tester.clone()).await?;
+    test_legacy_taproot_inscription_with_wrong_internal_key_without_checksig(
+        &mut reg_tester.clone(),
+    )
+    .await?;
+    test_legacy_taproot_inscription_wrong_internal_key(&mut reg_tester.clone()).await?;
+    test_legacy_tapscript_inscription_invalid_token_data(&mut reg_tester.clone()).await?;
+
+    info!("legacy_taproot_swap");
+    test_legacy_taproot_swap(&mut reg_tester.clone()).await?;
+    test_taproot_swap_without_tapscript(&mut reg_tester.clone()).await?;
+    test_taproot_swap_without_control_block(&mut reg_tester.clone()).await?;
+    test_taproot_swap_with_long_witness_stack(&mut reg_tester.clone()).await?;
+    test_taproot_swap_psbt_with_incorrect_prefix(&mut reg_tester.clone()).await?;
+    test_taproot_swap_with_wrong_token_amount(&mut reg_tester.clone()).await?;
+    test_taproot_swap_without_token_balance(&mut reg_tester.clone()).await?;
+    test_taproot_swap_with_wrong_token(&mut reg_tester.clone()).await?;
+
+    info!("multi_psbt_integration");
+    test_portal_coordinated_commit_reveal_flow_integration(&mut reg_tester.clone()).await?;
+
+    info!("multi_psbt_security");
+    test_commit_psbt_security_invariants(&mut reg_tester.clone()).await?;
+    test_reveal_psbt_security_invariants(&mut reg_tester.clone()).await?;
+    test_inputs_sequences_are_rbf(&mut reg_tester.clone()).await?;
+    test_commit_outputs_whitelist_including_portal(&mut reg_tester.clone()).await?;
+    test_script_address_hrp_matches_network(&mut reg_tester.clone()).await?;
+    test_portal_reveal_fairness_base_plus_witness(&mut reg_tester.clone()).await?;
+    test_psbt_hygiene_and_witness_utxo_presence(&mut reg_tester.clone()).await?;
+    test_tapscript_prefix_structure_pubkey_then_op_checksig(&mut reg_tester.clone()).await?;
+    test_tapscript_builder_rejects_empty_data(&mut reg_tester.clone()).await?;
+    test_async_node_sign_and_merge_flows(&mut reg_tester.clone()).await?;
+    test_sighash_default_encoding_for_signatures(&mut reg_tester.clone()).await?;
+    test_reveal_outputs_whitelist_and_counts(&mut reg_tester.clone()).await?;
+    test_script_output_funds_dust_plus_reveal_fee_estimate(&mut reg_tester.clone()).await?;
+    test_pre_sign_estimated_commit_fee_is_covered(&mut reg_tester.clone()).await?;
+    test_commit_shortfall_is_offset_by_reveal_surplus_after_signing(&mut reg_tester.clone())
+        .await?;
+    test_tap_internal_key_set_on_commit_and_reveal_inputs(&mut reg_tester.clone()).await?;
+    test_witness_stack_shapes_commit_and_reveal(&mut reg_tester.clone()).await?;
+    test_script_address_hrp_across_networks(&mut reg_tester.clone()).await?;
+
+    info!("multi_psbt_tx_validation");
+    test_pre_sign_node_refuses_on_underfunded_script_output(&mut reg_tester.clone()).await?;
+    test_pre_sign_node_refuses_on_reveal_output_remap(&mut reg_tester.clone()).await?;
+    test_reordering_commit_inputs_rejected(&mut reg_tester.clone()).await?;
+    test_reordering_commit_outputs_rejected(&mut reg_tester.clone()).await?;
+    test_portal_cannot_steal_change_rejected(&mut reg_tester.clone()).await?;
+    test_node_cannot_steal_in_reveal_rejected(&mut reg_tester.clone()).await?;
+    test_portal_reorders_commit_inputs_before_sign_rejected(&mut reg_tester.clone()).await?;
+
+    info!("regtest_commit_reveal");
+    test_taproot_transaction_regtest(&mut reg_tester.clone()).await?;
+
+    info!("legacy_commit_reveal_p2wsh");
+    test_legacy_commit_reveal_p2wsh(&mut reg_tester.clone()).await?;
+
+    // legacy_segwit tests skipped — need identity_p2wpkh which requires admin funding
+    // info!("legacy_segwit_envelope");
+    // info!("legacy_segwit_swap");
+
+    info!("compose_api");
+    test_compose(&mut reg_tester.clone()).await?;
+    test_compose_all_fields(&mut reg_tester.clone()).await?;
+    test_compose_nonexistent_utxo(&mut reg_tester.clone()).await?;
+    test_compose_invalid_address(&mut reg_tester.clone()).await?;
+    test_compose_insufficient_funds(&mut reg_tester.clone()).await?;
+    test_compose_missing_params(&mut reg_tester.clone()).await?;
+    test_compose_duplicate_address_and_duplicate_utxo(&mut reg_tester.clone()).await?;
+    test_compose_param_bounds_and_fee_rate(&mut reg_tester.clone()).await?;
+    test_reveal_with_op_return_mempool_accept(&mut reg_tester.clone()).await?;
+
+    Ok(())
+}

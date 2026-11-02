@@ -111,7 +111,15 @@ K2b adds `--build-executors` and `--build-node` to the same builder. These modes
 use production recipes independently of the proof recipes. The executor contains
 the actual retained runtime, host bindings, semantic policy and dependencies.
 The separate `protocol-bundles/node` workspace owns node services and physical
-storage, and its resolved graph must not contain Wasmtime or an executor crate.
+storage, and its resolved graph must not contain Wasmtime, an executor crate or
+one of the independently built consensus crates.
+
+The K5 builder defaults to the `managed-node` link set: retained `first` and
+current `observer` executors, plus independent `consensus-first` and
+`consensus-second` graphs. It enables managed startup in the daemon. The earlier
+link sets remain explicit qualification configurations, not a promise to support
+intermediate development databases. Executor and consensus roles are recorded
+separately, so their shared `first` label cannot alias native ownership or evidence.
 
 The production recipes `executor-first` and `executor-second` build the actual
 P1 implementation against Wasmtime `51.0.0-kontor.2` and `51.0.0-kontor.3`,
@@ -129,7 +137,7 @@ leave that optional host dependency disabled.
 Kontor binary, injects the staged facade into the node library, supplies its
 dependency search paths to both node compiler invocations, and checks native
 ownership in the final executable. A content-keyed workspace compiler wrapper
-makes Cargo rebuild the node when externally staged executor inputs change,
+makes Cargo rebuild the node when externally staged executor or consensus inputs change,
 without invalidating every node dependency. The wrapper captures the binary's
 codegen objects, which join the current Cargo archive inventory as concrete
 node-owned inputs to the audit.
@@ -190,13 +198,15 @@ the binary. `node-build.json` records the installed path and hash. A plain
 it does not establish retained dependency isolation.
 
 The Docker `builder` stage invokes the same Python builder and installs that
-audited output into the runtime image. Its `cacher` stage fetches the three locked
+audited output into the runtime image. Its `cacher` stage fetches the locked
 graphs; it no longer compiles a unified workspace whose artifacts the isolated
 graphs cannot reuse. The opt-in `protocol-bundle-qualification` image uses
-`tools/protocol-bundles/qualify_node.py` to build and execute both real graphs.
+`tools/protocol-bundles/qualify_node.py` to build the managed node and execute both
+real executor graphs. Managed qualification also compiles interface controls
+against both consensus libraries and runs the actual node adapter tests.
 The runner rejects stale or changed binaries, missing graphs/cases, mismatched
 observations and subprocess failures, and records raw output hashes with the
-node build report hash in `executors/node-execution.json`. Its 300-second timeout
+node build report hash in `executors/managed-node/node-execution.json`. Its 300-second timeout
 is a test timeout, not a Kontor execution cutoff. Full release-image and platform
 qualification is still required before the phase can merge.
 

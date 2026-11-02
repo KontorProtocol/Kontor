@@ -10,9 +10,17 @@ use malachitebft_app_channel::{
     SyncContext, WalContext,
 };
 
+use super::transport::Engine;
 use crate::consensus::codec::ProtobufCodec;
 use crate::consensus::signing::{Ed25519Provider, PrivateKey};
 use crate::consensus::{Address, Ctx};
+
+#[cfg(kontor_managed)]
+mod managed;
+#[cfg(kontor_managed)]
+pub use managed::NodeCoordinator;
+#[cfg(all(kontor_managed, feature = "protocol-qualification"))]
+pub(crate) use managed::qualification::run as qualify_managed_startup;
 
 pub struct EngineConfig {
     pub private_key: PrivateKey,
@@ -50,14 +58,28 @@ impl NodeConfig for MalachiteNodeConfig {
 }
 
 pub struct EngineOutput {
-    pub channels: Channels<Ctx>,
-    pub signing_provider: Ed25519Provider,
+    pub(super) engine: Engine,
     pub address: Address,
+}
+
+pub struct LegacyEngineOutput {
+    pub channels: Channels<Ctx>,
     pub _handle: EngineHandle,
+    pub address: Address,
+    signer: Ed25519Provider,
+}
+
+impl From<LegacyEngineOutput> for EngineOutput {
+    fn from(output: LegacyEngineOutput) -> Self {
+        Self {
+            engine: Engine::legacy(output.channels, output._handle, output.signer),
+            address: output.address,
+        }
+    }
 }
 
 /// Start the Malachite consensus engine and return channels + metadata.
-pub async fn start(config: EngineConfig) -> Result<EngineOutput> {
+pub async fn start(config: EngineConfig) -> Result<LegacyEngineOutput> {
     let public_key = config.private_key.public_key();
     let address = Address::from_public_key(&public_key);
     let keypair = Keypair::ed25519_from_bytes(config.private_key.inner().to_bytes())
@@ -125,10 +147,10 @@ pub async fn start(config: EngineConfig) -> Result<EngineOutput> {
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    Ok(EngineOutput {
+    Ok(LegacyEngineOutput {
         channels,
-        signing_provider: app_provider,
-        address,
         _handle: handle,
+        address,
+        signer: app_provider,
     })
 }

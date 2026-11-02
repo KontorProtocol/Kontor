@@ -88,7 +88,7 @@ async fn pending_recognition_keeps_blocks_and_requests_live_with_channel_backpre
 {
     let (mut trial, _directory) = fixture().await?;
     let anchor_hash = trial.execution.last_hash.unwrap();
-    let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
+    let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
     let mut raw = genesis_block(Network::Regtest).txdata.remove(0);
     raw.input[0].previous_output = OutPoint::new(raw.compute_txid(), 0);
     let shutdown = Shutdown::new();
@@ -156,7 +156,7 @@ async fn pending_recognition_keeps_blocks_and_requests_live_with_channel_backpre
 async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Result<()> {
     let (mut trial, _directory) = fixture().await?;
     let anchor_hash = trial.execution.last_hash.unwrap();
-    let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
+    let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
     let old = genesis_block(Network::Regtest).txdata.remove(0);
     let mut current = old.clone();
     current.input[0].witness = Witness::from_slice(&[b"replacement".as_slice()]);
@@ -212,7 +212,7 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
 async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Result<()> {
     let (mut trial, _directory) = fixture().await?;
     let anchor_hash = trial.execution.last_hash.unwrap();
-    let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
+    let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
     let raw = genesis_block(Network::Regtest).txdata.remove(0);
     trial.consensus.mempool.insert(recognized(raw.clone()));
     let before = trial.preparation_selection().await?;
@@ -272,7 +272,7 @@ async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Resu
 async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()> {
     let (mut trial, _directory) = fixture().await?;
     let anchor_hash = trial.execution.last_hash.unwrap();
-    let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
+    let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
     let raw = genesis_block(Network::Regtest).txdata.remove(0);
     trial.consensus.mempool.insert(recognized(raw.clone()));
     trial
@@ -309,7 +309,7 @@ async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()
 async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -> Result<()> {
     let (mut trial, _directory) = fixture().await?;
     let anchor_hash = trial.execution.last_hash.unwrap();
-    let _engine = StopEngine(trial.consensus.engine_handle.actor.clone());
+    let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
     let raw = genesis_block(Network::Regtest).txdata.remove(0);
     let mut replacement = raw.clone();
     replacement.input[0].witness = Witness::from_slice(&[b"not batchable".as_slice()]);

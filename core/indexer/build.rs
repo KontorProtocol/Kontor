@@ -63,6 +63,7 @@ fn build_protos() {
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(kontor_observer)");
+    println!("cargo:rustc-check-cfg=cfg(kontor_managed)");
     println!("cargo:rustc-check-cfg=cfg(kontor_retained)");
     println!("cargo:rustc-check-cfg=cfg(kontor_linked)");
     println!("cargo:rustc-check-cfg=cfg(kontor_node)");

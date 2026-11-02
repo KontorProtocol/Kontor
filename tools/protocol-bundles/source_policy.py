@@ -9,13 +9,14 @@ import hashlib
 from pathlib import Path
 import re
 
-from provenance import RETAINED_TREES
+from provenance import RETAINED_TREES, consensus_sources
 
 
+# Certified-input enum variants and reading a PID do not take process ownership.
 CONTROL = re.compile(
     r"\b(?:tokio\s*::\s*(?:signal|process)|signal_hook|ctrl_c|"
     r"SIGCHLD|SIGTERM|SIGINT|sigaction|sighandler|"
-    r"Command\s*::|(?:std|tokio)\s*::\s*process\s*::|"
+    r"Command\s*::(?!\s*(?:Block|Batch|Control)\b)|(?:std|tokio)\s*::\s*process\s*::(?!\s*id\b)|"
     r"(?:fork|vfork|posix_spawn|execve|waitpid|signal)\s*\()"
 )
 
@@ -30,7 +31,7 @@ def excluded_module(root, parent, module, guard):
 
 
 def check(root, metadata, *, kind="proof"):
-    if kind not in ("proof", "executor"):
+    if kind not in ("proof", "executor", "consensus"):
         raise RuntimeError(f"unknown graph source kind: {kind}")
     paths = set()
     for package in metadata["packages"]:
@@ -41,6 +42,18 @@ def check(root, metadata, *, kind="proof"):
     if kind == "proof":
         paths.update(path for path in (root / "protocol-bundles/proof").glob("*.rs")
                      if path.name not in ("host.rs", "cross_graph_rejected.rs"))
+    elif kind == "consensus":
+        paths.update(root / relative for relative in consensus_sources(root) if relative.endswith(".rs"))
+        # These node adapters are inventoried for provenance but are not part
+        # of the bundle. Include imported types and their child modules.
+        shared = root / "protocol-bundles/consensus"
+        imported = set()
+        for source in shared.rglob("*.rs"):
+            for relative in re.findall(r'#\[path\s*=\s*"([^"]+)"\]', source.read_text()):
+                imported.add((source.parent / relative).resolve())
+        paths = {path for path in paths if not path.is_relative_to(root / "core/indexer")
+                 or path.resolve() in imported
+                 or any(path.resolve().is_relative_to(source.with_suffix("")) for source in imported)}
     else:
         for relative in RETAINED_TREES:
             paths.update((root / relative).rglob("*.rs"))
@@ -68,6 +81,7 @@ def check(root, metadata, *, kind="proof"):
         raise RuntimeError("empty maintained bundle source-policy inventory")
     return {"maintained_sources": result, "test_only_sources": test_sources, "node_only_sources": node_sources,
             "exceptions": (["node-owned proof/host.rs signals and child reaping"] if kind == "proof" else []) + [
-                           "pinned Wasmtime F1 Unix VM trap handlers and Rayon pool",
                            "pinned Tokio Unix registry pairs without bundle subscribers",
-                           "pinned futures-timer helper and blst crypto-only pool"]}
+                           "pinned futures-timer helper"] + ([] if kind == "consensus" else [
+                           "pinned Wasmtime F1 Unix VM trap handlers and Rayon pool",
+                           "blst crypto-only pool"])}

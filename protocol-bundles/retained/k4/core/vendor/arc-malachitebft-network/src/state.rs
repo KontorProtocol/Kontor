@@ -1,0 +1,1517 @@
+//! Network state management
+
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+
+use libp2p::identify;
+use libp2p::request_response::InboundRequestId;
+use libp2p::Multiaddr;
+use malachitebft_discovery as discovery;
+use malachitebft_discovery::util::strip_peer_id_from_multiaddr;
+use malachitebft_sync as sync;
+
+use crate::behaviour::Behaviour;
+use crate::metrics::Metrics as NetworkMetrics;
+use crate::{Channel, ChannelNames, PeerType, PersistentPeerError};
+use malachitebft_discovery::ConnectionDirection;
+
+/// Public network state dump for external consumers
+#[derive(Clone, Debug)]
+pub struct NetworkStateDump {
+    pub local_node: LocalNodeInfo,
+    pub peers: std::collections::HashMap<libp2p::PeerId, PeerInfo>,
+    pub validator_set: Vec<ValidatorInfo>,
+    pub persistent_peer_ids: Vec<libp2p::PeerId>,
+    pub persistent_peer_addrs: Vec<Multiaddr>,
+}
+
+/// Validator information passed from consensus to network layer
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ValidatorInfo {
+    /// Consensus address as string (for display/metrics and local node validator set matching)
+    pub address: String,
+    /// Public key bytes (for matching validator proofs)
+    pub public_key: Vec<u8>,
+    /// Voting power
+    pub voting_power: u64,
+}
+
+impl ValidatorInfo {
+    /// Returns the address if the public key matches, None otherwise.
+    pub fn address_for_public_key(&self, public_key: &[u8]) -> Option<&str> {
+        if self.public_key == public_key {
+            Some(&self.address)
+        } else {
+            None
+        }
+    }
+}
+
+/// Local node information
+#[derive(Clone, Debug)]
+pub struct LocalNodeInfo {
+    pub moniker: String,
+    pub peer_id: libp2p::PeerId,
+    pub listen_addr: Multiaddr,
+    /// This node's consensus address (if it is configured with validator credentials).
+    ///
+    /// Present if the node has a consensus keypair, even if not currently in the active validator set.
+    /// This is static configuration determined at startup.
+    /// Note: In the future full nodes may not have a consensus address, so this will be None.
+    pub consensus_address: Option<String>,
+    /// Pre-signed validator proof bytes (if this node has validator credentials).
+    ///
+    /// Used for the validator proof protocol to prove validator identity.
+    pub proof_bytes: Option<bytes::Bytes>,
+    /// Whether this node is currently in the active validator set.
+    ///
+    /// Updated dynamically when validator set changes. A node can have `consensus_address = Some(...)`
+    /// but `is_validator = false` if it was removed from the validator set or hasn't joined yet.
+    pub is_validator: bool,
+    /// Whether this node only accepts connections from persistent peers.
+    pub persistent_peers_only: bool,
+    /// Set of topics this node is subscribed to
+    pub subscribed_topics: HashSet<String>,
+}
+
+impl fmt::Display for LocalNodeInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut topics: Vec<&str> = self.subscribed_topics.iter().map(|s| s.as_str()).collect();
+        topics.sort();
+        let topics_str = format!("[{}]", topics.join(","));
+        let address = self.consensus_address.as_deref().unwrap_or("none");
+        let role = if self.is_validator {
+            "validator"
+        } else {
+            "full_node"
+        };
+        let peers_mode = if self.persistent_peers_only {
+            "persistent_only"
+        } else {
+            "open"
+        };
+        write!(
+            f,
+            "{}, {}, {}, {}, {}, {}, {}, me",
+            self.listen_addr, self.moniker, role, self.peer_id, address, topics_str, peers_mode
+        )
+    }
+}
+
+/// Peer information without slot number (for State, which has no cardinality limits)
+#[derive(Clone, Debug)]
+pub struct PeerInfo {
+    pub moniker: String,
+    /// Peer address
+    pub address: Multiaddr,
+    /// Consensus address, set when peer has a verified proof AND is in the validator set.
+    /// Derived from the matching validator in the set.
+    /// Used for display/metrics (shorter than raw public key).
+    pub consensus_address: Option<String>,
+    /// Consensus public key from a verified validator proof.
+    /// Set when a valid proof is received, regardless of validator set membership.
+    /// Used to re-evaluate validator status when the validator set changes.
+    pub consensus_public_key: Option<Vec<u8>>,
+    /// Peer type (validator, persistent, full node)
+    pub peer_type: PeerType,
+    /// Connection direction (outbound or inbound), None if ephemeral
+    pub connection_direction: Option<ConnectionDirection>,
+    /// GossipSub score
+    pub score: f64,
+    pub topics: HashSet<String>, // Set of topics peer is in mesh for (e.g., "/consensus", "/liveness")
+    pub is_explicit: bool,       // Whether this peer is an explicit peer in gossipsub
+}
+
+impl PeerInfo {
+    /// Format peer info with peer_id for logging
+    ///  Address, Moniker, Type, PeerId, ConsensusAddr, Mesh, Dir, Score, Explicit
+    pub fn format_with_peer_id(&self, peer_id: &libp2p::PeerId) -> String {
+        let direction = self.connection_direction.map_or("??", |d| d.as_str());
+        let mut topics: Vec<&str> = self.topics.iter().map(|s| s.as_str()).collect();
+        topics.sort();
+        let topics_str = format!("[{}]", topics.join(","));
+        let peer_type_str = self.peer_type.primary_type_str();
+        let address = self.consensus_address.as_deref().unwrap_or("none");
+        let explicit = if self.is_explicit { "explicit" } else { "-" };
+        format!(
+            "{}, {}, {}, {}, {}, {}, {}, {}, {}",
+            self.address,
+            self.moniker,
+            peer_type_str,
+            peer_id,
+            address,
+            topics_str,
+            direction,
+            self.score as i64,
+            explicit
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct State {
+    pub sync_channels: HashMap<InboundRequestId, sync::ResponseChannel>,
+    pub discovery: discovery::Discovery<Behaviour>,
+    pub persistent_peer_ids: HashSet<libp2p::PeerId>,
+    pub persistent_peer_addrs: Vec<Multiaddr>,
+    /// Latest validator set from consensus
+    pub validator_set: HashSet<ValidatorInfo>,
+    pub(crate) metrics: NetworkMetrics,
+    /// Local node information
+    pub local_node: LocalNodeInfo,
+    /// Whether this node promotes its persistent peers to explicit gossipsub peers.
+    pub(crate) enable_explicit_peering: bool,
+    /// Detailed peer information indexed by PeerId
+    pub peer_info: HashMap<libp2p::PeerId, PeerInfo>,
+    /// Pending verified proofs for peers not yet in peer_info (Identify not received yet).
+    ///
+    /// rust-libp2p does not guarantee Identify runs before other protocols:
+    /// <https://docs.rs/libp2p/latest/libp2p/identify/index.html#important-discrepancies>
+    ///
+    /// If proof verification completes before Identify, we buffer the public_key here
+    /// and apply it when Identify completes and creates the PeerInfo.
+    ///
+    /// Entries are dropped on the peer's last close, and a verdict that arrives
+    /// after that close is not stored (the peer is gone and Identify will not
+    /// complete for this id).
+    pub(crate) pending_verified_proofs: HashMap<libp2p::PeerId, Vec<u8>>,
+}
+
+impl State {
+    // The configured /tcp/0 address must become the actual bound address in dumps.
+    pub fn record_listen_addr(&mut self, addr: Multiaddr) {
+        self.local_node.listen_addr = addr;
+    }
+
+    /// Process a validator set update from consensus.
+    ///
+    /// This method:
+    /// - Updates the validator set
+    /// - Updates local node validator status and metrics
+    /// - Removes peers whose validators were removed from the set
+    /// - Promotes peers whose validators were added back to the set
+    ///
+    /// Returns a list of (peer_id, new_score) for peers whose type changed,
+    /// so the caller can update GossipSub scores.
+    pub(crate) fn process_validator_set_update(
+        &mut self,
+        new_validators: HashSet<ValidatorInfo>,
+    ) -> Vec<(libp2p::PeerId, f64)> {
+        // Store the new validator set
+        self.validator_set = new_validators;
+
+        self.reclassify_local_node();
+
+        // Reclassify peers based on stored proofs against new validator set
+        self.reclassify_peers()
+    }
+
+    /// Re-classify the local node based on the current validator set.
+    fn reclassify_local_node(&mut self) {
+        let was_validator = self.local_node.is_validator;
+        // Update local node status
+        let local_is_validator = self
+            .local_node
+            .consensus_address
+            .as_ref()
+            .map(|addr| self.validator_set.iter().any(|v| &v.address == addr))
+            .unwrap_or(false);
+
+        self.local_node.is_validator = local_is_validator;
+
+        // Log and update metrics for local node status change
+        if was_validator != local_is_validator {
+            tracing::info!(
+                local_is_validator,
+                address = ?self.local_node.consensus_address,
+                "Local node validator status changed"
+            );
+            self.metrics.set_local_node_info(&self.local_node);
+        }
+    }
+
+    /// Reclassify peers based on validator set changes.
+    ///
+    /// For peers with stored proofs (consensus_public_key), re-evaluates validator status
+    /// by checking if their public key matches a validator in the new set.
+    /// Updates consensus_address accordingly (set if in set, cleared if not).
+    ///
+    /// Returns a list of (peer_id, new_score) for peers whose type changed.
+    fn reclassify_peers(&mut self) -> Vec<(libp2p::PeerId, f64)> {
+        let mut changed_peers = Vec::new();
+
+        for (peer_id, peer_info) in self.peer_info.iter_mut() {
+            // Only re-evaluate peers with verified proofs
+            let Some(public_key) = &peer_info.consensus_public_key else {
+                continue;
+            };
+
+            // Look up validator by public key to check membership and get address
+            let validator_address = self
+                .validator_set
+                .iter()
+                .find_map(|v| v.address_for_public_key(public_key));
+
+            let is_in_validator_set = validator_address.is_some();
+
+            let new_type = peer_info
+                .peer_type
+                .with_validator_status(is_in_validator_set);
+
+            // Clone old info for metrics BEFORE updating fields
+            let old_peer_info = peer_info.clone();
+
+            // Update consensus_address: set if in validator set, clear if not
+            peer_info.consensus_address = validator_address.map(|s| s.to_string());
+
+            if let Some(new_score) = apply_peer_type_change(
+                peer_id,
+                peer_info,
+                &old_peer_info,
+                new_type,
+                &mut self.metrics,
+            ) {
+                changed_peers.push((*peer_id, new_score));
+            }
+        }
+
+        changed_peers
+    }
+
+    /// Record that a peer sent a valid proof with the given public key.
+    ///
+    /// The proof's signature has already been verified by the engine. This:
+    /// - Stores the public_key (for future validator set matching)
+    /// - Sets consensus_address if peer is currently in validator set
+    /// - Updates peer_type based on validator set membership
+    ///
+    /// If the peer is not yet in peer_info (Identify not received), the proof is
+    /// buffered in `pending_verified_proofs` and applied when Identify completes.
+    ///
+    /// Returns Some(new_score) if the peer exists and needs a GossipSub score update,
+    /// None if the peer is unknown/buffered or unchanged.
+    pub(crate) fn record_verified_proof(
+        &mut self,
+        peer_id: &libp2p::PeerId,
+        public_key: Vec<u8>,
+    ) -> Option<f64> {
+        let Some(peer_info) = self.peer_info.get_mut(peer_id) else {
+            // Peer not in peer_info yet (Identify not received).
+            // Buffer the proof to apply when Identify completes.
+            // Last-close removes this entry. Callers must only record while the peer
+            // is still connected so a post-close verdict is not stored.
+            self.pending_verified_proofs.insert(*peer_id, public_key);
+            return None;
+        };
+
+        // Look up the validator by public key to get their address
+        let validator_address = self
+            .validator_set
+            .iter()
+            .find_map(|v| v.address_for_public_key(&public_key));
+
+        let is_in_validator_set = validator_address.is_some();
+
+        let new_type = peer_info
+            .peer_type
+            .with_validator_status(is_in_validator_set);
+
+        // Clone old info for metrics before updating fields
+        let old_peer_info = peer_info.clone();
+
+        // Store the public key from the verified proof
+        peer_info.consensus_public_key = Some(public_key);
+
+        // Set consensus_address only if in validator set (for display/metrics)
+        peer_info.consensus_address = validator_address.map(|s| s.to_string());
+
+        apply_peer_type_change(
+            peer_id,
+            peer_info,
+            &old_peer_info,
+            new_type,
+            &mut self.metrics,
+        )
+    }
+
+    pub(crate) fn new(
+        discovery: discovery::Discovery<Behaviour>,
+        persistent_peer_addrs: Vec<Multiaddr>,
+        local_node: LocalNodeInfo,
+        metrics: NetworkMetrics,
+        enable_explicit_peering: bool,
+    ) -> Self {
+        // Extract PeerIds from persistent peer Multiaddrs if they contain /p2p/<peer_id>
+        let persistent_peer_ids = persistent_peer_addrs
+            .iter()
+            .filter_map(extract_peer_id_from_multiaddr)
+            .collect();
+
+        Self {
+            sync_channels: Default::default(),
+            discovery,
+            persistent_peer_ids,
+            persistent_peer_addrs,
+            validator_set: HashSet::new(),
+            metrics,
+            local_node,
+            enable_explicit_peering,
+            peer_info: HashMap::new(),
+            pending_verified_proofs: HashMap::new(),
+        }
+    }
+
+    /// Check if a peer is persistent, by PeerId or by connection address.
+    fn is_persistent_peer(
+        &self,
+        peer_id: &libp2p::PeerId,
+        connection_id: libp2p::swarm::ConnectionId,
+    ) -> bool {
+        self.persistent_peer_ids.contains(peer_id)
+            || self.is_persistent_peer_by_address(connection_id)
+    }
+
+    /// Remove a peer identity learned from a transport-only persistent address.
+    /// Identities embedded in configured addresses remain valid while disconnected.
+    pub(crate) fn remove_learned_persistent_peer_id(&mut self, peer_id: &libp2p::PeerId) {
+        let is_configured_by_id = self
+            .persistent_peer_addrs
+            .iter()
+            .filter_map(extract_peer_id_from_multiaddr)
+            .any(|configured_peer_id| configured_peer_id == *peer_id);
+
+        if !is_configured_by_id {
+            self.persistent_peer_ids.remove(peer_id);
+        }
+    }
+
+    /// Check if a peer is a persistent peer by matching its addresses against persistent peer addresses
+    ///
+    /// For inbound connections, we use the actual remote address from the connection endpoint
+    /// to prevent address spoofing attacks where a malicious peer could claim to be a
+    /// persistent peer by faking its `listen_addrs` in the Identify message.
+    fn is_persistent_peer_by_address(&self, connection_id: libp2p::swarm::ConnectionId) -> bool {
+        // Use actual remote address for both inbound and outbound connections
+        // This prevents address spoofing for inbound, and for outbound it's the address we dialed
+        let Some(conn_info) = self.discovery.connections.get(&connection_id) else {
+            return false;
+        };
+
+        let remote_addr_without_p2p = strip_peer_id_from_multiaddr(&conn_info.remote_addr);
+
+        for persistent_addr in &self.persistent_peer_addrs {
+            let persistent_addr_without_p2p = strip_peer_id_from_multiaddr(persistent_addr);
+
+            if remote_addr_without_p2p == persistent_addr_without_p2p {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Update peer information from gossipsub (scores and mesh membership)
+    /// Also updates metrics based on the updated State
+    pub(crate) fn update_peer_info(
+        &mut self,
+        gossipsub: &crate::behaviour::GossipsubBehaviour,
+        channels: &[Channel],
+        channel_names: &ChannelNames,
+    ) {
+        // Build a map of peer_id to the set of topics they're in
+        let mut peer_topics: HashMap<libp2p::PeerId, HashSet<String>> = HashMap::new();
+
+        for channel in channels {
+            let topic = channel.to_gossipsub_topic(channel_names);
+            let topic_hash = topic.hash();
+            let topic_str = channel.as_str(channel_names).to_string();
+
+            for peer_id in gossipsub.mesh_peers(&topic_hash) {
+                peer_topics
+                    .entry(*peer_id)
+                    .or_default()
+                    .insert(topic_str.clone());
+            }
+        }
+
+        // Update score and topics for all peers in State
+        for (peer_id, peer_info) in self.peer_info.iter_mut() {
+            // Use GossipSub score if available, otherwise use internal score based on peer type
+            let new_score = gossipsub.peer_score(peer_id).unwrap_or(peer_info.score);
+            let new_topics = peer_topics.get(peer_id).cloned().unwrap_or_default();
+
+            // Update metrics before updating peer_info.topics
+            // (metrics needs to compare old vs new topics)
+            let _ = self.metrics.update_peer_metrics(
+                peer_id,
+                peer_info,
+                new_score,
+                Some(new_topics.clone()),
+            );
+
+            // Now update peer information in State
+            peer_info.score = new_score;
+            peer_info.topics = new_topics;
+        }
+    }
+
+    /// Update the peer information after Identify completes and compute peer score.
+    ///
+    /// This method:
+    /// - Determines the peer type (validator, persistent, etc.)
+    /// - Records peer info in state and metrics
+    /// - Computes the GossipSub score
+    ///
+    /// Returns the score to set on the peer in GossipSub.
+    pub(crate) fn update_peer(
+        &mut self,
+        peer_id: libp2p::PeerId,
+        connection_id: libp2p::swarm::ConnectionId,
+        info: &identify::Info,
+    ) -> f64 {
+        // Determine peer type using actual remote address for inbound connections
+        let is_persistent = self.is_persistent_peer(&peer_id, connection_id);
+        if is_persistent {
+            self.persistent_peer_ids.insert(peer_id);
+        }
+
+        // Use actual connection address (dialed for outbound, source for inbound)
+        // This is more reliable than self-reported listen_addrs from identify
+        let address = self
+            .discovery
+            .connections
+            .get(&connection_id)
+            .map(|conn| conn.remote_addr.clone())
+            .unwrap_or_else(|| {
+                // Fallback to identify listen_addrs if connection info not available
+                info.listen_addrs
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "/ip4/0.0.0.0/tcp/0".parse().expect("valid multiaddr"))
+            });
+
+        // Parse agent_version to extract moniker
+        let agent_info = crate::utils::parse_agent_version(&info.agent_version);
+
+        // Determine connection direction from discovery layer
+        let connection_direction = if self.discovery.is_outbound_peer(&peer_id) {
+            Some(ConnectionDirection::Outbound)
+        } else if self.discovery.is_inbound_peer(&peer_id) {
+            Some(ConnectionDirection::Inbound)
+        } else {
+            None // ephemeral connection
+        };
+
+        // If peer already exists (additional connection), update Identify-provided fields.
+        // Keep existing state (topics) since they never fully disconnected.
+        if let Some(existing) = self.peer_info.get_mut(&peer_id) {
+            let old_peer_info = existing.clone();
+            existing.moniker = agent_info.moniker;
+            // Prefer outbound (dialed) addresses over inbound
+            if connection_direction == Some(ConnectionDirection::Outbound)
+                || existing.connection_direction != Some(ConnectionDirection::Outbound)
+            {
+                existing.address = address;
+                existing.connection_direction = connection_direction;
+            }
+            // Update persistent flag (may differ per connection, e.g. inbound ephemeral
+            // port vs outbound dialed address), but preserve validator status from proof protocol.
+            existing.peer_type = existing.peer_type.with_persistent(is_persistent);
+            existing.score = crate::peer_scoring::get_peer_score(existing.peer_type);
+
+            self.metrics
+                .update_peer_labels(&peer_id, &old_peer_info, existing);
+            return existing.score;
+        }
+
+        // New peer - create entry (validator status starts as false, set by proof protocol)
+        let peer_type = PeerType::new(is_persistent, false);
+        let mut score = crate::peer_scoring::get_peer_score(peer_type);
+        let peer_info = PeerInfo {
+            address,
+            consensus_public_key: None,
+            consensus_address: None,
+            moniker: agent_info.moniker,
+            peer_type,
+            connection_direction,
+            score,
+            topics: Default::default(),
+            is_explicit: false,
+        };
+
+        // Record peer information in metrics (subject to 100 slot limit)
+        self.metrics.record_new_peer(&peer_id, &peer_info);
+
+        // Store in State
+        self.peer_info.insert(peer_id, peer_info);
+
+        // Check for pending verified proof (proof verification completed before Identify).
+        // If found, apply it now that PeerInfo exists.
+        if let Some(public_key) = self.pending_verified_proofs.remove(&peer_id) {
+            if let Some(new_score) = self.record_verified_proof(&peer_id, public_key) {
+                score = new_score;
+            }
+        }
+
+        score
+    }
+
+    /// Format the peer information for logging (scrapable format):
+    ///  Address, Moniker, Type, PeerId, ConsensusAddr, Mesh, Dir, Score, Explicit
+    pub fn format_peer_info(&self) -> String {
+        let mut lines = Vec::new();
+
+        // Header
+        lines.push("Address, Moniker, Type, PeerId, ConsensusAddr, Mesh, Dir, Score".to_string());
+
+        // Local node info marked with "me"
+        lines.push(format!("{}", self.local_node));
+
+        // Sort peers by moniker
+        let mut peers: Vec<_> = self.peer_info.iter().collect();
+        peers.sort_by(|a, b| a.1.moniker.cmp(&b.1.moniker));
+
+        for (peer_id, peer_info) in peers {
+            lines.push(peer_info.format_with_peer_id(peer_id));
+        }
+
+        lines.join("\n")
+    }
+
+    /// Add a persistent peer as an explicit peer in gossipsub.
+    ///
+    /// A node always sends and forwards messages to its explicit peers,
+    /// regardless of mesh membership.
+    ///
+    /// No-op if explicit peering is disabled, if `peer_info` is missing
+    /// (peer not yet connected), if the peer is already explicit, if the
+    /// peer is not classified as persistent, or if gossipsub is disabled.
+    pub(crate) fn add_explicit_peer_to_gossipsub(
+        &mut self,
+        swarm: &mut libp2p::Swarm<Behaviour>,
+        peer_id: libp2p::PeerId,
+    ) {
+        if !self.enable_explicit_peering {
+            return;
+        }
+
+        let Some(peer_info) = self.peer_info.get_mut(&peer_id) else {
+            return;
+        };
+
+        if peer_info.peer_type.is_persistent() && !peer_info.is_explicit {
+            if let Some(gossipsub) = swarm.behaviour_mut().gossipsub.as_mut() {
+                gossipsub.add_explicit_peer(&peer_id);
+                self.metrics
+                    .record_explicit_peer(&peer_id, &peer_info.moniker);
+                peer_info.is_explicit = true;
+                tracing::info!("Added persistent peer {peer_id} as explicit peer in gossipsub");
+            }
+        }
+    }
+
+    /// Remove a persistent peer from explicit peers in gossipsub and mark the metric stale.
+    ///
+    /// No-op if explicit peering is disabled, if `peer_info` is missing,
+    /// or if the peer is not currently in the explicit set.
+    pub(crate) fn remove_explicit_peer_from_gossipsub(
+        &mut self,
+        swarm: &mut libp2p::Swarm<Behaviour>,
+        peer_id: &libp2p::PeerId,
+    ) {
+        if !self.enable_explicit_peering {
+            return;
+        }
+
+        let Some(peer_info) = self.peer_info.get_mut(peer_id) else {
+            return;
+        };
+
+        if peer_info.is_explicit {
+            if let Some(gossipsub) = swarm.behaviour_mut().gossipsub.as_mut() {
+                gossipsub.remove_explicit_peer(peer_id);
+                self.metrics
+                    .mark_explicit_peer_stale(peer_id, &peer_info.moniker);
+                peer_info.is_explicit = false;
+                tracing::info!(
+                    "Removed persistent peer {peer_id} from explicit peers in gossipsub"
+                );
+            }
+        }
+    }
+
+    /// Update peer's persistent status, recalculate score, and update GossipSub
+    fn update_peer_persistent_status(
+        peer_id: libp2p::PeerId,
+        peer_info: Option<&mut PeerInfo>,
+        is_persistent: bool,
+        swarm: &mut libp2p::Swarm<Behaviour>,
+    ) {
+        let Some(peer_info) = peer_info else {
+            return;
+        };
+
+        peer_info.peer_type = peer_info.peer_type.with_persistent(is_persistent);
+
+        // Recalculate score
+        let new_score = crate::peer_scoring::get_peer_score(peer_info.peer_type);
+        peer_info.score = new_score;
+
+        // Update GossipSub score
+        if let Some(gossipsub) = swarm.behaviour_mut().gossipsub.as_mut() {
+            gossipsub.set_application_score(&peer_id, new_score);
+        }
+
+        tracing::debug!(
+            %peer_id,
+            %is_persistent,
+            peer_type = ?peer_info.peer_type,
+            "Updated peer persistent status"
+        );
+    }
+
+    /// Add a persistent peer at runtime
+    pub(crate) fn add_persistent_peer(
+        &mut self,
+        addr: Multiaddr,
+        swarm: &mut libp2p::Swarm<Behaviour>,
+    ) -> Result<(), PersistentPeerError> {
+        // Check if already exists
+        if self.persistent_peer_addrs.contains(&addr) {
+            return Err(PersistentPeerError::AlreadyExists);
+        }
+
+        // Extract PeerId from multiaddr if present
+        if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
+            self.persistent_peer_ids.insert(peer_id);
+
+            // Update peer type and score if already connected
+            Self::update_peer_persistent_status(
+                peer_id,
+                self.peer_info.get_mut(&peer_id),
+                true,
+                swarm,
+            );
+
+            // Promote from ephemeral if already connected
+            self.try_prioritize_peer(peer_id);
+
+            // For a peer that is already connected, add it to the gossipsub
+            // explicit-peer set now. For one not yet connected, this is a
+            // no-op; the Identify handler picks it up when the connection
+            // completes.
+            self.add_explicit_peer_to_gossipsub(swarm, peer_id);
+        }
+
+        // Add to persistent peer list
+        self.persistent_peer_addrs.push(addr.clone());
+
+        // Update discovery layer to add this as a bootstrap node
+        self.discovery.add_bootstrap_node(addr.clone());
+
+        // Only dial if the address has a transport component. A peer-only
+        // address (/p2p/<peer_id>) has no network destination to dial.
+        if crate::TransportProtocol::from_multiaddr(&addr).is_some() {
+            if let Err(e) = swarm.dial(addr.clone()) {
+                tracing::warn!(
+                    error = %e,
+                    addr = %addr,
+                    "Failed to dial newly added persistent peer, will retry via discovery"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Remove a persistent peer at runtime
+    pub(crate) fn remove_persistent_peer(
+        &mut self,
+        addr: Multiaddr,
+        swarm: &mut libp2p::Swarm<Behaviour>,
+    ) -> Result<(), PersistentPeerError> {
+        // Check if exists and remove from persistent peer list
+        let Some(pos) = self.persistent_peer_addrs.iter().position(|a| a == &addr) else {
+            return Err(PersistentPeerError::NotFound);
+        };
+
+        self.persistent_peer_addrs.remove(pos);
+
+        // Prefer the stable identity in the configured address because discovery
+        // clears its learned association after the last connection closes.
+        let peer_id = extract_peer_id_from_multiaddr(&addr)
+            .or_else(|| self.discovery.get_peer_id_for_addr(&addr));
+
+        if let Some(peer_id) = peer_id {
+            self.persistent_peer_ids.remove(&peer_id);
+
+            // Remove from the gossipsub explicit-peer set before the peer
+            // stays connected as a non-persistent peer.
+            self.remove_explicit_peer_from_gossipsub(swarm, &peer_id);
+
+            // Update peer type and score if connected
+            Self::update_peer_persistent_status(
+                peer_id,
+                self.peer_info.get_mut(&peer_id),
+                false,
+                swarm,
+            );
+
+            // If peer is connected, disconnect it if
+            // - `persistent_peers_only` is configured,
+            // - or outbound connection exists
+            // Do not disconnect if there are inbound connections as the peer might have us as their persistent peer
+            let should_disconnect =
+                self.local_node.persistent_peers_only || !self.discovery.is_inbound_peer(&peer_id);
+
+            if swarm.is_connected(&peer_id) && should_disconnect {
+                let _ = swarm.disconnect_peer_id(peer_id);
+                tracing::info!(%peer_id, %addr, "Disconnecting from removed persistent peer");
+            }
+        }
+
+        // Cancel any in-progress dial attempts for this address and peer
+        self.discovery.cancel_dial_attempts(&addr, peer_id);
+
+        // Update discovery layer
+        self.discovery.remove_bootstrap_node(&addr);
+
+        Ok(())
+    }
+
+    /// Try to prioritize a high-value peer (validator or persistent) by
+    /// promoting it from ephemeral to inbound. If inbound slots are full,
+    /// evicts the lowest-value non-priority inbound peer to make room.
+    ///
+    /// Validators become ephemeral when they connect inbound and slots are
+    /// full. Persistent peers become ephemeral when both sides of a pair
+    /// have full inbound slots — each outbound dial arrives as inbound on
+    /// the remote and is classified as ephemeral.
+    ///
+    /// Returns `Some(evicted_peer_id)` if a peer was evicted, `None` otherwise.
+    pub(crate) fn try_prioritize_peer(
+        &mut self,
+        peer_id: libp2p::PeerId,
+    ) -> Option<libp2p::PeerId> {
+        let peer_info = self.peer_info.get(&peer_id)?;
+
+        // Only prioritize validators and persistent peers
+        if !peer_info.peer_type.is_validator() && !peer_info.peer_type.is_persistent() {
+            return None;
+        }
+
+        // Must be ephemeral — check before eviction to avoid evicting
+        // someone when the target peer is already inbound/outbound.
+        if !self.discovery.is_ephemeral_peer(&peer_id) {
+            return None;
+        }
+
+        // Evict lowest-value peer if inbound is full
+        let evicted = if !self.discovery.has_inbound_capacity() {
+            let evict_id = self.find_lowest_priority_inbound_peer()?;
+            let (evicted_type, evicted_score) = {
+                let info = &self.peer_info[&evict_id];
+                (info.peer_type.primary_type_str(), info.score)
+            };
+            tracing::info!(
+                %peer_id,
+                evicted = %evict_id,
+                evicted_type,
+                evicted_score,
+                "Evicting low-value inbound peer to make room for high-value peer"
+            );
+            self.discovery.evict_inbound_peer(evict_id);
+            Some(evict_id)
+        } else {
+            None
+        };
+
+        // Single promote path
+        if self.discovery.promote_to_inbound(peer_id) {
+            self.update_connection_direction(peer_id);
+            tracing::info!(
+                %peer_id,
+                peer_type = self.peer_info[&peer_id].peer_type.primary_type_str(),
+                "Promoted high-value peer to inbound"
+            );
+        }
+
+        evicted
+    }
+
+    /// Lowest-scoring inbound peer that is neither a validator nor persistent.
+    ///
+    /// Returns `None` when the inbound set is empty or every inbound peer is a
+    /// validator or persistent peer.
+    fn find_lowest_priority_inbound_peer(&self) -> Option<libp2p::PeerId> {
+        self.discovery
+            .inbound_peer_ids()
+            .filter_map(|pid| self.peer_info.get(pid).map(|info| (*pid, info)))
+            .filter(|(_, info)| !info.peer_type.is_validator() && !info.peer_type.is_persistent())
+            .min_by(|(_, a), (_, b)| a.score.total_cmp(&b.score))
+            .map(|(pid, _)| pid)
+    }
+
+    /// Update connection direction to Inbound after promotion from ephemeral.
+    fn update_connection_direction(&mut self, peer_id: libp2p::PeerId) {
+        if let Some(peer_info) = self.peer_info.get_mut(&peer_id) {
+            peer_info.connection_direction =
+                Some(malachitebft_discovery::ConnectionDirection::Inbound);
+        }
+    }
+}
+
+/// Extract PeerId from a Multiaddr if it contains a /p2p/<peer_id> component
+fn extract_peer_id_from_multiaddr(addr: &Multiaddr) -> Option<libp2p::PeerId> {
+    use libp2p::multiaddr::Protocol;
+
+    for protocol in addr.iter() {
+        if let Protocol::P2p(peer_id) = protocol {
+            return Some(peer_id);
+        }
+    }
+    None
+}
+
+/// Applies a peer type change, refreshes the stored metric labels, and reports
+/// whether the gossipsub application-specific score must be pushed to the swarm.
+///
+/// Returns `Some(new_score)` when the peer's classification changed, and `None`
+/// otherwise. The metric refresh is performed purely for its side effect: it is
+/// a no-op for peers without an allocated metric slot, but that must not block
+/// score propagation to gossipsub, which is consensus-critical and cannot be
+/// gated on metric-cardinality limits.
+fn apply_peer_type_change(
+    peer_id: &libp2p::PeerId,
+    peer_info: &mut PeerInfo,
+    old_peer_info: &PeerInfo,
+    new_type: PeerType,
+    metrics: &mut NetworkMetrics,
+) -> Option<f64> {
+    let new_score = crate::peer_scoring::get_peer_score(new_type);
+    let type_changed = new_type != old_peer_info.peer_type;
+    peer_info.peer_type = new_type;
+    peer_info.score = new_score;
+
+    metrics.update_peer_labels(peer_id, old_peer_info, peer_info);
+
+    type_changed.then_some(new_score)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::metrics::MAX_PEER_SLOTS;
+    use crate::peer_scoring::{FULL_NODE_SCORE, VALIDATOR_SCORE};
+    use malachitebft_discovery::Config;
+
+    /// Create a minimal `State` with disabled discovery and a dummy local node.
+    pub(crate) fn test_state() -> State {
+        test_state_with_local_addr(None)
+    }
+
+    /// Create a minimal `State` with disabled discovery and an optional local consensus address.
+    fn test_state_with_local_addr(consensus_address: Option<&str>) -> State {
+        let mut registry = malachitebft_metrics::Registry::default();
+        let discovery =
+            discovery::Discovery::<Behaviour>::new(Config::new(false), vec![], &mut registry);
+        let metrics = NetworkMetrics::new(&mut registry);
+
+        let local_node = LocalNodeInfo {
+            moniker: "test-node".to_string(),
+            peer_id: libp2p::PeerId::random(),
+            listen_addr: "/ip4/127.0.0.1/tcp/26656".parse().unwrap(),
+            consensus_address: consensus_address.map(|s| s.to_string()),
+            proof_bytes: None,
+            is_validator: false,
+            persistent_peers_only: false,
+            subscribed_topics: HashSet::new(),
+        };
+
+        State::new(discovery, vec![], local_node, metrics, false)
+    }
+
+    #[test]
+    fn remove_learned_persistent_peer_id_drops_address_learned_identity() {
+        let mut state = test_state();
+        let peer_id = libp2p::PeerId::random();
+        state
+            .persistent_peer_addrs
+            .push("/ip4/127.0.0.1/tcp/26656".parse().unwrap());
+        state.persistent_peer_ids.insert(peer_id);
+
+        state.remove_learned_persistent_peer_id(&peer_id);
+
+        assert!(!state.persistent_peer_ids.contains(&peer_id));
+    }
+
+    #[test]
+    fn remove_learned_persistent_peer_id_keeps_configured_identity() {
+        let mut state = test_state();
+        let peer_id = libp2p::PeerId::random();
+        state
+            .persistent_peer_addrs
+            .push(format!("/p2p/{peer_id}").parse().unwrap());
+        state.persistent_peer_ids.insert(peer_id);
+
+        state.remove_learned_persistent_peer_id(&peer_id);
+
+        assert!(state.persistent_peer_ids.contains(&peer_id));
+    }
+
+    /// Create default full-node peer info.
+    fn test_peer_info() -> PeerInfo {
+        PeerInfo {
+            moniker: "peer".to_string(),
+            address: "/ip4/10.0.0.1/tcp/26656".parse().unwrap(),
+            consensus_address: None,
+            consensus_public_key: None,
+            peer_type: PeerType::new(false, false),
+            connection_direction: None,
+            score: FULL_NODE_SCORE,
+            topics: HashSet::new(),
+            is_explicit: false,
+        }
+    }
+
+    /// Insert a peer into state and register it in metrics (so `apply_peer_type_change` can work).
+    fn insert_peer(state: &mut State, peer_id: libp2p::PeerId, info: PeerInfo) {
+        state.metrics.record_new_peer(&peer_id, &info);
+        state.peer_info.insert(peer_id, info);
+    }
+
+    // ── record_verified_proof tests ──────────────────────────────────
+
+    #[test]
+    fn record_proof_peer_becomes_validator() {
+        let mut state = test_state();
+        let peer_id = libp2p::PeerId::random();
+        let public_key = vec![1, 2, 3];
+
+        // Add peer and register in validator set
+        insert_peer(&mut state, peer_id, test_peer_info());
+        state.validator_set.insert(ValidatorInfo {
+            address: "val_addr_1".to_string(),
+            public_key: public_key.clone(),
+            voting_power: 100,
+        });
+
+        let result = state.record_verified_proof(&peer_id, public_key.clone());
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), VALIDATOR_SCORE);
+
+        let info = &state.peer_info[&peer_id];
+        assert!(info.peer_type.is_validator());
+        assert_eq!(info.consensus_address.as_deref(), Some("val_addr_1"));
+        assert_eq!(info.consensus_public_key.as_deref(), Some(&public_key[..]));
+    }
+
+    #[test]
+    fn record_proof_peer_not_in_validator_set() {
+        let mut state = test_state();
+        let peer_id = libp2p::PeerId::random();
+        let public_key = vec![4, 5, 6];
+
+        insert_peer(&mut state, peer_id, test_peer_info());
+        // No matching validator in set
+
+        let result = state.record_verified_proof(&peer_id, public_key.clone());
+
+        // Peer type and score are unchanged (still a full node), so gossipsub
+        // does not need a new score pushed.
+        assert!(result.is_none());
+
+        let info = &state.peer_info[&peer_id];
+        assert!(!info.peer_type.is_validator());
+        assert!(info.consensus_address.is_none());
+        // But the public key IS stored for future reclassification
+        assert_eq!(info.consensus_public_key.as_deref(), Some(&public_key[..]));
+    }
+
+    #[test]
+    fn record_proof_buffers_when_peer_unknown() {
+        let mut state = test_state();
+        let peer_id = libp2p::PeerId::random();
+        let public_key = vec![7, 8, 9];
+
+        // Don't insert peer into peer_info
+        let result = state.record_verified_proof(&peer_id, public_key.clone());
+
+        assert!(result.is_none());
+        assert_eq!(
+            state.pending_verified_proofs.get(&peer_id),
+            Some(&public_key)
+        );
+    }
+
+    // ── reclassify_peers (via process_validator_set_update) ──────────
+
+    #[test]
+    fn reclassify_promotes_to_validator() {
+        let mut state = test_state();
+        let peer_id = libp2p::PeerId::random();
+        let public_key = vec![10, 11, 12];
+
+        // Peer already has a proof stored but was not in validator set
+        let mut info = test_peer_info();
+        info.consensus_public_key = Some(public_key.clone());
+        insert_peer(&mut state, peer_id, info);
+
+        // Now add them to the validator set
+        let mut validators = HashSet::new();
+        validators.insert(ValidatorInfo {
+            address: "promoted_addr".to_string(),
+            public_key: public_key.clone(),
+            voting_power: 50,
+        });
+
+        let changed = state.process_validator_set_update(validators);
+
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].0, peer_id);
+        assert_eq!(changed[0].1, VALIDATOR_SCORE);
+
+        let info = &state.peer_info[&peer_id];
+        assert!(info.peer_type.is_validator());
+        assert_eq!(info.consensus_address.as_deref(), Some("promoted_addr"));
+    }
+
+    #[test]
+    fn reclassify_demotes_from_validator() {
+        let mut state = test_state();
+        let peer_id = libp2p::PeerId::random();
+        let public_key = vec![13, 14, 15];
+
+        // Peer is currently a validator
+        let mut info = test_peer_info();
+        info.peer_type = PeerType::new(false, true);
+        info.consensus_public_key = Some(public_key.clone());
+        info.consensus_address = Some("old_addr".to_string());
+        info.score = VALIDATOR_SCORE;
+        insert_peer(&mut state, peer_id, info);
+
+        // Empty validator set → peer should be demoted
+        let changed = state.process_validator_set_update(HashSet::new());
+
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].0, peer_id);
+        assert_eq!(changed[0].1, FULL_NODE_SCORE);
+
+        let info = &state.peer_info[&peer_id];
+        assert!(!info.peer_type.is_validator());
+        assert!(info.consensus_address.is_none());
+        // Public key is preserved for future reclassification
+        assert!(info.consensus_public_key.is_some());
+    }
+
+    #[test]
+    fn reclassify_peer_without_proof_unaffected() {
+        let mut state = test_state();
+        let peer_id = libp2p::PeerId::random();
+
+        // Peer without consensus_public_key
+        insert_peer(&mut state, peer_id, test_peer_info());
+
+        let changed = state.process_validator_set_update(HashSet::new());
+
+        // No changes since peer has no proof to match
+        assert!(changed.is_empty());
+        assert!(!state.peer_info[&peer_id].peer_type.is_validator());
+    }
+
+    #[test]
+    fn reclassify_reports_every_peer_even_beyond_metric_slot_cap() {
+        let mut state = test_state();
+        let peer_count = MAX_PEER_SLOTS + 20;
+        let mut peers = Vec::with_capacity(peer_count);
+
+        // Register more peers than the metric cap so the excess have no slot;
+        // `record_new_peer` silently skips them while `peer_info` still tracks them.
+        for i in 0..peer_count {
+            let peer_id = libp2p::PeerId::random();
+            let public_key = vec![(i >> 8) as u8, i as u8];
+            let mut info = test_peer_info();
+            info.consensus_public_key = Some(public_key.clone());
+            insert_peer(&mut state, peer_id, info);
+            peers.push((peer_id, public_key));
+        }
+
+        // Promote every peer to a validator in one validator-set update.
+        let mut validators = HashSet::new();
+        for (i, (_peer_id, public_key)) in peers.iter().enumerate() {
+            validators.insert(ValidatorInfo {
+                address: format!("val_addr_{i}"),
+                public_key: public_key.clone(),
+                voting_power: 10,
+            });
+        }
+
+        let changed = state.process_validator_set_update(validators);
+
+        // Every promoted peer must be reported so its score reaches gossipsub,
+        // including those whose metric slot was never allocated.
+        assert_eq!(changed.len(), peer_count);
+        for (peer_id, new_score) in &changed {
+            assert_eq!(*new_score, VALIDATOR_SCORE);
+            assert_eq!(state.peer_info[peer_id].score, VALIDATOR_SCORE);
+        }
+    }
+
+    // ── Local node reclassification ──────────────────────────────────
+
+    #[test]
+    fn reclassify_local_node_becomes_validator() {
+        let mut state = test_state_with_local_addr(Some("my_consensus_addr"));
+        assert!(!state.local_node.is_validator);
+
+        let mut validators = HashSet::new();
+        validators.insert(ValidatorInfo {
+            address: "my_consensus_addr".to_string(),
+            public_key: vec![99],
+            voting_power: 100,
+        });
+
+        let _ = state.process_validator_set_update(validators);
+
+        assert!(state.local_node.is_validator);
+    }
+
+    #[test]
+    fn reclassify_local_node_loses_validator() {
+        let mut state = test_state_with_local_addr(Some("my_consensus_addr"));
+        state.local_node.is_validator = true;
+
+        // Empty validator set
+        let _ = state.process_validator_set_update(HashSet::new());
+
+        assert!(!state.local_node.is_validator);
+    }
+
+    // ── Pending proof + update_peer flow ──────────────────────────────
+
+    #[test]
+    fn pending_proof_applied_when_identify_completes() {
+        let mut state = test_state();
+        let peer_id = libp2p::PeerId::random();
+        let public_key = vec![1, 2, 3];
+
+        state.validator_set.insert(ValidatorInfo {
+            address: "buffered_val".to_string(),
+            public_key: public_key.clone(),
+            voting_power: 100,
+        });
+
+        // Proof arrives before Identify, it is buffered as there is no PeerInfo yet
+        let result = state.record_verified_proof(&peer_id, public_key.clone());
+        assert!(result.is_none());
+        assert!(state.pending_verified_proofs.contains_key(&peer_id));
+
+        // Simulate Identify completed, update_peer creates PeerInfo and applies pending proof
+        let info = identify::Info {
+            public_key: libp2p::identity::Keypair::generate_ed25519().public(),
+            protocol_version: "test/1.0".to_string(),
+            agent_version: "moniker=test-peer".to_string(),
+            listen_addrs: vec!["/ip4/10.0.0.1/tcp/26656".parse().unwrap()],
+            protocols: vec![],
+            observed_addr: "/ip4/127.0.0.1/tcp/0".parse().unwrap(),
+            signed_peer_record: None,
+        };
+        let conn_id = libp2p::swarm::ConnectionId::new_unchecked(42);
+        let score = state.update_peer(peer_id, conn_id, &info);
+
+        assert!(state.pending_verified_proofs.is_empty());
+        let peer = &state.peer_info[&peer_id];
+        assert!(peer.peer_type.is_validator());
+        assert_eq!(peer.consensus_public_key.as_deref(), Some(&public_key[..]));
+        assert_eq!(peer.consensus_address.as_deref(), Some("buffered_val"));
+        assert_eq!(score, VALIDATOR_SCORE);
+    }
+
+    // ── Persistent peer + proof ──────────────────────────────────────
+
+    #[test]
+    fn record_proof_persistent_peer_becomes_validator() {
+        let mut state = test_state();
+        let peer_id = libp2p::PeerId::random();
+        let public_key = vec![20, 21, 22];
+
+        // Peer is persistent
+        let mut info = test_peer_info();
+        info.peer_type = PeerType::new(true, false);
+        insert_peer(&mut state, peer_id, info);
+
+        state.validator_set.insert(ValidatorInfo {
+            address: "persistent_val".to_string(),
+            public_key: public_key.clone(),
+            voting_power: 100,
+        });
+
+        let result = state.record_verified_proof(&peer_id, public_key);
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), VALIDATOR_SCORE);
+
+        let info = &state.peer_info[&peer_id];
+        assert!(info.peer_type.is_persistent());
+        assert!(info.peer_type.is_validator());
+        assert_eq!(info.consensus_address.as_deref(), Some("persistent_val"));
+    }
+
+    /// Create an [`InboundRequestId`] for testing.
+    ///
+    /// `InboundRequestId` has no public constructor; we transmute from `u64`.
+    /// This is sound because `InboundRequestId` is a newtype wrapping `u64` with no invariants.
+    pub(crate) fn test_inbound_request_id(id: u64) -> InboundRequestId {
+        // SAFETY: InboundRequestId is a #[repr(Rust)] newtype over u64.
+        unsafe { std::mem::transmute(id) }
+    }
+
+    /// Create a [`sync::ResponseChannel`] for testing.
+    ///
+    /// `ResponseChannel<T>` has no public constructor; we transmute from its inner
+    /// `futures::channel::oneshot::Sender<T>`.
+    fn test_response_channel() -> sync::ResponseChannel {
+        let (sender, _receiver) = futures::channel::oneshot::channel::<sync::RawResponse>();
+        // SAFETY: ResponseChannel<T> is a newtype over oneshot::Sender<T>.
+        unsafe { std::mem::transmute(sender) }
+    }
+
+    #[test]
+    fn sync_channel_cleaned_up_on_inbound_failure() {
+        let mut state = test_state();
+        let request_id = test_inbound_request_id(1);
+        let channel = test_response_channel();
+
+        // Simulate Message::Request inserting the channel
+        state.sync_channels.insert(request_id, channel);
+        assert_eq!(state.sync_channels.len(), 1);
+
+        // Simulate InboundFailure cleanup
+        let removed = state.sync_channels.remove(&request_id);
+        assert!(removed.is_some());
+        assert!(state.sync_channels.is_empty());
+    }
+
+    #[test]
+    fn late_sync_reply_after_inbound_failure_is_harmless() {
+        let mut state = test_state();
+        let request_id = test_inbound_request_id(2);
+        let channel = test_response_channel();
+
+        state.sync_channels.insert(request_id, channel);
+
+        // InboundFailure cleans up first
+        state.sync_channels.remove(&request_id);
+
+        // A late SyncReply arrives — the entry is already gone
+        let late_remove = state.sync_channels.remove(&request_id);
+        assert!(late_remove.is_none());
+    }
+
+    #[test]
+    fn sync_reply_before_inbound_failure_is_harmless() {
+        let mut state = test_state();
+        let request_id = test_inbound_request_id(3);
+        let channel = test_response_channel();
+
+        state.sync_channels.insert(request_id, channel);
+
+        // SyncReply arrives first and consumes the channel
+        let reply_remove = state.sync_channels.remove(&request_id);
+        assert!(reply_remove.is_some());
+
+        // InboundFailure arrives late — the entry is already gone
+        let failure_remove = state.sync_channels.remove(&request_id);
+        assert!(failure_remove.is_none());
+    }
+
+    // ── Connection prioritization tests ─────────────────────────────
+
+    /// Create a State with limited inbound capacity for prioritization tests.
+    fn test_state_with_inbound_capacity(capacity: usize) -> State {
+        let mut registry = malachitebft_metrics::Registry::default();
+        let mut config = malachitebft_discovery::Config::new(false);
+        config.set_peers_bounds(capacity, capacity);
+        let discovery = discovery::Discovery::<Behaviour>::new(config, vec![], &mut registry);
+        let metrics = NetworkMetrics::new(&mut registry);
+
+        let local_node = LocalNodeInfo {
+            moniker: "test-node".to_string(),
+            peer_id: libp2p::PeerId::random(),
+            listen_addr: "/ip4/127.0.0.1/tcp/26656".parse().unwrap(),
+            consensus_address: None,
+            proof_bytes: None,
+            is_validator: false,
+            persistent_peers_only: false,
+            subscribed_topics: HashSet::new(),
+        };
+
+        State::new(discovery, vec![], local_node, metrics, false)
+    }
+
+    /// Simulate a peer with an active connection (ephemeral by default).
+    fn add_ephemeral_peer(state: &mut State, peer_id: libp2p::PeerId, info: PeerInfo) {
+        let conn_id = libp2p::swarm::ConnectionId::new_unchecked(
+            (peer_id.to_bytes()[0] as usize) * 100 + peer_id.to_bytes()[1] as usize,
+        );
+        state.discovery.add_test_active_connection(peer_id, conn_id);
+        insert_peer(state, peer_id, info);
+    }
+
+    #[test]
+    fn prioritize_validator_promoted_when_capacity_available() {
+        let mut state = test_state_with_inbound_capacity(2);
+        let peer_id = libp2p::PeerId::random();
+
+        let mut info = test_peer_info();
+        info.peer_type = PeerType::new(false, true);
+        info.score = VALIDATOR_SCORE;
+        add_ephemeral_peer(&mut state, peer_id, info);
+
+        assert!(state.discovery.is_ephemeral_peer(&peer_id));
+
+        let evicted = state.try_prioritize_peer(peer_id);
+
+        assert!(evicted.is_none());
+        assert!(state.discovery.is_inbound_peer(&peer_id));
+        assert!(!state.discovery.is_ephemeral_peer(&peer_id));
+    }
+
+    #[test]
+    fn prioritize_validator_evicts_full_node_when_full() {
+        let mut state = test_state_with_inbound_capacity(1);
+
+        // Fill inbound with a full node
+        let full_node_id = libp2p::PeerId::random();
+        let full_node_info = test_peer_info();
+        add_ephemeral_peer(&mut state, full_node_id, full_node_info);
+        state.discovery.add_test_inbound_peer(full_node_id);
+
+        assert!(!state.discovery.has_inbound_capacity());
+
+        // Add validator as ephemeral
+        let validator_id = libp2p::PeerId::random();
+        let mut validator_info = test_peer_info();
+        validator_info.peer_type = PeerType::new(false, true);
+        validator_info.score = VALIDATOR_SCORE;
+        add_ephemeral_peer(&mut state, validator_id, validator_info);
+
+        let evicted = state.try_prioritize_peer(validator_id);
+
+        assert_eq!(evicted, Some(full_node_id));
+        assert!(state.discovery.is_inbound_peer(&validator_id));
+    }
+
+    #[test]
+    fn prioritize_no_eviction_when_all_inbound_are_validators() {
+        let mut state = test_state_with_inbound_capacity(1);
+
+        // Fill inbound with a validator
+        let existing_validator_id = libp2p::PeerId::random();
+        let mut existing_info = test_peer_info();
+        existing_info.peer_type = PeerType::new(false, true);
+        existing_info.score = VALIDATOR_SCORE;
+        add_ephemeral_peer(&mut state, existing_validator_id, existing_info);
+        state.discovery.add_test_inbound_peer(existing_validator_id);
+
+        // Add another validator as ephemeral
+        let new_validator_id = libp2p::PeerId::random();
+        let mut new_info = test_peer_info();
+        new_info.peer_type = PeerType::new(false, true);
+        new_info.score = VALIDATOR_SCORE;
+        add_ephemeral_peer(&mut state, new_validator_id, new_info);
+
+        let evicted = state.try_prioritize_peer(new_validator_id);
+
+        // No eviction candidate — all inbound are validators
+        assert!(evicted.is_none());
+        assert!(!state.discovery.is_inbound_peer(&new_validator_id));
+        assert!(state.discovery.is_ephemeral_peer(&new_validator_id));
+    }
+
+    #[test]
+    fn prioritize_full_node_not_promoted() {
+        let mut state = test_state_with_inbound_capacity(2);
+        let peer_id = libp2p::PeerId::random();
+
+        let info = test_peer_info(); // full node
+        add_ephemeral_peer(&mut state, peer_id, info);
+
+        let evicted = state.try_prioritize_peer(peer_id);
+
+        assert!(evicted.is_none());
+        assert!(state.discovery.is_ephemeral_peer(&peer_id));
+        assert!(!state.discovery.is_inbound_peer(&peer_id));
+    }
+
+    #[test]
+    fn prioritize_persistent_peer_promoted() {
+        // Persistent peers can become ephemeral when both sides of a pair have
+        // full inbound slots — each outbound dial arrives as inbound on the
+        // remote and is classified as ephemeral.
+        let mut state = test_state_with_inbound_capacity(2);
+        let peer_id = libp2p::PeerId::random();
+
+        let mut info = test_peer_info();
+        info.peer_type = PeerType::new(true, false); // persistent, not validator
+        add_ephemeral_peer(&mut state, peer_id, info);
+
+        let evicted = state.try_prioritize_peer(peer_id);
+
+        assert!(evicted.is_none());
+        assert!(state.discovery.is_inbound_peer(&peer_id));
+    }
+
+    #[test]
+    fn prioritize_evicts_lowest_score_peer() {
+        let mut state = test_state_with_inbound_capacity(2);
+
+        // Fill inbound with two full nodes of different scores
+        let low_score_id = libp2p::PeerId::random();
+        let mut low_info = test_peer_info();
+        low_info.score = 1.0;
+        add_ephemeral_peer(&mut state, low_score_id, low_info);
+        state.discovery.add_test_inbound_peer(low_score_id);
+
+        let high_score_id = libp2p::PeerId::random();
+        let mut high_info = test_peer_info();
+        high_info.score = 100.0;
+        add_ephemeral_peer(&mut state, high_score_id, high_info);
+        state.discovery.add_test_inbound_peer(high_score_id);
+
+        assert!(!state.discovery.has_inbound_capacity());
+
+        // Add validator as ephemeral
+        let validator_id = libp2p::PeerId::random();
+        let mut validator_info = test_peer_info();
+        validator_info.peer_type = PeerType::new(false, true);
+        validator_info.score = VALIDATOR_SCORE;
+        add_ephemeral_peer(&mut state, validator_id, validator_info);
+
+        let evicted = state.try_prioritize_peer(validator_id);
+
+        // Should evict the low-score full node
+        assert_eq!(evicted, Some(low_score_id));
+        assert!(state.discovery.is_inbound_peer(&validator_id));
+    }
+
+    #[test]
+    fn prioritize_updates_connection_direction() {
+        let mut state = test_state_with_inbound_capacity(2);
+        let peer_id = libp2p::PeerId::random();
+
+        let mut info = test_peer_info();
+        info.peer_type = PeerType::new(false, true);
+        info.connection_direction = None; // ephemeral
+        add_ephemeral_peer(&mut state, peer_id, info);
+
+        state.try_prioritize_peer(peer_id);
+
+        let peer = &state.peer_info[&peer_id];
+        assert_eq!(
+            peer.connection_direction,
+            Some(malachitebft_discovery::ConnectionDirection::Inbound)
+        );
+    }
+}

@@ -1,3 +1,4 @@
+use crate::protocol::coordinator::certified_input::CommandKind;
 use anyhow::{Context, Result, ensure};
 use bitcoin::{BlockHash, Txid, hashes::Hash};
 use libsql::{Connection, TransactionBehavior, params};
@@ -105,7 +106,10 @@ async fn seed(conn: &Connection, origin: WorkOrigin, decision: u64, txid: Txid) 
     let selected = replay::eligible(conn, origin.height, decision)
         .await?
         .context("finality seed on superseded interval")?;
-    ensure!(!selected.is_block, "block cannot supply batch exclusion");
+    ensure!(
+        selected.kind == CommandKind::Batch,
+        "block cannot supply batch exclusion"
+    );
     let original = load_verified_input(conn, decision).await?;
     ensure!(
         original
@@ -161,7 +165,7 @@ async fn probe(
             continue;
         };
         ensure!(
-            !selected.is_block
+            selected.kind == CommandKind::Batch
                 && selected.position.bitcoin_height == anchor
                 && selected.hash == hash
                 && stored_height == anchor,
@@ -251,7 +255,7 @@ async fn build_one(
     };
     let key = origin.key()?;
     let decision = selected.position.decision;
-    let item = if selected.is_block {
+    let item = if selected.kind != CommandKind::Batch {
         WorkItem::Execute { decision }
     } else {
         let certified = load_verified_input(conn, decision).await?;

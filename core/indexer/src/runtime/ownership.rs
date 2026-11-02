@@ -2985,6 +2985,7 @@ mod tests {
     }
 
     async fn one_object_pool(dir: &TempDir) -> Result<Pool<Manager>> {
+        new_connection(dir.path(), "owner.db").await?;
         Ok(Pool::builder(Manager::new(
             dir.path().to_path_buf(),
             "owner.db".into(),

@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS certified_decisions (
     original_proof BLOB NOT NULL,
     bitcoin_height BLOB NOT NULL CHECK (length(bitcoin_height) = 8),
     bitcoin_hash BLOB NOT NULL CHECK (length(bitcoin_hash) = 32),
-    is_block INTEGER NOT NULL CHECK (is_block IN (0, 1)),
+    command_kind INTEGER NOT NULL CHECK (command_kind IN (0, 1, 2)),
     proof_augmentation BLOB
 );
 

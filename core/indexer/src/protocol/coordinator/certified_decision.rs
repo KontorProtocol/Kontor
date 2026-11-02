@@ -257,7 +257,9 @@ pub(crate) fn verify_proof(
     verifier.finish()
 }
 
+#[path = "certified_decision/proof_stream.rs"]
 pub(crate) mod proof_stream;
 
 #[cfg(test)]
+#[path = "certified_decision/tests.rs"]
 pub(crate) mod tests;

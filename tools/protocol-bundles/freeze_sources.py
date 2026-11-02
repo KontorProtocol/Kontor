@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Relocate retained executor inputs from an exact Git commit without redefining them."""
+"""Preserve executor or coordinator inputs from an exact Git commit without redefining them."""
 
 import argparse
 import hashlib
@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 import tomllib
 
+from coordinator_definition import DESTINATION as CONSENSUS_REFERENCE, verify as verify_coordinator
 from execution_definition import SEMANTIC_TREES, verify_reference
 
 
@@ -45,14 +46,14 @@ def verify_snapshot(root, expected):
 
 
 def metadata(root, graph):
-    manifest = root / f"protocol-bundles/executor-{graph}/Cargo.toml"
+    manifest = root / f"protocol-bundles/{graph}/Cargo.toml"
     return json.loads(subprocess.check_output([
         "cargo", "metadata", "--locked", "--offline", "--format-version=1",
         "--manifest-path", str(manifest),
     ], cwd=root))
 
 
-def inputs(root, resolutions):
+def inputs(root, resolutions, graphs, extra_trees=()):
     paths = set()
 
     def include(path, ancestors=()):
@@ -71,11 +72,11 @@ def inputs(root, resolutions):
         else:
             raise ValueError(f"unsupported frozen input: {path}")
 
-    for relative in (*SEMANTIC_TREES, *SUPPORT_TREES):
+    for relative in (*SEMANTIC_TREES, *SUPPORT_TREES, *extra_trees):
         include(root / relative)
     # Cargo reads even unused path patches while resolving a locked graph.
-    for graph in GRAPHS:
-        manifest = root / f"protocol-bundles/executor-{graph}/Cargo.toml"
+    for graph in graphs:
+        manifest = root / f"protocol-bundles/{graph}/Cargo.toml"
         for registry in tomllib.loads(manifest.read_text()).get("patch", {}).values():
             for dependency in registry.values():
                 if "path" in dependency:
@@ -101,7 +102,25 @@ def inputs(root, resolutions):
     return sorted(paths)
 
 
-def freeze(repository, revision, destination):
+def definitions(root, resolutions, kind):
+    if kind == "coordinator":
+        node_lock = tomllib.loads((root / "protocol-bundles/node/Cargo.lock").read_text())
+        return {
+            "coordinator": verify_coordinator(root, resolutions[0], node_lock),
+            "observer": verify_reference(root, root / "protocol-bundles/executor-observer/Cargo.toml",
+                                         resolutions[1]),
+            "consensus_reference_sha256": hashlib.sha256((root / CONSENSUS_REFERENCE).read_bytes()).hexdigest(),
+            "retained_executor_reference_sha256": hashlib.sha256((root /
+                "protocol-bundles/retained/k3/protocol-bundles/executor-first/definition.bin"
+            ).read_bytes()).hexdigest(),
+        }
+    return [verify_reference(root, root / f"protocol-bundles/executor-{graph}/Cargo.toml", data)
+            for graph, data in zip(GRAPHS, resolutions, strict=True)]
+
+
+def freeze(repository, revision, destination, kind="executors"):
+    if kind not in {"executors", "coordinator"}:
+        raise ValueError("unknown snapshot kind")
     commit = subprocess.check_output(["git", "rev-parse", "--verify", revision + "^{commit}"],
                                      cwd=repository, text=True).strip()
     if revision != commit:
@@ -115,10 +134,17 @@ def freeze(repository, revision, destination):
         root.mkdir()
         with tarfile.open(fileobj=io.BytesIO(archive)) as source:
             source.extractall(root, filter="data")
-        resolutions = [metadata(root, graph) for graph in GRAPHS]
-        definitions = [verify_reference(root, root / f"protocol-bundles/executor-{graph}/Cargo.toml", data)
-                       for graph, data in zip(GRAPHS, resolutions, strict=True)]
-        selected = inputs(root, resolutions)
+        graphs = ("node", "executor-observer") if kind == "coordinator" else tuple(
+            f"executor-{graph}" for graph in GRAPHS)
+        resolutions = [metadata(root, graph) for graph in graphs]
+        expected = definitions(root, resolutions, kind)
+        extra_trees = (
+            "core/indexer",
+            "protocol-bundles/retained/k3/protocol-bundles/executor-first/definition.bin",
+            "protocol-bundles/executor-first/definition.bin",
+            "protocol-bundles/executor-second/definition.bin",
+        ) if kind == "coordinator" else ()
+        selected = inputs(root, resolutions, graphs, extra_trees)
         staged = Path(temporary) / "retained"
         records = {}
         for path in selected:
@@ -131,16 +157,22 @@ def freeze(repository, revision, destination):
             else:
                 shutil.copy2(path, target)
                 records[relative.as_posix()] = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-        for graph, expected in zip(GRAPHS, definitions, strict=True):
-            actual = verify_reference(staged, staged / f"protocol-bundles/executor-{graph}/Cargo.toml",
-                                      metadata(staged, graph))
-            if actual != expected:
-                raise ValueError("relocation changed a released execution definition")
-        record = {"source_commit": commit, "definitions": definitions, "files": records}
+        actual = definitions(staged, [metadata(staged, graph) for graph in graphs], kind)
+        if actual != expected:
+            raise ValueError("relocation changed a retained definition")
+        record = {"source_commit": commit, "definitions": expected, "files": records}
+        if kind == "coordinator":
+            record["kind"] = kind
+            retained = root / "protocol-bundles/retained/k3"
+            retained_hash = hashlib.sha256((retained / "snapshot.json").read_bytes()).hexdigest()
+            verify_snapshot(retained, retained_hash)
+            record["retained_executor_snapshot"] = {
+                "source_root": "protocol-bundles/retained/k3", "snapshot_sha256": retained_hash,
+            }
         (staged / "snapshot.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
         verify_snapshot(staged, hashlib.sha256((staged / "snapshot.json").read_bytes()).hexdigest())
         staged.rename(destination)
-    return {"source_commit": commit, "files": len(records), "definitions": definitions,
+    return {"source_commit": commit, "files": len(records), "definitions": expected,
             "snapshot_sha256": hashlib.sha256((destination / "snapshot.json").read_bytes()).hexdigest()}
 
 
@@ -148,9 +180,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--destination", required=True, type=Path)
+    parser.add_argument("--kind", choices=("executors", "coordinator"), default="executors")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
-    print(json.dumps(freeze(root, args.revision, args.destination.resolve()), indent=2))
+    print(json.dumps(freeze(root, args.revision, args.destination.resolve(), args.kind), indent=2))
 
 
 if __name__ == "__main__":

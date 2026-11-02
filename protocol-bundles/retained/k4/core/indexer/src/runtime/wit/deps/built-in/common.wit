@@ -1,0 +1,379 @@
+package kontor:built-in;
+
+// The context DATA types, split from the resource/function-bearing `context`
+// interface so they can be `with:`-remapped onto the shared `built-in-types`
+// crate on both sides (same maneuver as `numbers-types`). `context` keeps its
+// name, its resources, and its functions.
+interface context-types {
+    record out-point {
+        txid: string,
+        vout: u32,
+    }
+
+    /// Freely-constructible record naming a contract — used as the
+    /// target for cross-contract calls (`foreign.call`). The passive
+    /// side of the contract-identity pair (see `contract` resource).
+    record contract-address {
+        name: string,
+        height: u64,
+        tx-index: u32,
+    }
+
+    variant holder-ref {
+        x-only-pubkey(string),
+        signer-id(u64),
+        core,
+        burner,
+        utxo(out-point),
+        ordering-pool,
+        storage-pool,
+    }
+
+    variant signer-ref {
+        signer-id(u64),
+        x-only-pubkey(string),
+    }
+
+    /// The Bitcoin network this chain runs on — a chain-identity constant,
+    /// fixed at genesis. `Testnet4` is folded into `testnet`.
+    enum network {
+        mainnet,
+        signet,
+        testnet,
+        regtest,
+    }
+}
+
+interface context {
+    use error.{error};
+    use context-types.{contract-address, holder-ref, signer-ref, out-point, network};
+
+
+    /// Active proof of "I am the contract at this address." Same
+    /// HolderRef/Holder split: `contract-address` is the freely-
+    /// constructible record (anyone can pass one around); `contract`
+    /// is the host-issued resource that can only be obtained from the
+    /// host via `proc-context.contract` / `core-context.contract` /
+    /// `view-context.contract`.
+    ///
+    /// Returning a `contract` from `init` is how a contract proves
+    /// which address it is — there's no way to fabricate one pointing
+    /// at another contract. Once a `contract` crosses the result-row
+    /// boundary the host drains it to a `contract-address` record for
+    /// WAVE serialization; integrity is in-execution only.
+    resource contract {
+        address: func() -> contract-address;
+    }
+
+
+    resource holder {
+        key: func() -> string;
+        from-ref: static func(ref: holder-ref) -> result<holder, error>;
+        as-ref: func() -> holder-ref;
+    }
+
+    resource signer {
+        key: func() -> string;
+        as-holder: func() -> holder;
+        as-ref: func() -> holder-ref;
+    }
+
+
+
+    resource transaction {
+        id: func() -> string;
+        out-point: func() -> out-point;
+        // The raw OP_RETURN payload (bytes after `OP_RETURN`), if any. Contracts
+        // own decoding; the host does not interpret it.
+        op-return-data: func() -> option<list<u8>>;
+    }
+
+    resource keys {
+        next: func() -> option<list<u8>>;
+    }
+
+    // Each method advances the same cursor, decoding the value exactly like the
+    // corresponding storage getter. Compound children and incompatible values
+    // fail deterministically. none = end; each returned row is metered.
+    resource storage-rows {
+        next-str: func() -> option<tuple<list<u8>, string>>;
+        next-u64: func() -> option<tuple<list<u8>, u64>>;
+        next-s64: func() -> option<tuple<list<u8>, s64>>;
+        next-bool: func() -> option<tuple<list<u8>, bool>>;
+        next-list-u8: func() -> option<tuple<list<u8>, list<u8>>>;
+    }
+
+    resource view-storage {
+        get-str: func(path: list<u8>) -> option<string>;
+        get-u64: func(path: list<u8>) -> option<u64>;
+        get-s64: func(path: list<u8>) -> option<s64>;
+        get-bool: func(path: list<u8>) -> option<bool>;
+        get-list-u8: func(path: list<u8>) -> option<list<u8>>;
+        // Distinct child keys under `path`, as a lazy cursor over the half-open byte
+        // range `[lo, hi)` (FDB-style `get-range`). `lo`/`hi` are child-element bytes
+        // (relative to `path`); the guest computes them from its `RangeBounds` via
+        // `sort_lower_bound`/`sort_upper_bound`. `lo = none` starts at the first child
+        // (children only, not `path` itself); `hi = none` runs to the end of `path`'s
+        // subtree. An INCLUSIVE lower / EXCLUSIVE upper seek lets a sorted-index range
+        // query skip out-of-range members host-side rather than pulling-and-discarding
+        // them (each pulled key is metered). `descending` reverses only the iteration
+        // ORDER — the `[lo, hi)` range is identical either way — so a `.rev()` scan
+        // yields highest-first. The guest bounds how far it iterates (`take(n)`/early-
+        // break, or for procs running out of gas).
+        get-keys: func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> keys;
+        // Same bounds/direction as get-keys, returning direct leaves and values.
+        get-storage-rows: func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> storage-rows;
+        exists: func(path: list<u8>) -> bool;
+
+    }
+
+    resource proc-storage {
+        get-str: func(path: list<u8>) -> option<string>;
+        get-u64: func(path: list<u8>) -> option<u64>;
+        get-s64: func(path: list<u8>) -> option<s64>;
+        get-bool: func(path: list<u8>) -> option<bool>;
+        get-list-u8: func(path: list<u8>) -> option<list<u8>>;
+        // See view-storage::get-keys.
+        get-keys: func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> keys;
+        // See view-storage::get-storage-rows.
+        get-storage-rows: func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> storage-rows;
+        exists: func(path: list<u8>) -> bool;
+
+        set-str: func(path: list<u8>, value: string);
+        set-u64: func(path: list<u8>, value: u64);
+        set-s64: func(path: list<u8>, value: s64);
+        set-bool: func(path: list<u8>, value: bool);
+        set-list-u8: func(path: list<u8>, value: list<u8>);
+        set-void: func(path: list<u8>);
+        // Tombstone a path AND its whole subtree (every live descendant
+        // `path.field…`), height-versioned. A struct/map value persists under
+        // child paths, so removing one map entry must clear all of them, not just
+        // the exact path. Returns true if any live row was tombstoned.
+        delete: func(path: list<u8>) -> bool;
+        view-storage: func() -> view-storage;
+    }
+
+    resource view-context {
+        storage: func() -> view-storage;
+        /// See `proc-context.contract`. View functions may also need
+        /// to know which contract they're running in (e.g. for self-
+        /// referential lookups).
+        contract: func() -> contract;
+    }
+
+
+    resource proc-context {
+        signer: func() -> signer;
+        /// Who pays this op's gas. A `holder` (not a `signer`) by design —
+        /// contracts can credit the payer's balance but cannot spend on
+        /// their behalf, since the payer only consented to pay this op's
+        /// gas. Equals `signer.as-holder()` by default; redirected by a
+        /// previous-input `Sponsor` Inst (direct context) or by
+        /// `AggregateSigner.sponsored = true` (aggregate context).
+        payer: func() -> holder;
+        contract-signer: func() -> signer;
+        view-context: func() -> view-context;
+        generate-id: func() -> string;
+        storage: func() -> proc-storage;
+        transaction: func() -> transaction;
+        block-height: func() -> u64;
+        /// The chain's Bitcoin network — a genesis-fixed constant, safe to
+        /// branch consensus state on (e.g. network-specific defaults in `init`).
+        network: func() -> network;
+        /// The executing contract's own identity as a `contract` resource —
+        /// the only way for the contract to obtain one pointing at itself.
+        /// Returned from `init` so the new contract's address surfaces on
+        /// the publish op's result row; usable by any proc-context method
+        /// that needs to assert "I am the contract at <address>."
+        contract: func() -> contract;
+    }
+
+    resource fall-context {
+        signer: func() -> option<signer>;
+        /// See `proc-context.payer`. `none` when `signer` is also `none`
+        /// (a fall context with no acting signer has no payer either).
+        payer: func() -> option<holder>;
+        proc-context: func() -> option<proc-context>;
+        view-context: func() -> view-context;
+    }
+
+    resource core-context {
+        proc-context: func() -> proc-context;
+        signer-proc-context: func() -> proc-context;
+        core-signer: func() -> signer;
+        /// See `proc-context.contract`. Native contracts running as core
+        /// also need an integrity-bound handle to their own identity.
+        contract: func() -> contract;
+    }
+}
+interface foreign {
+    use context.{signer};
+    use context-types.{contract-address};
+
+    call: func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
+}
+interface crypto {
+    /// Raw SHA-256 of arbitrary bytes (32-byte digest). For deriving multiple
+    /// INDEPENDENT values from one seed, prefer `hkdf-derive` (domain-separated).
+    sha256: func(input: list<u8>) -> list<u8>;
+
+    /// HKDF-SHA256 (RFC 5869): derive a strong value from input keying material.
+    /// `info` is a domain-separation label — the same `ikm` with different `info`
+    /// yields INDEPENDENT outputs (e.g. per-draw / per-purpose randomness from one
+    /// block seed). NOT a password KDF (input must already be high-entropy).
+    hkdf-derive: func(
+        ikm: list<u8>,
+        salt: list<u8>,
+        info: list<u8>
+    ) -> list<u8>;
+
+    /// Canonical per-block entropy (the Bitcoin block hash) at `height`, or `none`
+    /// if `height` is beyond the block being executed (can't read entropy that
+    /// doesn't exist yet) OR older than the recent window (~144 blocks). Source-
+    /// abstracted: the value is opaque entropy — derive randomness from it via
+    /// `hkdf-derive`. Reading the CURRENT block is grindable by that block's miner;
+    /// for unpredictable draws, COMMIT a future height and resolve from it later.
+    block-entropy: func(height: u64) -> option<list<u8>>;
+}
+interface error {
+    variant error {
+        message(string),
+        overflow(string),
+        div-by-zero(string),
+        syntax(string),
+        validation(string),
+    }
+}
+// The numerics DATA types, split from the function-bearing `numbers` interface
+// so the types can be `with:`-remapped onto the shared `built-in-types` crate on
+// BOTH sides (wasmtime's `with:` can remap a types-only interface via a small
+// facade, but not individual records inside a function-bearing one). `numbers`
+// keeps its name and all its functions, so function import strings are
+// unchanged.
+interface numbers-types {
+    enum sign {
+        plus,
+        minus
+    }
+
+    record integer {
+        r0: u64,
+        r1: u64,
+        r2: u64,
+        r3: u64,
+        sign: sign
+    }
+
+    record decimal {
+        r0: u64,
+        r1: u64,
+        r2: u64,
+        r3: u64,
+        sign: sign
+    }
+
+    enum ordering {
+        less,
+        equal,
+        greater
+    }
+}
+
+interface numbers {
+    use error.{error};
+    use numbers-types.{sign, integer, decimal, ordering};
+
+    u64-to-integer: func(i: u64) -> integer;
+    s64-to-integer: func(i: s64) -> integer;
+    string-to-integer: func(s: string) -> result<integer, error>;
+    integer-to-string: func(i: integer) -> string;
+    eq-integer: func(a: integer, b: integer) -> bool;
+    cmp-integer: func(a: integer, b: integer) -> ordering;
+    add-integer: func(a: integer, b: integer) -> result<integer, error>;
+    sub-integer: func(a: integer, b: integer) -> result<integer, error>;
+    mul-integer: func(a: integer, b: integer) -> result<integer, error>;
+    div-integer: func(a: integer, b: integer) -> result<integer, error>;
+    /// Floor and remainder of (a * b + carry) / divisor, with a wide intermediate.
+    /// All inputs must be nonnegative; divisor must be positive.
+    mul-add-div-rem-integer: func(a: integer, b: integer, carry: integer, divisor: integer) -> result<tuple<integer, integer>, error>;
+    sqrt-integer: func(i: integer) -> result<integer, error>;
+
+    integer-to-decimal: func(i: integer) -> result<decimal, error>;
+    decimal-to-integer: func(d: decimal) -> result<integer, error>;
+    u64-to-decimal: func(i: u64) -> result<decimal, error>;
+    s64-to-decimal: func(i: s64) -> result<decimal, error>;
+    f64-to-decimal: func(f: f64) -> result<decimal, error>;
+    string-to-decimal: func(s: string) -> result<decimal, error>;
+    decimal-to-string: func(d: decimal) -> string;
+    eq-decimal: func(a: decimal, b: decimal) -> result<bool, error>;
+    cmp-decimal: func(a: decimal, b: decimal) -> ordering;
+    add-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
+    sub-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
+    mul-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
+    div-decimal: func(a: decimal, b: decimal) -> result<decimal, error>;
+    log10-decimal: func(a: decimal) -> result<decimal, error>;
+}
+interface testing {
+    /// Always returns an error. Used to test host function error propagation.
+    host-error: func() -> string;
+    /// Always panics. Used to test host function panic propagation.
+    host-panic: func() -> string;
+}
+
+// Plain data types that appear in cross-contract ABIs (e.g. filestorage's
+// `create-agreement(raw-file-descriptor)`). User contracts need the *type* to
+// call into native contracts, but not the file-registry *functions* — those
+// stay native-only (see built-in-native). Keep this types-only (no functions).
+interface file-registry-types {
+    record raw-file-descriptor {
+        file-id: string,
+        object-id: string,
+        nonce: list<u8>,
+        root: list<u8>,
+        padded-len: u64,
+        original-size: u64,
+        filename: string,
+    }
+
+    // Proof-verification data types. Kept here (with `raw-file-descriptor`) rather
+    // than in the native-only `file-registry` interface so `challenge-input` and
+    // its `raw-file-descriptor` field generate their storage models in the SAME
+    // module — a cross-interface record field can't yet resolve its `…Model`
+    // (see `get_model_ident`). The `verify` *function* stays native-only.
+    record challenge-input {
+        challenge-id: string,
+        file: raw-file-descriptor,
+        block-height: u64,
+        num-challenges: u64,
+        seed: list<u8>,
+        prover-id: u64,
+    }
+
+    enum verify-result {
+        verified,
+        rejected,
+        invalid,
+    }
+}
+
+interface pagination {
+    /// Explicit opt-in to cursor iteration on a view. An absent limit uses the
+    /// contract's default; an absent cursor starts at the beginning.
+    record cursor-request {
+        after: option<string>,
+        limit: option<u64>,
+    }
+}
+
+world built-in {
+    import pagination;
+    import context-types;
+    import context;
+    import numbers-types;
+    import foreign;
+    import crypto;
+    import error;
+    import numbers;
+    import testing;
+    import file-registry-types;
+}

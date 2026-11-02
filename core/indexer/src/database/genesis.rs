@@ -5,13 +5,49 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::Network;
 use libsql::{Builder, Connection, OpenFlags, params};
 
+use super::canonical_history::{self, HistoryState};
+use super::certified_history::{self, Status};
 use super::native_bootstrap::bootstrap_reader;
 use super::{Reader, Writer};
-use crate::protocol::coordinator::genesis::InitialProtocol;
+use crate::protocol::coordinator::baseline::Baseline;
+use crate::protocol::coordinator::genesis::{InitialProtocol, configured_chain, envelope};
 use crate::protocol::coordinator::selection::ExecutorVersion;
 use crate::protocol::v1::native::{NATIVE_CONTRACTS, NATIVE_PROVENANCE, native_provenance};
 use crate::protocol::v1::native_bootstrap;
 use crate::protocol::v1::storage_identity::CORE_SIGNER_ID;
+use crate::runtime::GenesisParameters;
+
+pub async fn open_node_database_for_genesis(
+    data_dir: &Path,
+    filename: &str,
+    network: Network,
+    starting_block_height: u64,
+    genesis: &GenesisParameters,
+) -> Result<(Reader, Writer)> {
+    admit_node_database(data_dir, filename, network, starting_block_height, genesis).await?;
+    let writer = Writer::new(data_dir, filename).await?;
+    let reader = Reader::new(data_dir, filename).await?;
+    Ok((reader, writer))
+}
+
+pub(crate) async fn admit_node_database(
+    data_dir: &Path,
+    filename: &str,
+    network: Network,
+    starting_block_height: u64,
+    genesis: &GenesisParameters,
+) -> Result<Baseline> {
+    let chain = configured_chain(network, starting_block_height, &envelope(genesis))?;
+    let baseline = Baseline::for_node(chain)?;
+    preflight_with_protocol(
+        &data_dir.join(filename),
+        &InitialProtocol::for_network(network),
+        Some(&baseline),
+    )
+    .await
+    .context("database protocol admission failed; database was not initialized or migrated")?;
+    Ok(baseline)
+}
 
 /// Validate existing genesis before opening connections that initialize or migrate
 /// schema. Rejected databases remain available for an explicit legacy definition.
@@ -35,6 +71,14 @@ pub async fn open_node_database(
 }
 
 async fn preflight(path: &Path, definition: &InitialProtocol) -> Result<()> {
+    preflight_with_protocol(path, definition, None).await
+}
+
+async fn preflight_with_protocol(
+    path: &Path,
+    definition: &InitialProtocol,
+    baseline: Option<&Baseline>,
+) -> Result<()> {
     match definition.executor {
         ExecutorVersion::LegacyP1 => {
             native_provenance()?;
@@ -51,7 +95,85 @@ async fn preflight(path: &Path, definition: &InitialProtocol) -> Result<()> {
     // Pin all reads to one snapshot, including the publication prefix and its
     // original provenance. Never use the normal connection initializer here.
     conn.execute("BEGIN", ()).await?;
-    validate_existing(&conn).await
+    validate_existing(&conn).await?;
+    if let Some(baseline) = baseline {
+        validate_protocol(&conn, baseline).await?;
+    }
+    Ok(())
+}
+
+async fn validate_protocol(conn: &Connection, baseline: &Baseline) -> Result<()> {
+    certified_history::require_command_schema(conn).await?;
+    let mut tables = BTreeSet::new();
+    let mut rows = conn
+        .query(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            (),
+        )
+        .await?;
+    while let Some(row) = rows.next().await? {
+        tables.insert(row.get::<String>(0)?);
+    }
+    if tables.contains("certified_history_state") {
+        let state = certified_history::frontier(conn).await?;
+        ensure!(
+            state.status != Status::Unavailable,
+            "certified protocol history unavailable"
+        );
+        if let Some(context) = state.context {
+            ensure!(
+                context == baseline.context,
+                "stored protocol {} is not supported for this configured chain by this binary",
+                hex::encode(context.protocol.0)
+            );
+            ensure!(
+                certified_history::protocol(conn, context.protocol).await? == baseline.manifest,
+                "stored protocol manifest differs from supported definition"
+            );
+            return Ok(());
+        }
+        ensure!(
+            state.status == Status::Pending
+                && state.authenticated_height == 0
+                && state.closed_height == 0,
+            "protocol history has no context at a nonempty processing position"
+        );
+    }
+    if tables.contains("canonical_history_state") {
+        let state = canonical_history::state(conn).await?;
+        ensure!(
+            matches!(state, HistoryState::PendingGenesis)
+                || matches!(state, HistoryState::Ready(cursor) if cursor.chain == baseline.context.chain
+                && cursor.ordinal == 0 && cursor.authentic),
+            "execution history exists without a supported protocol context"
+        );
+    }
+    // Only an uninitialized database may acquire a new genesis identity. Check
+    // all application tables so partial journals cannot masquerade as empty.
+    for table in tables {
+        if matches!(
+            table.as_str(),
+            "node_meta"
+                | "receipt_stream_state"
+                | "canonical_history_state"
+                | "certified_history_state"
+        ) {
+            continue;
+        }
+        let quoted = table.replace('"', "\"\"");
+        let exists = conn
+            .query(&format!("SELECT EXISTS(SELECT 1 FROM \"{quoted}\")"), ())
+            .await?
+            .next()
+            .await?
+            .context("missing protocol admission result")?
+            .get::<i64>(0)?;
+        ensure!(
+            exists == 0,
+            "populated {table} without a supported protocol context"
+        );
+    }
+    Ok(())
 }
 
 async fn validate_existing(conn: &Connection) -> Result<()> {
@@ -183,9 +305,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::database::canonical_history::{self, HistoryState};
     use crate::database::init::CREATE_SCHEMA;
     use crate::database::queries::insert_block;
+    use crate::protocol::identity::ChainId;
     use crate::reg_tester::random_x_only_pubkey;
     use crate::runtime::ownership::OwnerService;
     use crate::runtime::wit::Signer;
@@ -193,6 +315,81 @@ mod tests {
         Decimal, GenesisValidator, Runtime, Storage, TransactionContext, staking,
     };
     use crate::test_utils::{new_mock_block_hash, test_genesis, test_runtime};
+
+    #[tokio::test]
+    async fn protocol_admission_accepts_empty_and_interrupted_supported_genesis_without_writing()
+    -> Result<()> {
+        let dir = TempDir::new()?;
+        let path = dir.path().join("state.db");
+        let definition = InitialProtocol::for_network(Network::Regtest);
+        let baseline = Baseline::for_node(ChainId([3; 32]))?;
+        preflight_with_protocol(&path, &definition, Some(&baseline)).await?;
+        assert!(!path.exists());
+        let writer = Writer::new(dir.path(), "state.db").await?;
+        let conn = writer.connection();
+        let empty = snapshot(&conn).await?;
+        preflight_with_protocol(&path, &definition, Some(&baseline)).await?;
+        assert_eq!(snapshot(&conn).await?, empty);
+        certified_history::initialize(&conn).await?;
+        certified_history::begin_baseline(&conn, &baseline, 1).await?;
+        let before = snapshot(&conn).await?;
+        preflight_with_protocol(&path, &definition, Some(&baseline)).await?;
+        assert_eq!(snapshot(&conn).await?, before);
+        let other = Baseline::for_node(ChainId([4; 32]))?;
+        assert!(
+            preflight_with_protocol(&path, &definition, Some(&other))
+                .await
+                .is_err()
+        );
+        assert_eq!(snapshot(&conn).await?, before);
+        conn.execute(
+            "UPDATE certified_protocols SET manifest = ?1",
+            [vec![0u8; 32]],
+        )
+        .await?;
+        let malformed = snapshot(&conn).await?;
+        assert!(
+            preflight_with_protocol(&path, &definition, Some(&baseline))
+                .await
+                .is_err()
+        );
+        assert_eq!(snapshot(&conn).await?, malformed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn protocol_admission_rejects_populated_unversioned_state_without_schema_changes()
+    -> Result<()> {
+        let (dir, conn) = fixture(1).await?;
+        let genesis = test_genesis(&[]);
+        let before = snapshot(&conn).await?;
+        let result =
+            open_node_database_for_genesis(dir.path(), "state.db", Network::Regtest, 1, &genesis)
+                .await;
+        assert!(result.is_err());
+        assert_eq!(snapshot(&conn).await?, before);
+        assert!(!dir.path().join("consensus").exists());
+        Ok(())
+    }
+
+    #[cfg(kontor_managed)]
+    #[tokio::test]
+    async fn protocol_admission_does_not_adopt_an_intermediate_protocol_identity() -> Result<()> {
+        let dir = TempDir::new()?;
+        let genesis = test_genesis(&[]);
+        let chain = configured_chain(Network::Regtest, 1, &envelope(&genesis))?;
+        let writer = Writer::new(dir.path(), "state.db").await?;
+        let conn = writer.connection();
+        certified_history::initialize(&conn).await?;
+        certified_history::begin_baseline(&conn, &Baseline::current(chain)?, 1).await?;
+        let before = snapshot(&conn).await?;
+        let result =
+            open_node_database_for_genesis(dir.path(), "state.db", Network::Regtest, 1, &genesis)
+                .await;
+        assert!(result.is_err());
+        assert_eq!(snapshot(&conn).await?, before);
+        Ok(())
+    }
 
     async fn fixture(count: usize) -> Result<(TempDir, Connection)> {
         let dir = TempDir::new()?;

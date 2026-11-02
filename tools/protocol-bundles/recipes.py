@@ -13,8 +13,8 @@ from freeze_sources import verify_snapshot
 @dataclass(frozen=True)
 class Graph:
     directory: str
-    revision: str
-    version: str
+    revision: str | None
+    version: str | None
     itoa: str | None
     lift_rate: int
     kind: str = "proof"
@@ -60,7 +60,28 @@ OBSERVER_GRAPH = replace(EXECUTOR_GRAPHS["second"], directory="executor-observer
 EXECUTOR_LINK_SETS = {
     "legacy-qualification": RETAINED_EXECUTOR_GRAPHS,
     "k4-node": {"first": RETAINED_EXECUTOR_GRAPHS["first"], "observer": OBSERVER_GRAPH},
+    "managed-node": {"first": RETAINED_EXECUTOR_GRAPHS["first"], "observer": OBSERVER_GRAPH},
 }
+
+MALACHITE_REVISION = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+MALACHITE_VERSION = "0.9.0-kontor.1"
+CONSENSUS_GRAPHS = {
+    label: Graph("consensus-" + label, None, None, None, 0, kind="consensus",
+                 native_patches=("ring", "secp256k1-sys"))
+    for label in ("first", "second")
+}
+
+
+def verify_consensus_manifest(manifest):
+    dependencies = tomllib.loads(manifest.read_text())["dependencies"]
+    if "wasmtime" in dependencies:
+        raise RuntimeError("consensus graph must not contain Wasmtime")
+    engines = [value for value in dependencies.values()
+               if isinstance(value, dict) and value.get("package", "").startswith("arc-malachite")]
+    if not engines or any(value.get("git") != "https://github.com/KontorProtocol/malachite"
+                          or value.get("rev") != MALACHITE_REVISION
+                          or value.get("version") != "=" + MALACHITE_VERSION for value in engines):
+        raise RuntimeError("consensus manifest has the wrong immutable identity")
 
 
 def executor_graphs(link_set):
@@ -100,11 +121,16 @@ def verify_reservations(root, graphs=None):
         versions.add(version)
         prefixes.add(suffix(version))
     for label, graph in graphs.items():
+        manifest = graph_root(root, graph) / "protocol-bundles" / graph.directory / "Cargo.toml"
+        if graph.kind == "consensus":
+            if graph.version is not None or graph.revision is not None:
+                raise RuntimeError("consensus recipe has an unexpected Wasmtime identity")
+            verify_consensus_manifest(manifest)
+            continue
         if graph.version in versions or suffix(graph.version) in prefixes:
             raise RuntimeError(f"reserved Wasmtime version or native prefix: {label}")
         versions.add(graph.version)
         prefixes.add(suffix(graph.version))
-        manifest = graph_root(root, graph) / "protocol-bundles" / graph.directory / "Cargo.toml"
         dependency = tomllib.loads(manifest.read_text())["dependencies"]["wasmtime"]
         if dependency.get("rev") != graph.revision or dependency.get("version") != "=" + graph.version:
             raise RuntimeError(f"proof manifest has the wrong immutable identity: {label}")
@@ -113,6 +139,11 @@ def verify_reservations(root, graphs=None):
 def identity(root, label, graphs=None):
     graph = (GRAPHS if graphs is None else graphs)[label]
     base = graph_root(root, graph) / "protocol-bundles" / graph.directory
+    if graph.kind == "consensus":
+        return {"kind": "consensus", "directory": graph.directory,
+                "source_root": graph.source_root, "source_snapshot": graph.source_snapshot,
+                "malachite_revision": MALACHITE_REVISION, "malachite_version": MALACHITE_VERSION,
+                "manifest_sha256": sha(base / "Cargo.toml"), "lock_sha256": sha(base / "Cargo.lock")}
     return {"directory": graph.directory, "wasmtime_revision": graph.revision,
             "source_root": graph.source_root,
             "source_snapshot": graph.source_snapshot,

@@ -136,6 +136,11 @@ pub(crate) enum ApplicationSource {
         definition: MigrationDefinitionId,
         checkpoint: Option<[u8; 32]>,
     },
+    UpgradeControl {
+        decision: u64,
+        action: [u8; 32],
+        control: [u8; 32],
+    },
 }
 
 impl ApplicationSource {
@@ -190,6 +195,19 @@ impl ApplicationSource {
                     }
                 }
             }
+            Self::UpgradeControl {
+                decision,
+                action,
+                control,
+            } => {
+                if *decision == 0 {
+                    return Err(CodecError::InvalidValue);
+                }
+                output.tag(5)?;
+                output.u64(*decision)?;
+                output.fixed(action)?;
+                output.fixed(control)
+            }
         }
     }
 
@@ -223,6 +241,11 @@ impl ApplicationSource {
                     _ => return Err(CodecError::InvalidTag),
                 },
             },
+            5 => Self::UpgradeControl {
+                decision: input.u64()?,
+                action: input.fixed()?,
+                control: input.fixed()?,
+            },
             _ => return Err(CodecError::InvalidTag),
         })
     }
@@ -244,6 +267,12 @@ impl CanonicalApplication {
         if self.ordinal == 0 {
             return Err(CodecError::InvalidValue);
         }
+        if matches!(
+            self.source,
+            ApplicationSource::UpgradeControl { decision: 0, .. }
+        ) {
+            return Err(CodecError::InvalidValue);
+        }
         let needs_input = matches!(
             self.source,
             ApplicationSource::BlockTransactions { .. } | ApplicationSource::Batch { .. }
@@ -252,7 +281,9 @@ impl CanonicalApplication {
             return Err(CodecError::InvalidValue);
         }
         let height = match self.source {
-            ApplicationSource::Genesis { .. } => self.storage_height,
+            ApplicationSource::Genesis { .. } | ApplicationSource::UpgradeControl { .. } => {
+                self.storage_height
+            }
             ApplicationSource::BlockTransactions { height, .. }
             | ApplicationSource::BlockLifecycle { height, .. } => height,
             ApplicationSource::Batch { anchor_height, .. }

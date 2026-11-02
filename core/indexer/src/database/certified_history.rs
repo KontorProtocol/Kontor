@@ -16,6 +16,7 @@ use crate::protocol::identity::{ProtocolId, domain_digest};
 pub(crate) mod branch;
 pub(crate) mod closure;
 pub(crate) mod completion;
+pub(crate) mod control;
 pub(crate) mod finality;
 mod proof_read;
 pub(crate) mod registrations;
@@ -72,12 +73,32 @@ async fn durable_writer(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub(crate) async fn require_command_schema(conn: &Connection) -> Result<()> {
+    let mut rows = conn
+        .query("PRAGMA table_info(certified_decisions)", ())
+        .await?;
+    let mut present = false;
+    let mut typed = false;
+    while let Some(row) = rows.next().await? {
+        present = true;
+        typed |= row.get::<String>(1)? == "command_kind";
+    }
+    ensure!(
+        !present || typed,
+        "unsupported intermediate certified history schema; preserve this database and rebuild from authenticated history"
+    );
+    Ok(())
+}
+
 pub(crate) async fn initialize(conn: &Connection) -> Result<()> {
+    require_command_schema(conn).await?;
     durable_writer(conn).await?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .await?;
     tx.execute_batch(include_str!("sql/certified_history.sql"))
+        .await?;
+    tx.execute_batch(include_str!("sql/upgrade_control.sql"))
         .await?;
     tx.commit().await?;
     Ok(())
@@ -350,7 +371,7 @@ async fn load_record(
     height: u64,
 ) -> Result<(RetainedInput, usize, Option<usize>)> {
     let row = conn.query("SELECT d.decision_id, d.record, i.body, length(d.original_proof), length(d.proof_augmentation),
-        d.committee_id, d.body_digest, d.bitcoin_height, d.bitcoin_hash, d.is_block FROM certified_decisions d JOIN certified_inputs i ON d.body_digest = i.body_digest
+        d.committee_id, d.body_digest, d.bitcoin_height, d.bitcoin_hash, d.command_kind FROM certified_decisions d JOIN certified_inputs i ON d.body_digest = i.body_digest
         WHERE d.height = ?1", [height.to_be_bytes().to_vec()]).await?.next().await?.context("certified decision unavailable")?;
     let decision = Decision::decode(&row.get::<Vec<u8>>(1)?)?;
     ensure!(
@@ -364,7 +385,7 @@ async fn load_record(
     ensure!(
         u64::from_be_bytes(fixed(row.get(7)?)?) == position.0
             && fixed::<32>(row.get(8)?)? == position.1.to_byte_array()
-            && row.get::<i64>(9)? == i64::from(position.2),
+            && row.get::<i64>(9)? == position.2 as i64,
         "certified execution index differs"
     );
     let input = ExactInput::validate(decision.descriptor.clone(), row.get(2)?)?;
@@ -446,6 +467,12 @@ pub(crate) async fn append(conn: &Connection, certified: &AuthenticatedDecision)
             state.closed_height == state.authenticated_height,
             "previous decision closure unfinished"
         );
+        control::check_block_boundary(
+            &tx,
+            decision.descriptor.context,
+            &decision.descriptor.command,
+        )
+        .await?;
         tx.execute(
             "INSERT OR IGNORE INTO certified_inputs (body_digest, body) VALUES (?1, ?2)",
             params![
@@ -469,9 +496,9 @@ pub(crate) async fn append(conn: &Connection, certified: &AuthenticatedDecision)
             "retained input digest conflict"
         );
         let position = decision.descriptor.command.position();
-        tx.execute("INSERT INTO certified_decisions (height, decision_id, record, body_digest, committee_id, original_proof, bitcoin_height, bitcoin_hash, is_block)
+        tx.execute("INSERT INTO certified_decisions (height, decision_id, record, body_digest, committee_id, original_proof, bitcoin_height, bitcoin_hash, command_kind)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", params![decision.height.to_be_bytes().to_vec(), decision.id()?.to_vec(),
-                decision.encode()?, decision.descriptor.body_digest.to_vec(), decision.committee.to_vec(), certified.proof(), position.0.to_be_bytes().to_vec(), position.1.to_byte_array().to_vec(), position.2]).await?;
+                decision.encode()?, decision.descriptor.body_digest.to_vec(), decision.committee.to_vec(), certified.proof(), position.0.to_be_bytes().to_vec(), position.1.to_byte_array().to_vec(), position.2 as i64]).await?;
         branch::record(&tx, decision).await?;
         tx.execute("UPDATE certified_history_state SET authenticated_height = ?1, authenticated_id = ?2 WHERE singleton = 1",
             params![decision.height.to_be_bytes().to_vec(), decision.id()?.to_vec()]).await?;

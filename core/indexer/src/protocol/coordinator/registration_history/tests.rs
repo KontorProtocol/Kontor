@@ -115,10 +115,23 @@ fn replacement_activation_and_key_cannot_reuse_consent() -> Result<()> {
         .unwrap();
     member.0 = Address::from_public_key(&public).into_inner();
     member.1 = *public.as_bytes();
+    let replacement = next(&initial, observed)?;
     assert_ne!(
-        next(&initial, observed)?.entries[0].generation,
+        replacement.entries[0].generation,
         initial.entries[0].generation
     );
+    let restored = next(&replacement, observation())?;
+    assert_eq!(restored.entries[0].value, initial.entries[0].value);
+    assert_ne!(
+        restored.entries[0].generation,
+        initial.entries[0].generation
+    );
+    assert_ne!(
+        restored.entries[0].generation,
+        replacement.entries[0].generation
+    );
+    assert_eq!(restored.entries[1..], initial.entries[1..]);
+    restored.verify_successor(Some(&replacement))?;
     Ok(())
 }
 
