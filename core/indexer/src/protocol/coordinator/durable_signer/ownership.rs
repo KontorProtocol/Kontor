@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -15,7 +15,7 @@ use sha3::{Digest, Keccak256};
 use crate::protocol::coordinator::certified_input::EraContext;
 use crate::protocol::identity::ChainId;
 
-use super::{DurableSigner, SignerIdentity, SigningError};
+use super::{DurableSigner, SignerIdentity, SignerRecovery, SigningError, Store};
 
 const MAGIC: &[u8; 4] = b"KGO1";
 // Header: magic || chain[32] || network seed[32] || Keccak256(prefix).
@@ -31,6 +31,7 @@ struct State {
     last: u64,
     active: Option<u64>,
     seen_validators: BTreeSet<[u8; 32]>,
+    reservations: BTreeMap<u64, Option<[u8; 32]>>,
     fault: Option<String>,
 }
 
@@ -128,12 +129,14 @@ impl GenerationOwner {
         };
         let mut last = 0u64;
         let mut seen_validators = BTreeSet::new();
+        let mut reservations = BTreeMap::new();
         while let Some((generation, validator, next_digest)) = read_record(&mut journal, digest)? {
             if last.checked_add(1) != Some(generation) {
                 return Err(fault("generation journal is not consecutive"));
             }
             last = generation;
             digest = next_digest;
+            reservations.insert(generation, validator);
             if let Some(validator) = validator {
                 seen_validators.insert(validator);
             }
@@ -151,6 +154,7 @@ impl GenerationOwner {
                 last,
                 active: None,
                 seen_validators,
+                reservations,
                 fault: None,
             }),
             _ownership: ownership,
@@ -179,6 +183,7 @@ impl GenerationOwner {
         }
         state.last = generation;
         state.active = Some(generation);
+        state.reservations.insert(generation, validator);
         if let Some(validator) = validator {
             state.seen_validators.insert(validator);
         }
@@ -188,6 +193,61 @@ impl GenerationOwner {
             validator,
             prior_validator_seen,
         })
+    }
+
+    pub(crate) fn inspect_signer_recovery(
+        &self,
+        validator: [u8; 32],
+    ) -> Result<SignerRecovery, SigningError> {
+        let state = self.state.lock().map_err(poisoned)?;
+        if let Some(reason) = &state.fault {
+            return Err(SigningError::Fault(reason.clone()));
+        }
+        if state.active.is_some() {
+            return Err(fault(
+                "cannot inspect signing recovery during an active generation",
+            ));
+        }
+        let parent = self.directory.join("signers");
+        if !path_present(&parent)? {
+            return if state.seen_validators.contains(&validator) {
+                Err(fault("previous signer directory is missing"))
+            } else {
+                Ok(SignerRecovery::Absent)
+            };
+        }
+        if !fs::symlink_metadata(&parent)
+            .map_err(storage)?
+            .file_type()
+            .is_dir()
+        {
+            return Err(fault("signer parent is not a plain directory"));
+        }
+        let directory = parent.join(hex::encode(validator));
+        if !path_present(&directory)? {
+            return if state.seen_validators.contains(&validator) {
+                Err(fault("previous signer directory is missing"))
+            } else {
+                Ok(SignerRecovery::Absent)
+            };
+        }
+        if !state.seen_validators.contains(&validator) {
+            return Err(fault(
+                "signer journal exists without generation reservation",
+            ));
+        }
+        let network_keypair = Keypair::ed25519_from_bytes(self.network_key)
+            .map_err(|_| fault("persisted network key is invalid"))?;
+        let network_peer_id = network_keypair.public().to_peer_id().to_bytes();
+        let retained = Store::inspect_existing(&directory, self.chain, validator, |identity| {
+            if state.reservations.get(&identity.generation) != Some(&Some(validator))
+                || identity.network_peer_id != network_peer_id
+            {
+                return Err(fault("signer generation differs from owner reservation"));
+            }
+            Ok(())
+        })?;
+        Ok(SignerRecovery::Retained(retained))
     }
 }
 
@@ -436,6 +496,158 @@ mod tests {
 
     fn open_owner(root: &TempDir) -> Arc<GenerationOwner> {
         GenerationOwner::open(&directory(root), test_fixtures::context().chain).unwrap()
+    }
+
+    fn retained_history(root: &TempDir, signed: bool) -> (Arc<GenerationOwner>, [u8; 32], PathBuf) {
+        let owner = open_owner(root);
+        let key = PrivateKey::from([11; 32]);
+        let public = *key.public_key().as_bytes();
+        let generation = owner.reserve(Some(public)).unwrap();
+        let signer =
+            DurableSigner::open_owned(generation.clone(), test_fixtures::context(), key.clone())
+                .unwrap();
+        let address = Address::from_public_key(&key.public_key());
+        let committee = CommitteeRecord {
+            context: test_fixtures::context(),
+            height: 1,
+            decision: [7; 32],
+            stage: 0,
+            lineage: [0; 32],
+            members: vec![AuthorityMember {
+                holder: "validator".into(),
+                generation: [1; 32],
+                address: address.into_inner(),
+                key: public,
+                power: 1,
+            }],
+        };
+        signer.authorize_height(&committee, [9; 32]).unwrap();
+        if signed {
+            let vote = Vote::new_prevote(Height::new(1), Round::new(0), NilOrVal::Nil, address);
+            signer
+                .sign(SigningRequest::Vote {
+                    generation: generation.generation(),
+                    height: 1,
+                    round: 0,
+                    step: VoteStep::Prevote,
+                    value_id: None,
+                    validator_address: address.into_inner(),
+                    preimage: vote.to_sign_bytes().to_vec(),
+                })
+                .unwrap();
+        }
+        drop(signer);
+        generation.joined().unwrap();
+        let journal = directory(root)
+            .join("signers")
+            .join(hex::encode(public))
+            .join("signatures.log");
+        (owner, public, journal)
+    }
+
+    #[test]
+    fn recovery_inspection_is_read_only_and_distinguishes_authorization_from_signature() {
+        let fresh = TempDir::new().unwrap();
+        let owner = open_owner(&fresh);
+        let public = *PrivateKey::from([11; 32]).public_key().as_bytes();
+        assert_eq!(
+            owner.inspect_signer_recovery(public).unwrap(),
+            SignerRecovery::Absent
+        );
+        assert!(!directory(&fresh).join("signers").exists());
+        drop(owner);
+
+        let root = TempDir::new().unwrap();
+        let (owner, public, journal) = retained_history(&root, false);
+        let before = fs::read(&journal).unwrap();
+        let generations_before = fs::read(directory(&root).join("generations.log")).unwrap();
+        let SignerRecovery::Retained(recovery) = owner.inspect_signer_recovery(public).unwrap()
+        else {
+            panic!("retained signer was absent");
+        };
+        assert_eq!(recovery.highest_signed_height, None);
+        let authorization = recovery.latest_authorization.unwrap();
+        assert_eq!(authorization.height, 1);
+        assert_eq!(authorization.context, test_fixtures::context());
+        assert_eq!(authorization.predecessor_decision, [7; 32]);
+        assert_eq!(authorization.completed_closure, [9; 32]);
+        assert_eq!(fs::read(&journal).unwrap(), before);
+        assert_eq!(
+            fs::read(directory(&root).join("generations.log")).unwrap(),
+            generations_before
+        );
+        let next = owner.reserve(Some(public)).unwrap();
+        assert_eq!(next.generation(), 2);
+    }
+
+    #[test]
+    fn recovery_inspection_reports_signed_height_and_rejects_damaged_history() {
+        for damage in [None, Some("partial"), Some("digest"), Some("missing")] {
+            let root = TempDir::new().unwrap();
+            let (owner, public, journal) = retained_history(&root, true);
+            let mut bytes = fs::read(&journal).unwrap();
+            match damage {
+                None => {
+                    let SignerRecovery::Retained(recovery) =
+                        owner.inspect_signer_recovery(public).unwrap()
+                    else {
+                        panic!("retained signer was absent");
+                    };
+                    assert_eq!(recovery.highest_signed_height, Some(1));
+                    assert_eq!(recovery.latest_authorization.unwrap().height, 1);
+                }
+                Some("partial") => {
+                    bytes.pop();
+                    fs::write(&journal, &bytes).unwrap();
+                }
+                Some("digest") => {
+                    *bytes.last_mut().unwrap() ^= 1;
+                    fs::write(&journal, &bytes).unwrap();
+                }
+                Some("missing") => fs::remove_file(&journal).unwrap(),
+                _ => unreachable!(),
+            }
+            if damage.is_some() {
+                assert!(owner.inspect_signer_recovery(public).is_err());
+                if damage != Some("missing") {
+                    assert_eq!(fs::read(&journal).unwrap(), bytes);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn recovery_inspection_requires_matching_generation_reservation() {
+        let root = TempDir::new().unwrap();
+        let owner = open_owner(&root);
+        let first_key = PrivateKey::from([11; 32]);
+        let first_public = *first_key.public_key().as_bytes();
+        let first = owner.reserve(Some(first_public)).unwrap();
+        let signer =
+            DurableSigner::open_owned(first.clone(), test_fixtures::context(), first_key.clone())
+                .unwrap();
+        drop(signer);
+        first.joined().unwrap();
+
+        let second_key = PrivateKey::from([12; 32]);
+        let second = owner
+            .reserve(Some(*second_key.public_key().as_bytes()))
+            .unwrap();
+        assert!(owner.inspect_signer_recovery(first_public).is_err());
+        let mut wrong_identity = first
+            .signer_identity(test_fixtures::context(), &first_key)
+            .unwrap();
+        wrong_identity.generation = second.generation();
+        let signer_directory = directory(&root)
+            .join("signers")
+            .join(hex::encode(first_public));
+        let wrong = DurableSigner::open(&signer_directory, wrong_identity, first_key).unwrap();
+        drop(wrong);
+        second.joined().unwrap();
+        assert!(matches!(
+            owner.inspect_signer_recovery(first_public),
+            Err(SigningError::Fault(_))
+        ));
     }
 
     #[test]

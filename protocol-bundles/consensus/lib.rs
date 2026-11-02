@@ -13,6 +13,8 @@ pub use factory::{network_peer_id, start};
 mod consensus;
 mod owner;
 mod protocol;
+mod recovery;
+pub use recovery::{WalInspection, inspect_protected_wal};
 mod replies;
 mod wire;
 

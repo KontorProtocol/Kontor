@@ -12,7 +12,8 @@ use crate::consensus::{Address, Ctx, Proposal, ValueId, Vote};
 use crate::protocol::coordinator::certified_decision::CommitteeRecord;
 use crate::protocol::coordinator::certified_input::{Descriptor, EraContext};
 
-use self::store::{EntryRole, HeightAuthorization, Store, ValidatedRequest};
+use self::store::{EntryRole, Store, ValidatedRequest};
+pub(crate) use self::store::{HeightAuthorization, RetainedSignerRecovery};
 #[cfg(kontor_managed)]
 pub(crate) use ownership::GenerationOwner;
 pub(crate) use ownership::OwnedGeneration;
@@ -75,6 +76,12 @@ pub(crate) enum SigningError {
     Fenced,
     Storage(String),
     Fault(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SignerRecovery {
+    Absent,
+    Retained(RetainedSignerRecovery),
 }
 
 impl fmt::Display for SigningError {
