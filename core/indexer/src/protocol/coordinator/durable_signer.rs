@@ -79,6 +79,10 @@ pub(crate) enum SigningError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "One fixed-size recovery snapshot is passed during startup, not retained in a collection"
+)]
 pub(crate) enum SignerRecovery {
     Absent,
     Retained(RetainedSignerRecovery),
