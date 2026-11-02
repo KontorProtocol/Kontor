@@ -1,0 +1,9 @@
+[package]
+name = "numerics"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+fastnum = { workspace = true }
+num = { workspace = true }

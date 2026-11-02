@@ -161,10 +161,23 @@ pub(crate) struct Decision {
 }
 
 impl Decision {
-    pub(crate) fn encode(&self) -> Result<Vec<u8>, CodecError> {
-        if self.height == 0 {
+    fn validate_position(&self) -> Result<(), CodecError> {
+        if self.height == 0
+            || self
+                .descriptor
+                .transition
+                .as_ref()
+                .is_some_and(|transition| {
+                    self.height.checked_add(1) != Some(transition.start_height)
+                })
+        {
             return Err(CodecError::InvalidValue);
         }
+        Ok(())
+    }
+
+    pub(crate) fn encode(&self) -> Result<Vec<u8>, CodecError> {
+        self.validate_position()?;
         let mut output = Encoder::default();
         output.fixed(b"KCD1")?;
         output.u64(self.height)?;
@@ -186,9 +199,7 @@ impl Decision {
             descriptor: Descriptor::decode(input.bytes()?)?,
         };
         input.finish()?;
-        if value.height == 0 {
-            return Err(CodecError::InvalidValue);
-        }
+        value.validate_position()?;
         Ok(value)
     }
 

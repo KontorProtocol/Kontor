@@ -1,3 +1,4 @@
+import type { EffectiveContractArtifact as WireEffectiveContractArtifact } from "./bindings.js";
 import { hex } from "@scure/base";
 
 import type {
@@ -113,5 +114,31 @@ export function provenanceFromWire(w: WireBuildProvenance): BuildProvenance {
     },
     image: w.image,
     platform,
+  };
+}
+
+/** Selected artifact bytes, before component decoding (including compression). */
+export interface EffectiveArtifact {
+  sha256: string;
+  publishedSha256: string;
+  source: "publication" | "protocol_native";
+  protocolId: string | null;
+  executionDefinition: string;
+}
+
+export interface ContractProvenance {
+  entries: ProvenanceEntry[];
+  effectiveArtifact: EffectiveArtifact;
+}
+
+export function effectiveArtifactFromWire(
+  value: WireEffectiveContractArtifact,
+): EffectiveArtifact {
+  return {
+    sha256: value.sha256,
+    publishedSha256: value.published_sha256,
+    source: value.source,
+    protocolId: value.protocol_id,
+    executionDefinition: value.execution_definition,
   };
 }

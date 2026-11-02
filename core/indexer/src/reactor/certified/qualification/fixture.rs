@@ -11,14 +11,14 @@ use bitcoin::transaction::Version;
 use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
 use indexer_types::{Inst, InstKind, Insts, serialize};
 
-pub(super) fn issuance_transaction() -> Result<Transaction> {
+pub(crate) fn issuance_transaction() -> Result<Transaction> {
     raw_transaction(Insts::direct(vec![Inst {
         gas_limit: 100_000,
         kind: InstKind::Issuance,
     }]))
 }
 
-fn raw_transaction(instructions: Insts) -> Result<Transaction> {
+pub(crate) fn raw_transaction(instructions: Insts) -> Result<Transaction> {
     let secp = Secp256k1::new();
     let key = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[38; 32])?);
     let public = key.x_only_public_key().0;

@@ -1,4 +1,7 @@
+pub(crate) mod activation;
+pub(crate) mod activation_execution;
 pub(crate) mod application_closure;
+pub(crate) mod artifacts;
 pub(crate) mod baseline;
 pub(crate) mod bootstrap;
 pub(crate) mod certified_decision;
@@ -20,6 +23,7 @@ pub(crate) mod manifest;
 pub(crate) mod migration;
 mod migration_export;
 pub(crate) mod registration_history;
+pub(crate) mod registry;
 pub(crate) mod replay_input;
 pub(crate) mod selection;
 pub(crate) mod v1;
@@ -32,3 +36,6 @@ pub(crate) const fn minimum_prune_retention_blocks() -> u64 {
 }
 #[cfg(all(test, not(kontor_node)))]
 pub(crate) mod view;
+
+#[cfg(any(kontor_managed, test))]
+pub(crate) mod successor;

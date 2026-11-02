@@ -7,7 +7,9 @@ from pathlib import Path
 
 from build import ROOT, digest, write_json
 from provenance import fingerprint, package_sources, repository_sources
-from qualify_node import CASES, verify_storage_contracts, verify_certified_history, verify_managed_startup
+from qualify_node import (CASES, baseline_graphs, verify_executor_observations,
+                          verify_storage_contracts, verify_certified_history, verify_managed_startup)
+from transition_evidence import transition_semantics, verify_recovery, verify_authorization
 from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, executor_graphs, graph_root, identity
 from semantic_baseline import verify as verify_semantics
 from symbol_tool import TOOLCHAIN
@@ -115,13 +117,34 @@ def load_cell(path, root, link_set=None):
     verify_certified_history(observations, link_set, root)
     verify_managed_startup(observations, link_set)
     graphs = list(recipes)
-    require(execution['graphs'] == graphs and [item['graph'] for item in observations['executors']] == graphs,
-            'missing or duplicate execution graph')
+    require(execution['graphs'] == graphs, 'missing or duplicate execution graph')
+    verify_executor_observations(observations, link_set)
     require([item['graph'] for item in build['graphs']] == graphs, 'missing or duplicate build graph')
-    require(observations['executors'][0]['observations'] == observations['executors'][1]['observations'],
-            'within-node observations disagree')
-    require(execution['semantic_baseline'] == verify_semantics(observations, root, graphs),
+    require(execution['semantic_baseline'] == verify_semantics(observations, root, baseline_graphs(link_set)),
             'historical semantic comparison record differs')
+    if link_set == 'managed-node':
+        transition = execution.get('transition')
+        require(isinstance(transition, dict) and set(transition) == {'stdout_sha256', 'stderr_sha256'},
+                'missing managed transition evidence')
+        file_hash(directory / 'node-transition.stdout.json', transition['stdout_sha256'])
+        file_hash(directory / 'node-transition.stderr.log', transition['stderr_sha256'])
+        observations['transition'] = transition_semantics(read(directory / 'node-transition.stdout.json'), root)
+        recovery = execution.get('recovery')
+        require(isinstance(recovery, dict) and set(recovery) == {'stdout_sha256', 'stderr_sha256'},
+                'missing managed recovery evidence')
+        file_hash(directory / 'node-recovery.stdout.json', recovery['stdout_sha256'])
+        file_hash(directory / 'node-recovery.stderr.log', recovery['stderr_sha256'])
+        observations['recovery'] = verify_recovery(read(directory / 'node-recovery.stdout.json'))
+        authorization = execution.get('authorization')
+        require(isinstance(authorization, dict) and set(authorization) == {'stdout_sha256', 'stderr_sha256'},
+                'missing managed authorization evidence')
+        file_hash(directory / 'node-authorization.stdout.json', authorization['stdout_sha256'])
+        file_hash(directory / 'node-authorization.stderr.log', authorization['stderr_sha256'])
+        observations['authorization'] = verify_authorization(read(directory / 'node-authorization.stdout.json'))
+    else:
+        require('authorization' not in execution, 'unmanaged execution cannot claim managed authorization')
+        require('recovery' not in execution, 'unmanaged execution cannot claim managed recovery')
+        require('transition' not in execution, 'unmanaged execution cannot claim managed transition')
     compiler = dict(line.split(': ', 1) for line in build['compiler'].splitlines() if ': ' in line)
     require(compiler['release'] == TOOLCHAIN and compiler['host'] == cell[0], 'wrong compiler or host')
     require(build['toolchain_inputs']['compiler'] == build['compiler'], 'compiler records disagree')

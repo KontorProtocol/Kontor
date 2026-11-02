@@ -7,6 +7,7 @@ use bitcoin::{BlockHash, Network, hashes::Hash};
 use futures_util::poll;
 use indexer_types::BlockRow;
 use libsql::params;
+use stdlib::{KeyElement, KeyPath};
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -21,9 +22,10 @@ use crate::protocol::identity::ChainId;
 use crate::protocol::migration_work::MigrationWork;
 use crate::protocol::v1::migration::{MigrationContext, MigrationFailure};
 use crate::protocol::v1::migration_definition;
+use crate::protocol::v2::{migration_definition as p2_migration, token_migration};
 use crate::runtime::bundle_session::BundleSession;
 use crate::runtime::pool::{LinkedSession, new_linked};
-use crate::runtime::{ComponentCache, Runtime, Storage};
+use crate::runtime::{ComponentCache, Decimal, Runtime, Storage};
 
 #[tokio::test]
 async fn migration_root_releases_input_before_writer_settlement_with_one_available_slot()
@@ -558,5 +560,120 @@ async fn migration_footprint_overflow_fails_before_row_write() -> Result<()> {
     lease.drain().await?;
     lease.settle(false).await?;
     lease.complete().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn p2_token_backfill_preserves_ledger_and_rolls_back_invalid_or_exhausted_input() -> Result<()>
+{
+    for scenario in ["valid", "malformed", "budget", "already-migrated"] {
+        let (_dir, session, service, cursor, hash) = context_fixture().await?;
+        session
+            .conn
+            .execute("DELETE FROM contract_state", ())
+            .await?;
+        let mut expected = Vec::new();
+        for (holder, amount) in [
+            ("core".to_string(), "5"),
+            ("burn".to_string(), "1"),
+            ("ordering_pool".to_string(), "2"),
+            ("storage_pool".to_string(), "3"),
+            ("42".to_string(), "4"),
+            (format!("{}:7", "AB".repeat(32)), "6"),
+            ("43".to_string(), "0"),
+            ("44".to_string(), "-1"),
+        ] {
+            let key = KeyPath::new().push_interned(0).push(&holder);
+            let value = postcard::to_allocvec(&Decimal::from(amount).encode())?;
+            session.conn.execute(
+                "INSERT INTO contract_state (contract_id, height, path, value, size, deleted) VALUES (1, 1, ?1, ?2, ?3, 0)",
+                params![key.as_bytes(), value.as_slice(), value.len() as i64],
+            ).await?;
+            expected.push((key, value));
+        }
+        let count_key = KeyPath::new().push_interned(5);
+        if scenario == "malformed" {
+            let key = KeyPath::new().push_interned(0).push("45".to_string());
+            session.conn.execute(
+                "INSERT INTO contract_state (contract_id, height, path, value, size, deleted) VALUES (1, 1, ?1, x'ff', 1, 0)",
+                [key.as_bytes()],
+            ).await?;
+        } else if scenario == "already-migrated" {
+            session.conn.execute(
+                "INSERT INTO contract_state (contract_id, height, path, value, size, deleted) VALUES (1, 1, ?1, x'06', 1, 0)",
+                [count_key.as_bytes()],
+            ).await?;
+        }
+        let input = MigrationInput::open(&session.conn).await?;
+        let selection = select_legacy_p1(
+            &session.conn,
+            Network::Regtest,
+            ApplicationPosition::Migration {
+                anchor_height: 1,
+                anchor_hash: hash,
+            },
+        )
+        .await?;
+        let mut lease = service
+            .begin_linked_migration_reserved(
+                &session,
+                service.reserve_root_capacity().await?,
+                selection.clone(),
+                input.clone(),
+            )
+            .await?;
+        begin_unit(&session, &selection, Network::Regtest).await?;
+        input.pin(cursor, 1, hash).await?;
+        let exported = session
+            .executor
+            .owner
+            .clone()
+            .downcast::<BundleSession>()
+            .map_err(|_| anyhow!("wrong fixture executor"))?;
+        let runtime = exported.test_runtime().await;
+        // Exercise the real routine and owned snapshot/settlement here. Registered
+        // P2 selection is covered separately by activation integration.
+        let mut budget = p2_migration::token_count(session.executor.execution_definition?).budget;
+        if scenario == "budget" {
+            budget.write_operations = 0;
+        }
+        let mut context = MigrationContext::new(
+            &runtime.storage,
+            input.callbacks(),
+            budget,
+            runtime.storage.bundle_owner.clone().unwrap(),
+        )
+        .await?;
+        let result = token_migration::backfill(&mut context).await;
+        match scenario {
+            "valid" => {
+                result?;
+                assert_eq!(context.used().write_operations, 1);
+                assert_eq!(context.current_value(1, &count_key).await?, Some(vec![6]));
+                context.finish()?;
+            }
+            "budget" => assert_eq!(result.unwrap_err(), MigrationFailure::Budget),
+            _ => assert!(matches!(result, Err(MigrationFailure::InvalidOperation(_)))),
+        }
+        for (key, value) in &expected {
+            assert_eq!(
+                runtime.storage.get(1024, 1, key).await?,
+                Some(value.clone())
+            );
+        }
+        drop(runtime);
+        lease.drain().await?;
+        lease.settle(scenario == "valid").await?;
+        lease.complete().await?;
+        let stored = session.conn.query(
+            "SELECT value FROM contract_state WHERE contract_id = 1 AND path = ?1 AND deleted = 0", [count_key.as_bytes()],
+        ).await?.next().await?;
+        assert_eq!(
+            stored.is_some(),
+            matches!(scenario, "valid" | "already-migrated")
+        );
+        assert!(session.conn.is_autocommit());
+        assert_eq!(service.active_roots().await, 0);
+    }
     Ok(())
 }

@@ -88,6 +88,7 @@ class ConsensusInputs(unittest.TestCase):
                 shutil.copyfile(ROOT / relative, destination)
             before = fingerprint(consensus_sources(root))
             for relative in ("protocol-bundles/consensus/owner.rs", "core/indexer/src/consensus/value.rs",
+                             "core/indexer/src/protocol/coordinator/activation.rs",
                              "core/indexer/src/protocol/coordinator/certified_input.rs",
                              "core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs",
                              "core/indexer/src/protocol/coordinator/control/test-vector.json",

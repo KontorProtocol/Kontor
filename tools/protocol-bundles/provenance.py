@@ -64,6 +64,7 @@ def consensus_sources(root):
         for path in local_source_files(root / relative, root.resolve()):
             sources[str(path.relative_to(root))] = sha(path)
     for name in ("identity.rs", "canonical_codec.rs", "migration_work.rs",
+                 "coordinator/activation.rs",
                  "coordinator/certified_input.rs", "coordinator/certified_decision.rs",
                  "coordinator/control.rs", "coordinator/manifest.rs"):
         relative = "core/indexer/src/protocol/" + name

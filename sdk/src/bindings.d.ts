@@ -127,6 +127,8 @@ export type ComposeOutputs = {
  */
 export type ConsensusMode = "validator" | "follower";
 
+export type ContractArtifactSource = "publication" | "protocol_native";
+
 export type ContractFootprint = {
   contract_id: number;
   contract_name: string;
@@ -151,12 +153,26 @@ export type ContractListRow = {
 };
 
 /**
- * A contract's full append-only provenance log, oldest first — the last entry
- * is the current claim, earlier ones are the audit trail.
+ * Publication claims and the artifact selected by the current protocol.
  */
-export type ContractProvenanceResponse = { entries: Array<ProvenanceEntry> };
+export type ContractProvenanceResponse = {
+  entries: Array<ProvenanceEntry>;
+  effective_artifact: EffectiveContractArtifact;
+};
 
 export type ContractResponse = { wit: string };
+
+/**
+ * SHA-256 hashes cover stored artifact bytes (including compression), before
+ * component decoding. Publication claims do not attest a protocol replacement.
+ */
+export type EffectiveContractArtifact = {
+  sha256: string;
+  published_sha256: string;
+  source: ContractArtifactSource;
+  protocol_id: string | null;
+  execution_definition: string;
+};
 
 export type ErrorResponse = { error: string };
 

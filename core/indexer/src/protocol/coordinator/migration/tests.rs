@@ -16,12 +16,15 @@ use tokio::process::Command;
 use tokio::sync::Notify;
 use tokio::time::{sleep, timeout};
 
-use super::{MigrationAttemptWork, MigrationRejected, MigrationRequest, apply};
+use super::{MigrationAttemptWork, MigrationRejected, MigrationRequest, apply, begin};
 use crate::database::canonical_history::{self, ApplicationCursor, HistoryState};
+use crate::database::certified_history::{self, activation, control};
 use crate::database::connection::new_connection;
 use crate::database::queries::{get_checkpoint_latest, insert_block};
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
 use crate::protocol::canonical_input::CanonicalInput;
+use crate::protocol::coordinator::baseline::Baseline;
+use crate::protocol::coordinator::control::{ControlState, PendingPlan};
 use crate::protocol::coordinator::linked::{
     begin_canonical_unit, finish_canonical_unit, link_runtime,
 };
@@ -155,6 +158,252 @@ async fn selection(
 async fn live_value(session: &LinkedSession, key: &[u8]) -> Result<Option<Vec<u8>>> {
     Ok(session.conn.query("SELECT s.value FROM current_contract_state c JOIN contract_state s USING (contract_id, path, height) WHERE c.contract_id = 1 AND c.path = ?1", [key])
         .await?.next().await?.map(|row| row.get(0)).transpose()?)
+}
+
+// Install an already accepted control snapshot for these transaction-level
+// tests. Signed authorization and notice are covered by control admission tests.
+async fn scheduled_fixture() -> Result<(
+    TempDir,
+    LinkedSession,
+    OwnerService,
+    MigrationRequest,
+    ControlState,
+)> {
+    let (dir, session, service, mut request) = fixture(true).await?;
+    certified_history::initialize(&session.conn).await?;
+    let baseline = Baseline::current(request.expected.chain)?;
+    let mut target = baseline.manifest.clone();
+    target.protocol_number = 2;
+    target.predecessor = baseline.context.protocol;
+    target.state_schema = 2;
+    target.output_state_schema = 2;
+    target.migration = request.definition.id()?;
+    let state = ControlState {
+        context: baseline.context,
+        current_manifest: baseline.manifest,
+        head: [10; 32],
+        nonce: 1,
+        pending: Some(PendingPlan {
+            id: request.plan,
+            manifest: target.clone(),
+            activation: 2,
+            consumed: false,
+        }),
+    };
+    session.conn.execute("BEGIN", ()).await?;
+    let cursor = ready(&session.conn).await?;
+    let application = CanonicalApplication {
+        chain: cursor.chain,
+        ordinal: cursor.ordinal + 1,
+        parent_lineage: cursor.lineage,
+        execution: request.execution,
+        storage_height: 1,
+        source: ApplicationSource::UpgradeControl {
+            decision: 1,
+            action: [9; 32],
+            control: state.head,
+        },
+        input: None,
+    };
+    canonical_history::append(&session.conn, &application).await?;
+    control::record(
+        &session.conn,
+        &application,
+        &state,
+        control::Position {
+            decision: 1,
+            stage: 1,
+        },
+    )
+    .await?;
+    let hash = BlockHash::from_byte_array([4; 32]);
+    insert_block(
+        &session.conn,
+        BlockRow::builder().height(2).hash(hash).build(),
+    )
+    .await?;
+    for (source, input) in [
+        (
+            ApplicationSource::BlockTransactions {
+                height: 2,
+                hash: hash.to_byte_array(),
+                parent_hash: request.anchor_hash.to_byte_array(),
+            },
+            Some(CanonicalInput::bitcoin(&[])?),
+        ),
+        (
+            ApplicationSource::BlockLifecycle {
+                height: 2,
+                hash: hash.to_byte_array(),
+            },
+            None,
+        ),
+    ] {
+        let cursor = ready(&session.conn).await?;
+        canonical_history::append(
+            &session.conn,
+            &CanonicalApplication {
+                chain: cursor.chain,
+                ordinal: cursor.ordinal + 1,
+                parent_lineage: cursor.lineage,
+                execution: request.execution,
+                storage_height: 2,
+                source,
+                input,
+            },
+        )
+        .await?;
+    }
+    session.conn.execute("COMMIT", ()).await?;
+    request.expected = ready(&session.conn).await?;
+    request.anchor_height = 2;
+    request.anchor_hash = hash;
+    request.execution = ExecutionIdentity::Protocol {
+        protocol: target.id()?,
+        execution: target.executor,
+    };
+    Ok((dir, session, service, request, state))
+}
+
+#[tokio::test]
+async fn activation_records_share_migration_commit_and_rollback() -> Result<()> {
+    let (dir, session, service, request, pending) = scheduled_fixture().await?;
+    let reader = Builder::new_local(dir.path().join("migration.db"))
+        .build()
+        .await?
+        .connect()?;
+    let selected = selection(&session, &request).await?;
+    let mut owned = begin(&service, &session, &selected, Network::Regtest, &request).await?;
+    let receipt = owned.execute().await?;
+    let active = activation::record(&session.conn, &receipt).await?;
+    assert_eq!(
+        active.target()?.id()?,
+        pending.pending.as_ref().unwrap().manifest.id()?
+    );
+    assert!(
+        control::current(&session.conn)
+            .await?
+            .unwrap()
+            .pending
+            .is_none()
+    );
+    assert!(activation::current(&reader).await?.is_none());
+    assert_eq!(control::current(&reader).await?, Some(pending.clone()));
+    owned.finish(Ok(())).await?;
+    assert_eq!(activation::current(&reader).await?, Some(active));
+    assert_eq!(
+        live_value(&session, b"migration-output").await?,
+        Some(b"payload".to_vec())
+    );
+
+    rollback(&service, &session, 2).await?;
+    assert!(activation::current(&session.conn).await?.is_some());
+    assert_eq!(
+        live_value(&session, b"migration-output").await?,
+        Some(b"payload".to_vec())
+    );
+    rollback(&service, &session, 1).await?;
+    assert!(activation::current(&session.conn).await?.is_none());
+    assert_eq!(
+        control::current(&session.conn).await?,
+        Some(pending.clone())
+    );
+    assert_eq!(
+        live_value(&session, b"migration-input").await?,
+        Some(b"payload".to_vec())
+    );
+    assert_eq!(live_value(&session, b"migration-output").await?, None);
+    assert!(activation::current(&reader).await?.is_none());
+    assert_eq!(control::current(&reader).await?, Some(pending));
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_activation_publication_undoes_migration_and_consumption() -> Result<()> {
+    let (_dir, session, service, request, pending) = scheduled_fixture().await?;
+    let selected = selection(&session, &request).await?;
+    let mut owned = begin(&service, &session, &selected, Network::Regtest, &request).await?;
+    let receipt = owned.execute().await?;
+    activation::record(&session.conn, &receipt).await?;
+    let error = owned
+        .finish::<()>(Err(anyhow!("injected closure publication failure")))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("migration work consumed"));
+    assert!(session.conn.is_autocommit());
+    assert_eq!(ready(&session.conn).await?, request.expected);
+    assert_eq!(control::current(&session.conn).await?, Some(pending));
+    assert!(activation::current(&session.conn).await?.is_none());
+    assert!(
+        canonical_history::surviving_migration_result(
+            &session.conn,
+            receipt.application.migration_key()?
+        )
+        .await?
+        .is_none()
+    );
+    assert_eq!(
+        live_value(&session, b"migration-input").await?,
+        Some(b"payload".to_vec())
+    );
+    assert_eq!(live_value(&session, b"migration-output").await?, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn owned_migration_cannot_commit_without_successful_execution() -> Result<()> {
+    let (_dir, session, service, request) = fixture(true).await?;
+    let selected = selection(&session, &request).await?;
+    let owned = begin(&service, &session, &selected, Network::Regtest, &request).await?;
+    assert!(owned.finish(Ok(())).await.is_err());
+    assert!(session.conn.is_autocommit());
+    assert_eq!(ready(&session.conn).await?, request.expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn activation_rejects_a_completed_migration_for_another_plan() -> Result<()> {
+    let (_dir, session, service, mut request, pending) = scheduled_fixture().await?;
+    request.plan = PlanId([99; 32]);
+    let selected = selection(&session, &request).await?;
+    let mut owned = begin(&service, &session, &selected, Network::Regtest, &request).await?;
+    let receipt = owned.execute().await?;
+    let result = activation::record(&session.conn, &receipt).await;
+    assert!(result.is_err());
+    assert!(owned.finish(result).await.is_err());
+    assert_eq!(ready(&session.conn).await?, request.expected);
+    assert_eq!(control::current(&session.conn).await?, Some(pending));
+    assert!(activation::current(&session.conn).await?.is_none());
+    assert_eq!(live_value(&session, b"migration-output").await?, None);
+    assert_eq!(
+        live_value(&session, b"migration-input").await?,
+        Some(b"payload".to_vec())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_migration_cannot_commit_when_caller_discards_error() -> Result<()> {
+    let (_dir, session, service, mut request) = fixture(true).await?;
+    request.definition =
+        migration_definition::qualification(session.executor.execution_definition?, true);
+    let selected = selection(&session, &request).await?;
+    let mut owned = begin(&service, &session, &selected, Network::Regtest, &request).await?;
+    let error = owned.execute().await.unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<MigrationRejected>(),
+        Some(&MigrationRejected::Budget)
+    );
+    let error = owned.finish(Ok(())).await.unwrap_err();
+    assert!(format!("{error:#}").contains("cannot commit an unfinished or failed migration"));
+    assert_eq!(ready(&session.conn).await?, request.expected);
+    assert_eq!(live_value(&session, b"migration-output").await?, None);
+    assert_eq!(
+        live_value(&session, b"migration-input").await?,
+        Some(b"payload".to_vec())
+    );
+    assert!(session.conn.is_autocommit());
+    Ok(())
 }
 
 #[tokio::test]

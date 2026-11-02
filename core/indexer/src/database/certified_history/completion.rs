@@ -3,10 +3,11 @@ use bitcoin::hashes::Hash;
 use libsql::{Connection, TransactionBehavior, params};
 
 use super::{
-    Status, branch, closure, committee, durable_writer, fixed, frontier, load_verified_input,
-    registrations,
+    Status, branch, closure, committee, context_bytes, durable_writer, eras, fixed, frontier,
+    load_verified_input, protocol, registrations,
 };
 use crate::database::queries::select_block_latest;
+use crate::protocol::coordinator::activation::EraTransition;
 use crate::protocol::coordinator::closure_record::ClosureRecord;
 use crate::protocol::identity::domain_digest;
 
@@ -59,8 +60,10 @@ pub(crate) async fn completed(conn: &Connection, height: u64) -> Result<ClosureR
         .checked_add(1)
         .context("committee height exhausted")?;
     let authority = committee(conn, next).await?;
+    let mut expected = observation.authority()?;
+    expected.context = eras::next_context(conn, &record).await?;
     ensure!(
-        authority.id()? == record.next_committee && authority == observation.authority()?,
+        authority.id()? == record.next_committee && authority == expected,
         "completed closure authority differs"
     );
     let tip = branch::tip_at(conn, height)
@@ -141,7 +144,7 @@ pub(crate) async fn publish(conn: &Connection, height: u64) -> Result<ClosureRec
         "closure publication frontier differs"
     );
     let observation = registrations::at(&tx, height, progress.stage).await?;
-    let authority = observation
+    let mut authority = observation
         .authority()
         .map_err(|error| InvalidNextAuthority(error.to_string()))?;
     let tip = branch::tip(&tx)
@@ -156,6 +159,21 @@ pub(crate) async fn publish(conn: &Connection, height: u64) -> Result<ClosureRec
             && applied.hash == tip.1,
         "closure has not restored the certified Bitcoin tip"
     );
+    let selected = eras::selected_protocol(&tx).await?;
+    let transition = if selected == progress.plan.context.protocol {
+        None
+    } else {
+        EraTransition::derive(
+            progress.plan.context,
+            height,
+            progress.plan.decision,
+            progress.position.lineage,
+            &protocol(&tx, selected).await?,
+        )?
+    };
+    if let Some(transition) = &transition {
+        authority.context = transition.next;
+    }
     let record = ClosureRecord {
         context: progress.plan.context,
         height,
@@ -181,8 +199,15 @@ pub(crate) async fn publish(conn: &Connection, height: u64) -> Result<ClosureRec
     .await?;
     tx.execute("INSERT INTO decision_closures (height, closure_id, record, next_committee) VALUES (?1, ?2, ?3, ?4)",
         params![height.to_be_bytes().to_vec(), record.id()?.to_vec(), record.encode()?, record.next_committee.to_vec()]).await?;
-    tx.execute("UPDATE certified_history_state SET closed_height = ?1, closure_id = ?2 WHERE singleton = 1",
-        params![height.to_be_bytes().to_vec(), record.id()?.to_vec()]).await?;
+    if let Some(transition) = &transition {
+        tx.execute(
+            "INSERT INTO completed_protocol_eras (height, record) VALUES (?1, ?2)",
+            params![height.to_be_bytes().to_vec(), transition.encode()?],
+        )
+        .await?;
+    }
+    tx.execute("UPDATE certified_history_state SET closed_height = ?1, closure_id = ?2, context = ?3 WHERE singleton = 1",
+        params![height.to_be_bytes().to_vec(), record.id()?.to_vec(), context_bytes(authority.context)?]).await?;
     tx.commit().await?;
     Ok(record)
 }

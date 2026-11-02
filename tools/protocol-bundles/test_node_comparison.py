@@ -9,11 +9,12 @@ from unittest.mock import patch
 from build import ROOT, digest, write_json
 from compare_node import OWNERSHIP, TARGETS, compare, sources as validate_sources
 from provenance import fingerprint, package_sources, repository_sources
-from qualify_node import CASES
+from qualify_node import CASES, baseline_graphs
 from recipes import CONSENSUS_GRAPHS, EXECUTOR_GRAPHS, executor_graphs, graph_root, identity
 from semantic_baseline import verify as verify_semantics
 from test_semantic_baseline import sample_observation
 from test_node_execution import certified_sample, managed_sample
+from test_transition_evidence import transition_sample, recovery_sample, authorization_sample
 from symbol_tool import TOOLCHAIN
 from type_boundary import ADAPTER_TESTS, PROBES, inputs_for, probes_for
 
@@ -139,7 +140,7 @@ class NodeComparison(unittest.TestCase):
                  'toolchain_inputs': {'compiler': compiler}, 'node': node, 'graphs': graphs, 'consensus_graphs': consensus}
         write_json(directory / 'node-build.json', build)
         observations = {'schema': 1, 'cases': sorted(CASES), 'executors': [
-            {'graph': name, 'observations': sample_observation()} for name in recipes]}
+            {'graph': name, 'observations': sample_observation()} for name in baseline_graphs(link_set)]}
         observations['storage_contracts'] = {'rejected_before_construction': [
             f'{graph}:{mutation}' for graph in recipes
             for mutation in ('missing', 'unknown', 'changed', 'multiple')]}
@@ -151,10 +152,96 @@ class NodeComparison(unittest.TestCase):
         (directory / 'node-execution.stderr.log').write_text('synthetic execution log')
         execution = {'schema': 1, 'matching_observations': True, 'target': target, 'profile': profile, 'link_set': link_set,
                      'executable_sha256': node['executable_sha256'], 'cases': observations['cases'],
-                     'graphs': list(recipes), 'semantic_baseline': verify_semantics(observations, ROOT, list(recipes))}
+                     'graphs': list(recipes), 'semantic_baseline': verify_semantics(observations, ROOT, baseline_graphs(link_set))}
+        if link_set == 'managed-node':
+            write_json(directory / 'node-authorization.stdout.json', authorization_sample())
+            (directory / 'node-authorization.stderr.log').write_text('synthetic authorization log')
+            execution['authorization'] = {'stdout_sha256': digest(directory / 'node-authorization.stdout.json'),
+                                         'stderr_sha256': digest(directory / 'node-authorization.stderr.log')}
+            write_json(directory / 'node-recovery.stdout.json', recovery_sample())
+            (directory / 'node-recovery.stderr.log').write_text('synthetic recovery log')
+            execution['recovery'] = {'stdout_sha256': digest(directory / 'node-recovery.stdout.json'),
+                                     'stderr_sha256': digest(directory / 'node-recovery.stderr.log')}
+            write_json(directory / 'node-transition.stdout.json', transition_sample())
+            (directory / 'node-transition.stderr.log').write_text('synthetic transition log')
+            execution['transition'] = {
+                'stdout_sha256': digest(directory / 'node-transition.stdout.json'),
+                'stderr_sha256': digest(directory / 'node-transition.stderr.log')}
         write_json(directory / 'node-execution.json', execution)
         self.bind(directory)
         return directory
+
+    def test_managed_comparison_requires_transition_raw_evidence(self):
+        for cell in self.cells:
+            shutil.rmtree(cell)
+        cells = [self.cell(target, link_set='managed-node') for target in sorted(TARGETS)]
+        directory = cells[0]
+        path = directory / 'node-execution.json'
+        original = json.loads(path.read_text())
+        changed = copy.deepcopy(original)
+        changed.pop('transition')
+        write_json(path, changed)
+        with self.assertRaisesRegex(ValueError, 'missing managed transition evidence'):
+            compare(self.root, ROOT, 'release', 'success', 'managed-node')
+        write_json(path, original)
+        raw = directory / 'node-transition.stdout.json'
+        result = json.loads(raw.read_text())
+        result['closed_decisions'] = 5
+        write_json(raw, result)
+        with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+            compare(self.root, ROOT, 'release', 'success', 'managed-node')
+        original['transition']['stdout_sha256'] = digest(raw)
+        write_json(path, original)
+        with self.assertRaisesRegex(ValueError, 'transition checks'):
+            compare(self.root, ROOT, 'release', 'success', 'managed-node')
+
+    def test_managed_comparison_requires_recovery_raw_evidence(self):
+        for cell in self.cells:
+            shutil.rmtree(cell)
+        cells = [self.cell(target, link_set='managed-node') for target in sorted(TARGETS)]
+        directory = cells[0]
+        path = directory / 'node-execution.json'
+        original = json.loads(path.read_text())
+        changed = copy.deepcopy(original)
+        changed.pop('recovery')
+        write_json(path, changed)
+        with self.assertRaisesRegex(ValueError, 'missing managed recovery evidence'):
+            compare(self.root, ROOT, 'release', 'success', 'managed-node')
+        write_json(path, original)
+        raw = directory / 'node-recovery.stdout.json'
+        result = json.loads(raw.read_text())
+        result['finality_replay'].pop()
+        write_json(raw, result)
+        with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+            compare(self.root, ROOT, 'release', 'success', 'managed-node')
+        original['recovery']['stdout_sha256'] = digest(raw)
+        write_json(path, original)
+        with self.assertRaisesRegex(ValueError, 'recovery replay cases missing'):
+            compare(self.root, ROOT, 'release', 'success', 'managed-node')
+
+    def test_managed_comparison_requires_authorization_raw_evidence(self):
+        for cell in self.cells:
+            shutil.rmtree(cell)
+        cells = [self.cell(target, link_set='managed-node') for target in sorted(TARGETS)]
+        directory = cells[0]
+        path = directory / 'node-execution.json'
+        original = json.loads(path.read_text())
+        changed = copy.deepcopy(original)
+        changed.pop('authorization')
+        write_json(path, changed)
+        with self.assertRaisesRegex(ValueError, 'missing managed authorization evidence'):
+            compare(self.root, ROOT, 'release', 'success', 'managed-node')
+        write_json(path, original)
+        raw = directory / 'node-authorization.stdout.json'
+        result = json.loads(raw.read_text())
+        result['orphaned_p2_batch_not_replayed'] = False
+        write_json(raw, result)
+        with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+            compare(self.root, ROOT, 'release', 'success', 'managed-node')
+        original['authorization']['stdout_sha256'] = digest(raw)
+        write_json(path, original)
+        with self.assertRaisesRegex(ValueError, 'authorization replay evidence missing'):
+            compare(self.root, ROOT, 'release', 'success', 'managed-node')
 
     def test_managed_comparison_binds_consensus_sources_and_actual_controls(self):
         for cell in self.cells:

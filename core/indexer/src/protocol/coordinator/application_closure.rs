@@ -34,6 +34,7 @@ impl CanonicalPosition {
 pub(crate) enum WorkItem {
     Execute { decision: u64 },
     Replay { decision: u64, input: [u8; 32] },
+    Activate { decision: u64 },
     Rollback { height: u64 },
     Finality,
     Observe,
@@ -55,6 +56,10 @@ impl WorkItem {
                 output.u64(decision)?;
                 output.fixed(&input)?;
             }
+            Self::Activate { decision } => {
+                output.tag(5)?;
+                output.u64(decision)?;
+            }
             Self::Finality => output.tag(2)?,
             Self::Observe => output.tag(3)?,
         }
@@ -74,6 +79,9 @@ impl WorkItem {
             4 => Self::Replay {
                 decision: input.u64()?,
                 input: input.fixed()?,
+            },
+            5 => Self::Activate {
+                decision: input.u64()?,
             },
             _ => anyhow::bail!("unknown closure work item"),
         })
@@ -166,6 +174,7 @@ pub(crate) enum StageOutcome {
     RolledBack,
     FinalityEvaluated,
     Observed,
+    NoActivation,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -201,10 +210,17 @@ impl StageRecord {
                 ) | (WorkItem::Rollback { .. }, StageOutcome::RolledBack)
                     | (WorkItem::Finality, StageOutcome::FinalityEvaluated)
                     | (WorkItem::Observe, StageOutcome::Observed)
+                    | (
+                        WorkItem::Activate { .. },
+                        StageOutcome::Applied | StageOutcome::NoActivation
+                    )
             ),
             "stage outcome does not match action"
         );
-        if let WorkItem::Execute { decision } | WorkItem::Replay { decision, .. } = self.action {
+        if let WorkItem::Execute { decision }
+        | WorkItem::Replay { decision, .. }
+        | WorkItem::Activate { decision } = self.action
+        {
             ensure!(
                 decision > 0 && decision <= self.height,
                 "closure work refers to future decision"
@@ -282,6 +298,7 @@ impl StageRecord {
             StageOutcome::Observed => 4,
             StageOutcome::ReplacedAnchorBatch => 5,
             StageOutcome::RetractedControl => 6,
+            StageOutcome::NoActivation => 7,
         })?;
         output.count(self.applications.len())?;
         for application in &self.applications {
@@ -313,6 +330,7 @@ impl StageRecord {
             4 => StageOutcome::Observed,
             5 => StageOutcome::ReplacedAnchorBatch,
             6 => StageOutcome::RetractedControl,
+            7 => StageOutcome::NoActivation,
             _ => anyhow::bail!("unknown closure stage outcome"),
         };
         let count = input.count(4)?;

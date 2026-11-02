@@ -96,10 +96,10 @@ pub(crate) async fn complete(
     baseline: &Baseline,
 ) -> Result<()> {
     let state = certified_history::frontier(&session.conn).await?;
-    baseline.require_context(state.context.context("missing certified genesis context")?)?;
     if state.status == Status::Ready {
         return verify_genesis(&session.conn, baseline).await;
     }
+    baseline.require_context(state.context.context("missing certified genesis context")?)?;
     ensure!(
         state.status == Status::Initializing && state.authenticated_height == 0,
         "cannot publish genesis authority after consensus begins"

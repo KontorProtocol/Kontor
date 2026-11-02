@@ -151,6 +151,13 @@ CREATE TABLE IF NOT EXISTS decision_closures (
     next_committee BLOB NOT NULL REFERENCES historical_committees(committee_id)
 );
 
+-- Completion publishes this handoff intent with its C+1 committee. It survives
+-- canonical rollback; restoring an old protocol creates another, fresh era.
+CREATE TABLE IF NOT EXISTS completed_protocol_eras (
+    height BLOB PRIMARY KEY REFERENCES decision_closures(height),
+    record BLOB NOT NULL
+);
+
 INSERT OR IGNORE INTO certified_history_state
     (singleton, status, authenticated_height, closed_height)
 SELECT 1, CASE WHEN EXISTS(SELECT 1 FROM blocks)

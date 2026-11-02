@@ -1098,12 +1098,32 @@ pub struct ProvenanceEntry {
     pub provenance: BuildProvenance,
 }
 
-/// A contract's full append-only provenance log, oldest first — the last entry
-/// is the current claim, earlier ones are the audit trail.
+/// Publication claims and the artifact selected by the current protocol.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.d.ts")]
 pub struct ContractProvenanceResponse {
     pub entries: Vec<ProvenanceEntry>,
+    pub effective_artifact: EffectiveContractArtifact,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "bindings.d.ts")]
+pub enum ContractArtifactSource {
+    Publication,
+    ProtocolNative,
+}
+
+/// SHA-256 hashes cover stored artifact bytes (including compression), before
+/// component decoding. Publication claims do not attest a protocol replacement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings.d.ts")]
+pub struct EffectiveContractArtifact {
+    pub sha256: String,
+    pub published_sha256: String,
+    pub source: ContractArtifactSource,
+    pub protocol_id: Option<String>,
+    pub execution_definition: String,
 }
 
 impl Forge {

@@ -24,6 +24,7 @@ mod testlib_exports {
 }
 
 use bitcoin::{Network, p2p::Magic};
+use protocol::execution::ExecutorVersion;
 use protocol::registration::RegistrationCall;
 use protocol::session::SharedOwner;
 use protocol::session::{HostError, HostFuture, SessionExports};
@@ -40,13 +41,21 @@ pub fn execution_definition() -> &'static [u8] {
 }
 
 pub fn factory() -> Result<Factory, HostError> {
-    make_factory(false)
+    make_factory(false, ExecutorVersion::LegacyP1)
 }
 
 // Test tooling opts into its own fixed registry without adding test migrations
 // to the production factory or making them selectable through node configuration.
 pub fn qualification_factory() -> Result<Factory, HostError> {
-    make_factory(true)
+    make_factory(true, ExecutorVersion::LegacyP1)
+}
+
+pub fn p2_factory() -> Result<Factory, HostError> {
+    make_factory(false, ExecutorVersion::P2)
+}
+
+pub fn p2_native_artifact_hash(contract_id: u64) -> Option<[u8; 32]> {
+    protocol::v2::native::artifact_hash(contract_id)
 }
 
 pub fn registration_observer(owner: SharedOwner) -> Result<RegistrationCall, HostError> {
@@ -59,7 +68,7 @@ pub fn registration_observer(owner: SharedOwner) -> Result<RegistrationCall, Hos
     Ok(session.registrations())
 }
 
-fn make_factory(qualification: bool) -> Result<Factory, HostError> {
+fn make_factory(qualification: bool, version: ExecutorVersion) -> Result<Factory, HostError> {
     let engine = Runtime::new_engine().map_err(|e| (0, format!("{e:#}")))?;
     let linkers = Runtime::new_linkers(&engine).map_err(|e| (0, format!("{e:#}")))?;
     let cache = ComponentCache::new();
@@ -74,7 +83,7 @@ fn make_factory(qualification: bool) -> Result<Factory, HostError> {
                 .host(callbacks.into())
                 .height(if view_limit.is_some() { 1 } else { 0 })
                 .build();
-            let mut runtime = Runtime::new_with(engine, linkers, cache, storage)
+            let mut runtime = Runtime::new_for_version(engine, linkers, cache, storage, version)
                 .await
                 .map_err(|e| (0, format!("{e:#}")))?;
             runtime.network = network;

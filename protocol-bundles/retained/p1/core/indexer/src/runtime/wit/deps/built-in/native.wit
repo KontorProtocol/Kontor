@@ -1,0 +1,117 @@
+package kontor:built-in;
+
+// Stateless Proof-of-Retrievability crypto. The file registry itself is no longer
+// a host table — the filestorage contract owns the file metadata in its own
+// storage (folded into `agreement-data`) and the recent set of valid aggregated
+// roots. These functions are pure crypto over data the contract supplies; there is
+// no in-memory accumulator and no `file_metadata` table.
+interface file-registry {
+    use error.{error};
+    use file-registry-types.{raw-file-descriptor, challenge-input, verify-result};
+
+    // The aggregated ledger root over the registered file set — the Poseidon-tree
+    // root committing to every file. Takes only what the root commits to per file:
+    // `(root, padded-len, ledger-index)`, where `root` is the file's Merkle root,
+    // `padded-len` gives the tree depth, and `ledger-index` is the file's stable,
+    // append-only slot. (A full `raw-file-descriptor` is NOT needed — its
+    // object-id/nonce/filename don't enter the root — so the filestorage contract
+    // reads just these fields per agreement instead of whole structs.) Each file's
+    // leaf is placed at its `ledger-index` slot (gaps zero-filled, kontor-crypto
+    // 0.3.0 append-only model), so caller order doesn't matter and the result is
+    // independent of any sort. A `root` that is not a valid field element errors
+    // (this doubles as validation). The contract recomputes this on each file
+    // registration and records the result as a valid root.
+    aggregate-root: func(files: list<tuple<list<u8>, u64, u64>>) -> result<list<u8>, error>;
+
+    // Incrementally fold this block's newly-registered files into the persisted
+    // append-only ledger frontier (kontor-crypto `LedgerFrontier`) and return the
+    // updated frontier plus the new aggregated root. The root is byte-identical to
+    // `aggregate-root` over the full file set, but the cost is O(k) in the files
+    // added this block (an O(log n) fold each) instead of O(n) over every file — so
+    // the per-block `record-block-root` core hook no longer scales with the total
+    // file count. `count`/`peaks` are the persisted frontier state the contract
+    // stores: `count` is the number of files folded so far (== the next free slot)
+    // and `peaks` is the concatenated 32-byte field reprs of its mountain peaks (one
+    // per set bit of `count`). `new-files` are this block's `(root, padded-len,
+    // ledger-index)` in ascending `ledger-index` order, each slot exactly contiguous
+    // with `count`; a gap, a reorder, a wrong peak count, or a `root` that is not a
+    // valid field element errors. Returns `(new-count, new-peaks, new-root)`.
+    frontier-append: func(
+        count: u64,
+        peaks: list<u8>,
+        new-files: list<tuple<list<u8>, u64, u64>>
+    ) -> result<tuple<u64, list<u8>, list<u8>>, error>;
+
+    // Deterministic challenge id for a file + challenge parameters.
+    compute-challenge-id: func(
+        file: raw-file-descriptor,
+        block-height: u64,
+        num-challenges: u64,
+        seed: list<u8>,
+        prover-id: u64
+    ) -> result<string, error>;
+
+    // ─────────────────────────────────────────────────────────────────
+    // Proof Verification
+    // ─────────────────────────────────────────────────────────────────
+    //
+    // `challenge-input` (which carries the file's full metadata, so the host needs
+    // no registry lookup) and `verify-result` live in `file-registry-types`, beside
+    // `raw-file-descriptor`, so the nested-record storage model resolves.
+
+    resource proof {
+        from-bytes: static func(bytes: list<u8>) -> result<proof, error>;
+        // `valid-roots` is the contract's accepted aggregated-root set
+        // ({current} ∪ recent history). `files` is the contract's file-registry
+        // snapshot: each `(file-id, root, padded-len, ledger-index)` is the data
+        // the host needs to resolve a file's stable slot and root-commitment.
+        // kontor-crypto 0.3.0's constant-size proof carries neither the challenge
+        // ids nor the per-file ledger indices, so the verifier supplies both the
+        // challenge set (from `challenges`) and the registry (from `files`); the
+        // SNARK binds them, so a prover cannot lie about which files/slots it
+        // proved. Stateless — no host ledger.
+        verify: func(
+            challenges: list<challenge-input>,
+            valid-roots: list<list<u8>>,
+            files: list<tuple<string, list<u8>, u64, u64>>
+        ) -> result<verify-result, error>;
+    }
+}
+interface system {
+    /// Consume fuel for a RegisterBlsKey operation. The actual verification
+    /// and DB write happen in the reactor (outside the contract's fuel
+    /// scope); this call meters the caller for the operation so the fuel
+    /// accounting matches reality. Traps on insufficient fuel — aborts
+    /// the enclosing contract call.
+    register-bls-key: func();
+
+    /// Consume fuel for an UpdateProvenance operation. The reactor performs
+    /// the owner authz check and appends to the provenance log outside the
+    /// contract's fuel scope; this call meters the caller so fuel accounting
+    /// matches reality. Traps on insufficient fuel.
+    update-provenance: func();
+}
+
+interface deposit {
+    use context.{holder};
+    use numbers-types.{decimal};
+
+    /// The storage-deposit FLOOR a holder must keep below their token balance: the
+    /// sum of the per-row deposits they currently collateralize across ALL contracts
+    /// (host-only — derived from the per-row `depositor` columns, which no contract
+    /// can scan cross-contract). NATIVE-ONLY: it is the one host built-in that reads a
+    /// cross-contract aggregate, so it is confined to the native linker. User contracts
+    /// that need a holder's floor call the native token contract's `floor` view instead.
+    /// The token consults this on every debit to enforce `balance - floor >= amount`
+    /// (footprint x D locked as a spendable reserve). Takes a RESOLVED `holder` (the
+    /// caller resolves a holder-ref via `holder.from-ref` — the one canonical signer-id
+    /// resolution path); returns 0 for non-signer holders (core/burner/utxo).
+    storage-floor: func(holder: borrow<holder>) -> decimal;
+}
+
+world built-in-native {
+    include built-in;
+    import file-registry;
+    import system;
+    import deposit;
+}

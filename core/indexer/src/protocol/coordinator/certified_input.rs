@@ -5,6 +5,7 @@ use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::Hash;
 use bitcoin::{Block, BlockHash, Transaction};
 
+use super::activation::TransitionDescriptor;
 use super::control::UpgradeControl;
 
 use crate::protocol::canonical_codec::{CodecError, Decoder, Encoder};
@@ -99,6 +100,7 @@ impl Command {
 pub(crate) struct Descriptor {
     pub(crate) context: EraContext,
     pub(crate) command: Command,
+    pub(crate) transition: Option<TransitionDescriptor>,
     pub(crate) input_count: u32,
     pub(crate) body_length: u32,
     pub(crate) body_digest: [u8; 32],
@@ -108,6 +110,18 @@ impl Descriptor {
     fn validate(&self) -> Result<(), CodecError> {
         if self.context.codec != 1 {
             return Err(CodecError::InvalidTag);
+        }
+        if let Some(transition) = &self.transition {
+            let Command::Block { height, hash, .. } = self.command else {
+                return Err(CodecError::InvalidValue);
+            };
+            if transition.chain != self.context.chain
+                || transition.bitcoin_height != height
+                || transition.bitcoin_hash != hash.to_byte_array()
+            {
+                return Err(CodecError::InvalidValue);
+            }
+            transition.encode().map_err(|_| CodecError::InvalidValue)?;
         }
         let length = self.body_length as usize;
         match &self.command {
@@ -172,11 +186,16 @@ impl Descriptor {
                 parent,
                 header,
             } => {
-                output.tag(1)?;
+                // Keep ordinary Block bytes stable. Tag 3 commits the extra
+                // activation descriptor without reinterpreting old values.
+                output.tag(if self.transition.is_some() { 3 } else { 1 })?;
                 output.u64(*height)?;
                 output.fixed(&hash.to_byte_array())?;
                 output.fixed(&parent.to_byte_array())?;
                 output.fixed(header)?;
+                if let Some(transition) = &self.transition {
+                    output.bytes(&transition.encode().map_err(|_| CodecError::InvalidValue)?)?;
+                }
             }
         }
         output.fixed(&self.input_count.to_be_bytes())?;
@@ -194,12 +213,13 @@ impl Descriptor {
             return Err(CodecError::InvalidTag);
         }
         let context = EraContext::decode(&mut input)?;
-        let command = match input.tag()? {
+        let tag = input.tag()?;
+        let command = match tag {
             0 => Command::Batch {
                 anchor_height: input.u64()?,
                 anchor_hash: BlockHash::from_byte_array(input.fixed()?),
             },
-            1 => Command::Block {
+            1 | 3 => Command::Block {
                 height: input.u64()?,
                 hash: BlockHash::from_byte_array(input.fixed()?),
                 parent: BlockHash::from_byte_array(input.fixed()?),
@@ -211,9 +231,18 @@ impl Descriptor {
             },
             _ => return Err(CodecError::InvalidTag),
         };
+        let transition = if tag == 3 {
+            Some(
+                TransitionDescriptor::decode(input.bytes()?)
+                    .map_err(|_| CodecError::InvalidValue)?,
+            )
+        } else {
+            None
+        };
         let value = Self {
             context,
             command,
+            transition,
             input_count: u32::from_be_bytes(input.fixed()?),
             body_length: u32::from_be_bytes(input.fixed()?),
             body_digest: input.fixed()?,
@@ -244,6 +273,7 @@ impl ExactInput {
         let body = control.encode()?;
         let descriptor = Descriptor {
             context,
+            transition: None,
             command: Command::Control {
                 anchor_height,
                 anchor_hash,
@@ -290,6 +320,7 @@ impl ExactInput {
         }
         let descriptor = Descriptor {
             context,
+            transition: None,
             command: Command::Batch {
                 anchor_height,
                 anchor_hash,
@@ -310,6 +341,7 @@ impl ExactInput {
         let block = decode_block(&body)?;
         let descriptor = Descriptor {
             context,
+            transition: None,
             command: Command::Block {
                 height,
                 hash: block.block_hash(),
@@ -325,6 +357,15 @@ impl ExactInput {
         };
         descriptor.validate()?;
         Ok(Self { descriptor, body })
+    }
+
+    pub(crate) fn with_transition(
+        mut self,
+        transition: TransitionDescriptor,
+    ) -> Result<Self, CodecError> {
+        self.descriptor.transition = Some(transition);
+        self.descriptor.validate()?;
+        Ok(self)
     }
 
     pub(crate) fn validate(descriptor: Descriptor, body: Vec<u8>) -> Result<Self, CodecError> {

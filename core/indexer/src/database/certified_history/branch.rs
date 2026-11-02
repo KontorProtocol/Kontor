@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::{BlockHash, hashes::Hash};
 use libsql::{Connection, params};
 
-use super::{context_bytes, fixed, frontier};
+use super::{context_bytes, eras, fixed, frontier};
 use crate::protocol::coordinator::certified_decision::Decision;
 use crate::protocol::coordinator::certified_input::{Command, EraContext};
 
@@ -41,11 +41,12 @@ pub(super) async fn reserve(
 }
 
 pub(crate) async fn boundary(conn: &Connection, context: EraContext) -> Result<Boundary> {
+    let genesis = eras::genesis(conn).await?;
     let row = conn.query(
         "SELECT context, first_height, parent FROM certified_bitcoin_boundary WHERE singleton = 1", (),
     ).await?.next().await?.context("certified Bitcoin boundary unavailable")?;
     ensure!(
-        row.get::<Vec<u8>>(0)? == context_bytes(context)?,
+        row.get::<Vec<u8>>(0)? == context_bytes(genesis)? && genesis.chain == context.chain,
         "Bitcoin boundary context differs"
     );
     let first_height = u64::from_be_bytes(fixed(row.get(1)?)?);

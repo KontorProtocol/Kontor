@@ -11,6 +11,8 @@ use crate::api::{DaemonEnv, Env};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures_util::{FutureExt, future};
+#[cfg(kontor_managed)]
+use indexer::build_record;
 use indexer::config::GenesisConfig;
 use indexer::confirmation_backfill::{self, ConfirmationBackfillArgs};
 #[cfg(not(kontor_managed))]
@@ -53,6 +55,20 @@ enum Command {
     #[cfg(feature = "protocol-qualification")]
     /// Exercise retained executors against isolated temporary databases.
     QualifyExecutors,
+    #[cfg(all(kontor_managed, feature = "protocol-qualification"))]
+    /// Exercise real executor activation and consensus engine replacement locally.
+    QualifyProtocolTransition {
+        #[arg(long)]
+        cluster: bool,
+        #[arg(long, conflicts_with = "cluster")]
+        recovery: bool,
+        /// Run the full notice window and authorized rollback trace (prefer release).
+        #[arg(long, conflicts_with_all = ["cluster", "recovery"])]
+        authorized_replay: bool,
+    },
+    #[cfg(all(kontor_managed, feature = "protocol-qualification"))]
+    #[command(hide = true)]
+    QualifyTransitionCrash { directory: PathBuf, stage: String },
     #[cfg(feature = "protocol-qualification")]
     /// Compare linked execution with a preserved pre-extraction oracle.
     QualifyExecutorBaseline { archive: PathBuf },
@@ -79,10 +95,28 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    #[cfg(kontor_managed)]
+    build_record::verify()?;
     match cli.command {
+        #[cfg(all(kontor_managed, feature = "protocol-qualification"))]
+        Command::QualifyTransitionCrash { directory, stage } => {
+            protocol_qualification::transition_crash_child(&directory, &stage).await
+        }
         #[cfg(feature = "protocol-qualification")]
         Command::QualifyExecutors => {
             let result = protocol_qualification::run().await?;
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
+        #[cfg(all(kontor_managed, feature = "protocol-qualification"))]
+        Command::QualifyProtocolTransition {
+            cluster,
+            recovery,
+            authorized_replay,
+        } => {
+            let result =
+                protocol_qualification::protocol_transition(cluster, recovery, authorized_replay)
+                    .await?;
             println!("{}", serde_json::to_string(&result)?);
             Ok(())
         }

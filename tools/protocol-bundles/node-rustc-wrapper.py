@@ -61,6 +61,23 @@ def prepare(compiler, arguments, spec):
     return arguments, (out_dir, name + extra + '.*.rcgu.o')
 
 
+def attestation_environment(arguments, spec):
+    if spec.get('link_set') != 'managed-node':
+        return {}
+    record = spec.get('attestation')
+    if (not isinstance(record, dict) or record.get('schema') != 1
+            or record.get('link_set') != 'managed-node'
+            or len(record.get('graphs', [])) != 4):
+        raise RuntimeError('managed node requires its builder attestation')
+    for actual, library in zip(record['graphs'], spec['graphs']):
+        for key in ('role', 'graph', 'facade_sha256', 'build_inputs_sha256'):
+            if actual.get(key) != library[key]:
+                raise RuntimeError('builder attestation differs from linked input')
+    if '--target' not in arguments or arguments[arguments.index('--target') + 1] != record['target']:
+        raise RuntimeError('builder attestation target differs from compiler target')
+    return {'KONTOR_NODE_ATTESTATION': json.dumps(record, sort_keys=True, separators=(',', ':')),
+            'KONTOR_NODE_TARGET': record['target']}
+
 def main():
     spec_path = Path(os.environ['KONTOR_NODE_LINK_SPEC'])
     spec_hash = digest(spec_path)
@@ -73,7 +90,12 @@ def main():
             path.unlink()
     # Cargo passes inheritable jobserver descriptors to its compiler. Closing
     # them here loses rustc's access to the shared compilation budget.
-    result = subprocess.run([compiler, *arguments], close_fds=False)
+    environment = dict(os.environ)
+    environment.pop('KONTOR_NODE_ATTESTATION', None)
+    environment.pop('KONTOR_NODE_TARGET', None)
+    if '--crate-name' in original and original[original.index('--crate-name') + 1] in ('indexer', 'kontor'):
+        environment.update(attestation_environment(original, spec))
+    result = subprocess.run([compiler, *arguments], close_fds=False, env=environment)
     if result.returncode:
         raise SystemExit(result.returncode)
     if capture is not None:

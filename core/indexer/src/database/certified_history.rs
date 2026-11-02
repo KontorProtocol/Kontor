@@ -13,10 +13,12 @@ use crate::protocol::coordinator::manifest::ProtocolManifest;
 use crate::protocol::coordinator::registration_history::RegistrationSnapshot;
 use crate::protocol::identity::{ProtocolId, domain_digest};
 
+pub(crate) mod activation;
 pub(crate) mod branch;
 pub(crate) mod closure;
 pub(crate) mod completion;
 pub(crate) mod control;
+pub(crate) mod eras;
 pub(crate) mod finality;
 mod proof_read;
 pub(crate) mod registrations;
@@ -87,6 +89,13 @@ pub(crate) async fn require_command_schema(conn: &Connection) -> Result<()> {
         !present || typed,
         "unsupported intermediate certified history schema; preserve this database and rebuild from authenticated history"
     );
+    if present {
+        ensure!(
+            conn.query("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'completed_protocol_eras'", ())
+                .await?.next().await?.is_some(),
+            "unsupported intermediate protocol-era schema; preserve this database and rebuild from authenticated history"
+        );
+    }
     Ok(())
 }
 
@@ -139,10 +148,12 @@ pub(crate) async fn frontier(conn: &Connection) -> Result<Frontier> {
         "closed history exceeds authenticated history"
     );
     if let Some(context) = result.context {
+        let genesis = eras::genesis(conn).await?;
         ensure!(
-            result.genesis == Some(genesis_predecessor(context)?),
+            result.genesis == Some(genesis_predecessor(genesis)?) && genesis.chain == context.chain,
             "genesis predecessor differs"
         );
+        eras::verify_frontier(conn, &result, genesis).await?;
         if result.authenticated_height == 0 {
             ensure!(
                 result.authenticated_id == result.genesis,
@@ -247,7 +258,7 @@ async fn reserve_genesis(
             .await?;
         }
         Status::Initializing | Status::Ready => ensure!(
-            state.context == Some(context),
+            eras::genesis(&tx).await? == context,
             "certified genesis context changed"
         ),
         Status::Unavailable => {
@@ -297,7 +308,7 @@ pub(crate) async fn finish_genesis(
         "certified genesis was not reserved"
     );
     ensure!(
-        state.context == Some(authority.context)
+        eras::genesis(&tx).await? == authority.context
             && authority.height == 1
             && Some(authority.decision) == state.genesis
             && authority.stage == 0,
@@ -442,8 +453,8 @@ pub(crate) async fn append(conn: &Connection, certified: &AuthenticatedDecision)
     let state = frontier(&tx).await?;
     let decision = certified.decision();
     ensure!(
-        state.status == Status::Ready && state.context == Some(decision.descriptor.context),
-        "certified decision context unavailable"
+        state.status == Status::Ready,
+        "certified history unavailable"
     );
     ensure!(
         committee(&tx, decision.height).await?.id()? == decision.committee,
@@ -459,6 +470,10 @@ pub(crate) async fn append(conn: &Connection, certified: &AuthenticatedDecision)
         );
     } else {
         ensure!(
+            state.context == Some(decision.descriptor.context),
+            "certified decision context unavailable"
+        );
+        ensure!(
             state.authenticated_height.checked_add(1) == Some(decision.height)
                 && state.authenticated_id == Some(decision.predecessor),
             "certified decision gap or predecessor conflict"
@@ -467,12 +482,7 @@ pub(crate) async fn append(conn: &Connection, certified: &AuthenticatedDecision)
             state.closed_height == state.authenticated_height,
             "previous decision closure unfinished"
         );
-        control::check_block_boundary(
-            &tx,
-            decision.descriptor.context,
-            &decision.descriptor.command,
-        )
-        .await?;
+        control::check_transition(&tx, &decision.descriptor, decision.height).await?;
         tx.execute(
             "INSERT OR IGNORE INTO certified_inputs (body_digest, body) VALUES (?1, ?2)",
             params![

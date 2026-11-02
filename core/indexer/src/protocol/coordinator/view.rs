@@ -16,7 +16,7 @@ pub(crate) async fn execute_selected_view(
         .await
         .map_err(ExecutionError::NonDeterministic)?;
     match selection.version() {
-        ExecutorVersion::LegacyP1 => {
+        ExecutorVersion::LegacyP1 | ExecutorVersion::P2 => {
             runtime
                 .bind_selection(&selection.envelope())
                 .map_err(ExecutionError::NonDeterministic)?

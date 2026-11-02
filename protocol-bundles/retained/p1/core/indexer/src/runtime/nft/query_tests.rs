@@ -1,0 +1,197 @@
+use anyhow::Result;
+
+use indexer_types::serialize;
+use stdlib::KeyElement;
+
+use super::api::{self, Attribute};
+use crate::reg_tester::random_x_only_pubkey;
+use crate::runtime::Decimal;
+use crate::runtime::fuel::{Fuel, FuelDiscriminants, FuelGauge};
+use crate::runtime::token::api as token;
+use crate::runtime::wit::{Signer, kontor::built_in::context::HolderRef};
+use crate::test_utils::{make_descriptor, test_runtime};
+
+#[tokio::test]
+async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let signer = Signer::Id(
+        runtime
+            .get_or_create_identity(&random_x_only_pubkey())
+            .await?,
+    );
+    let holder = HolderRef::from(&signer);
+    let core = Signer::Core(Box::new(Signer::Nobody));
+    token::issue_to(
+        &mut runtime,
+        &core,
+        holder.clone(),
+        Decimal::from("1000000"),
+    )
+    .await??;
+    let keys: Vec<String> = ["a".into(), "a\0".into(), "a\0x".into()]
+        .into_iter()
+        .chain((0..107).map(|i| format!("nft-{i:03}")))
+        .collect();
+    let attributes: Vec<Attribute> = (0..32)
+        .map(|i| Attribute {
+            key: format!("attr-{i:02}"),
+            value: format!("value-雪-\0-{i}"),
+        })
+        .collect();
+    for (i, key) in keys.iter().enumerate() {
+        api::mint(
+            &mut runtime,
+            &signer,
+            key,
+            if i == 0 { attributes.clone() } else { vec![] },
+            make_descriptor(
+                format!("file-{i:03}"),
+                vec![1; 32],
+                16,
+                10,
+                "file.txt".into(),
+            ),
+        )
+        .await??;
+    }
+    let gauge = FuelGauge::with_profiling();
+    runtime.gauge = Some(gauge.clone());
+    assert_eq!(api::get_attributes(&mut runtime, "a").await?, attributes);
+    let stats = gauge.report()?.profile.unwrap().per_type;
+    assert!(!stats.contains_key(&FuelDiscriminants::Get));
+    assert_eq!(stats[&FuelDiscriminants::KeysNext].consumed_count, 32);
+    let expected: u64 = attributes
+        .iter()
+        .map(|attr| {
+            Fuel::KeysNext((attr.key.encode().len() + serialize(&attr.value).unwrap().len()) as u64)
+                .cost()
+        })
+        .sum();
+    assert_eq!(stats[&FuelDiscriminants::KeysNext].consumed_fuel, expected);
+    let gauge = FuelGauge::with_profiling();
+    runtime.gauge = Some(gauge.clone());
+    for attr in &attributes {
+        assert_eq!(
+            api::get_attribute(&mut runtime, "a", &attr.key).await?,
+            Some(attr.value.clone())
+        );
+    }
+    assert_eq!(
+        gauge.report()?.profile.unwrap().per_type[&FuelDiscriminants::Get].consumed_count,
+        32
+    );
+    let gauge = FuelGauge::with_profiling();
+    runtime.gauge = Some(gauge.clone());
+    let balances = token::balances(&mut runtime)
+        .fetch_with_limit(100)
+        .await??
+        .items;
+    assert!(
+        !gauge
+            .report()?
+            .profile
+            .unwrap()
+            .per_type
+            .contains_key(&FuelDiscriminants::Get)
+    );
+    assert!(
+        !balances
+            .iter()
+            .any(|balance| matches!(balance.acc, HolderRef::Core | HolderRef::Burner))
+    );
+    assert!(balances.iter().any(|balance| balance.acc == holder));
+    runtime.gauge = None;
+    for balance in balances {
+        assert_eq!(
+            token::balance(&mut runtime, balance.acc).await?,
+            Some(balance.amt)
+        );
+    }
+    let mut all = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let page = api::list_nfts(&mut runtime)
+            .set_after(after.as_deref())
+            .fetch_with_limit(7)
+            .await?;
+        all.extend(page.items.into_iter().map(|n| n.nft_id));
+        after = page.next;
+        if after.is_none() {
+            break;
+        }
+    }
+    assert_eq!(all, keys);
+    let mut work = Vec::new();
+    for after in [None, Some("nft-099")] {
+        let gauge = FuelGauge::with_profiling();
+        runtime.gauge = Some(gauge.clone());
+        let page = api::list_nfts(&mut runtime)
+            .set_after(after)
+            .fetch_with_limit(5)
+            .await?;
+        assert_eq!(page.items.len(), 5);
+        let stats = gauge.report()?.profile.unwrap().per_type;
+        work.push(stats[&FuelDiscriminants::KeysNext].consumed_count);
+        let gauge = FuelGauge::with_profiling();
+        runtime.gauge = Some(gauge.clone());
+        let covered = api::agreement_ids_by_creator(&mut runtime, holder.clone())
+            .set_after(after)
+            .fetch_with_limit(5)
+            .await?;
+        assert_eq!(covered.next, page.next);
+        assert_eq!(
+            covered.items,
+            page.items
+                .iter()
+                .map(|n| n.agreement_id.clone())
+                .collect::<Vec<_>>()
+        );
+        let covered_stats = gauge.report()?.profile.unwrap().per_type;
+        assert_eq!(
+            covered_stats[&FuelDiscriminants::KeysNext].consumed_count,
+            6
+        );
+        assert!(
+            covered_stats
+                .get(&FuelDiscriminants::Get)
+                .map_or(0, |s| s.consumed_count)
+                < stats[&FuelDiscriminants::Get].consumed_count
+        );
+    }
+    assert_eq!(work[0], work[1], "earlier pages must not add scanned rows");
+    runtime.gauge = None;
+    let capped = api::list_nfts(&mut runtime)
+        .fetch_with_limit(u64::MAX)
+        .await?;
+    assert_eq!(capped.items.len(), 100);
+    assert_eq!(capped.next.as_deref(), Some(keys[99].as_str()));
+    let empty = api::list_nfts(&mut runtime).fetch_with_limit(0).await?;
+    assert!(empty.items.is_empty() && empty.next.is_none());
+    let missing = api::list_nfts(&mut runtime)
+        .after("nft-099a")
+        .fetch_with_limit(1)
+        .await?;
+    assert_eq!(missing.items[0].nft_id, "nft-100");
+
+    let first = api::list_nfts_by_holder(&mut runtime, holder.clone())
+        .fetch_with_limit(1)
+        .await?;
+    assert_eq!(first.next.as_deref(), Some("a"));
+    runtime.storage.savepoint().await?;
+    api::transfer(&mut runtime, &signer, "a", HolderRef::Burner).await??;
+    let resumed = api::list_nfts_by_holder(&mut runtime, holder.clone())
+        .set_after(first.next.as_deref())
+        .fetch_with_limit(1)
+        .await?;
+    assert_eq!(resumed.items[0].nft_id, "a\0");
+    let changed = api::list_nfts_by_holder(&mut runtime, holder.clone())
+        .fetch_with_limit(1)
+        .await?;
+    assert_eq!(changed.items[0].nft_id, "a\0");
+    runtime.storage.rollback().await?;
+    let restored = api::list_nfts_by_holder(&mut runtime, holder)
+        .fetch_with_limit(1)
+        .await?;
+    assert_eq!(restored.items[0].nft_id, "a");
+    Ok(())
+}

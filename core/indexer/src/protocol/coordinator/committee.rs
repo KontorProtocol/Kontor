@@ -27,7 +27,9 @@ pub(crate) async fn derive_selected(
         .await?;
     let mut runtime = runtime.bind_selection(&selection.envelope())?;
     let members = match selection.version() {
-        ExecutorVersion::LegacyP1 => committee::derive_committee(&mut runtime).await?,
+        ExecutorVersion::LegacyP1 | ExecutorVersion::P2 => {
+            committee::derive_committee(&mut runtime).await?
+        }
     };
     materialize_committee(members)
 }

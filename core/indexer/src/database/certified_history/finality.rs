@@ -4,12 +4,13 @@ use bitcoin::{BlockHash, Txid, hashes::Hash};
 use libsql::{Connection, TransactionBehavior, params};
 
 use super::{
-    branch, closure, durable_writer, fixed, frontier, load_verified_input, replay, replay_input,
-    work,
+    activation, branch, closure, durable_writer, fixed, frontier, load_verified_input, replay,
+    replay_input, work,
 };
 use crate::protocol::canonical_application::DecisionExclusions;
 use crate::protocol::canonical_codec::{Decoder, Encoder};
 use crate::protocol::coordinator::application_closure::WorkItem;
+use crate::protocol::coordinator::certified_input::Command;
 use crate::protocol::coordinator::closure_work::WorkOrigin;
 use crate::protocol::coordinator::replay_input::ReplayInput;
 use crate::protocol::coordinator::v1::{FINALITY_WINDOW, deadline_for};
@@ -304,7 +305,13 @@ async fn build_one(
         }
     };
     let draft = work::for_origin(conn, origin).await?;
-    work::append(conn, draft, &[item]).await?;
+    let mut items = vec![item];
+    if selected.kind == CommandKind::Block {
+        // Replay reconstructs execution selection before Batch(H), even when
+        // the original block had no descriptor because Cancel/Postpone survived then.
+        items.push(WorkItem::Activate { decision });
+    }
+    work::append(conn, draft, &items).await?;
     conn.execute("UPDATE closure_finality_plans SET replay_height = ?2, replay_decision = ?3 WHERE plan_key = ?1",
         params![key.to_vec(), selected.position.bitcoin_height.to_be_bytes().to_vec(), decision.to_be_bytes().to_vec()]).await?;
     Ok(())
@@ -331,6 +338,20 @@ async fn seal(conn: &Connection, origin: WorkOrigin, from: Option<u64>) -> Resul
     let mut draft = work::for_origin(conn, origin).await?;
     if from.is_some() {
         draft = work::append(conn, draft, &[WorkItem::Finality]).await?;
+    } else {
+        let input = load_verified_input(conn, origin.height).await?;
+        if let Command::Block { height, hash, .. } = input.decision().descriptor.command
+            && activation::pending(conn, height, hash).await?.is_some()
+        {
+            draft = work::append(
+                conn,
+                draft,
+                &[WorkItem::Activate {
+                    decision: origin.height,
+                }],
+            )
+            .await?;
+        }
     }
     let (seeds, seed_digest) = seed_commitment(conn, origin).await?;
     let verdict = Verdict {

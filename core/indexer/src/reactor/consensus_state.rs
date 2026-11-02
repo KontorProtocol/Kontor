@@ -28,7 +28,7 @@ use crate::consensus::{
     Address, CommitCertificate, Ctx, Genesis, Height, PartStreamsMap, ProposalData, ProposalFin,
     ProposalInit, ProposalPart, ProposalParts, Validator, ValidatorSet, Value, proto,
 };
-use crate::database::certified_history::{self, Status};
+use crate::database::certified_history::{self, Status, eras};
 use crate::database::queries::{
     get_checkpoint_latest, get_transaction_by_txid, min_unsettled_batch_tx_height,
     select_block_at_height, select_existing_txids, select_unfinalized_batches,
@@ -280,7 +280,7 @@ async fn load_unfinalized_batches(
 }
 
 pub(super) async fn certified_startup(
-    conn: &libsql::Connection,
+    conn: &Connection,
 ) -> Result<(EraContext, Height, ValidatorSet)> {
     let frontier = certified_history::frontier(conn).await?;
     ensure!(
@@ -299,7 +299,8 @@ pub(super) async fn certified_startup(
         let completed =
             certified_history::completion::completed(conn, frontier.closed_height).await?;
         ensure!(
-            Some(completed.id()?) == frontier.closure_id && completed.context == protocol_context,
+            Some(completed.id()?) == frontier.closure_id
+                && eras::next_context(conn, &completed).await? == protocol_context,
             "startup closure frontier differs"
         );
         ensure!(
@@ -801,15 +802,57 @@ impl ConsensusState {
 #[cfg(test)]
 mod tests {
     use super::{
-        UnfinalizedBatch, build_finality_events, load_unfinalized_batches, missing_txids,
-        probe_at_deadline,
+        UnfinalizedBatch, build_finality_events, certified_startup, load_unfinalized_batches,
+        missing_txids, probe_at_deadline,
     };
     use crate::consensus::Height;
     use crate::consensus::finality_types::FinalityEvent;
-    use crate::database::queries::{confirm_transaction, insert_block, insert_transaction};
+    use crate::database::certified_history::{completion, eras};
+    use crate::database::connection::new_connection;
+    use crate::database::queries::{
+        confirm_transaction, insert_block, insert_transaction, select_block_at_height,
+    };
+    use crate::protocol::coordinator::activation_execution::{apply, tests::fixture};
+    use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
     use crate::test_utils::{new_mock_block_hash, new_test_db};
+    use anyhow::Result;
     use bitcoin::hashes::Hash;
-    use bitcoin::{BlockHash, Txid};
+    use bitcoin::{BlockHash, Network, Txid};
+
+    #[tokio::test]
+    async fn startup_uses_completed_successor_era_and_requires_finished_closure() -> Result<()> {
+        let (directory, session, service, definition) = Box::pin(fixture()).await?;
+        assert!(certified_startup(&session.conn).await.is_err());
+        let block = select_block_at_height(&session.conn, 1).await?.unwrap();
+        let selection = select_legacy_p1(
+            &session.conn,
+            Network::Regtest,
+            ApplicationPosition::Migration {
+                anchor_height: 1,
+                anchor_hash: block.hash,
+            },
+        )
+        .await?;
+        apply(
+            &service,
+            &session,
+            &selection,
+            Network::Regtest,
+            1,
+            definition,
+        )
+        .await?;
+        assert!(certified_startup(&session.conn).await.is_err());
+        let closed = completion::publish(&session.conn, 1).await?;
+        let expected = eras::next_context(&session.conn, &closed).await?;
+        assert_ne!(expected, closed.context);
+        let reopened = new_connection(directory.path(), "activation.db").await?;
+        let (context, height, _) = certified_startup(&reopened).await?;
+        assert_eq!(context, expected);
+        assert_eq!(height, Height::new(2));
+        assert_eq!(eras::genesis(&reopened).await?, closed.context);
+        Ok(())
+    }
 
     fn txid(n: u8) -> Txid {
         Txid::from_byte_array([n; 32])

@@ -39,10 +39,10 @@ def verify(observations, root, expected_graphs=('first', 'second')):
         if not source.resolve().is_relative_to(root.resolve()) or digest(source) != checksum:
             raise ValueError(f'historical semantic fixture changed: {relative}')
     graphs = observations['executors']
-    if tuple(expected_graphs) not in (('first', 'second'), ('first', 'observer')):
+    if tuple(expected_graphs) not in (('first',), ('first', 'second'), ('first', 'observer')):
         raise ValueError('unknown historical comparison graph set')
     if [graph['graph'] for graph in graphs] != list(expected_graphs):
-        raise ValueError('historical comparison requires both actual retained graphs')
+        raise ValueError('historical comparison requires the selected retained graphs')
     for graph in graphs:
         actual = project(graph['observations'])
         for section in ('inputs', 'observations'):

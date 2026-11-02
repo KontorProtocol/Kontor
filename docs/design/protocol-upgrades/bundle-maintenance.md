@@ -380,3 +380,76 @@ The conflicting itoa patch requirements demonstrate why one unified Cargo
 resolution is insufficient. Deliberately different serde_json features, VM
 lifting prices and compile-time Tokio types prove that the two graphs remain
 distinct. These differences are qualification fixtures, not a definition of P2.
+
+
+### Native artifact provenance across upgrades
+
+`GET /api/contracts/{address}/provenance` returns `entries`, the original
+publication-claim log, and `effective_artifact`, the artifact selected by the
+protocol at the pinned read snapshot. The latter reports `protocol_id`,
+`execution_definition`, `source` (`publication` or `protocol_native`),
+`published_sha256` and `sha256`. Both hashes cover stored artifact bytes,
+including compression, before component decoding. A protocol-native replacement
+can therefore have a different effective hash without changing the publication
+row or its claims. Those claims do not attest the replacement; its mapping is
+bound to the selected execution definition. Rollback restores the corresponding
+protocol selection and artifact record.
+
+The SDK's `session.getContractProvenance(address)` returns `entries` and
+`effectiveArtifact` with camel-case field names. Existing
+`session.getProvenance(address)` returns only the publication-claim log. The full
+method fails explicitly if the node or custom transport does not support it.
+These records describe one observed snapshot, not a promise that the canonical
+protocol cannot change after the response.
+
+### Managed P1/P2 qualification
+
+The managed node contains deliberately different P1 and P2 behavior. Its
+qualification runner checks retained P1 against the preserved historical oracle,
+then runs the actual multi-validator transition fixture in the same audited
+binary. It does not require P2 to reproduce P1's old semantics. Legacy retained
+link sets continue their two-graph equality comparison.
+
+`node-execution.json` records the linked graphs; `semantic_baseline.graphs`
+identifies which graphs were compared with the historical oracle. Managed records
+also require `transition` hashes for `node-transition.stdout.json` and
+`node-transition.stderr.log`. The comparator verifies those files, their effective
+native artifact/definition bindings, and agreement across the explicitly required
+platform/profile cells. Transition evidence covers its stated seeded-schedule
+scope; it is not a substitute for authorization, crash-recovery or cold-sync tests.
+
+`qualify-protocol-transition --recovery` exercises the real P2 token migration
+through the production closure driver, starting from a seeded accepted schedule.
+It checks rollback after an injected activation-persistence failure, fresh-session
+recovery before and after migration commit, equality of every persistent table
+with uninterrupted execution, invalid migration input across reopening, and C+1
+admission only after closure publication. It does not start consensus engines or
+simulate abrupt process termination. The command is separate from `--cluster`;
+both options cannot be selected together.
+
+The separate `qualify-executor-baseline <archive>` command consumes an unversioned
+pre-extraction archive and requires the `legacy-qualification` link set. A managed
+build rejects that command explicitly. Use `qualify-executors` for its preserved
+P1 semantic oracle and the transition commands for its actual P1/P2 behavior.
+Do not relabel archived unversioned state as certified managed history.
+
+
+The managed runner also requires `qualify-protocol-transition --recovery` from
+that audited executable. Its raw stdout/stderr hashes are recorded under
+`recovery` and checked by the comparator. In addition to migration atomicity, it
+covers finality expiry of an unconfirmed batch across H, a surviving schedule
+whose migration must rerun with the same H hash and changed pre-lineage, and
+rollback of signed Cancel and Postpone actions. Reopening after the owned rollback
+must match uninterrupted reconstruction. The initial schedule remains a seeded
+precondition; this does not claim an end-to-end Schedule approval or abrupt
+process-crash test. The harness timeout is 420 seconds, separate from every
+protocol execution limit. Existing qualification change-scope selection still
+controls which PRs run these checks.
+
+
+The recovery qualification also branches from its existing H=2 snapshot to
+confirm a gas-paying P1 batch transaction in P2 block H+1. It requires zero
+reexecution, unchanged transaction fuel and receipts, correct Bitcoin confirmation
+position, P2 selection for Batch(H), and full-state equality after database reopen.
+The raw recovery evidence verifier requires these observations; a successful
+process exit alone does not establish them.

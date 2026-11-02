@@ -12,6 +12,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::protocol::coordinator::control::ControlError;
 
+use crate::bitcoin_follower::block::BlockInput;
 use crate::consensus::finality_types::{
     DecidedBatch, FINALITY_WINDOW, StateEvent, UnfinalizedBatch, deadline_for,
 };
@@ -31,6 +32,7 @@ use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
 use crate::protocol::coordinator::certified_input::{Command, ExactInput, MAX_BATCH_BYTES};
 use crate::protocol::coordinator::closure_execution::begin_stage;
 use crate::protocol::coordinator::linked::PreparedTransaction;
+use crate::protocol::coordinator::registry::UnavailableProtocol;
 pub(super) use crate::protocol::coordinator::v1::batch_is_ordered;
 use crate::protocol::coordinator::v1::dependency_sort;
 
@@ -297,7 +299,7 @@ impl<E: Executor> ExecutionContext<E> {
             let retained =
                 certified_history::load_verified_input(&conn, consensus_height.as_u64()).await?;
             let expected = ExactInput::batch(
-                self.protocol_context,
+                retained.input().descriptor().context,
                 anchor_height,
                 anchor_hash,
                 certified.unwrap_or(batch_txs),
@@ -499,6 +501,7 @@ impl<E: Executor> ExecutionContext<E> {
         }
 
         self.record_application(
+            selection,
             anchor_height,
             ApplicationSource::Batch {
                 anchor_height,
@@ -656,8 +659,22 @@ impl<E: Executor> Reactor<E> {
     // rather than the local cursor, distinguishes replacements from duplicates.
     pub(super) async fn pending_block_value(&mut self) -> Result<Option<Value>> {
         let conn = self.db_conn();
+        let frontier = certified_history::frontier(&conn).await?;
+        let inclusion = frontier
+            .closed_height
+            .checked_add(1)
+            .context("consensus height exhausted")?;
+        if frontier.closed_height != frontier.authenticated_height
+            || self
+                .consensus
+                .pending_proposal
+                .as_ref()
+                .is_some_and(|proposal| proposal.height.as_u64() != inclusion)
+        {
+            return Ok(None);
+        }
         for block in self.consensus.pending_blocks.values() {
-            let input = block.exact_input(self.consensus.protocol_context)?;
+            let mut input = block.exact_input(self.consensus.protocol_context)?;
             match branch::validate(
                 &conn,
                 self.consensus.protocol_context,
@@ -669,17 +686,28 @@ impl<E: Executor> Reactor<E> {
                 Err(error) if error.downcast_ref::<branch::Rejected>().is_some() => continue,
                 Err(error) => return Err(error),
             }
-            match control::check_block_boundary(
+            let transition = match control::expected_transition(
                 &conn,
                 self.consensus.protocol_context,
                 &input.descriptor().command,
+                inclusion,
             )
             .await
             {
-                Ok(()) => return Ok(Some(Value::from_input(input)?)),
+                Ok(transition) => transition,
                 Err(error) if error.is::<control::ActivationRequired>() => continue,
                 Err(error) => return Err(error),
+            };
+            if let Some(transition) = transition {
+                if let Err(error) = transition.require_installed() {
+                    if error.is::<UnavailableProtocol>() {
+                        continue;
+                    }
+                    return Err(error);
+                }
+                input = input.with_transition(transition.descriptor)?;
             }
+            return Ok(Some(Value::from_input(input)?));
         }
         Ok(None)
     }
@@ -820,17 +848,17 @@ impl<E: Executor> Reactor<E> {
             let _ = reply.send(None);
             return Ok(());
         }
-        if let Err(error) = control::check_block_boundary(
-            &conn,
-            self.consensus.protocol_context,
-            data.value().command(),
-        )
-        .await
+        if let Err(error) =
+            control::check_installed_transition(&conn, data.value().descriptor(), height.as_u64())
+                .await
         {
-            if !error.is::<control::ActivationRequired>() {
+            if !error.is::<control::ActivationRequired>()
+                && !error.is::<control::RejectedTransition>()
+                && !error.is::<UnavailableProtocol>()
+            {
                 return Err(error);
             }
-            warn!(%error, "Rejecting ordinary block at upgrade boundary");
+            warn!(%error, "Rejecting unavailable or invalid activation transition");
             let _ = reply.send(None);
             return Ok(());
         }
@@ -865,8 +893,7 @@ impl<E: Executor> Reactor<E> {
             } => {
                 if let Some(block) = self.consensus.pending_blocks.get(bh) {
                     if block.hash != *hash
-                        || block.exact_input(self.consensus.protocol_context)?
-                            != *data.value().input()
+                        || *block != BlockInput::from_exact(data.value().input())?
                     {
                         warn!(
                             block_height = bh,
@@ -1366,6 +1393,9 @@ impl<E: Executor> Reactor<E> {
             self.prune_finalized_bodies(&conn).await;
         }
         gauge!(DEFERRED_DECISIONS).set(0.0);
+        if self.handoff_if_needed().await? {
+            return Ok(());
+        }
         self.resume_next_height().await
     }
 

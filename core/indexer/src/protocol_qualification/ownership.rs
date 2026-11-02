@@ -18,14 +18,15 @@ use super::NETWORK;
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
 use crate::database::connection::new_connection;
 use crate::protocol::coordinator::linked::{
-    RetainedFactory, execute_view, read_snapshot, retained_session_factory,
+    RetainedFactory, execute_view, retained_session_factory,
     retained_session_factory_with_callbacks,
 };
+use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
 use crate::protocol::session::HostError;
 use crate::protocol::storage_callbacks::StorageCallbacks;
 use crate::protocol::storage_rows::CursorOwner;
-use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::{HostFailure, SessionFactory};
+use crate::runtime::ownership::{LinkedOperation, OwnerService};
 use crate::runtime::pool::{LinkedManager, new_linked};
 
 const LIMIT: Duration = Duration::from_secs(10);
@@ -448,12 +449,22 @@ pub(super) async fn qualify_node_capacity(service: &OwnerService) -> Result<Valu
         observed.as_mut().enable();
         let started = entered.clone();
         let call_service = service.clone();
+        // This tests graph-owned root capacity, not canonical protocol admission.
+        // No guest operation runs, and the unversioned fixture has no authority.
+        let selection =
+            select_legacy_p1(&object.conn, NETWORK, ApplicationPosition::Committee).await?;
         held.push(tokio::spawn(async move {
-            read_snapshot(&call_service, object, NETWORK, move |_, _, _| async move {
-                started.notify_one();
-                pending::<Result<()>>().await
-            })
-            .await
+            let capacity = call_service.reserve_root_capacity().await?;
+            let operation: LinkedOperation = Box::new(move |_, _| {
+                Box::pin(async move {
+                    started.notify_one();
+                    pending().await
+                })
+            });
+            let mut handle = call_service
+                .start_linked_pooled_reserved(object, capacity, selection, operation)
+                .await?;
+            handle.result().await
         }));
         timeout(LIMIT, observed)
             .await

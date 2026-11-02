@@ -25,6 +25,13 @@ class HistoricalSemantics(unittest.TestCase):
         self.observations = {'executors': [{'graph': name, 'observations': sample_observation()}
                                           for name in ('first', 'second')]}
 
+    def test_managed_p1_still_requires_the_preserved_oracle(self):
+        observed = {'executors': self.observations['executors'][:1]}
+        self.assertEqual(verify(observed, ROOT, ('first',))['graphs'], ['first'])
+        observed['executors'][0]['observations']['missing_function']['Err'][1] = 'changed'
+        with self.assertRaisesRegex(ValueError, 'historical semantic comparison differs'):
+            verify(observed, ROOT, ('first',))
+
     def test_matches_preserved_oracle(self):
         self.assertTrue(verify(self.observations, ROOT)['matching_observations'])
 

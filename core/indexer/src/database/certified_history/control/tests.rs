@@ -109,7 +109,7 @@ async fn append_effect_with_plan(
 }
 
 #[tokio::test]
-async fn block_boundary_uses_surviving_control_and_exact_activation_height() -> Result<()> {
+async fn transition_uses_surviving_control_and_exact_activation_height() -> Result<()> {
     let (_directory, _db, conn) = database().await?;
     let context = state([0; 32], 0)?.context;
     let block = |height| Command::Block {
@@ -118,14 +118,36 @@ async fn block_boundary_uses_surviving_control_and_exact_activation_height() -> 
         parent: BlockHash::all_zeros(),
         header: [0; 80],
     };
-    check_block_boundary(&conn, context, &block(1108)).await?;
+    assert!(
+        expected_transition(&conn, context, &block(1108), 20)
+            .await?
+            .is_none()
+    );
     conn.execute("BEGIN", ()).await?;
     append_effect_with_plan(&conn, 100, 1, Some(1108)).await?;
     conn.execute("COMMIT", ()).await?;
     let scheduled = current(&conn).await?;
-    check_block_boundary(&conn, context, &block(1107)).await?;
-    for height in [1108, 1109, u64::MAX] {
-        let error = check_block_boundary(&conn, context, &block(height))
+    assert!(
+        expected_transition(&conn, context, &block(1107), 20)
+            .await?
+            .is_none()
+    );
+    let transition = expected_transition(&conn, context, &block(1108), 20)
+        .await?
+        .context("due transition")?;
+    assert_eq!(transition.descriptor.start_height, 21);
+    assert_eq!(
+        transition.descriptor.plan,
+        scheduled.as_ref().unwrap().pending.as_ref().unwrap().id
+    );
+    assert!(
+        transition
+            .require_installed()
+            .unwrap_err()
+            .is::<registry::UnavailableProtocol>()
+    );
+    for height in [1109, u64::MAX] {
+        let error = expected_transition(&conn, context, &block(height), 20)
             .await
             .unwrap_err();
         let error = error
@@ -142,12 +164,15 @@ async fn block_boundary_uses_surviving_control_and_exact_activation_height() -> 
     let postponed = current(&conn).await?;
     assert_eq!(at_storage_height(&conn, 199).await?, scheduled);
     assert_eq!(at_storage_height(&conn, 200).await?, postponed);
-    check_block_boundary(&conn, context, &block(1108)).await?;
     assert!(
-        check_block_boundary(&conn, context, &block(1208))
-            .await
-            .unwrap_err()
-            .is::<ActivationRequired>()
+        expected_transition(&conn, context, &block(1108), 20)
+            .await?
+            .is_none()
+    );
+    assert!(
+        expected_transition(&conn, context, &block(1208), 20)
+            .await?
+            .is_some()
     );
     conn.execute("BEGIN", ()).await?;
     append_effect(&conn, 300, 3).await?;
@@ -155,7 +180,11 @@ async fn block_boundary_uses_surviving_control_and_exact_activation_height() -> 
     let cancelled = current(&conn).await?;
     assert_eq!(at_storage_height(&conn, 299).await?, postponed);
     assert_eq!(at_storage_height(&conn, 300).await?, cancelled);
-    check_block_boundary(&conn, context, &block(1208)).await?;
+    assert!(
+        expected_transition(&conn, context, &block(1208), 20)
+            .await?
+            .is_none()
+    );
 
     conn.execute("BEGIN", ()).await?;
     retract_at(
@@ -172,10 +201,9 @@ async fn block_boundary_uses_surviving_control_and_exact_activation_height() -> 
     conn.execute("COMMIT", ()).await?;
     assert_eq!(current(&conn).await?, scheduled);
     assert!(
-        check_block_boundary(&conn, context, &block(1108))
-            .await
-            .unwrap_err()
-            .is::<ActivationRequired>()
+        expected_transition(&conn, context, &block(1108), 20)
+            .await?
+            .is_some()
     );
     conn.execute("BEGIN", ()).await?;
     retract_at(
@@ -190,7 +218,11 @@ async fn block_boundary_uses_surviving_control_and_exact_activation_height() -> 
     .await?;
     canonical_history::rollback(&conn, 99).await?;
     conn.execute("COMMIT", ()).await?;
-    check_block_boundary(&conn, context, &block(1108)).await?;
+    assert!(
+        expected_transition(&conn, context, &block(1108), 20)
+            .await?
+            .is_none()
+    );
     Ok(())
 }
 

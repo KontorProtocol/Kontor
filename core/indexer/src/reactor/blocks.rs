@@ -25,7 +25,7 @@ use crate::protocol::coordinator::closure_execution::begin_stage;
 use crate::protocol::coordinator::linked::{self, PreparedBlock, PreparedTransaction};
 use crate::protocol::coordinator::minimum_prune_retention_blocks;
 use crate::protocol::coordinator::selection::{
-    ApplicationPosition, ExecutionSelection, select_legacy_p1,
+    ApplicationPosition, ExecutionSelection, select_current,
 };
 use crate::runtime::ownership::adapter::HostFailure;
 
@@ -167,6 +167,7 @@ impl<E: Executor> ExecutionContext<E> {
             .await
             .context("execute_block failed")?;
         self.record_application(
+            selection,
             block.height,
             ApplicationSource::BlockTransactions {
                 height: block.height,
@@ -180,6 +181,7 @@ impl<E: Executor> ExecutionContext<E> {
             .await
             .context("run_block_lifecycle failed")?;
         self.record_application(
+            selection,
             block.height,
             ApplicationSource::BlockLifecycle {
                 height: block.height,
@@ -355,16 +357,13 @@ impl<E: Executor> ExecutionContext<E> {
                 decision.consensus_height.as_u64(),
             )
             .await?;
+            // Certification retains its original era and transition descriptor.
+            // Reconstruction may select different execution rules after rollback;
+            // the following activation stage derives the surviving schedule.
             ensure!(
-                *retained.input() == block.exact_input(self.protocol_context)?,
+                block == BlockInput::from_exact(retained.input())?,
                 "block application differs from retained certified bytes"
             );
-            control::check_block_boundary(
-                &self.db_conn(),
-                self.protocol_context,
-                &retained.input().descriptor().command,
-            )
-            .await?;
             let block = self
                 .executor
                 .prepare_block(&self.recognizer, stage.selection(), block)
@@ -599,6 +598,7 @@ impl<E: Executor> ExecutionContext<E> {
         // Recognition belongs at admission, since the protocol may change while
         // an RPC request waits in the bounded simulation queue.
         let selection = self.simulation_selection().await?;
+        self.select_session(&selection).await?;
         let tx = match self
             .executor
             .prepare_simulation(&self.recognizer, &selection, raw)?
@@ -622,7 +622,7 @@ impl<E: Executor> ExecutionContext<E> {
                     .checked_add(1)
                     .context("simulation height overflow")
             })?;
-            select_legacy_p1(&conn, network, ApplicationPosition::Simulation { height }).await
+            select_current(&conn, network, ApplicationPosition::Simulation { height }).await
         }
     }
 

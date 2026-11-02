@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "fb21340d55081aa5cc2669997c2b150accb194b3930880eb6516e8ddb5cdaefc",
+  "parent_manifest_sha256": "39c95249da5a9e45f554a6acb4589ce9abc8c9b2a374bc8ea7b1bd244b775dc9",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1243,7 +1243,7 @@
     },
     "native_genesis_preflight": {
       "path": "core/indexer/src/database/genesis.rs",
-      "sha256": "21dfec4ed2da2d703c84fd2305e2b8117a49f204df1fd35564dc5716424d51a2"
+      "sha256": "9da6da8a4a57e063c9fc0cd494a8b4639cebd678e81a9a975f25b58059b1b424"
     },
     "retained_deposit_policy": {
       "path": "core/indexer/src/protocol/v1/deposit.rs",
@@ -1323,11 +1323,11 @@
     },
     "runtime": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "63e397bbacb5d2f1908a79bffcce53a1e4760df1d04769d346e35acd2d2b8690"
+      "sha256": "801e4b359afe5690332677d6ccaa1c01b1573cba2ea19b75315209dec5b434e4"
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",
-      "sha256": "7ea80c6e27fcf35577e8cf39125923c9b3884805cc72266f628e49aacfe0b43d"
+      "sha256": "f3b3cc0ee1f638ebccd3012187da7422dcaced94d20bf7af8b41cf7be09a05c5"
     },
     "token": {
       "path": "core/indexer/src/runtime/token.rs",

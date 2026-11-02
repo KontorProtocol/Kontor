@@ -1,4 +1,4 @@
-mod fixture;
+pub(crate) mod fixture;
 mod recovery;
 #[cfg(all(kontor_managed, not(test)))]
 mod rehearsal;

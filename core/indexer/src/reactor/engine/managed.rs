@@ -1,24 +1,28 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use bitcoin::Network;
+use libsql::Connection;
 use malachitebft_app_channel::app::config::{BootstrapProtocol, Selector};
 
 use super::{EngineConfig, EngineOutput};
+use crate::build_record;
 use crate::consensus::Address;
 use crate::consensus::signing::PrivateKey;
-use crate::database::{Reader, Writer, admit_node_database, open_node_database_for_genesis};
+use crate::database::{
+    Reader, Writer, admit_node_database, certified_history, open_node_database_for_genesis,
+};
 use crate::protocol::coordinator::certified_input::EraContext;
 use crate::protocol::coordinator::durable_signer::{
     DurableSigner, GenerationOwner, OwnedGeneration,
 };
 use crate::protocol::coordinator::managed::control::EngineSlot;
 use crate::protocol::coordinator::managed::reactor::ReactorEngine;
-use crate::protocol::coordinator::managed::startup::{
-    Bootstrap, Bundle, Configuration, PeerSelection,
-};
+use crate::protocol::coordinator::managed::startup::{Bootstrap, Configuration, PeerSelection};
+use crate::protocol::coordinator::registry;
+use crate::reactor::consensus_state::certified_startup;
 use crate::reactor::transport::Engine;
 use crate::runtime::GenesisParameters;
 
@@ -45,9 +49,8 @@ pub struct NodeCoordinator {
     owner: Arc<GenerationOwner>,
     slot: EngineSlot,
     directory: PathBuf,
-    context: EraContext,
+    genesis: EraContext,
     validator: Option<[u8; 32]>,
-    prepared: Mutex<Option<PreparedGeneration>>,
 }
 
 impl NodeCoordinator {
@@ -58,6 +61,7 @@ impl NodeCoordinator {
         starting_block_height: u64,
         genesis: &GenesisParameters,
     ) -> Result<(Arc<Self>, Reader, Writer)> {
+        build_record::verify()?;
         let baseline = admit_node_database(
             &config.data_dir,
             filename,
@@ -73,14 +77,12 @@ impl NodeCoordinator {
             let owner =
                 GenerationOwner::open(&directory.join("consensus-authority"), context.chain)?;
             let validator = key.as_ref().map(|key| *key.public_key().as_bytes());
-            let prepared = PreparedGeneration::reserve(&owner, context, key)?;
             Ok(Arc::new(Self {
                 owner,
                 slot: EngineSlot::default(),
                 directory: directory.canonicalize()?,
-                context,
+                genesis: context,
                 validator,
-                prepared: Mutex::new(Some(prepared)),
             }))
         })
         .await
@@ -98,11 +100,18 @@ impl NodeCoordinator {
         Ok((coordinator, reader, writer))
     }
 
-    pub(crate) fn start(&self, config: &EngineConfig, context: EraContext) -> Result<EngineOutput> {
+    pub(crate) async fn start(
+        &self,
+        config: &EngineConfig,
+        conn: &Connection,
+    ) -> Result<EngineOutput> {
+        let (context, _, _) = certified_startup(conn).await?;
         ensure!(
-            context == self.context,
-            "engine protocol differs from admitted context"
+            certified_history::eras::genesis(conn).await? == self.genesis,
+            "engine genesis differs from admitted context"
         );
+        let manifest = certified_history::protocol(conn, context.protocol).await?;
+        let installed = registry::resolve(&manifest)?;
         ensure!(
             config.data_dir.canonicalize()? == self.directory,
             "engine directory differs from admitted directory"
@@ -112,15 +121,9 @@ impl NodeCoordinator {
             key.as_ref().map(|key| *key.public_key().as_bytes()) == self.validator,
             "engine validator mode or identity changed after admission"
         );
-        let prepared = self
-            .prepared
-            .lock()
-            .map_err(|_| anyhow::anyhow!("engine startup lock poisoned"))?
-            .take();
-        let prepared = match prepared {
-            Some(prepared) => prepared,
-            None => PreparedGeneration::reserve(&self.owner, context, key)?,
-        };
+        // No signing state is opened until closure recovery has established the
+        // next engine's exact era and installed implementation.
+        let prepared = PreparedGeneration::reserve(&self.owner, context, key)?;
         let address = Address::from_public_key(&config.private_key.public_key());
         let input = Configuration {
             generation: prepared.ownership.generation(),
@@ -147,7 +150,7 @@ impl NodeCoordinator {
         };
         let engine = ReactorEngine::start_owned(
             &self.slot,
-            Bundle::First,
+            installed.consensus,
             input,
             prepared.signer,
             prepared.ownership,

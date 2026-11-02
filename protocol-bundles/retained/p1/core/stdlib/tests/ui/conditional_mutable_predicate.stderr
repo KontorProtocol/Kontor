@@ -1,0 +1,44 @@
+error[E0223]: ambiguous associated type
+  --> tests/ui/conditional_mutable_predicate.rs:26:52
+   |
+26 | #[index(live, by = owner, when = matches!(payload, Payload::ONE))]
+   |                                                    ^^^^^^^^^^^^
+   |
+help: if there were a trait named `Example` with associated type `ONE` implemented for `Payload`, you could use the fully-qualified path
+   |
+26 - #[index(live, by = owner, when = matches!(payload, Payload::ONE))]
+26 + #[index(live, by = owner, when = matches!(payload, <Payload as Example>::ONE))]
+   |
+
+error[E0223]: ambiguous associated type
+  --> tests/ui/conditional_mutable_predicate.rs:33:63
+   |
+33 | #[index(live, by = owner, when = matches!(state, State::Value(Payload::ONE)))]
+   |                                                               ^^^^^^^^^^^^
+   |
+help: if there were a trait named `Example` with associated type `ONE` implemented for `Payload`, you could use the fully-qualified path
+   |
+33 - #[index(live, by = owner, when = matches!(state, State::Value(Payload::ONE)))]
+33 + #[index(live, by = owner, when = matches!(state, State::Value(<Payload as Example>::ONE)))]
+   |
+
+error[E0223]: ambiguous associated type
+  --> tests/ui/conditional_mutable_predicate.rs:40:65
+   |
+40 | #[index(live, by = owner, when = matches!(payload, Option::Some(Payload::ONE)))]
+   |                                                                 ^^^^^^^^^^^^
+   |
+help: if there were a trait named `Example` with associated type `ONE` implemented for `Payload`, you could use the fully-qualified path
+   |
+40 - #[index(live, by = owner, when = matches!(payload, Option::Some(Payload::ONE)))]
+40 + #[index(live, by = owner, when = matches!(payload, Option::Some(<Payload as Example>::ONE)))]
+   |
+
+error[E0599]: no variant named `ONE` found for enum `State`
+  --> tests/ui/conditional_mutable_predicate.rs:47:57
+   |
+17 | enum State {
+   | ---------- variant `ONE` not found here
+...
+47 | #[index(live, by = owner, when = matches!(state, State::ONE))]
+   |                                                         ^^^ variant not found in `State`

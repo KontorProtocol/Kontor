@@ -15,6 +15,7 @@ from managed_definition import DESTINATION as MANAGED_DEFINITION
 from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, executor_graphs
 from semantic_baseline import verify as verify_semantics
 from symbol_tool import TOOLCHAIN
+from transition_evidence import verify_transition, verify_recovery, verify_authorization
 
 
 CASES = {"native-genesis", "genesis-resume", "read-only-views", "committee", "registration-observer-capability",
@@ -57,8 +58,9 @@ def verify_certified_history(observations, link_set, root=ROOT):
         manifest = bytes.fromhex(result['manifest'])
         chain = bytes.fromhex(result['chain'])
         protocol = bytes.fromhex(result['protocol'])
+        graph = executor_graphs(link_set)['first' if link_set == 'managed-node' else 'observer']
         executor = hashed(b'kontor/execution-definition/v1',
-                          (root / 'protocol-bundles/executor-observer/definition.bin').read_bytes())
+                          (root / graph.source_root / 'protocol-bundles' / graph.directory / 'definition.bin').read_bytes())
         consensus_path = (MANAGED_DEFINITION if link_set == 'managed-node' else
                           'core/indexer/src/protocol/coordinator/baseline/consensus.json')
         consensus = hashed(b'kontor/consensus-definition/v1', (root / consensus_path).read_bytes())
@@ -74,7 +76,7 @@ def verify_certified_history(observations, link_set, root=ROOT):
     except (ValueError, TypeError):
         valid = False
     if not valid:
-        raise RuntimeError('certified baseline identity differs from the observer definition')
+        raise RuntimeError('certified baseline identity differs from the selected genesis executor')
 
 
 def verify_storage_contracts(observations, link_set=None):
@@ -97,6 +99,55 @@ def verify_managed_startup(observations, link_set):
                     competing_writer_rejected=True)
     if result != expected:
         raise RuntimeError('managed startup evidence missing, incomplete or bound to another protocol')
+
+
+def baseline_graphs(link_set):
+    # P2 intentionally changes semantics. Only retained P1 belongs to the old oracle.
+    return ['first'] if link_set == 'managed-node' else list(executor_graphs(link_set))
+
+
+def verify_executor_observations(observations, link_set):
+    graphs = observations.get('executors', [])
+    if [item['graph'] for item in graphs] != baseline_graphs(link_set):
+        raise RuntimeError('node execution omitted or mislabeled a retained baseline graph')
+    if any(item['observations'] != graphs[0]['observations'] for item in graphs[1:]):
+        raise RuntimeError('retained executor observations disagree')
+
+
+def execute_transition(executable, directory, root=ROOT):
+    stdout = directory / 'node-transition.stdout.json'
+    stderr = directory / 'node-transition.stderr.log'
+    with stdout.open('w') as out, stderr.open('w') as err:
+        result = subprocess.run([str(executable), 'qualify-protocol-transition', '--cluster'],
+                                stdout=out, stderr=err, timeout=390)
+    if result.returncode:
+        raise RuntimeError(f'node transition failed ({result.returncode}): {stderr}')
+    verify_transition(json.loads(stdout.read_text()), root)
+    return {'stdout_sha256': digest(stdout), 'stderr_sha256': digest(stderr)}
+
+
+def execute_recovery(executable, directory):
+    stdout = directory / 'node-recovery.stdout.json'
+    stderr = directory / 'node-recovery.stderr.log'
+    with stdout.open('w') as out, stderr.open('w') as err:
+        result = subprocess.run([str(executable), 'qualify-protocol-transition', '--recovery'],
+                                stdout=out, stderr=err, timeout=420)
+    if result.returncode:
+        raise RuntimeError(f'node recovery failed ({result.returncode}): {stderr}')
+    verify_recovery(json.loads(stdout.read_text()))
+    return {'stdout_sha256': digest(stdout), 'stderr_sha256': digest(stderr)}
+
+
+def execute_authorization(executable, directory):
+    stdout = directory / 'node-authorization.stdout.json'
+    stderr = directory / 'node-authorization.stderr.log'
+    with stdout.open('w') as out, stderr.open('w') as err:
+        result = subprocess.run([str(executable), 'qualify-protocol-transition', '--authorized-replay'],
+                                stdout=out, stderr=err, timeout=420)
+    if result.returncode:
+        raise RuntimeError(f'node authorization failed ({result.returncode}): {stderr}')
+    verify_authorization(json.loads(stdout.read_text()))
+    return {'stdout_sha256': digest(stdout), 'stderr_sha256': digest(stderr)}
 
 
 def execute_node(report_path, link_set=None):
@@ -125,17 +176,16 @@ def execute_node(report_path, link_set=None):
     if result.returncode:
         raise RuntimeError(f'node execution failed ({result.returncode}): {stderr}')
     observations = json.loads(stdout.read_text())
-    if [item['graph'] for item in observations['executors']] != expected_graphs:
-        raise RuntimeError('node execution omitted a retained graph')
-    first, second = observations['executors']
-    if first['observations'] != second['observations']:
-        raise RuntimeError('retained executor observations disagree')
+    verify_executor_observations(observations, link_set)
     if observations.get('schema') != 1 or set(observations['cases']) != CASES or len(observations['cases']) != len(CASES):
         raise RuntimeError('node execution case set changed')
     verify_storage_contracts(observations, link_set)
     verify_certified_history(observations, link_set)
     verify_managed_startup(observations, link_set)
-    semantic_baseline = verify_semantics(observations, ROOT, expected_graphs)
+    semantic_baseline = verify_semantics(observations, ROOT, baseline_graphs(link_set))
+    transition = execute_transition(executable, directory) if link_set == 'managed-node' else None
+    recovery = execute_recovery(executable, directory) if link_set == 'managed-node' else None
+    authorization = execute_authorization(executable, directory) if link_set == 'managed-node' else None
     if digest(executable) != node['executable_sha256'] or digest(report_path) != report_hash:
         raise RuntimeError('node executable or build report changed during execution')
     evidence = {'schema': 1, 'target': report['target'], 'profile': report['profile'], 'link_set': link_set,
@@ -144,6 +194,10 @@ def execute_node(report_path, link_set=None):
                 'cases': observations['cases'], 'graphs': expected_graphs,
                 'seconds': time.monotonic() - started, 'matching_observations': True,
                 'semantic_baseline': semantic_baseline}
+    if transition is not None:
+        evidence['transition'] = transition
+        evidence['recovery'] = recovery
+        evidence['authorization'] = authorization
     write_json(success, evidence)
     return evidence
 

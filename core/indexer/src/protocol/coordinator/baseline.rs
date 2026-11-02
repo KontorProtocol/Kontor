@@ -13,7 +13,7 @@ use crate::protocol::v1::native::{NATIVE_GENESIS_ID, native_provenance};
 
 const CONSENSUS_REFERENCE: &[u8] = include_bytes!("baseline/consensus.json");
 #[cfg(kontor_managed)]
-const MANAGED_REFERENCE: &[u8] = include_bytes!("managed/definitions/first.json");
+pub(super) const MANAGED_REFERENCE: &[u8] = include_bytes!("managed/definitions/first.json");
 const PARAMETERS: &[&str] = &[
     "core/indexer/src/protocol/v1/engine.rs",
     "core/indexer/src/protocol/v1/gas.rs",
@@ -36,7 +36,15 @@ pub(crate) fn consensus_is_registered(definition: [u8; 32]) -> bool {
     let reference = MANAGED_REFERENCE;
     #[cfg(not(kontor_managed))]
     let reference = CONSENSUS_REFERENCE;
-    domain_digest(b"kontor/consensus-definition/v1", reference) == definition
+    let first = domain_digest(b"kontor/consensus-definition/v1", reference) == definition;
+    #[cfg(kontor_managed)]
+    {
+        first || super::successor::consensus_definition() == definition
+    }
+    #[cfg(not(kontor_managed))]
+    {
+        first
+    }
 }
 
 impl Baseline {
@@ -69,7 +77,7 @@ impl Baseline {
         Self::compose_consensus(chain, reference, CONSENSUS_REFERENCE)
     }
 
-    fn compose_consensus(
+    pub(super) fn compose_consensus(
         chain: ChainId,
         reference: &DefinitionReference,
         consensus: &[u8],
@@ -146,7 +154,7 @@ impl Baseline {
     }
 }
 
-fn source(reference: &DefinitionReference, path: &str) -> Result<[u8; 32]> {
+pub(super) fn source(reference: &DefinitionReference, path: &str) -> Result<[u8; 32]> {
     reference
         .sources
         .iter()

@@ -24,14 +24,7 @@ async fn admission_precedes_authority_and_exclusive_ownership_precedes_writer() 
     let genesis = test_genesis(&[]);
     let (coordinator, reader, writer) =
         NodeCoordinator::open_database(&config, "state.db", Network::Regtest, 1, &genesis).await?;
-    let first = coordinator
-        .prepared
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .ownership
-        .clone();
+    let first = coordinator.owner.reserve(coordinator.validator)?;
     assert_eq!(first.generation(), 1);
     let network_key = first.network_key();
     assert!(
@@ -43,14 +36,7 @@ async fn admission_precedes_authority_and_exclusive_ownership_precedes_writer() 
     drop((first, coordinator, reader, writer));
     let (coordinator, reader, writer) =
         NodeCoordinator::open_database(&config, "state.db", Network::Regtest, 1, &genesis).await?;
-    let second = coordinator
-        .prepared
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .ownership
-        .clone();
+    let second = coordinator.owner.reserve(coordinator.validator)?;
     assert_eq!(second.generation(), 2);
     assert_eq!(second.network_key(), network_key);
     drop((second, coordinator, reader, writer));

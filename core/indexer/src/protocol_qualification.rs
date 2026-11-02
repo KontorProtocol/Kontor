@@ -1,18 +1,23 @@
 //! Bounded execution checks using the same adapters as the production node.
 
-use crate::database::certified_history::branch;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use bitcoin::{BlockHash, hashes::Hash};
 use indexer_types::{Block, BlockRow};
+#[cfg(kontor_managed)]
+use libsql::Connection;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
+use crate::database::certified_history::branch;
 use crate::database::connection::new_connection;
 use crate::database::queries::insert_block;
+#[cfg(kontor_managed)]
+use crate::protocol::coordinator::bootstrap;
+#[cfg(not(kontor_managed))]
 use crate::protocol::coordinator::genesis::bind_identity;
 #[cfg(all(kontor_linked, not(kontor_observer)))]
 use crate::protocol::coordinator::linked::retained_session_factory;
@@ -29,12 +34,16 @@ use crate::protocol::identity::ExecutionDefinitionId;
 use crate::protocol::operations::{AddressEnvelope, SessionOwner};
 #[cfg(kontor_managed)]
 use crate::reactor::engine::qualify_managed_startup;
-use crate::reactor::{certified, history_qualification, qualification};
+#[cfg(not(kontor_managed))]
+use crate::reactor::qualification;
+#[cfg(kontor_managed)]
+use crate::reactor::upgrade_qualification;
+use crate::reactor::{certified, history_qualification};
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::{LinkedSession, new_linked};
 
-pub(crate) mod fixture;
+mod fixture;
 mod migration;
 #[cfg(kontor_linked)]
 mod ownership;
@@ -43,7 +52,34 @@ pub(crate) mod snapshot;
 mod storage_contract;
 mod transactions;
 
+#[cfg(kontor_managed)]
+pub async fn transition_crash_child(directory: &Path, stage: &str) -> Result<()> {
+    upgrade_qualification::crash::child(directory, stage).await
+}
+
+#[cfg(kontor_managed)]
+pub async fn protocol_transition(
+    cluster: bool,
+    recovery: bool,
+    authorized_replay: bool,
+) -> Result<Value> {
+    if authorized_replay {
+        Box::pin(upgrade_qualification::authorization::run()).await
+    } else if recovery {
+        Box::pin(upgrade_qualification::recovery::run()).await
+    } else if cluster {
+        Box::pin(upgrade_qualification::cluster::run()).await
+    } else {
+        Box::pin(upgrade_qualification::run()).await
+    }
+}
+
 use fixture::{NETWORK, genesis, state};
+
+#[cfg(kontor_managed)]
+pub(crate) async fn application_state(conn: &Connection) -> Result<Value> {
+    Ok(serde_json::to_value(state(conn).await?)?)
+}
 
 #[cfg(all(kontor_linked, kontor_observer))]
 use kontor_executor_observer as alternate_executor;
@@ -56,7 +92,7 @@ const ALTERNATE_GRAPH: &str = "second";
 
 type Factories = (&'static str, SessionFactory, SessionFactory);
 
-#[cfg(kontor_linked)]
+#[cfg(all(kontor_linked, not(kontor_managed)))]
 fn alternate_factory(view_gas_limit: Option<u64>) -> Result<SessionFactory> {
     #[cfg(kontor_observer)]
     {
@@ -120,18 +156,20 @@ fn factories() -> Result<Vec<Factories>> {
             .is_err(),
             "qualification-only second executor acquired a production factory"
         );
-        Ok(vec![
+        let factories = vec![
             (
                 "first",
                 session_factory_for_definition(NETWORK, first_id, None)?,
                 session_factory_for_definition(NETWORK, first_id, Some(DEFAULT_VIEW_GAS_LIMIT))?,
             ),
+            #[cfg(not(kontor_managed))]
             (
                 ALTERNATE_GRAPH,
                 alternate_factory(None)?,
                 alternate_factory(Some(DEFAULT_VIEW_GAS_LIMIT))?,
             ),
-        ])
+        ];
+        Ok(factories)
     }
     #[cfg(not(kontor_linked))]
     {
@@ -151,6 +189,9 @@ async fn exercise(
 ) -> Result<Value> {
     let dir = TempDir::new()?;
     let conn = new_connection(dir.path(), "qualification.db").await?;
+    #[cfg(kontor_managed)]
+    let (baseline, _) = bootstrap::prepare(&conn, NETWORK, 1, &genesis()).await?;
+    #[cfg(not(kontor_managed))]
     bind_identity(&conn, NETWORK, 1, &genesis()).await?;
     for height in 0..=1 {
         insert_block(
@@ -179,6 +220,9 @@ async fn exercise(
         state(&conn).await? == initialized,
         "resumed genesis changed persisted state"
     );
+
+    #[cfg(kontor_managed)]
+    bootstrap::complete(service, &session, NETWORK, &baseline).await?;
 
     let pool = new_linked(dir.path().to_path_buf(), "qualification.db".into(), read, 1)?;
     let address: AddressEnvelope = ("staking".into(), 0, 0);
@@ -244,7 +288,7 @@ async fn exercise(
     let lease = begin_canonical_unit(service, &session, &selection, NETWORK, false).await?;
     let committee = async {
         let committee = derive_committee(&session, &selection, NETWORK).await?;
-        let expected_observer = matches!(_name, "observer" | "in-tree");
+        let expected_observer = cfg!(kontor_managed) || matches!(_name, "observer" | "in-tree");
         ensure!(
             session.executor.operations.registrations.is_some() == expected_observer,
             "registration capability attached to wrong executor"
@@ -498,6 +542,14 @@ pub async fn run() -> Result<Value> {
     result
 }
 
+#[cfg(kontor_managed)]
+pub async fn compare_baseline(_archive: &Path) -> Result<Value> {
+    anyhow::bail!(
+        "unversioned archive comparison requires the legacy-qualification link set; use qualify-executors for the managed P1 semantic oracle and qualify-protocol-transition for managed P1/P2 execution"
+    )
+}
+
+#[cfg(not(kontor_managed))]
 pub async fn compare_baseline(archive: &Path) -> Result<Value> {
     let service = OwnerService::new();
     let result = async {

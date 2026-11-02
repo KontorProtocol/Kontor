@@ -1,12 +1,20 @@
 use std::sync::Arc;
 
 use super::bundle_session::{BundleSession, infrastructure};
+use crate::protocol::execution::ExecutorVersion;
 use crate::protocol::identity::MigrationDefinition;
 use crate::protocol::migration_work::MigrationWork;
 use crate::protocol::operations::MigrationCall;
 use crate::protocol::v1::definition::execution_definition;
 use crate::protocol::v1::migration::{MigrationContext, MigrationFailure};
 use crate::protocol::v1::migration_definition;
+use crate::protocol::v2::{migration_definition as p2_migration, token_migration};
+
+enum Routine {
+    Noop,
+    Qualification,
+    TokenCount,
+}
 
 impl BundleSession {
     pub(crate) fn migration(self: &Arc<Self>) -> MigrationCall {
@@ -38,16 +46,25 @@ impl BundleSession {
                 let Ok(definition) = MigrationDefinition::decode(&definition) else {
                     return Ok(Err((0, Some([0; 5]))));
                 };
-                let rewrite = if definition == migration_definition::noop(execution) {
-                    false
-                } else if qualification
-                    && [false, true].into_iter().any(|exhaust| {
-                        definition == migration_definition::qualification(execution, exhaust)
-                    })
-                {
-                    true
-                } else {
-                    return Ok(Err((0, Some([0; 5]))));
+                let routine = match runtime.executor_version() {
+                    ExecutorVersion::P2 if definition == p2_migration::token_count(execution) => {
+                        Routine::TokenCount
+                    }
+                    ExecutorVersion::LegacyP1
+                        if definition == migration_definition::noop(execution) =>
+                    {
+                        Routine::Noop
+                    }
+                    ExecutorVersion::LegacyP1
+                        if qualification
+                            && [false, true].into_iter().any(|exhaust| {
+                                definition
+                                    == migration_definition::qualification(execution, exhaust)
+                            }) =>
+                    {
+                        Routine::Qualification
+                    }
+                    _ => return Ok(Err((0, Some([0; 5])))),
                 };
                 let mut used = MigrationWork::default();
                 let result = async {
@@ -62,10 +79,10 @@ impl BundleSession {
                         )?,
                     )
                     .await?;
-                    let outcome = if rewrite {
-                        qualification_rewrite(&mut context).await
-                    } else {
-                        Ok(())
+                    let outcome = match routine {
+                        Routine::Noop => Ok(()),
+                        Routine::Qualification => qualification_rewrite(&mut context).await,
+                        Routine::TokenCount => token_migration::backfill(&mut context).await,
                     };
                     used = context.used();
                     outcome.and_then(|()| context.finish())
