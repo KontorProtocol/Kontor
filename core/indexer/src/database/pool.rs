@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use deadpool::managed::{self, Pool, RecycleError};
 use libsql::Error;
 
-use super::connection::new_connection;
+use super::connection::new_read_only_connection;
 
 #[derive(Debug)]
 pub struct Manager {
@@ -31,7 +31,7 @@ impl managed::Manager for Manager {
     type Error = Error;
 
     async fn create(&self) -> Result<Self::Type, Error> {
-        new_connection(&self.data_dir, &self.filename).await
+        new_read_only_connection(&self.data_dir, &self.filename).await
     }
 
     async fn recycle(

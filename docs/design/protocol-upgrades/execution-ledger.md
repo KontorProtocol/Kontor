@@ -3621,3 +3621,39 @@ performance qualification. The original CI lint/security audit passed while the
 remaining ordinary tests continued. The correction is batched locally until those
 jobs expose any additional failures; the failed control matrices are not blindly
 rerun on the unchanged PR candidate.
+
+### K5/K6 CI reader initialization correction
+
+The first PR621 candidate (`7c5609b1`) passed lint/security, SDK, reproducible
+contracts/SDK and both Docker-cache jobs. Both standard Rust jobs failed only
+`cluster_late_joiner_sync` in their 129-test integration suites. The Linux log
+exposed the reactor's original failure: a locked database while inserting the
+block batch decision. macOS observed the subsequent closed operation admission.
+Two focused local dev runs reproduced that shutdown. Logging the supervisor's
+fatal cause before draining prevents test cleanup from hiding it.
+
+Reader-pool creation called the schema-initializing writer constructor. Its
+metadata writes could invalidate a canonical writer's deferred transaction
+snapshot. A deterministic regression established this failure before the fix:
+open/read a writer transaction, open a Reader pool connection, then attempt the
+writer insert. Both database and runtime reader pools now open the existing
+file read-only, preserving connection timeout, foreign-key and crypto-extension
+setup while leaving schema installation to the writer. Existing startup orders
+initialize the writer first. Pool fixtures now do so explicitly as well.
+
+The regression and connection checks passed (2), all runtime-pool checks passed
+(5, including held/fresh snapshots after contract ID reuse), and the original
+late-joiner cluster test passed in 127.18 seconds. These are local dev diagnostics,
+not release qualification. Before/after logs and source hashes are preserved in
+`.build-cache/k6-ci-reader-correction.json`. The temporary diagnostic binary-path
+symlink was removed. Workspace Clippy including tests and formatting passed.
+The single independent reviewer traced startup and reader consumers and found
+no material concerns in the four-file behavioral/diagnostic correction atop
+`98bd1e4a`. The lead verified the failing-before/passing-after regression,
+actual cluster recovery and reader restrictions. The unreleased managed
+reference and derived stack source bindings were refreshed; retained references
+and historical acceptance evidence keep their original source identities.
+
+This fix is batched with the already validated frozen-library/source-pin
+correction for the next PR candidate. Current-head CI remains required before
+merge. No expensive failed campaign was rerun without diagnosing its failures.

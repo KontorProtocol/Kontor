@@ -490,7 +490,9 @@ async fn run_daemon(config: Config) -> Result<()> {
     // enough BECAUSE of that ordering — `cancel()` is a release store and every
     // reader that acts on the token's cancellation acquires it, so this store
     // is visible to anything that saw the cancel. Not a coincidence to tidy.
-    if matches!(stop, Stop::Fatal(_)) {
+    if let Stop::Fatal(cause) = &stop {
+        // A caller can terminate us during draining, before exit_status logs the cause.
+        error!("Initiating shutdown after failure: {cause:#}");
         failed.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     info!("Initiating shutdown");

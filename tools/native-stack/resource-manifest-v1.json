@@ -550,7 +550,7 @@
     },
     "runtime_pool": {
       "path": "core/indexer/src/runtime/pool.rs",
-      "sha256": "f5e6e6623887c49d2772efef660e52cfa79ba4a458d0be323cf45461774388b3"
+      "sha256": "a5f1e9281de50a25ee3e8fc4c57d04616f7e0795e21c389ea034c28dcc0799c7"
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",
