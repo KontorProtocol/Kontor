@@ -3296,3 +3296,41 @@ K6 still needs migration rehearsal/support diagnostics with failure work account
 the agreed scheduled-height guard, remaining committee and cross-language codec
 coverage, and consolidated K5/K6 qualification and review. K7/K8 activation and
 migration handoff remain subsequent work. No CI, PR, merge or publication occurred.
+
+### K6 scheduled-height guard checkpoint (1 November 2026)
+
+Continued from `e8dcdf9b`. The agreed intermediate guard now rejects ordinary
+Block commands at or above a surviving pending activation height. Proposal
+selection skips these blocks, proposal validation rejects them without stopping
+the reactor, and new certified append rejects before input, certificate or branch
+mutation. Owned block application checks again before preparation or execution.
+Existing certified retries retain their original historical verification path.
+Control commands continue through their separate authorization checks and retain
+priority over pending blocks. No activation, executor switch or migration is
+claimed by this guard; K7's authorized boundary transition must implement them.
+
+The guard reads the latest canonical control snapshot at or below the block's
+parent height. This matches the actual replacement-block rollback order, preserves
+all controls at the retained height, and removes later Schedule/Postpone/Cancel
+effects from the decision. It neither creates an irreversible schedule nor changes
+reference clocks, authorization thresholds or retained certificates.
+
+Six database-control tests passed, including the new exact H-1/H/H+1 and u64
+boundary checks, projected surviving snapshots, cancellation/postponement, and
+actual rollback restoring or removing the boundary. These are direct persistence
+fixtures, not live-quorum authorization evidence. The real preparation/CLI/reorg
+test passed in 42.56s with explicit append rejection and unchanged frontier/control
+checks. Its boundary candidates also contain a height gap, so the test requires
+the specific activation error to distinguish guard execution from branch rejection.
+It does not claim a thousand-block approach-to-H run or activation handoff. The
+existing local-engine control proposal-priority test passed in 17.32s.
+
+Lead review traced the block proposal, new certified append and owned application
+paths; rollback order and target-height inclusion; typed normal rejection versus
+infrastructure failures; and the unchanged control proposal path. Validation used
+one serialized Cargo/runtime slot with at most two build jobs. Evidence is in
+`.build-cache/k6-boundary-validation.json` and its three raw logs. Formatting and
+diff checks passed. Managed-bundle qualification and the consolidated independent
+K5/K6 review remain pending. Migration rehearsal, failure work reporting, support
+diagnostics, remaining committee and codec coverage remain the next K6 work.
+No CI, PR, merge, fork change or publication occurred.

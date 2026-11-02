@@ -55,6 +55,14 @@ verify the proposed manifest and installed implementation. Once migration rehear
 is available, run it before approval and repeat as activation approaches; a rehearsal
 is advisory and never authorizes an upgrade.
 
+Until the activation transition is implemented, a pending schedule prevents an
+ordinary Bitcoin block at H or later from being proposed, accepted or applied.
+Valid Cancel and Postpone actions remain eligible and have proposal priority.
+This intermediate implementation must not be used to carry a network through an
+activation. A replacement Bitcoin block is checked against the control state
+that survives rollback to its parent, so removed schedules do not keep blocking
+the chain and undoing a postponement or cancellation restores the prior boundary.
+
 ## Approve the exact action
 
 Each approving validator uses its existing Ed25519 validator key as a local file

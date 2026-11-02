@@ -665,8 +665,19 @@ impl<E: Executor> Reactor<E> {
             )
             .await
             {
-                Ok(()) => return Ok(Some(Value::from_input(input)?)),
+                Ok(()) => {}
                 Err(error) if error.downcast_ref::<branch::Rejected>().is_some() => continue,
+                Err(error) => return Err(error),
+            }
+            match control::check_block_boundary(
+                &conn,
+                self.consensus.protocol_context,
+                &input.descriptor().command,
+            )
+            .await
+            {
+                Ok(()) => return Ok(Some(Value::from_input(input)?)),
+                Err(error) if error.is::<control::ActivationRequired>() => continue,
                 Err(error) => return Err(error),
             }
         }
@@ -806,6 +817,20 @@ impl<E: Executor> Reactor<E> {
                 return Err(error);
             }
             warn!(%error, "Rejecting proposal outside certified Bitcoin branch");
+            let _ = reply.send(None);
+            return Ok(());
+        }
+        if let Err(error) = control::check_block_boundary(
+            &conn,
+            self.consensus.protocol_context,
+            data.value().command(),
+        )
+        .await
+        {
+            if !error.is::<control::ActivationRequired>() {
+                return Err(error);
+            }
+            warn!(%error, "Rejecting ordinary block at upgrade boundary");
             let _ = reply.send(None);
             return Ok(());
         }

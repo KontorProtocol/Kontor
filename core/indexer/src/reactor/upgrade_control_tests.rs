@@ -539,6 +539,35 @@ async fn prepared_input(
     )?)
 }
 
+async fn assert_boundary_rejected(
+    execution: &ExecutionContext<RuntimeExecutor>,
+    key: &PrivateKey,
+    activation: u64,
+) -> Result<()> {
+    let conn = execution.db_conn();
+    let frontier = certified_history::frontier(&conn).await?;
+    let state = control::current(&conn).await?;
+    let candidate = certified_fixture::block(
+        activation,
+        execution.last_hash.context("Bitcoin tip")?,
+        0,
+        vec![],
+    );
+    // This candidate also has a height gap. Require the specific boundary error
+    // to prove append stops at the guard, before recording or branch mutation.
+    let error = append(
+        execution,
+        candidate.exact_input(execution.protocol_context)?,
+        key,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.is::<control::ActivationRequired>(), "{error:#}");
+    assert_eq!(certified_history::frontier(&conn).await?, frontier);
+    assert_eq!(control::current(&conn).await?, state);
+    Ok(())
+}
+
 #[tokio::test]
 async fn prepared_controls_and_bitcoin_reorg_restore_postponed_then_original_schedule() -> Result<()>
 {
@@ -609,6 +638,7 @@ async fn prepared_controls_and_bitcoin_reorg_restore_postponed_then_original_sch
     let height = append(&execution, schedule, &key).await?;
     finish(&mut execution, height).await?;
     let scheduled = control::current(&conn).await?.context("scheduled state")?;
+    assert_boundary_rejected(&execution, &key, 4000).await?;
     assert!(
         prepare(
             &conn,
@@ -644,6 +674,7 @@ async fn prepared_controls_and_bitcoin_reorg_restore_postponed_then_original_sch
     finish(&mut execution, postpone_height).await?;
     let postponed = control::current(&conn).await?.context("postponed state")?;
     assert_eq!(postponed.pending.as_ref().unwrap().activation, 5000);
+    assert_boundary_rejected(&execution, &key, 5000).await?;
 
     let third = certified_fixture::block(3, second.hash, 0, vec![]);
     let height = append(
@@ -676,6 +707,7 @@ async fn prepared_controls_and_bitcoin_reorg_restore_postponed_then_original_sch
     .await?;
     finish(&mut execution, height).await?;
     assert_eq!(control::current(&conn).await?, Some(scheduled));
+    assert_boundary_rejected(&execution, &key, 4000).await?;
     for original in [&postpone, &cancel] {
         let reanchored = ExactInput::control(
             execution.protocol_context,

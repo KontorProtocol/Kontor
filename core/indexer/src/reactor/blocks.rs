@@ -359,6 +359,12 @@ impl<E: Executor> ExecutionContext<E> {
                 *retained.input() == block.exact_input(self.protocol_context)?,
                 "block application differs from retained certified bytes"
             );
+            control::check_block_boundary(
+                &self.db_conn(),
+                self.protocol_context,
+                &retained.input().descriptor().command,
+            )
+            .await?;
             let block = self
                 .executor
                 .prepare_block(&self.recognizer, stage.selection(), block)

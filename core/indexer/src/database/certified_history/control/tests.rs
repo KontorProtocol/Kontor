@@ -1,12 +1,14 @@
+use bitcoin::{BlockHash, hashes::Hash};
 use libsql::{Builder, Database};
 use tempfile::TempDir;
 
 use super::*;
 use crate::protocol::coordinator::application_closure::CanonicalPosition;
 use crate::protocol::coordinator::certified_input::EraContext;
+use crate::protocol::coordinator::control::PendingPlan;
 use crate::protocol::coordinator::manifest::ProtocolManifest;
 use crate::protocol::identity::{
-    ChainId, ExecutionDefinitionId, ExecutionIdentity, MigrationDefinitionId, ProtocolId,
+    ChainId, ExecutionDefinitionId, ExecutionIdentity, MigrationDefinitionId, PlanId, ProtocolId,
 };
 
 async fn database() -> Result<(TempDir, Database, Connection)> {
@@ -62,6 +64,15 @@ fn state(head: [u8; 32], nonce: u64) -> Result<ControlState> {
 }
 
 async fn append_effect(conn: &Connection, height: u64, seed: u8) -> Result<CanonicalApplication> {
+    append_effect_with_plan(conn, height, seed, None).await
+}
+
+async fn append_effect_with_plan(
+    conn: &Connection,
+    height: u64,
+    seed: u8,
+    activation: Option<u64>,
+) -> Result<CanonicalApplication> {
     let HistoryState::Ready(cursor) = canonical_history::state(conn).await? else {
         panic!()
     };
@@ -81,14 +92,106 @@ async fn append_effect(conn: &Connection, height: u64, seed: u8) -> Result<Canon
         input: None,
     };
     canonical_history::append(conn, &application).await?;
-    record(
-        conn,
-        &application,
-        &state(control, decision)?,
-        Position { decision, stage: 1 },
+    let mut next = state(control, decision)?;
+    if let Some(activation) = activation {
+        let mut manifest = next.current_manifest.clone();
+        manifest.protocol_number += 1;
+        manifest.predecessor = next.context.protocol;
+        next.pending = Some(PendingPlan {
+            id: PlanId([seed; 32]),
+            manifest,
+            activation,
+            consumed: false,
+        });
+    }
+    record(conn, &application, &next, Position { decision, stage: 1 }).await?;
+    Ok(application)
+}
+
+#[tokio::test]
+async fn block_boundary_uses_surviving_control_and_exact_activation_height() -> Result<()> {
+    let (_directory, _db, conn) = database().await?;
+    let context = state([0; 32], 0)?.context;
+    let block = |height| Command::Block {
+        height,
+        hash: BlockHash::all_zeros(),
+        parent: BlockHash::all_zeros(),
+        header: [0; 80],
+    };
+    check_block_boundary(&conn, context, &block(1108)).await?;
+    conn.execute("BEGIN", ()).await?;
+    append_effect_with_plan(&conn, 100, 1, Some(1108)).await?;
+    conn.execute("COMMIT", ()).await?;
+    let scheduled = current(&conn).await?;
+    check_block_boundary(&conn, context, &block(1107)).await?;
+    for height in [1108, 1109, u64::MAX] {
+        let error = check_block_boundary(&conn, context, &block(height))
+            .await
+            .unwrap_err();
+        let error = error
+            .downcast_ref::<ActivationRequired>()
+            .context("boundary error")?;
+        assert_eq!(error.block, height);
+        assert_eq!(error.activation, 1108);
+    }
+    assert_eq!(at_storage_height(&conn, 99).await?, None);
+    assert_eq!(at_storage_height(&conn, 100).await?, scheduled);
+    conn.execute("BEGIN", ()).await?;
+    append_effect_with_plan(&conn, 200, 2, Some(1208)).await?;
+    conn.execute("COMMIT", ()).await?;
+    let postponed = current(&conn).await?;
+    assert_eq!(at_storage_height(&conn, 199).await?, scheduled);
+    assert_eq!(at_storage_height(&conn, 200).await?, postponed);
+    check_block_boundary(&conn, context, &block(1108)).await?;
+    assert!(
+        check_block_boundary(&conn, context, &block(1208))
+            .await
+            .unwrap_err()
+            .is::<ActivationRequired>()
+    );
+    conn.execute("BEGIN", ()).await?;
+    append_effect(&conn, 300, 3).await?;
+    conn.execute("COMMIT", ()).await?;
+    let cancelled = current(&conn).await?;
+    assert_eq!(at_storage_height(&conn, 299).await?, postponed);
+    assert_eq!(at_storage_height(&conn, 300).await?, cancelled);
+    check_block_boundary(&conn, context, &block(1208)).await?;
+
+    conn.execute("BEGIN", ()).await?;
+    retract_at(
+        &conn,
+        origin(&conn, 12).await?,
+        Position {
+            decision: 12,
+            stage: 1,
+        },
+        199,
     )
     .await?;
-    Ok(application)
+    canonical_history::rollback(&conn, 199).await?;
+    conn.execute("COMMIT", ()).await?;
+    assert_eq!(current(&conn).await?, scheduled);
+    assert!(
+        check_block_boundary(&conn, context, &block(1108))
+            .await
+            .unwrap_err()
+            .is::<ActivationRequired>()
+    );
+    conn.execute("BEGIN", ()).await?;
+    retract_at(
+        &conn,
+        origin(&conn, 13).await?,
+        Position {
+            decision: 13,
+            stage: 1,
+        },
+        99,
+    )
+    .await?;
+    canonical_history::rollback(&conn, 99).await?;
+    conn.execute("COMMIT", ()).await?;
+    check_block_boundary(&conn, context, &block(1108)).await?;
+    Ok(())
 }
 
 async fn origin(conn: &Connection, decision: u64) -> Result<WorkOrigin> {

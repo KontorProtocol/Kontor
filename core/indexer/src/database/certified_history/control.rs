@@ -5,6 +5,7 @@ use super::{closure, fixed};
 use crate::database::canonical_history::{self, HistoryState};
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
 use crate::protocol::coordinator::application_closure::WorkItem;
+use crate::protocol::coordinator::certified_input::{Command, EraContext};
 use crate::protocol::coordinator::closure_work::WorkOrigin;
 use crate::protocol::coordinator::control::ControlState;
 
@@ -57,18 +58,61 @@ fn effect(row: &Row) -> Result<Effect> {
 }
 
 pub(crate) async fn current(conn: &Connection) -> Result<Option<ControlState>> {
+    at_storage_height(conn, u64::MAX).await
+}
+
+async fn at_storage_height(conn: &Connection, height: u64) -> Result<Option<ControlState>> {
     let row = conn
         .query(
             "SELECT a.record, c.ordinal, c.lineage, c.decision, c.action, c.control, c.state
          FROM canonical_upgrade_controls c JOIN canonical_applications a ON a.ordinal = c.ordinal
-         ORDER BY c.ordinal DESC LIMIT 1",
-            (),
+         WHERE a.storage_height <= ?1 ORDER BY c.ordinal DESC LIMIT 1",
+            [i64::try_from(height).unwrap_or(i64::MAX)],
         )
         .await?
         .next()
         .await?;
     row.map(|row| effect(&row).map(|value| value.state))
         .transpose()
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "Bitcoin block {block} reaches scheduled upgrade height {activation}; an authorized activation transition is required"
+)]
+pub(crate) struct ActivationRequired {
+    pub(crate) block: u64,
+    pub(crate) activation: u64,
+}
+
+// Ordinary Block commands cannot cross an upgrade boundary. A replacement first
+// undoes all applications above its parent, including Postpone and Cancel, so
+// judge the surviving snapshot rather than today's pending plan. K7's distinct
+// activation transition will own execution of H and the subsequent handoff.
+pub(crate) async fn check_block_boundary(
+    conn: &Connection,
+    context: EraContext,
+    command: &Command,
+) -> Result<()> {
+    let Command::Block { height, .. } = command else {
+        return Ok(());
+    };
+    let parent = height
+        .checked_sub(1)
+        .context("cannot execute native genesis as a block")?;
+    if let Some(state) = at_storage_height(conn, parent).await? {
+        ensure!(state.context == context, "upgrade boundary context differs");
+        if let Some(plan) = state.pending {
+            ensure!(
+                *height < plan.activation,
+                ActivationRequired {
+                    block: *height,
+                    activation: plan.activation
+                }
+            );
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn reference_floor(conn: &Connection, at: Position) -> Result<u64> {

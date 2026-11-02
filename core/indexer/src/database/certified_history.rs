@@ -467,6 +467,12 @@ pub(crate) async fn append(conn: &Connection, certified: &AuthenticatedDecision)
             state.closed_height == state.authenticated_height,
             "previous decision closure unfinished"
         );
+        control::check_block_boundary(
+            &tx,
+            decision.descriptor.context,
+            &decision.descriptor.command,
+        )
+        .await?;
         tx.execute(
             "INSERT OR IGNORE INTO certified_inputs (body_digest, body) VALUES (?1, ?2)",
             params![
