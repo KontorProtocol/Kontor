@@ -4780,3 +4780,43 @@ script changes, descriptive scope-string corrections and regenerated build
 reference. They are local evidence for the exercised implementation, not an
 exact-final-head cross-platform qualification claim. Consolidated independent
 review and final-candidate scoped CI remain required; no CI has been launched.
+
+### Consolidated single-runtime review, correction pending
+
+Lead and single independent reviewer examined base/merge base `8c757a86` through
+`7b7bd3967d22dbdb12f77defdf11546d01dabbf3`. Remote main was freshly verified at
+that base by the lead. Coverage included original-context Finalized handling,
+closure/authorization/Next ordering, stale callbacks, nil votes and exact retries,
+WAL reconciliation, promotion ownership, semantic identity and build provenance.
+The reviewer also checked preserved live evidence against the built binary and
+confirmed no changes to retained executor source trees.
+
+One material finding, SR-WAL-1, is accepted and remains open: syntax-only WAL
+inspection does not bind stored valid proposals to the context of the height
+being resumed. Pinned replay restores their validity without application
+revalidation. A valid misplaced same-height WAL could therefore influence
+signing outside the authenticated context. The bounded correction passes the
+certified next height and context into inspection before generation reservation,
+checks height-bearing entries against the WAL header, and compares proposal/value
+descriptor contexts when that WAL will actually resume. Older completed WALs must
+remain eligible for forward reset without comparison against a successor context.
+The Daybreak implementer accepted `SINGLE-RUNTIME-WAL-CONTEXT-1`; focused negative
+controls must use valid foreign-context frames and prove unchanged original bytes.
+No other material finding was reported. The same reviewer will check this fix.
+
+The full 179-test Python control run had only local ccache read-only filesystem
+errors in C fixture compilation. Repeating the affected 34 audit tests with
+`CCACHE_DISABLE=1` passed, completing coverage of those controls. Workspace Rust
+format checking also passed. Candidate CI and PR submission remain held for the
+WAL correction and its focused review.
+
+SR-WAL-1 correction `46412b58` was inspected by the lead and integrated as
+`e6fe6f24`. The same reviewer examined its exact diff against `7b7bd396` and
+closed the finding, with no new material concern. Four pinned-facade recovery
+tests passed, covering valid foreign-context and matching-context inputs, all
+four height-bearing input variants, covered older WALs and unchanged protected
+bytes on refusal. Ordinary indexer compilation passed in the implementer's
+checkout. These checks refuse inconsistent startup state; they neither repair
+arbitrary database/WAL combinations nor establish support for swapping backups.
+No Malachite fork change was made. Linked compilation of the managed caller and
+final exact-head CI remain required.

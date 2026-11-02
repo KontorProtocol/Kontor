@@ -1123,6 +1123,34 @@ and ABI descriptors; legacy parsing/signatures remain exact. Defer a new user
 transaction format, including the proposed disjoint format-1. Publish maintenance rules
 for historical backports, compiler changes, migrations and retained artifacts.
 
+Current-code inventory after the single-runtime proof:
+
+- Reuse the implemented `/protocol/upgrades` state/prepare/submit API, SDK
+  `UpgradeClient`, and operator-invoked migration rehearsal report. No second
+  approval path, automatic rehearsal service or new persistent readiness system.
+- Add a consistent protocol snapshot and supported format/ABI discovery using
+  the selected manifest, certified frontier, canonical application position and
+  existing build record. Distinguish installed support and local diagnostics
+  from authorization or certified state. Keep heights exact in SDK wire types.
+- Report the actual runtime role and any verified join floor. Configured
+  validator mode alone does not mean the joining runtime can sign. Diagnostics
+  must remain useful while history/support is unavailable, without admitting
+  execution or bypassing normal startup checks.
+- Simulation already selects rules when the reactor admits the queued raw
+  request. Bind any reported protocol/lineage and gas-estimation assumptions to
+  that same selection, not a separate API read that can race activation. State
+  clearly that the simulated next block and current estimates do not guarantee
+  future inclusion behavior. Preserve ordinary transaction encoding and signing.
+- Existing component caches bind stored content, executor version and actual
+  engine identity; linked read snapshots select their executor inside the
+  database snapshot. Reuse these mechanisms and existing rollback/activation
+  evidence. Add focused integration checks only for newly exposed provenance,
+  unavailable-state diagnostics, SDK discovery and any uncovered contamination.
+
+Begin implementation from merged K9. Group K10/K11 delivery as already agreed,
+with one combined review and scoped final-candidate CI rather than separate PRs
+for individual endpoints or documentation sections.
+
 ### K11. Integrated qualification and release evidence
 
 Dependencies: all above. Modules: real multi-validator integration harness, CI

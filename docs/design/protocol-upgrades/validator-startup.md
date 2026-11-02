@@ -53,7 +53,10 @@ signature at 7, does not require an additional decision.
 Inspection reads signer history without creating a signing capability or reserving
 a generation. WAL validation uses a private copy because the pinned WAL library
 repairs incomplete tails when opening a file. Corruption is reported without
-modifying the protected original.
+modifying the protected original. Entries with heights must match the WAL header.
+When resuming that height, proposal/value descriptors must also match its verified
+chain, protocol and era. These checks reject inconsistent restored files; they do
+not repair or support arbitrary combinations of database and validator backups.
 
 Promotion first stops and fully joins the catch-up runtime while retaining the
 exclusive node owner. Startup then reinspects protected state and the completed
