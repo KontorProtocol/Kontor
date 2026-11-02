@@ -3545,3 +3545,23 @@ state. The verifier requires the explicit managed rehearsal result. Six interfac
 tooling and ten node-evidence tooling tests passed; the new Rust CLI integration
 still requires the rebuilt binary to execute. No new CI matrix or performance
 workload was added.
+
+At `e2ec3283`, the complete Linux ARM64 dev managed-node build passed, including
+native ownership, six executor interface controls, seven consensus interface
+controls and seven actual node-to-consensus adapter tests. The installed binary
+SHA-256 is `be4453eab3c2e8deff3e39fab23be5c00cb31ff4e0ecbe559ad3bdd7f74e448b`.
+Its real runtime qualification passed in 206.41s: both executor graphs agreed on
+all 25 scenarios and the historical semantic baseline; 15 certified decisions
+authenticated and closed; engine-free recovery and interrupted replay passed;
+managed startup joined both engine generations, retained the listener/WAL and
+database service, and rejected a competing writer. Both rehearsal CLI cases
+passed with unchanged source bytes and state. Intentional panic-injection output
+is retained in the raw log alongside the successful terminal result.
+
+The build, runtime reports, raw output and binary are preserved under
+`.build-cache/k6-linked-acceptance-e2ec3283`; the adjacent acceptance record binds
+their hashes to the source. This supersedes the earlier missing linked acceptance
+for this candidate, not the final cross-platform CI gate or K7/K8 activation work.
+The default branch was verified through GitHub as the K4 merge `0a2cbd89`.
+Consolidated lead and single independent K5/K6 review, scoped final CI and merge
+remain required. No CI, push, publication or new Daybreak assignment occurred.
