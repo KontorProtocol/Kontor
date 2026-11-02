@@ -16,6 +16,7 @@ use crate::protocol::identity::{ProtocolId, domain_digest};
 pub(crate) mod branch;
 pub(crate) mod closure;
 pub(crate) mod completion;
+pub(crate) mod control;
 pub(crate) mod finality;
 mod proof_read;
 pub(crate) mod registrations;
@@ -78,6 +79,8 @@ pub(crate) async fn initialize(conn: &Connection) -> Result<()> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .await?;
     tx.execute_batch(include_str!("sql/certified_history.sql"))
+        .await?;
+    tx.execute_batch(include_str!("sql/upgrade_control.sql"))
         .await?;
     tx.commit().await?;
     Ok(())

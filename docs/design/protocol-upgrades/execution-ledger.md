@@ -3062,3 +3062,54 @@ output directory. This is one local dev cell and same-era restart evidence, not
 cross-platform acceptance or the incompatible-protocol activation handoff.
 K6 control integration, K7 activation, and the grouped review/CI/merge remain
 outstanding. No CI campaign or fork change was needed for this checkpoint.
+
+### K6 reversible approval and control persistence checkpoint
+
+The operator replaced irreversible upgrade effects with canonical rollback and
+fresh validator reapproval. The single independent reviewer agreed
+K6-ROLLBACK-PLAN revision 1 after tracing K4 branch intervals, frozen finality
+replay and owned rollback. The implementation plan now records the signed-reference
+floor, action-ID retractions at the correct historical prefix, and K7/K8's
+post-closure protocol selection with fresh engine eras. Existing authenticated
+history and signing safety remain monotonic. The superseded uncommitted Bitcoin
+high-water draft was archived in `.build-cache/k6-superseded-high-water` and removed.
+No merged prerequisite or completed K5 implementation was reverted.
+
+Authorization draft `7288c9c0` was integrated as `98cda5bb`. Its bounded revision
+`f89967b8` was integrated as `0065676f`: canonical Bitcoin reference/inclusion
+heights replace high-water, a rollback-derived minimum closed reference rejects
+old consent after nonce/head restoration, and KUS1 encodes reversible snapshots.
+The signed KUA1/KUC1 action/envelope formats are unchanged. All 14 focused verifier
+and codec tests passed in the isolated worktree. The three integrated source
+hashes match that tested source. Raw log: `/tmp/k6-auth-2-focused-cargo.log`.
+This is verifier evidence; callers still authenticate references and committees.
+
+The lead added canonical control application records and snapshots, action-ID
+retractions bound to rollback origin/stage, indexed prefix-scoped invalidation
+and reference-floor queries, and the retraction call inside the owned reactor
+rollback transaction. Canonical-history deletion cannot bypass a retraction.
+Reconstruction accepts an original action before its recorded rollback but checks
+that rederiving the same retraction produces exactly the same disposition. A
+changed signature subset cannot evade invalidation by changing the envelope ID.
+Snapshots and retractions roll back together if canonical undo fails. Effects at
+the target Bitcoin height survive, matching existing application-suffix rules.
+
+All five new persistence tests passed, including failure injection, reopen,
+nonce/state restoration prerequisites, duplicate/retracted action rejection,
+historical-prefix reconstruction and a rollback spanning more than one read page.
+The combined test build took 2m03s; these tests ran in 0.06s. The same compiled
+binary then passed 19 certified-history tests (including those five), eight
+canonical-history tests, six canonical-application tests and the actual owned
+closure-stage test (16.84s). Evidence and source hashes are in
+`.build-cache/k6-control-persistence-validation.json`; regression command/log and
+binary bindings are in `.build-cache/k6-control-regressions.json`.
+
+Lead review checked canonical suffix selection, restored snapshots, atomic
+rollback/error behavior, action versus envelope identity, prefix-scoped floor
+queries and exact reconstruction. Planning agreement is not code approval;
+independent implementation review remains consolidated around complete K5/K6.
+Live typed control proposals, authorization/application integration, explicit
+control replay disposition, operator APIs/rehearsal and K7/K8 activation are still
+unfinished. The persistence tests invoke the storage primitive and do not establish
+end-to-end control consensus or cross-upgrade recovery. No CI campaign, PR, merge,
+publication or new fork change was performed for this checkpoint.
