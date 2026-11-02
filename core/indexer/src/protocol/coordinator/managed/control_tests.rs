@@ -7,6 +7,7 @@ use tokio::time::timeout;
 
 use super::*;
 use crate::consensus::{Address, Height, Vote, test_fixtures};
+use crate::protocol::coordinator::certified_decision::{AuthorityMember, CommitteeRecord};
 use crate::protocol::coordinator::durable_signer::{
     GenerationOwner, SigningError, SigningRequest, VoteStep,
 };
@@ -150,6 +151,21 @@ async fn blocked_control_thread_does_not_block_node_revocation_or_allow_competin
             .unwrap(),
     );
     let address = Address::from_public_key(&key.public_key());
+    let committee = CommitteeRecord {
+        context: test_fixtures::context(),
+        height: 1,
+        decision: [7; 32],
+        stage: 0,
+        lineage: [0; 32],
+        members: vec![AuthorityMember {
+            holder: "validator".into(),
+            generation: [1; 32],
+            address: address.into_inner(),
+            key: *key.public_key().as_bytes(),
+            power: 1,
+        }],
+    };
+    signer.authorize_height(&committee, [9; 32]).unwrap();
     let vote = Vote::new_prevote(Height::new(1), Round::new(0), NilOrVal::Nil, address);
     let request = SigningRequest::Vote {
         generation: 1,

@@ -9,9 +9,10 @@ use malachitebft_signing_ed25519::PrivateKey;
 use sha3::{Digest, Keccak256};
 
 use crate::consensus::{Address, Ctx, Proposal, ValueId, Vote};
+use crate::protocol::coordinator::certified_decision::CommitteeRecord;
 use crate::protocol::coordinator::certified_input::{Descriptor, EraContext};
 
-use self::store::{EntryRole, Store, ValidatedRequest};
+use self::store::{EntryRole, HeightAuthorization, Store, ValidatedRequest};
 #[cfg(kontor_managed)]
 pub(crate) use ownership::GenerationOwner;
 pub(crate) use ownership::OwnedGeneration;
@@ -142,6 +143,40 @@ impl DurableSigner {
 
     pub(crate) fn public_key(&self) -> [u8; 32] {
         self.public_key
+    }
+
+    pub(crate) fn authorize_height(
+        &self,
+        committee: &CommitteeRecord,
+        completed_closure: [u8; 32],
+    ) -> Result<(), SigningError> {
+        if committee.context.chain != self.identity.context.chain
+            || committee.height == 0
+            || completed_closure == [0; 32]
+        {
+            return invalid("height authority chain, height, or closure differs");
+        }
+        let committee_id = committee
+            .id()
+            .map_err(|error| SigningError::InvalidRequest(error.to_string()))?;
+        let authorization = HeightAuthorization {
+            generation: self.identity.generation,
+            height: committee.height,
+            context: committee.context,
+            committee: committee_id,
+            predecessor_decision: committee.decision,
+            completed_closure,
+            member: committee
+                .members
+                .iter()
+                .any(|member| member.key == self.public_key),
+            reconciled: false,
+        };
+        let authorize = || self.store.authorize_height(authorization);
+        match &self.owned_generation {
+            Some(generation) => generation.with_active(authorize),
+            None => authorize(),
+        }
     }
 
     pub(crate) fn sign(&self, request: SigningRequest) -> Result<[u8; 64], SigningError> {
@@ -317,13 +352,12 @@ impl DurableSigner {
     fn validate_descriptor(&self, bytes: &[u8]) -> Result<(), SigningError> {
         let descriptor = Descriptor::decode(bytes)
             .map_err(|error| SigningError::InvalidRequest(error.to_string()))?;
-        if descriptor.context != self.identity.context
-            || descriptor
-                .encode()
-                .map_err(|error| SigningError::InvalidRequest(error.to_string()))?
-                != bytes
+        if descriptor
+            .encode()
+            .map_err(|error| SigningError::InvalidRequest(error.to_string()))?
+            != bytes
         {
-            return invalid("proposal descriptor context or canonical bytes differ");
+            return invalid("proposal descriptor canonical bytes differ");
         }
         Ok(())
     }
@@ -349,6 +383,7 @@ mod tests {
     use super::*;
     use crate::consensus::test_fixtures;
     use crate::consensus::{Height, ProposalData, Value};
+    use crate::protocol::coordinator::certified_decision::AuthorityMember;
     use crate::protocol::coordinator::certified_input::MAX_BATCH_BYTES;
 
     fn identity(generation: u64) -> SignerIdentity {
@@ -365,6 +400,29 @@ mod tests {
 
     fn open(directory: &Path, generation: u64) -> DurableSigner {
         DurableSigner::open(directory, identity(generation), key()).unwrap()
+    }
+
+    fn committee(signer: &DurableSigner, height: u64, decision: [u8; 32]) -> CommitteeRecord {
+        CommitteeRecord {
+            context: signer.identity.context,
+            height,
+            decision,
+            stage: 0,
+            lineage: [0; 32],
+            members: vec![AuthorityMember {
+                holder: "validator".into(),
+                generation: [1; 32],
+                address: signer.address,
+                key: signer.public_key,
+                power: 1,
+            }],
+        }
+    }
+
+    fn authorize(signer: &DurableSigner, height: u64) {
+        signer
+            .authorize_height(&committee(signer, height, [7; 32]), [9; 32])
+            .unwrap();
     }
 
     fn vote(signer: &DurableSigner, height: u64, round: u32) -> SigningRequest {
@@ -434,6 +492,7 @@ mod tests {
     fn canonical_vote_retry_conflict_and_reopen() {
         let directory = TempDir::new().unwrap();
         let signer = open(directory.path(), 1);
+        authorize(&signer, 5);
         let request = vote(&signer, 5, 2);
         let signature = signer.sign(request.clone()).unwrap();
         assert_eq!(signer.sign(request.clone()).unwrap(), signature);
@@ -482,6 +541,7 @@ mod tests {
     fn maximal_valid_proposal_uses_small_durable_record() {
         let directory = TempDir::new().unwrap();
         let signer = open(directory.path(), 1);
+        authorize(&signer, 4);
         let value = Value::new_batch_raw(
             test_fixtures::context(),
             4,
@@ -526,6 +586,7 @@ mod tests {
         for proposal_first in [true, false] {
             let directory = TempDir::new().unwrap();
             let signer = open(directory.path(), 1);
+            authorize(&signer, 8);
             let proposal = proposal(&signer, 8, 1);
             let fin = fin(&signer, 8, 1);
             if proposal_first {
@@ -591,6 +652,7 @@ mod tests {
     fn later_round_rejects_new_old_round_but_preserves_exact_retry() {
         let directory = TempDir::new().unwrap();
         let signer = open(directory.path(), 1);
+        authorize(&signer, 9);
         let first = vote(&signer, 9, 1);
         let signature = signer.sign(first.clone()).unwrap();
         signer.sign(vote(&signer, 9, 2)).unwrap();
@@ -617,6 +679,7 @@ mod tests {
     fn generation_fence_and_old_snapshot_are_durable() {
         let directory = TempDir::new().unwrap();
         let signer = open(directory.path(), 1);
+        authorize(&signer, 5);
         signer.sign(vote(&signer, 5, 0)).unwrap();
         signer.fence_generation(1).unwrap();
         assert_eq!(signer.sign(vote(&signer, 5, 0)), Err(SigningError::Fenced));
@@ -626,6 +689,7 @@ mod tests {
             Err(SigningError::Fenced)
         ));
         let next = open(directory.path(), 2);
+        authorize(&next, 6);
         next.sign(vote(&next, 6, 0)).unwrap();
         drop(next);
         assert!(matches!(
@@ -638,6 +702,7 @@ mod tests {
     fn partial_journal_tail_fails_closed() {
         let directory = TempDir::new().unwrap();
         let signer = open(directory.path(), 1);
+        authorize(&signer, 1);
         signer.sign(vote(&signer, 1, 0)).unwrap();
         drop(signer);
         OpenOptions::new()
@@ -653,6 +718,7 @@ mod tests {
     fn concurrent_fence_and_sign_never_sign_after_fence() {
         let directory = TempDir::new().unwrap();
         let signer = Arc::new(open(directory.path(), 1));
+        authorize(&signer, 1);
         let barrier = Arc::new(Barrier::new(3));
         let signing = Arc::clone(&signer);
         let start = Arc::clone(&barrier);
@@ -672,5 +738,189 @@ mod tests {
         fenced.join().unwrap().unwrap();
         assert!(result.is_ok() || result == Err(SigningError::Fenced));
         assert_eq!(signer.sign(vote(&signer, 2, 0)), Err(SigningError::Fenced));
+    }
+
+    #[test]
+    fn nil_vote_and_proposal_fin_require_height_authorization() {
+        let directory = TempDir::new().unwrap();
+        let signer = open(directory.path(), 1);
+        assert!(matches!(
+            signer.sign(vote(&signer, 5, 0)),
+            Err(SigningError::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            signer.sign(fin(&signer, 5, 0)),
+            Err(SigningError::InvalidRequest(_))
+        ));
+        authorize(&signer, 5);
+        signer.sign(vote(&signer, 5, 0)).unwrap();
+        signer.sign(fin(&signer, 5, 0)).unwrap();
+    }
+
+    #[test]
+    fn authorization_binds_committee_context_and_completed_closure() {
+        let directory = TempDir::new().unwrap();
+        let signer = open(directory.path(), 1);
+        let authority = committee(&signer, 5, [7; 32]);
+        assert!(matches!(
+            signer.authorize_height(&authority, [0; 32]),
+            Err(SigningError::InvalidRequest(_))
+        ));
+        let mut wrong_context = authority.clone();
+        wrong_context.context.chain.0[0] ^= 1;
+        assert!(matches!(
+            signer.authorize_height(&wrong_context, [9; 32]),
+            Err(SigningError::InvalidRequest(_))
+        ));
+        let mut wrong_member = authority.clone();
+        wrong_member.members.clear();
+        assert!(matches!(
+            signer.authorize_height(&wrong_member, [9; 32]),
+            Err(SigningError::InvalidRequest(_))
+        ));
+        signer.authorize_height(&authority, [9; 32]).unwrap();
+        signer.authorize_height(&authority, [9; 32]).unwrap();
+        assert_eq!(
+            signer.authorize_height(&authority, [8; 32]),
+            Err(SigningError::Conflict)
+        );
+        let mut changed_committee = authority;
+        changed_committee.members[0].power = 2;
+        assert_eq!(
+            signer.authorize_height(&changed_committee, [9; 32]),
+            Err(SigningError::Conflict)
+        );
+    }
+
+    #[test]
+    fn old_height_only_allows_exact_retry_after_advancing_and_reopening() {
+        let directory = TempDir::new().unwrap();
+        let signer = open(directory.path(), 1);
+        authorize(&signer, 5);
+        let first = vote(&signer, 5, 0);
+        let signature = signer.sign(first.clone()).unwrap();
+        authorize(&signer, 6);
+        assert_eq!(signer.sign(first.clone()).unwrap(), signature);
+        assert_eq!(signer.sign(vote(&signer, 5, 1)), Err(SigningError::Stale));
+        drop(signer);
+
+        let restarted = open(directory.path(), 2);
+        assert_eq!(restarted.sign(vote(&restarted, 5, 0)).unwrap(), signature);
+        assert!(matches!(
+            restarted.sign(vote(&restarted, 6, 0)),
+            Err(SigningError::InvalidRequest(_))
+        ));
+        authorize(&restarted, 6);
+        restarted.sign(vote(&restarted, 6, 0)).unwrap();
+        assert_eq!(
+            restarted.authorize_height(&committee(&restarted, 5, [7; 32]), [9; 32]),
+            Err(SigningError::Stale)
+        );
+        drop(restarted);
+        let reopened = open(directory.path(), 3);
+        assert_eq!(reopened.sign(vote(&reopened, 5, 0)).unwrap(), signature);
+    }
+
+    #[test]
+    fn same_generation_era_transition_uses_authorized_descriptor_context() {
+        let directory = TempDir::new().unwrap();
+        let signer = open(directory.path(), 1);
+        authorize(&signer, 5);
+        let old_vote = vote(&signer, 5, 0);
+        let old_signature = signer.sign(old_vote.clone()).unwrap();
+
+        let mut next = committee(&signer, 6, [8; 32]);
+        next.context.era[0] ^= 1;
+        next.context.protocol.0[0] ^= 1;
+        signer.authorize_height(&next, [10; 32]).unwrap();
+        assert_eq!(signer.sign(old_vote).unwrap(), old_signature);
+        signer.sign(vote(&signer, 6, 0)).unwrap();
+        assert!(matches!(
+            signer.sign(fin(&signer, 6, 0)),
+            Err(SigningError::InvalidRequest(_))
+        ));
+
+        let value = Value::new_batch_raw(next.context, 6, BlockHash::all_zeros(), vec![]).unwrap();
+        let proposal = Proposal::new(
+            Height::new(6),
+            Round::new(0),
+            value.clone(),
+            Round::Nil,
+            Address::new(signer.address),
+        );
+        signer
+            .sign(SigningRequest::Proposal {
+                generation: 1,
+                height: 6,
+                round: 0,
+                pol_round: None,
+                validator_address: signer.address,
+                descriptor: value.descriptor_bytes().to_vec(),
+                preimage: proposal.to_sign_bytes().to_vec(),
+            })
+            .unwrap();
+        drop(signer);
+        let reopened = open(directory.path(), 2);
+        assert_eq!(reopened.sign(vote(&reopened, 5, 0)).unwrap(), old_signature);
+        reopened.authorize_height(&next, [10; 32]).unwrap();
+    }
+
+    #[test]
+    fn missing_membership_and_unverified_height_gap_block_new_slots() {
+        let directory = TempDir::new().unwrap();
+        let signer = open(directory.path(), 1);
+        authorize(&signer, 5);
+        let old_vote = vote(&signer, 5, 0);
+        let signature = signer.sign(old_vote.clone()).unwrap();
+        assert_eq!(
+            signer.authorize_height(&committee(&signer, 7, [7; 32]), [9; 32]),
+            Err(SigningError::Stale)
+        );
+        let other = PrivateKey::from([12; 32]);
+        let mut next = committee(&signer, 6, [8; 32]);
+        next.members[0].key = *other.public_key().as_bytes();
+        next.members[0].address = Address::from_public_key(&other.public_key()).into_inner();
+        signer.authorize_height(&next, [10; 32]).unwrap();
+        assert!(matches!(
+            signer.sign(vote(&signer, 6, 0)),
+            Err(SigningError::InvalidRequest(_))
+        ));
+        assert_eq!(signer.sign(old_vote).unwrap(), signature);
+        drop(signer);
+
+        let reopened = open(directory.path(), 2);
+        reopened
+            .authorize_height(&committee(&reopened, 8, [11; 32]), [12; 32])
+            .unwrap();
+        reopened.sign(vote(&reopened, 8, 0)).unwrap();
+    }
+
+    #[test]
+    fn concurrent_authorization_and_nil_vote_replay_in_journal_order() {
+        let directory = TempDir::new().unwrap();
+        let signer = Arc::new(open(directory.path(), 1));
+        let authority = committee(&signer, 1, [7; 32]);
+        let barrier = Arc::new(Barrier::new(3));
+        let vote_request = vote(&signer, 1, 0);
+        let signing = Arc::clone(&signer);
+        let start = Arc::clone(&barrier);
+        let vote_thread = std::thread::spawn(move || {
+            start.wait();
+            signing.sign(vote_request)
+        });
+        let authorizing = Arc::clone(&signer);
+        let start = Arc::clone(&barrier);
+        let auth_thread = std::thread::spawn(move || {
+            start.wait();
+            authorizing.authorize_height(&authority, [9; 32])
+        });
+        barrier.wait();
+        let first = vote_thread.join().unwrap();
+        auth_thread.join().unwrap().unwrap();
+        assert!(first.is_ok() || matches!(first, Err(SigningError::InvalidRequest(_))));
+        let signature = signer.sign(vote(&signer, 1, 0)).unwrap();
+        drop(signer);
+        let reopened = open(directory.path(), 1);
+        assert_eq!(reopened.sign(vote(&reopened, 1, 0)).unwrap(), signature);
     }
 }

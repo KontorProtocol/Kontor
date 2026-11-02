@@ -427,6 +427,7 @@ mod tests {
     use super::*;
     use crate::consensus::test_fixtures;
     use crate::consensus::{Address, Height, Vote};
+    use crate::protocol::coordinator::certified_decision::{AuthorityMember, CommitteeRecord};
     use crate::protocol::coordinator::durable_signer::{DurableSigner, SigningRequest, VoteStep};
 
     fn directory(root: &TempDir) -> PathBuf {
@@ -503,6 +504,21 @@ mod tests {
             DurableSigner::open_owned(validator.clone(), test_fixtures::context(), key.clone())
                 .unwrap();
         let address = Address::from_public_key(&key.public_key());
+        let committee = CommitteeRecord {
+            context: test_fixtures::context(),
+            height: 1,
+            decision: [7; 32],
+            stage: 0,
+            lineage: [0; 32],
+            members: vec![AuthorityMember {
+                holder: "validator".into(),
+                generation: [1; 32],
+                address: address.into_inner(),
+                key: public,
+                power: 1,
+            }],
+        };
+        signer.authorize_height(&committee, [9; 32]).unwrap();
         let vote = Vote::new_prevote(Height::new(1), Round::new(0), NilOrVal::Nil, address);
         let request = SigningRequest::Vote {
             generation: validator.generation(),
