@@ -141,8 +141,14 @@ impl GenerationOwner {
                 seen_validators.insert(validator);
             }
         }
-        if journal_existed && last == 0 {
-            return Err(fault("existing generation journal has no reservation"));
+        if journal_existed
+            && last == 0
+            && (path_present(&directory.join("signatures.log"))?
+                || path_present(&directory.join("signers"))?)
+        {
+            return Err(fault(
+                "signing history exists without generation reservation",
+            ));
         }
         Ok(Arc::new(Self {
             directory,
@@ -496,6 +502,50 @@ mod tests {
 
     fn open_owner(root: &TempDir) -> Arc<GenerationOwner> {
         GenerationOwner::open(&directory(root), test_fixtures::context().chain).unwrap()
+    }
+
+    #[test]
+    fn header_only_owner_reopens_without_creating_a_reservation() {
+        let root = TempDir::new().unwrap();
+        let first = open_owner(&root);
+        let network_key = first.network_key;
+        let journal_path = directory(&root).join("generations.log");
+        let header = fs::read(&journal_path).unwrap();
+        assert_eq!(header.len(), HEADER_BYTES);
+        drop(first);
+
+        let reopened = open_owner(&root);
+        assert_eq!(reopened.network_key, network_key);
+        assert_eq!(fs::read(&journal_path).unwrap(), header);
+        let generation = reopened.reserve(None).unwrap();
+        assert_eq!(generation.generation(), 1);
+        assert_eq!(generation.network_key(), network_key);
+    }
+
+    #[test]
+    fn header_only_owner_rejects_orphan_signer_state_and_partial_records() {
+        for damage in ["signers", "legacy", "partial"] {
+            let root = TempDir::new().unwrap();
+            let owner = open_owner(&root);
+            drop(owner);
+            let journal_path = directory(&root).join("generations.log");
+            match damage {
+                "signers" => fs::create_dir(directory(&root).join("signers")).unwrap(),
+                "legacy" => fs::write(directory(&root).join("signatures.log"), []).unwrap(),
+                "partial" => {
+                    let mut journal = OpenOptions::new().append(true).open(&journal_path).unwrap();
+                    journal.write_all(&[1, 2, 3]).unwrap();
+                    journal.sync_all().unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let before = fs::read(&journal_path).unwrap();
+            assert!(matches!(
+                GenerationOwner::open(&directory(&root), test_fixtures::context().chain),
+                Err(SigningError::Fault(_) | SigningError::Storage(_))
+            ));
+            assert_eq!(fs::read(&journal_path).unwrap(), before);
+        }
     }
 
     fn retained_history(root: &TempDir, signed: bool) -> (Arc<GenerationOwner>, [u8; 32], PathBuf) {
