@@ -42,6 +42,7 @@ impl<'a> ProofVerifier<'a> {
         length: usize,
         authority: &'a CommitteeRecord,
     ) -> Result<Self> {
+        decision.validate_position()?;
         ensure!(
             decision.height == authority.height
                 && decision.committee == authority.id()?

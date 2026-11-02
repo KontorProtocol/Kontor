@@ -10,7 +10,6 @@ use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplica
 use crate::protocol::canonical_input::CanonicalInput;
 use crate::protocol::coordinator::linked;
 use crate::protocol::coordinator::selection::{ApplicationPosition, ExecutionSelection};
-use crate::protocol::identity::ExecutionIdentity;
 use crate::runtime::ownership::LinkedCanonicalRootLease;
 use crate::runtime::ownership::adapter::HostFailure;
 
@@ -30,12 +29,14 @@ use tokio::sync::MutexGuard;
 impl<E: Executor> ExecutionContext<E> {
     pub(super) fn record_application(
         &self,
+        selection: &ExecutionSelection,
         storage_height: u64,
         source: ApplicationSource,
         input: Option<CanonicalInput>,
     ) -> impl Future<Output = Result<()>> + Send + 'static {
         let conn = self.db_conn();
         let definition = self.session.executor.execution_definition;
+        let selection = selection.clone();
         async move {
             let cursor = match canonical_history::state(&conn).await? {
                 HistoryState::Unavailable => return Ok(()),
@@ -53,7 +54,7 @@ impl<E: Executor> ExecutionContext<E> {
                         .checked_add(1)
                         .ok_or_else(|| anyhow!("application ordinal overflow"))?,
                     parent_lineage: cursor.lineage,
-                    execution: ExecutionIdentity::Baseline(definition?),
+                    execution: selection.execution_identity(definition?)?,
                     storage_height,
                     source,
                     input,

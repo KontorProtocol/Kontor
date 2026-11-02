@@ -639,3 +639,36 @@ async fn intermediate_boolean_command_schema_is_refused_without_relabeling() -> 
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn intermediate_pre_activation_schema_is_refused_before_initialization() -> Result<()> {
+    let directory = TempDir::new()?;
+    let conn = new_connection(directory.path(), "old-eras.db").await?;
+    conn.execute_batch("CREATE TABLE certified_decisions (command_kind INTEGER NOT NULL); INSERT INTO certified_decisions VALUES (1);").await?;
+    let error = initialize(&conn).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported intermediate protocol-era schema")
+    );
+    assert_eq!(
+        conn.query("SELECT command_kind FROM certified_decisions", ())
+            .await?
+            .next()
+            .await?
+            .unwrap()
+            .get::<i64>(0)?,
+        1
+    );
+    assert!(
+        conn.query(
+            "SELECT 1 FROM sqlite_schema WHERE name = 'completed_protocol_eras'",
+            ()
+        )
+        .await?
+        .next()
+        .await?
+        .is_none()
+    );
+    Ok(())
+}

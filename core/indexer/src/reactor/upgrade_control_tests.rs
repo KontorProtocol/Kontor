@@ -1,5 +1,5 @@
 use super::consensus_state::PendingProposal;
-use crate::consensus::Height;
+use crate::consensus::{Height, ProposalData, Value};
 use crate::upgrade_control::{
     PrepareUpgrade, RequestedUpgrade, SubmissionError, SubmitUpgrade, UpgradeSubmission,
     decode_submission, prepare, snapshot,
@@ -13,6 +13,7 @@ use tokio::sync::oneshot;
 
 use anyhow::{Context, Result};
 use bitcoin::Network;
+use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use indexer_types::{Inst, InstKind, Insts};
 use tempfile::TempDir;
@@ -28,13 +29,16 @@ use crate::database::Writer;
 use crate::database::canonical_history;
 use crate::database::certified_history::{self, closure, completion, control};
 use crate::migration_rehearsal::{self, MigrationRehearsalArgs};
+use crate::protocol::canonical_application::CanonicalApplication;
+use crate::protocol::coordinator::activation::TransitionDescriptor;
+use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
 use crate::protocol::coordinator::certified_decision::tests::proof;
 use crate::protocol::coordinator::certified_decision::{AuthenticatedDecision, Decision};
 use crate::protocol::coordinator::certified_input::ExactInput;
 use crate::protocol::coordinator::control::{
     ApprovalSigner, ControlAction, ControlOperation, UpgradeControl,
 };
-use crate::protocol::identity::ExecutionDefinitionId;
+use crate::protocol::identity::{ExecutionDefinitionId, ExecutionIdentity, PlanId, ProtocolId};
 use crate::protocol::v1::migration_definition;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::{Decimal, GenesisParameters, GenesisValidator};
@@ -160,6 +164,71 @@ async fn schedule(
 }
 
 #[tokio::test]
+async fn certified_application_uses_original_era_not_running_era() -> Result<()> {
+    let directory = TempDir::new()?;
+    let key = PrivateKey::from([17; 32]);
+    let owner = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[71; 32])?);
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: owner.x_only_public_key().0.to_string(),
+        ed25519_pubkey: key.public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }]);
+    let mut execution = open(directory.path(), &genesis).await?;
+    let original = execution.protocol_context;
+    let first = certified_fixture::empty_block(1);
+    let block = first.exact_input(original)?;
+    let height = append(&execution, block.clone(), &key).await?;
+
+    // Isolate historical input verification from engine handoff: the running
+    // era differs, but the retained certificate and canonical P1 state do not.
+    execution.protocol_context.era[0] ^= 1;
+    finish(&mut execution, height).await?;
+    assert_eq!(
+        certified_history::load(&execution.db_conn(), height)
+            .await?
+            .input(),
+        &block
+    );
+
+    let issuance = certified_fixture::transaction(
+        &owner,
+        Insts::direct(vec![Inst {
+            gas_limit: 100_000,
+            kind: InstKind::Issuance,
+        }]),
+        0,
+    )?;
+    let batch = ExactInput::batch(original, 1, first.hash, &[issuance])?;
+    let height = append(&execution, batch.clone(), &key).await?;
+    finish(&mut execution, height).await?;
+    let conn = execution.db_conn();
+    assert_eq!(
+        certified_history::load(&conn, height).await?.input(),
+        &batch
+    );
+    let row = conn
+        .query(
+            "SELECT record FROM canonical_applications ORDER BY ordinal DESC LIMIT 1",
+            (),
+        )
+        .await?
+        .next()
+        .await?
+        .context("batch application")?;
+    let application = CanonicalApplication::decode(&row.get::<Vec<u8>>(0)?)?;
+    assert!(
+        matches!(application.execution, ExecutionIdentity::Protocol { protocol, .. } if protocol == original.protocol)
+    );
+    assert_eq!(
+        certified_history::frontier(&conn).await?.context,
+        Some(original)
+    );
+    assert_eq!(execution.owner_service.active_roots().await, 0);
+    execution.owner_service.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
 async fn finality_undo_restart_and_fresh_approval_match_cold_reconstruction() -> Result<()> {
     let directory = TempDir::new()?;
     let cold_directory = TempDir::new()?;
@@ -248,6 +317,23 @@ async fn finality_undo_restart_and_fresh_approval_match_cold_reconstruction() ->
     assert!(execution.recover(&Shutdown::new().signal()).await?);
     assert_eq!(execution.last_height, 7);
     assert!(control::current(&execution.db_conn()).await?.is_none());
+    let progress = closure::recover(&execution.db_conn(), rollback_decision).await?;
+    let mut activation_checks = 0;
+    for index in 1..=progress.stage {
+        let stage = closure::stage(&execution.db_conn(), rollback_decision, index).await?;
+        if let WorkItem::Activate { decision } = stage.action {
+            let previous =
+                closure::stage(&execution.db_conn(), rollback_decision, index - 1).await?;
+            assert_eq!(previous.action, WorkItem::Execute { decision });
+            assert_eq!(stage.outcome, StageOutcome::NoActivation);
+            assert_eq!(stage.input, stage.output);
+            activation_checks += 1;
+        }
+    }
+    assert_eq!(
+        activation_checks, 7,
+        "every reconstructed block must check activation before following batches"
+    );
     let at = control::Position {
         decision: rollback_decision + 1,
         stage: 0,
@@ -359,6 +445,36 @@ async fn operator_queue_proposes_exact_approval_before_pending_block_and_drops_c
     assert_eq!(state.bitcoin_height, "1");
     assert_eq!(state.nonce, "0");
     assert!(state.pending.is_none());
+    let block = certified_fixture::block(2, first.hash, 0, vec![]);
+    let ordinary = block.exact_input(reactor.execution.protocol_context)?;
+    let unsolicited = ordinary.clone().with_transition(TransitionDescriptor {
+        chain: reactor.execution.protocol_context.chain,
+        plan: PlanId([91; 32]),
+        bitcoin_height: 2,
+        bitcoin_hash: block.hash.to_byte_array(),
+        source: reactor.execution.protocol_context.protocol,
+        target: ProtocolId([92; 32]),
+        consensus: [93; 32],
+        start_height: 3,
+    })?;
+    reactor.consensus.pending_blocks.insert(2, block);
+    for (input, accepted) in [(unsolicited, false), (ordinary.clone(), true)] {
+        let (reply, response) = oneshot::channel();
+        reactor
+            .validate_and_accept_proposal(
+                &ProposalData::new(Value::from_input(input)?),
+                reactor.consensus.address,
+                Height::new(2),
+                Round::new(0),
+                reply,
+            )
+            .await?;
+        assert_eq!(response.await?.is_some(), accepted);
+    }
+    assert_eq!(
+        reactor.pending_block_value().await?.unwrap().input(),
+        &ordinary
+    );
     assert_eq!(
         state.committee[0].key,
         hex::encode(key.public_key().as_bytes())

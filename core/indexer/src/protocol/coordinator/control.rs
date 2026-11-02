@@ -578,7 +578,7 @@ fn approval_digest(
     Ok(domain_digest(APPROVAL_DOMAIN, &out.finish()))
 }
 
-fn validate_target(
+pub(crate) fn validate_target(
     target: &ProtocolManifest,
     current: &ProtocolManifest,
 ) -> Result<(), ControlError> {

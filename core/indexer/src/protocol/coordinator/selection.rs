@@ -6,6 +6,11 @@ use anyhow::{Context, Result, bail, ensure};
 use bitcoin::{BlockHash, Network, hashes::Hash};
 use libsql::Connection;
 
+use super::registry;
+use crate::database::canonical_history::{self, ApplicationCursor, HistoryState};
+use crate::database::certified_history::{activation, eras, protocol};
+use crate::protocol::identity::{ExecutionDefinitionId, ExecutionIdentity, ProtocolId};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApplicationPosition {
     View,
@@ -57,6 +62,13 @@ struct LegacyCanonicalBase {
     checkpoint_hash: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CanonicalBinding {
+    cursor: ApplicationCursor,
+    protocol: ProtocolId,
+    execution: ExecutionDefinitionId,
+}
+
 // A selection does not authorize storage access. CanonicalRootLease retains
 // that responsibility; cloning this value cannot create a live root or writer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,6 +77,7 @@ pub(crate) struct ExecutionSelection {
     network: Network,
     base: LegacyCanonicalBase,
     position: ApplicationPosition,
+    canonical: Option<CanonicalBinding>,
 }
 
 impl ExecutionSelection {
@@ -127,6 +140,25 @@ impl ExecutionSelection {
 
     pub(crate) fn version(&self) -> ExecutorVersion {
         self.version
+    }
+
+    pub(crate) fn execution_identity(
+        &self,
+        definition: ExecutionDefinitionId,
+    ) -> Result<ExecutionIdentity> {
+        match &self.canonical {
+            Some(binding) => {
+                ensure!(
+                    definition == binding.execution,
+                    "executor definition differs from canonical selection"
+                );
+                Ok(ExecutionIdentity::Protocol {
+                    protocol: binding.protocol,
+                    execution: definition,
+                })
+            }
+            None => Ok(ExecutionIdentity::Baseline(definition)),
+        }
     }
 
     pub(crate) fn is_migration(&self) -> bool {
@@ -208,7 +240,16 @@ impl ExecutionSelection {
     }
 
     pub(crate) fn same_recognition_rules(&self, current: &Self) -> bool {
-        self.version == current.version && self.network == current.network
+        self.version == current.version
+            && self.network == current.network
+            && self
+                .canonical
+                .as_ref()
+                .map(|binding| (binding.protocol, binding.execution))
+                == current
+                    .canonical
+                    .as_ref()
+                    .map(|binding| (binding.protocol, binding.execution))
     }
 
     pub(crate) fn can_reuse_preparation(&self, current: &Self) -> bool {
@@ -223,7 +264,11 @@ impl ExecutionSelection {
     }
 
     pub(crate) async fn verify_base(&self, conn: &Connection) -> Result<()> {
-        let current = select_legacy_p1(conn, self.network, self.position.clone()).await?;
+        let current = if self.canonical.is_some() {
+            select_canonical(conn, self.network, self.position.clone()).await?
+        } else {
+            select_legacy_p1(conn, self.network, self.position.clone()).await?
+        };
         ensure!(
             *self == current,
             "executor selection canonical base changed"
@@ -325,7 +370,62 @@ pub(crate) async fn select_legacy_p1(
             checkpoint_hash: row.get(6)?,
         },
         position,
+        canonical: None,
     })
+}
+
+// The ordering era authenticates decisions; it does not select execution during
+// reconstruction. Only the surviving activation at this application position does.
+pub(crate) async fn select_canonical(
+    conn: &Connection,
+    network: Network,
+    position: ApplicationPosition,
+) -> Result<ExecutionSelection> {
+    let mut selected = select_legacy_p1(conn, network, position.clone()).await?;
+    let HistoryState::Ready(cursor) = canonical_history::state(conn).await? else {
+        bail!("canonical executor selection requires authentic genesis");
+    };
+    ensure!(
+        cursor.authentic,
+        "canonical executor selection has unauthenticated lineage"
+    );
+    let manifest = match position {
+        ApplicationPosition::Migration {
+            anchor_height,
+            anchor_hash,
+        } => {
+            activation::pending(conn, anchor_height, anchor_hash)
+                .await?
+                .context("migration selection lacks a surviving due plan")?
+                .pending
+                .context("migration selection lost its plan")?
+                .manifest
+        }
+        _ => protocol(conn, eras::selected_protocol(conn).await?).await?,
+    };
+    ensure!(
+        manifest.chain == cursor.chain,
+        "canonical protocol chain differs"
+    );
+    let installed = registry::resolve(&manifest)?;
+    // Preparation may read without a pinned transaction. Bracket the immutable
+    // manifest lookup with lineage and receipt-generation checks, then recheck
+    // the full selection inside the owned root before executing anything.
+    ensure!(
+        canonical_history::state(conn).await? == HistoryState::Ready(cursor)
+            && select_legacy_p1(conn, network, selected.position.clone())
+                .await?
+                .base
+                == selected.base,
+        "canonical executor selection changed during admission"
+    );
+    selected.version = installed.executor;
+    selected.canonical = Some(CanonicalBinding {
+        cursor,
+        protocol: manifest.id()?,
+        execution: manifest.executor,
+    });
+    Ok(selected)
 }
 
 #[cfg(test)]
@@ -354,7 +454,11 @@ mod tests {
     use indexer_types::{BlockRow, TransactionRow};
 
     use super::*;
+    use crate::database::certified_history;
     use crate::database::queries::{insert_block, insert_transaction, rollback_to_height};
+    use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
+    use crate::protocol::coordinator::baseline::Baseline;
+    use crate::protocol::identity::ChainId;
     use crate::test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db};
 
     fn preparation(height: u64) -> ApplicationPosition {
@@ -362,6 +466,78 @@ mod tests {
             anchor_height: height,
             anchor_hash: Some(new_mock_block_hash(height as u32)),
         }
+    }
+
+    #[tokio::test]
+    async fn canonical_selection_binds_protocol_definition_and_application_lineage() -> Result<()> {
+        let (_reader, writer, _dir) = new_test_db().await?;
+        let conn = writer.connection();
+        assert!(
+            select_canonical(&conn, Network::Regtest, ApplicationPosition::Committee)
+                .await
+                .is_err()
+        );
+        certified_history::initialize(&conn).await?;
+        let baseline = Baseline::for_node(ChainId([1; 32]))?;
+        certified_history::begin_baseline(&conn, &baseline, 1).await?;
+        conn.execute("BEGIN", ()).await?;
+        canonical_history::bind_genesis(&conn, baseline.context.chain).await?;
+        conn.execute("COMMIT", ()).await?;
+        let selected = select_canonical(&conn, Network::Regtest, preparation(1)).await?;
+        assert_eq!(
+            selected.execution_identity(baseline.manifest.executor)?,
+            ExecutionIdentity::Protocol {
+                protocol: baseline.context.protocol,
+                execution: baseline.manifest.executor,
+            }
+        );
+        assert!(
+            selected
+                .execution_identity(ExecutionDefinitionId([2; 32]))
+                .is_err()
+        );
+        assert!(!selected.same_recognition_rules(
+            &select_legacy_p1(&conn, Network::Regtest, preparation(1)).await?
+        ));
+        selected.verify_base(&conn).await?;
+        conn.execute("BEGIN", ()).await?;
+        let HistoryState::Ready(cursor) = canonical_history::state(&conn).await? else {
+            panic!()
+        };
+        canonical_history::append(
+            &conn,
+            &CanonicalApplication {
+                chain: cursor.chain,
+                ordinal: cursor.ordinal + 1,
+                parent_lineage: cursor.lineage,
+                execution: selected.execution_identity(baseline.manifest.executor)?,
+                storage_height: 0,
+                source: ApplicationSource::Genesis { stage: 0 },
+                input: None,
+            },
+        )
+        .await?;
+        conn.execute("COMMIT", ()).await?;
+        let after = select_canonical(&conn, Network::Regtest, preparation(1)).await?;
+        assert!(selected.verify_base(&conn).await.is_err());
+        assert_eq!(
+            selected.base, after.base,
+            "legacy freshness fields did not change"
+        );
+        assert!(selected.can_reuse_preparation(&after));
+        assert!(
+            select_canonical(
+                &conn,
+                Network::Regtest,
+                ApplicationPosition::Migration {
+                    anchor_height: 1,
+                    anchor_hash: new_mock_block_hash(1),
+                }
+            )
+            .await
+            .is_err()
+        );
+        Ok(())
     }
 
     async fn block(conn: &Connection, height: u64) -> Result<()> {

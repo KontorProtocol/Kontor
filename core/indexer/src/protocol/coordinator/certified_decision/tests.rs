@@ -1,4 +1,6 @@
-use bitcoin::{BlockHash, hashes::Hash};
+use bitcoin::blockdata::constants::genesis_block;
+use bitcoin::consensus::serialize;
+use bitcoin::{BlockHash, Network, hashes::Hash};
 use malachitebft_core_types::{CommitSignature, NilOrVal, Round};
 use prost::Message;
 
@@ -6,7 +8,39 @@ use super::*;
 use crate::consensus::codec::encode_commit_certificate;
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{CommitCertificate, Ctx, Height, Vote};
-use crate::protocol::identity::{ChainId, ProtocolId};
+use crate::protocol::coordinator::activation::TransitionDescriptor;
+use crate::protocol::identity::{ChainId, PlanId, ProtocolId};
+
+#[test]
+fn signed_activation_cannot_name_another_successor_height() {
+    let (authority, _, mut decision, keys) = fixture();
+    let block = genesis_block(Network::Bitcoin);
+    let input = ExactInput::block(authority.context, 100, serialize(&block))
+        .unwrap()
+        .with_transition(TransitionDescriptor {
+            chain: authority.context.chain,
+            plan: PlanId([6; 32]),
+            bitcoin_height: 100,
+            bitcoin_hash: block.block_hash().to_byte_array(),
+            source: authority.context.protocol,
+            target: ProtocolId([7; 32]),
+            consensus: [8; 32],
+            start_height: 3,
+        })
+        .unwrap();
+    decision.descriptor = input.descriptor().clone();
+    // Valid signatures on a value at C=1 cannot make its proposed C+1 equal 3.
+    let signed = proof(&decision, &keys, &[0, 1, 2], 0);
+    assert!(
+        AuthenticatedDecision::verify(decision.clone(), input.clone(), signed, &authority).is_err()
+    );
+    let mut transition = input.descriptor().transition.clone().unwrap();
+    transition.start_height = 2;
+    let valid = input.with_transition(transition).unwrap();
+    decision.descriptor = valid.descriptor().clone();
+    let signed = proof(&decision, &keys, &[0, 1, 2], 0);
+    assert!(AuthenticatedDecision::verify(decision, valid, signed, &authority).is_ok());
+}
 
 pub(crate) fn fixture() -> (CommitteeRecord, ExactInput, Decision, Vec<PrivateKey>) {
     let context = EraContext {

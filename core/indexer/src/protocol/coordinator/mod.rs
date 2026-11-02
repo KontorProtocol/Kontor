@@ -1,3 +1,5 @@
+pub(crate) mod activation;
+pub(crate) mod activation_execution;
 pub(crate) mod application_closure;
 pub(crate) mod baseline;
 pub(crate) mod bootstrap;
@@ -20,6 +22,7 @@ pub(crate) mod manifest;
 pub(crate) mod migration;
 mod migration_export;
 pub(crate) mod registration_history;
+pub(crate) mod registry;
 pub(crate) mod replay_input;
 pub(crate) mod selection;
 pub(crate) mod v1;

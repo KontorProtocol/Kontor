@@ -1,13 +1,17 @@
 use anyhow::{Context, Result, ensure};
+use bitcoin::hashes::Hash;
 use libsql::{Connection, Row, params};
 
-use super::{closure, fixed};
+use super::{activation, closure, fixed};
 use crate::database::canonical_history::{self, HistoryState};
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
+use crate::protocol::coordinator::activation::TransitionDescriptor;
 use crate::protocol::coordinator::application_closure::WorkItem;
-use crate::protocol::coordinator::certified_input::{Command, EraContext};
+use crate::protocol::coordinator::certified_input::{Command, Descriptor, EraContext};
 use crate::protocol::coordinator::closure_work::WorkOrigin;
 use crate::protocol::coordinator::control::ControlState;
+use crate::protocol::coordinator::manifest::ProtocolManifest;
+use crate::protocol::coordinator::registry;
 
 pub(crate) mod admission;
 
@@ -61,6 +65,21 @@ pub(crate) async fn current(conn: &Connection) -> Result<Option<ControlState>> {
     at_storage_height(conn, u64::MAX).await
 }
 
+pub(super) async fn at_ordinal(conn: &Connection, ordinal: u64) -> Result<Option<ControlState>> {
+    let row = conn
+        .query(
+            "SELECT a.record, c.ordinal, c.lineage, c.decision, c.action, c.control, c.state
+         FROM canonical_upgrade_controls c JOIN canonical_applications a ON a.ordinal = c.ordinal
+         WHERE c.ordinal = ?1",
+            [ordinal],
+        )
+        .await?
+        .next()
+        .await?;
+    row.map(|row| effect(&row).map(|value| value.state))
+        .transpose()
+}
+
 async fn at_storage_height(conn: &Connection, height: u64) -> Result<Option<ControlState>> {
     let row = conn
         .query(
@@ -72,8 +91,16 @@ async fn at_storage_height(conn: &Connection, height: u64) -> Result<Option<Cont
         .await?
         .next()
         .await?;
-    row.map(|row| effect(&row).map(|value| value.state))
-        .transpose()
+    let control = row.map(|row| effect(&row)).transpose()?;
+    if let Some(activation) = activation::at_storage_height(conn, height).await? {
+        if control
+            .as_ref()
+            .is_none_or(|control| control.application.ordinal < activation.application.ordinal)
+        {
+            return activation.consumed_control().map(Some);
+        }
+    }
+    Ok(control.map(|value| value.state))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -85,32 +112,96 @@ pub(crate) struct ActivationRequired {
     pub(crate) activation: u64,
 }
 
-// Ordinary Block commands cannot cross an upgrade boundary. A replacement first
-// undoes all applications above its parent, including Postpone and Cancel, so
-// judge the surviving snapshot rather than today's pending plan. K7's distinct
-// activation transition will own execution of H and the subsequent handoff.
-pub(crate) async fn check_block_boundary(
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct RejectedTransition(&'static str);
+
+#[derive(Debug)]
+pub(crate) struct PendingTransition {
+    pub(crate) descriptor: TransitionDescriptor,
+    manifest: ProtocolManifest,
+}
+
+impl PendingTransition {
+    pub(crate) fn require_installed(&self) -> Result<()> {
+        registry::resolve(&self.manifest)?;
+        Ok(())
+    }
+}
+
+pub(crate) async fn expected_transition(
     conn: &Connection,
     context: EraContext,
     command: &Command,
-) -> Result<()> {
-    let Command::Block { height, .. } = command else {
-        return Ok(());
+    decision: u64,
+) -> Result<Option<PendingTransition>> {
+    let Command::Block { height, hash, .. } = *command else {
+        return Ok(None);
     };
     let parent = height
         .checked_sub(1)
         .context("cannot execute native genesis as a block")?;
-    if let Some(state) = at_storage_height(conn, parent).await? {
-        ensure!(state.context == context, "upgrade boundary context differs");
-        if let Some(plan) = state.pending {
-            ensure!(
-                *height < plan.activation,
-                ActivationRequired {
-                    block: *height,
-                    activation: plan.activation
-                }
-            );
-        }
+    let Some(state) = at_storage_height(conn, parent).await? else {
+        return Ok(None);
+    };
+    // A replacement can restore a schedule signed before a later handoff.
+    ensure!(
+        state.context.chain == context.chain,
+        "upgrade boundary chain differs"
+    );
+    if let Some(plan) = state.pending.as_ref().filter(|plan| !plan.consumed) {
+        ensure!(
+            height <= plan.activation,
+            ActivationRequired {
+                block: height,
+                activation: plan.activation
+            }
+        );
+    }
+    let Some(descriptor) =
+        TransitionDescriptor::expected(&state, height, hash.to_byte_array(), decision)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(PendingTransition {
+        descriptor,
+        manifest: state
+            .pending
+            .context("transition plan disappeared")?
+            .manifest,
+    }))
+}
+
+pub(crate) async fn check_transition(
+    conn: &Connection,
+    descriptor: &Descriptor,
+    decision: u64,
+) -> Result<Option<PendingTransition>> {
+    let expected =
+        expected_transition(conn, descriptor.context, &descriptor.command, decision).await?;
+    if let Some(expected) = &expected {
+        ensure!(
+            descriptor.transition.is_some(),
+            ActivationRequired {
+                block: expected.descriptor.bitcoin_height,
+                activation: expected.descriptor.bitcoin_height,
+            }
+        );
+    }
+    ensure!(
+        descriptor.transition.as_ref() == expected.as_ref().map(|value| &value.descriptor),
+        RejectedTransition("block activation descriptor differs from canonical schedule")
+    );
+    Ok(expected)
+}
+
+pub(crate) async fn check_installed_transition(
+    conn: &Connection,
+    descriptor: &Descriptor,
+    decision: u64,
+) -> Result<()> {
+    if let Some(expected) = check_transition(conn, descriptor, decision).await? {
+        expected.require_installed()?;
     }
     Ok(())
 }

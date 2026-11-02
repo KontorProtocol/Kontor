@@ -82,6 +82,7 @@ async fn batch(
         excluded.sort_unstable();
         execution
             .record_application(
+                &selection,
                 height,
                 ApplicationSource::Batch {
                     anchor_height: height,

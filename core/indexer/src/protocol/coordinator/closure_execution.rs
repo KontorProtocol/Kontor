@@ -6,7 +6,7 @@ use super::certified_input::Command;
 use super::closure_work::WorkCursor;
 use super::linked::{begin_canonical_unit, finish_canonical_unit, observe_registrations};
 use super::registration_history::RegistrationSnapshot;
-use super::selection::{ApplicationPosition, ExecutionSelection, select_legacy_p1};
+use super::selection::{ApplicationPosition, ExecutionSelection, select_canonical};
 use crate::database::certified_history::{closure, load, registrations};
 use crate::runtime::ownership::{LinkedCanonicalRootLease, OwnerService};
 use crate::runtime::pool::LinkedSession;
@@ -45,29 +45,42 @@ impl OwnedClosureStage {
         } = self;
         let result = async {
             let (value, outcome, remaining) = result?;
-            let previous = registrations::latest(&session.conn)
-                .await?
-                .context("stage lacks prior registration observation")?;
-            let watched = previous
-                .entries
-                .iter()
-                .map(|entry| entry.holder.clone())
-                .collect();
-            let observation = observe_registrations(&session, &selection, network, watched).await?;
-            let position =
-                closure::canonical_position(&session.conn, previous.position.context.chain).await?;
-            let snapshot = RegistrationSnapshot::observe(
-                Some(&previous),
-                ticket.observation_position(position.lineage)?,
-                observation,
-            )?;
             let record =
-                closure::commit_stage(&session.conn, ticket, outcome, remaining, &snapshot).await?;
+                record_stage(&session, &selection, network, ticket, outcome, remaining).await?;
             Ok((value, record))
         }
         .await;
         finish_canonical_unit(lease, result, true).await
     }
+}
+
+// Migration owns its transaction itself. Sharing this recording step lets it
+// persist the same observation and stage proof without nesting canonical roots.
+pub(crate) async fn record_stage(
+    session: &LinkedSession,
+    selection: &ExecutionSelection,
+    network: Network,
+    ticket: closure::StageTicket,
+    outcome: StageOutcome,
+    remaining: WorkCursor,
+) -> Result<StageRecord> {
+    let previous = registrations::latest(&session.conn)
+        .await?
+        .context("stage lacks prior registration observation")?;
+    let watched = previous
+        .entries
+        .iter()
+        .map(|entry| entry.holder.clone())
+        .collect();
+    let observation = observe_registrations(session, selection, network, watched).await?;
+    let position =
+        closure::canonical_position(&session.conn, previous.position.context.chain).await?;
+    let snapshot = RegistrationSnapshot::observe(
+        Some(&previous),
+        ticket.observation_position(position.lineage)?,
+        observation,
+    )?;
+    closure::commit_stage(&session.conn, ticket, outcome, remaining, &snapshot).await
 }
 
 pub(crate) async fn begin_stage(
@@ -104,8 +117,9 @@ pub(crate) async fn begin_stage(
             rollback_height: Some(height),
         },
         WorkItem::Finality | WorkItem::Observe => ApplicationPosition::Committee,
+        WorkItem::Activate { .. } => ApplicationPosition::Committee,
     };
-    let selection = select_legacy_p1(&session.conn, network, position).await?;
+    let selection = select_canonical(&session.conn, network, position).await?;
     let lease = begin_canonical_unit(service, session, &selection, network, false).await?;
     let admission = closure::prepare(&session.conn, height)
         .await

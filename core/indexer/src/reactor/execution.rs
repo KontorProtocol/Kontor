@@ -15,6 +15,7 @@ use crate::database::certified_history::{
     self, Status, branch, closure, completion, control, finality, replay_input, work,
 };
 use crate::database::queries::{PRUNE_WATERMARK_KEY, get_meta_u64, select_block_latest};
+use crate::protocol::coordinator::activation_execution;
 use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
 use crate::protocol::coordinator::certified_input::Command;
 use crate::protocol::coordinator::certified_input::EraContext;
@@ -103,6 +104,7 @@ pub(super) enum ExecutionStep {
     Finality,
     Control,
     Observed,
+    Activation,
     Complete,
 }
 
@@ -125,6 +127,16 @@ impl<E: Executor> ExecutionContext<E> {
                 return Ok(ExecutionStep::Complete);
             };
             match action {
+                WorkItem::Activate { .. } => {
+                    activation_execution::step(
+                        &self.owner_service,
+                        &self.session,
+                        self.network,
+                        height,
+                    )
+                    .await?;
+                    Ok(ExecutionStep::Activation)
+                }
                 WorkItem::Rollback { height } => {
                     self.rollback(height).await?;
                     Ok(ExecutionStep::RolledBack(height))

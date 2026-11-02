@@ -3,8 +3,8 @@ use bitcoin::hashes::Hash;
 use libsql::{Connection, TransactionBehavior, params};
 
 use super::{
-    Status, control, durable_writer, fixed, frontier, load_verified_input, registrations,
-    replay_input, work,
+    Status, activation, control, durable_writer, fixed, frontier, load_verified_input, protocol,
+    registrations, replay_input, work,
 };
 use crate::database::canonical_history::{self, HistoryState};
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
@@ -17,7 +17,7 @@ use crate::protocol::coordinator::closure_work::{WorkCursor, WorkOrigin, item_di
 use crate::protocol::coordinator::registration_history::{
     ObservationPosition, RegistrationSnapshot,
 };
-use crate::protocol::identity::ChainId;
+use crate::protocol::identity::{ChainId, ExecutionIdentity};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Progress {
@@ -332,6 +332,48 @@ pub(crate) async fn prepare(conn: &Connection, height: u64) -> Result<Option<Sta
 }
 
 async fn validate_application_source(conn: &Connection, record: &StageRecord) -> Result<()> {
+    if let WorkItem::Activate { decision } = record.action {
+        let certified = load_verified_input(conn, decision).await?;
+        let Command::Block { height, hash, .. } = certified.decision().descriptor.command else {
+            anyhow::bail!("activation work does not name a certified block");
+        };
+        ensure!(
+            record.input.storage_height == height,
+            "activation has a different Bitcoin position"
+        );
+        if record.outcome == StageOutcome::NoActivation {
+            return Ok(());
+        }
+        let [application] = record.applications.as_slice() else {
+            anyhow::bail!("activation requires one migration application");
+        };
+        let ApplicationSource::Migration {
+            anchor_height,
+            anchor_hash,
+            definition,
+            ..
+        } = application.source
+        else {
+            anyhow::bail!("activation stage contains another application kind");
+        };
+        let ExecutionIdentity::Protocol {
+            protocol: id,
+            execution,
+        } = application.execution
+        else {
+            anyhow::bail!("activation lacks a target protocol identity");
+        };
+        let target = protocol(conn, id).await?;
+        ensure!(
+            anchor_height == height
+                && anchor_hash == hash.to_byte_array()
+                && application.chain == target.chain
+                && target.executor == execution
+                && target.migration == definition,
+            "activation stage differs from certified boundary or target manifest"
+        );
+        return Ok(());
+    }
     let (height, frozen) = match record.action {
         WorkItem::Execute { decision } => (decision, None),
         WorkItem::Replay { decision, input } => {
@@ -518,6 +560,29 @@ pub(crate) async fn commit_stage(
     record.validate()?;
     advance(conn, &previous, &record).await?;
     validate_application_source(conn, &record).await?;
+    if let WorkItem::Activate { decision } = record.action {
+        // Only commit checks use reversible state. Recovery validates retained
+        // stage records after later rollback has removed this activation.
+        if outcome == StageOutcome::Applied {
+            let active = activation::current(conn)
+                .await?
+                .context("activation stage lacks canonical metadata")?;
+            ensure!(
+                record.applications.as_slice() == [active.application],
+                "activation metadata differs from stage"
+            );
+        } else {
+            let certified = load_verified_input(conn, decision).await?;
+            let Command::Block { height, hash, .. } = certified.decision().descriptor.command
+            else {
+                anyhow::bail!("activation work does not name a block");
+            };
+            ensure!(
+                activation::pending(conn, height, hash).await?.is_none(),
+                "pending activation cannot be skipped"
+            );
+        }
+    }
     if let [application] = record.applications.as_slice()
         && let ApplicationSource::UpgradeControl {
             decision,

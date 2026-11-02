@@ -167,6 +167,7 @@ impl<E: Executor> ExecutionContext<E> {
             .await
             .context("execute_block failed")?;
         self.record_application(
+            selection,
             block.height,
             ApplicationSource::BlockTransactions {
                 height: block.height,
@@ -180,6 +181,7 @@ impl<E: Executor> ExecutionContext<E> {
             .await
             .context("run_block_lifecycle failed")?;
         self.record_application(
+            selection,
             block.height,
             ApplicationSource::BlockLifecycle {
                 height: block.height,
@@ -355,16 +357,13 @@ impl<E: Executor> ExecutionContext<E> {
                 decision.consensus_height.as_u64(),
             )
             .await?;
+            // Certification retains its original era and transition descriptor.
+            // Reconstruction may select different execution rules after rollback;
+            // the following activation stage derives the surviving schedule.
             ensure!(
-                *retained.input() == block.exact_input(self.protocol_context)?,
+                block == BlockInput::from_exact(retained.input())?,
                 "block application differs from retained certified bytes"
             );
-            control::check_block_boundary(
-                &self.db_conn(),
-                self.protocol_context,
-                &retained.input().descriptor().command,
-            )
-            .await?;
             let block = self
                 .executor
                 .prepare_block(&self.recognizer, stage.selection(), block)

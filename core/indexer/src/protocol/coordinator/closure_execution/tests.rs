@@ -21,6 +21,7 @@ use crate::protocol::coordinator::control::{
 use crate::protocol::coordinator::genesis::bind_identity;
 use crate::protocol::coordinator::linked::{canonical_session, initialize};
 use crate::protocol::coordinator::registration_history::ObservationPosition;
+use crate::protocol::coordinator::selection::select_legacy_p1;
 use crate::protocol::identity::ExecutionIdentity;
 use crate::reg_tester::random_x_only_pubkey;
 

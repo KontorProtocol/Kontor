@@ -7,6 +7,8 @@ use bitcoin::transaction::Version;
 use bitcoin::{Amount, Network, ScriptBuf, TxIn, TxOut, Witness};
 
 use crate::consensus::Value;
+use crate::protocol::coordinator::certified_decision::Decision;
+use crate::protocol::identity::PlanId;
 
 use super::*;
 
@@ -39,6 +41,97 @@ fn batch(transactions: &[Transaction]) -> ExactInput {
         transactions,
     )
     .unwrap()
+}
+
+#[test]
+fn activation_is_committed_without_changing_bitcoin_body_or_ordinary_blocks() {
+    let block = genesis_block(Network::Bitcoin);
+    let ordinary = ExactInput::block(context(), 100, serialize(&block)).unwrap();
+    let transition = TransitionDescriptor {
+        chain: context().chain,
+        plan: PlanId([5; 32]),
+        bitcoin_height: 100,
+        bitcoin_hash: block.block_hash().to_byte_array(),
+        source: context().protocol,
+        target: ProtocolId([6; 32]),
+        consensus: [7; 32],
+        start_height: 201,
+    };
+    let upgraded = ordinary
+        .clone()
+        .with_transition(transition.clone())
+        .unwrap();
+    assert_eq!(upgraded.body(), ordinary.body());
+    assert_eq!(upgraded.transactions(), ordinary.transactions());
+    assert_ne!(upgraded.descriptor().id(), ordinary.descriptor().id());
+    let bytes = upgraded.descriptor().encode().unwrap();
+    assert!(bytes.len() <= MAX_DESCRIPTOR_BYTES);
+    let decoded = Descriptor::decode(&bytes).unwrap();
+    assert_eq!(
+        ExactInput::validate(decoded, upgraded.body().to_vec()).unwrap(),
+        upgraded
+    );
+    assert_eq!(
+        Descriptor::decode(&ordinary.descriptor().encode().unwrap()).unwrap(),
+        *ordinary.descriptor()
+    );
+    let value = Value::from_input(upgraded.clone()).unwrap();
+    let restored: Value = serde_json::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert_eq!(restored.descriptor(), upgraded.descriptor());
+
+    let mut changed_plan = transition.clone();
+    changed_plan.plan = PlanId([8; 32]);
+    assert_ne!(
+        ordinary
+            .clone()
+            .with_transition(changed_plan)
+            .unwrap()
+            .descriptor()
+            .id(),
+        upgraded.descriptor().id()
+    );
+    let mut changed_hash = transition.clone();
+    changed_hash.bitcoin_hash = [8; 32];
+    assert!(ordinary.clone().with_transition(changed_hash).is_err());
+    let mut changed_height = transition.clone();
+    changed_height.bitcoin_height += 1;
+    assert!(ordinary.clone().with_transition(changed_height).is_err());
+    let mut changed_chain = transition.clone();
+    changed_chain.chain = ChainId([8; 32]);
+    assert!(ordinary.with_transition(changed_chain).is_err());
+    assert!(batch(&[]).with_transition(transition).is_err());
+}
+
+#[test]
+fn activation_successor_height_is_bound_to_the_certified_decision() {
+    let block = genesis_block(Network::Bitcoin);
+    let input = ExactInput::block(context(), 100, serialize(&block))
+        .unwrap()
+        .with_transition(TransitionDescriptor {
+            chain: context().chain,
+            plan: PlanId([5; 32]),
+            bitcoin_height: 100,
+            bitcoin_hash: block.block_hash().to_byte_array(),
+            source: context().protocol,
+            target: ProtocolId([6; 32]),
+            consensus: [7; 32],
+            start_height: 201,
+        })
+        .unwrap();
+    let mut decision = Decision {
+        height: 200,
+        predecessor: [8; 32],
+        committee: [9; 32],
+        descriptor: input.descriptor().clone(),
+    };
+    let mut encoded = decision.encode().unwrap();
+    assert_eq!(Decision::decode(&encoded).unwrap(), decision);
+    decision.height = 201;
+    assert!(decision.encode().is_err());
+    encoded[4..12].copy_from_slice(&201u64.to_be_bytes());
+    assert!(Decision::decode(&encoded).is_err());
+    decision.height = u64::MAX;
+    assert!(decision.encode().is_err());
 }
 
 #[test]

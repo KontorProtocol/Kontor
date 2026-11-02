@@ -4,8 +4,8 @@ use libsql::Connection;
 use super::{Position, current, is_retracted, record, reference_floor};
 use crate::database::canonical_history;
 use crate::database::certified_history::{
-    branch, closure, committee, completion, frontier, genesis_predecessor, load_verified_input,
-    protocol,
+    branch, closure, committee, completion, eras, frontier, genesis_predecessor,
+    load_verified_input, protocol,
 };
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
 use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
@@ -20,20 +20,28 @@ use crate::protocol::identity::ExecutionIdentity;
 pub(crate) struct Rejected(&'static str);
 
 pub(crate) async fn state(conn: &Connection, context: EraContext) -> Result<ControlState> {
-    if let Some(state) = current(conn).await? {
-        ensure!(
-            state.context == context,
-            "canonical control context differs"
-        );
-        return Ok(state);
-    }
-    Ok(ControlState {
+    ensure!(
+        frontier(conn).await?.context == Some(context)
+            && eras::selected_protocol(conn).await? == context.protocol,
+        "control admission awaits the canonical protocol's completed ordering era"
+    );
+    let manifest = protocol(conn, context.protocol).await?;
+    let mut state = current(conn).await?.unwrap_or(ControlState {
         context,
-        current_manifest: protocol(conn, context.protocol).await?,
-        head: genesis_predecessor(context)?,
+        current_manifest: manifest.clone(),
+        head: genesis_predecessor(eras::genesis(conn).await?)?,
         nonce: 0,
         pending: None,
-    })
+    });
+    ensure!(
+        state.context.chain == context.chain && manifest.chain == context.chain,
+        "canonical control chain differs"
+    );
+    // Only the view advances to the completed era. Historical approvals and
+    // surviving head/nonce/plan remain exactly the originally recorded values.
+    state.context = context;
+    state.current_manifest = manifest;
+    Ok(state)
 }
 
 // Both proposal admission and owned application use authenticated positions.

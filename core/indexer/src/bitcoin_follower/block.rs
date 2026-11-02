@@ -187,8 +187,9 @@ mod tests {
 
     use super::BlockInput;
     use crate::protocol::canonical_input::CanonicalInput;
+    use crate::protocol::coordinator::activation::TransitionDescriptor;
     use crate::protocol::coordinator::certified_input::{EraContext, ExactInput};
-    use crate::protocol::identity::{ChainId, ProtocolId};
+    use crate::protocol::identity::{ChainId, PlanId, ProtocolId};
 
     fn context() -> EraContext {
         EraContext {
@@ -217,6 +218,18 @@ mod tests {
         assert_eq!(exact.body(), serialize(&raw));
         let replay = BlockInput::from_exact(&exact).unwrap();
         assert_eq!(replay, input);
+        let transition = TransitionDescriptor {
+            chain: context().chain,
+            plan: PlanId([4; 32]),
+            bitcoin_height: 7,
+            bitcoin_hash: input.hash.to_byte_array(),
+            source: context().protocol,
+            target: ProtocolId([5; 32]),
+            consensus: [6; 32],
+            start_height: 10,
+        };
+        let activating = exact.clone().with_transition(transition).unwrap();
+        assert_eq!(BlockInput::from_exact(&activating).unwrap(), input);
         let prepared = replay.prepare(|_| Ok(None)).unwrap();
         assert!(prepared.transactions.is_empty());
         assert_eq!(

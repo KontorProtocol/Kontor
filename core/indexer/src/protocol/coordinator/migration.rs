@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result, anyhow, ensure};
 use bitcoin::{BlockHash, Network, hashes::Hash};
 use thiserror::Error;
@@ -10,8 +12,8 @@ use crate::database::queries::{get_checkpoint_latest, max_block_height, select_b
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
 use crate::protocol::identity::{ExecutionIdentity, MigrationDefinition, PlanId};
 use crate::protocol::migration_work::{MigrationMeter, MigrationWork};
-use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::HostFailure;
+use crate::runtime::ownership::{LinkedCanonicalRootLease, OwnerService};
 use crate::runtime::pool::LinkedSession;
 
 #[cfg(test)]
@@ -93,20 +95,43 @@ pub(crate) async fn apply(
     network: Network,
     request: &MigrationRequest,
 ) -> Result<MigrationReceipt> {
-    let mut used = Some(MigrationWork::default());
-    apply_inner(service, session, selection, network, request, &mut used)
-        .await
-        .map_err(|error| error.context(MigrationAttemptWork(used)))
+    let mut migration = begin(service, session, selection, network, request).await?;
+    let result = migration.execute().await;
+    migration.finish(result).await
 }
 
-async fn apply_inner(
+// Activation prepares its closure ticket inside this unit, then writes its
+// protocol/control records before finishing it. No second root or commit is needed.
+pub(crate) struct OwnedMigration<'a> {
+    lease: LinkedCanonicalRootLease,
+    session: LinkedSession,
+    selection: ExecutionSelection,
+    request: &'a MigrationRequest,
+    input: Arc<MigrationInput>,
+    used: Option<MigrationWork>,
+    attempted: bool,
+    successful: bool,
+}
+
+pub(crate) async fn begin<'a>(
     service: &OwnerService,
     session: &LinkedSession,
     selection: &ExecutionSelection,
     network: Network,
-    request: &MigrationRequest,
-    used: &mut Option<MigrationWork>,
-) -> Result<MigrationReceipt> {
+    request: &'a MigrationRequest,
+) -> Result<OwnedMigration<'a>> {
+    begin_inner(service, session, selection, network, request)
+        .await
+        .map_err(|error| error.context(MigrationAttemptWork(Some(MigrationWork::default()))))
+}
+
+async fn begin_inner<'a>(
+    service: &OwnerService,
+    session: &LinkedSession,
+    selection: &ExecutionSelection,
+    network: Network,
+    request: &'a MigrationRequest,
+) -> Result<OwnedMigration<'a>> {
     selection.ensure_runtime(network, session.origin())?;
     ensure!(
         selection.envelope().3
@@ -128,9 +153,8 @@ async fn apply_inner(
         execution == request.definition.execution && execution == selected_identity,
         "migration definition does not belong to the selected executor"
     );
-    let application = request.application()?;
-    let key = application.migration_key()?;
-    let encoded_definition = request.definition.encode()?;
+    request.application()?;
+    request.definition.encode()?;
     let input = MigrationInput::open(&session.conn).await?;
     let capacity = service.reserve_root_capacity().await?;
     let mut lease = service
@@ -144,77 +168,121 @@ async fn apply_inner(
         lease.complete().await?;
         return Err(error);
     }
-    let result = async {
-        let anchor = select_block_at_height(&session.conn, request.anchor_height)
-            .await?
-            .context("migration anchor is absent")?;
-        ensure!(
-            anchor.hash == request.anchor_hash,
-            "migration anchor changed"
-        );
-        // A successful retry can occur after later applications. Its original
-        // prestate/checkpoint no longer describes the tip, so check the surviving
-        // marker before comparing current state to the requested prestate.
-        if let Some(receipt) =
-            canonical_history::surviving_migration_result(&session.conn, key).await?
-        {
-            ensure!(
-                receipt.application == application,
-                "migration retry context changed"
-            );
-            MigrationMeter::new(request.definition.budget).charge(receipt.work)?;
-            return Ok(receipt);
-        }
-        ensure!(
-            canonical_history::state(&session.conn).await? == HistoryState::Ready(request.expected),
-            "migration canonical prestate changed"
-        );
-        ensure!(
-            max_block_height(&session.conn).await? == Some(request.anchor_height),
-            "new migration cannot write behind the canonical block tip"
-        );
-        let checkpoint = get_checkpoint_latest(&session.conn)
-            .await?
-            .map(|row| -> Result<[u8; 32]> {
-                hex::decode(row.hash)?
-                    .try_into()
-                    .map_err(|_| anyhow!("invalid legacy checkpoint digest"))
-            })
-            .transpose()?;
-        ensure!(
-            checkpoint == request.checkpoint,
-            "migration checkpoint changed"
-        );
-        input
-            .pin(request.expected, request.anchor_height, request.anchor_hash)
-            .await?;
-        *used = None;
-        let outcome = (session.executor.operations.migration)(
-            session.executor.owner.clone(),
-            selection.envelope(),
-            encoded_definition,
-            input.callbacks(),
-        )
-        .await
-        .map_err(|(tag, message, values)| {
-            *used = values.map(MigrationWork::from_values);
-            HostFailure::from((tag, message))
-        })?;
-        let values = outcome.map_err(|(tag, values)| {
-            *used = values.map(MigrationWork::from_values);
-            match tag {
-                0 => MigrationRejected::UnknownDefinition,
-                1 => MigrationRejected::Budget,
-                2 => MigrationRejected::InvalidOperation,
-                tag => MigrationRejected::UnknownOutcome(tag),
-            }
-        })?;
-        let work = MigrationWork::from_values(values);
-        *used = Some(work);
-        MigrationMeter::new(request.definition.budget).charge(work)?;
-        canonical_history::append_migration(&session.conn, &application, work).await?;
-        Ok(MigrationReceipt { application, work })
+    Ok(OwnedMigration {
+        lease,
+        session: session.clone(),
+        selection: selection.clone(),
+        request,
+        input,
+        used: Some(MigrationWork::default()),
+        attempted: false,
+        successful: false,
+    })
+}
+
+impl OwnedMigration<'_> {
+    pub(crate) async fn execute(&mut self) -> Result<MigrationReceipt> {
+        ensure!(!self.attempted, "migration unit was already executed");
+        self.attempted = true;
+        let result = self.execute_inner().await;
+        self.successful = result.is_ok();
+        result
     }
-    .await;
-    finish_canonical_unit(lease, result, true).await
+
+    async fn execute_inner(&mut self) -> Result<MigrationReceipt> {
+        let session = &self.session;
+        let selection = &self.selection;
+        let request = self.request;
+        let input = &self.input;
+        let used = &mut self.used;
+        let application = request.application()?;
+        let key = application.migration_key()?;
+        let encoded_definition = request.definition.encode()?;
+        async {
+            let anchor = select_block_at_height(&session.conn, request.anchor_height)
+                .await?
+                .context("migration anchor is absent")?;
+            ensure!(
+                anchor.hash == request.anchor_hash,
+                "migration anchor changed"
+            );
+            // A successful retry can occur after later applications. Its original
+            // prestate/checkpoint no longer describes the tip, so check the surviving
+            // marker before comparing current state to the requested prestate.
+            if let Some(receipt) =
+                canonical_history::surviving_migration_result(&session.conn, key).await?
+            {
+                ensure!(
+                    receipt.application == application,
+                    "migration retry context changed"
+                );
+                MigrationMeter::new(request.definition.budget).charge(receipt.work)?;
+                return Ok(receipt);
+            }
+            ensure!(
+                canonical_history::state(&session.conn).await?
+                    == HistoryState::Ready(request.expected),
+                "migration canonical prestate changed"
+            );
+            ensure!(
+                max_block_height(&session.conn).await? == Some(request.anchor_height),
+                "new migration cannot write behind the canonical block tip"
+            );
+            let checkpoint = get_checkpoint_latest(&session.conn)
+                .await?
+                .map(|row| -> Result<[u8; 32]> {
+                    hex::decode(row.hash)?
+                        .try_into()
+                        .map_err(|_| anyhow!("invalid legacy checkpoint digest"))
+                })
+                .transpose()?;
+            ensure!(
+                checkpoint == request.checkpoint,
+                "migration checkpoint changed"
+            );
+            input
+                .pin(request.expected, request.anchor_height, request.anchor_hash)
+                .await?;
+            *used = None;
+            let outcome = (session.executor.operations.migration)(
+                session.executor.owner.clone(),
+                selection.envelope(),
+                encoded_definition,
+                input.callbacks(),
+            )
+            .await
+            .map_err(|(tag, message, values)| {
+                *used = values.map(MigrationWork::from_values);
+                HostFailure::from((tag, message))
+            })?;
+            let values = outcome.map_err(|(tag, values)| {
+                *used = values.map(MigrationWork::from_values);
+                match tag {
+                    0 => MigrationRejected::UnknownDefinition,
+                    1 => MigrationRejected::Budget,
+                    2 => MigrationRejected::InvalidOperation,
+                    tag => MigrationRejected::UnknownOutcome(tag),
+                }
+            })?;
+            let work = MigrationWork::from_values(values);
+            *used = Some(work);
+            MigrationMeter::new(request.definition.budget).charge(work)?;
+            canonical_history::append_migration(&session.conn, &application, work).await?;
+            Ok(MigrationReceipt { application, work })
+        }
+        .await
+    }
+
+    pub(crate) async fn finish<T>(self, result: Result<T>) -> Result<T> {
+        let result = result.and_then(|value| {
+            ensure!(
+                self.successful,
+                "cannot commit an unfinished or failed migration"
+            );
+            Ok(value)
+        });
+        finish_canonical_unit(self.lease, result, true)
+            .await
+            .map_err(|error| error.context(MigrationAttemptWork(self.used)))
+    }
 }

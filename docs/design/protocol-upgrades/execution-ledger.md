@@ -3684,3 +3684,224 @@ The lead reviewed this nonmaterial fixture correction; existing independent
 production review coverage remains applicable. Running CI evidence is retained
 while the correction is validated and remaining failures are collected. These
 local results do not replace the final candidate's required CI checks.
+
+
+### K5/K6 merge and K7/K8 starting point
+
+PR [#621](https://github.com/KontorProtocol/Kontor/pull/621) merged as
+`b3e0fc246d7a859e30b836630372e5658f45afb8` on 2 November 2026. Its tree
+`f73eb28afe6441fc898e87312768574190dab146` exactly matches the qualified PR
+candidate `38df95bd` and test merge `2b0c1cd2`; main was verified at that merge.
+The consolidated lead and single independent review, focused reader correction
+review, and lead-reviewed test fixture correction cover the final candidate.
+
+Required current-head CI passed: standard workflow `41392126418`, stack
+qualification `41392126206`, and linked-bundle qualification `41392126216`.
+The lead independently validated the downloaded raw evidence against the source,
+lockfiles, compiler/build records, component artifacts and intended test sets.
+All three release platforms agreed on stack outcomes and complete linked-node
+observations. All 24 bounded dev-smoke executions passed. Linux ordinary CI passed
+1,051 indexer tests and 129 integration tests; macOS passed 1,045 and 129,
+respectively. The ten previously failing fixture cases and late-joiner regression
+passed on both platforms. Ignored tests remain ignored, not claimed as passes.
+
+Evidence and reviews remain in the completed `protocol-upgrade-control` worktree,
+including `.build-cache/k5-k6-premerge-38df95bd.json`,
+`.build-cache/k6-ci-38df95bd-stack-comparison.json`, and
+`.build-cache/k6-ci-38df95bd-bundle-comparison.json`. Older evidence retains its
+original source identity. Duplicate post-merge qualification was cancelled under
+the verified-tree-equivalence policy; no acceptance gate was waived.
+
+K7/K8 starts in the isolated `protocol-activation-replay` worktree from this
+verified merge. K5/K6 provides managed ownership, durable signing and reversible
+authorized upgrade controls, but does not yet implement after-H activation or
+cross-upgrade migration/engine recovery. Those remain the next grouped phase,
+followed by K9 and K10/K11. Publication remains deferred until final review.
+
+
+### K7/K8 planning agreement and initial records, 2 November 2026
+
+From verified merge `b3e0fc246d7a859e30b836630372e5658f45afb8`, the lead and
+`/root/k2b_system_review` explicitly agreed implementation refinement revision 1
+under `K7K8-PLAN-1`. The review traced current migration ownership, closure work,
+context admission, committee observations, engine startup and native loading. It
+corrected the premature next-era commitment and migration-failure incident wording.
+The plan now separates reversible activation from monotonic ordering eras and
+requires atomic migration/control/stage application followed by atomic completed
+closure/authority/handoff publication. It preserves the existing retraction rules.
+
+P2 will add a positive-balance ledger-entry count with an actual metered backfill
+from old token state and maintained updates. All holder variants count, with no
+amount/rate/gas-constant change. A selected-executor native mapping preserves P1
+artifacts and original genesis publication. The reviewer identified the exact
+field and value codecs to preserve. This choice is part of the same agreed plan,
+not an extra optimization or a new transaction format.
+
+Initial code adds distinct typed activation-descriptor and completed-era records.
+It does not enable live activation yet. Focused tests cover the surviving boundary,
+schedule removal before completion, historical-protocol restoration with a fresh
+era, monotonic consensus heights and malformed persisted records. Planning
+agreement is not the final independent implementation review. Raw plan/source
+bindings are in `.build-cache/k7-k8-plan-agreement.json`.
+
+Local validation: the first four activation-record tests passed. The broader
+coordinator filter then passed 91 tests with one intentionally ignored subprocess
+entry point in 44.79 seconds. Raw output and source bindings are retained in
+`.build-cache/k7-coordinator-records-test.{log,json}`. These include actual migration,
+closure, registration, pool, bootstrap and signing regressions, but do not establish
+live activation or multi-bundle handoff.
+
+Block values now commit an optional activation descriptor using a distinct Block
+tag; ordinary Block encoding remains unchanged. Descriptor validation binds the
+chain/H/hash, and Decision encoding binds the successor to C+1. Source tracing found
+that direct streamed certificate admission also needed this height check. Added
+it there and ran the focused positive/negative certificate test: one passed, proving
+valid signatures over the wrong successor height are rejected while a matching
+certificate remains accepted. Its separate current-source evidence is retained in
+`.build-cache/k7-certified-transition-height-test.{log,json}`. No CI was launched.
+Live expected-descriptor/support admission, activation persistence, migration/stage
+atomicity and engine switching remain to be integrated before this group can ship.
+
+### K7/K8 migration-owned activation persistence, 2 November 2026
+
+Extracted `OwnedMigration` from the existing migration coordinator so migration
+effects and subsequent activation records can share one canonical root and one
+transaction. Finishing an unexecuted or failed migration cannot commit, including
+when a caller discards the execution error. Existing cancellation, subprocess
+crash, work reporting and retry behavior remain covered.
+
+Canonical activation now references the completed migration application and its
+surviving accepted control snapshot. It validates plan, H, migration definition,
+protocol and executor identity. The target manifest is retained independently of
+reversible activation. Control reads consume the pending plan after activation;
+real executor rollback removes migrated state and activation together and restores
+the pending plan. Historical signed control snapshots are not rewritten.
+
+Extracted the shared registration-observation and closure-stage recording step
+from `OwnedClosureStage`. The activation scheduler will use it inside the
+migration-owned transaction. That integration, current-era/control projection,
+registry selection and engine handoff are still pending. These changes do not yet
+enable live activation or establish complete activation-stage atomicity.
+
+Local evidence is source-bound under `.build-cache/k7-atomic-activation-test`,
+`k7-atomic-coordinator-test` and `k7-atomic-history-test` (JSON plus raw logs).
+The initial migration filter passed 12 tests. After strengthening the rollback
+case and adding wrong-plan and discarded-error cases, the coordinator filter
+passed 97 tests with one intentionally ignored subprocess entry point; its parent
+crash test passed. Certified-history regressions passed 21 tests. The coordinator
+and history checks took 44.41 and 0.16 seconds after compilation. No CI or additional
+review campaign was launched. The grouped K7/K8 implementation remains local and
+unmerged.
+
+### K7/K8 activation ordering and completed-era publication, 2 November 2026
+
+Activation now has an explicit closure work item. Initial execution schedules it
+after H and its due finality; historical reconstruction checks after each Block
+and before following batches. A no-activation outcome cannot skip a surviving
+due plan. The migration-owned unit records migration, canonical activation,
+consumption, registration observation and stage advancement together. Failure
+injected at stage insertion rolls back all of them; retry and reopen preserve
+the completed stage. Unsupported targets remain unfinished without mutation.
+
+Completion now publishes the closure, successor committee, completed-era handoff
+record and ordering frontier in one transaction. Genesis remains bound to its
+immutable Bitcoin-boundary context. The successor authority retains registration
+generations and old-decision provenance while selecting the new era. Publication
+failure leaves the old frontier and no successor committee; retry succeeds.
+Missing handoff records are rejected. Exact retries of already retained old-era
+certificates remain valid after handoff. Startup checks the completed successor
+context, not the preceding decision's context.
+
+Control admission projects the surviving head, nonce and pending plan into the
+completed ordering era and canonical active manifest, without rewriting historical
+snapshots or approvals. Boundary checking distinguishes a surviving schedule's
+original context from the current ordering era. Intermediate pre-activation
+development schemas are refused before initialization rather than relabeled.
+
+Evidence is local and source-bound. Before completed-era changes, coordinator
+tests passed 99 with one intentional subprocess entry ignored, history tests
+passed 21, and the strengthened real replay/restart/cold-reconstruction test
+passed with seven ordered activation checks. The earlier five-test control suite
+had four passes and one sandbox socket denial; the denied proposal test passed
+when rerun alone with local networking permitted. After completion and projection,
+the coordinator suite again passed 99 (one ignored); the consensus-state filter
+passed 16, including the new reopened-database successor-era startup test.
+The focused final next-decision/activation tests passed 2, including acceptance of
+the first certificate in the successor era and historical closure verification
+after that append. Certified-history tests passed 22, including refusal of the
+unsupported intermediate schema before mutation. All five control/replay
+regressions passed with loopback networking permitted (96.51 seconds). Raw logs
+and source maps are in `k7-era-next-decision-test`, `k7-era-history-test` and
+`k7-era-control-replay-test`. The startup evidence is `k7-era-startup-test`;
+completion and projection evidence are `k7-era-completion-test` and
+`k7-control-projection-test`. These checks cover successive explicitly recorded
+source states; unchanged earlier results are retained, not relabeled as a fresh
+run of the final source.
+The first completion compile had a corrected result-type mismatch and rustc
+incremental-cache ICE; only indexer's disposable incremental cache was cleared.
+Failed logs are retained, not reported as passing evidence.
+
+This remains an uncommitted, unmerged part of K7/K8, not a live P2 handoff claim.
+The activation transaction fixture pre-seeds accepted control state and block
+applications, then uses the real registered no-op migration, canonical runtime,
+staking observation and closure machinery. It does not establish authorization
+notice, full block execution, P2 backfill or independent P2 dispatch. Actual P2
+registration/extraction, per-position executor selection, live transition proposal
+and replay wiring, managed engine switching, and complete cross-upgrade recovery
+remain required. No CI or new independent-review campaign was launched.
+
+### K7/K8 canonical selection and live transition admission, 2 November 2026
+
+The certified execution selector now binds the protocol, immutable executor
+definition and canonical application lineage. Owned-root admission rechecks that
+selection, and block/batch application records use its protocol execution identity.
+Migration selection also resolves the target from the pending canonical plan.
+Unversioned fixture preparation remains explicit and does not become certified
+history merely because a session exists. The coordinator suite passed 100 tests
+with one intentional subprocess entry ignored (48.29 seconds), recorded in
+`.build-cache/k7-canonical-selection-test.json` and its raw log.
+
+Block and batch input verification now preserves the original certified era.
+Block comparison checks the full retained Bitcoin body and metadata rather than
+constructing an ordinary descriptor in the running era. Live transition admission
+is not repeated during historical execution: the derived activation stage evaluates
+the surviving schedule at that reconstructed position. A focused real block/batch
+application test, with a deliberately different in-memory running era, passed and
+retained the original certificate and canonical protocol identity. This isolates
+input verification; it is not evidence of an actual engine handoff.
+
+Live block proposal construction derives the exact transition from surviving
+parent-height control state and the next consensus height. It requires an installed
+target before proposing activation. Incoming proposal admission requires that same
+descriptor and installed target, with missing, unsolicited, mismatched and
+unavailable transitions rejected without treating them as database failures. Exact
+local Bitcoin-body comparison preserves the independently validated descriptor.
+Authenticated history admission still verifies the descriptor independently of
+local installation, so an unsupported node can retain certified work and stop at
+activation rather than invent execution support. The earlier ordinary-block-only
+boundary guard has been removed.
+
+Focused checks on the source map in `.build-cache/k7-live-transition-sources.json`:
+
+- Surviving schedule, postponement, cancellation, rollback, exact H and C+1:
+  1 passed, 0.09 seconds (`k7-transition-admission-test`).
+- Migration/activation atomicity and unsupported-target handling, including exact
+  descriptor validation: 2 passed, 17.20 seconds (`k7-live-activation-test`).
+- Full retained Bitcoin body and transition-bearing input decoding: 2 passed
+  (`k7-retained-block-test`).
+- Real control, proposal, committee, rollback, restart and replay paths:
+  6 passed, 104.82 seconds (`k7-live-control-replay-test`). The proposal case rejects
+  an unsolicited transition and accepts the ordinary block without one.
+
+All logs and source-bound JSON records are local under `.build-cache/`. The earlier
+original-era-only test passed separately in 17.40 seconds. Its first compile had an
+import error and an incremental compiler ICE; the import was corrected and only
+the disposable indexer incremental caches were cleared. The failed log is retained.
+
+K7/K8 is still local and incomplete. The registry currently contains only P1, so
+positive live installed-P2 admission, actual P2 migration/dispatch and engine
+handoff are not established by these checks. Final P1 retention, actual P2 native
+mapping, session switching, startup recovery and complete cross-upgrade acceptance
+remain. Live proposal callbacks must also follow the completed ordering context
+during managed handoff. No PR, CI campaign, publication or additional independent
+review round was started.

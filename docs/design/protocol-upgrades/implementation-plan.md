@@ -283,8 +283,9 @@ is explicit and separate from binary installation or ordinary consensus voting.
    before Block work, including H with insufficient target support. They do not wait
    for the H round to fail before proposing Cancel/Postpone.
 3. Block H carries TransitionDescriptor{chain_id, plan_id, H, H_hash, old/new
-   protocol_id, next_era_id, next_codec_id, start_height=C+1}. It does not certify
-   execution roots or a successor committee. Prevote checks the ordinary Block
+   protocol_id, target_consensus_definition, start_height=C+1}. It does not certify
+   execution roots, the eventual engine era or a successor committee. Derive the
+   actual era only from completed closure, which may retract the schedule. Prevote checks the ordinary Block
    predicate, exact authorized descriptor and installed target support. An absent
    descriptor at pending H or an unsolicited/wrong descriptor is invalid. Unsupported
    validators prevote nil. After C is certified, gate C+1 until old H/lifecycle and
@@ -383,10 +384,13 @@ This v1 has no automatic abort-to-P1, target substitution, emergency maintainer 
 or guaranteed in-protocol exit from an invalid authorized target. The operational
 outcome is explicit:
 
-1. Fence signing/admission, retain the certified transition and consumed plan, and
-   preserve the last complete canonical transaction, handoff intent, raw inputs,
-   control journal, signer slots and WAL. Export failure class, target, exact input
-   lineage and checkpoint. Never commit partial migration or erase the decision.
+1. Fence signing/admission beyond the certified decision and retain that decision,
+   the pending plan and failed attempt diagnostics. Migration effects, activation
+   and plan consumption remain uncommitted together; closure stays unfinished.
+   Preserve the last complete canonical transaction, raw inputs, control journal,
+   signer slots and WAL. A final handoff intent exists only after successful complete
+   closure. Export failure class, target, exact input lineage and checkpoint. Never
+   commit partial migration or erase the decision.
 2. Reproduce from authenticated inputs. Local I/O/OOM/corruption is an infrastructure
    repair, not a deterministic migration result; restore/reconcile and retry without
    changing rules or signing history. Unsupported successor validators install the
@@ -882,6 +886,148 @@ expired batches and same H hash/different pre-lineage. Independent state/receipt
 committee comparisons must match across representative distinct event orderings. Test pruned-node archive
 rebuild, zero validators, missing history and unavailable quorum. Do not mutate
 committee authority merely because a local Bitcoin notification arrived.
+
+### K7/K8 implementation refinement, revision 1 (2 November 2026)
+
+Status: explicitly agreed by lead and the single independent reviewer
+`/root/k2b_system_review` under `K7K8-PLAN-1`, including the P2 count and native
+resolution details below. Base is the verified K5/K6 merge `b3e0fc246d7a859e30b836630372e5658f45afb8`. This implements the settled
+reversible-upgrade policy, not another governance policy or prerequisite project.
+All K7/K8 acceptance requirements above remain part of the grouped PR.
+
+**Persisted identities and admission.** Separate immutable chain/genesis context,
+authenticated ordering context and reversible active protocol. `certified_history`
+currently derives genesis from its mutable context, while bootstrap and the managed
+coordinator assume the baseline forever. Keep genesis separately verifiable against
+the retained baseline. Record each completed era transition and validate the current
+ordering context against that history before opening signing. Recover an unfinished
+application closure before starting any engine. A canonical active-protocol record
+is tied to an application ordinal/lineage and disappears with that application on
+rollback. Initial state selects P1; installation order never selects execution.
+Do not add compatibility migrations for intermediate K4/K5/K6 development schemas.
+Reject unsupported schemas read-only before initialization, with preservation guidance.
+
+**Block proposal commitment.** Add an optional typed transition descriptor to the
+canonical Block input, committing chain, plan, H/hash, source/target protocol IDs,
+target consensus definition and C+1. The target manifest already binds executor,
+migration, parameters and canonical codecs. Ordinary live admission derives the
+expected descriptor from surviving state at H's parent, then requires exact equality
+and installed target support. Absent, unsolicited or mismatched descriptors are
+invalid. No execution, migration or successor committee derivation occurs during
+voting. Target wire framing is separate from the canonical certificate codec:
+the existing second engine's incompatible framing does not change codec v1 to v2.
+
+**Canonical activation stage.** Add explicit derived activation work to the existing
+closure scheduler. It selects a still-pending authorized plan at the reconstructed
+after-H position, executes the target's registered migration and consumes that plan.
+The initial H command executes H and lifecycle with the old executor and settles its
+due finality first. Replay inserts activation immediately after reconstructed H and
+before any Batch(H) or H+1 work. The finality planner already freezes exclusions and
+orders retained work by Bitcoin position, then decision; extend that representation
+rather than using notifications or a separate replay queue. No action effect is
+resurrected from a descriptor after retraction. If undoing Cancel/Postpone restores
+a surviving schedule, derive its migration at the appropriate reconstructed H even
+when the retained Block originally needed no transition descriptor. Original live
+validity and deterministic reconstruction are distinct checks.
+
+`migration::apply` already owns the sole canonical root. Extract/reuse that owned
+unit to commit migration effects, receipt, active-protocol record, consumed-plan
+snapshot, registration observation and closure-stage advancement together. Do not
+wrap it in another `OwnedClosureStage` or commit a migration before its activation
+record. Its exact key continues to bind plan, H/hash, pre-lineage, pre-checkpoint and
+migration definition. Failure rolls all those changes back and leaves certified
+work resumable but C+1 gated. An unchanged surviving receipt is idempotent; same H
+with changed exclusions/pre-lineage reruns the migration on the changed prestate.
+
+**Selection during replay and requests.** Resolve the executor for each canonical
+application position, not once at process startup. Verify retained decisions using
+their original era, committee and codec; execute their still-eligible inputs using
+the protocol reconstructed at that application position. In particular, a retained
+P2-era batch cannot force P2 after removal of the schedule that originally enabled
+it. Apply normal recognition/validity with the selected executor and retain the new
+execution identity and existing frozen exclusions. Already surviving canonical
+transactions confirm without reexecution or charging. Use the same validated
+selection for recognition, block/batch work, lifecycle, migration, committee reads,
+views, simulation and preparation. Partition component/session caches by immutable
+executor identity and reject stale selections after rollback or activation.
+
+**Control projection.** Keep historical signed action contexts and snapshots exact.
+Build current admission state from the surviving control head, nonce and pending
+plan, canonical active manifest and authenticated current ordering era. Restore the
+prior plan when its activation is rolled back, subject to existing control-action
+retractions when the schedule itself was removed. Do not require an old snapshot's
+era to be the current era, rewrite old approvals, reset registration generations
+at handoff, or derive the initial control head from a later ordering era.
+
+**Completion and engine handoff.** After all stages, including recursive due finality,
+settle, derive the selected protocol and successor committee once. If the selected
+protocol equals the running ordering protocol, publish closure with no restart.
+Otherwise derive a fresh era from predecessor era, certified decision C, final closed
+lineage and selected protocol. In one completion transaction persist the closure,
+C+1 authority in the successor context, next ordering context and handoff intent.
+Keep observation provenance in the old decision context while binding the resulting
+successor authority to the new context. No circular dependency between era ID and
+closure/committee ID is permitted. Restore historical P1 in a fresh era exactly as
+for a forward upgrade; never reuse its old WAL or consensus/signing heights.
+
+Drain/fence and await the outgoing managed engine using the existing generation
+owner and slot. Only then start the registered engine at C+1 with its own era WAL
+and the derived committee. Retain the process-level owner, stable network identity,
+RPC and Bitcoin follower. Persist enough intent to resume after activation commit,
+completion publication, stop/join, WAL creation or first signature. Startup chooses
+from verified history, not a hardcoded `Bundle::First`. No additional Malachite fork
+work is planned unless a concrete lifecycle defect requires a small reviewed fix.
+
+**Bundled implementations.** Freeze the final upgrade-capable P1 executor and its
+coordinator rules, not an intermediate prelaunch baseline. Keep current retained K3
+qualification evidence separately. Link two independently resolved production
+executors and both managed consensus bundles, with explicit manifest-to-adapter
+mappings and builder attestation. Avoid a third conflicting Wasmtime copy. The real
+P2 adds a maintained count of token ledger entries with strictly positive balances,
+exposed through an additive native token view. Count all holder variants, including
+pools, burner, contract and UTXO holders; this is a count of stored positive entries,
+not a new economic definition of circulating holders. The target migration scans
+the existing ledger under its deterministic work budget, decodes and validates the
+old keys/balances, computes the checked count and stores the new token field. It
+preserves balances and all other state. Token storage is already deposit-exempt,
+so no payer or deposit policy is introduced for the new field. Later ledger writes
+maintain the count from the actual before/after entry, including repeated writes
+to the same holder, without changing existing transfer arithmetic. No gas constant,
+amount, rate or ordinary transaction encoding changes. Additional real work remains
+metered normally; measured gas need not be identical for the different P2 routine.
+Append the new count as token field 5, preserving existing field indices (ledger 0).
+Retain the precise storage codecs: balances use postcard Vec wrapping a Decimal
+keycodec element; count values use host postcard u64 encoding. Decode complete
+canonical Holder keys and both value layers with no trailing bytes.
+
+Resolve P2's pinned native token artifact through the selected executor's immutable
+native mapping. Preserve original genesis publication bytes and provenance. The
+selected component's executable bytes, WIT/ABI, cache key and effective-artifact
+provenance must agree; original-publication provenance remains separately available.
+Do not mutate the old publication row or allocate a second native address. Rollback
+restores both the prior executor mapping and the migrated state. Frozen P1 retains
+its original token artifact and missing-method behavior for the new view. Validate
+real calls before/after activation and rollback plus mint, transfer, burn/escrow and
+UTXO paths affecting the maintained count. The count is derived from actual old
+state, not a hardcoded version marker. All future routing must retain old
+recognition, metering, error, lifecycle, state and migration behavior.
+
+**Delivery and evidence.** Implement in local dependency order: durable activation
+and handoff representations; single-unit migration integration and replay work;
+registry/position selection and proposal admission; managed engine/recovery wiring;
+real P2 and native upgrade; representative integrated tests. Keep one grouped PR with lead
+plus one independent review and a batched final-candidate CI run. Reuse unaffected
+K5 ownership evidence while adding actual multi-validator upgrade evidence.
+
+Use focused traces for surviving versus removed schedule, rollback restoring
+Cancel/Postpone, same H/hash with changed pre-lineage, retained P2-era batch under
+restored P1, confirmation without recharge, migration failure and zero successor
+power. Exercise unsupported-target Cancel progress, same-port incompatible-engine
+handoff with RPC/ingestion alive, two upgrades, restored historical protocol in a
+fresh era, and crash recovery at the durable transitions above. Compare final state,
+receipts, execution identities, committee/registration generations and retained
+history across uninterrupted, restart and reconstructed execution. K9 later adds
+cross-era transport, not a new mechanism for deciding the results of replay.
 
 ### K9. Stable history transport and cold catch-up
 

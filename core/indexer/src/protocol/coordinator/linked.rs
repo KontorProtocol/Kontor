@@ -119,6 +119,9 @@ fn adapt_session<M: MigrationExport>(
     let make_root = Arc::new(
         move |selection: ExecutionSelection, adapter: OwnerAdapter| {
             selection
+                .execution_identity(execution_definition.map_err(|error| (0, error.to_string()))?)
+                .map_err(|error| (0, format!("{error:#}")))?;
+            selection
                 .ensure_runtime(network, origin)
                 .map_err(|error| (0, format!("{error:#}")))?;
             let source: SelectionSource = if !canonical && selection.is_public_view() {
