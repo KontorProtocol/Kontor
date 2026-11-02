@@ -4820,3 +4820,15 @@ checkout. These checks refuse inconsistent startup state; they neither repair
 arbitrary database/WAL combinations nor establish support for swapping backups.
 No Malachite fork change was made. Linked compilation of the managed caller and
 final exact-head CI remain required.
+
+Final local candidate `b8aff3da53d6cb13f3747bbe3b53bc3cbd341170` completed the
+linked Linux ARM64 release build with both executor graphs and one consensus
+graph. Installed and audited binary hashes agree:
+`17b8d963e3aa8dfb9232fd925e095f0f85a004329abef08f10295eaa1867cf8f`.
+The corrected managed caller compiled successfully. Recovery then passed all five
+killed-process checkpoints and three finality replay scenarios. All 25 executor
+cases passed again, including same-era validator WAL restart, with successful
+semantic oracle and evidence validation. Results and transcripts are preserved in
+`.build-cache/single-runtime-final-{build,recovery,executors}*`. This closes the
+linked-caller validation gap from focused review. No production changes follow
+that candidate in this evidence entry; required PR CI remains pending.
