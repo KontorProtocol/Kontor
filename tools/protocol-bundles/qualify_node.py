@@ -44,11 +44,12 @@ def verify_certified_history(observations, link_set, root=ROOT):
         if result is not None:
             raise RuntimeError('legacy qualification cannot claim certified baseline coverage')
         return
-    expected_keys = CERTIFIED_CHECKS | {'authenticated', 'closed', 'executor_definition',
+    checks = CERTIFIED_CHECKS | ({'migration_rehearsal_cli'} if link_set == 'managed-node' else set())
+    expected_keys = checks | {'authenticated', 'closed', 'executor_definition',
                                       'protocol', 'chain', 'manifest', 'era'}
     if not isinstance(result, dict) or set(result) != expected_keys:
         raise RuntimeError('certified history evidence missing or incomplete')
-    if any(result[key] is not True for key in CERTIFIED_CHECKS) or result['authenticated'] != 15 or result['closed'] != 15:
+    if any(result[key] is not True for key in checks) or result['authenticated'] != 15 or result['closed'] != 15:
         raise RuntimeError('certified history checks did not complete')
     def hashed(domain, value):
         return hashlib.sha256(domain + b'\0' + value).hexdigest()

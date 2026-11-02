@@ -1,5 +1,7 @@
 mod fixture;
 mod recovery;
+#[cfg(all(kontor_managed, not(test)))]
+mod rehearsal;
 
 use std::path::Path;
 use std::time::Duration;
@@ -314,6 +316,13 @@ pub(crate) async fn run(
     stopped.context("qualification engine shutdown")?;
     let (evidence, reactor) = result?;
     qualify_engine_free_recovery(reactor.execution, &factory, dir.path()).await?;
+    #[cfg(all(kontor_managed, not(test)))]
+    let evidence = {
+        rehearsal::run(dir.path(), &conn).await?;
+        let mut evidence = evidence;
+        evidence["migration_rehearsal_cli"] = json!(true);
+        evidence
+    };
     Ok(evidence)
 }
 

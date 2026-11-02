@@ -3526,3 +3526,22 @@ remain recorded, not accepted as qualification. The unreleased managed definitio
 was regenerated after its source inventory and dependency graph changed; frozen
 executor snapshots remain unchanged. The next acceptance step is the actual
 combined build and runtime, followed by the group's consolidated review and CI.
+
+The next build compiled both consensus graphs and the node, then correctly failed
+the old factory-identity positive control: retained and maintained migration
+exports no longer have identical result types. The observer link set now requires
+direct factory substitution to fail and an explicit typed conversion to compile.
+The frozen first/second pair still requires structural factory identity. Actual
+staged-library checks passed all six executor controls after correcting the probe's
+closure coercion. This is interface evidence, not a successful whole-node build.
+The earlier consensus adapter result files were from the preserved prior build
+and are not current-candidate evidence.
+
+The managed qualification also now invokes the real rehearsal CLI on its existing
+fully closed certified database fixture, after the engine stops. It checks a
+registered no-op and an unknown routine, JSON results and process exit status,
+advisory authority, source identity, and unchanged database/WAL bytes and logical
+state. The verifier requires the explicit managed rehearsal result. Six interface
+tooling and ten node-evidence tooling tests passed; the new Rust CLI integration
+still requires the rebuilt binary to execute. No new CI matrix or performance
+workload was added.

@@ -30,6 +30,36 @@ pub fn unselected_runtime(value: Runtime) { drop(value); }
 '''),
 }
 
+ADAPTED_EXECUTOR_PROBES = {
+    **PROBES,
+    'structural-factories': ('E0308', PROBES['structural-factories'][1]),
+    'adapted-factories': (None, '''use first::Factory as First;
+use second::Factory as Second;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+type MigrationFuture = Pin<Box<dyn Future<Output = Result<
+    Result<[u64; 5], (u8, Option<[u64; 5]>)>,
+    (u8, String, Option<[u64; 5]>)>> + Send>>;
+pub fn first_into_second(value: First) -> Second {
+    Arc::new(move |storage, network, limit| {
+        let pending = value(storage, network, limit);
+        Box::pin(async move {
+            let ((a, b, c, d, e, f, g, h, i, j, migration), owner, roots, release) = pending.await?;
+            let migration: Arc<dyn Fn(_, _, _, _) -> MigrationFuture + Send + Sync> = Arc::new(move |owner, selection, definition, input| {
+                let pending = migration(owner, selection, definition, input);
+                Box::pin(async move {
+                    pending.await.map(|result| result.map_err(|tag| (tag, None)))
+                        .map_err(|(tag, message)| (tag, message, None))
+                }) as MigrationFuture
+            });
+            Ok(((a, b, c, d, e, f, g, h, i, j, migration), owner, roots, release))
+        })
+    })
+}
+'''),
+}
+
 CONSENSUS_PROBES = {
     'typed-adapter': (None, '''use first::api::{EnginePoll, Response, Validator};
 use first::Engine;
@@ -86,6 +116,8 @@ def probes_for(graphs):
         if not all(consensus) or [graph['graph'] for graph in graphs] != ['first', 'second']:
             raise RuntimeError('consensus interface controls require both consensus graphs')
         return CONSENSUS_PROBES
+    if [graph['graph'] for graph in graphs] == ['first', 'observer']:
+        return ADAPTED_EXECUTOR_PROBES
     return PROBES
 
 

@@ -24,7 +24,8 @@ def certified_sample(link_set="k4-node"):
     consensus = bytes.fromhex(hashed(b'kontor/consensus-definition/v1', (ROOT / consensus_path).read_bytes()))
     manifest = b'KPM1' + chain + (1).to_bytes(8, 'big') + bytes(32) + bytes.fromhex(executor) + consensus + bytes(132)
     protocol = hashed(b'kontor/protocol-manifest/v1', manifest)
-    return {**{key: True for key in CERTIFIED_CHECKS}, 'authenticated': 15, 'closed': 15,
+    checks = CERTIFIED_CHECKS | ({'migration_rehearsal_cli'} if link_set == 'managed-node' else set())
+    return {**{key: True for key in checks}, 'authenticated': 15, 'closed': 15,
             'executor_definition': executor, 'manifest': manifest.hex(), 'chain': chain.hex(),
             'protocol': protocol, 'era': hashed(b'kontor/genesis-era/v1', chain + bytes.fromhex(protocol))}
 
@@ -83,8 +84,23 @@ class NodeExecution(unittest.TestCase):
     def test_consensus_definition_cannot_be_substituted_between_link_sets(self):
         for selected, other in (('managed-node', 'k4-node'), ('k4-node', 'managed-node')):
             verify_certified_history({'certified_history': certified_sample(selected)}, selected)
+            substituted = certified_sample(other)
+            if selected == 'managed-node':
+                substituted['migration_rehearsal_cli'] = True
+            else:
+                substituted.pop('migration_rehearsal_cli')
             with self.assertRaisesRegex(RuntimeError, 'baseline identity'):
-                verify_certified_history({'certified_history': certified_sample(other)}, selected)
+                verify_certified_history({'certified_history': substituted}, selected)
+
+    def test_managed_history_requires_successful_rehearsal_cli(self):
+        original = certified_sample('managed-node')
+        for replacement in (False, None):
+            changed = dict(original, migration_rehearsal_cli=replacement)
+            with self.assertRaises(RuntimeError):
+                verify_certified_history({'certified_history': changed}, 'managed-node')
+        del original['migration_rehearsal_cli']
+        with self.assertRaises(RuntimeError):
+            verify_certified_history({'certified_history': original}, 'managed-node')
 
     def test_managed_startup_requires_actual_results_for_the_selected_protocol(self):
         history = certified_sample('managed-node')

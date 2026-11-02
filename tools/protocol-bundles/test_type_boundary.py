@@ -4,10 +4,17 @@ import tempfile
 import unittest
 
 from provenance import sha
-from type_boundary import ADAPTER_TESTS, CONSENSUS_PROBES, adapter_tests_passed, check_diagnostics, inputs_for, probes_for
+from type_boundary import ADAPTER_TESTS, ADAPTED_EXECUTOR_PROBES, CONSENSUS_PROBES, PROBES, adapter_tests_passed, check_diagnostics, inputs_for, probes_for
 
 
 class Diagnostics(unittest.TestCase):
+    def test_executor_interface_controls_follow_the_explicit_graph_pair(self):
+        self.assertIs(probes_for([{'graph': name} for name in ('first', 'second')]), PROBES)
+        selected = probes_for([{'graph': name} for name in ('first', 'observer')])
+        self.assertIs(selected, ADAPTED_EXECUTOR_PROBES)
+        self.assertEqual(selected['structural-factories'][0], 'E0308')
+        self.assertIsNone(selected['adapted-factories'][0])
+
     def test_adapter_test_evidence_requires_both_bundles_and_successful_exit(self):
         summary = f'test result: ok. {len(ADAPTER_TESTS)} passed; 0 failed; 0 ignored;'
         output = '\n'.join(f'test {name} ... ok' for name in ADAPTER_TESTS) + '\n' + summary
