@@ -92,13 +92,12 @@ async fn at_storage_height(conn: &Connection, height: u64) -> Result<Option<Cont
         .next()
         .await?;
     let control = row.map(|row| effect(&row)).transpose()?;
-    if let Some(activation) = activation::at_storage_height(conn, height).await? {
-        if control
+    if let Some(activation) = activation::at_storage_height(conn, height).await?
+        && control
             .as_ref()
             .is_none_or(|control| control.application.ordinal < activation.application.ordinal)
-        {
-            return activation.consumed_control().map(Some);
-        }
+    {
+        return activation.consumed_control().map(Some);
     }
     Ok(control.map(|value| value.state))
 }

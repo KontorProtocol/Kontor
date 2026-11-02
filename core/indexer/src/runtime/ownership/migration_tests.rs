@@ -593,7 +593,7 @@ async fn p2_token_backfill_preserves_ledger_and_rolls_back_invalid_or_exhausted_
         }
         let count_key = KeyPath::new().push_interned(5);
         if scenario == "malformed" {
-            let key = KeyPath::new().push_interned(0).push(&"45".to_string());
+            let key = KeyPath::new().push_interned(0).push("45".to_string());
             session.conn.execute(
                 "INSERT INTO contract_state (contract_id, height, path, value, size, deleted) VALUES (1, 1, ?1, x'ff', 1, 0)",
                 [key.as_bytes()],

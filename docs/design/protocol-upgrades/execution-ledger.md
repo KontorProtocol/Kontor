@@ -4564,3 +4564,46 @@ source/binary hashes. Fifty-seven Python checks passed (12 builder, 10 evidence,
 
 No independent implementation approval, final cross-platform CI, PR or merge is
 claimed by this review. Those are the next grouped delivery gates.
+
+### K7/K8 consolidated independent source review
+
+K7K8-REVIEW-1 reviewed base `b3e0fc246d7a859e30b836630372e5658f45afb8`
+through candidate `155ce1091fd5e42141539f1465578b973752055d` with no material
+findings. It covered canonical activation/migration, rollback and fresh approval,
+branch replay, executor selection, writer/read ownership, engine handoff,
+signing persistence, P2 accounting and native provenance. The reviewer verified
+all 1,313 frozen P1 inventory entries and the five supplied evidence archives.
+The ownership design retains the canonical lease through migration settlement
+and requires terminal outgoing engine ownership before replacement.
+
+Builder-record checks compare registry definitions and wire codecs and validate
+record structure. Source/compiler/facade hashes are retained builder provenance,
+not independently recomputed runtime measurements. The changed-bindings negative
+controls do not claim to detect arbitrary substitution of valid provenance hashes.
+The first-signature interruption uses production proposal-Fin signing with
+ConsensusReady held, not an autonomous first vote.
+
+Remote main was rechecked at the same base; no candidate PR or CI run exists yet.
+The post-review source delta only orders a module declaration and regenerates its
+two managed references. Ordinary Rust checks and final scoped platform CI remain
+pending. K9 cold catch-up and K10/K11 remain separate uncompleted groups.
+
+Final local preparation passed `cargo clippy -p indexer --tests -- -D warnings`,
+formatting, and 128 focused Rust tests (102 coordinator, 22 certified history,
+three handoff, one session selection). The ignored migration crash child is
+invoked by its parent test. The source inventory and four command/log records
+are retained in `.build-cache/k7-final-tests.json`; sources stayed unchanged
+during the run.
+
+Clippy corrections restrict managed helpers to their callers, document the
+unconstructed P2 variant in unmanaged builds, simplify one equivalent condition,
+move a test module and remove a needless test borrow. The unreleased observer
+reference and both managed references were regenerated; frozen P1 is untouched.
+The independent review remains applicable to the unchanged behavior.
+
+The 176 Python build/evidence controls are covered by the full-suite run plus
+a focused successful rerun of its 34 native-audit tests with `CCACHE_DISABLE=1`.
+The initial audit failures came from ccache attempting a read-only cache write.
+The only source correction was adding the required activation input to the
+managed-definition fixture and its source-mutation assertion. All three current
+references verify. These local results do not replace final platform CI.

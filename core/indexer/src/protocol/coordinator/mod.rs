@@ -37,4 +37,5 @@ pub(crate) const fn minimum_prune_retention_blocks() -> u64 {
 #[cfg(all(test, not(kontor_node)))]
 pub(crate) mod view;
 
+#[cfg(any(kontor_managed, test))]
 pub(crate) mod successor;

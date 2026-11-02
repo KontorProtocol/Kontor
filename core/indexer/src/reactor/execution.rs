@@ -148,82 +148,6 @@ impl<E: Executor> ExecutionContext<E> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::*;
-    use crate::database::canonical_history;
-    use crate::protocol::coordinator::activation_execution::tests::fixture;
-    use crate::protocol::coordinator::linked::{begin_canonical_unit, finish_canonical_unit};
-    use crate::reactor::executor::NoopExecutor;
-
-    #[tokio::test]
-    async fn session_selection_rejects_busy_stale_and_uninstalled_targets() -> Result<()> {
-        let (_directory, session, service, _) = Box::pin(fixture()).await?;
-        let conn = session.conn.clone();
-        let context = certified_history::frontier(&conn).await?.context.unwrap();
-        let owner = session.executor.owner.clone();
-        let mut execution = ExecutionContext::new(
-            NoopExecutor,
-            session,
-            Network::Regtest,
-            service,
-            context,
-            PruneConfig {
-                enabled: false,
-                retain_blocks: 144,
-            },
-            1,
-            None,
-        );
-        let selected = execution
-            .select_executor(ApplicationPosition::Committee)
-            .await?;
-        assert!(selected.canonical_execution().is_some());
-        execution.select_session(&selected).await?;
-        assert!(Arc::ptr_eq(&owner, &execution.session.executor.owner));
-
-        execution
-            .session
-            .canonical_busy
-            .store(true, Ordering::SeqCst);
-        assert!(execution.select_session(&selected).await.is_err());
-        execution
-            .session
-            .canonical_busy
-            .store(false, Ordering::SeqCst);
-        let lease = begin_canonical_unit(
-            &execution.owner_service,
-            &execution.session,
-            &selected,
-            execution.network,
-            false,
-        )
-        .await?;
-        assert!(execution.select_session(&selected).await.is_err());
-        finish_canonical_unit(lease, Ok(()), false).await?;
-
-        // The fixture's scheduled successor deliberately has no installed mapping.
-        // Routing must fail before opening a migration or advancing its stage.
-        let before = canonical_history::state(&conn).await?;
-        let progress = closure::progress(&conn, 1).await?;
-        let error = execution.step_certified_closure(1).await.err().unwrap();
-        assert!(format!("{error:#}").contains("protocol is not installed"));
-        assert_eq!(canonical_history::state(&conn).await?, before);
-        assert_eq!(closure::progress(&conn, 1).await?.stage, progress.stage);
-        assert!(conn.is_autocommit());
-        assert!(Arc::ptr_eq(&owner, &execution.session.executor.owner));
-
-        conn.execute("BEGIN", ()).await?;
-        canonical_history::rollback(&conn, 0).await?;
-        conn.execute("COMMIT", ()).await?;
-        assert!(execution.select_session(&selected).await.is_err());
-        assert!(Arc::ptr_eq(&owner, &execution.session.executor.owner));
-        Ok(())
-    }
-}
-
 pub(super) enum ExecutionStep {
     Planning,
     RolledBack(u64),
@@ -455,5 +379,81 @@ impl<E: Executor> ExecutionContext<E> {
             "recovery retained a writer transaction"
         );
         Ok(!shutdown.is_cancelled())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::database::canonical_history;
+    use crate::protocol::coordinator::activation_execution::tests::fixture;
+    use crate::protocol::coordinator::linked::{begin_canonical_unit, finish_canonical_unit};
+    use crate::reactor::executor::NoopExecutor;
+
+    #[tokio::test]
+    async fn session_selection_rejects_busy_stale_and_uninstalled_targets() -> Result<()> {
+        let (_directory, session, service, _) = Box::pin(fixture()).await?;
+        let conn = session.conn.clone();
+        let context = certified_history::frontier(&conn).await?.context.unwrap();
+        let owner = session.executor.owner.clone();
+        let mut execution = ExecutionContext::new(
+            NoopExecutor,
+            session,
+            Network::Regtest,
+            service,
+            context,
+            PruneConfig {
+                enabled: false,
+                retain_blocks: 144,
+            },
+            1,
+            None,
+        );
+        let selected = execution
+            .select_executor(ApplicationPosition::Committee)
+            .await?;
+        assert!(selected.canonical_execution().is_some());
+        execution.select_session(&selected).await?;
+        assert!(Arc::ptr_eq(&owner, &execution.session.executor.owner));
+
+        execution
+            .session
+            .canonical_busy
+            .store(true, Ordering::SeqCst);
+        assert!(execution.select_session(&selected).await.is_err());
+        execution
+            .session
+            .canonical_busy
+            .store(false, Ordering::SeqCst);
+        let lease = begin_canonical_unit(
+            &execution.owner_service,
+            &execution.session,
+            &selected,
+            execution.network,
+            false,
+        )
+        .await?;
+        assert!(execution.select_session(&selected).await.is_err());
+        finish_canonical_unit(lease, Ok(()), false).await?;
+
+        // The fixture's scheduled successor deliberately has no installed mapping.
+        // Routing must fail before opening a migration or advancing its stage.
+        let before = canonical_history::state(&conn).await?;
+        let progress = closure::progress(&conn, 1).await?;
+        let error = execution.step_certified_closure(1).await.err().unwrap();
+        assert!(format!("{error:#}").contains("protocol is not installed"));
+        assert_eq!(canonical_history::state(&conn).await?, before);
+        assert_eq!(closure::progress(&conn, 1).await?.stage, progress.stage);
+        assert!(conn.is_autocommit());
+        assert!(Arc::ptr_eq(&owner, &execution.session.executor.owner));
+
+        conn.execute("BEGIN", ()).await?;
+        canonical_history::rollback(&conn, 0).await?;
+        conn.execute("COMMIT", ()).await?;
+        assert!(execution.select_session(&selected).await.is_err());
+        assert!(Arc::ptr_eq(&owner, &execution.session.executor.owner));
+        Ok(())
     }
 }

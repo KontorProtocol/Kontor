@@ -1,6 +1,13 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ExecutorVersion {
     LegacyP1,
+    #[cfg_attr(
+        not(kontor_managed),
+        allow(
+            dead_code,
+            reason = "Only the independently linked managed registry installs P2"
+        )
+    )]
     P2,
 }
 

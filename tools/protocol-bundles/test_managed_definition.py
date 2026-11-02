@@ -13,6 +13,7 @@ class ManagedDefinitionTests(unittest.TestCase):
         node, node_lock = test_coordinator_definition.CoordinatorDefinitionTests().fixture(root)
         for name in (*BUILD_INPUTS, GRAPH, 'protocol-bundles/consensus/lib.rs',
                      'core/indexer/src/protocol/migration_work.rs',
+                     'core/indexer/src/protocol/coordinator/activation.rs',
                      'core/indexer/src/protocol/coordinator/certified_decision.rs',
                      'core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs',
                      'core/indexer/src/protocol/coordinator/control.rs',
@@ -102,6 +103,7 @@ class ManagedDefinitionTests(unittest.TestCase):
             self.assertEqual(original, reference(root, *inputs))
             for name in (*BUILD_INPUTS, GRAPH, 'protocol-bundles/consensus/lib.rs',
                          'core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs',
+                         'core/indexer/src/protocol/coordinator/activation.rs',
                          'core/indexer/src/protocol/coordinator/control.rs',
                          'core/indexer/src/protocol/coordinator/certified_input.rs'):
                 with self.subTest(name=name):

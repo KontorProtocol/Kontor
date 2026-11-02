@@ -3,7 +3,9 @@ use anyhow::{Result, ensure};
 use super::baseline::{Baseline, source};
 use super::manifest::ProtocolManifest;
 use crate::protocol::canonical_codec::Encoder;
-use crate::protocol::identity::{ChainId, DefinitionReference, domain_digest};
+#[cfg(any(kontor_managed, test))]
+use crate::protocol::identity::ChainId;
+use crate::protocol::identity::{DefinitionReference, domain_digest};
 use crate::protocol::v1::native::TOKEN_CONTRACT_ID;
 use crate::protocol::v2::migration_definition;
 
@@ -12,10 +14,12 @@ pub(crate) const EXECUTOR_REFERENCE: &[u8] =
 const CONSENSUS_REFERENCE: &[u8] = include_bytes!("managed/definitions/second.json");
 const TOKEN_ARTIFACT: &str = "core/indexer/src/protocol/v2/native/token.wasm.br";
 
+#[cfg(kontor_managed)]
 pub(crate) fn consensus_definition() -> [u8; 32] {
     domain_digest(b"kontor/consensus-definition/v1", CONSENSUS_REFERENCE)
 }
 
+#[cfg(kontor_managed)]
 pub(crate) fn manifest(chain: ChainId) -> Result<ProtocolManifest> {
     let first = Baseline::for_node(chain)?;
     let reference = DefinitionReference::decode(EXECUTOR_REFERENCE)?;

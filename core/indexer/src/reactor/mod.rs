@@ -15,8 +15,6 @@ mod execution_fixture;
 pub mod executor;
 mod handlers;
 mod handoff;
-#[cfg(all(kontor_managed, feature = "protocol-qualification"))]
-pub(crate) mod upgrade_qualification;
 #[cfg(test)]
 mod handoff_tests;
 #[cfg(feature = "protocol-qualification")]
@@ -49,6 +47,8 @@ mod transport_tests;
 pub mod types;
 #[cfg(test)]
 mod upgrade_control_tests;
+#[cfg(all(kontor_managed, feature = "protocol-qualification"))]
+pub(crate) mod upgrade_qualification;
 mod upgrades;
 #[cfg(test)]
 mod workload_tests;
