@@ -3113,3 +3113,53 @@ control replay disposition, operator APIs/rehearsal and K7/K8 activation are sti
 unfinished. The persistence tests invoke the storage primitive and do not establish
 end-to-end control consensus or cross-upgrade recovery. No CI campaign, PR, merge,
 publication or new fork change was performed for this checkpoint.
+
+### K6 typed command and reactor rollback checkpoint (1 November 2026)
+
+Local implementation based on `049115e0`, not a completed K5/K6 group or merge.
+Upgrade controls now have their own certified command tag and exact KUC1 body.
+The execution index and replay selector distinguish Block, Batch and Control.
+Controls cannot decode as Bitcoin transactions or enter transaction-exclusion
+filtering. Old intermediate boolean-command schemas are refused during read-only
+node admission, without relabeling or deleting their data.
+
+Proposal admission and owned application use the same verifier integration:
+closed authenticated reference, current inclusion committee, canonical Bitcoin
+position, current reversible state, action-ID retraction and historical reference
+floor. Application persists its snapshot and canonical lineage with the closure
+stage. Finality replay carries controls as explicit commands and records a
+RetractedControl outcome after owned undo; it does not reauthorize old envelopes.
+Historical stage recovery validates the original envelope/application binding,
+not the latest canonical snapshot. The live snapshot check occurs at commit.
+
+The expanded owned-closure test passed (17.21s). It covers signed schedule and
+cancel, invalid signature/anchor, interrupted application, atomic retry, restart,
+duplicate rejection, typed replay selection and recovery of an earlier control
+closure after a later action changes the state. The same production source passed
+seven certified-input tests, 14 approval tests, 20 certified-history tests and two
+read-only protocol-admission tests. Two additional filters selected zero tests;
+they provide no coverage and are excluded from the 44-test count. Commands,
+results and binary binding: `.build-cache/k6-control-command-regressions.json`;
+owned-unit raw log: `.build-cache/k6-control-inclusion-tests-final.log`.
+
+A new real-executor reactor test then passed (69.07s, build 1m12s). It executes an
+unconfirmed issuance batch, applies a schedule, reaches the six-block finality
+deadline, and interrupts after owned rollback removes the schedule. A reopened
+executor recovers the remaining frozen work. The old envelope and the same
+approval reanchored at the current tip are rejected. A new signed action using
+the completed rollback decision succeeds. A separate fresh database reconstructs
+all the original retained inputs/certificates; closed records and canonical
+control state match recovery, including after the fresh submission. The original
+schedule's certificate and original application history remain verifiable after
+retraction. Raw log: `.build-cache/k6-control-reactor-recovery.log`.
+
+This test uses the real reactor closure/executor/database path and authenticated
+fixture certificates, without a live multi-validator network. It does not yet
+prove operator submission, live proposal transport, all postpone/cancel undo and
+Bitcoin-reorg cases, or cross-activation migration/engine handoff. Those remain
+in scope. The focused local build encountered a Rust incremental fingerprint ICE;
+only disposable indexer incremental caches were removed before a successful
+rebuild. No fork changes, CI runs, PRs, merges or publication were performed.
+Consolidated lead and single independent review remain required for complete
+K5/K6. Source/binary hashes and limitations are recorded in
+`.build-cache/k6-control-command-validation.json`.

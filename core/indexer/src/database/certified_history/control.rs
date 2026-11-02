@@ -8,6 +8,8 @@ use crate::protocol::coordinator::application_closure::WorkItem;
 use crate::protocol::coordinator::closure_work::WorkOrigin;
 use crate::protocol::coordinator::control::ControlState;
 
+pub(crate) mod admission;
+
 const PAGE: u64 = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

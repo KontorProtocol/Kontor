@@ -1,3 +1,4 @@
+use crate::protocol::coordinator::certified_input::CommandKind;
 #[path = "ordering_reward_tests.rs"]
 mod ordering_reward_tests;
 #[path = "startup_recovery_tests.rs"]
@@ -1074,20 +1075,21 @@ async fn prod_reactor_validators_agree_on_values() -> Result<()> {
     for node in 0..3 {
         assert_eq!(cluster.counter_value(node).await?, "6");
         let conn = cluster.node_conn(node).await.clone();
-        assert!(
+        assert_eq!(
             certified_history::load(&conn, 1)
                 .await?
                 .decision()
                 .descriptor
                 .command
                 .position()
-                .2
+                .2,
+            CommandKind::Block
         );
         for height in &batch_heights {
             let decision = certified_history::load(&conn, *height).await?;
-            let (anchor, _, is_block) = decision.decision().descriptor.command.position();
+            let (anchor, _, kind) = decision.decision().descriptor.command.position();
             assert_eq!(anchor, 1);
-            assert!(!is_block);
+            assert_eq!(kind, CommandKind::Batch);
         }
     }
     cluster.mine_and_send(&[]);

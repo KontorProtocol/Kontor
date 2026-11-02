@@ -36,9 +36,9 @@ async fn append_index(conn: &Connection, height: u64, input: &ExactInput) -> Res
     )
     .await?;
     let position = decision.descriptor.command.position();
-    tx.execute("INSERT INTO certified_decisions (height, decision_id, record, body_digest, committee_id, original_proof, bitcoin_height, bitcoin_hash, is_block) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    tx.execute("INSERT INTO certified_decisions (height, decision_id, record, body_digest, committee_id, original_proof, bitcoin_height, bitcoin_hash, command_kind) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![height.to_be_bytes().to_vec(), decision.id()?.to_vec(), decision.encode()?,
-            decision.descriptor.body_digest.to_vec(), authority.to_vec(), Vec::<u8>::new(), position.0.to_be_bytes().to_vec(), position.1.to_byte_array().to_vec(), position.2]).await?;
+            decision.descriptor.body_digest.to_vec(), authority.to_vec(), Vec::<u8>::new(), position.0.to_be_bytes().to_vec(), position.1.to_byte_array().to_vec(), position.2 as i64]).await?;
     record(&tx, &decision).await?;
     tx.execute(
         "UPDATE certified_history_state SET authenticated_height = ?1 WHERE singleton = 1",

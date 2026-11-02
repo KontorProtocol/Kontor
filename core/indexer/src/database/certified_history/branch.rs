@@ -147,6 +147,10 @@ pub(crate) async fn validate(
         Command::Batch {
             anchor_height,
             anchor_hash,
+        }
+        | Command::Control {
+            anchor_height,
+            anchor_hash,
         } => {
             ensure!(
                 boundary.parent.is_some(),

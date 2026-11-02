@@ -103,6 +103,7 @@ async fn preflight_with_protocol(
 }
 
 async fn validate_protocol(conn: &Connection, baseline: &Baseline) -> Result<()> {
+    certified_history::require_command_schema(conn).await?;
     let mut tables = BTreeSet::new();
     let mut rows = conn
         .query(

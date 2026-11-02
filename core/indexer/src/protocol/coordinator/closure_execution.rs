@@ -84,6 +84,7 @@ pub(crate) async fn begin_stage(
         WorkItem::Execute { decision } | WorkItem::Replay { decision, .. } => {
             let input = load(&session.conn, decision).await?;
             match input.decision().descriptor.command {
+                Command::Control { .. } => ApplicationPosition::Committee,
                 Command::Batch {
                     anchor_height,
                     anchor_hash,

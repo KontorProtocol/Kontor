@@ -5,18 +5,22 @@ use tempfile::TempDir;
 use super::*;
 use crate::consensus::signing::PrivateKey;
 use crate::database::canonical_history::{self, HistoryState};
-use crate::database::certified_history;
+use crate::database::certified_history::{self, completion, control, replay};
 use crate::database::connection::new_connection;
 use crate::database::queries::insert_block;
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
 use crate::protocol::canonical_input::CanonicalInput;
+use crate::protocol::coordinator::baseline::Baseline;
 use crate::protocol::coordinator::certified_decision::tests::proof;
 use crate::protocol::coordinator::certified_decision::{AuthenticatedDecision, Decision};
-use crate::protocol::coordinator::certified_input::{EraContext, ExactInput};
+use crate::protocol::coordinator::certified_input::{CommandKind, ExactInput};
+use crate::protocol::coordinator::control::{
+    ApprovalSigner, ControlAction, ControlOperation, UpgradeControl,
+};
 use crate::protocol::coordinator::genesis::bind_identity;
 use crate::protocol::coordinator::linked::{canonical_session, initialize};
 use crate::protocol::coordinator::registration_history::ObservationPosition;
-use crate::protocol::identity::{ExecutionIdentity, ProtocolId};
+use crate::protocol::identity::ExecutionIdentity;
 use crate::reg_tester::random_x_only_pubkey;
 
 #[tokio::test]
@@ -35,13 +39,9 @@ async fn owned_closure_stage_records_real_observation_and_rolls_back_failed_effe
         )],
     );
     let chain = bind_identity(&conn, Network::Regtest, 1, &genesis).await?;
-    let context = EraContext {
-        chain,
-        era: [2; 32],
-        protocol: ProtocolId([3; 32]),
-        codec: 1,
-    };
-    certified_history::begin_genesis(&conn, context).await?;
+    let baseline = Baseline::for_node(chain)?;
+    let context = baseline.context;
+    certified_history::begin_baseline(&conn, &baseline, 1).await?;
     insert_block(
         &conn,
         BlockRow::builder()
@@ -81,8 +81,9 @@ async fn owned_closure_stage_records_real_observation_and_rolls_back_failed_effe
         committee: authority.id()?,
         descriptor: input.descriptor().clone(),
     };
-    let certificate = proof(&decision, &[key], &[0], 0);
-    let certified = AuthenticatedDecision::verify(decision, input, certificate, &authority)?;
+    let certificate = proof(&decision, &[key.clone()], &[0], 0);
+    let certified =
+        AuthenticatedDecision::verify(decision.clone(), input, certificate, &authority)?;
     certified_history::append(&conn, &certified).await?;
     conn.execute("CREATE TABLE owned_effect (value INTEGER)", ())
         .await?;
@@ -148,6 +149,14 @@ async fn owned_closure_stage_records_real_observation_and_rolls_back_failed_effe
     };
     conn.execute("INSERT INTO owned_effect VALUES (1)", ())
         .await?;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(1)
+            .hash(block.block_hash())
+            .build(),
+    )
+    .await?;
     canonical_history::append(&conn, &application).await?;
     canonical_history::append(&conn, &lifecycle).await?;
     let remaining = stage.remaining_after();
@@ -182,6 +191,154 @@ async fn owned_closure_stage_records_real_observation_and_rolls_back_failed_effe
             .get::<i64>(0)?,
         1
     );
+    completion::publish(&conn, 1).await?;
+    let authority = certified_history::committee(&conn, 2).await?;
+    let state = control::admission::state(&conn, context).await?;
+    let mut manifest = state.current_manifest.clone();
+    manifest.protocol_number = 2;
+    manifest.predecessor = context.protocol;
+    let action = ControlAction {
+        context,
+        head: state.head,
+        nonce: 1,
+        expected_pending: None,
+        reference_height: 1,
+        reference_decision: decision.id()?,
+        expires_at: 100,
+        operation: ControlOperation::Schedule {
+            manifest,
+            activation: 1009,
+        },
+    };
+    let envelope = UpgradeControl {
+        approvals: vec![
+            ApprovalSigner::new(key.clone()).sign(&action, authority.members[0].generation)?,
+        ],
+        action,
+    };
+    let input = ExactInput::control(context, 1, block.block_hash(), &envelope)?;
+    let at = control::Position {
+        decision: 2,
+        stage: 0,
+    };
+    let accepted = control::admission::verify(&conn, &input, 2, at).await?;
+    let mut invalid = envelope.clone();
+    invalid.approvals[0].signature[0] ^= 1;
+    let invalid = ExactInput::control(context, 1, block.block_hash(), &invalid)?;
+    assert!(
+        control::admission::verify(&conn, &invalid, 2, at)
+            .await
+            .is_err()
+    );
+    let wrong_anchor = ExactInput::control(context, 0, BlockHash::all_zeros(), &envelope)?;
+    assert!(
+        control::admission::verify(&conn, &wrong_anchor, 2, at)
+            .await
+            .is_err()
+    );
+    let decision = Decision {
+        height: 2,
+        predecessor: decision.id()?,
+        committee: authority.id()?,
+        descriptor: input.descriptor().clone(),
+    };
+    let certified = AuthenticatedDecision::verify(
+        decision.clone(),
+        input,
+        proof(&decision, &[key.clone()], &[0], 0),
+        &authority,
+    )?;
+    certified_history::append(&conn, &certified).await?;
+    let stage = begin_stage(&service, &session, Network::Regtest, 2)
+        .await?
+        .unwrap();
+    assert_eq!(
+        control::admission::apply(&conn, 2, 2).await?,
+        StageOutcome::Applied
+    );
+    assert_eq!(control::current(&conn).await?, Some(accepted.next.clone()));
+    assert!(
+        stage
+            .finish::<()>(Err(anyhow::anyhow!("control publication interrupted")))
+            .await
+            .is_err()
+    );
+    assert_eq!(control::current(&conn).await?, None);
+    assert_eq!(closure::recover(&conn, 2).await?.stage, 0);
+    let stage = begin_stage(&service, &session, Network::Regtest, 2)
+        .await?
+        .unwrap();
+    let outcome = control::admission::apply(&conn, 2, 2).await?;
+    let remaining = stage.remaining_after();
+    let (_, record) = stage.finish(Ok(((), outcome, remaining))).await?;
+    assert_eq!(record.applications.len(), 1);
+    assert_eq!(control::current(&conn).await?, Some(accepted.next.clone()));
+    assert!(
+        control::admission::verify(&conn, certified.input(), 2, at)
+            .await
+            .is_err()
+    );
+    let selected = replay::eligible(&conn, 2, 2).await?.unwrap();
+    assert_eq!(selected.kind, CommandKind::Control);
+    assert_eq!(replay::page(&conn, 2, 1, None).await?.len(), 2);
+    let reopened = new_connection(directory.path(), "owned-closure.db").await?;
+    assert_eq!(control::current(&reopened).await?, Some(accepted.next));
+    assert_eq!(closure::recover(&reopened, 2).await?.stage, 1);
+    let stage = begin_stage(&service, &session, Network::Regtest, 2)
+        .await?
+        .unwrap();
+    let remaining = stage.remaining_after();
+    stage
+        .finish(Ok(((), StageOutcome::FinalityEvaluated, remaining)))
+        .await?;
+    completion::publish(&conn, 2).await?;
+    assert_eq!(certified_history::frontier(&conn).await?.closed_height, 2);
+    let authority = certified_history::committee(&conn, 3).await?;
+    let state = control::admission::state(&conn, context).await?;
+    let pending = state.pending.as_ref().unwrap();
+    let action = ControlAction {
+        context,
+        head: state.head,
+        nonce: state.nonce + 1,
+        expected_pending: Some(pending.id),
+        reference_height: 2,
+        reference_decision: decision.id()?,
+        expires_at: 100,
+        operation: ControlOperation::Cancel {
+            target: pending.manifest.id()?,
+            activation: pending.activation,
+        },
+    };
+    let envelope = UpgradeControl {
+        approvals: vec![
+            ApprovalSigner::new(key.clone()).sign(&action, authority.members[0].generation)?,
+        ],
+        action,
+    };
+    let input = ExactInput::control(context, 1, block.block_hash(), &envelope)?;
+    let decision = Decision {
+        height: 3,
+        predecessor: decision.id()?,
+        committee: authority.id()?,
+        descriptor: input.descriptor().clone(),
+    };
+    let certified = AuthenticatedDecision::verify(
+        decision.clone(),
+        input,
+        proof(&decision, &[key], &[0], 0),
+        &authority,
+    )?;
+    certified_history::append(&conn, &certified).await?;
+    let stage = begin_stage(&service, &session, Network::Regtest, 3)
+        .await?
+        .unwrap();
+    let remaining = stage.remaining_after();
+    let outcome = control::admission::apply(&conn, 3, 3).await?;
+    stage.finish(Ok(((), outcome, remaining))).await?;
+    assert!(control::current(&conn).await?.unwrap().pending.is_none());
+    // An old closure binds its original application, not the latest control snapshot.
+    assert_eq!(closure::recover(&conn, 2).await?.stage, 2);
+    assert_eq!(completion::completed(&conn, 2).await?.height, 2);
     service.shutdown();
     Ok(())
 }

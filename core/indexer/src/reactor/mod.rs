@@ -45,6 +45,8 @@ mod transport;
 mod transport_tests;
 pub mod types;
 #[cfg(test)]
+mod upgrade_control_tests;
+#[cfg(test)]
 mod workload_tests;
 
 #[cfg(kontor_managed)]
