@@ -29,6 +29,16 @@ pub(crate) struct Baseline {
     pub(crate) context: EraContext,
 }
 
+// Match the production definition used by node admission. The second engine
+// remains qualification-only until it has a registered protocol mapping.
+pub(crate) fn consensus_is_registered(definition: [u8; 32]) -> bool {
+    #[cfg(kontor_managed)]
+    let reference = MANAGED_REFERENCE;
+    #[cfg(not(kontor_managed))]
+    let reference = CONSENSUS_REFERENCE;
+    domain_digest(b"kontor/consensus-definition/v1", reference) == definition
+}
+
 impl Baseline {
     pub(crate) fn for_node(chain: ChainId) -> Result<Self> {
         #[cfg(kontor_managed)]

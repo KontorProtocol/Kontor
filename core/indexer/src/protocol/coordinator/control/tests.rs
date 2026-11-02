@@ -536,6 +536,48 @@ fn k6_wire_and_signature_match_independent_golden_vector() {
 }
 
 #[test]
+fn k6_wire_wide_postpone_and_cancel_match_cross_language_vectors() {
+    let vector: Value = serde_json::from_str(include_str!("test-vector.json")).unwrap();
+    let state = state();
+    let target = manifest(2, state.context.protocol).id().unwrap();
+    let mut action = schedule(&state);
+    action.head = hex::decode(vector["control_id"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    action.nonce = u64::MAX;
+    action.expected_pending = Some(PlanId(
+        hex::decode(vector["action_id"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap(),
+    ));
+    action.reference_height = (1_u64 << 53) + 1;
+    action.expires_at = u64::MAX - 1;
+    for entry in vector["wide_actions"].as_array().unwrap() {
+        action.operation = match entry["kind"].as_str().unwrap() {
+            "postpone" => ControlOperation::Postpone {
+                target,
+                previous_activation: 1108,
+                activation: u64::MAX,
+            },
+            "cancel" => ControlOperation::Cancel {
+                target,
+                activation: 1108,
+            },
+            kind => panic!("unknown vector kind {kind}"),
+        };
+        let bytes = action.encode().unwrap();
+        assert_eq!(hex::encode(&bytes), entry["action_hex"].as_str().unwrap());
+        assert_eq!(
+            hex::encode(action.id().unwrap()),
+            entry["action_id"].as_str().unwrap()
+        );
+        assert_eq!(ControlAction::decode(&bytes).unwrap(), action);
+    }
+}
+
+#[test]
 fn accepted_schedule_does_not_reauthorize_after_committee_change() {
     let original = state();
     let committee = make_committee(&original, &[(1, 5), (2, 1)]);

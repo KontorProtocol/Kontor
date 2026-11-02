@@ -102,9 +102,23 @@ An attempted migration failure produces a report and a nonzero CLI exit status.
 Invalid files or an unusable source snapshot fail before execution.
 
 Success means only that this migration succeeded against this snapshot. It does
-not verify consensus implementation support, authorize scheduling, predict future
+not qualify the consensus engine, authorize scheduling, predict future
 state, or guarantee activation. Retain the report with its inputs and rerun it near
 activation. There is no background rehearsal service or automatic approval.
+
+`target_support` lists the exact executor and consensus definition IDs and whether
+this binary has production registrations for them. A linked qualification-only
+engine is not reported as registered. `migration_registered` is `true` or `false`
+only when the attempt establishes the executor's recognition of that exact
+definition; `null` means it could not establish this. A migration may succeed
+while the target consensus definition is unregistered. This is still only a
+migration result, not a ready-to-activate verdict.
+
+Keep `rehearsal.json` as the operator's last-rehearsal record. Check its exact
+manifest/definition IDs, source protocol and era, decision, Bitcoin hash,
+application ordinal, lineage and checkpoint when comparing it with later state.
+A report for different inputs does not establish success for the current inputs.
+The node does not import this file as trusted state or automatically refresh it.
 
 ## Approve the exact action
 

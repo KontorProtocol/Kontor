@@ -13,9 +13,12 @@ use crate::database::canonical_history::{self, HistoryState};
 use crate::database::certified_history::{self, Status, completion, control};
 use crate::database::init::load_extensions;
 use crate::database::queries::get_checkpoint_latest;
+use crate::protocol::coordinator::baseline::consensus_is_registered;
 use crate::protocol::coordinator::linked::session_factory_for_definition;
 use crate::protocol::coordinator::manifest::ProtocolManifest;
-use crate::protocol::coordinator::migration::{self, MigrationAttemptWork, MigrationRequest};
+use crate::protocol::coordinator::migration::{
+    self, MigrationAttemptWork, MigrationRejected, MigrationRequest,
+};
 use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
 use crate::protocol::identity::{ExecutionIdentity, MigrationDefinition, PlanId, domain_digest};
 use crate::protocol::migration_work::MigrationWork;
@@ -65,6 +68,16 @@ impl From<MigrationWork> for WorkReport {
 }
 
 #[derive(Debug, Serialize)]
+pub struct TargetSupport {
+    pub execution_definition_id: String,
+    pub consensus_definition_id: String,
+    pub executor_registered: bool,
+    pub consensus_registered: bool,
+    /// None means the attempt did not establish whether the routine is registered.
+    pub migration_registered: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RehearsalReport {
     pub scope: &'static str,
     pub authorizes_upgrade: bool,
@@ -80,6 +93,7 @@ pub struct RehearsalReport {
     pub bitcoin_hash: String,
     pub checkpoint: Option<String>,
     pub target_protocol_id: String,
+    pub target_support: TargetSupport,
     pub target_manifest_hex: String,
     pub migration_definition_id: String,
     pub migration_definition_hex: String,
@@ -202,6 +216,13 @@ async fn rehearse(
         bitcoin_hash: BlockHash::from_byte_array(closed.bitcoin_hash).to_string(),
         checkpoint: checkpoint.map(hex::encode),
         target_protocol_id: hex::encode(target.id()?.0),
+        target_support: TargetSupport {
+            execution_definition_id: hex::encode(target.executor.0),
+            consensus_definition_id: hex::encode(target.consensus),
+            executor_registered: false,
+            consensus_registered: consensus_is_registered(target.consensus),
+            migration_registered: None,
+        },
         target_manifest_hex: hex::encode(target.encode()?),
         migration_definition_id: hex::encode(definition.id()?.0),
         migration_definition_hex: hex::encode(definition.encode()?),
@@ -218,6 +239,7 @@ async fn rehearse(
             return Ok(report);
         }
     };
+    report.target_support.executor_registered = true;
     let service = OwnerService::new();
     let result = async {
         let executor = factory(conn.clone()).await?;
@@ -254,6 +276,7 @@ async fn rehearse(
     .await;
     match result {
         Ok(receipt) => {
+            report.target_support.migration_registered = Some(true);
             report.work_consumed = receipt.work.into();
             match receipt.application.lineage() {
                 Ok(lineage) => {
@@ -264,6 +287,13 @@ async fn rehearse(
             }
         }
         Err(error) => {
+            report.target_support.migration_registered = match error
+                .downcast_ref::<MigrationRejected>()
+            {
+                Some(MigrationRejected::UnknownDefinition) => Some(false),
+                Some(MigrationRejected::Budget | MigrationRejected::InvalidOperation) => Some(true),
+                _ => None,
+            };
             if let Some(work) = error.downcast_ref::<MigrationAttemptWork>() {
                 report.work_consumed = work.0.into();
             }

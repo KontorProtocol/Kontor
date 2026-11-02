@@ -797,7 +797,8 @@ async fn migration_rehearsal_reports_real_snapshot_without_mutating_source() -> 
     let wal_path = directory.path().join("upgrade-control.db-wal");
     let wal_bytes = fs::read(&wal_path).ok();
     let target_file = directory.path().join("target.json");
-    for case in 0..3 {
+    for case in 0..4 {
+        let mut target = target.clone();
         let mut definition = migration_definition::noop(target.executor);
         if case == 1 {
             definition.routine = "not-installed".into();
@@ -805,6 +806,9 @@ async fn migration_rehearsal_reports_real_snapshot_without_mutating_source() -> 
         if case == 2 {
             target.executor = ExecutionDefinitionId([254; 32]);
             definition.execution = target.executor;
+        }
+        if case == 3 {
+            target.consensus = [253; 32];
         }
         target.migration = definition.id()?;
         fs::write(
@@ -822,7 +826,11 @@ async fn migration_rehearsal_reports_real_snapshot_without_mutating_source() -> 
         .await?;
         assert_eq!(
             report.outcome,
-            if case == 0 { "succeeded" } else { "failed" }
+            if case == 0 || case == 3 {
+                "succeeded"
+            } else {
+                "failed"
+            }
         );
         assert_eq!(report.target_protocol_id, hex::encode(target.id()?.0));
         assert_eq!(report.decision_height, before.closed_height.to_string());
@@ -832,7 +840,13 @@ async fn migration_rehearsal_reports_real_snapshot_without_mutating_source() -> 
         );
         assert_eq!(report.work_consumed.computation_steps, "0");
         assert!(!report.authorizes_upgrade);
-        if case == 0 {
+        assert_eq!(report.target_support.executor_registered, case != 2);
+        assert_eq!(report.target_support.consensus_registered, case != 3);
+        assert_eq!(
+            report.target_support.migration_registered,
+            if case == 2 { None } else { Some(case != 1) }
+        );
+        if case == 0 || case == 3 {
             assert_ne!(report.output_lineage.as_ref(), Some(&report.input_lineage));
             assert!(report.error.is_none());
         } else {

@@ -3383,3 +3383,50 @@ checked across the independently built graphs before the grouped merge. Installe
 support/last-rehearsal diagnostics, remaining committee/codec coverage, consolidated
 independent review and final K5/K6 integration/CI remain outstanding. No CI run,
 PR, merge or publication occurred for this increment.
+
+### K6 advisory support and cross-language control vectors
+
+On base `7f6d62832df273b1276444be77635a446f152be6`, rehearsal reports now
+include the target executor/consensus definition IDs, production-registration
+checks, and migration recognition when the attempt can establish it. Executor
+lookup uses the actual production factory selector. Consensus lookup uses the
+same definition as node admission; the second engine remains qualification-only
+until K7 registers its protocol mapping. Migration recognition is nullable when
+the attempt cannot establish it. No diagnostic authorizes activation or upgrades
+a linked qualification component into a production mapping.
+
+The extended real certified-state fixture passed all four cases: successful
+migration, unknown routine, unavailable executor, and successful migration with
+an unregistered consensus definition. All preserve source database and WAL bytes.
+The last case proves that migration success is not presented as complete target
+support. The four rehearsal tests passed in 17.14s. The operator retains the JSON
+report as the last-rehearsal record, with its exact target and source bindings.
+No node import, automatic refresh, readiness-expiry or persistence service was
+added. API-wide diagnostics remain in K10's integration scope.
+
+Added independent JavaScript encoding of KPM1, KUA1, KUC1 and KUS1 fixtures and
+SHA-256 domain digests. WebCrypto independently verifies the existing approval
+signature and rejects changed action and registration-generation bindings.
+Postpone/Cancel fixtures exercise optional plan identity, values beyond 2^53 and
+u64::MAX. These wide fixtures establish codec behavior, not semantically valid
+upgrade approvals at those artificial positions. Rust encodes, decodes and checks
+the same bytes and IDs. No new SDK signing or transaction-format API was added.
+
+Validation passed: 15 Rust control tests; 12 JavaScript vector/operator-client
+tests; four vector tests in local headless Chromium. The default browser command
+could not start because Playwright's expected revision1248 was absent. A temporary
+local config selected the already installed revision1243, and all four tests then
+ran and passed. Repository configuration and browser installations were unchanged.
+Raw logs and scoped source/evidence bindings are recorded in
+`.build-cache/k6-support-codec-validation.json`. The rehearsal test log predates
+the test-only vector additions, and its original binary was not retained; it is
+not represented as a current full-binary qualification. Final managed-bundle
+integration remains required.
+
+Lead review checked the production selector and baseline definition bindings,
+unknown versus missing migration recognition, advisory report semantics, wide
+integer encoding, byte order, domain separation and browser compatibility. The
+single independent review remains consolidated around completed K5/K6. No CI,
+PR, merge, publication or new Daybreak assignment occurred. Remaining K6 work is
+committee-churn integration coverage, actual linked CLI/bundle evidence, and the
+grouped review and scoped final CI campaign.
