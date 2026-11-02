@@ -5,6 +5,7 @@ use crate::upgrade_control::{
     decode_submission, prepare, snapshot,
 };
 use malachitebft_core_types::Round;
+use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
@@ -34,6 +35,9 @@ use crate::runtime::ownership::OwnerService;
 use crate::runtime::{Decimal, GenesisParameters, GenesisValidator};
 use crate::stopper::Shutdown;
 use crate::test_utils::test_genesis;
+use crate::upgrade_approval_cli::{
+    self, ApprovalOutput, UpgradeApprovalArgs, UpgradeApprovalCommand,
+};
 
 async fn open(
     directory: &Path,
@@ -492,7 +496,7 @@ async fn prepared_input(
         },
     )
     .await?;
-    let action = ControlAction::decode(&hex::decode(prepared.action_hex)?)?;
+    let action = ControlAction::decode(&hex::decode(&prepared.action_hex)?)?;
     assert_eq!(prepared.action_id, hex::encode(action.id()?));
     let frontier = certified_history::frontier(&conn).await?;
     let authority = certified_history::committee(&conn, frontier.closed_height + 1).await?;
@@ -501,10 +505,32 @@ async fn prepared_input(
         .iter()
         .find(|member| member.key == *key.public_key().as_bytes())
         .context("approval member")?;
-    let envelope = UpgradeControl {
-        approvals: vec![ApprovalSigner::new(key.clone()).sign(&action, member.generation)?],
-        action,
+    let files = TempDir::new()?;
+    let preparation = files.path().join("preparation.json");
+    let key_file = files.path().join("fixture.key");
+    fs::write(&preparation, serde_json::to_vec(&prepared)?)?;
+    fs::write(&key_file, hex::encode(key.inner().to_bytes()))?;
+    let approval = upgrade_approval_cli::run(UpgradeApprovalArgs {
+        command: UpgradeApprovalCommand::Sign {
+            preparation: preparation.clone(),
+            key_file,
+            registration_generation: hex::encode(member.generation),
+            expected_action_id: prepared.action_id,
+        },
+    })?;
+    let approval_file = files.path().join("approval.json");
+    fs::write(&approval_file, serde_json::to_vec(&approval)?)?;
+    let ApprovalOutput::Assemble(assembled) = upgrade_approval_cli::run(UpgradeApprovalArgs {
+        command: UpgradeApprovalCommand::Assemble {
+            preparation,
+            approval_files: vec![approval_file],
+        },
+    })?
+    else {
+        anyhow::bail!("expected assembled approval envelope");
     };
+    let envelope = UpgradeControl::decode(&hex::decode(&assembled.envelope_hex)?)?;
+    assert_eq!(envelope.action, action);
     Ok(ExactInput::control(
         execution.protocol_context,
         execution.last_height,

@@ -3260,3 +3260,39 @@ under K6-APPROVAL-CLI and is not yet integrated at this checkpoint. Migration
 rehearsal/support diagnostics, remaining committee coverage, the agreed pre-K7
 activation guard and consolidated K5/K6 review/qualification remain unfinished.
 No new independent review, CI, PR, merge, fork change or publication was requested.
+
+### K6 offline approval integration checkpoint (1 November 2026)
+
+Integrated Daybreak task `K6-APPROVAL-CLI`, source commit
+`7f60ac3050e1dcc8e7152a089c2abab4ee12922b`, as `2523c388` over `06499d1e`.
+The bounded delegation added inspection, explicit-hash file-based approval signing,
+and canonical assembly. Lead inspection covered the entire CLI and its tests,
+bounded file reads, exact action and registration binding, duplicate rejection,
+canonical sorting, safe key error reporting and honest offline verification status.
+The shared `Approval::verify_for` helper preserves the previous signature preimage
+and consensus verifier ordering; committee membership and generation checks still
+precede signature verification. The delegated work remains included in the eventual
+single independent K5/K6 review rather than receiving a separate microreview.
+
+The node executable now exposes `kontor upgrade-approval inspect|sign|assemble`.
+The real preparation/reorg test now uses the CLI's public file-based sign and
+assemble interface for Schedule, Postpone, Cancel and fresh retry. It passed in
+42.43s, including both rollback restorations, rejection of stale consent and fresh
+postponement. The six CLI and 14 authorization tests also passed on the integrated
+test binary. The executable built successfully and a five-command smoke check
+matched the independent golden action/signature/envelope, rejected the wrong
+expected action ID before reading a missing key, and required the expected-ID
+argument. Formatting and diff checks passed. Existing compiler warnings remain.
+
+Evidence is in `.build-cache/k6-cli-integration-validation.json`, the reorg and
+focused-test logs, `.build-cache/k6-cli-main-build.log` and
+`.build-cache/k6-cli-executable-smoke.json`. The focused checks use the ordinary
+local build, not a rebuilt managed independent-bundle node or live multi-validator
+quorum. The [operator workflow](upgrade-approvals.md) documents preparation,
+inspection, explicit approval, assembly, submission and fresh authorization after
+rollback, including the API result wrapper and exact submission object.
+
+K6 still needs migration rehearsal/support diagnostics with failure work accounting,
+the agreed scheduled-height guard, remaining committee and cross-language codec
+coverage, and consolidated K5/K6 qualification and review. K7/K8 activation and
+migration handoff remain subsequent work. No CI, PR, merge or publication occurred.

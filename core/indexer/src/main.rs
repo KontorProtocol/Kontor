@@ -24,6 +24,7 @@ use indexer::protocol_qualification;
 use indexer::receipt_stream_rotation::{self, ReceiptStreamRotationArgs};
 use indexer::runtime::GenesisParameters;
 use indexer::stopper::{self, Shutdown};
+use indexer::upgrade_approval_cli::{self, UpgradeApprovalArgs};
 use indexer::{api, built_info, reactor, reg_tester, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, logging};
 use indexer_types::{Inst, InstKind};
@@ -60,6 +61,8 @@ enum Command {
     Run(Box<Config>),
     /// Generate validator keys deterministically from a master seed.
     Keygen(KeygenArgs),
+    /// Inspect, sign or assemble an exact upgrade action offline.
+    UpgradeApproval(UpgradeApprovalArgs),
     /// Recover confirmation positions from one verified canonical raw block.
     BackfillConfirmations(ConfirmationBackfillArgs),
     /// Invalidate receipt resume tokens after restoring a node database backup.
@@ -89,6 +92,11 @@ async fn main() -> Result<()> {
         Command::Build(args) => build(args),
         Command::Run(config) => run_daemon(*config).await,
         Command::Keygen(args) => keygen::run(args),
+        Command::UpgradeApproval(args) => {
+            let result = upgrade_approval_cli::run(args)?;
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
         Command::BackfillConfirmations(args) => {
             let result = confirmation_backfill::run(args).await?;
             println!("{}", serde_json::to_string(&result)?);
