@@ -13,6 +13,10 @@ class ManagedDefinitionTests(unittest.TestCase):
         node, node_lock = test_coordinator_definition.CoordinatorDefinitionTests().fixture(root)
         for name in (*BUILD_INPUTS, GRAPH, 'protocol-bundles/consensus/lib.rs',
                      'core/indexer/src/protocol/migration_work.rs',
+                     'core/indexer/src/protocol/coordinator/certified_decision.rs',
+                     'core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs',
+                     'core/indexer/src/protocol/coordinator/control.rs',
+                     'core/indexer/src/protocol/coordinator/manifest.rs',
                      'core/indexer/src/protocol/coordinator/certified_input.rs'):
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,6 +77,8 @@ class ManagedDefinitionTests(unittest.TestCase):
             destination.with_name('second.json').write_text('unregistered successor')
             self.assertEqual(original, reference(root, *inputs))
             for name in (*BUILD_INPUTS, GRAPH, 'protocol-bundles/consensus/lib.rs',
+                         'core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs',
+                         'core/indexer/src/protocol/coordinator/control.rs',
                          'core/indexer/src/protocol/coordinator/certified_input.rs'):
                 with self.subTest(name=name):
                     path = root / name

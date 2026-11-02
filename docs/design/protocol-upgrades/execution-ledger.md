@@ -3504,3 +3504,25 @@ not invent it on budget failure. Lead review checked the typed conversion,
 unchanged successful receipts and error tags, absence versus zero in diagnostics,
 and preservation of old sources. Actual managed build/runtime evidence is pending;
 consolidated independent review and grouped CI/merge are still required.
+
+### K6 independent consensus build integration
+
+The combined build exposed missing shared control-decoding dependencies in the
+consensus graphs. The graph now imports the control, manifest and certificate
+authority modules, declares the already-locked `thiserror` dependency directly,
+and uses explicit child-module paths that resolve both in the node and through
+the independent graph's `#[path]` imports. Source provenance includes those
+modules and their children, including the certificate verifier and test vector;
+the process-ownership tripwire also scans imported child modules. The tripwire
+recognizes `Command::Control` as an enum variant, preserving its rejection of
+process-launch calls.
+
+On base `ae91fc03`, 12 consensus-input, six executor-input, five managed-definition
+and ten execution-definition tooling tests passed. Existing mutation checks now
+cover the imported child module and control fixture. An initial managed-definition
+fixture omitted the new imports and failed; its corrected fixture passes, and the
+failure log is retained. The previous linked build and source-inventory failures
+remain recorded, not accepted as qualification. The unreleased managed definition
+was regenerated after its source inventory and dependency graph changed; frozen
+executor snapshots remain unchanged. The next acceptance step is the actual
+combined build and runtime, followed by the group's consolidated review and CI.

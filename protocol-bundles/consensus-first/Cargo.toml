@@ -23,6 +23,7 @@ prost = { version = "=0.13.5" }
 serde = { version = "=1.0.229", default-features = false, features = ["alloc", "derive", "rc"] }
 sha2 = "=0.11.1"
 sha3 = { version = "=0.12.0" }
+thiserror = "=2.0.21"
 tokio = { version = "=1.53.3", features = ["full"] }
 async-trait = { version = "=0.1.92" }
 malachitebft-app-channel = { package = "arc-malachitebft-app-channel", git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1" }

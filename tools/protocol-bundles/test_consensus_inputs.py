@@ -75,6 +75,8 @@ class ConsensusInputs(unittest.TestCase):
             for relative in re.findall(r'#\[path\s*=\s*"([^"]+)"\]', source.read_text()):
                 self.assertIn(str((source.parent / relative).resolve().relative_to(ROOT)), inventory)
         self.assertIn("core/indexer/proto/consensus/v1/consensus.proto", inventory)
+        self.assertIn("core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs", inventory)
+        self.assertIn("core/indexer/src/protocol/coordinator/control/test-vector.json", inventory)
         self.assertNotIn("core/indexer/src/protocol/v1/engine.rs", repository_sources(ROOT, "consensus"))
 
     def test_external_source_edits_invalidate_inventory(self):
@@ -87,6 +89,8 @@ class ConsensusInputs(unittest.TestCase):
             before = fingerprint(consensus_sources(root))
             for relative in ("protocol-bundles/consensus/owner.rs", "core/indexer/src/consensus/value.rs",
                              "core/indexer/src/protocol/coordinator/certified_input.rs",
+                             "core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs",
+                             "core/indexer/src/protocol/coordinator/control/test-vector.json",
                              "core/indexer/proto/consensus/v1/sync.proto"):
                 path = root / relative
                 original = path.read_bytes()
@@ -103,6 +107,7 @@ class ConsensusInputs(unittest.TestCase):
         paths = {item["path"] for item in result["maintained_sources"]}
         self.assertIn(str(ROOT / "protocol-bundles/consensus/owner.rs"), paths)
         self.assertIn(str(ROOT / "core/indexer/src/consensus/codec.rs"), paths)
+        self.assertIn(str(ROOT / "core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs"), paths)
 
     def test_process_tripwire_distinguishes_enum_variants_and_read_only_pid(self):
         for source in ("Command::Block { height }", "Command :: Batch { anchor }", "Command::Control { anchor }", "std::process:: id()"):

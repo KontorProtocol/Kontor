@@ -45,14 +45,15 @@ def check(root, metadata, *, kind="proof"):
     elif kind == "consensus":
         paths.update(root / relative for relative in consensus_sources(root) if relative.endswith(".rs"))
         # These node adapters are inventoried for provenance but are not part
-        # of the bundle. Only the explicitly imported production types compile.
+        # of the bundle. Include imported types and their child modules.
         shared = root / "protocol-bundles/consensus"
         imported = set()
         for source in shared.rglob("*.rs"):
             for relative in re.findall(r'#\[path\s*=\s*"([^"]+)"\]', source.read_text()):
                 imported.add((source.parent / relative).resolve())
         paths = {path for path in paths if not path.is_relative_to(root / "core/indexer")
-                 or path.resolve() in imported}
+                 or path.resolve() in imported
+                 or any(path.resolve().is_relative_to(source.with_suffix("")) for source in imported)}
     else:
         for relative in RETAINED_TREES:
             paths.update((root / relative).rglob("*.rs"))

@@ -608,4 +608,5 @@ fn validate_notice(activation: u64, inclusion_bitcoin_height: u64) -> Result<(),
 }
 
 #[cfg(test)]
+#[path = "control/tests.rs"]
 mod tests;
