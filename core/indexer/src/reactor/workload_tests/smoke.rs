@@ -1,3 +1,4 @@
+use crate::reactor::engine::ValidatorStart;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -168,6 +169,7 @@ async fn reactor(
             persistent_peers: Vec::new(),
             data_dir: directory.to_path_buf(),
             consensus_enabled: false,
+            validator_start: ValidatorStart::Resume,
             discovery: Default::default(),
         },
         &mut runtime,

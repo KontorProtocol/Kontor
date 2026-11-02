@@ -40,6 +40,78 @@ use crate::stopper::Shutdown;
 use crate::test_utils::test_genesis;
 
 #[tokio::test]
+async fn closed_height_rejects_late_round_and_proposal_requests() -> Result<()> {
+    let key = PrivateKey::from([17; 32]);
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".into(),
+        ed25519_pubkey: key.public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100.9999999"),
+    }]);
+    let dir = TempDir::new()?;
+    let mut reactor = certified_fixture::reactor(dir.path(), &genesis, key.clone(), 1).await?;
+    let height = Height::new(1);
+    let round = Round::new(0);
+    let value = Value::from_input(
+        certified_fixture::empty_block(1).exact_input(reactor.consensus.protocol_context)?,
+    )?;
+    let proof = certified_fixture::certificate(&key, &value, height, round);
+    certified_fixture::proposal(&mut reactor, value, height, round);
+    let (reply, ack) = oneshot::channel();
+    reactor
+        .consensus
+        .receive_decision(&reactor.db_conn(), proof.clone(), reply)
+        .await?;
+    ack.await?;
+    reactor.advance().await?;
+    assert_eq!(reactor.consensus.current_height, height);
+    assert!(reactor.consensus.pending_next_height.is_none());
+
+    let (reply_value, received) = oneshot::channel();
+    reactor
+        .handle_consensus_msg(AppMsg::StartedRound {
+            height,
+            round: Round::new(10),
+            proposer: reactor.consensus.address,
+            role: Role::Validator,
+            reply_value,
+        })
+        .await?;
+    assert!(received.await?.is_empty());
+    assert_ne!(reactor.consensus.current_round, Round::new(10));
+    let (reply, received) = oneshot::channel();
+    reactor
+        .handle_get_value(height, round, Duration::from_secs(1), reply)
+        .await?;
+    assert!(received.await.is_err());
+    assert!(reactor.consensus.pending_proposal.is_none());
+
+    let (reply, next) = oneshot::channel();
+    reactor.handle_finalized(proof, reply).await?;
+    reactor.advance().await?;
+    assert!(matches!(next.await?, Next::Start(h, _) if h == Height::new(2)));
+    let (reply_value, received) = oneshot::channel();
+    reactor
+        .handle_consensus_msg(AppMsg::StartedRound {
+            height,
+            round: Round::new(11),
+            proposer: reactor.consensus.address,
+            role: Role::Validator,
+            reply_value,
+        })
+        .await?;
+    assert!(received.await?.is_empty());
+    assert_eq!(reactor.consensus.current_height, Height::new(2));
+    assert!(
+        reactor
+            .consensus
+            .engine
+            .stop(Duration::from_secs(5))
+            .await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn next_height_uses_executed_stake_and_preserves_early_proposals() -> Result<()> {
     for deferred in [false, true] {
         for before_finalized in [false, true] {

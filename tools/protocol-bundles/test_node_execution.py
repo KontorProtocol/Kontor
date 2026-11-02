@@ -9,6 +9,8 @@ import unittest
 from build import ROOT, digest
 from qualify_node import CASES, CERTIFIED_CHECKS, execute_node, verify_certified_history, verify_managed_startup, verify_executor_observations, execute_transition, execute_recovery, execute_authorization
 from test_semantic_baseline import sample_observation
+from qualify_node import execute_join
+from test_transition_evidence import join_sample
 from test_transition_evidence import transition_sample, recovery_sample, authorization_sample
 
 
@@ -20,7 +22,7 @@ def certified_sample(link_set="k4-node"):
                      if link_set == 'managed-node' else 'protocol-bundles/executor-observer/definition.bin')
     executor = hashed(b'kontor/execution-definition/v1', (ROOT / executor_path).read_bytes())
     chain = bytes([7]) * 32
-    consensus_path = ('core/indexer/src/protocol/coordinator/managed/definitions/first.json'
+    consensus_path = ('core/indexer/src/protocol/coordinator/consensus-rules-v1.json'
                       if link_set == 'managed-node' else
                       'core/indexer/src/protocol/coordinator/baseline/consensus.json')
     consensus = bytes.fromhex(hashed(b'kontor/consensus-definition/v1', (ROOT / consensus_path).read_bytes()))
@@ -40,6 +42,18 @@ def managed_sample(history):
 
 
 class NodeExecution(unittest.TestCase):
+    def test_join_process_failure_cannot_pass_with_valid_output(self):
+        sample = join_sample()
+        for code in (0, 1):
+            self.binary.write_text(f'#!{sys.executable}\nimport sys\nassert sys.argv[1:] == ["qualify-protocol-transition", "--join"]\nprint({json.dumps(sample)!r})\nsys.exit({code})\n')
+            self.binary.chmod(0o755)
+            if code:
+                with self.assertRaisesRegex(RuntimeError, 'node join failed'):
+                    execute_join(self.binary, self.root)
+            else:
+                result = execute_join(self.binary, self.root)
+                self.assertEqual(result['stdout_sha256'], digest(self.root / 'node-join.stdout.json'))
+
     def test_managed_genesis_rejects_observer_as_p1_even_with_consistent_hashes(self):
         sample = certified_sample('managed-node')
         manifest = bytearray.fromhex(sample['manifest'])

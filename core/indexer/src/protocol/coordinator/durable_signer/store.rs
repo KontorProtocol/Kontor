@@ -8,12 +8,12 @@ use malachitebft_signing_ed25519::{PrivateKey, Signature};
 use sha3::{Digest, Keccak256};
 
 use crate::protocol::canonical_codec::{Decoder, Encoder};
-use crate::protocol::coordinator::certified_input::EraContext;
+use crate::protocol::coordinator::certified_input::{Descriptor, EraContext};
 use crate::protocol::identity::{ChainId, ProtocolId};
 
 use super::{MAX_SIGNING_PREIMAGE_BYTES, SignerIdentity, SigningError};
 
-const MAGIC: &[u8; 4] = b"KDS1";
+const MAGIC: &[u8; 4] = b"KDS2";
 const MAX_RECORD_BYTES: usize = 4096;
 // Journal header: magic || chain[32] || validator[32]. Each frame is u32_be(payload length)
 // || canonical_codec payload || Keccak256(previous frame hash || length || payload), seeded at zero.
@@ -67,6 +67,24 @@ pub(super) struct ValidatedRequest {
     pub(super) preimage: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HeightAuthorization {
+    pub(crate) generation: u64,
+    pub(crate) height: u64,
+    pub(crate) context: EraContext,
+    pub(crate) committee: [u8; 32],
+    pub(crate) predecessor_decision: [u8; 32],
+    pub(crate) completed_closure: [u8; 32],
+    pub(crate) member: bool,
+    pub(crate) reconciled: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RetainedSignerRecovery {
+    pub(crate) highest_signed_height: Option<u64>,
+    pub(crate) latest_authorization: Option<HeightAuthorization>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum SlotKey {
     Consensus(u64, u32, EntryRole),
@@ -75,6 +93,7 @@ enum SlotKey {
 
 #[derive(Clone)]
 struct SignedRecord {
+    context: EraContext,
     preimage_digest: [u8; 32],
     preimage_length: usize,
     commitment: Option<Vec<u8>>,
@@ -87,6 +106,9 @@ struct Inner {
     identity: SignerIdentity,
     fenced: bool,
     maximum: Option<(u64, u32)>,
+    authorization: Option<HeightAuthorization>,
+    active_authorization: bool,
+    authorization_call_seen: bool,
     slots: BTreeMap<SlotKey, SignedRecord>,
     proposal_commitments: BTreeMap<(u64, u32), Vec<u8>>,
     fault: Option<String>,
@@ -168,83 +190,14 @@ impl Store {
             identity: requested.clone(),
             fenced: false,
             maximum: None,
+            authorization: None,
+            active_authorization: false,
+            authorization_call_seen: false,
             slots: BTreeMap::new(),
             proposal_commitments: BTreeMap::new(),
             fault: None,
         };
-        let mut current: Option<SignerIdentity> = None;
-        while let Some(payload) = inner.read_record()? {
-            let mut input = Decoder::new(&payload);
-            match input.tag().map_err(codec)? {
-                1 => {
-                    let identity = decode_identity(&mut input)?;
-                    input.finish().map_err(codec)?;
-                    if identity.generation == 0
-                        || identity.network_peer_id.is_empty()
-                        || identity.network_peer_id.len() > 256
-                        || identity.context.chain.0 != chain
-                        || current
-                            .as_ref()
-                            .is_some_and(|last| identity.generation <= last.generation)
-                    {
-                        return Err(corrupt("signing generation did not advance"));
-                    }
-                    current = Some(identity);
-                    inner.fenced = false;
-                }
-                2 => {
-                    let generation = input.u64().map_err(codec)?;
-                    input.finish().map_err(codec)?;
-                    if current.as_ref().map(|value| value.generation) != Some(generation)
-                        || inner.fenced
-                    {
-                        return Err(corrupt("invalid generation fence"));
-                    }
-                    inner.fenced = true;
-                }
-                3 => {
-                    let active = current
-                        .as_ref()
-                        .ok_or_else(|| corrupt("sign before open"))?;
-                    if inner.fenced {
-                        return Err(corrupt("sign after generation fence"));
-                    }
-                    let generation = input.u64().map_err(codec)?;
-                    let context = decode_context(&mut input)?;
-                    let height = input.u64().map_err(codec)?;
-                    let round = u32::from_be_bytes(input.fixed().map_err(codec)?);
-                    let role = EntryRole::from_tag(input.tag().map_err(codec)?)?;
-                    let peer_id = input.bytes().map_err(codec)?.to_vec();
-                    let commitment_bytes = input.bytes().map_err(codec)?.to_vec();
-                    let preimage_length = usize::try_from(input.u64().map_err(codec)?)
-                        .ok()
-                        .filter(|length| *length <= MAX_SIGNING_PREIMAGE_BYTES)
-                        .ok_or_else(|| corrupt("signing message length invalid"))?;
-                    let preimage_digest: [u8; 32] = input.fixed().map_err(codec)?;
-                    let signature: [u8; 64] = input.fixed().map_err(codec)?;
-                    input.finish().map_err(codec)?;
-                    if generation != active.generation
-                        || context != active.context
-                        || (role == EntryRole::ValidatorProof && peer_id != active.network_peer_id)
-                    {
-                        return Err(corrupt("signing record context differs"));
-                    }
-                    let commitment = (!commitment_bytes.is_empty()).then_some(commitment_bytes);
-                    let request = ValidatedRequest {
-                        generation,
-                        height,
-                        round,
-                        role,
-                        commitment,
-                        preimage: Vec::new(),
-                    };
-                    let slot = request.slot(&peer_id)?;
-                    inner.admit(&request, &slot)?;
-                    inner.record(slot, request, signature, preimage_digest, preimage_length);
-                }
-                _ => return Err(corrupt("unknown signer journal record")),
-            }
-        }
+        let current = inner.replay(chain, |_| Ok(()))?;
         if current.is_none() && !created {
             return Err(corrupt("existing signer journal has no generation record"));
         }
@@ -273,6 +226,71 @@ impl Store {
         })
     }
 
+    pub(super) fn inspect_existing(
+        directory: &Path,
+        chain: ChainId,
+        validator: [u8; 32],
+        validate_identity: impl Fn(&SignerIdentity) -> Result<(), SigningError>,
+    ) -> Result<RetainedSignerRecovery, SigningError> {
+        if !fs::symlink_metadata(directory)
+            .map_err(storage)?
+            .file_type()
+            .is_dir()
+        {
+            return Err(corrupt("signer directory is not a plain directory"));
+        }
+        let lock_path = directory.join("owner.lock");
+        let journal_path = directory.join("signatures.log");
+        for path in [&lock_path, &journal_path] {
+            if !fs::symlink_metadata(path)
+                .map_err(storage)?
+                .file_type()
+                .is_file()
+            {
+                return Err(corrupt("signer lock or journal is not a plain file"));
+            }
+        }
+        let ownership = File::open(&lock_path).map_err(storage)?;
+        ownership
+            .try_lock()
+            .map_err(|error| SigningError::Storage(error.to_string()))?;
+        let mut journal = File::open(&journal_path).map_err(storage)?;
+        let mut header = [0; 68];
+        journal.read_exact(&mut header).map_err(storage)?;
+        if &header[..4] != MAGIC || header[4..36] != chain.0 || header[36..68] != validator {
+            return Err(corrupt("signer journal chain or validator differs"));
+        }
+        let mut inner = Inner {
+            journal,
+            digest: [0; 32],
+            identity: SignerIdentity {
+                context: EraContext {
+                    chain,
+                    era: [0; 32],
+                    protocol: ProtocolId([0; 32]),
+                    codec: 0,
+                },
+                generation: 0,
+                network_peer_id: Vec::new(),
+            },
+            fenced: false,
+            maximum: None,
+            authorization: None,
+            active_authorization: false,
+            authorization_call_seen: false,
+            slots: BTreeMap::new(),
+            proposal_commitments: BTreeMap::new(),
+            fault: None,
+        };
+        if inner.replay(chain.0, validate_identity)?.is_none() {
+            return Err(corrupt("existing signer journal has no generation record"));
+        }
+        Ok(RetainedSignerRecovery {
+            highest_signed_height: inner.maximum.map(|(height, _)| height),
+            latest_authorization: inner.authorization,
+        })
+    }
+
     pub(super) fn sign(&self, request: ValidatedRequest) -> Result<[u8; 64], SigningError> {
         let mut inner = self
             .inner
@@ -292,6 +310,7 @@ impl Store {
         let slot = request.slot(peer_id)?;
         let request_digest = message_digest(&request.preimage);
         if let Some(previous) = inner.slots.get(&slot) {
+            check_descriptor_context(&request, previous.context)?;
             let identical = previous.preimage_length == request.preimage.len()
                 && previous.preimage_digest == request_digest
                 && previous.commitment == request.commitment;
@@ -311,16 +330,70 @@ impl Store {
             }
             return Ok(signature);
         }
+        if request.role != EntryRole::ValidatorProof {
+            inner.check_new_signing_height(&request)?;
+        }
+        let context = if request.role == EntryRole::ValidatorProof {
+            inner.identity.context
+        } else {
+            inner.authorization.expect("checked signing height").context
+        };
+        check_descriptor_context(&request, context)?;
         inner.admit(&request, &slot)?;
         let signature = self.key.sign(&request.preimage).to_bytes();
-        let payload = encode_sign(&inner.identity, &request, &slot, &signature, request_digest)?;
+        let payload = encode_sign(context, &request, &slot, &signature, request_digest)?;
         if let Err(error) = inner.append(&payload) {
             inner.fault = Some(error.to_string());
             return Err(error);
         }
         let preimage_length = request.preimage.len();
-        inner.record(slot, request, signature, request_digest, preimage_length);
+        inner.record(
+            slot,
+            request,
+            context,
+            signature,
+            request_digest,
+            preimage_length,
+        );
         Ok(signature)
+    }
+
+    pub(super) fn authorize_height(
+        &self,
+        mut authorization: HeightAuthorization,
+    ) -> Result<(), SigningError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| SigningError::Fault("signer lock poisoned".into()))?;
+        inner.available(authorization.generation)?;
+        // The caller verifies certified history before the first authorization after open.
+        // Persist the gap marker so replay can distinguish recovery from a skipped live height.
+        authorization.reconciled = match inner.authorization {
+            Some(previous)
+                if authorization.height == previous.height
+                    && authorization.generation == previous.generation =>
+            {
+                previous.reconciled
+            }
+            Some(previous) => {
+                authorization.height > previous.height
+                    && previous.height.checked_add(1) != Some(authorization.height)
+            }
+            None => false,
+        };
+        let append = inner.check_authorization(&authorization, &inner.identity, false)?;
+        if append {
+            let payload = encode_authorization(authorization)?;
+            if let Err(error) = inner.append(&payload) {
+                inner.fault = Some(error.to_string());
+                return Err(error);
+            }
+            inner.authorization = Some(authorization);
+        }
+        inner.active_authorization = true;
+        inner.authorization_call_seen = true;
+        Ok(())
     }
 
     pub(super) fn fence_generation(&self, generation: u64) -> Result<(), SigningError> {
@@ -373,6 +446,202 @@ impl ValidatedRequest {
 }
 
 impl Inner {
+    fn replay(
+        &mut self,
+        chain: [u8; 32],
+        validate_identity: impl Fn(&SignerIdentity) -> Result<(), SigningError>,
+    ) -> Result<Option<SignerIdentity>, SigningError> {
+        let mut current: Option<SignerIdentity> = None;
+        while let Some(payload) = self.read_record()? {
+            let mut input = Decoder::new(&payload);
+            match input.tag().map_err(codec)? {
+                1 => {
+                    let identity = decode_identity(&mut input)?;
+                    input.finish().map_err(codec)?;
+                    if identity.generation == 0
+                        || identity.network_peer_id.is_empty()
+                        || identity.network_peer_id.len() > 256
+                        || identity.context.chain.0 != chain
+                        || current
+                            .as_ref()
+                            .is_some_and(|last| identity.generation <= last.generation)
+                    {
+                        return Err(corrupt("signing generation did not advance"));
+                    }
+                    validate_identity(&identity)?;
+                    current = Some(identity);
+                    self.fenced = false;
+                }
+                2 => {
+                    let generation = input.u64().map_err(codec)?;
+                    input.finish().map_err(codec)?;
+                    if current.as_ref().map(|value| value.generation) != Some(generation)
+                        || self.fenced
+                    {
+                        return Err(corrupt("invalid generation fence"));
+                    }
+                    self.fenced = true;
+                }
+                3 => {
+                    let active = current
+                        .as_ref()
+                        .ok_or_else(|| corrupt("sign before open"))?;
+                    if self.fenced {
+                        return Err(corrupt("sign after generation fence"));
+                    }
+                    let generation = input.u64().map_err(codec)?;
+                    let context = decode_context(&mut input)?;
+                    let height = input.u64().map_err(codec)?;
+                    let round = u32::from_be_bytes(input.fixed().map_err(codec)?);
+                    let role = EntryRole::from_tag(input.tag().map_err(codec)?)?;
+                    let peer_id = input.bytes().map_err(codec)?.to_vec();
+                    let commitment_bytes = input.bytes().map_err(codec)?.to_vec();
+                    let preimage_length = usize::try_from(input.u64().map_err(codec)?)
+                        .ok()
+                        .filter(|length| *length <= MAX_SIGNING_PREIMAGE_BYTES)
+                        .ok_or_else(|| corrupt("signing message length invalid"))?;
+                    let preimage_digest: [u8; 32] = input.fixed().map_err(codec)?;
+                    let signature: [u8; 64] = input.fixed().map_err(codec)?;
+                    input.finish().map_err(codec)?;
+                    if generation != active.generation
+                        || context.chain != active.context.chain
+                        || (role == EntryRole::ValidatorProof && context != active.context)
+                        || (role == EntryRole::ValidatorProof && peer_id != active.network_peer_id)
+                    {
+                        return Err(corrupt("signing record context differs"));
+                    }
+                    if role != EntryRole::ValidatorProof
+                        && !self.authorization.is_some_and(|authorization| {
+                            authorization.generation == generation
+                                && authorization.height == height
+                                && authorization.context == context
+                                && authorization.member
+                        })
+                    {
+                        return Err(corrupt("consensus sign lacks height authorization"));
+                    }
+                    let commitment = (!commitment_bytes.is_empty()).then_some(commitment_bytes);
+                    let request = ValidatedRequest {
+                        generation,
+                        height,
+                        round,
+                        role,
+                        commitment,
+                        preimage: Vec::new(),
+                    };
+                    check_descriptor_context(&request, context)
+                        .map_err(|_| corrupt("proposal descriptor authorization differs"))?;
+                    let slot = request.slot(&peer_id)?;
+                    self.admit(&request, &slot)?;
+                    self.record(
+                        slot,
+                        request,
+                        context,
+                        signature,
+                        preimage_digest,
+                        preimage_length,
+                    );
+                }
+                4 => {
+                    let active = current
+                        .as_ref()
+                        .ok_or_else(|| corrupt("authorization before open"))?;
+                    if self.fenced {
+                        return Err(corrupt("authorization after generation fence"));
+                    }
+                    let authorization = decode_authorization(&mut input)?;
+                    input.finish().map_err(codec)?;
+                    self.check_authorization(&authorization, active, true)
+                        .map_err(|_| corrupt("conflicting or regressing height authorization"))?;
+                    self.authorization = Some(authorization);
+                }
+                _ => return Err(corrupt("unknown signer journal record")),
+            }
+        }
+        Ok(current)
+    }
+
+    fn check_authorization(
+        &self,
+        authorization: &HeightAuthorization,
+        identity: &SignerIdentity,
+        replay: bool,
+    ) -> Result<bool, SigningError> {
+        if authorization.height == 0
+            || authorization.generation != identity.generation
+            || authorization.context.chain != identity.context.chain
+            || authorization.completed_closure == [0; 32]
+        {
+            return Err(SigningError::InvalidRequest(
+                "height authorization identity differs".into(),
+            ));
+        }
+        match self.authorization {
+            Some(previous) if authorization.height < previous.height => Err(SigningError::Stale),
+            Some(previous) if authorization.height == previous.height => {
+                if authorization.context != previous.context
+                    || authorization.committee != previous.committee
+                    || authorization.predecessor_decision != previous.predecessor_decision
+                    || authorization.completed_closure != previous.completed_closure
+                    || authorization.member != previous.member
+                {
+                    Err(SigningError::Conflict)
+                } else if authorization.generation < previous.generation {
+                    Err(SigningError::Stale)
+                } else if authorization.generation == previous.generation {
+                    if authorization.reconciled != previous.reconciled {
+                        Err(SigningError::Conflict)
+                    } else {
+                        Ok(false)
+                    }
+                } else if authorization.reconciled {
+                    Err(SigningError::Conflict)
+                } else {
+                    Ok(true)
+                }
+            }
+            Some(previous) if authorization.generation < previous.generation => {
+                Err(SigningError::Stale)
+            }
+            Some(previous) if previous.height.checked_add(1) == Some(authorization.height) => {
+                if authorization.reconciled {
+                    Err(SigningError::InvalidRequest(
+                        "consecutive height marked reconciled".into(),
+                    ))
+                } else {
+                    Ok(true)
+                }
+            }
+            Some(_) if authorization.reconciled && (replay || !self.authorization_call_seen) => {
+                Ok(true)
+            }
+            Some(_) => Err(SigningError::Stale),
+            None if authorization.reconciled => Err(SigningError::InvalidRequest(
+                "initial height cannot be marked reconciled".into(),
+            )),
+            None => Ok(true),
+        }
+    }
+
+    fn check_new_signing_height(&self, request: &ValidatedRequest) -> Result<(), SigningError> {
+        match self.authorization {
+            Some(authorization) if request.height < authorization.height => {
+                Err(SigningError::Stale)
+            }
+            Some(authorization)
+                if request.height == authorization.height
+                    && authorization.generation == request.generation
+                    && authorization.member
+                    && self.active_authorization =>
+            {
+                Ok(())
+            }
+            _ => Err(SigningError::InvalidRequest(
+                "consensus height is not authorized".into(),
+            )),
+        }
+    }
+
     fn available(&self, generation: u64) -> Result<(), SigningError> {
         if let Some(fault) = &self.fault {
             return Err(SigningError::Fault(fault.clone()));
@@ -411,6 +680,7 @@ impl Inner {
         &mut self,
         slot: SlotKey,
         request: ValidatedRequest,
+        context: EraContext,
         signature: [u8; 64],
         preimage_digest: [u8; 32],
         preimage_length: usize,
@@ -427,6 +697,7 @@ impl Inner {
         self.slots.insert(
             slot,
             SignedRecord {
+                context,
                 preimage_digest,
                 preimage_length,
                 commitment: request.commitment,
@@ -528,7 +799,7 @@ fn decode_identity(input: &mut Decoder<'_>) -> Result<SignerIdentity, SigningErr
 }
 
 fn encode_sign(
-    identity: &SignerIdentity,
+    context: EraContext,
     request: &ValidatedRequest,
     slot: &SlotKey,
     signature: &[u8; 64],
@@ -537,7 +808,7 @@ fn encode_sign(
     let mut output = Encoder::default();
     output.tag(3).map_err(codec)?;
     output.u64(request.generation).map_err(codec)?;
-    encode_context(&mut output, identity.context)?;
+    encode_context(&mut output, context)?;
     output.u64(request.height).map_err(codec)?;
     output.fixed(&request.round.to_be_bytes()).map_err(codec)?;
     output.tag(request.role.tag()).map_err(codec)?;
@@ -553,6 +824,81 @@ fn encode_sign(
     output.fixed(&preimage_digest).map_err(codec)?;
     output.fixed(signature).map_err(codec)?;
     Ok(output.finish())
+}
+
+fn check_descriptor_context(
+    request: &ValidatedRequest,
+    context: EraContext,
+) -> Result<(), SigningError> {
+    if !request.role.is_proposal() {
+        return Ok(());
+    }
+    let bytes = request
+        .commitment
+        .as_deref()
+        .ok_or_else(|| corrupt("missing proposal descriptor"))?;
+    let descriptor = Descriptor::decode(bytes)
+        .map_err(|_| SigningError::InvalidRequest("invalid proposal descriptor".into()))?;
+    if descriptor.context != context
+        || descriptor
+            .encode()
+            .map_err(|_| SigningError::InvalidRequest("invalid proposal descriptor".into()))?
+            != bytes
+    {
+        return Err(SigningError::InvalidRequest(
+            "proposal descriptor context differs from authorized height".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn encode_authorization(authorization: HeightAuthorization) -> Result<Vec<u8>, SigningError> {
+    let mut output = Encoder::default();
+    output.tag(4).map_err(codec)?;
+    output.u64(authorization.generation).map_err(codec)?;
+    output.u64(authorization.height).map_err(codec)?;
+    encode_context(&mut output, authorization.context)?;
+    output.fixed(&authorization.committee).map_err(codec)?;
+    output
+        .fixed(&authorization.predecessor_decision)
+        .map_err(codec)?;
+    output
+        .fixed(&authorization.completed_closure)
+        .map_err(codec)?;
+    output.tag(u8::from(authorization.member)).map_err(codec)?;
+    output
+        .tag(u8::from(authorization.reconciled))
+        .map_err(codec)?;
+    Ok(output.finish())
+}
+
+fn decode_authorization(input: &mut Decoder<'_>) -> Result<HeightAuthorization, SigningError> {
+    let generation = input.u64().map_err(codec)?;
+    let height = input.u64().map_err(codec)?;
+    let context = decode_context(input)?;
+    let committee = input.fixed().map_err(codec)?;
+    let predecessor_decision = input.fixed().map_err(codec)?;
+    let completed_closure = input.fixed().map_err(codec)?;
+    let member = match input.tag().map_err(codec)? {
+        0 => false,
+        1 => true,
+        _ => return Err(corrupt("invalid authorization membership flag")),
+    };
+    let reconciled = match input.tag().map_err(codec)? {
+        0 => false,
+        1 => true,
+        _ => return Err(corrupt("invalid authorization reconciliation flag")),
+    };
+    Ok(HeightAuthorization {
+        generation,
+        height,
+        context,
+        committee,
+        predecessor_decision,
+        completed_closure,
+        member,
+        reconciled,
+    })
 }
 
 fn sync_directory(directory: &Path) -> Result<(), SigningError> {
@@ -596,6 +942,19 @@ mod tests {
             context: test_fixtures::context(),
             generation: 1,
             network_peer_id: vec![3; 38],
+        }
+    }
+
+    fn authorization() -> HeightAuthorization {
+        HeightAuthorization {
+            generation: 1,
+            height: 1,
+            context: test_fixtures::context(),
+            committee: [7; 32],
+            predecessor_decision: [8; 32],
+            completed_closure: [9; 32],
+            member: true,
+            reconciled: false,
         }
     }
 
@@ -648,6 +1007,7 @@ mod tests {
     fn failed_append_is_sticky_and_cannot_return_a_signature() {
         let directory = TempDir::new().unwrap();
         let store = Store::open(directory.path(), &identity(), PrivateKey::from([11; 32])).unwrap();
+        store.authorize_height(authorization()).unwrap();
         let request = ValidatedRequest {
             generation: 1,
             height: 1,
@@ -673,7 +1033,84 @@ mod tests {
         drop(store);
         let reopened =
             Store::open(directory.path(), &identity(), PrivateKey::from([11; 32])).unwrap();
+        reopened.authorize_height(authorization()).unwrap();
         assert!(reopened.sign(request).is_ok());
+    }
+
+    #[test]
+    fn recovery_rejects_sign_before_authorization_and_conflicting_authorization() {
+        let directory = TempDir::new().unwrap();
+        let store = Store::open(directory.path(), &identity(), PrivateKey::from([11; 32])).unwrap();
+        let request = ValidatedRequest {
+            generation: 1,
+            height: 1,
+            round: 0,
+            role: EntryRole::Prevote,
+            commitment: None,
+            preimage: b"test-only-preimage".to_vec(),
+        };
+        let slot = request.slot(&[]).unwrap();
+        let signature = PrivateKey::from([11; 32])
+            .sign(&request.preimage)
+            .to_bytes();
+        let payload = encode_sign(
+            identity().context,
+            &request,
+            &slot,
+            &signature,
+            message_digest(&request.preimage),
+        )
+        .unwrap();
+        store.inner.lock().unwrap().append(&payload).unwrap();
+        drop(store);
+        assert!(matches!(
+            Store::open(directory.path(), &identity(), PrivateKey::from([11; 32])),
+            Err(SigningError::Fault(_))
+        ));
+
+        let directory = TempDir::new().unwrap();
+        let store = Store::open(directory.path(), &identity(), PrivateKey::from([11; 32])).unwrap();
+        store.authorize_height(authorization()).unwrap();
+        let mut changed = authorization();
+        changed.committee[0] ^= 1;
+        store
+            .inner
+            .lock()
+            .unwrap()
+            .append(&encode_authorization(changed).unwrap())
+            .unwrap();
+        drop(store);
+        assert!(matches!(
+            Store::open(directory.path(), &identity(), PrivateKey::from([11; 32])),
+            Err(SigningError::Fault(_))
+        ));
+    }
+
+    #[test]
+    fn failed_authorization_append_fences_new_signatures() {
+        let directory = TempDir::new().unwrap();
+        let store = Store::open(directory.path(), &identity(), PrivateKey::from([11; 32])).unwrap();
+        store.inner.lock().unwrap().journal =
+            File::open(directory.path().join("signatures.log")).unwrap();
+        assert!(matches!(
+            store.authorize_height(authorization()),
+            Err(SigningError::Storage(_))
+        ));
+        assert!(matches!(
+            store.authorize_height(authorization()),
+            Err(SigningError::Fault(_))
+        ));
+        assert!(matches!(
+            store.sign(ValidatedRequest {
+                generation: 1,
+                height: 1,
+                round: 0,
+                role: EntryRole::Prevote,
+                commitment: None,
+                preimage: b"test-only-preimage".to_vec(),
+            }),
+            Err(SigningError::Fault(_))
+        ));
     }
 
     #[cfg(target_os = "linux")]

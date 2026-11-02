@@ -55,7 +55,8 @@ class ExternalBitcoinChecks(unittest.TestCase):
             while time.monotonic() < deadline:
                 try:
                     state = (Path("/proc") / str(child) / "stat").read_text().rsplit(")", 1)[1].split()[0]
-                except FileNotFoundError:
+                except (FileNotFoundError, ProcessLookupError):
+                    # The process can disappear after procfs opens stat but before read.
                     state = "gone"
                 if state in ("gone", "Z"):
                     child = None

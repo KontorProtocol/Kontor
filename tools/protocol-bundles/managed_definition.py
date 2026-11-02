@@ -1,4 +1,4 @@
-"""Bind an unreleased managed protocol to its coordinator and independent consensus graph.
+"""Record node and pinned consensus runtime build provenance, independently of protocol identity.
 
 The K4 reference remains untouched. Writing a managed reference is explicit and
 is only permitted while assembling an unreleased protocol. Released definitions
@@ -27,7 +27,7 @@ BUILD_INPUTS = (
 
 
 def graph_manifest(label):
-    if label not in ('first', 'second'):
+    if label != 'first':
         raise ValueError('unknown managed consensus graph')
     return f'protocol-bundles/consensus-{label}/Cargo.toml'
 
@@ -119,7 +119,7 @@ def metadata(root, manifest):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--write', action='store_true')
-    parser.add_argument('--graph', choices=('first', 'second'), default='first')
+    parser.add_argument('--graph', choices=('first',), default='first')
     parser.add_argument('--node-metadata', type=Path)
     parser.add_argument('--graph-metadata', type=Path)
     args = parser.parse_args()

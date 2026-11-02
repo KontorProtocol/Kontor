@@ -1,3 +1,4 @@
+use crate::reactor::engine::ValidatorStart;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -51,6 +52,7 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
         persistent_peers: Vec::new(),
         data_dir: dir.path().to_path_buf(),
         consensus_enabled: true,
+        validator_start: ValidatorStart::Bootstrap,
         discovery: Default::default(),
     };
     #[cfg(kontor_managed)]
@@ -211,6 +213,7 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
             persistent_peers: Vec::new(),
             data_dir: dir.path().to_path_buf(),
             consensus_enabled: true,
+            validator_start: ValidatorStart::Bootstrap,
             discovery: Default::default(),
         },
         #[cfg(kontor_managed)]

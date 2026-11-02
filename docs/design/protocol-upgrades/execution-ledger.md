@@ -4607,3 +4607,228 @@ The initial audit failures came from ccache attempting a read-only cache write.
 The only source correction was adding the required activation input to the
 managed-definition fixture and its source-mutation assertion. All three current
 references verify. These local results do not replace final platform CI.
+
+### Single-runtime proof started (2 November 2026)
+
+Operator resumed the amended goal. Verified PR622 base
+`8c757a8625e8f71f5eceb03c1b3710c849d46207` and created isolated branch
+`feat/protocol-single-runtime`. The uncommitted HTTP K9 draft remains untouched
+in `protocol-historical-catchup`. K9 now follows the single-runtime proof in the
+implementation plan, superseding the previous transport plan. No new build, CI
+or proof result is claimed yet. Fork cleanup remains deferred.
+
+The only delegated implementation is security-specific durable per-height signer
+authorization (`SINGLE-RUNTIME-SIGNER-1`), assigned to the existing Daybreak agent
+in its own worktree. Lead owns reactor integration and final review. One
+independent reviewer covers the coherent result; no duplicate planning review.
+
+Initial proof changes remove protocol-triggered stop/start from the reactor's
+advance path, retain the live transport, refresh execution preparation at the
+next-height gate, and reject stale round/proposal callbacks after certification.
+The focused local handoff suite passed four tests (114.22 seconds runtime),
+including closure-before-Finalized and the new late-callback regression. This run
+preceded the subsequent signer-call integration and is preliminary evidence only.
+Log: `.build-cache/single-runtime-handoff-tests.log`. Initial compilation needed
+`CCACHE_DISABLE=1` because the sandbox cannot write the user's ccache directory.
+
+The live transition qualification now includes a fresh follower with no injected
+history, syncing from an already-P2 peer, plus generation-journal equality and
+separate validator/follower WAL assertions. The proof temporarily retains the existing dual-graph
+build scaffolding while selecting the first pinned engine for both protocols;
+removing that scaffolding and separating semantic identity from build provenance
+belong to the coherent refactor only after the bounded proof succeeds.
+
+The integrated signer suite passed 30 tests, including idempotent recovery after
+an authenticated height gap. The managed release build then passed locally on
+Linux arm64 with both independent historical executors. The live activation,
+Malachite catch-up and restart command passed using binary SHA-256
+`cd2b10d2e12e056467f155ebe95027ca06fcf2a13e0e69ccbff89c4474eafac8`.
+Evidence: `.build-cache/single-runtime-transition-r3.json`, SHA-256
+`8f75c4b8fda8de504347f1e3dadaa31a016b89c7d47f04c49082a2b2661c27f0`.
+It confirms unchanged engine generation and network owner across activation,
+continuous validator WAL, a non-signing fresh follower retrieving the identical
+certified prefix and application position through height 2 from an already-P2
+peer, and production restart followed by processing Bitcoin height 3. This fixture
+seeds the accepted schedule on both nodes; it does not prove upgrade authorization
+or follower promotion. Source and follower may advance beyond the checked prefix.
+
+Earlier attempts exposed two harness assumptions about moving consensus tips,
+corrected by comparing the same completed height and checking retained records on
+restart. A sandboxed attempt could not bind local network sockets; the successful
+run used authorized local network access. These were local checks, not CI reruns.
+The existing crash/recovery suite also passed against this same binary. Evidence:
+`.build-cache/single-runtime-recovery.json`, SHA-256
+`ddf91e98e6c9ff389f55d9c99c555c1e5ad1e28262380ed147ed74e7e3c9fbd8`.
+All five process-kill checkpoints passed (certified, activated, closed, engine-ready
+and signed), preserving certified history, matching recovered state and refusing
+conflicting signatures. The signed checkpoint also preserved the exact retry.
+Migration failure atomicity, cross-upgrade replay, confirmation without execution,
+token accounting, empty-successor gating and unsupported-upgrade cancellation
+passed in that suite. Startup authorization recovery is covered; this does not
+claim a process kill precisely inside a running engine's Next callback.
+
+The bounded proof supports proceeding with the coherent single-runtime refactor.
+K9 remains incomplete: remove dual-consensus build scaffolding, separate semantic
+identity from build provenance, complete joining/promotion and targeted historical
+sync rejection/resumption coverage, then consolidate lead and independent review
+before scoped final-candidate CI. No PR was pushed and no CI launched for this proof.
+
+### Single-runtime build refactor in progress
+
+Protocol manifests now bind `consensus-rules-v1.json`, shared by P1 and P2, instead
+of the whole node/runtime build. The runtime reference remains independently
+checked by the embedded build record. Protocol registration no longer selects a
+consensus implementation. The production recipe links two historical executors
+and one pinned consensus runtime, and rejects an extra runtime. Removed the second
+consensus manifest/lock/reference, alternate wire-codec feature, dual adapters and
+cross-runtime type probes. Generation ownership, signer fencing, shutdown/join
+and historical executor isolation remain in place. Tests still exercise successive
+runtime generations, including a test-fixture authorization needed by the new
+per-height signer.
+
+The ordinary baseline and successor identity checks passed (2 plus 1 tests).
+Build-control validation passed 175 of 176 tests before correcting one remaining
+four-library attestation assumption; the affected 12-test node-build suite then
+passed. Subsequent consensus-input and node-execution evidence suites passed
+(12 and 15 tests). Four adapter tests and four interface compilation controls
+passed against the previously staged pinned runtime library. The release managed
+build subsequently passed with fresh evidence under
+`.build-cache/single-runtime-refactor-linked`, reusing only compilation caches.
+Its node report confirms two execution graphs and one consensus graph. Executable
+SHA-256: `1aac8de22866dbda6fe43e88b8b60e966e97bf04770b81fd87f103567b8c5a14`.
+Node source-input digest:
+`d71a0a6e133bc6354e0249d18c614b35032afa903385cd00aba91454287759c8`.
+
+The new executable passed the bounded live activation/catch-up/restart command
+and the three-validator transition/reorg command. Results are in
+`.build-cache/single-runtime-refactor-transition.json` and
+`.build-cache/single-runtime-refactor-cluster.json`. The latter passed the existing
+transition evidence verifier: matching closure/state, restoration of P1 in a fresh
+era, reapplied migration, retained history, RPC continuity and Bitcoin ingestion
+continuity. The bounded command again verified unchanged engine generation and
+network owner through activation and a fresh follower's exact historical prefix.
+No CI has been launched. Joining/promotion and final review remain incomplete.
+
+### Single-runtime startup integration, in progress (2 November 2026)
+
+Base `effa30b7` passed the linked release build and live transition/restart/catch-up
+plus three-validator upgrade/rollback checks. Security inspection commit
+`1fc4e90b` was reviewed for integration and cherry-picked as `6d0930e9`.
+It shares signer-journal validation with ordinary replay and inspects a private
+WAL copy with the pinned reader/decoder. The implementer reports three signer
+inspection and two WAL integration tests passing. Final consolidated review remains.
+
+Startup policies now distinguish explicit genesis bootstrap, retained-state resume,
+and join with a positive verified consensus-height floor. Eight standalone Rust
+policy tests pass; integrated Cargo tests and live role-promotion evidence remain
+pending. The reactor promotion path is connected after completed Finalized handling,
+with follower stop/join before protected-state reinspection and validator startup.
+The crash fixture now enters the actual WAL height before its explicit first
+signature. Regtest startup selects bootstrap for initial members, resume for
+restarts and join for previously unstarted members.
+
+Lead review found a real pre-reservation interruption/refusal window: a header-only
+owner journal cannot currently reopen. The Daybreak implementer is investigating
+that narrow correction. No CI, publication, merge or completion claim accompanies
+this in-progress entry.
+
+Startup integration follow-up: the integrated normal Cargo filter passed all nine
+policy/configuration tests. The header-only owner correction is now integrated as
+`0352cecc`, following the WAL-copy integrity correction `130cf83a`; the implementer
+reports its two focused recovery tests passing. The linked managed release build
+is running against this code plus the startup integration. A focused four-member
+join scenario now requires the promoted member's vote after an original validator
+stops. Live results and consolidated review are still pending. Existing build
+caches are reused; no CI run has been launched.
+
+### Startup integration local evidence (2 November 2026)
+
+The linked release build completed with the startup integration and inspection
+fixes above. Binary SHA-256:
+`b833df3ca0234942ae8d740594aa382357e603bc342e6178533d85927aaeec08`.
+Its build report is in `.build-cache/single-runtime-refactor-linked`; transcripts
+and results use `.build-cache/single-runtime-startup-*`.
+
+- Four-member join passed. Three original validators reached P2; the fourth
+  verified the exact history through consensus height 3, promoted in generation
+  2 with separate WALs and the same listener, and signed decision 6 after an
+  original validator stopped. The join evidence verifier passed.
+- Default transition passed with unchanged engine generation and network owner,
+  continuous validator WAL, exact cold-follower history, and production restart
+  at Bitcoin height 3 in the same era and on the same listener.
+- Recovery passed, including five killed-process checkpoints, rejected conflicting
+  signatures, preserved exact retry, atomic migration and three finality replay
+  scenarios. The recovery evidence verifier passed.
+- All 25 retained executor/node cases passed their semantic oracle and evidence
+  checks. Managed startup resumed the same-era WAL and listener, rejected a
+  competing writer, and fully joined both engine lifetimes.
+
+The Daybreak implementer ran the full focused durable-signer suite, 36 tests
+passing. Its test reconciliation `23397c7c` was reviewed and integrated as
+`3acab9fe`. Retained signer artifacts still make header truncation an error;
+without those artifacts a lost follower-only reservation is indistinguishable
+from interruption before the first reservation and can safely reopen.
+
+The affected Python evidence/comparison suites passed 48 tests, including missing,
+tampered and semantically failed join reports. Join runs inside the existing
+scoped managed-node qualification, without another workflow or ordinary-PR job.
+The comparison fixtures now derive consensus manifests from the single-runtime
+recipe rather than referencing the removed second graph.
+
+These live results precede the final test-only recovery reconciliation, evidence
+script changes, descriptive scope-string corrections and regenerated build
+reference. They are local evidence for the exercised implementation, not an
+exact-final-head cross-platform qualification claim. Consolidated independent
+review and final-candidate scoped CI remain required; no CI has been launched.
+
+### Consolidated single-runtime review, correction pending
+
+Lead and single independent reviewer examined base/merge base `8c757a86` through
+`7b7bd3967d22dbdb12f77defdf11546d01dabbf3`. Remote main was freshly verified at
+that base by the lead. Coverage included original-context Finalized handling,
+closure/authorization/Next ordering, stale callbacks, nil votes and exact retries,
+WAL reconciliation, promotion ownership, semantic identity and build provenance.
+The reviewer also checked preserved live evidence against the built binary and
+confirmed no changes to retained executor source trees.
+
+One material finding, SR-WAL-1, is accepted and remains open: syntax-only WAL
+inspection does not bind stored valid proposals to the context of the height
+being resumed. Pinned replay restores their validity without application
+revalidation. A valid misplaced same-height WAL could therefore influence
+signing outside the authenticated context. The bounded correction passes the
+certified next height and context into inspection before generation reservation,
+checks height-bearing entries against the WAL header, and compares proposal/value
+descriptor contexts when that WAL will actually resume. Older completed WALs must
+remain eligible for forward reset without comparison against a successor context.
+The Daybreak implementer accepted `SINGLE-RUNTIME-WAL-CONTEXT-1`; focused negative
+controls must use valid foreign-context frames and prove unchanged original bytes.
+No other material finding was reported. The same reviewer will check this fix.
+
+The full 179-test Python control run had only local ccache read-only filesystem
+errors in C fixture compilation. Repeating the affected 34 audit tests with
+`CCACHE_DISABLE=1` passed, completing coverage of those controls. Workspace Rust
+format checking also passed. Candidate CI and PR submission remain held for the
+WAL correction and its focused review.
+
+SR-WAL-1 correction `46412b58` was inspected by the lead and integrated as
+`e6fe6f24`. The same reviewer examined its exact diff against `7b7bd396` and
+closed the finding, with no new material concern. Four pinned-facade recovery
+tests passed, covering valid foreign-context and matching-context inputs, all
+four height-bearing input variants, covered older WALs and unchanged protected
+bytes on refusal. Ordinary indexer compilation passed in the implementer's
+checkout. These checks refuse inconsistent startup state; they neither repair
+arbitrary database/WAL combinations nor establish support for swapping backups.
+No Malachite fork change was made. Linked compilation of the managed caller and
+final exact-head CI remain required.
+
+Final local candidate `b8aff3da53d6cb13f3747bbe3b53bc3cbd341170` completed the
+linked Linux ARM64 release build with both executor graphs and one consensus
+graph. Installed and audited binary hashes agree:
+`17b8d963e3aa8dfb9232fd925e095f0f85a004329abef08f10295eaa1867cf8f`.
+The corrected managed caller compiled successfully. Recovery then passed all five
+killed-process checkpoints and three finality replay scenarios. All 25 executor
+cases passed again, including same-era validator WAL restart, with successful
+semantic oracle and evidence validation. Results and transcripts are preserved in
+`.build-cache/single-runtime-final-{build,recovery,executors}*`. This closes the
+linked-caller validation gap from focused review. No production changes follow
+that candidate in this evidence entry; required PR CI remains pending.

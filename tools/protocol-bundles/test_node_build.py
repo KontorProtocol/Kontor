@@ -32,7 +32,7 @@ class NodeBuild(unittest.TestCase):
         prototype = dict(self.spec['graphs'][0], build_inputs_sha256='a' * 64)
         self.spec['graphs'] = [dict(prototype, role=role, graph=graph) for role, graph in (
             ('executor', 'first'), ('executor', 'observer'),
-            ('consensus', 'first'), ('consensus', 'second'))]
+            ('consensus', 'first'))]
         arguments = ['--target', 'aarch64-unknown-linux-gnu']
         with self.assertRaisesRegex(RuntimeError, 'requires'):
             wrapper.attestation_environment(arguments, self.spec)
@@ -45,7 +45,7 @@ class NodeBuild(unittest.TestCase):
         self.assertEqual(json.loads(environment['KONTOR_NODE_ATTESTATION']), record)
         with self.assertRaisesRegex(RuntimeError, 'target'):
             wrapper.attestation_environment(['--target', 'x86_64-unknown-linux-gnu'], self.spec)
-        for index in range(4):
+        for index in range(3):
             for field in ('role', 'graph', 'facade_sha256', 'build_inputs_sha256'):
                 changed = copy.deepcopy(self.spec)
                 changed['attestation']['graphs'][index][field] = 'wrong'
@@ -90,25 +90,27 @@ class NodeBuild(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'does not match'):
             wrapper.prepare('/pinned/rustc', ['--crate-name', 'indexer'], self.spec)
 
-    def test_managed_node_requires_all_four_role_bound_libraries(self):
+    def test_managed_node_requires_two_executors_and_one_runtime(self):
         self.spec['link_set'] = 'managed-node'
         prototype = self.spec['graphs'][0]
         self.spec['graphs'] = [dict(prototype, role=role, graph=graph) for role, graph in (
             ('executor', 'first'), ('executor', 'observer'),
-            ('consensus', 'first'), ('consensus', 'second'))]
+            ('consensus', 'first'))]
         for crate in ('indexer', 'kontor'):
             args, _ = wrapper.prepare('/pinned/rustc', [
                 '--crate-name', crate, '--out-dir', str(self.root), '-C', 'extra-filename=-abcd'], self.spec)
             self.assertIn('kontor_managed', args)
             self.assertIn('kontor_observer', args)
-            self.assertEqual(args.count('-L'), 4)
-            self.assertEqual(args.count('--extern'), 4 if crate == 'indexer' else 0)
+            self.assertEqual(args.count('-L'), 3)
+            self.assertEqual(args.count('--extern'), 3 if crate == 'indexer' else 0)
             if crate == 'indexer':
                 for role, graph in (('executor', 'first'), ('executor', 'observer'),
-                                    ('consensus', 'first'), ('consensus', 'second')):
+                                    ('consensus', 'first')):
                     self.assertIn(f'kontor_{role}_{graph}={self.facade}', args)
-        broken = []
-        for index in range(4):
+        extra = copy.deepcopy(self.spec)
+        extra['graphs'].append(dict(prototype, role='consensus', graph='second'))
+        broken = [extra]
+        for index in range(3):
             missing = copy.deepcopy(self.spec)
             del missing['graphs'][index]
             broken.append(missing)

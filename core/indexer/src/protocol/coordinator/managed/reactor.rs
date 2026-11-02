@@ -18,7 +18,7 @@ use tokio::sync::{oneshot, watch};
 use tokio::time::{Instant, timeout_at};
 
 use super::control::{Control, EngineSlot, Status};
-use super::startup::{Bundle, Configuration};
+use super::startup::{Configuration, Runtime};
 use super::types::{
     Delivery, EngineError, EngineState, Event, HeightParameters, NextHeight, ProposalBytes,
     ProposalPartBytes, PublishError, ReplyError, ReplyToken, Request, Response, Role, SyncOutcome,
@@ -47,7 +47,7 @@ impl ReactorEngine {
     #[cfg(test)]
     pub(crate) fn start(
         slot: &EngineSlot,
-        bundle: Bundle,
+        bundle: Runtime,
         config: Configuration,
         signer: Option<Arc<DurableSigner>>,
     ) -> Result<Self, EngineError> {
@@ -59,7 +59,7 @@ impl ReactorEngine {
 
     pub(crate) fn start_owned(
         slot: &EngineSlot,
-        bundle: Bundle,
+        bundle: Runtime,
         config: Configuration,
         signer: Option<Arc<DurableSigner>>,
         ownership: OwnedGeneration,

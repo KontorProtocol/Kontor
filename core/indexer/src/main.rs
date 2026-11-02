@@ -24,6 +24,7 @@ use indexer::keygen::{self, KeygenArgs};
 use indexer::migration_rehearsal::{self, MigrationRehearsalArgs};
 #[cfg(feature = "protocol-qualification")]
 use indexer::protocol_qualification;
+use indexer::reactor::engine::{EngineConfig, ValidatorStart};
 use indexer::receipt_stream_rotation::{self, ReceiptStreamRotationArgs};
 use indexer::runtime::GenesisParameters;
 use indexer::stopper::{self, Shutdown};
@@ -56,7 +57,7 @@ enum Command {
     /// Exercise retained executors against isolated temporary databases.
     QualifyExecutors,
     #[cfg(all(kontor_managed, feature = "protocol-qualification"))]
-    /// Exercise real executor activation and consensus engine replacement locally.
+    /// Exercise real executor activation with the shared consensus runtime locally.
     QualifyProtocolTransition {
         #[arg(long)]
         cluster: bool,
@@ -65,6 +66,9 @@ enum Command {
         /// Run the full notice window and authorized rollback trace (prefer release).
         #[arg(long, conflicts_with_all = ["cluster", "recovery"])]
         authorized_replay: bool,
+        /// Verify catch-up from upgraded peers and subsequent validator promotion.
+        #[arg(long, conflicts_with_all = ["cluster", "recovery", "authorized_replay"])]
+        join: bool,
     },
     #[cfg(all(kontor_managed, feature = "protocol-qualification"))]
     #[command(hide = true)]
@@ -113,10 +117,15 @@ async fn main() -> Result<()> {
             cluster,
             recovery,
             authorized_replay,
+            join,
         } => {
-            let result =
-                protocol_qualification::protocol_transition(cluster, recovery, authorized_replay)
-                    .await?;
+            let result = protocol_qualification::protocol_transition(
+                cluster,
+                recovery,
+                authorized_replay,
+                join,
+            )
+            .await?;
             println!("{}", serde_json::to_string(&result)?);
             Ok(())
         }
@@ -329,12 +338,25 @@ async fn run_daemon(config: Config) -> Result<()> {
     if !consensus_enabled {
         info!("Consensus mode: follower — sync-only, will not sign");
     }
-    let engine_config = reactor::engine::EngineConfig {
+    anyhow::ensure!(
+        consensus_enabled || (!config.bootstrap_consensus && config.join_min_height.is_none()),
+        "bootstrap and join options require validator mode"
+    );
+    let validator_start = match (config.bootstrap_consensus, config.join_min_height) {
+        (true, None) => ValidatorStart::Bootstrap,
+        (false, Some(minimum_closed_height)) => ValidatorStart::Join {
+            minimum_closed_height,
+        },
+        (false, None) => ValidatorStart::Resume,
+        (true, Some(_)) => anyhow::bail!("bootstrap and join options are mutually exclusive"),
+    };
+    let engine_config = EngineConfig {
         private_key,
         listen_addr: config.consensus_listen_addr.clone(),
         persistent_peers: config.consensus_peers.clone(),
         data_dir: config.data_dir.clone(),
         consensus_enabled,
+        validator_start,
         discovery: DiscoveryConfig {
             enabled: true,
             bootstrap_protocol: BootstrapProtocol::Full,

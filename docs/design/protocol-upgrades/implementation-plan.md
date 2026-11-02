@@ -1030,21 +1030,85 @@ receipts, execution identities, committee/registration generations and retained
 history across uninterrupted, restart and reconstructed execution. K9 later adds
 cross-era transport, not a new mechanism for deciding the results of replay.
 
-### K9. Stable history transport and cold catch-up
+### K9. Single-runtime proof and verified cold catch-up
 
-Dependencies: K4/K7/K8. Modules: node history service, sequential bounded peer synchronization,
-archive storage and startup. Result: current-era peers serve exact historical input
-and certificate envelopes independent of live Malachite codecs. Fresh nodes verify
-from original genesis through all eras and recovery before signing. Limit chunks,
-total decoded sizes and peer work; retain progress across retries and restart.
-Defer parallel scheduling, peer scoring, speculative prefetching and generalized
-staging. Test entirely new-era peers,
-missing middle records, tampered values/certificates/input/committee claims, unsupported
-codecs and restored snapshots. Keep separate received/verified/applied/era/signer
-frontiers. Re-execute committee-changing prefixes before trusting successor
-certificates; missing target support cannot advance authentication beyond its
-unknown derived committee.
-Do not use trusted snapshots as evidence of full genesis verification.
+Operator refinement, 2 November 2026, supersedes the earlier requirement for
+separate live consensus bundles, incompatible codecs and protocol-triggered
+engine restarts. Planning review `SINGLE-MALACHITE-PLAN-1` accepted this direction
+with the boundary and signing conditions below. Historical execution bundles
+remain independently resolved, locked and linked.
+
+First prove real P1-to-P2 activation/migration with one pinned Malachite runtime
+and common wire format. Keep the same engine generation and network owner through
+the next-height callback. A fresh node must use Malachite sync from peers already
+on P2 and verify/replay P1, the upgrade and P2 with historical committees and
+executors. Test closure-before-Finalized ordering and recovery around authorization
+and Next. If the proof requires substantial machinery or exposes a fundamental
+obstacle, report evidence before broadening the architecture.
+
+Validate Finalized under C's original context before installing C+1 state.
+Callbacks are not globally quiescent: reject stale work by position/context.
+Persist per-height signing authority (context, committee, completed predecessor)
+under the signing lock before Next, retaining global anti-equivocation slots and
+exact historical retries only. Engine generation remains a lifetime fence.
+Keep validator WAL continuous across activation; follower catch-up has a separate
+WAL. Promotion reconciles database/signing/validator WAL and may stop/join the
+engine if required. Unsigned peer tips are hints, never freshness authority.
+Distinguish explicit genesis bootstrap from joining an existing chain.
+
+If the bounded proof succeeds, complete this replacement K9 and then K10/K11.
+Retain exact certified inputs, sequential verification, missing/corrupt-history
+rejection, persisted progress, unsupported-protocol rejection and restart recovery.
+Do not add a parallel HTTP transport, custom multi-peer scheduler or old-engine
+archive service. Preserve the separate HTTP draft until replacement is proven.
+Separate semantic certificate rules from runtime build provenance; future runtime
+updates require historical compatibility evidence. Defer Malachite fork cleanup
+until after this initiative, retaining current lifecycle fixes.
+
+The bounded live proof and existing migration/recovery suite passed locally,
+recorded in the execution ledger at `e7b131d3`. Proceed with the coherent refactor.
+P1 and P2 name the same versioned consensus-rule definition. The node build record
+separately binds the runtime source/dependency graph, compiler and linked artifact;
+a matching rule identifier is not itself evidence of compatible behavior. Any
+runtime update must pass the applicable historical certificate, replay and sync
+checks before release. Changes to certificate semantics require a new rule
+definition and explicit protocol support. Historical executors retain their own
+immutable definitions and independently locked graphs.
+
+Startup policy agreed by lead and the existing independent reviewer in
+`SINGLE-MALACHITE-JOIN-1`:
+
+- Bootstrap is an explicit initial-genesis operation. Resume requires retained
+  validator state and first completes any durable unfinished application closure.
+  If D is the completed consensus height, resume N = D+1, including its existing
+  rounds and exact signature retries. Do not require N to be certified first.
+- Preserve and replay a valid validator WAL at N. A WAL below N can reset forward
+  only when authenticated closure covers it. WAL or signer state ahead of N
+  requires reconstruction, never a backward reset. Missing/corrupt state cannot
+  silently create a fresh validator. A missing WAL before any signature at the
+  unfinished height is distinct from losing an unfinished signed WAL.
+- Join starts as a non-signing follower. Require a positive operator-supplied
+  minimum closed consensus height and verified closure through the maximum of
+  that minimum, local consensus-signature height, protected WAL height and latest
+  authorization height minus one. The configured minimum is a lower-bound policy,
+  not proof of the current network tip. Missing history or unavailable peers
+  cannot authorize signing. Nonmembers remain followers.
+- Before promotion, fully stop/join the follower, recheck the durable boundary,
+  reconcile protected state, authorize N and start the validator. Keep exclusive
+  node ownership throughout. Inspect a private copy of a protected WAL: the
+  pinned WAL library repairs partial tails when opening files. Reuse its sequence
+  and entry decoder APIs, without a new fork change or journal. WAL entries can
+  include remote messages, so they need not correspond one-for-one to local
+  signatures. Read-only follower mode never promotes.
+
+Representative coverage includes all-validator restart at unfinished N,
+authorization-before-WAL interruption, stale database with ahead signer/WAL,
+missing/corrupt protected WAL, and promotion only after verified closure.
+
+Use focused local checks and one consolidated independent review, then scoped
+final-candidate CI. Reuse prior research and valid unchanged evidence; do not
+restart performance campaigns or exhaustive diagnostics. This is a plan, not
+completed implementation or acceptance evidence.
 
 ### K10. Protocol-aware clients, caches and operations
 
@@ -1058,6 +1122,34 @@ unsupported/recovery admission failures and SDK format discovery. Expose existin
 and ABI descriptors; legacy parsing/signatures remain exact. Defer a new user
 transaction format, including the proposed disjoint format-1. Publish maintenance rules
 for historical backports, compiler changes, migrations and retained artifacts.
+
+Current-code inventory after the single-runtime proof:
+
+- Reuse the implemented `/protocol/upgrades` state/prepare/submit API, SDK
+  `UpgradeClient`, and operator-invoked migration rehearsal report. No second
+  approval path, automatic rehearsal service or new persistent readiness system.
+- Add a consistent protocol snapshot and supported format/ABI discovery using
+  the selected manifest, certified frontier, canonical application position and
+  existing build record. Distinguish installed support and local diagnostics
+  from authorization or certified state. Keep heights exact in SDK wire types.
+- Report the actual runtime role and any verified join floor. Configured
+  validator mode alone does not mean the joining runtime can sign. Diagnostics
+  must remain useful while history/support is unavailable, without admitting
+  execution or bypassing normal startup checks.
+- Simulation already selects rules when the reactor admits the queued raw
+  request. Bind any reported protocol/lineage and gas-estimation assumptions to
+  that same selection, not a separate API read that can race activation. State
+  clearly that the simulated next block and current estimates do not guarantee
+  future inclusion behavior. Preserve ordinary transaction encoding and signing.
+- Existing component caches bind stored content, executor version and actual
+  engine identity; linked read snapshots select their executor inside the
+  database snapshot. Reuse these mechanisms and existing rollback/activation
+  evidence. Add focused integration checks only for newly exposed provenance,
+  unavailable-state diagnostics, SDK discovery and any uncovered contamination.
+
+Begin implementation from merged K9. Group K10/K11 delivery as already agreed,
+with one combined review and scoped final-candidate CI rather than separate PRs
+for individual endpoints or documentation sections.
 
 ### K11. Integrated qualification and release evidence
 

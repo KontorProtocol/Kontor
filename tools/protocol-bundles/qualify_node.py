@@ -11,11 +11,10 @@ import sys
 import time
 
 from build import ROOT, digest, write_json
-from managed_definition import DESTINATION as MANAGED_DEFINITION
 from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, executor_graphs
 from semantic_baseline import verify as verify_semantics
 from symbol_tool import TOOLCHAIN
-from transition_evidence import verify_transition, verify_recovery, verify_authorization
+from transition_evidence import verify_transition, verify_recovery, verify_authorization, verify_join
 
 
 CASES = {"native-genesis", "genesis-resume", "read-only-views", "committee", "registration-observer-capability",
@@ -61,7 +60,7 @@ def verify_certified_history(observations, link_set, root=ROOT):
         graph = executor_graphs(link_set)['first' if link_set == 'managed-node' else 'observer']
         executor = hashed(b'kontor/execution-definition/v1',
                           (root / graph.source_root / 'protocol-bundles' / graph.directory / 'definition.bin').read_bytes())
-        consensus_path = (MANAGED_DEFINITION if link_set == 'managed-node' else
+        consensus_path = ('core/indexer/src/protocol/coordinator/consensus-rules-v1.json' if link_set == 'managed-node' else
                           'core/indexer/src/protocol/coordinator/baseline/consensus.json')
         consensus = hashed(b'kontor/consensus-definition/v1', (root / consensus_path).read_bytes())
         # KPM1 baseline uses one transaction format and one host ABI.
@@ -126,6 +125,18 @@ def execute_transition(executable, directory, root=ROOT):
     return {'stdout_sha256': digest(stdout), 'stderr_sha256': digest(stderr)}
 
 
+def execute_join(executable, directory):
+    stdout = directory / 'node-join.stdout.json'
+    stderr = directory / 'node-join.stderr.log'
+    with stdout.open('w') as out, stderr.open('w') as err:
+        result = subprocess.run([str(executable), 'qualify-protocol-transition', '--join'],
+                                stdout=out, stderr=err, timeout=360)
+    if result.returncode:
+        raise RuntimeError(f'node join failed ({result.returncode}): {stderr}')
+    verify_join(json.loads(stdout.read_text()))
+    return {'stdout_sha256': digest(stdout), 'stderr_sha256': digest(stderr)}
+
+
 def execute_recovery(executable, directory):
     stdout = directory / 'node-recovery.stdout.json'
     stderr = directory / 'node-recovery.stderr.log'
@@ -186,6 +197,7 @@ def execute_node(report_path, link_set=None):
     transition = execute_transition(executable, directory) if link_set == 'managed-node' else None
     recovery = execute_recovery(executable, directory) if link_set == 'managed-node' else None
     authorization = execute_authorization(executable, directory) if link_set == 'managed-node' else None
+    join = execute_join(executable, directory) if link_set == 'managed-node' else None
     if digest(executable) != node['executable_sha256'] or digest(report_path) != report_hash:
         raise RuntimeError('node executable or build report changed during execution')
     evidence = {'schema': 1, 'target': report['target'], 'profile': report['profile'], 'link_set': link_set,
@@ -198,6 +210,7 @@ def execute_node(report_path, link_set=None):
         evidence['transition'] = transition
         evidence['recovery'] = recovery
         evidence['authorization'] = authorization
+        evidence['join'] = join
     write_json(success, evidence)
     return evidence
 

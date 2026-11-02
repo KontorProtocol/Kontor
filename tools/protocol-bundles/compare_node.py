@@ -9,7 +9,7 @@ from build import ROOT, digest, write_json
 from provenance import fingerprint, package_sources, repository_sources
 from qualify_node import (CASES, baseline_graphs, verify_executor_observations,
                           verify_storage_contracts, verify_certified_history, verify_managed_startup)
-from transition_evidence import transition_semantics, verify_recovery, verify_authorization
+from transition_evidence import transition_semantics, verify_recovery, verify_authorization, verify_join
 from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, executor_graphs, graph_root, identity
 from semantic_baseline import verify as verify_semantics
 from symbol_tool import TOOLCHAIN
@@ -141,7 +141,14 @@ def load_cell(path, root, link_set=None):
         file_hash(directory / 'node-authorization.stdout.json', authorization['stdout_sha256'])
         file_hash(directory / 'node-authorization.stderr.log', authorization['stderr_sha256'])
         observations['authorization'] = verify_authorization(read(directory / 'node-authorization.stdout.json'))
+        join = execution.get('join')
+        require(isinstance(join, dict) and set(join) == {'stdout_sha256', 'stderr_sha256'},
+                'missing managed join evidence')
+        file_hash(directory / 'node-join.stdout.json', join['stdout_sha256'])
+        file_hash(directory / 'node-join.stderr.log', join['stderr_sha256'])
+        observations['join'] = verify_join(read(directory / 'node-join.stdout.json'))
     else:
+        require('join' not in execution, 'unmanaged execution cannot claim managed join')
         require('authorization' not in execution, 'unmanaged execution cannot claim managed authorization')
         require('recovery' not in execution, 'unmanaged execution cannot claim managed recovery')
         require('transition' not in execution, 'unmanaged execution cannot claim managed transition')

@@ -10,6 +10,27 @@ TRANSITION_FLAGS = {
     'reapplied_migration', 'retained_history_unchanged',
     'http_rpc_continuity', 'bitcoin_follower_continuity',
 }
+JOIN_FLAGS = {
+    'source_already_p2', 'same_listener', 'matching_verified_prefix',
+    'separate_wals', 'required_promoted_vote',
+}
+
+
+def verify_join(result):
+    keys = JOIN_FLAGS | {'validators', 'initial_signers', 'verified_floor',
+                         'signed_decision', 'promotion_generation'}
+    if not isinstance(result, dict) or set(result) != keys:
+        raise ValueError('validator join evidence missing or incomplete')
+    if (any(result[key] is not True for key in JOIN_FLAGS)
+            or any(type(result[key]) is not int for key in keys - JOIN_FLAGS)
+            or result['validators'] != 4 or result['initial_signers'] != 3
+            or result['promotion_generation'] != 2
+            or not 0 < result['verified_floor'] < result['signed_decision']):
+        raise ValueError('validator join did not verify progress before promotion and signing')
+    # Empty batches can shift consensus heights between independent live runs.
+    return {key: result[key] for key in keys - {'verified_floor', 'signed_decision'}}
+
+
 STATE_TABLES = {
     'block_execution_usage', 'blocks', 'bls_keys', 'contract_provenance',
     'contract_results', 'contract_state', 'contracts', 'current_contract_state',

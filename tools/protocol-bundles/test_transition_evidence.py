@@ -2,9 +2,33 @@ import copy
 import hashlib
 import unittest
 
+from transition_evidence import JOIN_FLAGS, verify_join
+
 from build import ROOT
 from recipes import executor_graphs
 from transition_evidence import STATE_TABLES, TRANSITION_FLAGS, RECOVERY_FLAGS, REPLAY_FLAGS, CONFIRMATION_FLAGS, AUTHORIZATION_FLAGS, TOKEN_COUNT_FLAGS, EMPTY_SUCCESSOR_FLAGS, UNSUPPORTED_FLAGS, CRASH_STAGES, CRASH_FLAGS, BUILD_RECORD_FLAGS, verify_transition, transition_semantics, verify_recovery, verify_authorization
+
+
+def join_sample():
+    return {**{key: True for key in JOIN_FLAGS}, 'validators': 4, 'initial_signers': 3,
+            'promotion_generation': 2, 'verified_floor': 3, 'signed_decision': 6}
+
+
+class JoinEvidence(unittest.TestCase):
+    def test_requires_complete_success_and_signing_after_the_verified_floor(self):
+        verify_join(join_sample())
+        for key in join_sample():
+            missing = join_sample()
+            missing.pop(key)
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                verify_join(missing)
+            changed = join_sample()
+            changed[key] = False
+            with self.subTest(false=key), self.assertRaises(ValueError):
+                verify_join(changed)
+        for floor, signed in [(0, 6), (3, 3), (7, 6)]:
+            with self.subTest(floor=floor, signed=signed), self.assertRaises(ValueError):
+                verify_join({**join_sample(), 'verified_floor': floor, 'signed_decision': signed})
 
 
 def transition_sample():

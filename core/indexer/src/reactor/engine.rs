@@ -15,6 +15,9 @@ use crate::consensus::codec::ProtobufCodec;
 use crate::consensus::signing::{Ed25519Provider, PrivateKey};
 use crate::consensus::{Address, Ctx};
 
+mod validator_start;
+pub use validator_start::ValidatorStart;
+
 #[cfg(kontor_managed)]
 mod managed;
 #[cfg(kontor_managed)]
@@ -29,6 +32,7 @@ pub struct EngineConfig {
     pub persistent_peers: Vec<String>,
     pub data_dir: PathBuf,
     pub consensus_enabled: bool,
+    pub validator_start: ValidatorStart,
     pub discovery: DiscoveryConfig,
 }
 
@@ -60,6 +64,7 @@ impl NodeConfig for MalachiteNodeConfig {
 
 pub struct EngineOutput {
     pub(super) engine: Engine,
+    pub(super) promotion_floor: Option<u64>,
     pub address: Address,
 }
 
@@ -74,6 +79,7 @@ impl From<LegacyEngineOutput> for EngineOutput {
     fn from(output: LegacyEngineOutput) -> Self {
         Self {
             engine: Engine::legacy(output.channels, output._handle, output.signer),
+            promotion_floor: None,
             address: output.address,
         }
     }

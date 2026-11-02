@@ -1,3 +1,5 @@
+use crate::reactor::engine::ValidatorStart;
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 use anyhow::{Context, Error, Result, anyhow, ensure};
@@ -21,6 +23,7 @@ use crate::database::connection::new_read_only_connection;
 use crate::database::queries::insert_block;
 use crate::keygen;
 use crate::protocol::coordinator::bootstrap;
+use crate::protocol::coordinator::durable_signer::{GenerationOwner, SignerRecovery};
 use crate::protocol::coordinator::genesis::envelope;
 use crate::protocol::coordinator::linked::{canonical_session, initialize};
 use crate::protocol::identity::ProtocolId;
@@ -49,6 +52,7 @@ impl Node {
         key: PrivateKey,
         genesis: GenesisParameters,
         peers: Vec<String>,
+        validator_start: ValidatorStart,
     ) -> Result<Self> {
         let directory = TempDir::new()?;
         let config = EngineConfig {
@@ -57,6 +61,7 @@ impl Node {
             persistent_peers: peers,
             data_dir: directory.path().to_path_buf(),
             consensus_enabled: true,
+            validator_start,
             discovery: DiscoveryConfig {
                 enabled: true,
                 bootstrap_protocol: BootstrapProtocol::Full,
@@ -310,7 +315,7 @@ pub(crate) async fn run() -> Result<Value> {
     let result = timeout(Duration::from_secs(240), async {
         for key in keys {
             let peers = nodes.first().map(|node| vec![node.listener.clone()]).unwrap_or_default();
-            nodes.push(Node::start(PrivateKey::from(key.ed25519_private), genesis.clone(), peers).await?);
+            nodes.push(Node::start(PrivateKey::from(key.ed25519_private), genesis.clone(), peers, ValidatorStart::Bootstrap).await?);
             let node = nodes.last_mut().context("started node")?;
             node.ready().await?;
             ensure!(node.view().await?.get("Err").is_some(), "P1 exposes P2 view");
@@ -414,7 +419,7 @@ pub(crate) async fn run() -> Result<Value> {
             "restored_p1_in_fresh_era": true, "reapplied_migration": true, "retained_history_unchanged": true,
             "authorization_test": false,
             "http_rpc_continuity": true, "bitcoin_follower_continuity": true,
-            "scope": "seeded surviving schedule; real multi-validator P1/P2/P1/P2 execution, rollback and incompatible engine handoffs; production HTTP router and Bitcoin follower with fixture Bitcoin RPC and ZMQ publisher",
+            "scope": "seeded surviving schedule; real multi-validator P1/P2/P1/P2 execution and rollback with one continuous Malachite runtime; production HTTP router and Bitcoin follower with fixture Bitcoin RPC and ZMQ publisher",
             "native_provenance": {"publication": original_provenance, "upgraded": upgraded_provenance,
                 "restored_on_rollback": true, "unaffected_native_uses_publication": true},
             "state": expected_state}))
@@ -426,6 +431,157 @@ pub(crate) async fn run() -> Result<Value> {
     for node in &mut nodes {
         if let Err(error) = node.join().await {
             cleanup = Err(error);
+        }
+    }
+    match result {
+        Ok(value) => {
+            cleanup?;
+            Ok(value)
+        }
+        Err(error) => {
+            if let Err(cleanup) = cleanup {
+                eprintln!("cleanup also failed: {cleanup:#}");
+            }
+            Err(error)
+        }
+    }
+}
+
+pub(crate) async fn run_join() -> Result<Value> {
+    let keys: Vec<_> = (0..4)
+        .map(|index| keygen::derive_validator(&[0x74; 32], index))
+        .collect();
+    let genesis = GenesisParameters {
+        sigma_min: Decimal::from("1"),
+        validators: keys
+            .iter()
+            .map(|key| GenesisValidator {
+                x_only_pubkey: hex::encode(key.x_only_pubkey),
+                ed25519_pubkey: key.ed25519_pubkey.to_vec(),
+                stake: Decimal::from("100"),
+            })
+            .collect(),
+    };
+    let mut nodes = Vec::<Node>::new();
+    let result = timeout(Duration::from_secs(180), async {
+        for key in keys.iter().take(3) {
+            let peers = nodes
+                .first()
+                .map(|node| vec![node.listener.clone()])
+                .unwrap_or_default();
+            nodes.push(
+                Node::start(
+                    PrivateKey::from(key.ed25519_private),
+                    genesis.clone(),
+                    peers,
+                    ValidatorStart::Bootstrap,
+                )
+                .await?,
+            );
+            nodes
+                .last_mut()
+                .context("initial validator")?
+                .ready()
+                .await?;
+        }
+        let first = nodes[0].first;
+        let target = nodes[0].target;
+        let mut block = genesis_block(NETWORK);
+        broadcast(&nodes, 1, block.clone()).await?;
+        wait_all(&mut nodes, 1, block.block_hash(), first).await?;
+        block.header.prev_blockhash = block.block_hash();
+        block.header.nonce = block.header.nonce.wrapping_add(1);
+        broadcast(&nodes, 2, block.clone()).await?;
+        let floor = wait_all(&mut nodes, 2, block.block_hash(), target).await?;
+        let peers = nodes.iter().map(|node| node.listener.clone()).collect();
+        nodes.push(
+            Node::start(
+                PrivateKey::from(keys[3].ed25519_private),
+                genesis,
+                peers,
+                ValidatorStart::Join {
+                    minimum_closed_height: NonZeroU64::new(floor).context("join floor")?,
+                },
+            )
+            .await?,
+        );
+        nodes[3].ready().await?;
+        wait_all(&mut nodes, 2, block.block_hash(), target).await?;
+        for height in 1..=floor {
+            let original = certified_history::load(&nodes[0].observer, height).await?;
+            let joined = certified_history::load(&nodes[3].observer, height).await?;
+            ensure!(
+                original.decision().id()? == joined.decision().id()?
+                    && original.input() == joined.input(),
+                "joined history differs"
+            );
+        }
+        nodes[3].services.advance(1, &genesis_block(NETWORK));
+        nodes[3].services.advance(2, &block);
+        // Three of four votes are required. Removing an original validator makes
+        // the next certificate evidence that the catch-up node actually promoted.
+        nodes[0].shutdown.cancel();
+        nodes[0].join().await?;
+        block.header.prev_blockhash = block.block_hash();
+        block.header.nonce = block.header.nonce.wrapping_add(1);
+        broadcast(&nodes[1..], 3, block.clone()).await?;
+        let decided = wait_all(&mut nodes[1..], 3, block.block_hash(), target).await?;
+        ensure!(
+            nodes[3].addresses.borrow().as_ref() == Some(&nodes[3].listener),
+            "promotion changed listener"
+        );
+        nodes[3].shutdown.cancel();
+        nodes[3].join().await?;
+        let directory = nodes[3]
+            .directory
+            .as_ref()
+            .context("joined node directory")?;
+        let context = certified_history::frontier(&nodes[3].observer)
+            .await?
+            .context
+            .context("joined context")?;
+        let owner =
+            GenerationOwner::open(&directory.path().join("consensus-authority"), context.chain)?;
+        let SignerRecovery::Retained(retained) =
+            owner.inspect_signer_recovery(keys[3].ed25519_pubkey)?
+        else {
+            return Err(anyhow!("promoted validator has no signing history"));
+        };
+        let authorized = retained
+            .latest_authorization
+            .context("promotion authorization")?;
+        ensure!(
+            authorized.generation == 2 && authorized.height > floor,
+            "promotion did not follow a separate non-signing generation"
+        );
+        ensure!(
+            retained
+                .highest_signed_height
+                .is_some_and(|height| height >= decided),
+            "joining member did not sign the post-promotion decision"
+        );
+        ensure!(
+            directory.path().join("consensus-catchup.wal").exists()
+                && directory.path().join("consensus-validator.wal").exists()
+        );
+        Ok::<_, Error>(json!({"validators": 4, "initial_signers": 3,
+            "source_already_p2": true, "verified_floor": floor,
+            "signed_decision": decided, "promotion_generation": authorized.generation,
+            "same_listener": true, "matching_verified_prefix": true,
+            "separate_wals": true, "required_promoted_vote": true}))
+    })
+    .await
+    .context("validator join qualification timed out")
+    .and_then(|value| value);
+    for node in &nodes {
+        node.shutdown.cancel();
+    }
+    let mut cleanup = Ok(());
+    for node in &mut nodes {
+        if node.task.is_some() {
+            if let Err(error) = node.join().await {
+                cleanup = Err(error);
+            }
         }
     }
     match result {

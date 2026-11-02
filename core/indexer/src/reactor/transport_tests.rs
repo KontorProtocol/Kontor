@@ -18,15 +18,16 @@ use crate::consensus::{
     Address, Height, PartStreamsMap, ProposalData, ProposalFin, ProposalInit, ProposalPart,
     Validator, ValidatorSet, Vote, test_fixtures,
 };
+use crate::protocol::coordinator::certified_decision::{AuthorityMember, CommitteeRecord};
 use crate::protocol::coordinator::durable_signer::{DurableSigner, GenerationOwner};
 use crate::protocol::coordinator::managed::control::EngineSlot;
 use crate::protocol::coordinator::managed::reactor::ReactorEngine;
 use crate::protocol::coordinator::managed::startup::{
-    Bootstrap, Bundle, Configuration, PeerSelection,
+    Bootstrap, Configuration, PeerSelection, Runtime,
 };
 
 #[tokio::test]
-async fn managed_transport_signs_publishes_and_decides_through_both_bundles() -> Result<()> {
+async fn managed_transport_signs_publishes_and_decides_across_generations() -> Result<()> {
     let directory = TempDir::new()?;
     let slot = EngineSlot::default();
     let key = PrivateKey::from([11; 32]);
@@ -36,15 +37,14 @@ async fn managed_transport_signs_publishes_and_decides_through_both_bundles() ->
         &directory.path().join("authority"),
         test_fixtures::context().chain,
     )?;
-    for (bundle, generation) in [(Bundle::First, 1), (Bundle::Second, 2)] {
+    for (bundle, generation) in [(Runtime, 1), (Runtime, 2)] {
         let ownership = owner.reserve(Some(*key.public_key().as_bytes()))?;
         ensure!(ownership.generation() == generation);
         let peer = Keypair::ed25519_from_bytes(ownership.network_key())?
             .public()
             .to_peer_id()
             .to_bytes();
-        ensure!(Bundle::First.network_peer_id(&ownership.network_key())? == peer);
-        ensure!(Bundle::Second.network_peer_id(&ownership.network_key())? == peer);
+        ensure!(Runtime.network_peer_id(&ownership.network_key())? == peer);
         let config = Configuration {
             generation,
             channel_capacity: 16,
@@ -63,6 +63,23 @@ async fn managed_transport_signs_publishes_and_decides_through_both_bundles() ->
             test_fixtures::context(),
             key.clone(),
         )?);
+        signer.authorize_height(
+            &CommitteeRecord {
+                context: test_fixtures::context(),
+                height: generation,
+                decision: [7; 32],
+                stage: 0,
+                lineage: [0; 32],
+                members: vec![AuthorityMember {
+                    holder: "validator".into(),
+                    generation: [1; 32],
+                    address: address.into_inner(),
+                    key: *key.public_key().as_bytes(),
+                    power: 1,
+                }],
+            },
+            [9; 32],
+        )?;
         let managed =
             ReactorEngine::start_owned(&slot, bundle, config, Some(signer.clone()), ownership)?;
         let mut engine = Engine::managed(managed);

@@ -27,7 +27,7 @@ def prepare(compiler, arguments, spec):
         'legacy-qualification': [('executor', 'first'), ('executor', 'second')],
         'k4-node': [('executor', 'first'), ('executor', 'observer')],
         'managed-node': [('executor', 'first'), ('executor', 'observer'),
-                         ('consensus', 'first'), ('consensus', 'second')],
+                         ('consensus', 'first')],
     }
     selected = [(graph.get('role', 'executor'), graph['graph']) for graph in spec['graphs']]
     if link_set is not None:
@@ -67,7 +67,8 @@ def attestation_environment(arguments, spec):
     record = spec.get('attestation')
     if (not isinstance(record, dict) or record.get('schema') != 1
             or record.get('link_set') != 'managed-node'
-            or len(record.get('graphs', [])) != 4):
+            or len(record.get('graphs', [])) != 3
+            or len(spec.get('graphs', [])) != 3):
         raise RuntimeError('managed node requires its builder attestation')
     for actual, library in zip(record['graphs'], spec['graphs']):
         for key in ('role', 'graph', 'facade_sha256', 'build_inputs_sha256'):

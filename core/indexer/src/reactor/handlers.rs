@@ -38,6 +38,15 @@ impl<E: Executor> Reactor<E> {
         role: Role,
         reply_value: tokio::sync::oneshot::Sender<Vec<ProposedValue<Ctx>>>,
     ) -> Result<()> {
+        if round < self.consensus.current_round
+            || !self
+                .consensus
+                .height_is_open(&self.db_conn(), height)
+                .await?
+        {
+            let _ = reply_value.send(Vec::new());
+            return Ok(());
+        }
         info!(%height, %round, %proposer, ?role, "Started round");
         self.consensus.current_height = height;
         self.consensus.current_round = round;
@@ -113,6 +122,9 @@ impl<E: Executor> Reactor<E> {
         let height = self.consensus.current_height;
         let round = self.consensus.current_round;
 
+        if parts.height < height || (parts.height == height && parts.round < round) {
+            return reply_none(reply);
+        }
         if parts.height != height
             || parts.round != round
             || self.consensus.current_proposer.is_none()
@@ -121,6 +133,13 @@ impl<E: Executor> Reactor<E> {
             return reply_none(reply);
         }
 
+        if !self
+            .consensus
+            .height_is_open(&self.db_conn(), height)
+            .await?
+        {
+            return reply_none(reply);
+        }
         if round == Round::Nil
             || self
                 .consensus
@@ -201,6 +220,12 @@ impl<E: Executor> Reactor<E> {
         value_bytes: bytes::Bytes,
         reply: tokio::sync::oneshot::Sender<SyncedValueOutcome<Ctx>>,
     ) -> Result<()> {
+        if height != self.consensus.current_height {
+            // A queued sync response from the previous height cannot install
+            // input into the committee/context selected for the next height.
+            let _ = reply.send(SyncedValueOutcome::LocalTransientError);
+            return Ok(());
+        }
         let decoded: Result<Value, _> = ProtobufCodec.decode(value_bytes);
         let result = if let Ok(value) = decoded
             && value.descriptor().context == self.consensus.protocol_context

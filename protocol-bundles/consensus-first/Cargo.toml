@@ -12,7 +12,6 @@ path = "../consensus/lib.rs"
 
 [features]
 default = []
-wire-v2 = []
 
 [dependencies]
 anyhow = { version = "=1.0.104", default-features = false }
@@ -24,12 +23,14 @@ serde = { version = "=1.0.229", default-features = false, features = ["alloc", "
 sha2 = "=0.11.1"
 sha3 = { version = "=0.12.0" }
 thiserror = "=2.0.21"
+tempfile = "=3.27.0"
 tokio = { version = "=1.53.3", features = ["full"] }
 async-trait = { version = "=0.1.92" }
 malachitebft-app-channel = { package = "arc-malachitebft-app-channel", git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1" }
 malachitebft-app = { package = "arc-malachitebft-app", git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1" }
 malachitebft-core-types = { package = "arc-malachitebft-core-types", git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", features = ["serde"] }
 malachitebft-engine = { package = "arc-malachitebft-engine", git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1" }
+malachitebft-wal = { package = "arc-malachitebft-wal", git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1" }
 malachitebft-config = { package = "arc-malachitebft-config", git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1" }
 malachitebft-signing = { package = "arc-malachitebft-signing", git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1" }
 malachitebft-signing-ed25519 = { package = "arc-malachitebft-signing-ed25519", git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", features = ["serde"] }

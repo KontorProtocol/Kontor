@@ -10,6 +10,7 @@ use tokio::time::timeout;
 use super::message::Message;
 use crate::consensus::signing::{Ed25519Provider, Signature};
 use crate::consensus::{Ctx, ProposalPart};
+use crate::protocol::coordinator::certified_decision::CommitteeRecord;
 
 #[cfg(kontor_managed)]
 use crate::consensus::codec::ProtobufCodec;
@@ -161,6 +162,34 @@ impl Engine {
                 .await
                 .context("proposal signing task failed")??;
                 Ok(Signature::from_bytes(bytes))
+            }
+        }
+    }
+
+    pub(super) async fn authorize_height(
+        &self,
+        committee: CommitteeRecord,
+        completed_closure: [u8; 32],
+    ) -> Result<()> {
+        match &self.backend {
+            #[cfg(kontor_managed)]
+            Backend::Stopped => Err(anyhow!("consensus engine is stopped")),
+            #[cfg(kontor_managed)]
+            Backend::Managed {
+                signer: Some(signer),
+                ..
+            } => {
+                let signer = signer.clone();
+                tokio::task::spawn_blocking(move || {
+                    signer.authorize_height(&committee, completed_closure)
+                })
+                .await
+                .context("height authorization task failed")??;
+                Ok(())
+            }
+            _ => {
+                let _ = (committee, completed_closure);
+                Ok(())
             }
         }
     }

@@ -62,14 +62,9 @@ pub fn first_into_second(value: First) -> Second {
 }
 
 CONSENSUS_PROBES = {
-    'typed-adapter': (None, '''use first::api::{EnginePoll, Response, Validator};
+    'typed-runtime': (None, """use first::api::{EnginePoll, Response};
 use first::Engine;
-use second::api::Validator as SecondValidator;
 use std::time::Duration;
-pub fn adapt(value: Validator) -> SecondValidator {
-    SecondValidator { public_key: value.public_key, voting_power: value.voting_power }
-}
-
 pub fn drive(engine: &mut Engine) {
     if let Ok(EnginePoll::Event(event)) = engine.poll() {
         if let Some(token) = event.reply {
@@ -79,32 +74,23 @@ pub fn drive(engine: &mut Engine) {
     let _ = engine.request_stop();
     let _ = engine.wait_stopped(Duration::ZERO);
 }
-'''),
-    'distinct-validator': ('E0308', '''use first::api::Validator as First;
-use second::api::Validator as Second;
-pub fn cross_graph(value: First) -> Second { value }
-'''),
-    'distinct-engine': ('E0308', '''use first::Engine as First;
-use second::Engine as Second;
-pub fn cross_graph(value: First) -> Second { value }
-'''),
-    'tokio-handle': PROBES['tokio-handle'],
-    'first-private-consensus': ('E0603', '''use first::consensus::Ctx;
+"""),
+    'private-consensus': ('E0603', """use first::consensus::Ctx;
 pub fn private_context(value: Ctx) { drop(value); }
-'''),
-    'second-private-owner': ('E0603', '''use second::owner::Owner;
+"""),
+    'private-owner': ('E0603', """use first::owner::Owner;
 pub fn private_owner(value: Owner) { drop(value); }
-'''),
-    'control-thread-owner': ('E0277', '''use first::Engine;
+"""),
+    'control-thread-owner': ('E0277', """use first::Engine;
 pub fn require_send<T: Send>() {}
 pub fn move_owner() { require_send::<Engine>(); }
-'''),
+"""),
 }
 
 
 ADAPTER_TESTS = [
     f'managed::adapter::{graph}::tests::{test}'
-    for graph in ('first', 'second')
+    for graph in ('runtime',)
     for test in ('height_parameters_preserve_committee_order_and_all_timeouts',
                  'event_keeps_generation_rounds_and_canonical_payload',
                  'local_failure_is_not_reclassified_as_a_peer_fault')
@@ -113,9 +99,9 @@ ADAPTER_TESTS = [
 
 def probes_for(graphs):
     consensus = [graph.get('identity', {}).get('kind') == 'consensus' for graph in graphs]
-    if any(consensus):
-        if not all(consensus) or [graph['graph'] for graph in graphs] != ['first', 'second']:
-            raise RuntimeError('consensus interface controls require both consensus graphs')
+    if any(consensus) or len(graphs) == 1:
+        if not all(consensus) or [graph['graph'] for graph in graphs] != ['first']:
+            raise RuntimeError('consensus interface controls require the pinned runtime graph')
         return CONSENSUS_PROBES
     if [graph['graph'] for graph in graphs] == ['first', 'observer']:
         identity = graphs[0].get('identity', {})
@@ -143,12 +129,12 @@ def check_diagnostics(returncode, text, expected):
 
 
 def inputs_for(graphs, check_files):
-    if [graph['graph'] for graph in graphs] not in (['first', 'second'], ['first', 'observer']):
+    if [graph['graph'] for graph in graphs] not in (['first'], ['first', 'second'], ['first', 'observer']):
         raise RuntimeError('interface controls require both production graphs')
     arguments = []
     inputs = {}
     dependencies = ('tokio',) if probes_for(graphs) is CONSENSUS_PROBES else ('wasmtime', 'tokio')
-    for name, graph in zip(('first', 'second'), graphs, strict=True):
+    for name, graph in zip(('first', 'second')[:len(graphs)], graphs, strict=True):
         libraries = {name: Path(graph['facade'])}
         for dependency in dependencies:
             candidates = [item for item in graph['artifacts']

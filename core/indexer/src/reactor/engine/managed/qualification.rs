@@ -1,3 +1,4 @@
+use crate::reactor::engine::ValidatorStart;
 use std::fs;
 use std::time::Duration;
 
@@ -27,6 +28,7 @@ fn configuration(dir: &TempDir) -> EngineConfig {
         persistent_peers: vec![],
         data_dir: dir.path().to_path_buf(),
         consensus_enabled: true,
+        validator_start: ValidatorStart::Bootstrap,
         discovery: Default::default(),
     }
 }
@@ -97,6 +99,7 @@ pub(crate) async fn run() -> Result<Value> {
             "running engine lost generation ownership"
         );
         let mut next_config = configuration(&dir);
+        next_config.validator_start = ValidatorStart::Resume;
         next_config.listen_addr = listener.clone();
         ensure!(
             NodeCoordinator::open_database(
@@ -160,13 +163,7 @@ pub(crate) async fn run() -> Result<Value> {
             reservation.generation() == 3,
             "restart did not consume exactly two generations"
         );
-        ensure!(
-            fs::metadata(dir.path().join(format!(
-                "consensus-{}.wal",
-                hex::encode(coordinator.genesis.era)
-            )))
-            .is_ok()
-        );
+        ensure!(fs::metadata(dir.path().join("consensus-validator.wal")).is_ok());
         let baseline = Baseline::for_node(coordinator.genesis.chain)?;
         Ok(json!({
             "chain": hex::encode(coordinator.genesis.chain.0),

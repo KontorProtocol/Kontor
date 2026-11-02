@@ -2,11 +2,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use bitcoin::Network;
+use kontor_consensus_first::{WalInspection, WalResumeContext, inspect_protected_wal};
 use libsql::Connection;
 use malachitebft_app_channel::app::config::{BootstrapProtocol, Selector};
 
+use super::validator_start::{RecoveryState, StartRole};
 use super::{EngineConfig, EngineOutput};
 use crate::build_record;
 use crate::consensus::Address;
@@ -16,12 +18,15 @@ use crate::database::{
 };
 use crate::protocol::coordinator::certified_input::EraContext;
 use crate::protocol::coordinator::durable_signer::{
-    DurableSigner, GenerationOwner, OwnedGeneration,
+    DurableSigner, GenerationOwner, OwnedGeneration, SignerRecovery,
 };
 use crate::protocol::coordinator::managed::control::EngineSlot;
 use crate::protocol::coordinator::managed::reactor::ReactorEngine;
-use crate::protocol::coordinator::managed::startup::{Bootstrap, Configuration, PeerSelection};
+use crate::protocol::coordinator::managed::startup::{
+    Bootstrap, Configuration, PeerSelection, Runtime,
+};
 use crate::protocol::coordinator::registry;
+use crate::protocol::identity::domain_digest;
 use crate::reactor::consensus_state::certified_startup;
 use crate::reactor::transport::Engine;
 use crate::runtime::GenesisParameters;
@@ -105,26 +110,119 @@ impl NodeCoordinator {
         config: &EngineConfig,
         conn: &Connection,
     ) -> Result<EngineOutput> {
-        let (context, _, _) = certified_startup(conn).await?;
+        let (context, height, committee) = certified_startup(conn).await?;
         ensure!(
             certified_history::eras::genesis(conn).await? == self.genesis,
             "engine genesis differs from admitted context"
         );
         let manifest = certified_history::protocol(conn, context.protocol).await?;
-        let installed = registry::resolve(&manifest)?;
+        registry::resolve(&manifest)?;
         ensure!(
             config.data_dir.canonicalize()? == self.directory,
             "engine directory differs from admitted directory"
         );
-        let key = config.consensus_enabled.then(|| config.private_key.clone());
+        let mut key = config.consensus_enabled.then(|| config.private_key.clone());
         ensure!(
             key.as_ref().map(|key| *key.public_key().as_bytes()) == self.validator,
             "engine validator mode or identity changed after admission"
         );
+        let address = Address::from_public_key(&config.private_key.public_key());
+        let role = if let Some(validator) = self.validator {
+            let owner = Arc::clone(&self.owner);
+            let wal_path = self.directory.join("consensus-validator.wal");
+            let wal_resume = WalResumeContext {
+                height: height.as_u64(),
+                chain: context.chain.0,
+                era: context.era,
+                protocol: context.protocol.0,
+                codec: context.codec,
+            };
+            let (signer, wal) = tokio::task::spawn_blocking(move || -> Result<_> {
+                Ok((
+                    owner.inspect_signer_recovery(validator)?,
+                    inspect_protected_wal(&wal_path, wal_resume)?,
+                ))
+            })
+            .await
+            .context("validator recovery inspection task failed")??;
+            let wal_height = match wal {
+                WalInspection::Missing => None,
+                WalInspection::Present { height, .. } => Some(height),
+            };
+            let retained = match signer {
+                SignerRecovery::Absent => RecoveryState {
+                    wal_height,
+                    ..RecoveryState::default()
+                },
+                SignerRecovery::Retained(state) => {
+                    if let Some(authorization) = state.latest_authorization
+                        && authorization.height <= height.as_u64()
+                    {
+                        let authority =
+                            certified_history::committee(conn, authorization.height).await?;
+                        let closure = if authorization.height == 1 {
+                            domain_digest(b"kontor/genesis-closure/v1", &authority.encode()?)
+                        } else {
+                            certified_history::completion::completed(conn, authorization.height - 1)
+                                .await?
+                                .id()?
+                        };
+                        ensure!(
+                            authorization.context == authority.context
+                                && authorization.committee == authority.id()?
+                                && authorization.predecessor_decision == authority.decision
+                                && authorization.completed_closure == closure
+                                && authorization.member
+                                    == authority
+                                        .members
+                                        .iter()
+                                        .any(|member| member.key == validator),
+                            "retained signing authorization differs from verified history"
+                        );
+                    }
+                    RecoveryState {
+                        retained_signer: true,
+                        highest_signed_height: state.highest_signed_height,
+                        authorization_height: state.latest_authorization.map(|value| value.height),
+                        wal_height,
+                    }
+                }
+            };
+            config
+                .validator_start
+                .select(
+                    height.as_u64() - 1,
+                    committee.iter().any(|member| member.address == address),
+                    retained,
+                )
+                .map_err(|error| anyhow!(error))?
+        } else {
+            StartRole::Follower {
+                promotion_floor: None,
+            }
+        };
+        let promotion_floor = match role {
+            StartRole::Validator => None,
+            StartRole::Follower { promotion_floor } => {
+                key = None;
+                promotion_floor
+            }
+        };
         // No signing state is opened until closure recovery has established the
         // next engine's exact era and installed implementation.
         let prepared = PreparedGeneration::reserve(&self.owner, context, key)?;
-        let address = Address::from_public_key(&config.private_key.public_key());
+        if let Some(signer) = prepared.signer.clone() {
+            let committee = certified_history::committee(conn, height.as_u64()).await?;
+            let completed_closure = certified_history::frontier(conn)
+                .await?
+                .closure_id
+                .context("startup lacks completed closure")?;
+            tokio::task::spawn_blocking(move || {
+                signer.authorize_height(&committee, completed_closure)
+            })
+            .await
+            .context("startup signing authorization task failed")??;
+        }
         let input = Configuration {
             generation: prepared.ownership.generation(),
             channel_capacity: 128,
@@ -132,11 +230,13 @@ impl NodeCoordinator {
             network_key: prepared.ownership.network_key(),
             listen_address: config.listen_addr.clone(),
             persistent_peers: config.persistent_peers.clone(),
-            // A restart reopens this era's WAL. A protocol switch uses a new
-            // era path, even if the two engines happen to share a WAL codec.
-            wal_path: self
-                .directory
-                .join(format!("consensus-{}.wal", hex::encode(context.era))),
+            // Nonvalidator startup resets its WAL. Never let catch-up discard
+            // the validator's durable votes, including across protocol changes.
+            wal_path: self.directory.join(if prepared.signer.is_some() {
+                "consensus-validator.wal"
+            } else {
+                "consensus-catchup.wal"
+            }),
             discovery_enabled: config.discovery.enabled,
             bootstrap: match config.discovery.bootstrap_protocol {
                 BootstrapProtocol::Kademlia => Bootstrap::Kademlia,
@@ -150,13 +250,14 @@ impl NodeCoordinator {
         };
         let engine = ReactorEngine::start_owned(
             &self.slot,
-            installed.consensus,
+            Runtime,
             input,
             prepared.signer,
             prepared.ownership,
         )?;
         Ok(EngineOutput {
             engine: Engine::managed(engine),
+            promotion_floor,
             address,
         })
     }

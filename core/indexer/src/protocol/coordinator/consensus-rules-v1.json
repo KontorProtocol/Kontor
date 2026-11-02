@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "rules": "kontor/consensus-rules/v1",
+  "committee": "KCA1; ordered Ed25519 keys, Keccak addresses and positive u64 voting power; unique key/address/holder; total power <= u64::MAX / 3",
+  "decision": "KCD1; contiguous global consensus height; authenticated predecessor, historical committee and KVD1 descriptor",
+  "certificate": "codec 1; canonical protobuf commit certificate; distinct committee signers; Ed25519 precommit signatures; strictly greater than two thirds of total power; no vote extensions",
+  "value": "KVD1; chain, era, protocol and codec bound to exact ordered input bytes",
+  "application": "kontor/coordinator/v1; deterministic certified closure before authorizing the next consensus height",
+  "activation": "after Bitcoin H and its lifecycle; atomic migration; subsequent Batch(H) and H+1 use the successor",
+  "upgrade_control": "codec 1; explicit committee authorization; reversible canonical effects; invalidated approvals require fresh authorization",
+  "history": "retain authenticated decisions and historical committees across application rollback; confirmation does not reexecute prior canonical batches"
+}

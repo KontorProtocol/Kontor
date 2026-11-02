@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+#[cfg(kontor_managed)]
+use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -1393,9 +1395,6 @@ impl<E: Executor> Reactor<E> {
             self.prune_finalized_bodies(&conn).await;
         }
         gauge!(DEFERRED_DECISIONS).set(0.0);
-        if self.handoff_if_needed().await? {
-            return Ok(());
-        }
         self.resume_next_height().await
     }
 
@@ -1411,6 +1410,8 @@ impl<E: Executor> Reactor<E> {
         else {
             return Ok(());
         };
+        self.refresh_protocol_execution(self.consensus.protocol_context)
+            .await?;
         let (_, reply) = self
             .consensus
             .pending_next_height
@@ -1419,6 +1420,58 @@ impl<E: Executor> Reactor<E> {
         self.maybe_prune_state().await;
         // Durable completion survives cancellation of this particular engine callback.
         let _ = reply.send(next);
+        #[cfg(kontor_managed)]
+        self.promote_joined_validator(height.as_u64()).await?;
+        Ok(())
+    }
+
+    #[cfg(kontor_managed)]
+    async fn promote_joined_validator(&mut self, closed_height: u64) -> Result<()> {
+        let Some(floor) = self.consensus.promotion_floor else {
+            return Ok(());
+        };
+        if closed_height < floor || self.consensus.validator_index.is_none() {
+            return Ok(());
+        }
+        let coordinator = self
+            .coordinator
+            .as_ref()
+            .context("joining node lacks coordinator")?;
+        let mut config = self
+            .engine_config
+            .clone()
+            .context("joining node lacks engine configuration")?;
+        config.listen_addr = self
+            .consensus
+            .engine
+            .listen_address()
+            .await?
+            .context("joining engine lacks bound listener")?;
+        // Finalized was consumed under the old context. The follower may receive
+        // more network work until joined, but no old callbacks run past this gate.
+        ensure!(
+            self.consensus.engine.stop(Duration::from_secs(10)).await?,
+            "catch-up engine failed to join before validator promotion"
+        );
+        let output = coordinator.start(&config, &self.db_conn()).await?;
+        ensure!(
+            output.promotion_floor.is_none(),
+            "validator promotion lost its verified floor"
+        );
+        self.io_jobs.clear();
+        self.validated_candidates = None;
+        self.consensus.pending_proposal = None;
+        self.consensus.undecided.clear();
+        self.consensus.early_proposals.clear();
+        self.consensus.part_streams = Default::default();
+        self.consensus.current_proposer = None;
+        self.consensus.current_round = Round::new(0);
+        self.consensus.engine = output.engine;
+        self.consensus.promotion_floor = None;
+        info!(
+            closed_height,
+            floor, "Verified catch-up completed; starting validator"
+        );
         Ok(())
     }
 
@@ -1449,6 +1502,14 @@ impl<E: Executor> Reactor<E> {
         timeout: std::time::Duration,
         reply: tokio::sync::oneshot::Sender<LocallyProposedValue<Ctx>>,
     ) -> Result<()> {
+        if round != self.consensus.current_round
+            || !self
+                .consensus
+                .height_is_open(&self.db_conn(), height)
+                .await?
+        {
+            return Ok(());
+        }
         info!(%height, %round, "Building value to propose");
 
         if let Some(existing) = self
