@@ -60,6 +60,18 @@ pub(crate) struct Approval {
     pub(crate) signature: [u8; 64],
 }
 
+impl Approval {
+    pub(crate) fn verify_for(&self, action_id: [u8; 32]) -> Result<(), ControlError> {
+        let public = PublicKey::from_bytes(self.key).map_err(|_| ControlError::Approval)?;
+        let signature = Signature::from_bytes(self.signature);
+        let preimage = approval_digest(action_id, self.key, self.generation)?;
+        if public.verify(&preimage, &signature).is_err() {
+            return Err(ControlError::Signature);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct UpgradeControl {
     pub(crate) action: ControlAction,
@@ -498,12 +510,7 @@ impl UpgradeControl {
             if member.generation != approval.generation {
                 return Err(ControlError::Approval);
             }
-            let public = PublicKey::from_bytes(approval.key).map_err(|_| ControlError::Approval)?;
-            let signature = Signature::from_bytes(approval.signature);
-            let preimage = approval_digest(action, approval.key, approval.generation)?;
-            if public.verify(&preimage, &signature).is_err() {
-                return Err(ControlError::Signature);
-            }
+            approval.verify_for(action)?;
             signed = signed
                 .checked_add(u128::from(member.power))
                 .ok_or(ControlError::Overflow)?;
