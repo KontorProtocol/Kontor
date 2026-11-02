@@ -301,19 +301,18 @@ async fn rehearse(
         }
     }
     service.shutdown();
-    if let Some(driver) = service.take_driver() {
-        if let Err(error) = async {
+    if let Some(driver) = service.take_driver()
+        && let Err(error) = async {
             driver.await??;
             Ok::<_, anyhow::Error>(())
         }
         .await
-        {
-            report.outcome = "failed";
-            report.error = Some(format!(
-                "owner shutdown failed: {error:#}; migration result: {:?}",
-                report.error
-            ));
-        }
+    {
+        report.outcome = "failed";
+        report.error = Some(format!(
+            "owner shutdown failed: {error:#}; migration result: {:?}",
+            report.error
+        ));
     }
     Ok(report)
 }

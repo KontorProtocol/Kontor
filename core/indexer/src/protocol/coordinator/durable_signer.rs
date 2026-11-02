@@ -12,7 +12,9 @@ use crate::consensus::{Address, Ctx, Proposal, ValueId, Vote};
 use crate::protocol::coordinator::certified_input::{Descriptor, EraContext};
 
 use self::store::{EntryRole, Store, ValidatedRequest};
-pub(crate) use ownership::{GenerationOwner, OwnedGeneration};
+#[cfg(kontor_managed)]
+pub(crate) use ownership::GenerationOwner;
+pub(crate) use ownership::OwnedGeneration;
 
 const MAX_SIGNING_PREIMAGE_BYTES: usize = 4_200_000;
 

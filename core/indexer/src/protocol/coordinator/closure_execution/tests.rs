@@ -1,5 +1,6 @@
 use bitcoin::{BlockHash, blockdata::constants::genesis_block, consensus::serialize, hashes::Hash};
 use indexer_types::BlockRow;
+use std::slice;
 use tempfile::TempDir;
 
 use super::*;
@@ -81,7 +82,7 @@ async fn owned_closure_stage_records_real_observation_and_rolls_back_failed_effe
         committee: authority.id()?,
         descriptor: input.descriptor().clone(),
     };
-    let certificate = proof(&decision, &[key.clone()], &[0], 0);
+    let certificate = proof(&decision, slice::from_ref(&key), &[0], 0);
     let certified =
         AuthenticatedDecision::verify(decision.clone(), input, certificate, &authority)?;
     certified_history::append(&conn, &certified).await?;
@@ -245,7 +246,7 @@ async fn owned_closure_stage_records_real_observation_and_rolls_back_failed_effe
     let certified = AuthenticatedDecision::verify(
         decision.clone(),
         input,
-        proof(&decision, &[key.clone()], &[0], 0),
+        proof(&decision, slice::from_ref(&key), &[0], 0),
         &authority,
     )?;
     certified_history::append(&conn, &certified).await?;

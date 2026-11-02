@@ -7,6 +7,7 @@ use crate::upgrade_control::{
 use malachitebft_core_types::Round;
 use std::fs;
 use std::path::Path;
+use std::slice;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
@@ -95,7 +96,7 @@ async fn append(
         committee: authority.id()?,
         descriptor: input.descriptor().clone(),
     };
-    let certificate = proof(&decision, &[key.clone()], &[0], 0);
+    let certificate = proof(&decision, slice::from_ref(key), &[0], 0);
     certified_history::append(
         &conn,
         &AuthenticatedDecision::verify(decision, input, certificate, &authority)?,

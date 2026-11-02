@@ -62,10 +62,8 @@ impl GenerationOwner {
             return Err(fault("generation owner directory is not a plain directory"));
         }
         let directory = fs::canonicalize(directory).map_err(storage)?;
-        if !existed {
-            if let Some(parent) = directory.parent() {
-                sync_directory(parent)?;
-            }
+        if !existed && let Some(parent) = directory.parent() {
+            sync_directory(parent)?;
         }
         let lock_path = directory.join("generation.lock");
         let journal_path = directory.join("generations.log");
@@ -329,10 +327,12 @@ fn append_record(
     Ok(())
 }
 
+type GenerationRecord = (u64, Option<[u8; 32]>, [u8; 32]);
+
 fn read_record(
     journal: &mut File,
     previous: [u8; 32],
-) -> Result<Option<(u64, Option<[u8; 32]>, [u8; 32])>, SigningError> {
+) -> Result<Option<GenerationRecord>, SigningError> {
     let mut record = [0u8; RECORD_BYTES];
     if journal.read(&mut record[..1]).map_err(storage)? == 0 {
         return Ok(None);

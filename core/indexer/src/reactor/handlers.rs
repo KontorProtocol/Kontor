@@ -275,6 +275,9 @@ impl<E: Executor> Reactor<E> {
         msg: impl Into<Message>,
     ) -> Result<consensus_state::ConsensusResult> {
         let mut result = consensus_state::ConsensusResult::None;
+        #[cfg(not(kontor_managed))]
+        let Message::Application(msg) = msg.into();
+        #[cfg(kontor_managed)]
         let msg = match msg.into() {
             Message::Application(msg) => msg,
             Message::Finalized {

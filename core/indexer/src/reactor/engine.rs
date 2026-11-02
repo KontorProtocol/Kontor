@@ -6,7 +6,8 @@ use malachitebft_app_channel::app::config::*;
 use malachitebft_app_channel::app::net::Multiaddr;
 use malachitebft_app_channel::app::types::Keypair;
 use malachitebft_app_channel::{
-    ConsensusContext, NetworkContext, NetworkIdentity, RequestContext, SyncContext, WalContext,
+    Channels, ConsensusContext, EngineHandle, NetworkContext, NetworkIdentity, RequestContext,
+    SyncContext, WalContext,
 };
 
 use super::transport::Engine;
@@ -61,8 +62,24 @@ pub struct EngineOutput {
     pub address: Address,
 }
 
+pub struct LegacyEngineOutput {
+    pub channels: Channels<Ctx>,
+    pub _handle: EngineHandle,
+    pub address: Address,
+    signer: Ed25519Provider,
+}
+
+impl From<LegacyEngineOutput> for EngineOutput {
+    fn from(output: LegacyEngineOutput) -> Self {
+        Self {
+            engine: Engine::legacy(output.channels, output._handle, output.signer),
+            address: output.address,
+        }
+    }
+}
+
 /// Start the Malachite consensus engine and return channels + metadata.
-pub async fn start(config: EngineConfig) -> Result<EngineOutput> {
+pub async fn start(config: EngineConfig) -> Result<LegacyEngineOutput> {
     let public_key = config.private_key.public_key();
     let address = Address::from_public_key(&public_key);
     let keypair = Keypair::ed25519_from_bytes(config.private_key.inner().to_bytes())
@@ -130,8 +147,10 @@ pub async fn start(config: EngineConfig) -> Result<EngineOutput> {
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    Ok(EngineOutput {
-        engine: Engine::legacy(channels, handle, app_provider),
+    Ok(LegacyEngineOutput {
+        channels,
+        _handle: handle,
         address,
+        signer: app_provider,
     })
 }

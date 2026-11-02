@@ -3565,3 +3565,39 @@ for this candidate, not the final cross-platform CI gate or K7/K8 activation wor
 The default branch was verified through GitHub as the K4 merge `0a2cbd89`.
 Consolidated lead and single independent K5/K6 review, scoped final CI and merge
 remain required. No CI, push, publication or new Daybreak assignment occurred.
+
+### K5/K6 consolidated review and final local checks
+
+The lead consolidated review and the single independent review covered base
+`0a2cbd89` through `b0548353`, with no unresolved material source finding. The
+independent reviewer checked 1,634 frozen K4 entries against the base, all 46
+indexed evidence-record hashes, and eight archived linked file/binary bindings.
+Coverage included durable signing and ownership, managed lifecycle, control
+thresholds and committee generations, reversible snapshots/retractions, ordered
+replay and cold reconstruction, and operator API/CLI/SDK/rehearsal behavior.
+Actual cross-era activation remains K7/K8 work, not implied by startup evidence.
+
+Final local workspace Clippy exposed unused managed-only code in ordinary builds,
+style warnings, and an existing gossip integration fixture still consuming the
+old raw startup result. Managed-only declarations now follow their actual cfg;
+legacy startup retains raw channels/handle and moves them into the reactor wrapper
+through a consuming conversion. No managed ownership is cloned or weakened. Other
+corrections preserve lock-file contents explicitly, simplify equivalent conditions
+and assertions, and box CLI report values without changing JSON. The unreleased
+managed definition was regenerated; frozen references are unchanged. The reviewer
+inspected this correction separately and found no material concern.
+
+Core workspace Clippy including tests now passes. All 155 bundle-tool checks,
+38 CI-control checks, six certified-value wire tests (including real signed gossip)
+and six approval-CLI tests pass. The initial tooling attempt failed because the
+host ccache directory was read-only; disabling that wrapper allowed the native
+negative controls to execute. Failed lint/tool logs remain recorded. Final local
+records and review reports are under `.build-cache/k5-k6-*` and
+`.build-cache/k6-final-*`. Previous linked acceptance retains its original
+`e2ec3283` source binding rather than being relabeled as this corrected candidate.
+
+GitHub main remains `0a2cbd89`; no prior branch PR or run existed at the preflight
+check. The existing selectors require one final release-three-platform campaign
+plus bounded dev coverage for the changed execution/build/coordinator inputs.
+There is no automatic exhaustive dev sweep or new performance campaign. Required
+candidate CI and verified merge still gate K7/K8 implementation.

@@ -53,7 +53,7 @@ pub enum UpgradeApprovalCommand {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum ApprovalOutput {
-    Inspect(InspectedAction),
+    Inspect(Box<InspectedAction>),
     Sign(ApprovalFile),
     Assemble(AssembledEnvelope),
 }
@@ -79,7 +79,7 @@ pub struct InspectedAction {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InspectedOperation {
     Schedule {
-        target: InspectedManifest,
+        target: Box<InspectedManifest>,
         activation_height: String,
     },
     Postpone {
@@ -145,7 +145,9 @@ pub fn run(args: UpgradeApprovalArgs) -> Result<ApprovalOutput> {
     match args.command {
         UpgradeApprovalCommand::Inspect { preparation } => {
             let (action, action_id) = read_preparation(&preparation)?;
-            Ok(ApprovalOutput::Inspect(inspect(&action, action_id)?))
+            Ok(ApprovalOutput::Inspect(Box::new(inspect(
+                &action, action_id,
+            )?)))
         }
         UpgradeApprovalCommand::Sign {
             preparation,
@@ -271,7 +273,7 @@ fn inspect(action: &ControlAction, action_id: [u8; 32]) -> Result<InspectedActio
             manifest,
             activation,
         } => InspectedOperation::Schedule {
-            target: inspect_manifest(manifest)?,
+            target: Box::new(inspect_manifest(manifest)?),
             activation_height: activation.to_string(),
         },
         ControlOperation::Postpone {

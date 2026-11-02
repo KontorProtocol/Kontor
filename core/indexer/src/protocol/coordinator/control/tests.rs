@@ -153,16 +153,11 @@ fn exact_thresholds_and_inclusion_power_changes() {
         expires_at: 244,
         operation: ControlOperation::Cancel { target, activation },
     };
-    assert!(matches!(
-        signed(cancel.clone(), &committee.members, &[1]).verify(
-            &state,
-            &committee,
-            reference(),
-            100,
-            0
-        ),
-        Ok(_)
-    ));
+    assert!(
+        signed(cancel.clone(), &committee.members, &[1])
+            .verify(&state, &committee, reference(), 100, 0)
+            .is_ok()
+    );
     assert!(matches!(
         signed(cancel.clone(), &drift.members, &[1]).verify(&state, &drift, reference(), 100, 0),
         Err(ControlError::Threshold)

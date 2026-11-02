@@ -591,8 +591,8 @@ impl ReactorCluster {
                 .expect("recovered cluster committee");
             let genesis = Genesis { validator_set };
 
-            let engine_output = match engine::start(engine_config).await {
-                Ok(o) => o,
+            let engine_output: engine::EngineOutput = match engine::start(engine_config).await {
+                Ok(o) => o.into(),
                 Err(e) => {
                     tracing::error!(node = i, %e, "Failed to start engine");
                     return;

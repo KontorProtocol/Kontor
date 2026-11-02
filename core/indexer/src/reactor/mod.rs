@@ -921,7 +921,7 @@ pub(crate) async fn start_consensus(
         .context("Failed to build genesis from staking contract")?;
 
     consensus_from_engine(
-        engine::start(engine_config).await?,
+        engine::start(engine_config).await?.into(),
         runtime.get_storage_conn(),
         genesis,
         observation_channels,
@@ -948,14 +948,14 @@ async fn start_linked_consensus(
     let output = match coordinator {
         Some(coordinator) => coordinator.start(&engine_config, context)?,
         #[cfg(any(test, feature = "protocol-qualification"))]
-        None => engine::start(engine_config).await?,
+        None => engine::start(engine_config).await?.into(),
         #[cfg(not(any(test, feature = "protocol-qualification")))]
         None => bail!("managed consensus requires node ownership before database startup"),
     };
     #[cfg(not(kontor_managed))]
     let output = {
         let _ = context;
-        engine::start(engine_config).await?
+        engine::start(engine_config).await?.into()
     };
     consensus_from_engine(
         output,

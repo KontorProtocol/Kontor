@@ -106,12 +106,10 @@ impl Store {
     ) -> Result<Self, SigningError> {
         let existed = directory.exists();
         fs::create_dir_all(directory).map_err(storage)?;
-        if !existed {
-            if let Some(parent) = directory.parent() {
-                File::open(parent)
-                    .and_then(|file| file.sync_all())
-                    .map_err(storage)?;
-            }
+        if !existed && let Some(parent) = directory.parent() {
+            File::open(parent)
+                .and_then(|file| file.sync_all())
+                .map_err(storage)?;
         }
         let lock_path = directory.join("owner.lock");
         let path = directory.join("signatures.log");
@@ -123,6 +121,7 @@ impl Store {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&lock_path)
             .map_err(storage)?;
         ownership

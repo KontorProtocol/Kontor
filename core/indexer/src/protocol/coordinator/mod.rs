@@ -10,6 +10,7 @@ pub(crate) mod closure_work;
 pub(crate) mod committee;
 pub(crate) mod control;
 pub(crate) mod decision;
+#[cfg(any(test, kontor_managed))]
 pub(crate) mod durable_signer;
 pub(crate) mod genesis;
 pub(crate) mod linked;

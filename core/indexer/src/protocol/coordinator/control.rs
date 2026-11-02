@@ -24,6 +24,9 @@ const APPROVAL_DOMAIN: &[u8] = b"kontor/upgrade-approval/v1";
 const CONTROL_DOMAIN: &[u8] = b"kontor/upgrade-control/v1";
 const APPROVAL_BYTES: usize = 32 + 32 + 64;
 
+// Control actions are bounded, individually processed values shared by the
+// independently compiled graphs; keep the manifest inline in this value type.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ControlOperation {
     Schedule {
