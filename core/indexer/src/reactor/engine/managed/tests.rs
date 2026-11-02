@@ -1,3 +1,4 @@
+use crate::reactor::engine::ValidatorStart;
 use tempfile::TempDir;
 
 use super::*;
@@ -13,6 +14,7 @@ fn engine_config(dir: &TempDir) -> EngineConfig {
         persistent_peers: vec![],
         data_dir: dir.path().to_path_buf(),
         consensus_enabled: true,
+        validator_start: ValidatorStart::Bootstrap,
         discovery: Default::default(),
     }
 }

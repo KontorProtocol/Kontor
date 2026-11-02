@@ -62,8 +62,11 @@ pub async fn protocol_transition(
     cluster: bool,
     recovery: bool,
     authorized_replay: bool,
+    join: bool,
 ) -> Result<Value> {
-    if authorized_replay {
+    if join {
+        Box::pin(upgrade_qualification::cluster::run_join()).await
+    } else if authorized_replay {
         Box::pin(upgrade_qualification::authorization::run()).await
     } else if recovery {
         Box::pin(upgrade_qualification::recovery::run()).await

@@ -1,3 +1,4 @@
+use crate::reactor::engine::ValidatorStart;
 use std::fs;
 use std::time::Duration;
 
@@ -27,6 +28,7 @@ fn configuration(dir: &TempDir) -> EngineConfig {
         persistent_peers: vec![],
         data_dir: dir.path().to_path_buf(),
         consensus_enabled: true,
+        validator_start: ValidatorStart::Bootstrap,
         discovery: Default::default(),
     }
 }
@@ -97,6 +99,7 @@ pub(crate) async fn run() -> Result<Value> {
             "running engine lost generation ownership"
         );
         let mut next_config = configuration(&dir);
+        next_config.validator_start = ValidatorStart::Resume;
         next_config.listen_addr = listener.clone();
         ensure!(
             NodeCoordinator::open_database(

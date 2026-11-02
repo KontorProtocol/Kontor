@@ -1,6 +1,8 @@
+use crate::reactor::engine::ValidatorStart;
 use std::env;
 use std::fs;
 use std::future::pending;
+use std::num::NonZeroU64;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -9,7 +11,7 @@ use anyhow::{Context, Error, Result, ensure};
 use bitcoin::blockdata::constants::genesis_block;
 use libsql::Connection;
 use malachitebft_app_channel::AppMsg;
-use malachitebft_core_types::Round;
+use malachitebft_core_types::{HeightParams, LinearTimeouts, Round};
 use serde_json::{Value as Json, json};
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -41,6 +43,9 @@ pub(super) fn configuration(path: &Path) -> EngineConfig {
         persistent_peers: vec![],
         data_dir: path.to_path_buf(),
         consensus_enabled: true,
+        validator_start: ValidatorStart::Join {
+            minimum_closed_height: NonZeroU64::new(1).unwrap(),
+        },
         discovery: Default::default(),
     }
 }
@@ -80,6 +85,27 @@ async fn proposal(conn: &Connection, conflicting: bool) -> Result<ProposalData> 
         genesis_block(NETWORK).block_hash(),
         &transactions,
     )?)?))
+}
+
+async fn enter_height(engine: &mut Engine, conn: &Connection, ready: Message) -> Result<Message> {
+    let Message::Application(AppMsg::ConsensusReady { reply }) = ready else {
+        anyhow::bail!("expected engine readiness");
+    };
+    let (_, height, committee) = certified_startup(conn).await?;
+    reply
+        .send((
+            height,
+            HeightParams::new(committee, LinearTimeouts::default(), None),
+        ))
+        .map_err(|_| anyhow::anyhow!("ready reply closed"))?;
+    let started = timeout(Duration::from_secs(20), engine.next())
+        .await??
+        .context("engine stopped before entering height")?;
+    ensure!(
+        matches!(&started, Message::Application(AppMsg::StartedRound { .. })),
+        "engine did not enter its retained WAL height"
+    );
+    Ok(started)
 }
 
 async fn sign(engine: &mut Engine, proposal: &ProposalData) -> Result<String> {
@@ -139,10 +165,15 @@ pub(crate) async fn child(path: &Path, stage: &str) -> Result<()> {
     let (coordinator, _reader, _writer) =
         NodeCoordinator::open_database(&config, DATABASE, NETWORK, 1, &genesis()).await?;
     let mut output = coordinator.start(&config, &execution.db_conn()).await?;
-    let (listener, _ready) = ready(&mut output.engine).await?;
+    let (listener, ready) = ready(&mut output.engine).await?;
     ensure!(path.join("consensus-validator.wal").exists());
-    // Keep ConsensusReady unanswered so no unsolicited proposal races this
-    // first proposal-Fin signature through the production managed transport.
+    // Hold StartedRound unanswered after WAL startup, so no unsolicited
+    // proposal races the explicit first proposal-Fin signature.
+    let _started = if stage == "signed" {
+        Some(enter_height(&mut output.engine, &execution.db_conn(), ready).await?)
+    } else {
+        None
+    };
     let signature = if stage == "signed" {
         Some(
             sign(
@@ -222,13 +253,17 @@ pub(super) async fn run(service: &OwnerService) -> Result<Json> {
         let (context, height, _) = certified_startup(&conn).await?;
         ensure!(context.protocol == target && height == Height::new(2));
         let mut config = configuration(directory.path());
+        if matches!(stage, "engine-ready" | "signed") {
+            config.validator_start = ValidatorStart::Resume;
+        }
         if let Some(listener) = marker["listener"].as_str() {
             config.listen_addr = listener.into();
         }
         let (coordinator, _reader, _writer) =
             NodeCoordinator::open_database(&config, DATABASE, NETWORK, 1, &genesis()).await?;
         let mut output = coordinator.start(&config, &conn).await?;
-        let (listener, _ready) = ready(&mut output.engine).await?;
+        let (listener, ready) = ready(&mut output.engine).await?;
+        let _started = enter_height(&mut output.engine, &conn, ready).await?;
         if let Some(previous) = marker["listener"].as_str() {
             ensure!(listener == previous);
         }

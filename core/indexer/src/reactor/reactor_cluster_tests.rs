@@ -1,4 +1,5 @@
 use crate::protocol::coordinator::certified_input::CommandKind;
+use crate::reactor::engine::ValidatorStart;
 #[path = "ordering_reward_tests.rs"]
 mod ordering_reward_tests;
 #[path = "startup_recovery_tests.rs"]
@@ -548,6 +549,7 @@ impl ReactorCluster {
                 persistent_peers: peers,
                 data_dir: executor.data_dir(),
                 consensus_enabled: true,
+                validator_start: ValidatorStart::Bootstrap,
                 discovery: DiscoveryConfig {
                     enabled: true,
                     bootstrap_protocol: BootstrapProtocol::Full,

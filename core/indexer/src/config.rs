@@ -1,3 +1,4 @@
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 
 use anyhow::{Context, Error as AnyhowError, Result};
@@ -86,6 +87,23 @@ pub struct Config {
         help = "validator (signs votes/proposals) | follower (sync-only)"
     )]
     pub consensus_mode: ConsensusMode,
+
+    #[clap(
+        long,
+        env = "BOOTSTRAP_CONSENSUS",
+        conflicts_with = "join_min_height",
+        help = "Start a validator at initial genesis, without existing signing history"
+    )]
+    #[serde(default)]
+    pub bootstrap_consensus: bool,
+
+    #[clap(
+        long,
+        env = "JOIN_MIN_HEIGHT",
+        conflicts_with = "bootstrap_consensus",
+        help = "Follow verified history through at least this Kontor consensus height before signing (not a Bitcoin height or a guarantee of the latest tip)"
+    )]
+    pub join_min_height: Option<NonZeroU64>,
 
     #[clap(
         long,
@@ -200,6 +218,8 @@ impl Config {
             data_dir: "will be set".into(),
             starting_block_height: 1,
             consensus_mode: ConsensusMode::Follower,
+            bootstrap_consensus: false,
+            join_min_height: None,
             consensus_private_key: None,
             consensus_private_key_file: None,
             consensus_listen_addr: "/ip4/127.0.0.1/tcp/26656".to_string(),
@@ -264,6 +284,45 @@ mod tests {
     use super::*;
     use crate::runtime::Decimal;
     use serde_json::json;
+
+    #[test]
+    fn validator_start_options_require_a_positive_unambiguous_join_floor() {
+        let base = [
+            "kontor",
+            "--bitcoin-rpc-url",
+            "http://127.0.0.1:1",
+            "--bitcoin-rpc-user",
+            "test",
+            "--bitcoin-rpc-password",
+            "test",
+            "--data-dir",
+            "/unused",
+            "--genesis-file",
+            "/unused/genesis.json",
+            "--consensus-mode",
+            "validator",
+        ];
+        let parse = |extra: &[&str]| {
+            Config::try_parse_from(base.iter().copied().chain(extra.iter().copied()))
+        };
+        let resume = parse(&[]).unwrap();
+        assert!(!resume.bootstrap_consensus && resume.join_min_height.is_none());
+        assert!(
+            parse(&["--bootstrap-consensus"])
+                .unwrap()
+                .bootstrap_consensus
+        );
+        assert_eq!(
+            parse(&["--join-min-height", "9"])
+                .unwrap()
+                .join_min_height
+                .unwrap()
+                .get(),
+            9
+        );
+        assert!(parse(&["--join-min-height", "0"]).is_err());
+        assert!(parse(&["--join-min-height", "9", "--bootstrap-consensus"]).is_err());
+    }
 
     #[test]
     fn genesis_requires_an_explicit_admission_floor() {

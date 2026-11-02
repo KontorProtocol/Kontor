@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     io::Write,
+    num::NonZeroU64,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
@@ -26,6 +27,7 @@ use crate::{
     consensus::signing::PrivateKey as Ed25519PrivateKey,
     database::types::OpResultId,
     keygen,
+    reactor::engine::ValidatorStart,
     retry::retry_extended,
     runtime::ContractAddress,
 };
@@ -245,6 +247,7 @@ fn tail_bitcoind_debug_log(data_dir: &Path) -> String {
 }
 
 struct ConsensusNodeConfig {
+    validator_start: ValidatorStart,
     private_key_hex: String,
     listen_addr: String,
     peers: Vec<String>,
@@ -306,6 +309,18 @@ async fn run_kontor(
             .arg(&c.genesis_file);
         for peer in &c.peers {
             cmd.arg("--consensus-peers").arg(peer);
+        }
+        match c.validator_start {
+            ValidatorStart::Bootstrap => {
+                cmd.arg("--bootstrap-consensus");
+            }
+            ValidatorStart::Resume => {}
+            ValidatorStart::Join {
+                minimum_closed_height,
+            } => {
+                cmd.arg("--join-min-height")
+                    .arg(minimum_closed_height.to_string());
+            }
         }
     }
 
@@ -1276,6 +1291,7 @@ impl RegTesterCluster {
         );
         let (mut seed_child, seed_client, seed_api_port) = Self::spawn_node(
             &node_configs[0],
+            ValidatorStart::Bootstrap,
             &[],
             &genesis_path,
             &bitcoin_rpc_url,
@@ -1305,6 +1321,7 @@ impl RegTesterCluster {
         let spawns = node_configs.iter().skip(1).take(active - 1).map(|nc| {
             Self::spawn_node(
                 nc,
+                ValidatorStart::Bootstrap,
                 std::slice::from_ref(&seed_addr),
                 &genesis_path,
                 &bitcoin_rpc_url,
@@ -1459,6 +1476,7 @@ impl RegTesterCluster {
     /// waits for whatever it needs.
     async fn spawn_node(
         nc: &NodeConfig,
+        validator_start: ValidatorStart,
         peers: &[String],
         genesis_path: &std::path::Path,
         bitcoin_rpc_url: &str,
@@ -1466,6 +1484,7 @@ impl RegTesterCluster {
         kontor_bin: &Path,
     ) -> Result<(Child, KontorClient, u16)> {
         let consensus_config = ConsensusNodeConfig {
+            validator_start,
             private_key_hex: hex::encode(nc.ed25519_key.inner().to_bytes()),
             listen_addr: "/ip4/127.0.0.1/tcp/0".to_string(),
             peers: peers.to_vec(),
@@ -1588,6 +1607,13 @@ impl RegTesterCluster {
         let nc = &self.node_configs[index];
         let (child, client, api_port) = Self::spawn_node(
             nc,
+            if nc.api_port == 0 {
+                ValidatorStart::Join {
+                    minimum_closed_height: NonZeroU64::new(1).unwrap(),
+                }
+            } else {
+                ValidatorStart::Resume
+            },
             std::slice::from_ref(&self.seed_addr),
             &self.genesis_path,
             &self.bitcoin_rpc_url,

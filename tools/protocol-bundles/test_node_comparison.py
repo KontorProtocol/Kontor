@@ -14,7 +14,7 @@ from recipes import CONSENSUS_GRAPHS, EXECUTOR_GRAPHS, executor_graphs, graph_ro
 from semantic_baseline import verify as verify_semantics
 from test_semantic_baseline import sample_observation
 from test_node_execution import certified_sample, managed_sample
-from test_transition_evidence import transition_sample, recovery_sample, authorization_sample
+from test_transition_evidence import transition_sample, recovery_sample, authorization_sample, join_sample
 from symbol_tool import TOOLCHAIN
 from type_boundary import ADAPTER_TESTS, PROBES, inputs_for, probes_for
 
@@ -31,7 +31,8 @@ class NodeComparison(unittest.TestCase):
                                  '/cargo/git/checkouts/wasmtime/crates/core/Cargo.toml': 'external workspace',
                                  **{f'/fixture/protocol-bundles/{name}/Cargo.toml':
                                     digest(ROOT / f'protocol-bundles/{name}/Cargo.toml')
-                                    for name in ('node', 'executor-first', 'executor-second', 'consensus-first', 'consensus-second')}}}
+                                    for name in ('node', *(graph.directory for graph in EXECUTOR_GRAPHS.values()),
+                                                 *(graph.directory for graph in CONSENSUS_GRAPHS.values()))}}}
                        for kind in ('node', 'executor', 'consensus')}
 
     def setUp(self):
@@ -155,6 +156,10 @@ class NodeComparison(unittest.TestCase):
                      'graphs': list(recipes), 'semantic_baseline': verify_semantics(observations, ROOT, baseline_graphs(link_set))}
         if link_set == 'managed-node':
             write_json(directory / 'node-authorization.stdout.json', authorization_sample())
+            write_json(directory / 'node-join.stdout.json', join_sample())
+            (directory / 'node-join.stderr.log').write_text('synthetic join log')
+            execution['join'] = {'stdout_sha256': digest(directory / 'node-join.stdout.json'),
+                                 'stderr_sha256': digest(directory / 'node-join.stderr.log')}
             (directory / 'node-authorization.stderr.log').write_text('synthetic authorization log')
             execution['authorization'] = {'stdout_sha256': digest(directory / 'node-authorization.stdout.json'),
                                          'stderr_sha256': digest(directory / 'node-authorization.stderr.log')}
@@ -193,6 +198,30 @@ class NodeComparison(unittest.TestCase):
         original['transition']['stdout_sha256'] = digest(raw)
         write_json(path, original)
         with self.assertRaisesRegex(ValueError, 'transition checks'):
+            compare(self.root, ROOT, 'release', 'success', 'managed-node')
+
+    def test_managed_comparison_requires_join_raw_evidence(self):
+        for cell in self.cells:
+            shutil.rmtree(cell)
+        cells = [self.cell(target, link_set='managed-node') for target in sorted(TARGETS)]
+        directory = cells[0]
+        path = directory / 'node-execution.json'
+        original = json.loads(path.read_text())
+        changed = copy.deepcopy(original)
+        changed.pop('join')
+        write_json(path, changed)
+        with self.assertRaisesRegex(ValueError, 'missing managed join evidence'):
+            compare(self.root, ROOT, 'release', 'success', 'managed-node')
+        write_json(path, original)
+        raw = directory / 'node-join.stdout.json'
+        result = json.loads(raw.read_text())
+        result['required_promoted_vote'] = False
+        write_json(raw, result)
+        with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+            compare(self.root, ROOT, 'release', 'success', 'managed-node')
+        original['join']['stdout_sha256'] = digest(raw)
+        write_json(path, original)
+        with self.assertRaisesRegex(ValueError, 'join did not verify'):
             compare(self.root, ROOT, 'release', 'success', 'managed-node')
 
     def test_managed_comparison_requires_recovery_raw_evidence(self):

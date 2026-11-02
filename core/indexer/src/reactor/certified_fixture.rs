@@ -22,7 +22,7 @@ use malachitebft_app_channel::app::types::ProposedValue;
 use malachitebft_core_types::{CommitSignature, NilOrVal, Round, Validity};
 use tokio::sync::{mpsc, watch};
 
-use super::engine::EngineConfig;
+use super::engine::{EngineConfig, ValidatorStart};
 use super::executor::RuntimeExecutor;
 use super::mempool_fee_index::MempoolFeeIndex;
 use super::{PruneConfig, Reactor, create_executor_session, start_linked_consensus};
@@ -68,6 +68,7 @@ pub(super) async fn reactor_with_consensus(
             persistent_peers: Vec::new(),
             data_dir: directory.to_path_buf(),
             consensus_enabled,
+            validator_start: ValidatorStart::Bootstrap,
             discovery: Default::default(),
         },
         #[cfg(kontor_managed)]

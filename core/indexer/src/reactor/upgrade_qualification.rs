@@ -1,3 +1,4 @@
+use crate::reactor::engine::ValidatorStart;
 use std::fs;
 use std::time::Duration;
 
@@ -134,11 +135,12 @@ async fn wait_closed(conn: &Connection, protocol: ProtocolId, height: u64) -> Re
 }
 
 async fn restart(
-    config: EngineConfig,
+    mut config: EngineConfig,
     genesis: GenesisParameters,
     protocol: ProtocolId,
     expected_view: &str,
 ) -> Result<Value> {
+    config.validator_start = ValidatorStart::Resume;
     let (coordinator, _reader, writer) =
         NodeCoordinator::open_database(&config, DATABASE, NETWORK, 1, &genesis).await?;
     let observer = new_read_only_connection(&config.data_dir, DATABASE).await?;
@@ -279,6 +281,7 @@ pub(crate) async fn run() -> Result<Value> {
         persistent_peers: vec![],
         data_dir: directory.path().to_path_buf(),
         consensus_enabled: true,
+        validator_start: ValidatorStart::Bootstrap,
         discovery: Default::default(),
     };
     let genesis = GenesisParameters {

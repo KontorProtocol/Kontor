@@ -1001,6 +1001,7 @@ async fn consensus_from_engine(
     )
     .await
     .context("Failed to build consensus state")?;
+    state.promotion_floor = engine_output.promotion_floor;
     state.observation = observation_channels;
     state
         .refresh_finality_observation(&conn, last_block_height)

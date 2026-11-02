@@ -1,3 +1,4 @@
+use indexer::reactor::engine::ValidatorStart;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -45,6 +46,7 @@ impl Peer {
             persistent_peers,
             data_dir: directory.path().to_path_buf(),
             consensus_enabled: true,
+            validator_start: ValidatorStart::Bootstrap,
             discovery: Default::default(),
         })
         .await

@@ -1,3 +1,4 @@
+use crate::reactor::engine::ValidatorStart;
 pub(crate) mod fixture;
 mod recovery;
 #[cfg(all(kontor_managed, not(test)))]
@@ -131,6 +132,7 @@ pub(crate) async fn run(
             persistent_peers: Vec::new(),
             data_dir: dir.path().to_path_buf(),
             consensus_enabled: false,
+            validator_start: ValidatorStart::Resume,
             discovery: Default::default(),
         },
         #[cfg(kontor_managed)]

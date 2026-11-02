@@ -190,6 +190,6 @@ async fn exercise(service: &OwnerService) -> Result<Json> {
         "activation_write_failure_atomic": true, "reopened_state_matches": true,
         "invalid_input_rejected_after_reopen": true, "successor_gated_until_closure": true,
         "closed_decisions": 1, "successor_height": 2,
-        "scope": "seeded accepted schedule; linked executors; interrupted database reopen, not process crash or live engine handoff"
+        "scope": "seeded accepted schedule; linked executors; database reopen, killed-process recovery, migration and replay"
     }))
 }

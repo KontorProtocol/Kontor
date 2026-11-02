@@ -1,3 +1,4 @@
+use crate::reactor::engine::ValidatorStart;
 use std::fs;
 use std::time::Duration;
 
@@ -42,6 +43,7 @@ pub(super) async fn run(
         persistent_peers: vec![peer],
         data_dir: directory.path().to_path_buf(),
         consensus_enabled: false,
+        validator_start: ValidatorStart::Resume,
         discovery: Default::default(),
     };
     let (coordinator, _reader, writer) =
