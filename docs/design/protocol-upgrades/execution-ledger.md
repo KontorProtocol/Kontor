@@ -3601,3 +3601,23 @@ check. The existing selectors require one final release-three-platform campaign
 plus bounded dev coverage for the changed execution/build/coordinator inputs.
 There is no automatic exhaustive dev sweep or new performance campaign. Required
 candidate CI and verified merge still gate K7/K8 implementation.
+
+PR 621 opened at `7c5609b1`. Its first control jobs correctly rejected two packaging
+and provenance omissions before starting their expensive matrices. Four frozen K4
+sqlean libraries existed locally but were omitted from Git by the shared-library
+ignore rules. Each matches both its unchanged snapshot digest and the original
+K4 commit bytes. They are now tracked, with narrow retained-sqlean ignore exceptions.
+A clean staged Git export verifies all 1,634 entries against the unchanged inventory.
+The stack manifests also needed refreshed hashes for the changed indexer build
+script and genesis admission sources, plus their dependent manifest hashes. No
+resource cases, settings, thresholds or accepted historical results changed.
+
+After these corrections, seven source-root checks and all 235 stack-control unit
+tests pass. The first local stack-control retry reached all manifest checks but
+six socket fixtures were blocked by the sandbox; the rerun with local sockets
+available passed. Logs and the clean-export/hash comparison are retained under
+`.build-cache/k6-ci-*`. This is packaging/control evidence, not a new workload or
+performance qualification. The original CI lint/security audit passed while the
+remaining ordinary tests continued. The correction is batched locally until those
+jobs expose any additional failures; the failed control matrices are not blindly
+rerun on the unchanged PR candidate.

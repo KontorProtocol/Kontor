@@ -1130,7 +1130,7 @@
     }
   ],
   "claim_status": "candidate_only",
-  "parent_manifest_sha256": "84ccecdbb36d193617b860a4434ebec08d07fe576b309f0e09789b6154b44c05",
+  "parent_manifest_sha256": "33751369c3d78539ecd607376c9ff68d1305f1b2b7c3bc764da02470554e819a",
   "persistent_digest_rules": {
     "format": "row_multiset_and_logical_schema_v2",
     "historical_full_digest_comparison": "excluded_source_provenance_and_format",
@@ -1227,7 +1227,7 @@
     },
     "initial_protocol_definition": {
       "path": "core/indexer/src/protocol/coordinator/genesis.rs",
-      "sha256": "18542d88c717587ea277eb020229fde272925081e6bcde6f58e32408bf1c3ed3"
+      "sha256": "f562a0db3c1539dbf14c66890301e3b433370d47dc59e7d7aae574355fa6d9e3"
     },
     "invocation": {
       "path": "core/indexer/src/runtime/invocation.rs",
@@ -1243,7 +1243,7 @@
     },
     "native_genesis_preflight": {
       "path": "core/indexer/src/database/genesis.rs",
-      "sha256": "11c7a68b89517cdc415a56cbb57edea6c293572a6fd0d1cff3254f35bd313982"
+      "sha256": "21dfec4ed2da2d703c84fd2305e2b8117a49f204df1fd35564dc5716424d51a2"
     },
     "retained_deposit_policy": {
       "path": "core/indexer/src/protocol/v1/deposit.rs",
