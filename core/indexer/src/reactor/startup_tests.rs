@@ -70,6 +70,7 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
         None,
         None,
         None,
+        None,
         engine_config,
         #[cfg(kontor_managed)]
         coordinator,

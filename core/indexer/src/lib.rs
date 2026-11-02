@@ -32,4 +32,5 @@ pub mod stopper;
 pub mod test_utils;
 #[cfg(not(kontor_node))]
 pub mod testlib_exports;
+pub mod upgrade_control;
 pub mod witness_data;

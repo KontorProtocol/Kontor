@@ -331,6 +331,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         reader.clone(),
         info_tx,
     );
+    let (upgrade_tx, upgrade_rx) = mpsc::channel(1);
     let (simulate_tx, simulate_rx) = mpsc::channel(available_parallelism()?.into());
     let (fees_tx, fees_rx) = tokio::sync::watch::channel(indexer_types::Fees::floor(1));
     let event_subscriber_handle = event_subscriber.run(shutdown.signal(), event_rx);
@@ -350,6 +351,7 @@ async fn run_daemon(config: Config) -> Result<()> {
             bitcoin: bitcoin.clone(),
             owner_service: owner_service.clone(),
             simulate_tx,
+            upgrade_tx,
             fees_rx,
             info_rx,
             database_name: filename.to_string(),
@@ -388,6 +390,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         Some(ready_tx),
         Some(event_tx),
         Some(simulate_rx),
+        Some(upgrade_rx),
         engine_config,
         #[cfg(kontor_managed)]
         coordinator,

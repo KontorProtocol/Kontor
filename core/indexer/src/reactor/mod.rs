@@ -46,6 +46,7 @@ mod transport_tests;
 pub mod types;
 #[cfg(test)]
 mod upgrade_control_tests;
+mod upgrades;
 #[cfg(test)]
 mod workload_tests;
 
@@ -96,6 +97,7 @@ use crate::runtime::pool::LinkedSession;
 #[cfg(test)]
 use crate::runtime::{ComponentCache, Runtime, Storage};
 use crate::stopper::ShutdownSignal;
+use crate::upgrade_control::{PendingControl, UpgradeSubmission};
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
     bitcoin_helpers::new_mock_block_hash,
@@ -159,6 +161,8 @@ pub(crate) struct Reactor<E: Executor> {
     ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
+    upgrade_rx: Option<Receiver<UpgradeSubmission>>,
+    pending_control: PendingControl,
     consensus: consensus_state::ConsensusState,
 
     /// Shared with the API (`Env.consensus_listen_addr`); written on the first
@@ -296,6 +300,8 @@ impl<E: Executor> Reactor<E> {
             block_rx,
             mempool_rx,
             simulate_rx,
+            upgrade_rx: None,
+            pending_control: PendingControl::default(),
             ready_tx,
             event_tx,
             consensus,
@@ -453,6 +459,14 @@ impl<E: Executor> Reactor<E> {
             // so its death stops the node through `first_exit` anyway.
             let simulate_rx = async {
                 if let Some(rx) = self.simulate_rx.as_mut() {
+                    rx.recv().await
+                } else {
+                    pending().await
+                }
+            };
+
+            let upgrade_rx = async {
+                if let Some(rx) = self.upgrade_rx.as_mut() {
                     rx.recv().await
                 } else {
                     pending().await
@@ -625,6 +639,14 @@ impl<E: Executor> Reactor<E> {
                         .context("advance failed after consensus message")?;
                     // Yield to allow other channels (block_rx, mempool_rx) to be polled
                     tokio::task::yield_now().await;
+                }
+                submission = upgrade_rx => {
+                    if let Some(submission) = submission {
+                        self.submit_upgrade(submission).await?;
+                        self.try_fulfill_pending_proposal().await?;
+                    } else {
+                        self.upgrade_rx = None;
+                    }
                 }
                 option_event = simulate_rx => {
                     if let Some((tx, ret_tx)) = option_event {
@@ -997,6 +1019,7 @@ pub fn run(
     ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
     simulate_rx: Option<Receiver<Simulation>>,
+    upgrade_rx: Option<Receiver<UpgradeSubmission>>,
     engine_config: engine::EngineConfig,
     #[cfg(kontor_managed)] coordinator: Arc<NodeCoordinator>,
     bitcoin_client: Client,
@@ -1122,6 +1145,7 @@ pub fn run(
                 consensus.mempool.replace(initial_mempool);
                 let mut reactor = Reactor::from_execution(execution, block_rx, mempool_rx,
                     shutdown.clone(), ready_tx, event_tx, simulate_rx, consensus, consensus_listen_addr);
+                reactor.upgrade_rx = upgrade_rx;
                 #[cfg(kontor_managed)]
                 { reactor.coordinator = Some(coordinator); }
 

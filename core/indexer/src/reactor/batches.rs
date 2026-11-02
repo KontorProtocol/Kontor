@@ -985,6 +985,11 @@ impl<E: Executor> Reactor<E> {
             None => return Ok(false),
         };
 
+        if let Some(value) = self.pending_upgrade_value().await? {
+            self.fulfill_pending_with(value).await?;
+            return Ok(true);
+        }
+
         // Block proposals require only local branch checks, so pending bitcoind
         // validation must not delay them.
         if let Some(value) = self.pending_block_value().await? {

@@ -1,4 +1,12 @@
+use super::consensus_state::PendingProposal;
+use crate::consensus::Height;
+use crate::upgrade_control::{
+    SubmissionError, SubmitUpgrade, UpgradeSubmission, decode_submission, snapshot,
+};
+use malachitebft_core_types::Round;
 use std::path::Path;
+use std::time::{Duration, Instant};
+use tokio::sync::oneshot;
 
 use anyhow::{Context, Result};
 use bitcoin::Network;
@@ -295,5 +303,176 @@ async fn finality_undo_restart_and_fresh_approval_match_cold_reconstruction() ->
     );
     execution.owner_service.shutdown();
     cold.owner_service.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
+async fn operator_queue_proposes_exact_approval_before_pending_block_and_drops_consumed_action()
+-> Result<()> {
+    let directory = TempDir::new()?;
+    let key = PrivateKey::from([19; 32]);
+    let owner = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[73; 32])?);
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: owner.x_only_public_key().0.to_string(),
+        ed25519_pubkey: key.public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }]);
+    let mut reactor = Box::pin(certified_fixture::reactor_with_consensus(
+        directory.path(),
+        &genesis,
+        key.clone(),
+        1,
+        true,
+    ))
+    .await?;
+    let first = certified_fixture::empty_block(1);
+    let height = append(
+        &reactor.execution,
+        first.exact_input(reactor.execution.protocol_context)?,
+        &key,
+    )
+    .await?;
+    assert!(
+        snapshot(&reactor.db_conn())
+            .await
+            .unwrap_err()
+            .is::<SubmissionError>()
+    );
+    finish(&mut reactor.execution, height).await?;
+    reactor.consensus.current_height = Height::new(2);
+    let state = snapshot(&reactor.db_conn()).await?;
+    assert_eq!(state.reference_height, "1");
+    assert_eq!(state.inclusion_height, "2");
+    assert_eq!(state.bitcoin_height, "1");
+    assert_eq!(state.nonce, "0");
+    assert!(state.pending.is_none());
+    assert_eq!(
+        state.committee[0].key,
+        hex::encode(key.public_key().as_bytes())
+    );
+
+    let original = schedule(&reactor.execution, &key).await?;
+    let envelope = original.upgrade_control()?;
+    let decoded = decode_submission(SubmitUpgrade {
+        envelope_hex: hex::encode(envelope.encode()?),
+    })?;
+    assert_eq!(decoded, envelope);
+    let mut wrong_codec = envelope.clone();
+    wrong_codec.action.context.codec = 2;
+    let wrong_codec = decode_submission(SubmitUpgrade {
+        envelope_hex: hex::encode(wrong_codec.encode()?),
+    })?;
+    let (reply, result) = oneshot::channel();
+    reactor
+        .submit_upgrade(UpgradeSubmission {
+            envelope: wrong_codec,
+            reply,
+        })
+        .await?;
+    assert!(matches!(result.await?, Err(SubmissionError::Invalid(_))));
+
+    let mut bad = envelope.clone();
+    bad.approvals[0].signature[0] ^= 1;
+    let (reply, result) = oneshot::channel();
+    reactor
+        .submit_upgrade(UpgradeSubmission {
+            envelope: bad,
+            reply,
+        })
+        .await?;
+    assert!(matches!(result.await?, Err(SubmissionError::Invalid(_))));
+
+    for _ in 0..2 {
+        let (reply, result) = oneshot::channel();
+        reactor
+            .submit_upgrade(UpgradeSubmission {
+                envelope: envelope.clone(),
+                reply,
+            })
+            .await?;
+        let queued = result.await??;
+        assert_eq!(queued.status, "queued");
+        assert_eq!(queued.action_id, hex::encode(envelope.action.id()?));
+    }
+    let mut competing = envelope.clone();
+    competing.action.expires_at -= 1;
+    competing.approvals[0] = ApprovalSigner::new(key.clone())
+        .sign(&competing.action, competing.approvals[0].generation)?;
+    let (reply, result) = oneshot::channel();
+    reactor
+        .submit_upgrade(UpgradeSubmission {
+            envelope: competing,
+            reply,
+        })
+        .await?;
+    assert!(matches!(result.await?, Err(SubmissionError::Busy)));
+
+    let batch = ExactInput::batch(reactor.execution.protocol_context, 1, first.hash, &[])?;
+    let height = append(&reactor.execution, batch, &key).await?;
+    assert!(
+        reactor
+            .pending_control
+            .input(&reactor.db_conn(), 3)
+            .await?
+            .is_none()
+    );
+    finish(&mut reactor.execution, height).await?;
+    reactor.consensus.current_height = Height::new(3);
+    assert_eq!(
+        reactor
+            .pending_control
+            .input(&reactor.db_conn(), 3)
+            .await?
+            .unwrap(),
+        original
+    );
+
+    let block = certified_fixture::block(2, first.hash, 0, vec![]);
+    reactor.consensus.pending_blocks.insert(2, block);
+    let (reply, proposed) = oneshot::channel();
+    reactor.consensus.pending_proposal = Some(PendingProposal {
+        height: Height::new(3),
+        round: Round::new(0),
+        reply,
+        hard_deadline: Instant::now() + Duration::from_secs(5),
+    });
+    assert!(reactor.try_fulfill_pending_proposal().await?);
+    let proposed = proposed.await?;
+    assert_eq!(proposed.value.input(), &original);
+    assert!(reactor.consensus.pending_blocks.contains_key(&2));
+    let height = append(&reactor.execution, proposed.value.input().clone(), &key).await?;
+    // A certified but unfinished decision must not erase a valid pending entry.
+    assert!(
+        reactor
+            .pending_control
+            .input(&reactor.db_conn(), 4)
+            .await?
+            .is_none()
+    );
+    finish(&mut reactor.execution, height).await?;
+    reactor.consensus.current_height = Height::new(4);
+    assert!(
+        reactor
+            .pending_control
+            .input(&reactor.db_conn(), 4)
+            .await?
+            .is_none()
+    );
+    let (reply, result) = oneshot::channel();
+    reactor
+        .submit_upgrade(UpgradeSubmission { envelope, reply })
+        .await?;
+    assert!(matches!(result.await?, Err(SubmissionError::Invalid(_))));
+    let state = snapshot(&reactor.db_conn()).await?;
+    assert_eq!(state.nonce, "1");
+    assert!(state.pending.is_some());
+    assert!(
+        reactor
+            .consensus
+            .engine
+            .stop(Duration::from_secs(5))
+            .await?
+    );
+    reactor.execution.owner_service.shutdown();
     Ok(())
 }

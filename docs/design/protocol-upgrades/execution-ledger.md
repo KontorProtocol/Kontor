@@ -3163,3 +3163,59 @@ rebuild. No fork changes, CI runs, PRs, merges or publication were performed.
 Consolidated lead and single independent review remain required for complete
 K5/K6. Source/binary hashes and limitations are recorded in
 `.build-cache/k6-control-command-validation.json`.
+
+### K6 operator submission and proposal production checkpoint (1 November 2026)
+
+Local work based on `1991e61d`, with K5/K6 still incomplete. The daemon now wires
+`GET /api/protocol/upgrades` and `POST /api/protocol/upgrades` to the live reactor.
+GET reads one deferred database snapshot and reports the closed reference,
+canonical Bitcoin position, current control head/nonce/pending plan, reference
+floor and next inclusion committee. Heights, nonce and voting powers are decimal
+strings. Canonical state/manifest bytes accompany their displayed identifiers.
+The endpoint returns unavailable while authenticated history has unfinished work.
+
+POST accepts `{"envelope_hex":"<canonical KUC1 hex>"}` under an explicit body
+limit. It does not sign, collect approvals or amend signed fields. A capacity-one
+submission channel and one pending approved action bound local queue storage.
+Successful responses contain action ID, envelope ID and `status: "queued"`;
+this means queued on that node, not consensus acceptance or durable storage.
+The queue is volatile across restart. Identical pending submissions are
+idempotent; another valid pending action receives a temporary busy response.
+An HTTP timeout does not prove that a submission was not queued; retrying the
+identical envelope is safe while it remains valid. A rolled-back or otherwise
+invalidated action requires fresh approvals as specified by the control protocol.
+
+The proposer reuses live admission on every use and prioritizes a valid control
+before a pending Bitcoin block. Unfinished closure temporarily defers the queue;
+action expiry, changed state, committee changes or retraction invalidate it.
+Malformed or mismatched request context is an ordinary rejection, while database
+and history failures remain fatal infrastructure errors. Lead review caught and
+fixed a potential unsupported-codec error escaping the ordinary rejection path.
+No approval semantics, thresholds, signature domains or rollback rules changed.
+
+Five focused checks passed on the final source: malformed/oversized decoding;
+HTTP bounds, backpressure, closed channel and local acknowledgement; real-executor
+queue/proposal publication with a local Malachite engine; existing banked-verdict
+rollback protection; and pending-recognition/channel-backpressure behavior. The
+proposal test covers bad signatures and codecs, duplicate and competing actions,
+retention through an unrelated closed decision, priority over a pending block,
+exact signed-envelope publication, and rejection after canonical consumption.
+It passed in 18.28s. HTTP validation passed in 0.29s; the two existing regressions
+passed in 17.19s and 17.18s. The daemon test entry point compiled but its filter
+selected zero binary tests, which is not counted as test coverage.
+
+Initial failures were a missing startup-test argument, a disabled-network test
+fixture, sandbox socket restrictions, and an HTTP fixture lacking certified-history
+schema. The final real-engine run used local socket access. These tests use real
+execution/database and proposal publication, but fixture certificates rather than
+a live multi-validator quorum. The managed independent-bundle node has not been
+rebuilt for this checkpoint. Raw commands, source/binary bindings and results are
+in `.build-cache/k6-operator-validation.json` and the referenced logs.
+
+Lead inspection covered input-error versus infrastructure-error handling, queue
+bounds and lifetime, revalidation and proposal ordering, and read snapshot
+consistency. Remaining K6 work includes approval preparation/signing/assembly
+CLI and SDK interfaces, operator migration dry-run/support diagnostics, remaining
+postpone/cancel undo and Bitcoin reorg/committee cases, and consolidated K5/K6
+integration and review. K7/K8 activation/handoff remains the next dependent group.
+No CI, PR, merge, fork changes or publication were performed for this checkpoint.
