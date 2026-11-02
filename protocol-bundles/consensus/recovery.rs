@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{self, Cursor};
+use std::io::{self, Cursor, Read, Write};
 use std::path::Path;
 
 #[cfg(unix)]
@@ -7,6 +7,7 @@ use std::os::unix::fs::MetadataExt;
 
 use malachitebft_engine::wal::decode_entry;
 use malachitebft_wal as wal;
+use sha3::{Digest, Keccak256};
 use tempfile::NamedTempFile;
 
 use crate::consensus::{Ctx, codec::ProtobufCodec};
@@ -34,7 +35,7 @@ pub fn inspect_protected_wal(path: &Path) -> io::Result<WalInspection> {
 
     // The pinned Log::open repairs incomplete tails, so it must only see a private copy.
     let mut copy = NamedTempFile::new()?;
-    let copied = io::copy(&mut source, &mut copy)?;
+    let (copied, original_digest) = copy_and_digest(&mut source, &mut copy)?;
     if copied != before.len() || !same_file(&before, &fs::symlink_metadata(path)?) {
         return Err(invalid("WAL changed while copying"));
     }
@@ -58,7 +59,45 @@ pub fn inspect_protected_wal(path: &Path) -> io::Result<WalInspection> {
     if !same_file(&before, &fs::symlink_metadata(path)?) {
         return Err(invalid("WAL changed while inspecting"));
     }
+    if file_digest(copy.path())? != original_digest {
+        return Err(invalid("WAL copy changed during validation"));
+    }
     Ok(WalInspection::Present { height, entries })
+}
+
+fn copy_and_digest(
+    source: &mut impl Read,
+    destination: &mut impl Write,
+) -> io::Result<(u64, [u8; 32])> {
+    let mut hasher = Keccak256::new();
+    let mut copied = 0u64;
+    let mut buffer = [0u8; 8192];
+    loop {
+        let count = source.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        destination.write_all(&buffer[..count])?;
+        hasher.update(&buffer[..count]);
+        copied = copied
+            .checked_add(count as u64)
+            .ok_or_else(|| invalid("WAL length overflow"))?;
+    }
+    Ok((copied, hasher.finalize().into()))
+}
+
+fn file_digest(path: &Path) -> io::Result<[u8; 32]> {
+    let mut file = File::open(path)?;
+    let mut hasher = Keccak256::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(hasher.finalize().into())
 }
 
 fn invalid(reason: &str) -> io::Error {
