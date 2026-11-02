@@ -49,7 +49,6 @@ fn state() -> ControlState {
         head: [8; 32],
         nonce: 0,
         pending: None,
-        high_water: 100,
     }
 }
 
@@ -57,7 +56,7 @@ fn reference() -> AuthenticatedReference {
     AuthenticatedReference {
         height: 9,
         decision: [9; 32],
-        high_water: 100,
+        bitcoin_height: 100,
     }
 }
 
@@ -121,7 +120,7 @@ fn signed(action: ControlAction, members: &[AuthorityMember], seeds: &[u8]) -> U
 
 fn pending(state: &ControlState, committee: &CommitteeRecord) -> ControlState {
     signed(schedule(state), &committee.members, &[1, 2])
-        .verify(state, committee, reference(), 100)
+        .verify(state, committee, reference(), 100, 0)
         .unwrap()
         .next
 }
@@ -132,13 +131,13 @@ fn exact_thresholds_and_inclusion_power_changes() {
     let committee = make_committee(&state, &[(1, 5), (2, 1)]);
     let control = signed(schedule(&state), &committee.members, &[1]);
     let accepted = control
-        .verify(&state, &committee, reference(), 100)
+        .verify(&state, &committee, reference(), 100, 0)
         .unwrap();
     assert_eq!((accepted.signed_power, accepted.total_power), (5, 6));
     assert_eq!(accepted.next.pending.unwrap().id, PlanId(accepted.action));
     let drift = make_committee(&state, &[(1, 4), (2, 2)]);
     assert!(matches!(
-        control.verify(&state, &drift, reference(), 100),
+        control.verify(&state, &drift, reference(), 100, 0),
         Err(ControlError::Threshold)
     ));
     let mut state = pending(&state, &committee);
@@ -159,17 +158,18 @@ fn exact_thresholds_and_inclusion_power_changes() {
             &state,
             &committee,
             reference(),
-            100
+            100,
+            0
         ),
         Ok(_)
     ));
     assert!(matches!(
-        signed(cancel.clone(), &drift.members, &[1]).verify(&state, &drift, reference(), 100),
+        signed(cancel.clone(), &drift.members, &[1]).verify(&state, &drift, reference(), 100, 0),
         Err(ControlError::Threshold)
     ));
     state.pending.as_mut().unwrap().consumed = true;
     assert!(matches!(
-        signed(cancel, &committee.members, &[1]).verify(&state, &committee, reference(), 100),
+        signed(cancel, &committee.members, &[1]).verify(&state, &committee, reference(), 100, 0),
         Err(ControlError::Plan)
     ));
 }
@@ -199,13 +199,14 @@ fn cancel_requires_strictly_more_than_two_thirds() {
             &state,
             &committee,
             reference(),
-            100
+            100,
+            0
         ),
         Err(ControlError::Threshold)
     ));
     assert!(
         signed(cancel, &committee.members, &[1, 2])
-            .verify(&state, &committee, reference(), 100)
+            .verify(&state, &committee, reference(), 100, 0)
             .unwrap()
             .next
             .pending
@@ -220,7 +221,7 @@ fn approvals_bind_exact_action_key_generation_and_domain() {
     let mut control = signed(schedule(&state), &committee.members, &[1]);
     control.approvals[0].signature[0] ^= 1;
     assert!(matches!(
-        control.verify(&state, &committee, reference(), 100),
+        control.verify(&state, &committee, reference(), 100, 0),
         Err(ControlError::Signature)
     ));
     let mut control = signed(schedule(&state), &committee.members, &[1]);
@@ -228,32 +229,32 @@ fn approvals_bind_exact_action_key_generation_and_domain() {
         .sign(&control.action.id().unwrap())
         .to_bytes();
     assert!(matches!(
-        control.verify(&state, &committee, reference(), 100),
+        control.verify(&state, &committee, reference(), 100, 0),
         Err(ControlError::Signature)
     ));
     let leading = make_committee(&state, &[(1, 1), (2, 5)]);
     let mut control = signed(schedule(&state), &leading.members, &[1, 2]);
     control.approvals[1].signature[0] ^= 1;
     assert!(matches!(
-        control.verify(&state, &leading, reference(), 100),
+        control.verify(&state, &leading, reference(), 100, 0),
         Err(ControlError::Signature)
     ));
     let mut control = signed(schedule(&state), &committee.members, &[1]);
     control.action.expires_at -= 1;
     assert!(matches!(
-        control.verify(&state, &committee, reference(), 100),
+        control.verify(&state, &committee, reference(), 100, 0),
         Err(ControlError::Signature)
     ));
     let mut control = signed(schedule(&state), &committee.members, &[1]);
     control.approvals[0].generation = [99; 32];
     assert!(matches!(
-        control.verify(&state, &committee, reference(), 100),
+        control.verify(&state, &committee, reference(), 100, 0),
         Err(ControlError::Approval)
     ));
     let mut control = signed(schedule(&state), &committee.members, &[1]);
     control.approvals[0].key = *PrivateKey::from([3; 32]).public_key().as_bytes();
     assert!(matches!(
-        control.verify(&state, &committee, reference(), 100),
+        control.verify(&state, &committee, reference(), 100, 0),
         Err(ControlError::Approval)
     ));
     let control = signed(schedule(&state), &committee.members, &[1]);
@@ -261,7 +262,7 @@ fn approvals_bind_exact_action_key_generation_and_domain() {
     duplicate.approvals.push(control.approvals[0].clone());
     assert_eq!(duplicate.encode(), Err(CodecError::UnorderedSet));
     assert!(matches!(
-        duplicate.verify(&state, &committee, reference(), 100),
+        duplicate.verify(&state, &committee, reference(), 100, 0),
         Err(ControlError::Codec(CodecError::UnorderedSet))
     ));
 }
@@ -274,13 +275,19 @@ fn registration_reuse_rejects_old_consent_but_unrelated_churn_does_not() {
     let mut reused = original.clone();
     reused.members[0].generation = [88; 32];
     assert!(matches!(
-        control.verify(&state, &reused, reference(), 100),
+        control.verify(&state, &reused, reference(), 100, 0),
         Err(ControlError::Approval)
     ));
     let mut unrelated = original.clone();
     unrelated.members[1].generation = [77; 32];
-    assert!(control.verify(&state, &unrelated, reference(), 100).is_ok());
-    let accepted = control.verify(&state, &original, reference(), 100).unwrap();
+    assert!(
+        control
+            .verify(&state, &unrelated, reference(), 100, 0)
+            .is_ok()
+    );
+    let accepted = control
+        .verify(&state, &original, reference(), 100, 0)
+        .unwrap();
     assert_eq!(accepted.next.pending.unwrap().id, PlanId(accepted.action));
 }
 
@@ -292,35 +299,41 @@ fn state_cas_reference_expiry_and_notice_are_checked() {
     let mut changed = state.clone();
     changed.head[0] ^= 1;
     assert!(matches!(
-        control.verify(&changed, &committee, reference(), 100),
+        control.verify(&changed, &committee, reference(), 100, 0),
         Err(ControlError::Stale)
     ));
     changed = state.clone();
     changed.nonce = 1;
     assert!(matches!(
-        control.verify(&changed, &committee, reference(), 100),
+        control.verify(&changed, &committee, reference(), 100, 0),
         Err(ControlError::Stale)
     ));
     assert!(matches!(
-        control.verify(&state, &committee, reference(), 245),
+        control.verify(&state, &committee, reference(), 245, 0),
         Err(ControlError::Reference)
     ));
     let mut wrong = reference();
     wrong.decision[0] ^= 1;
     assert!(matches!(
-        control.verify(&state, &committee, wrong, 100),
+        control.verify(&state, &committee, wrong, 100, 0),
+        Err(ControlError::Reference)
+    ));
+    let mut future_bitcoin = reference();
+    future_bitcoin.bitcoin_height = 101;
+    assert!(matches!(
+        control.verify(&state, &committee, future_bitcoin, 100, 0),
         Err(ControlError::Reference)
     ));
     wrong = reference();
     wrong.height = 10;
     assert!(matches!(
-        control.verify(&state, &committee, wrong, 100),
+        control.verify(&state, &committee, wrong, 100, 0),
         Err(ControlError::Reference)
     ));
     let mut action = schedule(&state);
     action.reference_height = 10;
     assert!(matches!(
-        signed(action, &committee.members, &[1]).verify(&state, &committee, wrong, 100),
+        signed(action, &committee.members, &[1]).verify(&state, &committee, wrong, 100, 0),
         Err(ControlError::Reference)
     ));
     let mut action = schedule(&state);
@@ -328,19 +341,18 @@ fn state_cas_reference_expiry_and_notice_are_checked() {
         *activation -= 1;
     }
     assert!(matches!(
-        signed(action, &committee.members, &[1]).verify(&state, &committee, reference(), 100),
+        signed(action, &committee.members, &[1]).verify(&state, &committee, reference(), 100, 0),
         Err(ControlError::Plan)
     ));
     let mut overflow = state.clone();
     overflow.nonce = u64::MAX;
     assert!(matches!(
-        control.verify(&overflow, &committee, reference(), 100),
+        control.verify(&overflow, &committee, reference(), 100, 0),
         Err(ControlError::Overflow)
     ));
-    let mut near_max = state.clone();
-    near_max.high_water = u64::MAX - 1_008;
+    let near_max = state.clone();
     let mut near_max_ref = reference();
-    near_max_ref.high_water = near_max.high_water;
+    near_max_ref.bitcoin_height = u64::MAX - 1_008;
     let mut action = schedule(&near_max);
     action.expires_at = u64::MAX - 864;
     if let ControlOperation::Schedule { activation, .. } = &mut action.operation {
@@ -351,12 +363,12 @@ fn state_cas_reference_expiry_and_notice_are_checked() {
             &near_max,
             &committee,
             near_max_ref,
-            u64::MAX - 1_007
+            u64::MAX - 1_007,
+            0
         ),
         Err(ControlError::Overflow)
     ));
-    near_max_ref.high_water = u64::MAX - 100;
-    near_max.high_water = near_max_ref.high_water;
+    near_max_ref.bitcoin_height = u64::MAX - 100;
     let mut action = schedule(&near_max);
     action.expires_at = u64::MAX;
     assert!(matches!(
@@ -364,7 +376,8 @@ fn state_cas_reference_expiry_and_notice_are_checked() {
             &near_max,
             &committee,
             near_max_ref,
-            near_max_ref.high_water
+            near_max_ref.bitcoin_height,
+            0
         ),
         Err(ControlError::Overflow)
     ));
@@ -380,7 +393,8 @@ fn conflicting_plan_and_postpone_target_are_rejected() {
             &state,
             &committee,
             reference(),
-            100
+            100,
+            0
         ),
         Err(ControlError::Plan)
     ));
@@ -400,7 +414,7 @@ fn conflicting_plan_and_postpone_target_are_rejected() {
         },
     };
     let postponed = signed(action.clone(), &committee.members, &[1])
-        .verify(&state, &committee, reference(), 100)
+        .verify(&state, &committee, reference(), 100, 0)
         .unwrap();
     assert_eq!(postponed.next.pending.unwrap().activation, 1_109);
     if let ControlOperation::Postpone { target, .. } = &mut action.operation {
@@ -411,7 +425,8 @@ fn conflicting_plan_and_postpone_target_are_rejected() {
             &state,
             &committee,
             reference(),
-            100
+            100,
+            0
         ),
         Err(ControlError::Plan)
     ));
@@ -423,7 +438,7 @@ fn conflicting_plan_and_postpone_target_are_rejected() {
         *activation = plan.activation;
     }
     assert!(matches!(
-        signed(action, &committee.members, &[1]).verify(&state, &committee, reference(), 100),
+        signed(action, &committee.members, &[1]).verify(&state, &committee, reference(), 100, 0),
         Err(ControlError::Plan)
     ));
 }
@@ -507,6 +522,17 @@ fn k6_wire_and_signature_match_independent_golden_vector() {
         hex::encode(control.id().unwrap()),
         vector["control_id"].as_str().unwrap()
     );
+    assert_eq!(
+        hex::encode(state.encode().unwrap()),
+        vector["state_empty_hex"].as_str().unwrap()
+    );
+    let accepted = control
+        .verify(&state, &committee, reference(), 100, 0)
+        .unwrap();
+    assert_eq!(
+        hex::encode(accepted.next.encode().unwrap()),
+        vector["state_pending_hex"].as_str().unwrap()
+    );
 }
 
 #[test]
@@ -514,7 +540,7 @@ fn accepted_schedule_does_not_reauthorize_after_committee_change() {
     let original = state();
     let committee = make_committee(&original, &[(1, 5), (2, 1)]);
     let accepted = signed(schedule(&original), &committee.members, &[1])
-        .verify(&original, &committee, reference(), 100)
+        .verify(&original, &committee, reference(), 100, 0)
         .unwrap();
     let changed = make_committee(&original, &[(1, 1), (2, 5)]);
     assert_eq!(accepted.next.pending.unwrap().id, PlanId(accepted.action));
@@ -531,7 +557,7 @@ fn schedule_checks_predecessor_and_schema_without_needing_target_installation() 
     }
     assert!(
         signed(action.clone(), &committee.members, &[1])
-            .verify(&state, &committee, reference(), 100)
+            .verify(&state, &committee, reference(), 100, 0)
             .is_ok()
     );
     if let ControlOperation::Schedule { manifest, .. } = &mut action.operation {
@@ -542,7 +568,8 @@ fn schedule_checks_predecessor_and_schema_without_needing_target_installation() 
             &state,
             &committee,
             reference(),
-            100
+            100,
+            0
         ),
         Err(ControlError::Plan)
     ));
@@ -551,7 +578,7 @@ fn schedule_checks_predecessor_and_schema_without_needing_target_installation() 
         manifest.input_state_schema = 99;
     }
     assert!(matches!(
-        signed(action, &committee.members, &[1]).verify(&state, &committee, reference(), 100),
+        signed(action, &committee.members, &[1]).verify(&state, &committee, reference(), 100, 0),
         Err(ControlError::Plan)
     ));
     let mut action = schedule(&state);
@@ -559,7 +586,7 @@ fn schedule_checks_predecessor_and_schema_without_needing_target_installation() 
         manifest.output_state_schema = 99;
     }
     assert!(matches!(
-        signed(action, &committee.members, &[1]).verify(&state, &committee, reference(), 100),
+        signed(action, &committee.members, &[1]).verify(&state, &committee, reference(), 100, 0),
         Err(ControlError::Plan)
     ));
     let mut differently_migrated = state.clone();
@@ -569,7 +596,13 @@ fn schedule_checks_predecessor_and_schema_without_needing_target_installation() 
     let matching_committee = make_committee(&differently_migrated, &[(1, 5), (2, 1)]);
     assert!(
         signed(action, &matching_committee.members, &[1])
-            .verify(&differently_migrated, &matching_committee, reference(), 100)
+            .verify(
+                &differently_migrated,
+                &matching_committee,
+                reference(),
+                100,
+                0
+            )
             .is_ok()
     );
 }
@@ -600,7 +633,7 @@ fn old_cancel_and_postpone_approvals_cannot_replay_after_postponement() {
     );
     assert!(
         old_cancel
-            .verify(&pending, &committee, reference(), 244)
+            .verify(&pending, &committee, reference(), 244, 0)
             .is_ok()
     );
     let mut stale_plan = old_cancel.action.clone();
@@ -610,7 +643,8 @@ fn old_cancel_and_postpone_approvals_cannot_replay_after_postponement() {
             &pending,
             &committee,
             reference(),
-            100
+            100,
+            0
         ),
         Err(ControlError::Stale)
     ));
@@ -627,15 +661,15 @@ fn old_cancel_and_postpone_approvals_cannot_replay_after_postponement() {
         &[1],
     );
     let after = postpone
-        .verify(&pending, &committee, reference(), 100)
+        .verify(&pending, &committee, reference(), 100, 0)
         .unwrap()
         .next;
     assert!(matches!(
-        old_cancel.verify(&after, &committee, reference(), 100),
+        old_cancel.verify(&after, &committee, reference(), 100, 0),
         Err(ControlError::Stale)
     ));
     assert!(matches!(
-        postpone.verify(&after, &committee, reference(), 100),
+        postpone.verify(&after, &committee, reference(), 100, 0),
         Err(ControlError::Stale)
     ));
     let current = after.pending.as_ref().unwrap();
@@ -657,10 +691,120 @@ fn old_cancel_and_postpone_approvals_cannot_replay_after_postponement() {
             &committee.members,
             &[1, 2],
         )
-        .verify(&after, &committee, reference(), 100)
+        .verify(&after, &committee, reference(), 100, 0)
         .unwrap()
         .next
         .pending
         .is_none()
+    );
+}
+
+#[test]
+fn rollback_floor_rejects_old_and_alternate_consent_after_state_restore() {
+    let restored = state();
+    let mut inclusion = make_committee(&restored, &[(1, 5), (2, 1)]);
+    inclusion.height = 13;
+    let old = signed(schedule(&restored), &inclusion.members, &[1]);
+    let mut alternative_action = schedule(&restored);
+    alternative_action.expires_at = 243;
+    let alternative = signed(alternative_action, &inclusion.members, &[1]);
+    assert!(
+        old.verify(&restored, &inclusion, reference(), 100, 0)
+            .is_ok()
+    );
+    for consent in [&old, &alternative] {
+        assert!(matches!(
+            consent.verify(&restored, &inclusion, reference(), 100, 12),
+            Err(ControlError::Reference)
+        ));
+    }
+    let fresh_reference = AuthenticatedReference {
+        height: 12,
+        decision: [12; 32],
+        bitcoin_height: 80,
+    };
+    let mut fresh_action = schedule(&restored);
+    fresh_action.reference_height = fresh_reference.height;
+    fresh_action.reference_decision = fresh_reference.decision;
+    fresh_action.expires_at = 224;
+    if let ControlOperation::Schedule { activation, .. } = &mut fresh_action.operation {
+        *activation = 1_098;
+    }
+    let fresh = signed(fresh_action, &inclusion.members, &[1]);
+    let accepted = fresh
+        .verify(&restored, &inclusion, fresh_reference, 90, 12)
+        .unwrap();
+    assert_eq!(accepted.next.pending.unwrap().activation, 1_098);
+    assert!(matches!(
+        fresh.verify(&restored, &inclusion, fresh_reference, 90, 13),
+        Err(ControlError::Reference)
+    ));
+}
+
+#[test]
+fn changing_signed_reference_requires_new_approval_signatures() {
+    let restored = state();
+    let mut inclusion = make_committee(&restored, &[(1, 5), (2, 1)]);
+    inclusion.height = 13;
+    let mut old = signed(schedule(&restored), &inclusion.members, &[1]);
+    old.action.reference_height = 12;
+    old.action.reference_decision = [12; 32];
+    let changed_reference = AuthenticatedReference {
+        height: 12,
+        decision: [12; 32],
+        bitcoin_height: 100,
+    };
+    assert!(matches!(
+        old.verify(&restored, &inclusion, changed_reference, 100, 12),
+        Err(ControlError::Signature)
+    ));
+}
+
+#[test]
+fn reversible_control_state_codec_roundtrips_and_rejects_malformed_snapshots() {
+    let empty = state();
+    let empty_bytes = empty.encode().unwrap();
+    assert!(empty_bytes.starts_with(b"KUS1"));
+    assert_eq!(ControlState::decode(&empty_bytes), Ok(empty.clone()));
+    let committee = make_committee(&empty, &[(1, 5), (2, 1)]);
+    let mut with_pending = pending(&empty, &committee);
+    for consumed in [false, true] {
+        with_pending.pending.as_mut().unwrap().consumed = consumed;
+        let bytes = with_pending.encode().unwrap();
+        assert_eq!(ControlState::decode(&bytes), Ok(with_pending.clone()));
+        for length in 0..bytes.len() {
+            assert!(ControlState::decode(&bytes[..length]).is_err(), "{length}");
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert_eq!(
+            ControlState::decode(&trailing),
+            Err(CodecError::TrailingBytes)
+        );
+        let mut bad_consumed = bytes;
+        *bad_consumed.last_mut().unwrap() = 2;
+        assert_eq!(
+            ControlState::decode(&bad_consumed),
+            Err(CodecError::InvalidTag)
+        );
+    }
+    let mut invalid = empty_bytes.clone();
+    invalid[3] = b'2';
+    assert_eq!(ControlState::decode(&invalid), Err(CodecError::InvalidTag));
+    invalid = empty_bytes.clone();
+    *invalid.last_mut().unwrap() = 2;
+    assert_eq!(ControlState::decode(&invalid), Err(CodecError::InvalidTag));
+    invalid = empty_bytes.clone();
+    invalid[68] ^= 1;
+    assert_eq!(
+        ControlState::decode(&invalid),
+        Err(CodecError::InvalidValue)
+    );
+    invalid = empty_bytes.clone();
+    invalid[104..108].copy_from_slice(&u32::MAX.to_be_bytes());
+    assert!(ControlState::decode(&invalid).is_err());
+    assert_eq!(
+        ControlState::decode(&vec![0; super::MAX_BATCH_BYTES + 1]),
+        Err(CodecError::LengthOverflow)
     );
 }

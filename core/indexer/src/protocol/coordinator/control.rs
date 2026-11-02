@@ -4,6 +4,8 @@
 //! target ID and H. KUC1 encloses length-prefixed KUA1 and sorted fixed-width
 //! `(key, generation, signature)` entries. Integers are big-endian. The Schedule
 //! action ID becomes PlanId; the full KUC1 digest becomes the next control head.
+//! KUS1 snapshots `context | current KPM1 | head | nonce | pending tag`, then
+//! `(plan ID, target KPM1, H, consumed tag)` when pending. It contains no clock.
 
 use std::collections::BTreeMap;
 
@@ -68,7 +70,7 @@ pub(crate) struct UpgradeControl {
 pub(crate) struct AuthenticatedReference {
     pub(crate) height: u64,
     pub(crate) decision: [u8; 32],
-    pub(crate) high_water: u64,
+    pub(crate) bitcoin_height: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,7 +88,6 @@ pub(crate) struct ControlState {
     pub(crate) head: [u8; 32],
     pub(crate) nonce: u64,
     pub(crate) pending: Option<PendingPlan>,
-    pub(crate) high_water: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,7 +107,7 @@ pub(crate) enum ControlError {
     Context,
     #[error("stale control head, nonce or expected plan")]
     Stale,
-    #[error("invalid authenticated reference or high-water expiry")]
+    #[error("invalid authenticated reference or Bitcoin-height expiry")]
     Reference,
     #[error("invalid target manifest, plan or activation height")]
     Plan,
@@ -120,6 +121,96 @@ pub(crate) enum ControlError {
     Threshold,
     #[error("control arithmetic overflow")]
     Overflow,
+}
+
+impl ControlState {
+    pub(crate) fn encode(&self) -> Result<Vec<u8>, CodecError> {
+        let current = self.current_manifest.encode()?;
+        if self.context.codec != 1
+            || self.current_manifest.chain != self.context.chain
+            || self.current_manifest.id()? != self.context.protocol
+        {
+            return Err(CodecError::InvalidValue);
+        }
+        let mut out = Encoder::default();
+        out.fixed(b"KUS1")?;
+        self.context.encode(&mut out)?;
+        out.bytes(&current)?;
+        out.fixed(&self.head)?;
+        out.u64(self.nonce)?;
+        match &self.pending {
+            None => out.tag(0)?,
+            Some(plan) => {
+                if plan.manifest.chain != self.context.chain {
+                    return Err(CodecError::InvalidValue);
+                }
+                out.tag(1)?;
+                out.fixed(&plan.id.0)?;
+                out.bytes(&plan.manifest.encode()?)?;
+                out.u64(plan.activation)?;
+                out.tag(u8::from(plan.consumed))?;
+            }
+        }
+        let bytes = out.finish();
+        if bytes.len() > MAX_BATCH_BYTES {
+            return Err(CodecError::LengthOverflow);
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        if bytes.len() > MAX_BATCH_BYTES {
+            return Err(CodecError::LengthOverflow);
+        }
+        let mut input = Decoder::new(bytes);
+        if input.fixed::<4>()? != *b"KUS1" {
+            return Err(CodecError::InvalidTag);
+        }
+        let context = EraContext::decode(&mut input)?;
+        let current_bytes = input.bytes()?;
+        if current_bytes.len() > MAX_MANIFEST_BYTES {
+            return Err(CodecError::LengthOverflow);
+        }
+        let current_manifest = ProtocolManifest::decode(current_bytes)?;
+        let head = input.fixed()?;
+        let nonce = input.u64()?;
+        let pending = match input.tag()? {
+            0 => None,
+            1 => {
+                let id = PlanId(input.fixed()?);
+                let manifest_bytes = input.bytes()?;
+                if manifest_bytes.len() > MAX_MANIFEST_BYTES {
+                    return Err(CodecError::LengthOverflow);
+                }
+                let manifest = ProtocolManifest::decode(manifest_bytes)?;
+                let activation = input.u64()?;
+                let consumed = match input.tag()? {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(CodecError::InvalidTag),
+                };
+                Some(PendingPlan {
+                    id,
+                    manifest,
+                    activation,
+                    consumed,
+                })
+            }
+            _ => return Err(CodecError::InvalidTag),
+        };
+        input.finish()?;
+        let value = Self {
+            context,
+            current_manifest,
+            head,
+            nonce,
+            pending,
+        };
+        if value.encode()? != bytes {
+            return Err(CodecError::InvalidValue);
+        }
+        Ok(value)
+    }
 }
 
 impl ControlAction {
@@ -302,7 +393,8 @@ impl UpgradeControl {
         state: &ControlState,
         inclusion: &CommitteeRecord,
         reference: AuthenticatedReference,
-        inclusion_high_water: u64,
+        inclusion_bitcoin_height: u64,
+        minimum_reference_height: u64,
     ) -> Result<AcceptedControl, ControlError> {
         let control = self.id()?;
         let action = self.action.id()?;
@@ -325,25 +417,24 @@ impl UpgradeControl {
             return Err(ControlError::Stale);
         }
         let latest_expiry = reference
-            .high_water
+            .bitcoin_height
             .checked_add(MAX_REFERENCE_AGE)
             .ok_or(ControlError::Overflow)?;
         if reference.height == 0
+            || reference.height < minimum_reference_height
             || inclusion.height <= reference.height
             || self.action.reference_height != reference.height
             || self.action.reference_decision != reference.decision
-            || reference.high_water > inclusion_high_water
-            || state.high_water > inclusion_high_water
-            || self.action.expires_at < reference.high_water
+            || reference.bitcoin_height > inclusion_bitcoin_height
+            || self.action.expires_at < reference.bitcoin_height
             || self.action.expires_at > latest_expiry
-            || inclusion_high_water > self.action.expires_at
+            || inclusion_bitcoin_height > self.action.expires_at
         {
             return Err(ControlError::Reference);
         }
         let mut next = state.clone();
         next.head = control;
         next.nonce = self.action.nonce;
-        next.high_water = inclusion_high_water;
         match &self.action.operation {
             ControlOperation::Schedule {
                 manifest,
@@ -353,7 +444,7 @@ impl UpgradeControl {
                     return Err(ControlError::Plan);
                 }
                 validate_target(manifest, &state.current_manifest)?;
-                validate_notice(*activation, inclusion_high_water)?;
+                validate_notice(*activation, inclusion_bitcoin_height)?;
                 next.pending = Some(PendingPlan {
                     id: PlanId(action),
                     manifest: manifest.clone(),
@@ -374,7 +465,7 @@ impl UpgradeControl {
                 {
                     return Err(ControlError::Plan);
                 }
-                validate_notice(*activation, inclusion_high_water)?;
+                validate_notice(*activation, inclusion_bitcoin_height)?;
                 next.pending.as_mut().ok_or(ControlError::Plan)?.activation = *activation;
             }
             ControlOperation::Cancel { target, activation } => {
@@ -499,8 +590,8 @@ fn validate_target(
     Ok(())
 }
 
-fn validate_notice(activation: u64, high_water: u64) -> Result<(), ControlError> {
-    let minimum = high_water
+fn validate_notice(activation: u64, inclusion_bitcoin_height: u64) -> Result<(), ControlError> {
+    let minimum = inclusion_bitcoin_height
         .checked_add(NOTICE_HEIGHTS)
         .ok_or(ControlError::Overflow)?;
     if activation < minimum {
