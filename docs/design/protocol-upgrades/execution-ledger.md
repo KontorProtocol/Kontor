@@ -3657,3 +3657,30 @@ and historical acceptance evidence keep their original source identities.
 This fix is batched with the already validated frozen-library/source-pin
 correction for the next PR candidate. Current-head CI remains required before
 merge. No expensive failed campaign was rerun without diagnosing its failures.
+
+### K5/K6 ownership fixture initialization correction
+
+On candidate `99234cab`, the macOS library suite passed 1,035 tests and failed
+ten ownership tests before their assertions: their shared `one_object_pool`
+helper opened a nonexistent `owner.db` through the newly read-only pool manager.
+The helper now initializes the database through the existing writer constructor
+before creating the reader pool. This is a one-line change inside `cfg(test)`;
+production ownership behavior is unchanged. Other directly constructed runtime
+pools were checked for prior writer initialization.
+
+The Linux library job subsequently reported the identical ten fixture failures,
+with 1,041 other tests passing. No additional failure required a separate fix.
+
+All 55 ownership tests passed locally in the dev profile (434.23 seconds),
+including all ten failed CI cases. Formatting passed. The four stack manifests
+were regenerated and their 22 changed values verified to be source and
+parent/group hashes only, with no case or threshold changes. The 235 Python
+controls produced 229 passes and six sandbox socket errors; rerunning the two
+socket modules outside the sandbox passed all seven tests in those modules.
+Raw logs and the exact test-only diff check are recorded in
+`.build-cache/k6-ci-owner-fixture-correction.json` and its referenced files.
+
+The lead reviewed this nonmaterial fixture correction; existing independent
+production review coverage remains applicable. Running CI evidence is retained
+while the correction is validated and remaining failures are collected. These
+local results do not replace the final candidate's required CI checks.

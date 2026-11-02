@@ -358,7 +358,7 @@
     },
     "operation_ownership": {
       "path": "core/indexer/src/runtime/ownership.rs",
-      "sha256": "13f26e74c12040896d44d95f536184438cbaed1e2db2bb3b4b4d7e404fe1a7b3"
+      "sha256": "2d8f5b37ab64813eac3943a1635c00976a88b3c6fe2ac0107e576844618d27e7"
     },
     "pending_host_capture": {
       "path": "tools/native-stack/capture_resource_pending.py",
