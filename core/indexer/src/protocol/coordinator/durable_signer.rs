@@ -889,10 +889,20 @@ mod tests {
         drop(signer);
 
         let reopened = open(directory.path(), 2);
-        reopened
-            .authorize_height(&committee(&reopened, 8, [11; 32]), [12; 32])
-            .unwrap();
-        reopened.sign(vote(&reopened, 8, 0)).unwrap();
+        let reconciled = committee(&reopened, 8, [11; 32]);
+        reopened.authorize_height(&reconciled, [12; 32]).unwrap();
+        let journal = directory.path().join("signatures.log");
+        let length = std::fs::metadata(&journal).unwrap().len();
+        reopened.authorize_height(&reconciled, [12; 32]).unwrap();
+        assert_eq!(std::fs::metadata(&journal).unwrap().len(), length);
+        let new_signature = reopened.sign(vote(&reopened, 8, 0)).unwrap();
+        drop(reopened);
+
+        let repeated = open(directory.path(), 2);
+        let length = std::fs::metadata(&journal).unwrap().len();
+        repeated.authorize_height(&reconciled, [12; 32]).unwrap();
+        assert_eq!(std::fs::metadata(&journal).unwrap().len(), length);
+        assert_eq!(repeated.sign(vote(&repeated, 8, 0)).unwrap(), new_signature);
     }
 
     #[test]
