@@ -38,7 +38,7 @@
     },
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
-      "sha256": "9cd121f3275badd8edf53e75edf53d2e84dc9a9995199634459284882caee3af"
+      "sha256": "25ca26c95cb4b8697f379cae43ecec51140ac8f78dd1a57a5a68a25c22f7e7fb"
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
@@ -310,7 +310,7 @@
     },
     "native_genesis_preflight": {
       "path": "core/indexer/src/database/genesis.rs",
-      "sha256": "21dfec4ed2da2d703c84fd2305e2b8117a49f204df1fd35564dc5716424d51a2"
+      "sha256": "9da6da8a4a57e063c9fc0cd494a8b4639cebd678e81a9a975f25b58059b1b424"
     },
     "native_staking": {
       "path": "native-contracts/staking/src/lib.rs",
@@ -342,15 +342,15 @@
     },
     "native_token": {
       "path": "native-contracts/token/src/lib.rs",
-      "sha256": "b30a2a6a0f38e3426e4f6939f616bf30d1c73f4a1b1eaa6974b0a400e5c7d438"
+      "sha256": "970f930fe53410b6bdf1cdc3f06484aaf27b0ee8b23338505ac0ba4ff17a618d"
     },
     "native_token_binary": {
       "path": "native-contracts/binaries/token.wasm.br",
-      "sha256": "4b5a443f5b26740e61c0ac8fe6bab0b1132b7d6a0f4ae21036166beacb01e500"
+      "sha256": "5aad2956eec9f58ef9aa9bb7be8b80e42ca40e44e97aba5b32fb0f91b5809a38"
     },
     "native_token_wit": {
       "path": "native-contracts/token/wit/contract.wit",
-      "sha256": "975e51548fe46a5a1801e12ab558d6cd367aa1114b38405ee67e02a1ffb89239"
+      "sha256": "a219fe5be5972eab4ba37d4bdb176eeb5558121acbbfc1e45ac6f68eb8c2131b"
     },
     "nft_pages": {
       "path": "core/indexer/src/runtime/nft/query_tests.rs",
@@ -386,7 +386,7 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "63e397bbacb5d2f1908a79bffcce53a1e4760df1d04769d346e35acd2d2b8690"
+      "sha256": "801e4b359afe5690332677d6ccaa1c01b1573cba2ea19b75315209dec5b434e4"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
@@ -550,11 +550,11 @@
     },
     "runtime_pool": {
       "path": "core/indexer/src/runtime/pool.rs",
-      "sha256": "a5f1e9281de50a25ee3e8fc4c57d04616f7e0795e21c389ea034c28dcc0799c7"
+      "sha256": "2e75cd6146deb727ec6682d2a79f6a1e8e0febd5f8d5e4eb070140754e97d516"
     },
     "selected_policy_binding": {
       "path": "core/indexer/src/runtime/selected.rs",
-      "sha256": "7ea80c6e27fcf35577e8cf39125923c9b3884805cc72266f628e49aacfe0b43d"
+      "sha256": "f3b3cc0ee1f638ebccd3012187da7422dcaced94d20bf7af8b41cf7be09a05c5"
     },
     "sqlite_large_values_adapter": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sqlite_large_values.rs",
