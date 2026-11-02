@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, ensure};
 use bitcoin::Network;
-use kontor_consensus_first::{WalInspection, inspect_protected_wal};
+use kontor_consensus_first::{WalInspection, WalResumeContext, inspect_protected_wal};
 use libsql::Connection;
 use malachitebft_app_channel::app::config::{BootstrapProtocol, Selector};
 
@@ -130,10 +130,17 @@ impl NodeCoordinator {
         let role = if let Some(validator) = self.validator {
             let owner = Arc::clone(&self.owner);
             let wal_path = self.directory.join("consensus-validator.wal");
+            let wal_resume = WalResumeContext {
+                height: height.as_u64(),
+                chain: context.chain.0,
+                era: context.era,
+                protocol: context.protocol.0,
+                codec: context.codec,
+            };
             let (signer, wal) = tokio::task::spawn_blocking(move || -> Result<_> {
                 Ok((
                     owner.inspect_signer_recovery(validator)?,
-                    inspect_protected_wal(&wal_path)?,
+                    inspect_protected_wal(&wal_path, wal_resume)?,
                 ))
             })
             .await

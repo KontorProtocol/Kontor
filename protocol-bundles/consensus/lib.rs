@@ -14,7 +14,7 @@ mod consensus;
 mod owner;
 mod protocol;
 mod recovery;
-pub use recovery::{WalInspection, inspect_protected_wal};
+pub use recovery::{WalInspection, WalResumeContext, inspect_protected_wal};
 mod replies;
 mod wire;
 

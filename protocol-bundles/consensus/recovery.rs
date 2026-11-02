@@ -5,12 +5,32 @@ use std::path::Path;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
+use malachitebft_core_consensus::Input;
 use malachitebft_engine::wal::decode_entry;
 use malachitebft_wal as wal;
 use sha3::{Digest, Keccak256};
 use tempfile::NamedTempFile;
 
 use crate::consensus::{Ctx, codec::ProtobufCodec};
+use crate::protocol::coordinator::certified_input::EraContext;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WalResumeContext {
+    pub height: u64,
+    pub chain: [u8; 32],
+    pub era: [u8; 32],
+    pub protocol: [u8; 32],
+    pub codec: u32,
+}
+
+impl WalResumeContext {
+    fn matches(self, context: EraContext) -> bool {
+        self.chain == context.chain.0
+            && self.era == context.era
+            && self.protocol == context.protocol.0
+            && self.codec == context.codec
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WalInspection {
@@ -18,7 +38,7 @@ pub enum WalInspection {
     Present { height: u64, entries: u64 },
 }
 
-pub fn inspect_protected_wal(path: &Path) -> io::Result<WalInspection> {
+pub fn inspect_protected_wal(path: &Path, resume: WalResumeContext) -> io::Result<WalInspection> {
     let before = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(WalInspection::Missing),
@@ -48,9 +68,35 @@ pub fn inspect_protected_wal(path: &Path) -> io::Result<WalInspection> {
     for entry in log.iter()? {
         let bytes = entry?;
         let mut cursor = Cursor::new(bytes.as_slice());
-        decode_entry::<Ctx, ProtobufCodec, _>(&ProtobufCodec, &mut cursor)?;
+        let input = decode_entry::<Ctx, ProtobufCodec, _>(&ProtobufCodec, &mut cursor)?;
         if cursor.position() != bytes.len() as u64 {
             return Err(invalid("WAL entry has trailing bytes"));
+        }
+        match input {
+            Input::Vote(vote) => check_height(vote.message.height.as_u64(), height)?,
+            Input::Proposal(proposal) => {
+                check_height(proposal.message.height.as_u64(), height)?;
+                if height == resume.height
+                    && !resume.matches(proposal.message.value.descriptor().context)
+                {
+                    return Err(invalid(
+                        "WAL proposal value context differs from resumed era",
+                    ));
+                }
+            }
+            Input::ProposedValue(value, _) => {
+                check_height(value.height.as_u64(), height)?;
+                if height == resume.height && !resume.matches(value.value.descriptor().context) {
+                    return Err(invalid(
+                        "WAL proposed value context differs from resumed era",
+                    ));
+                }
+            }
+            Input::PolkaCertificate(certificate) => {
+                check_height(certificate.height.as_u64(), height)?;
+            }
+            Input::TimeoutElapsed(_) => {}
+            _ => return Err(invalid("unexpected WAL input")),
         }
         entries = entries
             .checked_add(1)
@@ -63,6 +109,13 @@ pub fn inspect_protected_wal(path: &Path) -> io::Result<WalInspection> {
         return Err(invalid("WAL copy changed during validation"));
     }
     Ok(WalInspection::Present { height, entries })
+}
+
+fn check_height(entry_height: u64, wal_height: u64) -> io::Result<()> {
+    if entry_height != wal_height {
+        return Err(invalid("WAL entry height differs from header"));
+    }
+    Ok(())
 }
 
 fn copy_and_digest(
