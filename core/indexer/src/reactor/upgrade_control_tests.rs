@@ -24,13 +24,17 @@ use super::executor::RuntimeExecutor;
 use crate::bitcoin_client::Client;
 use crate::consensus::signing::PrivateKey;
 use crate::database::Writer;
+use crate::database::canonical_history;
 use crate::database::certified_history::{self, closure, completion, control};
+use crate::migration_rehearsal::{self, MigrationRehearsalArgs};
 use crate::protocol::coordinator::certified_decision::tests::proof;
 use crate::protocol::coordinator::certified_decision::{AuthenticatedDecision, Decision};
 use crate::protocol::coordinator::certified_input::ExactInput;
 use crate::protocol::coordinator::control::{
     ApprovalSigner, ControlAction, ControlOperation, UpgradeControl,
 };
+use crate::protocol::identity::ExecutionDefinitionId;
+use crate::protocol::v1::migration_definition;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::{Decimal, GenesisParameters, GenesisValidator};
 use crate::stopper::Shutdown;
@@ -760,5 +764,93 @@ async fn prepared_controls_and_bitcoin_reorg_restore_postponed_then_original_sch
         5000
     );
     execution.owner_service.shutdown();
+    Ok(())
+}
+
+#[tokio::test]
+async fn migration_rehearsal_reports_real_snapshot_without_mutating_source() -> Result<()> {
+    let directory = TempDir::new()?;
+    let key = PrivateKey::from([23; 32]);
+    let owner = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[79; 32])?);
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: owner.x_only_public_key().0.to_string(),
+        ed25519_pubkey: key.public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }]);
+    let mut execution = open(directory.path(), &genesis).await?;
+    let height = append(
+        &execution,
+        certified_fixture::empty_block(1).exact_input(execution.protocol_context)?,
+        &key,
+    )
+    .await?;
+    finish(&mut execution, height).await?;
+    let conn = execution.db_conn();
+    let before = certified_history::frontier(&conn).await?;
+    let canonical = canonical_history::state(&conn).await?;
+    let state = control::admission::state(&conn, execution.protocol_context).await?;
+    let mut target = state.current_manifest.clone();
+    target.protocol_number += 1;
+    target.predecessor = state.context.protocol;
+    let path = directory.path().join("upgrade-control.db");
+    let database_bytes = fs::read(&path)?;
+    let wal_path = directory.path().join("upgrade-control.db-wal");
+    let wal_bytes = fs::read(&wal_path).ok();
+    let target_file = directory.path().join("target.json");
+    for case in 0..3 {
+        let mut definition = migration_definition::noop(target.executor);
+        if case == 1 {
+            definition.routine = "not-installed".into();
+        }
+        if case == 2 {
+            target.executor = ExecutionDefinitionId([254; 32]);
+            definition.execution = target.executor;
+        }
+        target.migration = definition.id()?;
+        fs::write(
+            &target_file,
+            serde_json::to_vec(&serde_json::json!({
+                "manifest_hex":hex::encode(target.encode()?),
+                "migration_definition_hex":hex::encode(definition.encode()?),
+            }))?,
+        )?;
+        let report = Box::pin(migration_rehearsal::run(MigrationRehearsalArgs {
+            database: path.clone(),
+            target: target_file.clone(),
+            network: Network::Regtest,
+        }))
+        .await?;
+        assert_eq!(
+            report.outcome,
+            if case == 0 { "succeeded" } else { "failed" }
+        );
+        assert_eq!(report.target_protocol_id, hex::encode(target.id()?.0));
+        assert_eq!(report.decision_height, before.closed_height.to_string());
+        assert_eq!(
+            report.source_protocol_id,
+            hex::encode(state.context.protocol.0)
+        );
+        assert_eq!(report.work_consumed.computation_steps, "0");
+        assert!(!report.authorizes_upgrade);
+        if case == 0 {
+            assert_ne!(report.output_lineage.as_ref(), Some(&report.input_lineage));
+            assert!(report.error.is_none());
+        } else {
+            assert!(report.output_lineage.is_none());
+            assert!(report.error.as_ref().unwrap().contains(if case == 1 {
+                "not registered"
+            } else {
+                "not linked"
+            }));
+        }
+        assert_eq!(certified_history::frontier(&conn).await?, before);
+        assert_eq!(canonical_history::state(&conn).await?, canonical);
+        assert_eq!(
+            control::admission::state(&conn, execution.protocol_context).await?,
+            state
+        );
+        assert_eq!(fs::read(&path)?, database_bytes);
+        assert_eq!(fs::read(&wal_path).ok(), wal_bytes);
+    }
     Ok(())
 }

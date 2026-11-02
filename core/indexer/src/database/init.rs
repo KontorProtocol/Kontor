@@ -60,6 +60,10 @@ pub async fn initialize_database(data_dir: &Path, conn: &libsql::Connection) -> 
     ensure_current_state(conn).await?;
     conn.query("PRAGMA journal_mode = WAL;", ()).await?;
     conn.query("PRAGMA synchronous = NORMAL;", ()).await?;
+    load_extensions(data_dir, conn).await
+}
+
+pub(crate) async fn load_extensions(data_dir: &Path, conn: &Connection) -> Result<(), Error> {
     conn.load_extension_enable()?;
     for (name, bytes) in [("crypto", CRYPTO_LIB)] {
         let p = data_dir.join(format!("{}.{}", name, LIB_FILE_EXT));

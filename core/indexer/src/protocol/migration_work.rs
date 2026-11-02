@@ -114,6 +114,12 @@ impl MigrationMeter {
             Ok(self.used)
         }
     }
+
+    // A rejected charge does not perform its operation or consume that charge.
+    // Earlier charges remain observable even after sticky budget exhaustion.
+    pub(crate) fn used(&self) -> MigrationWork {
+        self.used
+    }
 }
 
 #[cfg(test)]
@@ -144,6 +150,7 @@ mod tests {
             Err(MigrationBudgetExceeded)
         );
         assert_eq!(meter.finish(), Err(MigrationBudgetExceeded));
+        assert_eq!(meter.used(), work);
     }
 
     #[test]
@@ -169,6 +176,7 @@ mod tests {
         );
         assert_eq!(meter.used.computation_steps, 0);
         assert_eq!(meter.used.write_bytes, u64::MAX);
+        assert_eq!(meter.used().computation_steps, 0);
     }
 
     #[test]

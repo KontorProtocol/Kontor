@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use super::bundle_session::{BundleSession, infrastructure};
 use crate::protocol::identity::MigrationDefinition;
+use crate::protocol::migration_work::MigrationWork;
 use crate::protocol::operations::MigrationCall;
 use crate::protocol::v1::definition::execution_definition;
 use crate::protocol::v1::migration::{MigrationContext, MigrationFailure};
@@ -21,16 +22,21 @@ impl BundleSession {
         Arc::new(move |opaque, selection, definition, input| {
             let session = expected.clone();
             Box::pin(async move {
-                session.verify_operation_owner(opaque)?;
+                session.verify_operation_owner(opaque).map_err(unstarted)?;
                 let mut runtime = session.runtime.lock().await;
                 runtime
                     .verify_bundle_operation(&selection, 8)
-                    .map_err(infrastructure)?;
-                let mut runtime = runtime.bind_selection(&selection).map_err(infrastructure)?;
+                    .map_err(infrastructure)
+                    .map_err(unstarted)?;
+                let mut runtime = runtime
+                    .bind_selection(&selection)
+                    .map_err(infrastructure)
+                    .map_err(unstarted)?;
                 runtime.storage.height = selection.3.1;
-                let execution = execution_definition().map_err(|error| (2, error.to_string()))?;
+                let execution =
+                    execution_definition().map_err(|error| (2, error.to_string(), [0; 5]))?;
                 let Ok(definition) = MigrationDefinition::decode(&definition) else {
-                    return Ok(Err(0));
+                    return Ok(Err((0, [0; 5])));
                 };
                 let rewrite = if definition == migration_definition::noop(execution) {
                     false
@@ -41,8 +47,9 @@ impl BundleSession {
                 {
                     true
                 } else {
-                    return Ok(Err(0));
+                    return Ok(Err((0, [0; 5])));
                 };
+                let mut used = MigrationWork::default();
                 let result = async {
                     let mut context = MigrationContext::new(
                         &runtime.storage,
@@ -55,21 +62,30 @@ impl BundleSession {
                         )?,
                     )
                     .await?;
-                    if rewrite {
-                        qualification_rewrite(&mut context).await?;
-                    }
-                    context.finish()
+                    let outcome = if rewrite {
+                        qualification_rewrite(&mut context).await
+                    } else {
+                        Ok(())
+                    };
+                    used = context.used();
+                    outcome.and_then(|()| context.finish())
                 }
                 .await;
                 match result {
                     Ok(work) => Ok(Ok(work.values())),
-                    Err(MigrationFailure::Budget) => Ok(Err(1)),
-                    Err(MigrationFailure::InvalidOperation(_)) => Ok(Err(2)),
-                    Err(MigrationFailure::Infrastructure(message)) => Err((0, message)),
+                    Err(MigrationFailure::Budget) => Ok(Err((1, used.values()))),
+                    Err(MigrationFailure::InvalidOperation(_)) => Ok(Err((2, used.values()))),
+                    Err(MigrationFailure::Infrastructure(message)) => {
+                        Err((0, message, used.values()))
+                    }
                 }
             })
         })
     }
+}
+
+fn unstarted((tag, message): (u8, String)) -> (u8, String, [u64; 5]) {
+    (tag, message, [0; 5])
 }
 
 async fn qualification_rewrite(context: &mut MigrationContext) -> Result<(), MigrationFailure> {

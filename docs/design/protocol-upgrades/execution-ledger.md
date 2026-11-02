@@ -3334,3 +3334,52 @@ diff checks passed. Managed-bundle qualification and the consolidated independen
 K5/K6 review remain pending. Migration rehearsal, failure work reporting, support
 diagnostics, remaining committee and codec coverage remain the next K6 work.
 No CI, PR, merge, fork change or publication occurred.
+
+### K6 operator migration rehearsal and failed-attempt work accounting
+
+On base `2c610a40389d780f53a1a1370c1654b761153fc8`, added
+`kontor rehearse-migration --database ... --network ... --target ...`.
+It opens the existing database read-only, makes a consistent SQLite snapshot
+including committed WAL contents, verifies closed certified/canonical input
+bindings, and runs the exact manifest-bound migration through its registered
+executor with a separate storage owner. The temporary writer enables the ordinary
+foreign-key and checkpoint-function setup without schema initialization. Source
+database bytes and WAL remain unchanged in the real certified-state fixture.
+
+Reports bind the source protocol, era, decision, Bitcoin position, application
+lineage and checkpoint to the target manifest and migration definition. They
+include budget and charged work on success and failure, with decimal-string
+counters. Missing executors and unregistered routines fail explicitly. Reports
+are advisory migration results, not consensus-support qualification, authorization
+or a prediction about future activation state. No recurring rehearsal service,
+live engine, signer or automatic approval was introduced.
+
+The migration boundary now carries consumed work on deterministic rejection and
+host failure. Original error downcasts remain available through an anyhow context.
+Metering, rejected-charge semantics, state rollback and stored successful receipts
+are unchanged. The injected storage failure test verifies partial work, original
+host-error classification, rolled-back data and a successful fresh retry.
+
+Validation: 34 focused migration tests passed, with one ignored subprocess entry
+point exercised by its passing crash-recovery parent. Coverage includes committed
+WAL/uncommitted transaction separation, snapshot writes and source isolation,
+checkpoint hashing and foreign-key enforcement, real certified-state rehearsal,
+unknown routine/unavailable executor reports, and the existing migration substrate
+regressions. `cargo check -p indexer --bin kontor --locked --offline -j 2` passed.
+Raw logs, exact source hashes and the test-binary hash are recorded in
+`.build-cache/k6-migration-rehearsal-validation.json`. The first compile caught an
+old mock error tuple; the new checkpoint fixture initially omitted its referenced
+block. Both were corrected before the passing run. An initial CLI check named
+the package instead of its `kontor` binary and was corrected without rerunning
+the passing tests.
+
+Lead review traced charged-work retention through routine failure, finish and
+transaction settlement; typed error preservation; read-only source access and
+consistent snapshot acquisition; exact target selection; isolated ownership and
+shutdown; checkpoint/foreign-key behavior; and rejection rather than fallback.
+This is in-tree evidence, not a rebuilt independent-bundle qualification or an
+executed CLI-binary smoke test. The changed structural migration result must be
+checked across the independently built graphs before the grouped merge. Installed
+support/last-rehearsal diagnostics, remaining committee/codec coverage, consolidated
+independent review and final K5/K6 integration/CI remain outstanding. No CI run,
+PR, merge or publication occurred for this increment.

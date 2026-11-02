@@ -16,6 +16,7 @@ pub mod keygen;
 pub mod legacy_test_utils;
 pub mod logging;
 pub mod metrics;
+pub mod migration_rehearsal;
 #[cfg(not(kontor_node))]
 pub mod multi_psbt_test_utils;
 mod protocol;

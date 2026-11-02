@@ -19,6 +19,7 @@ use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
 use indexer::info::{compute_info_core, run_info_publisher};
 use indexer::keygen::{self, KeygenArgs};
+use indexer::migration_rehearsal::{self, MigrationRehearsalArgs};
 #[cfg(feature = "protocol-qualification")]
 use indexer::protocol_qualification;
 use indexer::receipt_stream_rotation::{self, ReceiptStreamRotationArgs};
@@ -63,6 +64,8 @@ enum Command {
     Keygen(KeygenArgs),
     /// Inspect, sign or assemble an exact upgrade action offline.
     UpgradeApproval(UpgradeApprovalArgs),
+    /// Rehearse an exact migration on an isolated snapshot without authorizing it.
+    RehearseMigration(MigrationRehearsalArgs),
     /// Recover confirmation positions from one verified canonical raw block.
     BackfillConfirmations(ConfirmationBackfillArgs),
     /// Invalidate receipt resume tokens after restoring a node database backup.
@@ -95,6 +98,12 @@ async fn main() -> Result<()> {
         Command::UpgradeApproval(args) => {
             let result = upgrade_approval_cli::run(args)?;
             println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
+        Command::RehearseMigration(args) => {
+            let report = migration_rehearsal::run(args).await?;
+            println!("{}", serde_json::to_string(&report)?);
+            anyhow::ensure!(report.outcome == "succeeded", "migration rehearsal failed");
             Ok(())
         }
         Command::BackfillConfirmations(args) => {

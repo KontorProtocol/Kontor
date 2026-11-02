@@ -269,6 +269,8 @@ async fn migration_budget_failure_is_sticky_and_outer_rollback_restores_input() 
     context.finish_nested(false).await?;
     assert_eq!(context.delete(1, b"d").await, Err(MigrationFailure::Budget));
     assert_eq!(context.step(0), Err(MigrationFailure::Budget));
+    assert_eq!(context.used().write_operations, 1);
+    assert_eq!(context.used().write_bytes, 8);
     assert_eq!(context.finish(), Err(MigrationFailure::Budget));
     drop(runtime);
     lease.drain().await?;
@@ -327,7 +329,7 @@ async fn retained_migration_operation_requires_exact_definition() -> Result<()> 
             input.callbacks()
         )
         .await
-        .map_err(|(_, message)| anyhow!(message))?,
+        .map_err(|(_, message, _)| anyhow!(message))?,
         Ok([0; 5])
     );
     let mut changed = definition;
@@ -340,8 +342,8 @@ async fn retained_migration_operation_requires_exact_definition() -> Result<()> 
             input.callbacks()
         )
         .await
-        .map_err(|(_, message)| anyhow!(message))?,
-        Err(0)
+        .map_err(|(_, message, _)| anyhow!(message))?,
+        Err((0, [0; 5]))
     );
     lease.drain().await?;
     lease.settle(false).await?;

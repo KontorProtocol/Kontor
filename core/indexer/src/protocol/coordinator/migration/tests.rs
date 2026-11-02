@@ -16,7 +16,7 @@ use tokio::process::Command;
 use tokio::sync::Notify;
 use tokio::time::{sleep, timeout};
 
-use super::{MigrationRejected, MigrationRequest, apply};
+use super::{MigrationAttemptWork, MigrationRejected, MigrationRequest, apply};
 use crate::database::canonical_history::{self, ApplicationCursor, HistoryState};
 use crate::database::connection::new_connection;
 use crate::database::queries::{get_checkpoint_latest, insert_block};
@@ -29,6 +29,7 @@ use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_legacy_p1,
 };
 use crate::protocol::identity::{ChainId, ExecutionIdentity, PlanId};
+use crate::protocol::migration_work::MigrationWork;
 use crate::protocol::v1::migration_definition;
 use crate::runtime::bundle_session::BundleSession;
 use crate::runtime::ownership::OwnerService;
@@ -529,6 +530,17 @@ async fn migration_coordinator_rejects_budget_and_production_test_registry() -> 
                 &MigrationRejected::UnknownDefinition
             })
         );
+        let used = error
+            .downcast_ref::<MigrationAttemptWork>()
+            .context("missing work report")?
+            .0;
+        if qualification {
+            assert_eq!(used.write_operations, 1);
+            assert!(used.read_operations > 0 && used.computation_steps > 0);
+            assert!(used.read_bytes < request.definition.budget.read_bytes);
+        } else {
+            assert_eq!(used, MigrationWork::default());
+        }
         assert_eq!(ready(&session.conn).await?, request.expected);
         assert_eq!(
             live_value(&session, b"migration-input").await?,
@@ -588,6 +600,44 @@ async fn migration_coordinator_rejects_changed_prestate_checkpoint_and_uncommitt
     session.conn.execute("ROLLBACK", ()).await?;
     assert_eq!(ready(&session.conn).await?, request.expected);
     assert!(!service.is_fatal());
+    Ok(())
+}
+
+#[tokio::test]
+async fn migration_reports_partial_work_on_storage_failure_and_preserves_retry() -> Result<()> {
+    let (_dir, session, service, request) = fixture(true).await?;
+    session
+        .conn
+        .execute_batch(
+            "CREATE TRIGGER fail_migration_write BEFORE INSERT ON contract_state
+         WHEN NEW.path = CAST('migration-output' AS BLOB)
+         BEGIN SELECT RAISE(ABORT, 'injected migration storage failure'); END;",
+        )
+        .await?;
+    let selected = selection(&session, &request).await?;
+    let error = apply(&service, &session, &selected, Network::Regtest, &request)
+        .await
+        .unwrap_err();
+    assert!(error.is::<HostFailure>(), "{error:#}");
+    let used = error
+        .downcast_ref::<MigrationAttemptWork>()
+        .context("missing work report")?
+        .0;
+    assert_eq!(used.write_operations, 1);
+    assert!(used.read_operations > 0 && used.read_bytes > 0 && used.computation_steps > 0);
+    assert_eq!(ready(&session.conn).await?, request.expected);
+    assert_eq!(
+        live_value(&session, b"migration-input").await?,
+        Some(b"payload".to_vec())
+    );
+    assert_eq!(live_value(&session, b"migration-output").await?, None);
+    assert!(session.conn.is_autocommit());
+    session
+        .conn
+        .execute_batch("DROP TRIGGER fail_migration_write")
+        .await?;
+    let completed = apply(&service, &session, &selected, Network::Regtest, &request).await?;
+    assert!(completed.work.write_operations > used.write_operations);
     Ok(())
 }
 
@@ -721,8 +771,9 @@ async fn migration_coordinator_reopen_returns_durable_result_without_reexecution
     .await?;
     runtime.network = Network::Regtest;
     let mut executor = link_runtime(runtime, true);
-    executor.operations.migration =
-        Arc::new(|_, _, _, _| Box::pin(async { Err((2, "retry executed a routine".into())) }));
+    executor.operations.migration = Arc::new(|_, _, _, _| {
+        Box::pin(async { Err((2, "retry executed a routine".into(), [0; 5])) })
+    });
     let session = LinkedSession::new(conn, executor);
     let service = OwnerService::new();
     assert_eq!(

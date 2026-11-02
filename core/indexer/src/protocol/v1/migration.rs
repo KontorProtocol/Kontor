@@ -357,6 +357,10 @@ impl MigrationContext {
         Ok(())
     }
 
+    pub(crate) fn used(&self) -> MigrationWork {
+        self.meter.used()
+    }
+
     pub(crate) fn finish(mut self) -> Result<MigrationWork> {
         self.step(0)?;
         if self.depth != 0 {

@@ -4,7 +4,7 @@ The operator API prepares unsigned actions from closed canonical history. The
 offline CLI inspects those bytes, signs an explicitly selected action, and
 assembles approval files. Submission queues the resulting envelope at one node;
 it does not establish consensus acceptance. This K5/K6 workflow does not yet
-implement activation or the operator migration dry run, which remain unfinished.
+implement activation.
 
 Use the node API base URL, for example `http://localhost:8080/api`. Heights, voting
 powers and nonces are decimal strings, including in SDK responses. Do not convert
@@ -51,9 +51,9 @@ Inspection decodes the canonical bytes, checks their action ID and displays ever
 signed field, including manifest definitions for Schedule. It ignores any extra
 display metadata in the preparation file. Check the intended chain, current
 protocol/era, action, target, activation, expiry and history reference. Independently
-verify the proposed manifest and installed implementation. Once migration rehearsal
-is available, run it before approval and repeat as activation approaches; a rehearsal
-is advisory and never authorizes an upgrade.
+verify the proposed manifest and installed implementation. Run migration rehearsal
+before approval and repeat as activation approaches; a rehearsal is advisory and
+never authorizes an upgrade.
 
 Until the activation transition is implemented, a pending schedule prevents an
 ordinary Bitcoin block at H or later from being proposed, accepted or applied.
@@ -62,6 +62,49 @@ This intermediate implementation must not be used to carry a network through an
 activation. A replacement Bitcoin block is checked against the control state
 that survives rollback to its parent, so removed schedules do not keep blocking
 the chain and undoing a postponement or cancellation restores the prior boundary.
+
+## Rehearse the selected migration
+
+Supply the exact canonical target manifest and migration definition in `target.json`:
+
+```json
+{
+  "manifest_hex": "<canonical KPM1 manifest hexadecimal>",
+  "migration_definition_hex": "<canonical migration definition hexadecimal>"
+}
+```
+
+The definition must match the manifest's migration identifier and executor.
+These are release artifacts, not instructions for selecting an arbitrary routine
+or changing its budget. Use the network of the source database:
+
+```sh
+kontor rehearse-migration \
+  --database /path/to/node/indexer.db \
+  --network regtest \
+  --target target.json > rehearsal.json
+```
+
+The command opens the source read-only and copies a consistent SQLite snapshot,
+including committed WAL contents, into a temporary directory. It requires fully
+closed certified history; if execution is in progress, retry once the node catches
+up. It runs the migration through the selected executor with an independent storage
+owner. No live engine or signer is created. Allow temporary disk space for a full
+database copy; the copy is removed when the command finishes.
+
+The JSON report identifies source protocol, era, certified decision, Bitcoin
+position, application lineage and checkpoint, together with the exact target
+manifest and migration definition. Work budget and consumed work use decimal
+strings. Failed operations report earlier charged work even when their state
+changes roll back; a rejected over-budget charge is not included. Missing executors
+and unregistered routines fail rather than falling back to another implementation.
+An attempted migration failure produces a report and a nonzero CLI exit status.
+Invalid files or an unusable source snapshot fail before execution.
+
+Success means only that this migration succeeded against this snapshot. It does
+not verify consensus implementation support, authorize scheduling, predict future
+state, or guarantee activation. Retain the report with its inputs and rerun it near
+activation. There is no background rehearsal service or automatic approval.
 
 ## Approve the exact action
 

@@ -216,12 +216,10 @@ pub(crate) fn session_factory(
     session_factory_for_definition(network, execution_definition()?, view_gas_limit)
 }
 
-#[cfg(any(kontor_linked, test, feature = "protocol-qualification"))]
 #[derive(Debug, thiserror::Error)]
 #[error("execution definition {0:?} is not linked for production")]
 pub(crate) struct UnavailableExecutionDefinition(pub(crate) ExecutionDefinitionId);
 
-#[cfg(any(kontor_linked, test, feature = "protocol-qualification"))]
 pub(crate) fn session_factory_for_definition(
     network: Network,
     definition: ExecutionDefinitionId,
