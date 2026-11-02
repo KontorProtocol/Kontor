@@ -394,7 +394,7 @@ def build_node(graphs, args, base_env, output, consensus=()):
     recipes = executor_graphs(args.link_set)
     managed = args.link_set == "managed-node"
     if managed != bool(consensus):
-        raise RuntimeError("managed node requires independently built consensus graphs")
+        raise RuntimeError("managed node requires the pinned consensus runtime graph")
     if ([graph["graph"] for graph in graphs] != list(recipes)
             or (managed and [graph["graph"] for graph in consensus] != list(CONSENSUS_GRAPHS))):
         raise RuntimeError("node graph set differs from the selected build recipe")
@@ -456,7 +456,7 @@ def build_node(graphs, args, base_env, output, consensus=()):
                     ("role", "graph", "facade_sha256", "build_inputs_sha256")},
                  "definition": (graphs[index]["execution_definition"]["execution_definition_id"]
                                 if index < 2 else coordinator[library["graph"]]["consensus_definition"]),
-                 "wire_codec": None if index < 2 else index - 1}
+                 "wire_codec": None if index < 2 else 1}
                 for index, library in enumerate(libraries)
             ],
         }

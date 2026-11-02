@@ -12,7 +12,6 @@ path = "../consensus/lib.rs"
 
 [features]
 default = []
-wire-v2 = []
 
 [dependencies]
 anyhow = { version = "=1.0.104", default-features = false }

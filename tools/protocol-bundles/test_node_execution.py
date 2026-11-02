@@ -20,7 +20,7 @@ def certified_sample(link_set="k4-node"):
                      if link_set == 'managed-node' else 'protocol-bundles/executor-observer/definition.bin')
     executor = hashed(b'kontor/execution-definition/v1', (ROOT / executor_path).read_bytes())
     chain = bytes([7]) * 32
-    consensus_path = ('core/indexer/src/protocol/coordinator/managed/definitions/first.json'
+    consensus_path = ('core/indexer/src/protocol/coordinator/consensus-rules-v1.json'
                       if link_set == 'managed-node' else
                       'core/indexer/src/protocol/coordinator/baseline/consensus.json')
     consensus = bytes.fromhex(hashed(b'kontor/consensus-definition/v1', (ROOT / consensus_path).read_bytes()))

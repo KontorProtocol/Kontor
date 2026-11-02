@@ -20,7 +20,9 @@ use crate::protocol::coordinator::durable_signer::{
 };
 use crate::protocol::coordinator::managed::control::EngineSlot;
 use crate::protocol::coordinator::managed::reactor::ReactorEngine;
-use crate::protocol::coordinator::managed::startup::{Bootstrap, Configuration, PeerSelection};
+use crate::protocol::coordinator::managed::startup::{
+    Bootstrap, Configuration, PeerSelection, Runtime,
+};
 use crate::protocol::coordinator::registry;
 use crate::reactor::consensus_state::certified_startup;
 use crate::reactor::transport::Engine;
@@ -111,7 +113,7 @@ impl NodeCoordinator {
             "engine genesis differs from admitted context"
         );
         let manifest = certified_history::protocol(conn, context.protocol).await?;
-        let installed = registry::resolve(&manifest)?;
+        registry::resolve(&manifest)?;
         ensure!(
             config.data_dir.canonicalize()? == self.directory,
             "engine directory differs from admitted directory"
@@ -164,7 +166,7 @@ impl NodeCoordinator {
         };
         let engine = ReactorEngine::start_owned(
             &self.slot,
-            installed.consensus,
+            Runtime,
             input,
             prepared.signer,
             prepared.ownership,

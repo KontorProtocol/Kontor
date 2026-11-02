@@ -1065,6 +1065,46 @@ Separate semantic certificate rules from runtime build provenance; future runtim
 updates require historical compatibility evidence. Defer Malachite fork cleanup
 until after this initiative, retaining current lifecycle fixes.
 
+The bounded live proof and existing migration/recovery suite passed locally,
+recorded in the execution ledger at `e7b131d3`. Proceed with the coherent refactor.
+P1 and P2 name the same versioned consensus-rule definition. The node build record
+separately binds the runtime source/dependency graph, compiler and linked artifact;
+a matching rule identifier is not itself evidence of compatible behavior. Any
+runtime update must pass the applicable historical certificate, replay and sync
+checks before release. Changes to certificate semantics require a new rule
+definition and explicit protocol support. Historical executors retain their own
+immutable definitions and independently locked graphs.
+
+Startup policy agreed by lead and the existing independent reviewer in
+`SINGLE-MALACHITE-JOIN-1`:
+
+- Bootstrap is an explicit initial-genesis operation. Resume requires retained
+  validator state and first completes any durable unfinished application closure.
+  If D is the completed consensus height, resume N = D+1, including its existing
+  rounds and exact signature retries. Do not require N to be certified first.
+- Preserve and replay a valid validator WAL at N. A WAL below N can reset forward
+  only when authenticated closure covers it. WAL or signer state ahead of N
+  requires reconstruction, never a backward reset. Missing/corrupt state cannot
+  silently create a fresh validator. A missing WAL before any signature at the
+  unfinished height is distinct from losing an unfinished signed WAL.
+- Join starts as a non-signing follower. Require a positive operator-supplied
+  minimum closed consensus height and verified closure through the maximum of
+  that minimum, local consensus-signature height, protected WAL height and latest
+  authorization height minus one. The configured minimum is a lower-bound policy,
+  not proof of the current network tip. Missing history or unavailable peers
+  cannot authorize signing. Nonmembers remain followers.
+- Before promotion, fully stop/join the follower, recheck the durable boundary,
+  reconcile protected state, authorize N and start the validator. Keep exclusive
+  node ownership throughout. Inspect a private copy of a protected WAL: the
+  pinned WAL library repairs partial tails when opening files. Reuse its sequence
+  and entry decoder APIs, without a new fork change or journal. WAL entries can
+  include remote messages, so they need not correspond one-for-one to local
+  signatures. Read-only follower mode never promotes.
+
+Representative coverage includes all-validator restart at unfinished N,
+authorization-before-WAL interruption, stale database with ahead signer/WAL,
+missing/corrupt protected WAL, and promotion only after verified closure.
+
 Use focused local checks and one consolidated independent review, then scoped
 final-candidate CI. Reuse prior research and valid unchanged evidence; do not
 restart performance campaigns or exhaustive diagnostics. This is a plan, not

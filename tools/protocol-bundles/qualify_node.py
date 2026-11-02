@@ -11,7 +11,6 @@ import sys
 import time
 
 from build import ROOT, digest, write_json
-from managed_definition import DESTINATION as MANAGED_DEFINITION
 from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, executor_graphs
 from semantic_baseline import verify as verify_semantics
 from symbol_tool import TOOLCHAIN
@@ -61,7 +60,7 @@ def verify_certified_history(observations, link_set, root=ROOT):
         graph = executor_graphs(link_set)['first' if link_set == 'managed-node' else 'observer']
         executor = hashed(b'kontor/execution-definition/v1',
                           (root / graph.source_root / 'protocol-bundles' / graph.directory / 'definition.bin').read_bytes())
-        consensus_path = (MANAGED_DEFINITION if link_set == 'managed-node' else
+        consensus_path = ('core/indexer/src/protocol/coordinator/consensus-rules-v1.json' if link_set == 'managed-node' else
                           'core/indexer/src/protocol/coordinator/baseline/consensus.json')
         consensus = hashed(b'kontor/consensus-definition/v1', (root / consensus_path).read_bytes())
         # KPM1 baseline uses one transaction format and one host ABI.

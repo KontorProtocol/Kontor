@@ -4672,3 +4672,39 @@ K9 remains incomplete: remove dual-consensus build scaffolding, separate semanti
 identity from build provenance, complete joining/promotion and targeted historical
 sync rejection/resumption coverage, then consolidate lead and independent review
 before scoped final-candidate CI. No PR was pushed and no CI launched for this proof.
+
+### Single-runtime build refactor in progress
+
+Protocol manifests now bind `consensus-rules-v1.json`, shared by P1 and P2, instead
+of the whole node/runtime build. The runtime reference remains independently
+checked by the embedded build record. Protocol registration no longer selects a
+consensus implementation. The production recipe links two historical executors
+and one pinned consensus runtime, and rejects an extra runtime. Removed the second
+consensus manifest/lock/reference, alternate wire-codec feature, dual adapters and
+cross-runtime type probes. Generation ownership, signer fencing, shutdown/join
+and historical executor isolation remain in place. Tests still exercise successive
+runtime generations, including a test-fixture authorization needed by the new
+per-height signer.
+
+The ordinary baseline and successor identity checks passed (2 plus 1 tests).
+Build-control validation passed 175 of 176 tests before correcting one remaining
+four-library attestation assumption; the affected 12-test node-build suite then
+passed. Subsequent consensus-input and node-execution evidence suites passed
+(12 and 15 tests). Four adapter tests and four interface compilation controls
+passed against the previously staged pinned runtime library. The release managed
+build subsequently passed with fresh evidence under
+`.build-cache/single-runtime-refactor-linked`, reusing only compilation caches.
+Its node report confirms two execution graphs and one consensus graph. Executable
+SHA-256: `1aac8de22866dbda6fe43e88b8b60e966e97bf04770b81fd87f103567b8c5a14`.
+Node source-input digest:
+`d71a0a6e133bc6354e0249d18c614b35032afa903385cd00aba91454287759c8`.
+
+The new executable passed the bounded live activation/catch-up/restart command
+and the three-validator transition/reorg command. Results are in
+`.build-cache/single-runtime-refactor-transition.json` and
+`.build-cache/single-runtime-refactor-cluster.json`. The latter passed the existing
+transition evidence verifier: matching closure/state, restoration of P1 in a fresh
+era, reapplied migration, retained history, RPC continuity and Bitcoin ingestion
+continuity. The bounded command again verified unchanged engine generation and
+network owner through activation and a fresh follower's exact historical prefix.
+No CI has been launched. Joining/promotion and final review remain incomplete.

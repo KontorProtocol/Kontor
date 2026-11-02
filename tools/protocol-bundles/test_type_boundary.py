@@ -29,7 +29,7 @@ class Diagnostics(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'unknown retained executor interface'):
             probes_for(graphs)
 
-    def test_adapter_test_evidence_requires_both_bundles_and_successful_exit(self):
+    def test_adapter_test_evidence_requires_runtime_tests_and_successful_exit(self):
         summary = f'test result: ok. {len(ADAPTER_TESTS)} passed; 0 failed; 0 ignored;'
         output = '\n'.join(f'test {name} ... ok' for name in ADAPTER_TESTS) + '\n' + summary
         self.assertTrue(adapter_tests_passed(0, output))
@@ -62,7 +62,7 @@ class ConsensusLibraries(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             graphs = []
-            for label in ('first', 'second'):
+            for label in ('first',):
                 inputs = root / label
                 inputs.mkdir()
                 facade = inputs / f'libconsensus_{label}.rlib'
@@ -73,14 +73,16 @@ class ConsensusLibraries(unittest.TestCase):
                                'facade': str(facade), 'link_inputs': str(inputs),
                                'artifacts': [{'path': str(path), 'sha256': sha(path)} for path in (facade, tokio)]})
             self.assertEqual(probes_for(graphs), CONSENSUS_PROBES)
+            with self.assertRaisesRegex(RuntimeError, 'pinned runtime graph'):
+                probes_for(graphs + [dict(graphs[0], graph='second')])
             arguments, libraries = inputs_for(graphs, True)
-            self.assertEqual(set(libraries), {'first', 'second', 'first_tokio', 'second_tokio'})
+            self.assertEqual(set(libraries), {'first', 'first_tokio'})
             self.assertIn('dependency=' + graphs[0]['link_inputs'], arguments)
             facade.write_bytes(b'replaced')
             with self.assertRaisesRegex(RuntimeError, 'library changed'):
                 inputs_for(graphs, True)
             del graphs[0]['identity']
-            with self.assertRaisesRegex(RuntimeError, 'both consensus graphs'):
+            with self.assertRaisesRegex(RuntimeError, 'pinned runtime graph'):
                 inputs_for(graphs, False)
 
 

@@ -11,6 +11,8 @@ pub(crate) mod closure_record;
 pub(crate) mod closure_work;
 #[cfg(any(test, feature = "protocol-qualification"))]
 pub(crate) mod committee;
+#[cfg(any(test, kontor_managed))]
+pub(crate) mod consensus_rules;
 pub(crate) mod control;
 pub(crate) mod decision;
 #[cfg(any(test, kontor_managed))]

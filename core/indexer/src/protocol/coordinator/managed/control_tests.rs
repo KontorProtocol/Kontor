@@ -72,7 +72,7 @@ async fn control_thread_drives_real_bundles_and_releases_slot_only_after_join() 
         test_fixtures::context().chain,
     )
     .unwrap();
-    for (bundle, generation) in [(Bundle::First, 1), (Bundle::Second, 2)] {
+    for (bundle, generation) in [(Runtime, 1), (Runtime, 2)] {
         let ownership = owner.reserve(None).unwrap();
         assert_eq!(ownership.generation(), generation);
         let mut wrong = config(&directory, generation + 1);
@@ -188,7 +188,7 @@ async fn blocked_control_thread_does_not_block_node_revocation_or_allow_competin
             Some(signer.clone()),
             Some(ownership),
             move || {
-                let engine = Bundle::First.start(input, Some(authority))?;
+                let engine = Runtime.start(input, Some(authority))?;
                 let _ = entered.send(());
                 gate.recv_timeout(Duration::from_secs(10))
                     .expect("test releases blocked control thread");
@@ -214,10 +214,7 @@ async fn blocked_control_thread_does_not_block_node_revocation_or_allow_competin
     );
     assert!(!control.has_joined());
     assert!(owner.reserve(None).is_err());
-    assert!(
-        slot.start(Bundle::Second, config(&directory, 2), None)
-            .is_err()
-    );
+    assert!(slot.start(Runtime, config(&directory, 2), None).is_err());
     release.send(()).unwrap();
     assert!(control.wait_stopped(Duration::from_secs(10)).await.unwrap());
     assert!(control.has_joined());
@@ -226,7 +223,7 @@ async fn blocked_control_thread_does_not_block_node_revocation_or_allow_competin
     let mut input = config(&directory, 2);
     input.network_key = next_ownership.network_key();
     let mut next = slot
-        .start_owned(Bundle::Second, input, None, next_ownership)
+        .start_owned(Runtime, input, None, next_ownership)
         .unwrap();
     ready(&mut next).await;
     next.request_stop();
@@ -239,7 +236,7 @@ async fn failed_start_and_abandoned_handle_do_not_release_slot() {
     let slot = EngineSlot::default();
     let mut input = config(&directory, 1);
     input.listen_address = "invalid".into();
-    let mut control = slot.start(Bundle::First, input, None).unwrap();
+    let mut control = slot.start(Runtime, input, None).unwrap();
     assert!(
         timeout(Duration::from_secs(5), control.events.recv())
             .await
@@ -251,15 +248,10 @@ async fn failed_start_and_abandoned_handle_do_not_release_slot() {
         Err(EngineError::InvalidConfiguration(_))
     ));
     assert!(control.has_joined());
-    assert!(
-        slot.start(Bundle::Second, config(&directory, 2), None)
-            .is_err()
-    );
+    assert!(slot.start(Runtime, config(&directory, 2), None).is_err());
 
     let slot = EngineSlot::default();
-    let mut control = slot
-        .start(Bundle::First, config(&directory, 3), None)
-        .unwrap();
+    let mut control = slot.start(Runtime, config(&directory, 3), None).unwrap();
     ready(&mut control).await;
     let mut status = control.subscribe();
     drop(control);
@@ -270,10 +262,7 @@ async fn failed_start_and_abandoned_handle_do_not_release_slot() {
     })
     .await
     .unwrap();
-    assert!(
-        slot.start(Bundle::Second, config(&directory, 4), None)
-            .is_err()
-    );
+    assert!(slot.start(Runtime, config(&directory, 4), None).is_err());
 }
 
 #[tokio::test]
@@ -282,7 +271,7 @@ async fn unacknowledged_ready_expires_and_stopped_publication_returns_buffer() {
     let slot = EngineSlot::default();
     let mut input = config(&directory, 1);
     input.readiness_timeout = Duration::from_secs(1);
-    let mut control = slot.start(Bundle::First, input, None).unwrap();
+    let mut control = slot.start(Runtime, input, None).unwrap();
     ready(&mut control).await;
     let mut status = control.subscribe();
     timeout(Duration::from_secs(5), async {
@@ -324,7 +313,7 @@ async fn dropped_follower_handle_keeps_os_ownership_until_blocked_worker_finishe
             None,
             Some(ownership),
             move || {
-                let engine = Bundle::First.start(input, None)?;
+                let engine = Runtime.start(input, None)?;
                 let _ = entered.send(());
                 gate.recv_timeout(Duration::from_secs(10))
                     .expect("test releases worker");
@@ -351,8 +340,5 @@ async fn dropped_follower_handle_keeps_os_ownership_until_blocked_worker_finishe
     .await
     .unwrap();
     assert_eq!(reopened.reserve(None).unwrap().generation(), 2);
-    assert!(
-        slot.start(Bundle::Second, config(&directory, 2), None)
-            .is_err()
-    );
+    assert!(slot.start(Runtime, config(&directory, 2), None).is_err());
 }

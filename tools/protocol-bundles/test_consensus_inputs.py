@@ -34,12 +34,12 @@ class ConsensusInputs(unittest.TestCase):
             self.assertNotIn("wasmtime_version", record)
             self.assertNotIn("execution", record)
             verify_identity(ROOT, {"graph": label, "identity": record}, CONSENSUS_GRAPHS)
-        self.assertNotEqual(identity(ROOT, "first", CONSENSUS_GRAPHS), identity(ROOT, "second", CONSENSUS_GRAPHS))
+        self.assertEqual(list(CONSENSUS_GRAPHS), ["first"])
 
     def test_malachite_manifest_changes_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ("first", "second", "consensus-first", "consensus-second"):
+            for name in ("first", "second", "consensus-first"):
                 target = root / "protocol-bundles" / name
                 target.mkdir(parents=True)
                 for file in ("Cargo.toml", "Cargo.lock"):

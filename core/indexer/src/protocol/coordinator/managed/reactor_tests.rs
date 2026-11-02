@@ -48,7 +48,7 @@ async fn ready(engine: &mut ReactorEngine) -> oneshot::Sender<(Height, HeightPar
 async fn reactor_poll_cancellation_preserves_delayed_reply_for_both_bundles() {
     let directory = TempDir::new().unwrap();
     let slot = EngineSlot::default();
-    for (bundle, generation) in [(Bundle::First, 1), (Bundle::Second, 2)] {
+    for (bundle, generation) in [(Runtime, 1), (Runtime, 2)] {
         let mut engine =
             ReactorEngine::start(&slot, bundle, config(&directory, generation), None).unwrap();
         let sender = ready(&mut engine).await;
@@ -79,8 +79,7 @@ async fn reactor_poll_cancellation_preserves_delayed_reply_for_both_bundles() {
 async fn dropped_reactor_startup_reply_fails_and_joins_the_actual_engine() {
     let directory = TempDir::new().unwrap();
     let slot = EngineSlot::default();
-    let mut engine =
-        ReactorEngine::start(&slot, Bundle::First, config(&directory, 1), None).unwrap();
+    let mut engine = ReactorEngine::start(&slot, Runtime, config(&directory, 1), None).unwrap();
     drop(ready(&mut engine).await);
     assert!(matches!(
         timeout(Duration::from_secs(5), engine.next())
@@ -96,8 +95,7 @@ async fn dropped_reactor_startup_reply_fails_and_joins_the_actual_engine() {
 async fn outgoing_reply_survives_cancelled_reactor_poll() {
     let directory = TempDir::new().unwrap();
     let slot = EngineSlot::default();
-    let mut engine =
-        ReactorEngine::start(&slot, Bundle::First, config(&directory, 1), None).unwrap();
+    let mut engine = ReactorEngine::start(&slot, Runtime, config(&directory, 1), None).unwrap();
     let event = timeout(Duration::from_secs(10), engine.control.events.recv())
         .await
         .unwrap()

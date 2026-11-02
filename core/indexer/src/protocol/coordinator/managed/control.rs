@@ -8,8 +8,8 @@ use std::time::{Duration, Instant as WallInstant};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Instant, sleep};
 
-use super::adapter::SelectedEngine;
-use super::startup::{Bundle, Configuration};
+use super::adapter::RuntimeEngine;
+use super::startup::{Configuration, Runtime};
 use super::types::{
     Delivery, EngineError, EnginePoll, EngineState, Event, ProposalPartBytes, PublishError,
     ReplyToken, Response,
@@ -61,7 +61,7 @@ impl EngineSlot {
     #[cfg(test)]
     pub(crate) fn start(
         &self,
-        bundle: Bundle,
+        bundle: Runtime,
         config: Configuration,
         signer: Option<Arc<DurableSigner>>,
     ) -> Result<Control, EngineError> {
@@ -81,7 +81,7 @@ impl EngineSlot {
 
     pub(crate) fn start_owned(
         &self,
-        bundle: Bundle,
+        bundle: Runtime,
         config: Configuration,
         signer: Option<Arc<DurableSigner>>,
         ownership: OwnedGeneration,
@@ -118,7 +118,7 @@ impl EngineSlot {
         factory: F,
     ) -> Result<Control, EngineError>
     where
-        F: FnOnce() -> Result<SelectedEngine, EngineError> + Send + 'static,
+        F: FnOnce() -> Result<RuntimeEngine, EngineError> + Send + 'static,
     {
         if generation == 0 || capacity == 0 || capacity > 4096 {
             return Err(EngineError::InvalidConfiguration(
@@ -381,7 +381,7 @@ fn run<F>(
     deadline: WallInstant,
 ) -> Result<(), EngineError>
 where
-    F: FnOnce() -> Result<SelectedEngine, EngineError>,
+    F: FnOnce() -> Result<RuntimeEngine, EngineError>,
 {
     // Keep the owner outside the unwind scope so revocation precedes teardown
     // even if node-side dispatch panics.
@@ -460,7 +460,7 @@ fn reject_pending(commands: &mut mpsc::Receiver<Command>) {
 }
 
 fn drive(
-    engine: &mut SelectedEngine,
+    engine: &mut RuntimeEngine,
     commands: &mut mpsc::Receiver<Command>,
     events: &mpsc::Sender<Event>,
     status: &watch::Sender<Status>,

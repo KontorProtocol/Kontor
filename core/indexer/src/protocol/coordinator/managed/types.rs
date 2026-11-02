@@ -1,16 +1,12 @@
-//! Node-owned coordination data. Bundle adapters preserve distinct dependency identities.
+//! Node-owned coordination data for the pinned consensus runtime.
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
-use kontor_consensus_first::api::ReplyToken as FirstToken;
-use kontor_consensus_second::api::ReplyToken as SecondToken;
+use kontor_consensus_first::api::ReplyToken as RuntimeToken;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReplyToken {
-    First(FirstToken),
-    Second(SecondToken),
-}
+pub(crate) struct ReplyToken(pub(super) RuntimeToken);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Validator {

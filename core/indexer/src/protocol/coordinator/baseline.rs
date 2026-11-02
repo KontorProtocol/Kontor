@@ -3,6 +3,8 @@ use anyhow::{Context, Result, ensure};
 use super::certified_input::{
     EraContext, MAX_BATCH_BYTES, MAX_BITCOIN_BYTES, MAX_DESCRIPTOR_BYTES,
 };
+#[cfg(kontor_managed)]
+use super::consensus_rules;
 use super::manifest::ProtocolManifest;
 use super::v1::{FINALITY_ROLLBACK_DEPTH, FINALITY_WINDOW};
 use crate::protocol::canonical_codec::Encoder;
@@ -12,8 +14,6 @@ use crate::protocol::v1::migration_definition;
 use crate::protocol::v1::native::{NATIVE_GENESIS_ID, native_provenance};
 
 const CONSENSUS_REFERENCE: &[u8] = include_bytes!("baseline/consensus.json");
-#[cfg(kontor_managed)]
-pub(super) const MANAGED_REFERENCE: &[u8] = include_bytes!("managed/definitions/first.json");
 const PARAMETERS: &[&str] = &[
     "core/indexer/src/protocol/v1/engine.rs",
     "core/indexer/src/protocol/v1/gas.rs",
@@ -29,22 +29,12 @@ pub(crate) struct Baseline {
     pub(crate) context: EraContext,
 }
 
-// Match the production definition used by node admission. The second engine
-// remains qualification-only until it has a registered protocol mapping.
 pub(crate) fn consensus_is_registered(definition: [u8; 32]) -> bool {
     #[cfg(kontor_managed)]
-    let reference = MANAGED_REFERENCE;
+    let registered = consensus_rules::definition();
     #[cfg(not(kontor_managed))]
-    let reference = CONSENSUS_REFERENCE;
-    let first = domain_digest(b"kontor/consensus-definition/v1", reference) == definition;
-    #[cfg(kontor_managed)]
-    {
-        first || super::successor::consensus_definition() == definition
-    }
-    #[cfg(not(kontor_managed))]
-    {
-        first
-    }
+    let registered = domain_digest(b"kontor/consensus-definition/v1", CONSENSUS_REFERENCE);
+    registered == definition
 }
 
 impl Baseline {
@@ -57,7 +47,7 @@ impl Baseline {
                 reference.id()? == execution_definition()?,
                 "managed executor reference differs"
             );
-            Self::compose_consensus(chain, &reference, MANAGED_REFERENCE)
+            Self::compose_consensus(chain, &reference, consensus_rules::REFERENCE)
         }
         #[cfg(not(kontor_managed))]
         Self::current(chain)
@@ -171,7 +161,7 @@ mod tests {
 
     #[cfg(kontor_managed)]
     #[test]
-    fn managed_identity_changes_consensus_without_relabeling_the_executor() -> Result<()> {
+    fn managed_identity_names_rules_without_relabeling_the_executor() -> Result<()> {
         let chain = ChainId([7; 32]);
         let old = Baseline::current(chain)?;
         let managed = Baseline::for_node(chain)?;
@@ -182,6 +172,9 @@ mod tests {
         expected.consensus = managed.manifest.consensus;
         assert_eq!(expected, managed.manifest);
         assert_eq!(managed.context.protocol, managed.manifest.id()?);
+        assert_eq!(managed.manifest.consensus, consensus_rules::definition());
+        assert!(consensus_is_registered(managed.manifest.consensus));
+        assert!(!consensus_is_registered(old.context.protocol.0));
         assert!(managed.require_context(old.context).is_err());
         Ok(())
     }

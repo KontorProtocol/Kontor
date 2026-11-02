@@ -1,8 +1,6 @@
 use anyhow::{Result, bail};
 
 use super::baseline::Baseline;
-#[cfg(kontor_managed)]
-use super::managed::startup::Bundle;
 use super::manifest::ProtocolManifest;
 #[cfg(kontor_managed)]
 use super::successor;
@@ -15,8 +13,6 @@ use crate::protocol::v2::migration_definition as p2_migration;
 pub(crate) struct InstalledProtocol {
     pub(crate) executor: ExecutorVersion,
     pub(crate) migration: MigrationDefinition,
-    #[cfg(kontor_managed)]
-    pub(crate) consensus: Bundle,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -31,8 +27,6 @@ pub(crate) fn resolve(manifest: &ProtocolManifest) -> Result<InstalledProtocol> 
         return Ok(InstalledProtocol {
             executor: ExecutorVersion::LegacyP1,
             migration: migration_definition::noop(first.manifest.executor),
-            #[cfg(kontor_managed)]
-            consensus: Bundle::First,
         });
     }
     #[cfg(kontor_managed)]
@@ -40,7 +34,6 @@ pub(crate) fn resolve(manifest: &ProtocolManifest) -> Result<InstalledProtocol> 
         return Ok(InstalledProtocol {
             executor: ExecutorVersion::P2,
             migration: p2_migration::token_count(manifest.executor),
-            consensus: Bundle::First,
         });
     }
     bail!(UnavailableProtocol(manifest.id()?))

@@ -70,7 +70,7 @@ MALACHITE_VERSION = "0.9.0-kontor.1"
 CONSENSUS_GRAPHS = {
     label: Graph("consensus-" + label, None, None, None, 0, kind="consensus",
                  native_patches=("ring", "secp256k1-sys"))
-    for label in ("first", "second")
+    for label in ("first",)
 }
 
 

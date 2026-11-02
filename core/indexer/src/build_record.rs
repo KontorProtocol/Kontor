@@ -2,7 +2,9 @@ use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 
 use crate::protocol::coordinator::{baseline::Baseline, successor};
-use crate::protocol::identity::{ChainId, DefinitionReference};
+use crate::protocol::identity::{ChainId, DefinitionReference, domain_digest};
+
+const RUNTIME: &[u8] = include_bytes!("protocol/coordinator/managed/definitions/first.json");
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -66,14 +68,8 @@ fn verify_record(input: Option<&str>) -> Result<()> {
         (
             "consensus",
             "first",
-            first.consensus,
+            domain_digest(b"kontor/consensus-definition/v1", RUNTIME),
             Some(kontor_consensus_first::WIRE_CODEC),
-        ),
-        (
-            "consensus",
-            "second",
-            second.consensus,
-            Some(kontor_consensus_second::WIRE_CODEC),
         ),
     ];
     ensure!(
@@ -132,7 +128,7 @@ pub(crate) fn qualify() -> Result<serde_json::Value> {
             "accepted changed {field}"
         );
     }
-    for index in 0..4 {
+    for index in 0..3 {
         for field in [
             "role",
             "graph",

@@ -2,17 +2,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::adapter::{SelectedEngine, first, second};
+use super::adapter::{RuntimeEngine, runtime};
 use super::types::EngineError;
 use crate::protocol::coordinator::durable_signer::{
     DurableSigner, SigningError, SigningRequest, VoteStep,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Bundle {
-    First,
-    Second,
-}
+pub(crate) struct Runtime;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Bootstrap {
@@ -40,172 +37,154 @@ pub(crate) struct Configuration {
     pub(crate) readiness_timeout: Duration,
 }
 
-macro_rules! startup_adapter {
-    ($module:ident, $bundle:ident) => {
-        mod $module {
-            use std::sync::Arc;
+mod runtime_startup {
+    use std::sync::Arc;
 
-            use $bundle::Engine;
-            use $bundle::api;
-            use $bundle::authority_api as authority;
+    use kontor_consensus_first::Engine;
+    use kontor_consensus_first::api;
+    use kontor_consensus_first::authority_api as authority;
 
-            use super::{
-                Bootstrap, Configuration, DurableSigner, PeerSelection, SigningError,
-                SigningRequest, VoteStep,
-            };
-
-            struct Signer(Arc<DurableSigner>);
-
-            impl authority::SigningService for Signer {
-                fn sign(
-                    &self,
-                    value: authority::SigningRequest,
-                ) -> Result<[u8; 64], authority::SigningError> {
-                    self.0.sign(request(value)).map_err(error)
-                }
-            }
-
-            fn request(value: authority::SigningRequest) -> SigningRequest {
-                match value {
-                    authority::SigningRequest::Vote {
-                        generation,
-                        height,
-                        round,
-                        step,
-                        value_id,
-                        validator_address,
-                        preimage,
-                    } => SigningRequest::Vote {
-                        generation,
-                        height,
-                        round,
-                        step: match step {
-                            authority::VoteStep::Prevote => VoteStep::Prevote,
-                            authority::VoteStep::Precommit => VoteStep::Precommit,
-                        },
-                        value_id,
-                        validator_address,
-                        preimage,
-                    },
-                    authority::SigningRequest::Proposal {
-                        generation,
-                        height,
-                        round,
-                        pol_round,
-                        validator_address,
-                        descriptor,
-                        preimage,
-                    } => SigningRequest::Proposal {
-                        generation,
-                        height,
-                        round,
-                        pol_round,
-                        validator_address,
-                        descriptor,
-                        preimage,
-                    },
-                    authority::SigningRequest::ProposalFin {
-                        generation,
-                        height,
-                        round,
-                        descriptor,
-                        digest,
-                    } => SigningRequest::ProposalFin {
-                        generation,
-                        height,
-                        round,
-                        descriptor,
-                        digest,
-                    },
-                    authority::SigningRequest::ValidatorProof {
-                        generation,
-                        public_key,
-                        network_peer_id,
-                        preimage,
-                    } => SigningRequest::ValidatorProof {
-                        generation,
-                        public_key,
-                        network_peer_id,
-                        preimage,
-                    },
-                }
-            }
-
-            fn error(value: SigningError) -> authority::SigningError {
-                match value {
-                    SigningError::InvalidRequest(reason) => {
-                        authority::SigningError::InvalidRequest(reason)
-                    }
-                    SigningError::Conflict => authority::SigningError::Conflict,
-                    SigningError::Stale => authority::SigningError::Stale,
-                    SigningError::Fenced => authority::SigningError::Fenced,
-                    SigningError::Storage(reason) => authority::SigningError::Storage(reason),
-                    SigningError::Fault(reason) => authority::SigningError::Fault(reason),
-                }
-            }
-
-            pub(super) fn start(
-                input: Configuration,
-                signer: Option<Arc<DurableSigner>>,
-            ) -> Result<Engine, api::EngineError> {
-                let config = api::EngineConfig {
-                    generation: input.generation,
-                    channel_capacity: input.channel_capacity,
-                    moniker: input.moniker,
-                    network_key: input.network_key,
-                    listen_address: input.listen_address,
-                    persistent_peers: input.persistent_peers,
-                    wal_path: input.wal_path,
-                    discovery: api::Discovery {
-                        enabled: input.discovery_enabled,
-                        bootstrap: match input.bootstrap {
-                            Bootstrap::Kademlia => api::Bootstrap::Kademlia,
-                            Bootstrap::Full => api::Bootstrap::Full,
-                        },
-                        selection: match input.peer_selection {
-                            PeerSelection::Kademlia => api::PeerSelection::Kademlia,
-                            PeerSelection::Random => api::PeerSelection::Random,
-                        },
-                    },
-                    readiness_timeout: input.readiness_timeout,
-                };
-                let authority = match signer {
-                    Some(signer) => authority::Authority::Validator {
-                        public_key: signer.public_key(),
-                        signer: Arc::new(Signer(signer)),
-                    },
-                    None => authority::Authority::Follower,
-                };
-                $bundle::start(config, authority)
-            }
-        }
+    use super::{
+        Bootstrap, Configuration, DurableSigner, PeerSelection, SigningError, SigningRequest,
+        VoteStep,
     };
-}
 
-startup_adapter!(first_startup, kontor_consensus_first);
-startup_adapter!(second_startup, kontor_consensus_second);
+    struct Signer(Arc<DurableSigner>);
 
-impl Bundle {
-    pub(crate) fn network_peer_id(self, key: &[u8; 32]) -> Result<Vec<u8>, EngineError> {
-        match self {
-            Self::First => kontor_consensus_first::network_peer_id(key).map_err(first::error),
-            Self::Second => kontor_consensus_second::network_peer_id(key).map_err(second::error),
+    impl authority::SigningService for Signer {
+        fn sign(
+            &self,
+            value: authority::SigningRequest,
+        ) -> Result<[u8; 64], authority::SigningError> {
+            self.0.sign(request(value)).map_err(error)
         }
     }
 
+    fn request(value: authority::SigningRequest) -> SigningRequest {
+        match value {
+            authority::SigningRequest::Vote {
+                generation,
+                height,
+                round,
+                step,
+                value_id,
+                validator_address,
+                preimage,
+            } => SigningRequest::Vote {
+                generation,
+                height,
+                round,
+                step: match step {
+                    authority::VoteStep::Prevote => VoteStep::Prevote,
+                    authority::VoteStep::Precommit => VoteStep::Precommit,
+                },
+                value_id,
+                validator_address,
+                preimage,
+            },
+            authority::SigningRequest::Proposal {
+                generation,
+                height,
+                round,
+                pol_round,
+                validator_address,
+                descriptor,
+                preimage,
+            } => SigningRequest::Proposal {
+                generation,
+                height,
+                round,
+                pol_round,
+                validator_address,
+                descriptor,
+                preimage,
+            },
+            authority::SigningRequest::ProposalFin {
+                generation,
+                height,
+                round,
+                descriptor,
+                digest,
+            } => SigningRequest::ProposalFin {
+                generation,
+                height,
+                round,
+                descriptor,
+                digest,
+            },
+            authority::SigningRequest::ValidatorProof {
+                generation,
+                public_key,
+                network_peer_id,
+                preimage,
+            } => SigningRequest::ValidatorProof {
+                generation,
+                public_key,
+                network_peer_id,
+                preimage,
+            },
+        }
+    }
+
+    fn error(value: SigningError) -> authority::SigningError {
+        match value {
+            SigningError::InvalidRequest(reason) => authority::SigningError::InvalidRequest(reason),
+            SigningError::Conflict => authority::SigningError::Conflict,
+            SigningError::Stale => authority::SigningError::Stale,
+            SigningError::Fenced => authority::SigningError::Fenced,
+            SigningError::Storage(reason) => authority::SigningError::Storage(reason),
+            SigningError::Fault(reason) => authority::SigningError::Fault(reason),
+        }
+    }
+
+    pub(super) fn start(
+        input: Configuration,
+        signer: Option<Arc<DurableSigner>>,
+    ) -> Result<Engine, api::EngineError> {
+        let config = api::EngineConfig {
+            generation: input.generation,
+            channel_capacity: input.channel_capacity,
+            moniker: input.moniker,
+            network_key: input.network_key,
+            listen_address: input.listen_address,
+            persistent_peers: input.persistent_peers,
+            wal_path: input.wal_path,
+            discovery: api::Discovery {
+                enabled: input.discovery_enabled,
+                bootstrap: match input.bootstrap {
+                    Bootstrap::Kademlia => api::Bootstrap::Kademlia,
+                    Bootstrap::Full => api::Bootstrap::Full,
+                },
+                selection: match input.peer_selection {
+                    PeerSelection::Kademlia => api::PeerSelection::Kademlia,
+                    PeerSelection::Random => api::PeerSelection::Random,
+                },
+            },
+            readiness_timeout: input.readiness_timeout,
+        };
+        let authority = match signer {
+            Some(signer) => authority::Authority::Validator {
+                public_key: signer.public_key(),
+                signer: Arc::new(Signer(signer)),
+            },
+            None => authority::Authority::Follower,
+        };
+        kontor_consensus_first::start(config, authority)
+    }
+}
+
+impl Runtime {
+    pub(crate) fn network_peer_id(self, key: &[u8; 32]) -> Result<Vec<u8>, EngineError> {
+        kontor_consensus_first::network_peer_id(key).map_err(runtime::error)
+    }
     pub(crate) fn start(
         self,
         config: Configuration,
         signer: Option<Arc<DurableSigner>>,
-    ) -> Result<SelectedEngine, EngineError> {
-        match self {
-            Self::First => first_startup::start(config, signer)
-                .map(SelectedEngine::First)
-                .map_err(first::error),
-            Self::Second => second_startup::start(config, signer)
-                .map(SelectedEngine::Second)
-                .map_err(second::error),
-        }
+    ) -> Result<RuntimeEngine, EngineError> {
+        runtime_startup::start(config, signer)
+            .map(RuntimeEngine)
+            .map_err(runtime::error)
     }
 }
 
@@ -223,11 +202,11 @@ mod tests {
     use crate::protocol::coordinator::managed::types::{EnginePoll, EngineState, Request};
 
     #[test]
-    fn both_bundles_start_through_the_node_signer_and_release_ownership() {
+    fn successive_generations_start_through_the_node_signer_and_release_ownership() {
         let directory = TempDir::new().unwrap();
         let signer_path = directory.path().join("signer");
         let key = PrivateKey::from([11; 32]);
-        for (bundle, generation) in [(Bundle::First, 1), (Bundle::Second, 2)] {
+        for (bundle, generation) in [(Runtime, 1), (Runtime, 2)] {
             let network_key = [7; 32];
             let peer_id = bundle.network_peer_id(&network_key).unwrap();
             let signer = Arc::new(
