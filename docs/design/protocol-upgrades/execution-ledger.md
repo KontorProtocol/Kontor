@@ -4962,3 +4962,15 @@ recovery run exercises the previous callers of the shared helpers as well as the
 new case. Frozen P1, production protocol authorization, gas rules and engine
 ownership behavior are unchanged by this fixture. Final reviewer follow-up,
 full controls, documentation/Site review and current-head CI remain pending.
+
+The same independent reviewer approved follow-up
+`81ac06f6db1a717bd21006a49558cb349ffc10a9` through
+`46bce9c954ab6b7ef41c5d9e36b64e64b873eab3`, with no material findings.
+They verified the recovery stdout hash, empty stderr, binary/build-record binding
+and semantic verification of the saved result without duplicating runtime runs.
+They confirmed the fixture closes the agreed gap and preserves shared-helper
+verification. Their documentation correction was limited to stale pending-test
+wording in the unpublished Site draft; that wording is updated. All 186
+protocol-bundle build/evidence controls and workspace formatting checks pass.
+The default branch was reverified at the unchanged PR623 merge before PR
+preparation. Current-head CI/platform qualification and merge remain outstanding.
