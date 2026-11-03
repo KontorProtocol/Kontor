@@ -133,8 +133,8 @@ Both historical and active locks remain covered by the dependency audit.
 `tools/kontor recipes` accepts JSON operations for the typed graph catalog,
 source-root checks, manifest reservations, graph identities and resolved engine
 attestations. The Rust builder and evidence tools use that catalog directly.
-Retained snapshot hashes, execution
-settings and successful identity reports are unchanged. Attestations require
+The catalog binds the current retained snapshot hashes and execution settings.
+Attestations require
 exact JSON types, so numeric zero cannot substitute for `false`, and a floating
 point number cannot substitute for an integer.
 
@@ -206,7 +206,8 @@ The preserved oracle still binds its raw log and fixture sources, and all three
 simulation/rollback/commit observations must match. Certified history binds the
 selected genesis executor and consensus definition; P2 cannot substitute for P1.
 Malformed numeric or boolean evidence is rejected by JSON type as well as value.
-The historical baseline and execution identities have not been regenerated.
+These verification commands do not regenerate the historical baseline or execution
+identities. The approved prelaunch identity refresh is documented above.
 Archive and execution test fixtures now live in the Rust tooling tests. These
 synthetic records exercise rejection and comparison rules, not real platform
 qualification. The qualification container runs `tools/kontor qualify-node` and
