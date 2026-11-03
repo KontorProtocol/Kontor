@@ -627,5 +627,31 @@ executable to the Python orchestrator. Direct Python builder entry points use
 `tools/kontor` to build and stage the same wrapper, passing offline policy through
 `CARGO_NET_OFFLINE`. The Docker fetch stage explicitly fetches the independent
 tooling lockfile before offline builds. The hidden `stage-graph-wrapper OUTPUT`
-command is an internal bootstrap interface, not a separate task runner. Node
-workspace/compiler and linker wrappers remain separate migration work.
+command is an internal bootstrap interface, not a separate task runner.
+
+### Node compiler wrapper
+
+Node compilation uses the dedicated `kontor-node-rustc` binary, staged by the
+same build tool through `stage-node-wrapper OUTPUT`. The workspace-wrapper path
+binds both the link specification and executable hash, so changing linked inputs
+invalidates the node compilation while unrelated CLI edits do not. Evidence
+records the wrapper source hash and its executable identity separately. Source
+inventories also bind the Rust tooling and its lockfile.
+
+The wrapper checks the compiler, library roles and facade hashes, removes
+inherited attestation variables, and supplies the verified managed attestation
+only to the node/library compilation. It preserves Cargo jobserver descriptors,
+clears stale object/link records before compiling, and binds the completed
+compiler output separately from the linker output for Darwin post-link stripping.
+Normal compiler exit codes pass through; signal failures now use the shell
+convention (`128 + signal`) instead of Python's negative-status truncation.
+Captured node invocations require UTF-8 arguments for JSON evidence and reject
+unrecordable arguments before invoking rustc. Probes and dependency/library
+invocations continue to forward raw operating-system arguments unchanged.
+
+The linker recording shim and orchestration still use Python pending their
+migration. A small real compiler/linker check covers this boundary locally;
+the full independently linked node build and Darwin validation remain part of
+the stabilized build acceptance, not additional per-edit CI jobs.
+The focused test bootstrap allows fetching the small standalone tooling graph on
+a cold runner; an explicitly inherited `CARGO_NET_OFFLINE` remains respected.

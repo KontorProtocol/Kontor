@@ -92,7 +92,7 @@ class NodeComparison(unittest.TestCase):
                 'installed': {'sha256': 'ef' * 32},
                 'source_inputs_sha256': fingerprint(self.sources['node']),
                 'lock_sha256': digest(ROOT / 'protocol-bundles/node/Cargo.lock'),
-                'wrapper_sha256': digest(ROOT / 'tools/protocol-bundles/node-rustc-wrapper.py'),
+                'wrapper_sha256': digest(ROOT / 'core/kontor-build/src/bin/kontor-node-rustc.rs'),
                 'linker_wrapper_sha256': digest(ROOT / 'tools/protocol-bundles/linker_record.py')}
         write_json(node_dir / 'source-inputs.json', self.sources['node'])
         (node_dir / 'build.log').write_text('synthetic node build transcript')
@@ -102,6 +102,8 @@ class NodeComparison(unittest.TestCase):
                 'source_inputs_sha256': node['source_inputs_sha256'],
                 'graphs': [{'graph': graph['graph'], 'role': role, 'build_inputs_sha256': fingerprint(graph)}
                            for role, group in (('executor', graphs), ('consensus', consensus)) for graph in group]}
+        node['wrapper_binary_sha256'] = 'bc' * 32
+        node['wrapper'] = '/synthetic/rustc-wrapper-' + fingerprint(spec) + '-' + node['wrapper_binary_sha256']
         write_json(node_dir / 'link-spec.json', spec)
         node['link_spec_sha256'] = digest(node_dir / 'link-spec.json')
         link = {'schema': 1, 'spec_sha256': node['link_spec_sha256'],
@@ -488,6 +490,18 @@ class NodeComparison(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'wrong compiler'):
             compare(self.root, ROOT, 'release', 'success')
 
+    def test_node_wrapper_identity_cannot_be_missing_or_substituted(self):
+        directory = self.cells[0]
+        original = json.loads((directory / 'node-build.json').read_text())
+        for field, value in (('wrapper_binary_sha256', ''), ('wrapper_binary_sha256', 'ab' * 32),
+                             ('wrapper', '/synthetic/another-wrapper'), ('wrapper_sha256', '00' * 32)):
+            build = copy.deepcopy(original)
+            build['node'][field] = value
+            write_json(directory / 'node-build.json', build)
+            self.bind(directory)
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                compare(self.root, ROOT, 'release', 'success')
+
     def test_stale_local_dependency_source_rejects(self):
         directory = self.cells[0]
         source = copy.deepcopy(self.sources['node'])
@@ -509,6 +523,7 @@ class NodeComparison(unittest.TestCase):
         build['node']['source_inputs_sha256'] = fingerprint(source)
         spec = json.loads((directory / 'node/link-spec.json').read_text())
         spec['source_inputs_sha256'] = fingerprint(source)
+        build['node']['wrapper'] = '/synthetic/rustc-wrapper-' + fingerprint(spec) + '-' + build['node']['wrapper_binary_sha256']
         write_json(directory / 'node/link-spec.json', spec)
         build['node']['link_spec_sha256'] = digest(directory / 'node/link-spec.json')
         link = json.loads((directory / 'node/linker-record.json').read_text())

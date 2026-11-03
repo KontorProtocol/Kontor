@@ -169,8 +169,16 @@ def load_cell(path, root, link_set=None):
     file_hash(node_dir / 'build.log', node['build_log_sha256'])
     file_hash(node_dir / 'link-spec.json', node['link_spec_sha256'])
     file_hash(node_dir / 'root-objects.json', node['root_codegen_sha256'])
-    file_hash(root / 'tools/protocol-bundles/node-rustc-wrapper.py', node['wrapper_sha256'])
+    file_hash(root / 'core/kontor-build/src/bin/kontor-node-rustc.rs', node['wrapper_sha256'])
     spec = read(node_dir / 'link-spec.json')
+    wrapper_hash = node.get('wrapper_binary_sha256', '')
+    require(isinstance(wrapper_hash, str) and len(wrapper_hash) == 64
+            and all(character in '0123456789abcdef' for character in wrapper_hash),
+            'node compiler wrapper binary identity is missing')
+    wrapper = Path(node.get('wrapper', ''))
+    require(wrapper.is_absolute()
+            and wrapper.name == 'rustc-wrapper-' + fingerprint(spec) + '-' + wrapper_hash,
+            'node compiler wrapper path does not match its build inputs')
     require(spec.get('link_set') == link_set, 'node link specification uses another link set')
     require(spec['features'] == ['protocol-qualification'] and spec['lock_sha256'] == node['lock_sha256']
             and spec['source_inputs_sha256'] == node['source_inputs_sha256'], 'node link inputs disagree')

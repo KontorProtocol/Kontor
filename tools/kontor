@@ -11,7 +11,14 @@ if [[ "${1:-}" == "protocol-bundles" ]]; then
         fi
     done
 fi
+wrapper_bins=()
 if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "stage-graph-wrapper" ]]; then
-    cargo build --locked --quiet -j 2 --manifest-path kontor-build/Cargo.toml --bin kontor-graph-rustc
+    wrapper_bins+=(--bin kontor-graph-rustc)
+fi
+if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "stage-node-wrapper" ]]; then
+    wrapper_bins+=(--bin kontor-node-rustc)
+fi
+if (( ${#wrapper_bins[@]} )); then
+    cargo build --locked --quiet -j 2 --manifest-path kontor-build/Cargo.toml "${wrapper_bins[@]}"
 fi
 exec cargo run --locked --quiet -j 2 --manifest-path kontor-build/Cargo.toml --bin kontor-build -- "$@"

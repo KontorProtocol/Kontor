@@ -41,12 +41,12 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
-def stage_compiler_wrapper(output, env, offline):
+def stage_compiler_wrapper(output, env, offline, *, kind="graph"):
     if offline:
         env = dict(env, CARGO_NET_OFFLINE="true")
     tool = env.get("KONTOR_BUILD_TOOL") or str(ROOT / "tools/kontor")
     return Path(subprocess.check_output(
-        [tool, "stage-graph-wrapper", str(output.resolve())],
+        [tool, f"stage-{kind}-wrapper", str(output.resolve())],
         cwd=ROOT, env=env, text=True).strip())
 
 
@@ -488,8 +488,10 @@ def build_node(graphs, args, base_env, output, consensus=()):
     write_json(spec_path, spec)
     # Cargo does not know that external --extern inputs changed. A content-keyed
     # workspace wrapper invalidates only the node, preserving dependency caches.
-    wrapper = directory / ("rustc-wrapper-" + fingerprint(spec) + ".py")
-    shutil.copyfile(ROOT / "tools/protocol-bundles/node-rustc-wrapper.py", wrapper)
+    staged_wrapper = stage_compiler_wrapper(directory, env, args.offline, kind="node")
+    wrapper_hash = digest(staged_wrapper)
+    wrapper = directory / ("rustc-wrapper-" + fingerprint(spec) + "-" + wrapper_hash)
+    shutil.copyfile(staged_wrapper, wrapper)
     wrapper.chmod(0o755)
     env.update(RUSTC_WORKSPACE_WRAPPER=str(wrapper), KONTOR_NODE_LINK_SPEC=str(spec_path))
     command = ["cargo", "build", "--locked", "--manifest-path", str(manifest), "--bin", "kontor",
@@ -528,6 +530,8 @@ def build_node(graphs, args, base_env, output, consensus=()):
         raise RuntimeError("node dependency metadata changed during compilation")
     if verify_definition() != coordinator:
         raise RuntimeError("coordinator definition changed during compilation")
+    if digest(wrapper) != wrapper_hash:
+        raise RuntimeError("node compiler wrapper changed during compilation")
     for graph in graphs:
         verify_identity(ROOT, graph, recipes)
         verify_staged_inputs(graph)
@@ -537,7 +541,9 @@ def build_node(graphs, args, base_env, output, consensus=()):
     result = {"coordinator_definition": coordinator, "qualification_command": args.node_qualification, "executable": str(executable), "executable_sha256": digest(executable),
               "source_inputs_sha256": fingerprint(sources), "lock_sha256": lock_hash,
               "link_spec_sha256": digest(spec_path), "build_log_sha256": digest(log),
-              "root_codegen_sha256": digest(Path(spec["root_objects"])), "wrapper_sha256": digest(wrapper),
+              "root_codegen_sha256": digest(Path(spec["root_objects"])),
+              "wrapper_sha256": digest(ROOT / "core/kontor-build/src/bin/kontor-node-rustc.rs"),
+              "wrapper": str(wrapper), "wrapper_binary_sha256": wrapper_hash,
               "linker_record_sha256": digest(Path(spec['linker_record'])),
               "linker_wrapper_sha256": digest(linker_wrapper),
               "native_helpers": helpers, "runtime_libraries": libraries,

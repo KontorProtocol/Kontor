@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use kontor_build::{
     BuildArgs, CiScope, DiagnosticsArgs, ProtocolBundlesArgs, VerifySnapshotArgs,
     check_native_helper_lock, ci_scope, diagnostics, protocol_bundles, run, stage_graph_wrapper,
-    verify_snapshot,
+    stage_node_wrapper, verify_snapshot,
 };
 
 #[derive(Parser)]
@@ -32,6 +32,9 @@ enum Command {
     /// Stage Cargo's dedicated graph compiler wrapper.
     #[command(hide = true)]
     StageGraphWrapper { output: PathBuf },
+    /// Stage Cargo's dedicated node compiler wrapper.
+    #[command(hide = true)]
+    StageNodeWrapper { output: PathBuf },
     /// Select CI checks from the GitHub event and complete Git change set.
     CiScope {
         #[arg(value_enum)]
@@ -49,6 +52,10 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::StageNodeWrapper { output } => {
+            println!("{}", stage_node_wrapper(&output)?.display());
+            Ok(())
+        }
         Command::StageGraphWrapper { output } => {
             println!("{}", stage_graph_wrapper(&output)?.display());
             Ok(())

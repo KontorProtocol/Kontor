@@ -9,7 +9,7 @@ mod snapshot;
 
 pub use bundles::{ProtocolBundlesArgs, protocol_bundles};
 pub use ci_scope::{CiScope, ci_scope};
-pub use compiler_wrapper::stage_graph_wrapper;
+pub use compiler_wrapper::{stage_graph_wrapper, stage_node_wrapper};
 pub use diagnostics::{DiagnosticsArgs, diagnostics};
 pub use native_lock::check_native_helper_lock;
 pub use snapshot::{VerifySnapshotArgs, verify_snapshot};

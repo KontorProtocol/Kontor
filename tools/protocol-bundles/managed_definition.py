@@ -21,7 +21,7 @@ TOOL = 'tools/protocol-bundles/managed_definition.py'
 BUILD_INPUTS = (
     TOOL,
     'tools/protocol-bundles/provenance.py',
-    'tools/protocol-bundles/node-rustc-wrapper.py',
+    'core/kontor-build/src/bin/kontor-node-rustc.rs',
     'tools/protocol-bundles/recipes.py',
 )
 
