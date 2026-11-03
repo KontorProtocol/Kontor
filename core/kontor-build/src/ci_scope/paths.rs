@@ -177,7 +177,13 @@ fn module(path: &str, stem: &str) -> bool {
 }
 
 fn shared_build(path: &str) -> bool {
-    SHARED_BUILD_FILES.contains(&path) || build_metadata(path)
+    SHARED_BUILD_FILES.contains(&path)
+        || (build_metadata(path)
+            && (!path.contains('/')
+                || path.starts_with(".cargo/")
+                || ["core/", "native-contracts/", "test-contracts/"]
+                    .iter()
+                    .any(|prefix| path.starts_with(prefix))))
 }
 
 pub(super) fn stack_relevant(path: &str) -> bool {

@@ -15,7 +15,7 @@ automatically select expensive qualification.
 | Pricing, tokens, staking, storage accounting, ordinary queries and transaction logic | Ordinary relevant checks; no qualification solely for these changes |
 | Engine, call transitions, ownership, resource limits or stack fixtures | Stack qualification, plus ordinary checks |
 | Activation/recovery, executor adapters, retained bundles or native graph machinery | Linked-node qualification, plus ordinary checks |
-| Compiler settings, native libraries or relevant dependency changes | Applicable stack and linked-node qualification |
+| Compiler settings, native libraries or dependency files in covered build trees | Applicable stack and linked-node qualification |
 | Stack evidence implementation | Stack qualification; no linked-node qualification solely for this change |
 | Unknown ordinary source path | Ordinary checks; use manual qualification when needed |
 
@@ -28,17 +28,27 @@ inputs. General database, reactor and protocol directories are not blanket
 triggers. Existing ordinary workspace tests retain bounded ownership, resource
 and call-chain checks without adding jobs or repeating ignored boundary sweeps.
 
-Dependency comparisons read the base and head Git objects, using the PR merge
-base for both paths and dependency contents. Lockfile comparisons follow
-Wasmtime/Cranelift/Pulley, runtime/pool, native-library and (for linked-node checks)
-Malachite dependencies. They also include packages that could change these
-dependencies' unified features, which lockfiles do not record. An unrelated
-version-only update can skip qualification even when it changes both the lockfile
-and manifest. Feature, patch, profile, dependency addition/removal and other
-manifest changes remain conservative. Retained bundle manifests and lockfiles
-remain linked-node inputs because they contribute to protocol identity.
-Missing, malformed, ambiguous or unsupported dependency evidence selects
-qualification rather than silently skipping it.
+Dependency selection uses paths, without parsing package changes:
+
+| Dependency/build files | Qualification |
+| --- | --- |
+| `core/**`, including shared workspace manifests/locks and native build inputs | Stack and linked-node |
+| `native-contracts/**` and `test-contracts/**` | Stack and linked-node |
+| `protocol-bundles/**`, including retained executor manifests/locks | Linked-node |
+| Existing stack or native-crypto qualification tool directories | Their respective qualification |
+| Dependency files in unrelated standalone SDK/workspace directories | Neither, unless another relevant file changes |
+
+The build-file rules cover `Cargo.toml`, `Cargo.lock`, `build.rs`, Rust toolchain
+files and Cargo configuration. Repository-root build configuration selects both
+matrices. The `core/` rule intentionally includes SDK crates in that shared
+workspace and tooling used by the executor/qualification builds. Updating an
+unrelated package inside a shared lockfile still selects qualification.
+
+Adding a dependency or crate within a covered build tree needs no selector
+change. A new workspace outside the covered paths needs a rule if it becomes
+an executor or qualification input. Source-path selection still uses the full
+PR diff or push range, including removed paths, with conservative missing-history
+fallback and manual overrides.
 
 The authoritative paths and tests are in `core/kontor-build/src/ci_scope/`.
 When a change affects an execution or upgrade boundary outside those paths,
@@ -152,9 +162,9 @@ finished its build phase in 0.23 seconds. This local check used no sccache and
 did not run the full workspace suite or cross-platform qualification matrix.
 
 Narrowed qualification selection was checked with local tooling and CLI tests,
-including dependency graph changes, feature contributors, PR merge bases,
-renames/deletions, malformed evidence, manual overrides and continued ordinary
-test selection. The required-check gate rejects missing or unsuccessful selected
+including covered and unrelated dependency-file locations, dependency additions,
+PR merge bases, renames/deletions, missing history, manual overrides and continued
+ordinary test selection. The required-check gate rejects missing or unsuccessful selected
 jobs. Historical replays include selector/documentation-only commits that skip
 both matrices, and node-building commits that select linked-node qualification
 without stack qualification. No hosted runs were used to validate this policy.

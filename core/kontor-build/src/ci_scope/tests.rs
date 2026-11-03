@@ -9,7 +9,6 @@ use tempfile::{TempDir, tempdir};
 
 use super::dependencies::{docker_target_paths, validate_repro_dependencies};
 use super::paths::{bundle_relevant, classify, stack_relevant};
-use super::qualification_dependencies::dependency_change_relevant;
 use super::{CiScope, JOBS, changed_paths, outputs, profile_policy, select};
 
 fn write(root: &Path, path: &str, text: &str) -> Result<()> {
@@ -574,7 +573,6 @@ fn tooling_only_changes_do_not_launch_qualification() {
     let targets = BTreeSet::new();
     for path in [
         "core/kontor-build/src/ci_scope.rs",
-        "core/kontor-build/src/ci_scope/qualification_dependencies.rs",
         "core/kontor-build/tests/linker_wrapper.rs",
         ".github/actions/setup-kontor-tools/action.yml",
         "core/kontor-build/src/node_evidence/comparison/mod.rs",
@@ -627,271 +625,6 @@ fn test_matrix_runs_the_union_without_duplicate_platform_builds() -> Result<()> 
     Ok(())
 }
 
-fn dependency_lock(helper: &str, unrelated: &str) -> String {
-    format!(
-        r#"version = 4
-[[package]]
-name = "indexer"
-version = "0.2.0"
-dependencies = ["wasmtime", "unrelated"]
-[[package]]
-name = "wasmtime"
-version = "51.0.0"
-dependencies = ["helper {helper}"]
-[[package]]
-name = "helper"
-version = "{helper}"
-checksum = "engine dependency"
-[[package]]
-name = "helper"
-version = "9.0.0"
-checksum = "unreachable version"
-[[package]]
-name = "unrelated"
-version = "{unrelated}"
-[[package]]
-name = "arc-malachitebft-engine"
-version = "0.8.2"
-"#
-    )
-}
-
-fn dependency_manifest(helper: &str, unrelated: &str) -> String {
-    format!(
-        r#"[workspace.dependencies]
-wasmtime = "51.0.0"
-helper = "{helper}"
-client = {{ package = "unrelated", version = "{unrelated}" }}
-"#
-    )
-}
-
-#[test]
-fn qualification_compares_dependency_versions_sources_and_transitive_closures() -> Result<()> {
-    let (root, _) = git_fixture()?;
-    write(
-        root.path(),
-        "core/Cargo.lock",
-        &dependency_lock("1.0.0", "1.0.0"),
-    )?;
-    write(
-        root.path(),
-        "core/Cargo.toml",
-        &dependency_manifest("1.0.0", "1.0.0"),
-    )?;
-    let base = commit(root.path())?;
-    // The common pinned-dependency update changes both the manifest and the lock.
-    write(
-        root.path(),
-        "core/Cargo.lock",
-        &dependency_lock("1.0.0", "2.0.0"),
-    )?;
-    write(
-        root.path(),
-        "core/Cargo.toml",
-        &dependency_manifest("1.0.0", "2.0.0"),
-    )?;
-    let unrelated = commit(root.path())?;
-    for kind in [CiScope::Stack, CiScope::Bundles] {
-        assert_eq!(
-            select(root.path(), kind, "pull_request", &event(&base, &unrelated))?["required"],
-            false
-        );
-    }
-    let variants = [
-        (dependency_lock("2.0.0", "1.0.0"), true, true),
-        (
-            dependency_lock("1.0.0", "1.0.0").replace("engine dependency", "new checksum"),
-            true,
-            true,
-        ),
-        (
-            dependency_lock("1.0.0", "1.0.0").replace("unreachable version", "new checksum"),
-            false,
-            false,
-        ),
-        (
-            dependency_lock("1.0.0", "1.0.0").replace("version = \"0.8.2\"", "version = \"0.8.3\""),
-            false,
-            true,
-        ),
-        (
-            dependency_lock("1.0.0", "1.0.0").replace(
-                "version = \"51.0.0\"",
-                "version = \"51.0.0\"\nsource = \"git+https://example.invalid/engine#new\"",
-            ),
-            true,
-            true,
-        ),
-        (
-            dependency_lock("1.0.0", "1.0.0").replace("helper 1.0.0", "helper"),
-            true,
-            true,
-        ),
-        ("invalid TOML".into(), true, true),
-        (
-            dependency_lock("1.0.0", "1.0.0").replace("version = 4", "version = 99"),
-            true,
-            true,
-        ),
-    ];
-    for (lock, stack, bundles) in variants {
-        write(root.path(), "core/Cargo.lock", &lock)?;
-        write(
-            root.path(),
-            "core/Cargo.toml",
-            &dependency_manifest("1.0.0", "1.0.0"),
-        )?;
-        let head = commit(root.path())?;
-        for (kind, expected) in [(CiScope::Stack, stack), (CiScope::Bundles, bundles)] {
-            assert_eq!(
-                select(root.path(), kind, "pull_request", &event(&base, &head))?["required"],
-                expected,
-                "{kind:?}: {lock}"
-            );
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn qualification_dependency_diff_uses_pr_merge_base_and_ignores_checkout_files() -> Result<()> {
-    let (root, _) = git_fixture()?;
-    write(
-        root.path(),
-        "core/Cargo.lock",
-        &dependency_lock("1.0.0", "1.0.0"),
-    )?;
-    let base = commit(root.path())?;
-    write(
-        root.path(),
-        "core/Cargo.lock",
-        &dependency_lock("1.0.0", "2.0.0"),
-    )?;
-    let head = commit(root.path())?;
-    git(root.path(), &["checkout", "-q", "--detach", &base])?;
-    write(
-        root.path(),
-        "core/Cargo.lock",
-        &dependency_lock("2.0.0", "1.0.0"),
-    )?;
-    let advanced = commit(root.path())?;
-    write(root.path(), "core/Cargo.lock", "broken checkout content")?;
-    for kind in [CiScope::Stack, CiScope::Bundles] {
-        assert_eq!(
-            select(root.path(), kind, "pull_request", &event(&advanced, &head))?["required"],
-            false
-        );
-        assert_eq!(
-            select(
-                root.path(),
-                kind,
-                "push",
-                &json!({"before":base,"after":advanced})
-            )?["required"],
-            true
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn build_configuration_changes_and_missing_dependency_evidence_require_qualification() -> Result<()>
-{
-    let (root, _) = git_fixture()?;
-    write(
-        root.path(),
-        "core/Cargo.lock",
-        &dependency_lock("1.0.0", "1.0.0"),
-    )?;
-    let manifest = dependency_manifest("1.0.0", "1.0.0");
-    write(root.path(), "core/Cargo.toml", &manifest)?;
-    let base = commit(root.path())?;
-    for changed in [
-        manifest.replace(
-            "wasmtime = \"51.0.0\"",
-            "wasmtime = { version = \"51.0.0\", features = ['async'] }",
-        ),
-        format!("{manifest}\n[profile.release]\nopt-level = 2\n"),
-        format!("{manifest}\n[patch.crates-io]\nhelper = {{ path = '../helper' }}\n"),
-        format!("{manifest}\nnew_dependency = '1'\n"),
-        manifest.replace("helper = \"1.0.0\"", "helper = \"=1.0.0\""),
-    ] {
-        write(root.path(), "core/Cargo.toml", &changed)?;
-        let head = commit(root.path())?;
-        for kind in [CiScope::Stack, CiScope::Bundles] {
-            assert_eq!(
-                select(root.path(), kind, "pull_request", &event(&base, &head))?["required"],
-                true,
-                "{changed}"
-            );
-        }
-    }
-    git(root.path(), &["mv", "core/Cargo.lock", "moved.lock"])?;
-    let deleted = commit(root.path())?;
-    for kind in [CiScope::Stack, CiScope::Bundles] {
-        let report = select(root.path(), kind, "pull_request", &event(&base, &deleted))?;
-        assert_eq!(report["required"], true);
-        assert!(report["reason"].as_str().unwrap().contains("cannot read"));
-        assert_eq!(
-            select(root.path(), kind, "workflow_dispatch", &json!({}))?["required"],
-            true
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn current_repository_lockfiles_have_resolvable_qualification_dependencies() -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
-    let head = git(root, &["rev-parse", "HEAD"])?;
-    for path in [
-        "core/Cargo.lock",
-        "core/kontor-build/Cargo.lock",
-        "test-contracts/Cargo.lock",
-        "native-contracts/Cargo.lock",
-    ] {
-        for kind in [CiScope::Stack, CiScope::Bundles] {
-            assert!(
-                !dependency_change_relevant(root, kind, &head, &head, path)?,
-                "{path}"
-            );
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn dependency_updates_that_can_unify_engine_features_still_qualify() -> Result<()> {
-    let (root, _) = git_fixture()?;
-    let lock = dependency_lock("1.0.0", "1.0.0").replace(
-        "name = \"unrelated\"\nversion = \"1.0.0\"",
-        "name = \"unrelated\"\nversion = \"1.0.0\"\ndependencies = [\"helper 1.0.0\"]",
-    );
-    write(root.path(), "core/Cargo.lock", &lock)?;
-    let base = commit(root.path())?;
-    write(
-        root.path(),
-        "core/Cargo.lock",
-        &lock.replace(
-            "name = \"unrelated\"\nversion = \"1.0.0\"",
-            "name = \"unrelated\"\nversion = \"2.0.0\"",
-        ),
-    )?;
-    let head = commit(root.path())?;
-    for kind in [CiScope::Stack, CiScope::Bundles] {
-        assert_eq!(
-            select(root.path(), kind, "pull_request", &event(&base, &head))?["required"],
-            true
-        );
-    }
-    Ok(())
-}
-
 #[test]
 fn ordinary_application_changes_keep_rust_tests_without_qualification() -> Result<()> {
     let (root, base) = git_fixture()?;
@@ -914,6 +647,83 @@ fn ordinary_application_changes_keep_rust_tests_without_qualification() -> Resul
         assert_eq!(
             select(root.path(), kind, "pull_request", &event)?["required"],
             false
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn dependency_paths_follow_build_boundaries_without_package_lists() {
+    for (path, stack, bundles) in [
+        ("core/Cargo.toml", true, true),
+        ("core/Cargo.lock", true, true),
+        ("core/indexer/Cargo.toml", true, true),
+        ("core/new-crate/Cargo.toml", true, true),
+        ("core/kontor-sdk/Cargo.toml", true, true),
+        ("core/kontor-build/Cargo.toml", true, true),
+        ("core/kontor-build/Cargo.lock", true, true),
+        ("protocol-bundles/new-executor/Cargo.toml", false, true),
+        ("protocol-bundles/new-executor/Cargo.lock", false, true),
+        ("native-contracts/Cargo.lock", true, true),
+        ("test-contracts/new-fixture/Cargo.toml", true, true),
+        (
+            "tools/native-stack/encoder-inventory/Cargo.lock",
+            true,
+            false,
+        ),
+        ("tools/native-crypto/object-report/Cargo.lock", false, true),
+        ("sdk/package-lock.json", false, false),
+        ("sdk-native/standalone/Cargo.lock", false, false),
+        ("sdk/standalone/Cargo.toml", false, false),
+        ("unrelated-workspace/Cargo.lock", false, false),
+        ("unrelated-workspace/build.rs", false, false),
+    ] {
+        assert_eq!(stack_relevant(path), stack, "stack: {path}");
+        assert_eq!(bundle_relevant(path), bundles, "bundles: {path}");
+    }
+}
+
+#[test]
+fn adding_dependencies_and_moving_manifests_preserves_qualification() -> Result<()> {
+    let (root, base) = git_fixture()?;
+    write(
+        root.path(),
+        "core/Cargo.toml",
+        "[workspace.dependencies]\nnew_dependency = '1'\n",
+    )?;
+    let added = commit(root.path())?;
+    fs::create_dir_all(root.path().join("sdk"))?;
+    git(root.path(), &["mv", "core/Cargo.toml", "sdk/Cargo.toml"])?;
+    let moved = commit(root.path())?;
+    write(
+        root.path(),
+        "sdk/Cargo.toml",
+        "[dependencies]\nother_dependency = '2'\n",
+    )?;
+    let sdk_change = commit(root.path())?;
+    for kind in [CiScope::Stack, CiScope::Bundles] {
+        for (before, after) in [(&base, &added), (&added, &moved)] {
+            let report = select(root.path(), kind, "pull_request", &event(before, after))?;
+            assert_eq!(report["required"], true);
+            assert!(
+                report["paths"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("core/Cargo.toml"))
+            );
+        }
+        assert_eq!(
+            select(
+                root.path(),
+                kind,
+                "pull_request",
+                &event(&moved, &sdk_change)
+            )?["required"],
+            false
+        );
+        assert_eq!(
+            select(root.path(), kind, "workflow_dispatch", &json!({}))?["required"],
+            true
         );
     }
     Ok(())
