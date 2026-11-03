@@ -97,6 +97,10 @@ class SourceRoots(unittest.TestCase):
             (root / "Cargo.toml").write_text("current workspace")
             tools = root / "tools/protocol-bundles"
             tools.mkdir(parents=True)
+            rust_tools = root / "core/kontor-build"
+            rust_tools.mkdir(parents=True)
+            rust_wrapper = rust_tools / "compiler_wrapper.rs"
+            rust_wrapper.write_text("Rust compiler wrapper")
             wrapper = tools / "wrapper.py"
             wrapper.write_text("current compiler wrapper")
             before = self.inputs(frozen, data, root)
@@ -105,6 +109,9 @@ class SourceRoots(unittest.TestCase):
             (root / "Cargo.toml").write_text("changed node workspace")
             self.assertEqual(before, self.inputs(frozen, data, root))
             wrapper.write_text("changed compiler wrapper")
+            self.assertNotEqual(before, self.inputs(frozen, data, root))
+            before = self.inputs(frozen, data, root)
+            rust_wrapper.write_text("changed Rust compiler wrapper")
             self.assertNotEqual(before, self.inputs(frozen, data, root))
 
     def test_local_dependency_and_symlink_cannot_read_mutable_node_sources(self):

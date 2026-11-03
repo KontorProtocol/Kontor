@@ -4,4 +4,14 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Avoid inheriting a contract workspace's wasm target when bootstrapping the host CLI.
 cd "$repo_root/core"
-exec cargo run --locked --quiet -j 2 --manifest-path kontor-build/Cargo.toml -- "$@"
+if [[ "${1:-}" == "protocol-bundles" ]]; then
+    for argument in "$@"; do
+        if [[ "$argument" == "--offline" ]]; then
+            export CARGO_NET_OFFLINE=true
+        fi
+    done
+fi
+if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "stage-graph-wrapper" ]]; then
+    cargo build --locked --quiet -j 2 --manifest-path kontor-build/Cargo.toml --bin kontor-graph-rustc
+fi
+exec cargo run --locked --quiet -j 2 --manifest-path kontor-build/Cargo.toml --bin kontor-build -- "$@"

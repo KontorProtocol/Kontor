@@ -186,6 +186,7 @@ def source_inputs(root, data, *, kind="proof", tool_root=None):
                 inherited[str(path)] = sha(path)
     result = {"verified_external_sources": verified, "packages": packages, "qualification_sources": sources,
               "inherited_manifests_and_configuration": inherited, "git_source_trees": git_sources}
+    result["rust_build_tools"] = package_sources(tool_root / "core/kontor-build", root=tool_root)
     if tool_root != root:
         result["build_tools"] = package_sources(tool_root / "tools/protocol-bundles", root=tool_root)
     return result

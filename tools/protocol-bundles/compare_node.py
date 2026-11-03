@@ -46,6 +46,13 @@ def sources(directory, report, root, kind, *, tool_root=None):
                         and (Path(name).name.startswith('test_') or Path(name).name == 'compare_node.py'))}
     require(build_inputs(data['qualification_sources']) == build_inputs(repository_sources(root, kind)),
             f'{kind} source inventory differs from checked-out qualification inputs')
+    tools_root = root if tool_root is None else tool_root
+    def rust_tools(items):
+        return {name: value for name, value in items.items()
+                if not name.startswith('tests/') and Path(name).suffix != '.md'}
+    require('rust_build_tools' in data and rust_tools(data['rust_build_tools']) == rust_tools(
+        package_sources(tools_root / 'core/kontor-build', root=tools_root)),
+        'Rust build-tool inventory differs')
     if tool_root is not None and tool_root != root:
         expected_tools = package_sources(tool_root / 'tools/protocol-bundles', root=tool_root)
         def tool_inputs(items):
@@ -199,7 +206,15 @@ def load_cell(path, root, link_set=None):
         require(read(graph_dir / 'build-inputs.json') == graph, f'{role}/{name} graph report differs')
         sources(graph_dir, graph, graph_root(root, selected[name]), role, tool_root=root)
         file_hash(graph_dir / 'build.log', graph['build_log_sha256'])
-        file_hash(root / 'tools/protocol-bundles/rustc-wrapper.py', graph['wrapper_sha256'])
+        file_hash(root / 'core/kontor-build/src/bin/kontor-graph-rustc.rs', graph['wrapper_sha256'])
+        wrapper_hash = graph.get('wrapper_binary_sha256', '')
+        require(isinstance(wrapper_hash, str) and len(wrapper_hash) == 64
+                and all(character in '0123456789abcdef' for character in wrapper_hash),
+                'graph compiler wrapper binary identity is missing')
+        wrapper = Path(graph.get('wrapper', ''))
+        require(wrapper.is_absolute() and wrapper.name == 'kontor-graph-rustc'
+                and wrapper.parent.name == wrapper_hash,
+                'graph compiler wrapper path does not match its binary identity')
     verify_interface_report(node_dir / 'type-boundary', node['interface_checks'], build['graphs'], cell[0])
     if consensus:
         verify_interface_report(node_dir / 'consensus/type-boundary', node['consensus_interface_checks'], consensus, cell[0])

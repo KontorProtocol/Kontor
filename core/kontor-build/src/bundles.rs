@@ -48,6 +48,7 @@ pub fn protocol_bundles(args: ProtocolBundlesArgs) -> Result<()> {
     let mut command = Command::new("python3");
     command
         .current_dir(root)
+        .env("KONTOR_BUILD_TOOL", env::current_exe()?)
         .arg(root.join("tools/protocol-bundles/build.py"))
         .args(["--profile", &args.profile, "--jobs", &args.jobs.to_string()]);
     if args.offline {

@@ -155,18 +155,30 @@ class ExecutionDefinitionTests(unittest.TestCase):
             manifest, metadata = self.fixture(root)
             manifest.write_text(manifest.read_text() +
                                 '[profile.dev]\npanic="unwind"\n[profile.release]\npanic="unwind"\n')
-            wrapper = root / "tools/protocol-bundles/rustc-wrapper.py"
+            wrapper = root / "tools/kontor-graph-rustc"
             wrapper.parent.mkdir(parents=True)
             wrapper.write_text("compiler wrapper")
             manifest.with_name("definition.bin").write_bytes(b"stale reference")
             args = SimpleNamespace(target="x86_64-unknown-linux-gnu", offline=True)
             with patch.object(build, "ROOT", root), patch.object(build, "identity", return_value={}), \
+                    patch.object(build, "stage_compiler_wrapper", return_value=wrapper), \
                     patch.object(build, "metadata", return_value=metadata) as resolve, \
                     patch.object(build, "run") as compile_graph:
                 with self.assertRaisesRegex(ValueError, "reference differs"):
                     build.build_graph("first", args, {}, root / "output", EXECUTOR_GRAPHS)
                 self.assertEqual([call.args[1] for call in resolve.call_args_list], [args.target, None])
                 compile_graph.assert_not_called()
+
+    def test_compiler_bootstrap_forwards_offline_policy_without_mutating_environment(self):
+        environment = {"CARGO_NET_OFFLINE": "false"}
+        with patch.object(build.subprocess, "check_output", return_value="/tmp/wrapper\n") as bootstrap:
+            build.stage_compiler_wrapper(Path("output"), environment, True)
+            self.assertEqual(bootstrap.call_args.kwargs["env"]["CARGO_NET_OFFLINE"], "true")
+            self.assertEqual(environment["CARGO_NET_OFFLINE"], "false")
+            self.assertEqual(bootstrap.call_args.args[0][0], str(build.ROOT / "tools/kontor"))
+            build.stage_compiler_wrapper(Path("output"), {"KONTOR_BUILD_TOOL": "/tool", "CARGO_NET_OFFLINE": "true"}, False)
+            self.assertEqual(bootstrap.call_args.kwargs["env"]["CARGO_NET_OFFLINE"], "true")
+            self.assertEqual(bootstrap.call_args.args[0][0], "/tool")
 
     def test_reference_metadata_is_unfiltered_and_locked(self):
         with patch.object(build.subprocess, "check_output", return_value="{}") as cargo:

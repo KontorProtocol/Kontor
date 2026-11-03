@@ -20,7 +20,8 @@ COPY protocol-bundles protocol-bundles
 RUN cargo fetch --locked --manifest-path protocol-bundles/executor-first/Cargo.toml && \
     cargo fetch --locked --manifest-path protocol-bundles/executor-second/Cargo.toml && \
     cargo fetch --locked --manifest-path protocol-bundles/consensus-first/Cargo.toml && \
-    cargo fetch --locked --manifest-path protocol-bundles/node/Cargo.toml
+    cargo fetch --locked --manifest-path protocol-bundles/node/Cargo.toml && \
+    cargo fetch --locked --manifest-path core/kontor-build/Cargo.toml
 
 FROM cacher AS protocol-bundle-qualification
 COPY . .

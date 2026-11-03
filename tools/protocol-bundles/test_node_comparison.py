@@ -23,6 +23,7 @@ class NodeComparison(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.sources = {kind: {'qualification_sources': repository_sources(ROOT, kind),
+                             'rust_build_tools': package_sources(ROOT / 'core/kontor-build', root=ROOT),
                              'packages': [{'package': 'path+file://<repository>/core/numerics#0.1.0',
                                            'files': package_sources(ROOT / 'core/numerics')}],
                              'inherited_manifests_and_configuration': {
@@ -77,7 +78,9 @@ class NodeComparison(unittest.TestCase):
                      'lock_sha256': graph_identity['lock_sha256'], 'manifest_sha256': graph_identity['manifest_sha256'],
                      'source_inputs_sha256': fingerprint(source),
                      'build_log_sha256': digest(graph_dir / 'build.log'),
-                     'wrapper_sha256': digest(ROOT / 'tools/protocol-bundles/rustc-wrapper.py')}
+                     'wrapper_sha256': digest(ROOT / 'core/kontor-build/src/bin/kontor-graph-rustc.rs'),
+                     'wrapper_binary_sha256': 'ab' * 32,
+                     'wrapper': '/synthetic/compiler-wrapper/' + 'ab' * 32 + '/kontor-graph-rustc'}
             graph['link_inputs'] = f'/synthetic/{role}/{name}'
             graph['facade'] = f'/synthetic/{role}/{name}/libkontor_{role}_{name}.rlib'
             dependencies = ('tokio',) if role == 'consensus' else ('wasmtime', 'tokio')
@@ -463,6 +466,18 @@ class NodeComparison(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'case set'):
             compare(self.root, ROOT, 'release', 'success')
 
+    def test_rehashed_stale_rust_build_tool_sources_reject(self):
+        directory = self.cells[0]
+        source = copy.deepcopy(self.sources['node'])
+        source['rust_build_tools']['src/compiler_wrapper.rs'] = 'substituted wrapper source'
+        write_json(directory / 'node/source-inputs.json', source)
+        build = json.loads((directory / 'node-build.json').read_text())
+        build['node']['source_inputs_sha256'] = fingerprint(source)
+        write_json(directory / 'node-build.json', build)
+        self.bind(directory)
+        with self.assertRaisesRegex(ValueError, 'Rust build-tool inventory differs'):
+            compare(self.root, ROOT, 'release', 'success')
+
     def test_changed_compiler_rejects(self):
         directory = self.cells[0]
         build = json.loads((directory / 'node-build.json').read_text())
@@ -564,6 +579,8 @@ class NodeComparison(unittest.TestCase):
     def test_new_inherited_configuration_invalidates_old_artifact(self):
         checkout = self.root / 'checkout'
         source = self.sources['node']
+        shutil.copytree(ROOT / 'core/kontor-build', checkout / 'core/kontor-build',
+                        ignore=shutil.ignore_patterns('target'))
         for recorded in source['inherited_manifests_and_configuration']:
             if recorded.startswith('/fixture/'):
                 relative = recorded.removeprefix('/fixture/')

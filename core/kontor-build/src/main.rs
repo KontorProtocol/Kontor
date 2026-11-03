@@ -6,7 +6,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kontor_build::{
     BuildArgs, CiScope, DiagnosticsArgs, ProtocolBundlesArgs, VerifySnapshotArgs,
-    check_native_helper_lock, ci_scope, diagnostics, protocol_bundles, run, verify_snapshot,
+    check_native_helper_lock, ci_scope, diagnostics, protocol_bundles, run, stage_graph_wrapper,
+    verify_snapshot,
 };
 
 #[derive(Parser)]
@@ -28,6 +29,9 @@ enum Command {
     CheckNativeHelperLock,
     /// Preserve command output and macOS crash reports for CI diagnostics.
     Diagnostics(DiagnosticsArgs),
+    /// Stage Cargo's dedicated graph compiler wrapper.
+    #[command(hide = true)]
+    StageGraphWrapper { output: PathBuf },
     /// Select CI checks from the GitHub event and complete Git change set.
     CiScope {
         #[arg(value_enum)]
@@ -45,6 +49,10 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::StageGraphWrapper { output } => {
+            println!("{}", stage_graph_wrapper(&output)?.display());
+            Ok(())
+        }
         Command::Build(args) => run(args),
         Command::ProtocolBundles(args) => protocol_bundles(args),
         Command::VerifySnapshot(args) => {

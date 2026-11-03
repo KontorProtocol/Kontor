@@ -581,3 +581,30 @@ The existing macOS abort smoke test is restricted to collector/workflow/bootstra
 changes and manual dispatch. The Linux tooling tests cover growing reports,
 missing baselines, copy errors, command timeouts, signal exits and surviving
 children; actual macOS report generation still needs the macOS smoke test.
+
+### Graph compiler wrapper
+
+Graph builds now stage `kontor-graph-rustc`, a dedicated binary within the existing
+build-tool crate. Its compiled code uses only the standard library, so unrelated
+CLI changes do not invalidate the large executor caches. It accepts Cargo's compiler arguments directly;
+it does not parse them as CLI options or invoke Python. It requires the exact
+pinned compiler and graph namespace, rejects an additional compiler wrapper,
+preserves Cargo's own metadata, and leaves toolchain probes unchanged. On Unix
+it replaces its process with rustc, preserving exit status and inherited jobserver
+descriptors.
+
+The builder stages a content-addressed hard link to the wrapper, or a copy
+when the output is on another filesystem. A later bootstrap rebuild therefore
+does not replace a wrapper already selected by a graph build. The target cache
+key and build record bind the wrapper's bytes. Its hash is checked after graph
+compilation and again with the other staged inputs. Source evidence also includes
+`core/kontor-build` independently of the retained executor source root. These are
+build-provenance changes; execution-definition inputs and identities are unchanged.
+
+During the builder migration, `tools/kontor protocol-bundles` passes its current
+executable to the Python orchestrator. Direct Python builder entry points use
+`tools/kontor` to build and stage the same wrapper, passing offline policy through
+`CARGO_NET_OFFLINE`. The Docker fetch stage explicitly fetches the independent
+tooling lockfile before offline builds. The hidden `stage-graph-wrapper OUTPUT`
+command is an internal bootstrap interface, not a separate task runner. Node
+workspace/compiler and linker wrappers remain separate migration work.

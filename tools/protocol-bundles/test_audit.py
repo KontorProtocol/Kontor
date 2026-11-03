@@ -576,11 +576,18 @@ class Ownership(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             artifact = Path(directory) / "staged.rlib"
             artifact.write_bytes(b"original")
+            wrapper = Path(directory) / "compiler-wrapper"
+            wrapper.write_bytes(b"compiler wrapper")
             graph = {"artifacts": [{"path": str(artifact), "sha256": digest(artifact)}],
+                     "wrapper": str(wrapper), "wrapper_binary_sha256": digest(wrapper),
                      "native_artifacts": [], "compiler_proc_macros": []}
             verify_staged_inputs(graph)
             artifact.write_bytes(b"changed after staging")
             with self.assertRaisesRegex(RuntimeError, "staged compiler input changed"):
+                verify_staged_inputs(graph)
+            artifact.write_bytes(b"original")
+            wrapper.write_bytes(b"substituted wrapper")
+            with self.assertRaisesRegex(RuntimeError, "staged compiler wrapper changed"):
                 verify_staged_inputs(graph)
 
     def test_source_mutation_changes_provenance_even_with_unchanged_lock(self):
@@ -589,6 +596,7 @@ class Ownership(unittest.TestCase):
             engine = root / "core/indexer/src/runtime/mod.rs"
             engine.parent.mkdir(parents=True)
             engine.write_text("node engine configuration")
+            (root / "core/kontor-build").mkdir()
             retained = root / "core/indexer/src/protocol/v1"
             retained.mkdir(parents=True)
             for name in ("engine", "resources", "gas", "native", "errors", "fuel", "fees", "deposit"):
@@ -609,6 +617,7 @@ class Ownership(unittest.TestCase):
             engine = root / "core/indexer/src/runtime/mod.rs"
             engine.parent.mkdir(parents=True)
             engine.write_text("node engine configuration")
+            (root / "core/kontor-build").mkdir()
             retained = root / "core/indexer/src/protocol/v1"
             retained.mkdir(parents=True)
             for name in ("engine", "resources", "gas", "native", "errors", "fuel", "fees", "deposit"):

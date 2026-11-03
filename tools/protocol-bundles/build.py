@@ -41,6 +41,15 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def stage_compiler_wrapper(output, env, offline):
+    if offline:
+        env = dict(env, CARGO_NET_OFFLINE="true")
+    tool = env.get("KONTOR_BUILD_TOOL") or str(ROOT / "tools/kontor")
+    return Path(subprocess.check_output(
+        [tool, "stage-graph-wrapper", str(output.resolve())],
+        cwd=ROOT, env=env, text=True).strip())
+
+
 def run(args, cwd, env, log):
     print("Running: " + " ".join(map(str, args)), flush=True)
     with log.open("w") as output:
@@ -168,8 +177,9 @@ def build_graph(graph, args, base_env, output, graphs=None):
     lock_hash = digest(lock)
     graph_identity = identity(ROOT, graph, graphs)
     namespace = "kontor_" + graph + "_" + fingerprint(graph_identity)[:24]
-    wrapper = ROOT / "tools/protocol-bundles/rustc-wrapper.py"
-    target_dir = graph_output / "target" / (namespace + "_" + digest(wrapper)[:16])
+    wrapper = stage_compiler_wrapper(graph_output, base_env, args.offline)
+    wrapper_hash = digest(wrapper)
+    target_dir = graph_output / "target" / (namespace + "_" + wrapper_hash[:16])
     env = dict(base_env, CARGO_TARGET_DIR=str(target_dir), KONTOR_PROTOCOL_BUNDLE="1",
                KONTOR_NATIVE_NAMESPACE=namespace, BUNDLE_LIFT_RATE=str(selected_recipe.lift_rate),
                BUNDLE_GRAPH=graph,
@@ -194,6 +204,8 @@ def build_graph(graph, args, base_env, output, graphs=None):
         command.append("--offline")
     log = graph_output / "build.log"
     run(command, source_root, env, log)
+    if digest(wrapper) != wrapper_hash:
+        raise RuntimeError("compiler wrapper changed during graph compilation")
     if digest(lock) != lock_hash:
         raise RuntimeError("locked build modified the dependency lock")
     if source_inputs(source_root, data, kind=selected_recipe.kind, tool_root=ROOT) != sources:
@@ -237,7 +249,9 @@ def build_graph(graph, args, base_env, output, graphs=None):
               "compiler_proc_macros": compiler_inputs,
               "source_inputs_sha256": fingerprint(sources), "locked_packages": locked_packages(lock),
               "source_policy": source_policy,
-              "wrapper_sha256": digest(wrapper), "injected_metadata": namespace,
+              "wrapper": str(wrapper), "wrapper_binary_sha256": wrapper_hash,
+              "wrapper_sha256": digest(ROOT / "core/kontor-build/src/bin/kontor-graph-rustc.rs"),
+              "injected_metadata": namespace,
               "rustflags": env["RUSTFLAGS"],
               "native_outputs": native_outputs}
     if definition is not None:
@@ -331,6 +345,8 @@ second = { package = "itoa", version = "=1.0.15" }
 
 
 def verify_staged_inputs(graph):
+    if digest(Path(graph["wrapper"])) != graph["wrapper_binary_sha256"]:
+        raise RuntimeError("staged compiler wrapper changed")
     for item in graph["artifacts"] + graph["native_artifacts"]:
         if digest(Path(item["path"])) != item["sha256"]:
             raise RuntimeError(f"staged compiler input changed: {item['path']}")
