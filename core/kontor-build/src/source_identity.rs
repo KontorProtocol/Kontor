@@ -19,16 +19,16 @@ use tar::Archive;
 #[derive(Deserialize)]
 pub struct Metadata {
     workspace_root: PathBuf,
-    packages: Vec<Package>,
+    pub(crate) packages: Vec<Package>,
 }
 
 #[derive(Deserialize)]
-struct Package {
+pub(crate) struct Package {
     name: String,
     version: String,
-    source: Option<String>,
-    manifest_path: PathBuf,
-    id: String,
+    pub(crate) source: Option<String>,
+    pub(crate) manifest_path: PathBuf,
+    pub(crate) id: String,
 }
 
 #[derive(Deserialize)]

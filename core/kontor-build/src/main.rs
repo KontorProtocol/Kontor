@@ -6,6 +6,7 @@ use std::process;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kontor_build::linker_record::verify_input;
+use kontor_build::provenance::{Request as ProvenanceRequest, run as provenance};
 use kontor_build::source_identity::{Metadata, verify_sources};
 use kontor_build::{
     BuildArgs, CiScope, DiagnosticsArgs, ProtocolBundlesArgs, VerifySnapshotArgs,
@@ -22,6 +23,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Locate the built CLI for transitional callers without repeated Cargo launches.
+    #[command(hide = true)]
+    ToolPath,
     /// Build reproducible contracts and SDK bindings in the pinned container.
     Build(BuildArgs),
     /// Build and qualify independently locked protocol bundles.
@@ -45,6 +49,8 @@ enum Command {
     VerifyLinkerRecord,
     /// Verify pinned Git and registry sources from Cargo metadata on standard input.
     VerifySources,
+    /// Inventory build source inputs from a JSON request on standard input.
+    Provenance,
     /// Select CI checks from the GitHub event and complete Git change set.
     CiScope {
         #[arg(value_enum)]
@@ -62,6 +68,15 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::ToolPath => {
+            println!("{}", env::current_exe()?.display());
+            Ok(())
+        }
+        Command::Provenance => {
+            let request: ProvenanceRequest = serde_json::from_reader(io::stdin().lock())?;
+            println!("{}", provenance(request)?);
+            Ok(())
+        }
         Command::VerifySources => {
             let data: Metadata = serde_json::from_reader(io::stdin().lock())?;
             println!("{}", verify_sources(&data)?);

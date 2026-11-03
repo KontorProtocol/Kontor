@@ -235,6 +235,21 @@ rewritten during verification. Unlike the previous Python tar reader, the Rust
 verifier rejects global PAX and GNU sparse entries. The locked registry archives
 checked during migration do not require those extensions; unsupported formats
 fail verification rather than silently bypassing source checks.
+`tools/kontor provenance` reads a JSON request identifying an `operation` and
+returns the source or toolchain evidence. It supports local/package file lists,
+retained/node/consensus inventories, complete `source_inputs`, `locked_packages`,
+`toolchain`, and `runtime_libraries`. Complete source inventories verify external
+sources before recording them and stop local manifest inheritance at the selected
+graph root, including frozen roots without a `.git` marker. Inventory paths must
+be UTF8 JSON keys; unreadable directories fail verification.
+
+The remaining Python orchestration uses a small adapter to these Rust functions.
+It bootstraps the CLI once per build environment and reuses that executable,
+honoring offline mode. Toolchain and runtime-library requests carry the caller's
+working directory so relative compiler paths and PATH entries keep their meaning.
+The evidence schema, source hashes, compiler/sysroot records, environment allowlist,
+and compiler proc-macro runtime-dependency rejection are preserved. This tooling
+migration does not regenerate executor identities.
 Absolute source paths and platform inputs are recorded. This is an audit of
 the actual build, not a claim that different checkouts or platforms produce
 byte-identical executables.

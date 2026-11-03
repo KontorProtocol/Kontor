@@ -18,20 +18,39 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class SourceRoots(unittest.TestCase):
-    def test_source_verifier_uses_pinned_tool_and_offline_environment(self):
+    def test_provenance_bootstraps_once_per_build_environment(self):
+        provenance._tool_path.cache_clear()
+        self.addCleanup(provenance._tool_path.cache_clear)
+        with patch.object(provenance.subprocess, "check_output", return_value="/built/kontor-build\n") as bootstrap, \
+                patch.object(provenance.subprocess, "run") as process:
+            process.return_value.returncode = 0
+            process.return_value.stdout = '{}'
+            env = {"CARGO_NET_OFFLINE": "true"}
+            for _ in range(2):
+                provenance._request({"operation": "retained_trees"}, env=env)
+            self.assertEqual(bootstrap.call_count, 1)
+            self.assertEqual(bootstrap.call_args.kwargs["env"], env)
+            self.assertEqual(process.call_args.args[0], ["/built/kontor-build", "provenance"])
+            provenance._request({"operation": "retained_trees"}, env={"CARGO_NET_OFFLINE": "false"})
+            self.assertEqual(bootstrap.call_count, 2)
+
+    def test_provenance_bridge_uses_pinned_tool_and_offline_environment(self):
         env = {"KONTOR_BUILD_TOOL": "/pinned/kontor-build", "CARGO_NET_OFFLINE": "true"}
-        data = {"packages": []}
+        data = {"operation": "source_inputs", "data": {"packages": []}}
         with patch.object(provenance.subprocess, "run") as process:
             process.return_value.returncode = 0
             process.return_value.stdout = '{"git": {}, "registry": {}}'
-            self.assertEqual(provenance.verify_sources(data, env=env), {"git": {}, "registry": {}})
-            self.assertEqual(process.call_args.args[0], ["/pinned/kontor-build", "verify-sources"])
+            self.assertEqual(provenance._request(data, env=env), {"git": {}, "registry": {}})
+            self.assertEqual(process.call_args.args[0], ["/pinned/kontor-build", "provenance"])
             self.assertEqual(process.call_args.kwargs["env"], env)
             self.assertEqual(json.loads(process.call_args.kwargs["input"]), data)
             process.return_value.returncode = 1
             process.return_value.stderr = "pinned source differs"
             with self.assertRaisesRegex(RuntimeError, "pinned source differs"):
-                provenance.verify_sources(data, env=env)
+                provenance._request(data, env=env)
+
+    def test_retained_tree_policy_matches_rust_inventory(self):
+        self.assertEqual(tuple(provenance._request({"operation": "retained_trees"})), provenance.RETAINED_TREES)
 
     def test_freeze_keeps_fixture_and_package_inputs_without_tool_programs(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -133,55 +152,6 @@ class SourceRoots(unittest.TestCase):
         return {"packages": [{"manifest_path": str(package / "Cargo.toml"),
                                "id": f"path+file://{package}#local", "source": None}]}
 
-    def inputs(self, root, data, tool_root):
-        with patch.object(provenance, "verify_sources", return_value={}), \
-                patch.object(provenance, "repository_sources", return_value={}):
-            return provenance.source_inputs(root, data, kind="executor", tool_root=tool_root)
-
-    def test_explicit_boundary_preserves_frozen_inheritance_and_tracks_current_tools(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            frozen = root / "retained/k3"
-            data = self.fixture(frozen)
-            (root / "Cargo.toml").write_text("current workspace")
-            tools = root / "tools/protocol-bundles"
-            tools.mkdir(parents=True)
-            rust_tools = root / "core/kontor-build"
-            rust_tools.mkdir(parents=True)
-            rust_wrapper = rust_tools / "compiler_wrapper.rs"
-            rust_wrapper.write_text("Rust compiler wrapper")
-            wrapper = tools / "wrapper.py"
-            wrapper.write_text("current compiler wrapper")
-            before = self.inputs(frozen, data, root)
-            self.assertIn(str(frozen / "core/Cargo.toml"), before["inherited_manifests_and_configuration"])
-            self.assertNotIn(str(root / "Cargo.toml"), before["inherited_manifests_and_configuration"])
-            (root / "Cargo.toml").write_text("changed node workspace")
-            self.assertEqual(before, self.inputs(frozen, data, root))
-            wrapper.write_text("changed compiler wrapper")
-            self.assertNotEqual(before, self.inputs(frozen, data, root))
-            before = self.inputs(frozen, data, root)
-            rust_wrapper.write_text("changed Rust compiler wrapper")
-            self.assertNotEqual(before, self.inputs(frozen, data, root))
-
-    def test_local_dependency_and_symlink_cannot_read_mutable_node_sources(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            frozen = root / "retained"
-            data = self.fixture(frozen)
-            outside = root / "node"
-            outside.mkdir()
-            (outside / "Cargo.toml").write_text("live dependency")
-            (outside / "lib.rs").write_text("live execution rules")
-            escaped = {"packages": [{**data["packages"][0], "manifest_path": str(outside / "Cargo.toml")}]}
-            with self.assertRaisesRegex(RuntimeError, "local package escapes"):
-                self.inputs(frozen, escaped, frozen)
-            package = frozen / "core/local"
-            for target in (outside / "lib.rs", outside, package):
-                link = package / "linked"
-                link.symlink_to(target)
-                with self.subTest(target=target), self.assertRaisesRegex(RuntimeError, "escapes|cyclic"):
-                    self.inputs(frozen, data, frozen)
-                link.unlink()
 
 
 if __name__ == "__main__":
