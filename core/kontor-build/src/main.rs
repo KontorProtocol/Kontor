@@ -4,10 +4,11 @@ use std::process;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use kontor_build::linker_record::verify_input;
 use kontor_build::{
     BuildArgs, CiScope, DiagnosticsArgs, ProtocolBundlesArgs, VerifySnapshotArgs,
     check_native_helper_lock, ci_scope, diagnostics, protocol_bundles, run, stage_graph_wrapper,
-    stage_node_wrapper, verify_snapshot,
+    stage_linker_wrapper, stage_node_wrapper, verify_snapshot,
 };
 
 #[derive(Parser)]
@@ -35,6 +36,11 @@ enum Command {
     /// Stage Cargo's dedicated node compiler wrapper.
     #[command(hide = true)]
     StageNodeWrapper { output: PathBuf },
+    /// Stage the node linker recording executable.
+    #[command(hide = true)]
+    StageLinkerWrapper { output: PathBuf },
+    /// Verify linker evidence supplied as JSON on standard input.
+    VerifyLinkerRecord,
     /// Select CI checks from the GitHub event and complete Git change set.
     CiScope {
         #[arg(value_enum)]
@@ -52,6 +58,11 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::VerifyLinkerRecord => verify_input(),
+        Command::StageLinkerWrapper { output } => {
+            println!("{}", stage_linker_wrapper(&output)?.display());
+            Ok(())
+        }
         Command::StageNodeWrapper { output } => {
             println!("{}", stage_node_wrapper(&output)?.display());
             Ok(())

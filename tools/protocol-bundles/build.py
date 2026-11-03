@@ -3,6 +3,7 @@
 
 import argparse
 import fcntl
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -15,7 +16,6 @@ import tomllib
 from audit import audit_final, audit_inputs
 from common_ownership import verify as verify_common_ownership
 from execution_definition import verify_reference
-from linker_record import validate as validate_linker_record
 from coordinator_definition import verify as verify_coordinator_reference
 from managed_definition import graph_manifest, verify as verify_managed_reference
 from metadata_control import proc_macro_hashes
@@ -48,6 +48,24 @@ def stage_compiler_wrapper(output, env, offline, *, kind="graph"):
     return Path(subprocess.check_output(
         [tool, f"stage-{kind}-wrapper", str(output.resolve())],
         cwd=ROOT, env=env, text=True).strip())
+
+
+@lru_cache(maxsize=1)
+def linker_validator():
+    return stage_compiler_wrapper(ROOT / ".build-cache/linker-validation", dict(os.environ), False, kind="linker")
+
+
+def validate_linker_record(record, spec_hash, output_hash, compiler_output=None, *, verifier=None):
+    request = dict(record=record, spec_hash=spec_hash, output_hash=output_hash, compiler_output=compiler_output)
+    result = subprocess.run([str(verifier or linker_validator()), "--verify-record"], input=json.dumps(request),
+                            capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip())
+
+
+def linker_wrapper_source_hash(root):
+    return fingerprint({path: digest(root / path) for path in (
+        "core/kontor-build/src/bin/kontor-node-linker.rs", "core/kontor-build/src/linker_record.rs")})
 
 
 def run(args, cwd, env, log):
@@ -459,11 +477,8 @@ def build_node(graphs, args, base_env, output, consensus=()):
         verify_staged_inputs(graph)
     audited, libraries = node_link_inputs(graphs, consensus)
     sets, versions = audit_inputs(audited, directory)
-    linker_directory = directory / 'linker'
-    linker_directory.mkdir(exist_ok=True)
-    linker_wrapper = linker_directory / 'cc'
-    shutil.copyfile(ROOT / 'tools/protocol-bundles/linker_record.py', linker_wrapper)
-    linker_wrapper.chmod(0o755)
+    linker_wrapper = stage_compiler_wrapper(directory, env, args.offline, kind="linker")
+    linker_wrapper_hash = digest(linker_wrapper)
     spec = {"compiler": env["RUSTC"], "features": features, "link_set": args.link_set,
             "source_inputs_sha256": fingerprint(sources),
             "lock_sha256": lock_hash, "root_objects": str(directory / "root-objects.json"),
@@ -509,7 +524,7 @@ def build_node(graphs, args, base_env, output, consensus=()):
     if not isinstance(compiler_record.get('compiler_output'), dict):
         raise RuntimeError('missing completed compiler output')
     validate_linker_record(linker_record, digest(spec_path), digest(executable),
-                           compiler_record['compiler_output'])
+                           compiler_record['compiler_output'], verifier=linker_wrapper)
     if compiler_record['linker_record_sha256'] != digest(Path(spec['linker_record'])):
         raise RuntimeError('node compiler and linker records disagree')
     archives, _, native_outputs, proc_macros = current_artifacts(log, directory / "target", args.target, "indexer")
@@ -532,6 +547,8 @@ def build_node(graphs, args, base_env, output, consensus=()):
         raise RuntimeError("coordinator definition changed during compilation")
     if digest(wrapper) != wrapper_hash:
         raise RuntimeError("node compiler wrapper changed during compilation")
+    if digest(linker_wrapper) != linker_wrapper_hash:
+        raise RuntimeError("node linker wrapper changed during compilation")
     for graph in graphs:
         verify_identity(ROOT, graph, recipes)
         verify_staged_inputs(graph)
@@ -545,7 +562,8 @@ def build_node(graphs, args, base_env, output, consensus=()):
               "wrapper_sha256": digest(ROOT / "core/kontor-build/src/bin/kontor-node-rustc.rs"),
               "wrapper": str(wrapper), "wrapper_binary_sha256": wrapper_hash,
               "linker_record_sha256": digest(Path(spec['linker_record'])),
-              "linker_wrapper_sha256": digest(linker_wrapper),
+              "linker_wrapper_sha256": linker_wrapper_source_hash(ROOT),
+              "linker_wrapper_binary_sha256": linker_wrapper_hash,
               "native_helpers": helpers, "runtime_libraries": libraries,
               "compiler_proc_macros": [{"path": str(path), "sha256": digest(path)} for path in proc_macros],
               "ownership": {name: digest(directory / name) for name in (

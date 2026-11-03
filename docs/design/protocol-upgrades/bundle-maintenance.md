@@ -649,9 +649,38 @@ Captured node invocations require UTF-8 arguments for JSON evidence and reject
 unrecordable arguments before invoking rustc. Probes and dependency/library
 invocations continue to forward raw operating-system arguments unchanged.
 
-The linker recording shim and orchestration still use Python pending their
-migration. A small real compiler/linker check covers this boundary locally;
+Orchestration still uses Python pending its migration. A small real
+compiler/linker check covers this boundary locally;
 the full independently linked node build and Darwin validation remain part of
 the stabilized build acceptance, not additional per-edit CI jobs.
 The focused test bootstrap allows fetching the small standalone tooling graph on
 a cold runner; an explicitly inherited `CARGO_NET_OFFLINE` remains respected.
+
+### Linker recording and verification
+
+`kontor-node-linker` now records the real driver call and selected linker backend
+without Python. It is staged by `stage-linker-wrapper OUTPUT`, uses the same
+content-addressed binary staging as the compiler wrappers, and excludes unrelated
+CLI code from its executable. The node report binds the two linker source files
+and executable hash separately; the link specification binds the staged binary.
+
+The recorder preserves GCC `collect2` lookup with `-B` and `-fuse-ld`, Clang's
+direct linker selection, four levels of response files, quoted arguments and
+text-mode newline handling. Custom driver specs/wrappers and `COLLECT_LD_OVERRIDE`
+remain rejected. Executable lookup checks Unix access permissions, using the
+already pinned libc version. Inherited descriptors and normal exit codes are
+preserved; signals use the same shell convention as the node compiler wrapper.
+Stale success records are removed before invocation, and changed tool bytes,
+link specifications or expanded response arguments prevent a success record.
+
+The verifier is available as `tools/kontor verify-linker-record`, reading JSON
+from standard input with `record`, `spec_hash`, `output_hash` and optional
+`compiler_output` fields. It validates both the original linker hash and the
+separate completed compiler output used on Darwin. During the remaining Python
+orchestrator migration, a small bridge calls this Rust verifier; node builds reuse
+the already-staged linker, so offline builds do not bootstrap another tool.
+
+Run the small real compiler/linker checks with
+`cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test linker_wrapper -j2`.
+The existing cross-platform qualification step runs these tests before its full
+node build. No additional job or performance campaign is required.

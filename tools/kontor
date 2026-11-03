@@ -18,6 +18,9 @@ fi
 if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "stage-node-wrapper" ]]; then
     wrapper_bins+=(--bin kontor-node-rustc)
 fi
+if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "stage-linker-wrapper" ]]; then
+    wrapper_bins+=(--bin kontor-node-linker)
+fi
 if (( ${#wrapper_bins[@]} )); then
     cargo build --locked --quiet -j 2 --manifest-path kontor-build/Cargo.toml "${wrapper_bins[@]}"
 fi

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from build import ROOT, digest, write_json
+from build import linker_wrapper_source_hash, ROOT, digest, write_json
 from compare_node import OWNERSHIP, TARGETS, compare, sources as validate_sources
 from provenance import fingerprint, package_sources, repository_sources
 from qualify_node import CASES, baseline_graphs
@@ -93,12 +93,14 @@ class NodeComparison(unittest.TestCase):
                 'source_inputs_sha256': fingerprint(self.sources['node']),
                 'lock_sha256': digest(ROOT / 'protocol-bundles/node/Cargo.lock'),
                 'wrapper_sha256': digest(ROOT / 'core/kontor-build/src/bin/kontor-node-rustc.rs'),
-                'linker_wrapper_sha256': digest(ROOT / 'tools/protocol-bundles/linker_record.py')}
+                'linker_wrapper_sha256': linker_wrapper_source_hash(ROOT),
+                'linker_wrapper_binary_sha256': 'cd' * 32}
         write_json(node_dir / 'source-inputs.json', self.sources['node'])
         (node_dir / 'build.log').write_text('synthetic node build transcript')
         node['build_log_sha256'] = digest(node_dir / 'build.log')
         spec = {'features': ['protocol-qualification'], 'lock_sha256': node['lock_sha256'], 'link_set': link_set,
-                'linker_wrapper_sha256': node['linker_wrapper_sha256'],
+                'linker_wrapper_sha256': node['linker_wrapper_binary_sha256'],
+                'linker_wrapper': '/synthetic/compiler-wrapper/' + 'cd' * 32 + '/kontor-node-linker',
                 'source_inputs_sha256': node['source_inputs_sha256'],
                 'graphs': [{'graph': graph['graph'], 'role': role, 'build_inputs_sha256': fingerprint(graph)}
                            for role, group in (('executor', graphs), ('consensus', consensus)) for graph in group]}

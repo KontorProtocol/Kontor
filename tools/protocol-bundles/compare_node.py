@@ -5,8 +5,7 @@ import argparse
 import json
 from pathlib import Path
 
-from build import ROOT, digest, write_json
-from linker_record import validate as validate_linker_record
+from build import ROOT, digest, write_json, validate_linker_record, linker_wrapper_source_hash
 from provenance import fingerprint, package_sources, repository_sources
 from qualify_node import (CASES, baseline_graphs, verify_executor_observations,
                           verify_storage_contracts, verify_certified_history, verify_managed_startup)
@@ -185,8 +184,15 @@ def load_cell(path, root, link_set=None):
     compiler_record = read(node_dir / 'root-objects.json')
     require(compiler_record['spec_sha256'] == node['link_spec_sha256'], 'stale root objects')
     file_hash(node_dir / 'linker-record.json', node['linker_record_sha256'])
-    file_hash(root / 'tools/protocol-bundles/linker_record.py', node['linker_wrapper_sha256'])
-    require(spec.get('linker_wrapper_sha256') == node['linker_wrapper_sha256'], 'linker wrapper differs')
+    require(linker_wrapper_source_hash(root) == node['linker_wrapper_sha256'], 'linker wrapper source differs')
+    linker_hash = node.get('linker_wrapper_binary_sha256', '')
+    require(isinstance(linker_hash, str) and len(linker_hash) == 64
+            and all(character in '0123456789abcdef' for character in linker_hash),
+            'linker wrapper binary identity is missing')
+    linker_path = Path(spec.get('linker_wrapper', ''))
+    require(spec.get('linker_wrapper_sha256') == linker_hash and linker_path.is_absolute()
+            and linker_path.name == 'kontor-node-linker' and linker_path.parent.name == linker_hash,
+            'linker wrapper differs')
     require(compiler_record.get('linker_record_sha256') == node['linker_record_sha256'],
             'compiler and linker records disagree')
     require(isinstance(compiler_record.get('compiler_output'), dict), 'missing completed compiler output')

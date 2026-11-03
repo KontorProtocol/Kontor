@@ -16,6 +16,10 @@ pub fn stage_node_wrapper(output: &Path) -> Result<PathBuf> {
     stage_wrapper(output, "kontor-node-rustc")
 }
 
+pub fn stage_linker_wrapper(output: &Path) -> Result<PathBuf> {
+    stage_wrapper(output, "kontor-node-linker")
+}
+
 fn stage_wrapper(output: &Path, name: &str) -> Result<PathBuf> {
     let executable = env::current_exe()?.canonicalize()?;
     let source = executable
