@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tempfile::tempfile;
 
+use crate::canonical_json::{Style, encode as canonical};
 use crate::container::sha256;
 use crate::recipes::executor_graphs;
 use crate::toolchain::Environment;
@@ -162,39 +163,15 @@ pub fn inputs_for(graphs: &[Value], check_files: bool, cwd: &Path) -> Result<(Ve
     }
     Ok((args, json!(inputs)))
 }
-// Evidence was emitted with Python's ASCII JSON escaping. Preserve its bytes
-// for paths containing Unicode, including supplementary-plane characters.
 fn encoded(value: &Value, pretty: bool) -> Result<String> {
-    fn integers(value: &Value) -> bool {
-        match value {
-            Value::Number(n) => !n.is_f64(),
-            Value::Array(a) => a.iter().all(integers),
-            Value::Object(o) => o.values().all(integers),
-            _ => true,
-        }
-    }
-    ensure!(
-        integers(value),
-        "interface evidence requires integer JSON numbers"
-    );
-    let mut value = value.clone();
-    value.sort_all_objects();
-    let source = if pretty {
-        serde_json::to_string_pretty(&value)?
-    } else {
-        serde_json::to_string(&value)?
-    };
-    let mut result = String::new();
-    for c in source.chars() {
-        if c < '\u{7f}' {
-            result.push(c);
+    canonical(
+        value,
+        if pretty {
+            Style::Pretty
         } else {
-            for word in c.encode_utf16(&mut [0; 2]) {
-                result.push_str(&format!("\\u{word:04x}"));
-            }
-        }
-    }
-    Ok(result)
+            Style::Compact
+        },
+    )
 }
 fn graph_inputs(graphs: &[Value]) -> Result<Value> {
     graphs

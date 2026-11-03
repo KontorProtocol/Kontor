@@ -11,6 +11,9 @@ if [[ "${1:-}" == "protocol-bundles" ]]; then
         fi
     done
 fi
+if [[ "${1:-}" == "freeze-execution" ]]; then
+    export CARGO_NET_OFFLINE=true
+fi
 wrapper_bins=()
 if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "stage-graph-wrapper" ]]; then
     wrapper_bins+=(--bin kontor-graph-rustc)

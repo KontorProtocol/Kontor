@@ -1,9 +1,11 @@
 pub mod build_inputs;
 mod bundles;
+mod canonical_json;
 mod ci_scope;
 mod compiler_wrapper;
 mod container;
 mod diagnostics;
+pub mod execution_definition;
 pub mod interface;
 pub mod linker_record;
 pub mod metadata_control;

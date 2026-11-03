@@ -6,6 +6,10 @@ use std::process;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kontor_build::build_inputs::{Request as BuildInputRequest, run as build_inputs};
+use kontor_build::execution_definition::{
+    FreezeArgs, Request as DefinitionRequest, freeze as freeze_execution,
+    run as execution_definition,
+};
 use kontor_build::interface::{Request as InterfaceRequest, run as interface};
 use kontor_build::linker_record::verify_input;
 use kontor_build::object_tools::{Request as ObjectRequest, run as inspect_object};
@@ -67,6 +71,10 @@ enum Command {
     BuildInputs,
     /// Run or verify independent bundle interface controls.
     Interface,
+    /// Build or verify execution-reference bytes from JSON input.
+    ExecutionDefinition,
+    /// Verify an executor reference, or explicitly write an unreleased definition.
+    FreezeExecution(FreezeArgs),
     /// Inventory build source inputs from a JSON request on standard input.
     Provenance,
     /// Select CI checks from the GitHub event and complete Git change set.
@@ -123,6 +131,15 @@ fn main() -> Result<()> {
         Command::Interface => {
             let request: InterfaceRequest = serde_json::from_reader(io::stdin().lock())?;
             println!("{}", interface(request)?);
+            Ok(())
+        }
+        Command::ExecutionDefinition => {
+            let request: DefinitionRequest = serde_json::from_reader(io::stdin().lock())?;
+            println!("{}", execution_definition(request)?);
+            Ok(())
+        }
+        Command::FreezeExecution(args) => {
+            println!("{}", freeze_execution(&repository_root()?, args)?);
             Ok(())
         }
         Command::VerifySources => {

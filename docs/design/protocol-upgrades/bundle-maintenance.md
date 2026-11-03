@@ -550,9 +550,13 @@ not regenerate it. The retained crate embeds its own reference directly, without
 depending on a build-script environment variable.
 
 For a deliberately changed, unreleased P2 definition, run
-`python3 tools/protocol-bundles/execution_definition.py observer --write`
+`tools/kontor freeze-execution observer --write`
 under the pinned toolchain, inspect the changed inputs and ID, then
 qualify the resulting executors. Omitting `--write` only verifies the reference.
+The Rust generator resolves locked, unfiltered Cargo metadata offline.
+`tools/kontor execution-definition` exposes the same encoding and verification
+operations through JSON for the transitional builder adapter. Canonical bytes,
+semantic exclusions, inherited package properties and build policy are unchanged.
 Never overwrite a released definition to silence a mismatch. Preserve its
 source graph and add the new definition separately. Compatibility qualification
 of a new compiler/platform artifact is distinct from changing execution rules.

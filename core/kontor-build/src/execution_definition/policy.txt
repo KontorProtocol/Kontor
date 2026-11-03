@@ -1,0 +1,10 @@
+Kontor execution reference build policy v1
+Independently locked retained graph with kontor_retained configuration.
+Requires the immutable storage contract referenced by the retained definition.
+Shared node adapters and SQL dependencies are separately artifact-qualified.
+Effective local-package manifests bind inherited workspace build properties.
+One pinned compiler per node build; qualified compiler/platform artifact mappings.
+Pulley64 execution, portable lifting accounting, sequential guest call-return.
+Retained native namespaces and node-owned process resources.
+Release Linux x86-64, Linux ARM64 and macOS ARM64 qualification; bounded dev smoke.
+Reference inputs remain immutable after release; compatible artifacts are separate.
