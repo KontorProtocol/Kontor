@@ -13,7 +13,6 @@ from audit import GDB_SCRIPT, audit_inputs, audit_final, compiler_debug_metadata
 from build import digest, verify_staged_inputs
 from common_ownership import graph_references, linker_owners, platform_owners, reject_common_shadow, reject_unowned_references, runtime_paths, verify
 from provenance import fingerprint, source_inputs
-from symbol_tool import inspect
 
 
 class Ownership(unittest.TestCase):
@@ -44,95 +43,6 @@ class Ownership(unittest.TestCase):
     def test_anonymous_constant_cannot_hide_collision(self):
         self.collision("anon.1234abcd.0")
 
-    def test_bitcode_definitions_still_have_owners_and_collide(self):
-        symbol = "_RNvCs123_5probe5STATE"
-        native = ("_" if sys.platform == "darwin" else "") + symbol
-        with patch("audit.inspect", return_value=f"---------------- T {native}\n"):
-            self.assertEqual(definitions(Path("bitcode")), {symbol: {"address": None, "kind": "T"}})
-            with tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                for graph in self.graphs:
-                    path = root / graph["graph"]
-                    path.write_bytes(b"fixture")
-                    graph["artifacts"] = [{"path": str(path)}]
-                with self.assertRaisesRegex(RuntimeError, "cross-graph definitions would coalesce"):
-                    audit_inputs(self.graphs, root)
-            with self.assertRaisesRegex(RuntimeError, "shadows common host/sysroot"):
-                reject_common_shadow(self.graphs[0], {symbol}, definitions(Path("sysroot")))
-
-    def test_final_bitcode_definition_has_no_linked_address(self):
-        with patch("audit.definitions", return_value={"_start": {"address": None, "kind": "T"}}):
-            with self.assertRaisesRegex(RuntimeError, "no linked address"):
-                audit_final(Path("not-linked"), [], [], [], Path("unused"), {})
-
-    def test_executor_final_audit_accepts_linked_native_subset_without_ring(self):
-        first = "kontor_first_blst_keygen"
-        second = "kontor_second_rustsecp256k1_v0_10_0_default_illegal_callback_fn"
-        local = {first: {"address": "1000", "kind": "t"},
-                 second: {"address": "2000", "kind": "t"}}
-        sets = [{first}, {second}]
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            with patch("audit.private_local_inputs", return_value=([set(), set()], [])):
-                with patch("audit.definitions", side_effect=lambda _path, globals_only=True:
-                           {} if globals_only else local):
-                    result = audit_final(Path("linked-node"), self.graphs, sets,
-                                         ["51.0.0-dev", "51.0.0-kontor.1"], root, {}, kind="executor")
-            self.assertEqual(result["wasmtime"], {})
-            self.assertEqual(set(result["native"]), {first, second})
-            self.assertEqual(set(result["crypto"]), {first, second})
-            inventory = json.loads((root / "final-ownership.json").read_text())
-            self.assertEqual(inventory[first]["owner"], "first")
-            self.assertEqual(inventory[second]["owner"], "second")
-            with patch("audit.private_local_inputs", return_value=([set(), set()], [])):
-                with patch("audit.definitions", side_effect=lambda _path, globals_only=True:
-                           {"unowned_final": {"address": "3000", "kind": "T"}} if globals_only else local):
-                    with self.assertRaisesRegex(RuntimeError, "ambiguous or unowned final definition"):
-                        audit_final(Path("linked-node"), self.graphs, sets,
-                                    ["51.0.0-dev", "51.0.0-kontor.1"], root, {}, kind="executor")
-            with patch("audit.definitions", side_effect=lambda _path, globals_only=True:
-                       {} if globals_only else local):
-                with self.assertRaisesRegex(RuntimeError, "missing graph-private Wasmtime native helper"):
-                    audit_final(Path("linked-proof"), self.graphs, sets,
-                                ["51.0.0-dev", "51.0.0-kontor.1"], root, {})
-
-    def test_executor_final_audit_rejects_unowned_or_aliased_private_symbols(self):
-        first = "kontor_first_blst_keygen"
-        second = "kontor_second_blst_keygen"
-        sets = [{first}, {second}]
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for local, message in (
-                ({first: {"address": "1000", "kind": "t"},
-                  second: {"address": "1000", "kind": "t"}}, "alias one address"),
-                ({"kontor_first_unowned": {"address": "1000", "kind": "t"}}, "unowned graph-private"),
-            ):
-                with self.subTest(message=message):
-                    with patch("audit.private_local_inputs", return_value=([set(), set()], [])):
-                        with patch("audit.definitions", side_effect=lambda _path, globals_only=True:
-                                   {} if globals_only else local):
-                            with self.assertRaisesRegex(RuntimeError, message):
-                                audit_final(Path("linked-node"), self.graphs, sets,
-                                            ["51.0.0-dev", "51.0.0-kontor.1"], root, {},
-                                            kind="executor")
-
-    def test_executor_final_node_owner_requires_concrete_input(self):
-        symbol = "blst_keygen"
-        linked = {symbol: {"address": "1000", "kind": "T"}}
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            with patch("audit.private_local_inputs", return_value=([set(), set()], [])):
-                with patch("audit.definitions", side_effect=lambda _path, globals_only=True:
-                           linked if globals_only else {}):
-                    with self.assertRaisesRegex(RuntimeError, "unowned final definition"):
-                        audit_final(Path("linked-node"), self.graphs, [set(), set()],
-                                    ["51.0.0-dev", "51.0.0-kontor.1"], root, {}, kind="executor")
-                    audit_final(Path("linked-node"), self.graphs, [set(), set()],
-                                ["51.0.0-dev", "51.0.0-kontor.1"], root, {}, kind="executor",
-                                node={symbol: ["node/libblst.a"]})
-            final = json.loads((root / "final-ownership.json").read_text())
-            self.assertEqual(final[symbol]["owner"], {"node_inputs": ["node/libblst.a"]})
-
     def test_private_local_input_inventory_keeps_globals_separate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -159,27 +69,6 @@ class Ownership(unittest.TestCase):
                 self.assertIn(local_names[index], private_sets[index])
                 self.assertNotIn(global_names[index], private_sets[index])
                 self.assertTrue(inventory[index]["inputs"][0]["sha256"])
-            linked = {name: {"address": str(index + 1), "kind": "t"}
-                      for index, name in enumerate(local_names)}
-            actual_definitions = definitions
-            def linked_definitions(path, globals_only=True):
-                if Path(path) == Path("linked-node"):
-                    return {} if globals_only else linked
-                return actual_definitions(path, globals_only=globals_only)
-            with patch("audit.definitions", side_effect=linked_definitions):
-                result = audit_final(Path("linked-node"), self.graphs, sets,
-                                     ["51.0.0-dev", "51.0.0-kontor.1"], root, {},
-                                     kind="executor")
-            self.assertEqual(set(result["native"]), set(local_names))
-            def falsely_global(path, globals_only=True):
-                if Path(path) == Path("linked-node") and globals_only:
-                    return {local_names[0]: linked[local_names[0]]}
-                return linked_definitions(path, globals_only=globals_only)
-            with patch("audit.definitions", side_effect=falsely_global):
-                with self.assertRaisesRegex(RuntimeError, "ambiguous or unowned final definition"):
-                    audit_final(Path("linked-node"), self.graphs, sets,
-                                ["51.0.0-dev", "51.0.0-kontor.1"], root, {},
-                                kind="executor")
             first_input = Path(self.graphs[0]["artifacts"][0]["path"])
             first_input.write_bytes(first_input.read_bytes() + b"changed")
             with self.assertRaisesRegex(RuntimeError, "staged graph input changed"):
@@ -265,18 +154,6 @@ class Ownership(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(RuntimeError, "unique versions"):
                 audit_inputs(self.graphs, Path(directory))
-
-    def test_runtime_reference_is_the_only_shared_input(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for graph in self.graphs:
-                path = root / graph["graph"]
-                path.write_bytes(b"fixture")
-                graph["artifacts"] = [{"path": str(path)}]
-            with patch("audit.definitions", return_value={"DW.ref.rust_eh_personality": {"address": "0", "kind": "V"}}):
-                sets, _ = audit_inputs(self.graphs, root)
-            self.assertEqual(sets[0] & sets[1], {"DW.ref.rust_eh_personality"})
-            self.assertEqual(len(json.loads((root / "input-ownership.json").read_text())), 2)
 
     def debug_object(self, root, name, section=".debug_gdb_scripts", payload="gdb_load_rust_pretty_printers.py", weak=True):
         source = root / (name + ".S")
@@ -563,7 +440,7 @@ class Ownership(unittest.TestCase):
             symbol = ("_" if sys.platform == "darwin" else "") + "_ZN5probe5STATE17h1234567890abcdefE"
             artifact = self.object(root, "unknown", f'int state __asm__("{symbol}") = 1;')
             with self.assertRaisesRegex(RuntimeError, "unowned final definition"):
-                audit_final(artifact, self.graphs, [set(), set()], [], root, {})
+                audit_final(artifact, self.graphs, [set(), set()], ["51.0.0-dev", "51.0.0-kontor.1"], root, {})
 
     def test_staged_input_mutation_is_detected(self):
         with tempfile.TemporaryDirectory() as directory:

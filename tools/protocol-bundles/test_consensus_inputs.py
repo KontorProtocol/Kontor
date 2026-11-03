@@ -4,9 +4,8 @@ import re
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch
 
-from audit import audit_final, audit_inputs, owner
+from audit import audit_inputs, owner
 from build import ROOT, identities
 from provenance import consensus_sources, fingerprint, repository_sources
 from recipes import CONSENSUS_GRAPHS, MALACHITE_REVISION, MALACHITE_VERSION, identity, verify_identity, verify_reservations
@@ -133,32 +132,6 @@ class ConsensusOwnership(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "process allocator"):
             owner("__rust_alloc", self.graphs()[0], None)
 
-    def test_consensus_still_rejects_native_collisions_and_shared_namespaces(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            graphs = self.graphs()
-            for graph in graphs:
-                path = root / graph["graph"]
-                path.write_bytes(b"fixture")
-                graph["artifacts"] = [{"path": str(path)}]
-            with patch("audit.definitions", return_value={"_RNvCs123_5probe5STATE": {"kind": "T", "address": "0"}}):
-                with self.assertRaisesRegex(RuntimeError, "would coalesce"):
-                    audit_inputs(graphs, root)
-            graphs[1]["namespace"] = graphs[0]["namespace"]
-            with self.assertRaisesRegex(RuntimeError, "unique names and namespaces"):
-                audit_inputs(graphs, root)
-
-    def test_mixed_final_ownership_keeps_vm_helper_with_its_actual_graph(self):
-        graphs = self.graphs()
-        graphs[1]["identity"] = {}
-        helper = "wasmtime_libunwind_51_0_0"
-        symbols = {helper: {"address": "1000", "kind": "T"}}
-        with tempfile.TemporaryDirectory() as directory:
-            with patch("audit.definitions", return_value=symbols), patch(
-                    "audit.private_local_inputs", return_value=([set(), set()], [])):
-                result = audit_final(Path("node"), graphs, [set(), {helper}], [None, "51.0.0"],
-                                     Path(directory), {}, kind="executor")
-        self.assertEqual(result["wasmtime"][helper]["owner"], "second")
 
 
 if __name__ == "__main__":

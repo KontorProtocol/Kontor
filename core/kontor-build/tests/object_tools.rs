@@ -5,8 +5,12 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Result, ensure};
 use kontor_build::object_tools::ObjectTools;
+#[cfg(target_os = "linux")]
+use kontor_build::symbol_audit::run as audit_symbols;
 use kontor_build::toolchain::symbol_reader;
 use serde_json::{Value, json};
+#[cfg(target_os = "linux")]
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 fn compile(root: &Path, source: &str, name: &str) -> Result<PathBuf> {
@@ -155,5 +159,57 @@ fn compiler_debug_metadata_binds_shape_payload_and_linked_offsets() -> Result<()
             assert_eq!(tools.compiler_debug_metadata(&object, true)?, 1);
         }
     }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires llvm-tools-preview; exercised by protocol bundle controls"]
+fn real_linked_graphs_preserve_global_and_private_ownership() -> Result<()> {
+    let dir = tempdir()?;
+    let root = dir.path();
+    let mut graphs = Vec::new();
+    let mut objects = Vec::new();
+    for name in ["first", "second"] {
+        let object = compile(
+            root,
+            &format!(
+                "static int kontor_{name}_local(void) {{ return 1; }} int kontor_{name}_call(void) {{ return kontor_{name}_local(); }}\n"
+            ),
+            &format!("{name}.c"),
+        )?;
+        let hash = hex::encode(Sha256::digest(fs::read(&object)?));
+        graphs.push(json!({"graph":name, "namespace":format!("kontor_{name}"), "packages":[], "identity":{"kind":"consensus"}, "artifacts":[{"path":object,"sha256":hash}], "native_artifacts":[]}));
+        objects.push(object);
+    }
+    let request = json!({"operation":"inputs", "working_directory":root, "graphs":graphs});
+    let input = audit_symbols(serde_json::from_value(request)?)?;
+    assert_eq!(input["versions"], json!([null, null]));
+    assert_eq!(
+        input["sets"],
+        json!([["kontor_first_call"], ["kontor_second_call"]])
+    );
+    let linked = root.join("node.so");
+    ensure!(
+        Command::new("cc")
+            .args(["-nostdlib", "-shared"])
+            .args(&objects)
+            .arg("-o")
+            .arg(&linked)
+            .status()?
+            .success(),
+        "link graph fixture"
+    );
+    let request = json!({"operation":"final", "working_directory":root, "executable":linked, "graphs":graphs, "sets":input["sets"], "versions":input["versions"], "common":{}, "kind":"executor", "node":{}});
+    let result = audit_symbols(serde_json::from_value(request)?)?;
+    for name in ["first", "second"] {
+        for suffix in ["call", "local"] {
+            assert_eq!(
+                result["attributed"][format!("kontor_{name}_{suffix}")]["owner"],
+                name
+            );
+        }
+    }
+    assert_eq!(result["result"]["native"].as_object().unwrap().len(), 4);
     Ok(())
 }

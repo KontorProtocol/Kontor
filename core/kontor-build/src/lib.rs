@@ -12,6 +12,7 @@ pub mod provenance;
 mod snapshot;
 pub mod source_identity;
 pub mod source_policy;
+pub mod symbol_audit;
 pub mod toolchain;
 
 pub use bundles::{ProtocolBundlesArgs, protocol_bundles};

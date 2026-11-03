@@ -273,6 +273,17 @@ keeps running the default tooling tests without that component. Run the object
 integration checks locally with `cargo test --locked --manifest-path
 core/kontor-build/Cargo.toml --test object_tools -- --ignored`.
 
+`tools/kontor audit-symbols` owns graph input and final-link ownership rules.
+It checks unique graph namespaces and Wasmtime version prefixes, matching PSM
+archive copies, staged input hashes for local symbols, and concrete owners for
+final global and private symbols. Inventory operations require explicit source
+arrays, including intentionally empty arrays. Executor audits permit native
+helpers removed by linking, while proof audits require their complete fixture
+set. Both reject aliases between independent graphs.
+The transitional Python adapter writes the same successful JSON report bytes.
+Malformed graph/ownership list lengths now fail before symbol inspection, and
+failed final audits do not write a partial local-input report.
+
 Absolute source paths and platform inputs are recorded. This is an audit of
 the actual build, not a claim that different checkouts or platforms produce
 byte-identical executables.

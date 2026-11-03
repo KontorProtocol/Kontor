@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::toolchain::symbol_reader;
 
-const GDB_SCRIPT: &str = "__rustc_debug_gdb_scripts_section__";
+pub const GDB_SCRIPT: &str = "__rustc_debug_gdb_scripts_section__";
 const GDB_PAYLOAD: &[u8] = b"\x01gdb_load_rust_pretty_printers.py\0";
 
 #[derive(Deserialize)]

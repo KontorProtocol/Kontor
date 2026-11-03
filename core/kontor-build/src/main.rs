@@ -9,6 +9,7 @@ use kontor_build::linker_record::verify_input;
 use kontor_build::object_tools::{Request as ObjectRequest, run as inspect_object};
 use kontor_build::provenance::{Request as ProvenanceRequest, run as provenance};
 use kontor_build::source_identity::{Metadata, verify_sources};
+use kontor_build::symbol_audit::{Request as AuditRequest, run as audit_symbols};
 use kontor_build::{
     BuildArgs, CiScope, DiagnosticsArgs, ProtocolBundlesArgs, VerifySnapshotArgs,
     check_native_helper_lock, ci_scope, diagnostics, protocol_bundles, run, stage_graph_wrapper,
@@ -52,6 +53,8 @@ enum Command {
     VerifySources,
     /// Inspect compiler objects with the pinned LLVM tools from a JSON request.
     InspectObject,
+    /// Attribute native symbols to independently compiled graphs from JSON input.
+    AuditSymbols,
     /// Inventory build source inputs from a JSON request on standard input.
     Provenance,
     /// Select CI checks from the GitHub event and complete Git change set.
@@ -83,6 +86,11 @@ fn main() -> Result<()> {
         Command::InspectObject => {
             let request: ObjectRequest = serde_json::from_reader(io::stdin().lock())?;
             println!("{}", inspect_object(request)?);
+            Ok(())
+        }
+        Command::AuditSymbols => {
+            let request: AuditRequest = serde_json::from_reader(io::stdin().lock())?;
+            println!("{}", audit_symbols(request)?);
             Ok(())
         }
         Command::VerifySources => {
