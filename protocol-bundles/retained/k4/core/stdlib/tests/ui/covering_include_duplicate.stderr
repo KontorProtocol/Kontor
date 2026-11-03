@@ -1,5 +1,0 @@
-error: `name` is listed twice in `include`
- --> tests/ui/covering_include_duplicate.rs:5:48
-  |
-5 | #[index(by_owner, by = owner, include = (name, name))]
-  |                                                ^^^^

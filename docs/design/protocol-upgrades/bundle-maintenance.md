@@ -8,6 +8,38 @@ built for dependency ownership, but is not replaced on every protocol upgrade.
 See [validator startup](validator-startup.md) for role promotion and protected
 state, and [upgrade approvals](upgrade-approvals.md) for authorization and rehearsal.
 
+## Cleanup configuration inventory
+
+The post-upgrade cleanup uses the following boundaries. Entries marked pending
+remain available until their callers and useful regression checks have been
+migrated. This table does not create additional qualification jobs.
+
+| Configuration | Disposition | Minimum affected validation |
+| --- | --- | --- |
+| `managed-node`: retained P1, P2 observer and one pinned consensus runtime | Keep as the supported node composition. | `qualify_node.py` and `compare_node.py`, through the existing release workflow, after build/runtime changes stabilize. |
+| Retained P1 source and independent executor dependency graphs | Keep required execution inputs and identities; migrate support tooling separately. | Source-root inventory and execution-definition tests, followed by the managed-node validation above. |
+| Local runtime/test adapters | Keep intentional test coverage; remove only branches proven obsolete. | Focused ownership, cancellation, settlement and rollback tests when their code changes. |
+| `legacy-qualification`, `k4-node`, retained K3 and standalone proof graphs | Pending caller and coverage migration. They are still referenced by tooling and tests. | Build-recipe, node-execution and comparison tests before retiring any path. Preserve isolation assertions in supported fixtures. |
+| Retained K4 coordinator snapshot | Removed. It was a development baseline, not an executor selected by any current build recipe. | Source-root tests and bundle-tooling tests. No runtime or cross-platform rebuild is required for this deletion alone. |
+| Stack release qualification and bounded dev smoke | Keep. | Existing qualification/comparison commands, only for affected execution/build changes. |
+| Intermediate S2 discovery, guard, chain, vmmap and final diagnostic stages | Pending audit of imports and useful assertions before retirement or consolidation. | Relevant evidence-verifier unit tests; do not rerun the historical performance campaign. |
+
+The Python command names above identify current behavior to preserve or retire,
+not the final tooling interface. Replacements will live behind `tools/kontor`.
+Final Python removal requires a tracked-file/content audit and a production build
+with Python unavailable and fresh build outputs. Dependency download caches may
+be reused. That build is part of normal stabilized validation, not an extra matrix.
+
+The removed K4 snapshot remains available at commit
+`b3e0fc246d7a859e30b836630372e5658f45afb8`, path
+`protocol-bundles/retained/k4`. Its inventory SHA-256 is
+`9359c0b7cdca0d9e2852262337061ce43a0856b32e36c173a41c4b874ba1ebf9`.
+The historical execution ledger records why it was originally captured. Its
+self-preservation test was removed with it; mutation, substituted-inventory,
+relocation and path-containment checks remain. K3 and P1 inventories are unchanged.
+
+## Existing build fixtures
+
 The standalone proof graphs below are build/isolation fixtures. Their results
 are separate from the real managed-node acceptance evidence recorded in the
 [execution ledger](execution-ledger.md).
