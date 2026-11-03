@@ -60,7 +60,6 @@ jobs:
       RUSTC_WRAPPER: ""
       CCACHE_DISABLE: "1"
       CARGO_BUILD_JOBS: "2"
-      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.1

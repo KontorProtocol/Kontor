@@ -64,7 +64,7 @@ pub fn run(request: Request) -> Result<Value> {
         ),
         Operation::ObjectRecords { path } => json!(tools.object_records(&path)?),
         Operation::ArchiveMembers { path } => json!(tools.archive_members(&path)?),
-        // Hex avoids enormous JSON arrays while the remaining Python callers migrate.
+        // Hex avoids enormous JSON arrays in the audit reports.
         Operation::ArchiveMember { path, member } => {
             json!(hex::encode(tools.archive_member(&path, &member)?))
         }
