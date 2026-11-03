@@ -155,7 +155,7 @@ pub fn install_node(node: &Value, destination: &Path, cwd: &Path) -> Result<Valu
         .context("install audited executable")?;
     Ok(json!({"path":destination,"sha256":digest}))
 }
-fn native_archives(directory: &Path, paths: &mut Vec<PathBuf>) -> Result<()> {
+pub(crate) fn native_archives(directory: &Path, paths: &mut Vec<PathBuf>) -> Result<()> {
     if !directory.is_dir() {
         return Ok(());
     }

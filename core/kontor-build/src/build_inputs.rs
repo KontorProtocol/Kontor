@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use crate::build_artifacts::{Request as ArtifactRequest, run as artifacts};
 use crate::graph_build::{Request as GraphBuildRequest, run as graph_build};
+use crate::node_build::{Request as NodeBuildRequest, run as node_build};
 use crate::recipes::{Graph, Kind, MALACHITE_REVISION, MALACHITE_VERSION, graph_root};
 
 #[derive(Deserialize)]
@@ -278,6 +279,9 @@ pub fn capabilities(root: &Path) -> Result<()> {
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
+    BuildNode {
+        request: NodeBuildRequest,
+    },
     BuildGraph {
         request: GraphBuildRequest,
     },
@@ -302,6 +306,7 @@ pub enum Request {
 }
 pub fn run(request: Request) -> Result<Value> {
     match request {
+        Request::BuildNode { request } => node_build(request),
         Request::BuildGraph { request } => graph_build(request),
         Request::Artifacts { request } => artifacts(request),
         Request::Identities { root, recipe, data } => identities(&root, &recipe, &data),

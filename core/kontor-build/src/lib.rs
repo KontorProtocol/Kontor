@@ -13,6 +13,7 @@ pub mod interface;
 pub mod linker_record;
 pub mod metadata_control;
 mod native_lock;
+pub mod node_build;
 pub mod object_tools;
 mod outputs;
 pub mod provenance;
