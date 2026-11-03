@@ -25,8 +25,7 @@ migrated. This table does not create additional qualification jobs.
 | Stack release qualification and bounded dev smoke | Keep. | Existing qualification/comparison commands, only for affected execution/build changes. |
 | Intermediate S2 discovery, guard, chain and final diagnostic stages | Retired as a separate prelaunch certification framework; archived at `9a286b68`. Rust regression diagnostics and frozen workload support remain. | Rust stack-tooling and frozen-workload tests. Existing release/dev-smoke gates remain unchanged; they do not replace the retired memory/phase/41-case certification claim. See the native-stack README. |
 
-The Python command names above identify current behavior to preserve or retire,
-not the final tooling interface. Replacements will live behind `tools/kontor`.
+Supported build and evidence commands use the existing `tools/kontor` entry point.
 Final Python removal requires a tracked-file/content audit and a production build
 with Python unavailable and fresh build outputs. Dependency download caches may
 be reused. That build is part of normal stabilized validation, not an extra matrix.
@@ -77,14 +76,11 @@ checks directly with `cargo test --locked --manifest-path core/kontor-build/Carg
 Ordinary CI also formats and lints this independent workspace. The rest of core
 continues to use its existing workspace commands.
 
-Bundle build, definition, interface and ownership commands now run entirely in
-Rust. The former Python adapters and tests in `tools/protocol-bundles` are removed.
-Their source/recipe/identity checks run in the ordinary tooling test suite; native
+Bundle build, definition, interface and ownership commands run in Rust.
+Source/recipe/identity checks run in the ordinary tooling test suite. Native
 object, archive, weak-import and allocator-ownership controls run in the existing
-LLVM-equipped `object_tools` test target. The bundle workflow no longer installs
-Python or runs a separate Python ownership suite. Managed consensus provenance
-now records the Rust tooling sources instead of the deleted adapters. Executor
-definitions and retained source inventories are unchanged.
+LLVM-equipped `object_tools` test target. Managed consensus provenance binds the
+Rust tooling sources; executor definitions remain separate.
 
 Individual retained inventories can now be verified by the Rust build CLI:
 
@@ -237,13 +233,9 @@ an explicit missing-support assumption, not different live node binaries.
 
 ## Build and evidence
 
-`tools/kontor protocol-bundles` now performs graph compilation, node linking,
+`tools/kontor protocol-bundles` performs graph compilation, node linking,
 proof orchestration, audits and installation in Rust. Docker's production build
-and the node qualification launcher use this entry point directly. The remaining
-Python `build.py` provides compatibility helpers for evidence tools and forwards
-legacy CLI invocations, preserving their caller-relative output/install paths.
-Qualification and evidence tooling still need migration; this is not yet a
-claim that the entire repository or container build is Python-free.
+and the node qualification launcher use this entry point directly.
 
 Run `RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor protocol-bundles` from
 the checkout. The command builds the two graphs sequentially with at most two
@@ -258,7 +250,7 @@ an output root are rejected. `--target` must match the supported native host.
 The supported targets are Linux ARM64, Linux x86-64 and macOS ARM64. CI uses
 release on each, matching the current node tests on macOS. Linux runs in the
 root Dockerfile's `protocol-bundle-qualification` target, derived from the same
-`builder-base` as the node. The ordinary node image is unchanged by K1.
+`builder-base` as the node.
 The development profile is available for local diagnosis.
 
 Evidence lives under `OUTPUT/TARGET/PROFILE`. Only a successful run writes
@@ -311,14 +303,12 @@ the lockfile. Keep those archives in Cargo's cache for offline qualification;
 missing archives fail verification rather than trusting an edited extraction.
 `tools/kontor verify-sources` performs these checks in Rust, reading Cargo
 metadata JSON on standard input and returning the existing Git/registry evidence
-object. The transitional Python builder calls this same verifier with its pinned
-build environment, including offline policy. The verifier supports SHA1 and
-SHA256 Git repositories. Ordinary Git filenames retain raw Unix bytes; submodule
+object. The Rust builder invokes the same verifier with its pinned build
+environment, including offline policy. It supports SHA1 and SHA256 Git repositories. Ordinary Git filenames retain raw Unix bytes; submodule
 names must be UTF8 to appear as JSON object keys. No sources are extracted or
-rewritten during verification. Unlike the previous Python tar reader, the Rust
-verifier rejects global PAX and GNU sparse entries. The locked registry archives
-checked during migration do not require those extensions; unsupported formats
-fail verification rather than silently bypassing source checks.
+rewritten during verification. Global PAX and GNU sparse archive entries are
+rejected. Locked registry archives do not require those extensions; unsupported
+formats fail verification rather than bypassing source checks.
 `tools/kontor provenance` reads a JSON request identifying an `operation` and
 returns the source or toolchain evidence. It supports local/package file lists,
 retained/node/consensus inventories, complete `source_inputs`, `locked_packages`,
@@ -327,13 +317,11 @@ sources before recording them and stop local manifest inheritance at the selecte
 graph root, including frozen roots without a `.git` marker. Inventory paths must
 be UTF8 JSON keys; unreadable directories fail verification.
 
-The remaining Python orchestration uses a small adapter to these Rust functions.
-It bootstraps the CLI once per build environment and reuses that executable,
-honoring offline mode. Toolchain and runtime-library requests carry the caller's
-working directory so relative compiler paths and PATH entries keep their meaning.
-The evidence schema, source hashes, compiler/sysroot records, environment allowlist,
-and compiler proc-macro runtime-dependency rejection are preserved. This tooling
-migration does not regenerate executor identities.
+The Rust builder calls these functions directly. Toolchain and runtime-library
+requests carry the caller's working directory so relative compiler paths and PATH
+entries keep their meaning. Evidence binds source hashes, compiler/sysroot
+records and an environment allowlist. Compiler proc-macro libraries cannot become
+runtime dependencies. Recording build evidence never regenerates execution IDs.
 
 The `source_policy` operation preserves the process-control review tripwire and
 guarded source exclusions for proof, executor and consensus graphs. Excluded
@@ -345,8 +333,7 @@ directories. Its requests carry the original working directory and environment.
 `tools/kontor inspect-object` accepts JSON operations for pinned LLVM symbol and
 object records, archive members, section bytes and compiler GDB metadata checks.
 Requests include `working_directory` to preserve relative object paths. Binary
-results use hex strings at the transitional Python boundary. The Rust ownership
-helpers use bytes directly. Reader failures reject partial output, section reads
+results use hex strings in JSON; the Rust ownership helpers use bytes directly. Reader failures reject partial output, section reads
 check input identity and bounds, and GDB metadata requires the exact ELF shape and
 payload. The separate native-crypto object reporter retains its existing schema;
 LLVM tools remain necessary here to inspect compiler bitcode inputs.
@@ -364,8 +351,7 @@ final global and private symbols. Inventory operations require explicit source
 arrays, including intentionally empty arrays. Executor audits permit native
 helpers removed by linking, while proof audits require their complete fixture
 set. Both reject aliases between independent graphs.
-The transitional Python adapter writes the same successful JSON report bytes.
-Malformed graph/ownership list lengths now fail before symbol inspection, and
+Malformed graph/ownership list lengths fail before symbol inspection, and
 failed final audits do not write a partial local-input report.
 
 `tools/kontor audit-shared` checks retained graph imports against concrete sysroot,
@@ -374,9 +360,7 @@ separate and cannot satisfy retained graph imports. Only the named weak system
 unwind references are optional; a strong reference to the same name remains
 required. The platform-library allowlists and ELF GOT constraints are unchanged.
 Library export lookup uses local loader handles and never calls resolved symbols;
-handles are released after lookup. The remaining Python adapter preserves the
-successful shared/node ownership report bytes. Python object attributes are no
-longer eligible as apparent library exports.
+handles are released after lookup. Ownership requires an actual library export.
 
 Absolute source paths and platform inputs are recorded. This is an audit of
 the actual build, not a claim that different checkouts or platforms produce
@@ -386,7 +370,7 @@ byte-identical executables.
 
 ### Production node build
 
-K2b adds `--build-executors` and `--build-node` to the same builder. These modes
+`--build-executors` and `--build-node` use the same builder. These modes
 use production recipes independently of the proof recipes. The executor contains
 the actual retained runtime, host bindings, semantic policy and dependencies.
 The separate `protocol-bundles/node` workspace owns node services and physical
@@ -461,7 +445,7 @@ Production evidence is under `OUTPUT/TARGET/PROFILE/executors`. Its
 successful node build and ownership audit. Neither is execution qualification.
 Failure removes the corresponding old success marker and preserves logs.
 Actual multi-executor behavior, cleanup, baseline compatibility and platform
-qualification remain K2b acceptance requirements.
+qualification require the separate execution checks.
 
 For a production release executable, use:
 
@@ -498,9 +482,10 @@ are errors. The comparator verifies raw logs, source inventories, local package
 files, workspace/graph identities, linker inputs and ownership-report hashes,
 then requires identical execution observations across the required cells.
 Package documentation and Git ignore files omitted by Docker are excluded from
-source equality. Comparator-only edits (Python compatibility glue and Rust
-`src/node_evidence/comparison/`) and Python test edits do not invalidate unchanged
-runtime/build sources; the original source-inventory hashes remain verified.
+source equality. Comparator-only edits under `src/node_evidence/comparison/`
+and standalone tooling integration tests under `core/kontor-build/tests/` are
+excluded from this source comparison. Other Rust tests remain bound. The original
+source-inventory hashes remain verified.
 The exclusion applies to both tool and local-package inventories. Shared Rust
 validators, the execution runner and CLI/module wiring remain bound. The archive
 checker is not called by node execution or builds. Comparison failures replace
@@ -510,9 +495,9 @@ dev smoke checks. It does not replace their coverage or establish all executions
 from the sampled scenarios.
 
 The workflow selects changes from the complete Git diff, including deleted and
-renamed inputs. Comparator-only and Python test changes run the builder/evidence
-controls on one Linux runner without repeating the platform builds. Changes to
-node execution or build inputs still require the selected matrix; missing Git
+renamed inputs. Comparator-only changes run the builder/evidence controls on one
+Linux runner without repeating the platform builds. Other tooling tests and
+changes to node execution or build inputs can require the selected matrix; missing Git
 history requires qualification. Unrelated changes skip both groups. Builder
 checks run once before the matrix rather than once per platform.
 The small native-object negative controls also run on ARM Linux and macOS during
@@ -592,8 +577,8 @@ its caller; a timeout must retain ownership rather than free its inputs.
 
 The proof records cold and per-graph crypto, VM and engine counts before checking
 repeated use. It requires bounded one-time allocation and no replacement growth.
-The blst pool is separate from the VM pool. A future production node with its
-own blst copy plus two bundles can retain three pools. These resources stay
+The blst pool is separate from the VM pool. A node with its own blst copy plus
+two bundles can retain three pools. These resources stay
 resident; bundle unloading is unsupported.
 
 ## Changing a retained bundle
@@ -614,7 +599,7 @@ under the pinned toolchain, inspect the changed inputs and ID, then
 qualify the resulting executors. Omitting `--write` only verifies the reference.
 The Rust generator resolves locked, unfiltered Cargo metadata offline.
 `tools/kontor execution-definition` exposes the same encoding and verification
-operations through JSON for the transitional builder adapter. Canonical bytes,
+operations through JSON for diagnostics; builds call the Rust library directly. Canonical bytes,
 semantic exclusions, inherited package properties and build policy are unchanged.
 Never overwrite a released definition to silence a mismatch. Preserve its
 source graph and add the new definition separately. Compatibility qualification
@@ -790,12 +775,10 @@ compilation and again with the other staged inputs. Source evidence also include
 `core/kontor-build` independently of the retained executor source root. These are
 build-provenance changes; execution-definition inputs and identities are unchanged.
 
-During the builder migration, `tools/kontor protocol-bundles` passes its current
-executable to the Python orchestrator. Direct Python builder entry points use
-`tools/kontor` to build and stage the same wrapper, passing offline policy through
-`CARGO_NET_OFFLINE`. The Docker fetch stage explicitly fetches the independent
-tooling lockfile before offline builds. The hidden `stage-graph-wrapper OUTPUT`
-command is an internal bootstrap interface, not a separate task runner.
+`tools/kontor` builds the dedicated wrappers before starting orchestration.
+The builder stages them without a second bootstrap. Offline policy passes through
+`CARGO_NET_OFFLINE`, and Docker fetches the independent tooling lock before offline
+builds. `stage-graph-wrapper OUTPUT` is an internal bootstrap interface.
 
 ### Node compiler wrapper
 
@@ -811,16 +794,15 @@ inherited attestation variables, and supplies the verified managed attestation
 only to the node/library compilation. It preserves Cargo jobserver descriptors,
 clears stale object/link records before compiling, and binds the completed
 compiler output separately from the linker output for Darwin post-link stripping.
-Normal compiler exit codes pass through; signal failures now use the shell
-convention (`128 + signal`) instead of Python's negative-status truncation.
+Normal compiler exit codes pass through; signal failures use the shell convention
+(`128 + signal`).
 Captured node invocations require UTF-8 arguments for JSON evidence and reject
 unrecordable arguments before invoking rustc. Probes and dependency/library
 invocations continue to forward raw operating-system arguments unchanged.
 
-Orchestration still uses Python pending its migration. A small real
-compiler/linker check covers this boundary locally;
-the full independently linked node build and Darwin validation remain part of
-the stabilized build acceptance, not additional per-edit CI jobs.
+Small real compiler/linker tests cover this boundary locally. Full independently
+linked node builds and Darwin validation run after affected changes stabilize,
+not as additional per-edit jobs.
 The focused test bootstrap allows fetching the small standalone tooling graph on
 a cold runner; an explicitly inherited `CARGO_NET_OFFLINE` remains respected.
 
@@ -844,9 +826,9 @@ link specifications or expanded response arguments prevent a success record.
 The verifier is available as `tools/kontor verify-linker-record`, reading JSON
 from standard input with `record`, `spec_hash`, `output_hash` and optional
 `compiler_output` fields. It validates both the original linker hash and the
-separate completed compiler output used on Darwin. During the remaining Python
-orchestrator migration, a small bridge calls this Rust verifier; node builds reuse
-the already-staged linker, so offline builds do not bootstrap another tool.
+separate completed compiler output used on Darwin. Node builds call the Rust
+verifier directly and reuse the staged linker; offline builds do not bootstrap
+another tool.
 
 Run the small real compiler/linker checks with
 `cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test linker_wrapper -j2`.

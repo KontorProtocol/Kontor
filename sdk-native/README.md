@@ -71,6 +71,8 @@ the deployment target / minSdk by hand.
 
 ## Building
 
+Binding generation requires `jq` to read Cargo's target-directory metadata.
+
 ```bash
 # One-time tooling
 cargo install cargo-ndk                 # Android cross-linking
