@@ -29,9 +29,9 @@ const FILES: &[&str] = &[
     "core/indexer/src/protocol/canonical_codec.rs",
     "core/indexer/src/protocol/identity.rs",
     "core/indexer/build.rs",
-    "tools/protocol-bundles/symbol_tool.py",
-    "tools/protocol-bundles/build.py",
-    "tools/protocol-bundles/coordinator_definition.py",
+    "core/kontor-build/src/object_tools.rs",
+    "core/kontor-build/src/bundles.rs",
+    "core/kontor-build/src/consensus_definition.rs",
 ];
 const BASELINE: &str = "core/indexer/src/protocol/coordinator/baseline/consensus.json";
 const POLICY: &str =
@@ -39,10 +39,10 @@ const POLICY: &str =
 const DIRECTORY: &str = "core/indexer/src/protocol/coordinator/managed/definitions/";
 const GRAPH: &str = "protocol-bundles/consensus-first/Cargo.toml";
 const BUILD_INPUTS: &[&str] = &[
-    "tools/protocol-bundles/managed_definition.py",
-    "tools/protocol-bundles/provenance.py",
+    "core/kontor-build/src/node_build.rs",
+    "core/kontor-build/src/provenance.rs",
     "core/kontor-build/src/bin/kontor-node-rustc.rs",
-    "tools/protocol-bundles/recipes.py",
+    "core/kontor-build/src/recipes.rs",
 ];
 type Sources = BTreeMap<String, String>;
 fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str> {

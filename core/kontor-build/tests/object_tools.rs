@@ -122,6 +122,14 @@ fn compiler_debug_metadata_binds_shape_payload_and_linked_offsets() -> Result<()
     );
     let object = compile(root, &source, "good.S")?;
     assert_eq!(tools.compiler_debug_metadata(&object, false)?, 1);
+    let graphs = json!([
+        {"graph":"first","namespace":"kontor_first","identity":{"kind":"consensus"},"packages":[],"artifacts":[{"path":object}],"native_artifacts":[]},
+        {"graph":"second","namespace":"kontor_second","identity":{"kind":"consensus"},"packages":[],"artifacts":[{"path":object}],"native_artifacts":[]}
+    ]);
+    let input = audit_symbols(serde_json::from_value(
+        json!({"operation":"inputs","working_directory":root,"graphs":graphs}),
+    )?)?;
+    assert_eq!(input["sets"], json!([[symbol], [symbol]]));
     let linked = root.join("linked.so");
     ensure!(
         Command::new("cc")
@@ -154,6 +162,14 @@ fn compiler_debug_metadata_binds_shape_payload_and_linked_offsets() -> Result<()
         assert!(
             tools.compiler_debug_metadata(&object, false).is_err(),
             "accepted {name}"
+        );
+        let mut changed = graphs.clone();
+        changed[0]["artifacts"] = json!([{"path":object}]);
+        assert!(
+            audit_symbols(serde_json::from_value(
+                json!({"operation":"inputs","working_directory":root,"graphs":changed})
+            )?)
+            .is_err()
         );
         if name == "offset.S" {
             assert_eq!(tools.compiler_debug_metadata(&object, true)?, 1);
@@ -255,3 +271,6 @@ fn shared_runtime_lookup_uses_actual_library_handles_and_hashes() -> Result<()> 
     }
     Ok(())
 }
+
+#[path = "object_tools/ownership.rs"]
+mod ownership;

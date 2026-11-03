@@ -159,11 +159,18 @@ fn current_recipe_inputs_preserve_executor_and_proof_identity_separation() -> Re
     let root = repository();
     let proof = proof_graphs();
     let executor = current_executors();
-    for graphs in [&proof, &executor] {
+    let consensus = consensus_graphs();
+    assert_eq!(consensus.keys().collect::<Vec<_>>(), ["first"]);
+    for graphs in [&proof, &executor, &consensus] {
         verify_reservations(&root, graphs)?;
         for label in graphs.keys() {
             let report = json!({"graph":label,"identity":identity(&root, label, graphs)?});
             verify_identity(&root, &report, graphs)?;
+            if graphs[label].kind == Kind::Consensus {
+                assert_eq!(report["identity"]["kind"], "consensus");
+                assert!(report["identity"].get("wasmtime_version").is_none());
+                assert!(report["identity"].get("execution").is_none());
+            }
         }
     }
     let report = json!({"graph":"first","identity":identity(&root, "first", &executor)?});
@@ -171,6 +178,39 @@ fn current_recipe_inputs_preserve_executor_and_proof_identity_separation() -> Re
     let mut mixed = proof;
     mixed.insert("executor".into(), executor["first"].clone());
     assert!(verify_reservations(&root, &mixed).is_err());
+    Ok(())
+}
+
+#[test]
+fn relocated_recipe_uses_retained_inputs_and_ignores_live_manifest() -> Result<()> {
+    let dir = tempdir()?;
+    let root = dir.path();
+    let mut graph = current_executors().remove("first").unwrap();
+    graph.source_root = "retained/k3".into();
+    let frozen = root.join(&graph.source_root);
+    let relative = Path::new("protocol-bundles").join(&graph.directory);
+    for destination in [root, frozen.as_path()] {
+        fs::create_dir_all(destination.join(&relative))?;
+        for name in ["Cargo.toml", "Cargo.lock"] {
+            fs::copy(
+                repository().join(&relative).join(name),
+                destination.join(&relative).join(name),
+            )?;
+        }
+    }
+    let graphs = Graphs::from([("first".into(), graph)]);
+    let report = json!({"graph":"first", "identity":identity(root, "first", &graphs)?});
+    fs::write(
+        root.join(&relative).join("Cargo.toml"),
+        "new observer manifest",
+    )?;
+    verify_identity(root, &report, &graphs)?;
+    assert!(verify_identity(root, &report, &current_executors()).is_err());
+    fs::write(
+        frozen.join(relative).join("Cargo.lock"),
+        "changed retained lock",
+    )?;
+    assert!(verify_identity(root, &report, &graphs).is_err());
     Ok(())
 }
 

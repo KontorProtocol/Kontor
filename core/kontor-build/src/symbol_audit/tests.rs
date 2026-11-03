@@ -154,6 +154,14 @@ fn inputs_reject_collisions_namespaces_roles_and_normalized_versions() -> Result
             ["DW.ref.rust_eh_personality"]
         ])
     );
+    graphs[0].identity = json!({});
+    assert!(
+        audit
+            .inputs(&graphs)
+            .unwrap_err()
+            .to_string()
+            .contains("role does not match")
+    );
     Ok(())
 }
 

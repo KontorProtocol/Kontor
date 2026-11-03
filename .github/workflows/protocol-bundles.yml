@@ -53,14 +53,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy, llvm-tools-preview
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
       - name: Check formats and ownership negative controls
         run: |
           rustfmt --edition 2024 --check protocol-bundles/proof/*.rs
           cargo fmt --manifest-path core/Cargo.toml --all -- --check
-          python3 -m unittest discover -s tools/protocol-bundles -p 'test_*.py'
       - name: Check builder CLI
         run: |
           cargo clippy --locked --manifest-path core/kontor-build/Cargo.toml --all-targets -j2 -- -D warnings
@@ -89,12 +85,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy, llvm-tools-preview
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Check native ownership controls on the target platform
-        if: matrix.profile == 'release' && matrix.os != 'ubuntu-latest'
-        run: python3 -m unittest discover -s tools/protocol-bundles -p 'test_audit.py'
       - name: Check compiler and linker output capture before the full build
         run: cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test linker_wrapper --test object_tools -j2 -- --include-ignored
       - name: Install node dependencies (macOS)
@@ -152,9 +142,6 @@ jobs:
             ~/.cargo/registry
             core/kontor-build/target
           key: kontor-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/kontor-build/Cargo.lock', 'core/kontor-build/Cargo.toml') }}
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
       - uses: actions/download-artifact@v8
         with:
           pattern: protocol-bundle-evidence-*

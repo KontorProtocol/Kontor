@@ -8,10 +8,12 @@ use std::process::{Command, Stdio};
 
 use anyhow::Result;
 use kontor_build::provenance::{
-    GraphKind, RETAINED_TREES, local_source_files, node_sources, package_sources, retained_sources,
-    source_inputs,
+    GraphKind, RETAINED_TREES, consensus_sources, local_source_files, node_sources,
+    package_sources, repository_sources, retained_sources, source_inputs,
 };
 use kontor_build::source_identity::Metadata;
+use kontor_build::source_policy::{Kind, check};
+use regex::Regex;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -221,11 +223,83 @@ fn frozen_inheritance_stops_at_root_and_current_tools_remain_bound() -> Result<(
         "cargo-home/config.toml",
         "retained/k3/core/local/lib.rs",
         "retained/k3/core/Cargo.toml",
+        "retained/k3/core/indexer/src/runtime/mod.rs",
+        "retained/k3/core/indexer/src/protocol/v1/engine.rs",
+        "retained/k3/core/indexer/src/protocol/v1/resources.rs",
+        "retained/k3/core/indexer/src/protocol/v1/gas.rs",
+        "retained/k3/core/indexer/src/protocol/v1/native.rs",
+        "retained/k3/core/indexer/src/protocol/v1/errors.rs",
+        "retained/k3/core/indexer/src/protocol/v1/fuel.rs",
+        "retained/k3/core/indexer/src/protocol/v1/fees.rs",
+        "retained/k3/core/indexer/src/protocol/v1/deposit.rs",
     ] {
         let before = inputs()?;
         write(&root, relative, "changed")?;
         assert_ne!(inputs()?, before, "{relative}");
     }
+    Ok(())
+}
+
+#[test]
+fn consensus_inventory_binds_imported_sources_protobuf_and_control_vectors() -> Result<()> {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let inventory = consensus_sources(repository)?;
+    for name in [
+        "core/indexer/proto/consensus/v1/consensus.proto",
+        "core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs",
+        "core/indexer/src/protocol/coordinator/control/test-vector.json",
+    ] {
+        assert!(inventory.contains_key(Path::new(name)), "missing {name}");
+    }
+    assert!(
+        !repository_sources(repository, GraphKind::Consensus)?
+            .contains_key(Path::new("core/indexer/src/protocol/v1/engine.rs"))
+    );
+    let imports = Regex::new(r#"#\[path\s*=\s*"([^"]+)"\]"#)?;
+    for source in local_source_files(&repository.join("protocol-bundles/consensus"), repository)? {
+        if source.extension().is_none_or(|ext| ext != "rs") {
+            continue;
+        }
+        assert!(inventory.contains_key(source.strip_prefix(repository)?));
+        for capture in imports.captures_iter(&fs::read_to_string(&source)?) {
+            let imported = source.parent().unwrap().join(&capture[1]).canonicalize()?;
+            assert!(inventory.contains_key(imported.strip_prefix(repository)?));
+        }
+    }
+    let dir = tempdir()?;
+    let root = dir.path();
+    for relative in inventory.keys() {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().unwrap())?;
+        fs::copy(repository.join(relative), path)?;
+    }
+    assert_eq!(consensus_sources(root)?, inventory);
+    for relative in [
+        "protocol-bundles/consensus/owner.rs",
+        "core/indexer/src/consensus/value.rs",
+        "core/indexer/src/protocol/coordinator/activation.rs",
+        "core/indexer/src/protocol/coordinator/certified_input.rs",
+        "core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs",
+        "core/indexer/src/protocol/coordinator/control/test-vector.json",
+        "core/indexer/proto/consensus/v1/sync.proto",
+    ] {
+        let path = root.join(relative);
+        let contents = fs::read(&path)?;
+        fs::write(&path, "changed")?;
+        assert_ne!(consensus_sources(root)?, inventory, "{relative}");
+        fs::write(path, contents)?;
+    }
+    write(
+        root,
+        "protocol-bundles/consensus/owner.rs",
+        "std::process::exit(1);",
+    )?;
+    let empty = serde_json::from_value(json!({"packages":[]}))?;
+    assert!(check(root, &empty, Kind::Consensus).is_err());
     Ok(())
 }
 

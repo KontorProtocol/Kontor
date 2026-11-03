@@ -77,6 +77,15 @@ checks directly with `cargo test --locked --manifest-path core/kontor-build/Carg
 Ordinary CI also formats and lints this independent workspace. The rest of core
 continues to use its existing workspace commands.
 
+Bundle build, definition, interface and ownership commands now run entirely in
+Rust. The former Python adapters and tests in `tools/protocol-bundles` are removed.
+Their source/recipe/identity checks run in the ordinary tooling test suite; native
+object, archive, weak-import and allocator-ownership controls run in the existing
+LLVM-equipped `object_tools` test target. The bundle workflow no longer installs
+Python or runs a separate Python ownership suite. Managed consensus provenance
+now records the Rust tooling sources instead of the deleted adapters. Executor
+definitions and retained source inventories are unchanged.
+
 Individual retained inventories can now be verified by the Rust build CLI:
 
 ```sh
@@ -108,8 +117,8 @@ Both historical and active locks remain covered by the dependency audit.
 
 `tools/kontor recipes` accepts JSON operations for the typed graph catalog,
 source-root checks, manifest reservations, graph identities and resolved engine
-attestations. The transitional `tools/protocol-bundles/recipes.py` adapter uses
-that catalog for remaining evidence tools. Retained snapshot hashes, execution
+attestations. The Rust builder and evidence tools use that catalog directly.
+Retained snapshot hashes, execution
 settings and successful identity reports are unchanged. Attestations require
 exact JSON types, so numeric zero cannot substitute for `false`, and a floating
 point number cannot substitute for an integer.
