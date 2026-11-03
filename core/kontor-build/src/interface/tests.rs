@@ -17,6 +17,14 @@ fn selection_requires_retained_identity_and_consensus_role() -> Result<()> {
     }
     assert!(selection(&[json!({"graph":"second","identity":{"kind":"consensus"}})]).is_err());
     assert!(selection(&[json!({"graph":"first","identity":{"kind":"consensus"}})])? == CONSENSUS);
+    assert!(selection(&[json!({"graph":"first"}), json!({"graph":"second"})])? == PROBES);
+    assert!(
+        selection(&[
+            json!({"graph":"first","identity":{"kind":"consensus"}}),
+            json!({"graph":"second","identity":{"kind":"consensus"}})
+        ])
+        .is_err()
+    );
     for (set, expected) in [("managed-node", PROBES), ("k4-node", ADAPTED)] {
         let recipe = executor_graphs(Some(set))?.remove("first").unwrap();
         let mut graphs = vec![
@@ -34,6 +42,7 @@ fn diagnostics_reject_wrong_codes_success_and_crashes() -> Result<()> {
     let diagnostic = |code| json!({"level":"error","code":{"code":code}}).to_string();
     check_diagnostics(0, "", None)?;
     check_diagnostics(1, &diagnostic("E0308"), Some("E0308"))?;
+    check_diagnostics(1, &diagnostic("E0603"), Some("E0603"))?;
     for (status, text) in [
         (0, String::new()),
         (-9, String::new()),
@@ -47,6 +56,38 @@ fn diagnostics_reject_wrong_codes_success_and_crashes() -> Result<()> {
         assert!(check_diagnostics(status, &text, Some("E0308")).is_err());
     }
     assert!(check_diagnostics(0, "[]", None).is_err());
+    Ok(())
+}
+
+#[test]
+fn consensus_inputs_require_private_tokio_and_unchanged_staged_libraries() -> Result<()> {
+    let dir = tempdir()?;
+    let root = dir.path();
+    let facade = root.join("libconsensus.rlib");
+    let tokio = root.join("libtokio-fixture.rlib");
+    fs::write(&facade, "facade")?;
+    fs::write(&tokio, "tokio")?;
+    let graphs = vec![json!({"graph":"first", "identity":{"kind":"consensus"},
+        "facade":facade, "link_inputs":root,
+        "artifacts":[{"path":facade,"sha256":sha256(&facade)?},{"path":tokio,"sha256":sha256(&tokio)?}]})];
+    let (arguments, libraries) = inputs_for(&graphs, true, root)?;
+    assert_eq!(
+        libraries,
+        json!({"first":sha256(&facade)?,"first_tokio":sha256(&tokio)?})
+    );
+    assert!(arguments.contains(&format!("dependency={}", root.display())));
+    for library in [&facade, &tokio] {
+        let original = fs::read(library)?;
+        fs::write(library, "substituted")?;
+        assert!(inputs_for(&graphs, true, root).is_err());
+        fs::write(library, original)?;
+    }
+    let mut missing = graphs.clone();
+    missing[0]["artifacts"].as_array_mut().unwrap().pop();
+    assert!(inputs_for(&missing, true, root).is_err());
+    let mut untyped = graphs;
+    untyped[0].as_object_mut().unwrap().remove("identity");
+    assert!(inputs_for(&untyped, false, root).is_err());
     Ok(())
 }
 #[test]

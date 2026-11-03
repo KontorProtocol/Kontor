@@ -124,8 +124,8 @@ compiler arguments use the caller's working directory. Compiler and adapter
 subprocesses retain their 60/120/30-second limits, and a failed interface rerun
 removes the previous successful report. Graph fingerprints retain ASCII JSON
 escaping, including Unicode paths; malformed identities and non-integer numeric
-evidence are rejected. `type_boundary.py` remains a forwarding adapter for
-evidence-comparison callers.
+evidence are rejected. The Rust builder and archive comparator use these controls
+directly; the former `type_boundary.py` forwarding adapter has been removed.
 
 | Output | Directory | Wasmtime version | Immutable fork revision | Lifting rate |
 | --- | --- | --- | --- | ---: |

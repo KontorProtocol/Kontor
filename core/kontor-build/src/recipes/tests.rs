@@ -116,32 +116,61 @@ fn historical_reservations_and_active_manifest_pins_reject_substitution() -> Res
                 .contains("reserved Wasmtime")
         );
     }
-    let manifest = dir.path().join("protocol-bundles/pulley-first/Cargo.toml");
-    let original = fs::read_to_string(&manifest)?;
-    fs::write(
-        &manifest,
-        original.replace(
-            graphs["first"].revision.as_deref().unwrap(),
-            &"0".repeat(40),
-        ),
-    )?;
-    assert!(
-        verify_reservations(dir.path(), &graphs)
-            .unwrap_err()
-            .to_string()
-            .contains("wrong immutable identity")
-    );
-    fs::write(manifest, original)?;
-    fs::write(
-        dir.path().join("protocol-bundles/first/Cargo.lock"),
-        "substituted",
-    )?;
-    assert!(
-        verify_reservations(dir.path(), &graphs)
-            .unwrap_err()
-            .to_string()
-            .contains("historical proof inputs changed")
-    );
+    for graph in graphs.values() {
+        let manifest = dir
+            .path()
+            .join("protocol-bundles")
+            .join(&graph.directory)
+            .join("Cargo.toml");
+        let original = fs::read_to_string(&manifest)?;
+        for (before, after) in [
+            (graph.revision.as_deref().unwrap(), "0".repeat(40)),
+            (graph.version.as_deref().unwrap(), "51.0.0-kontor.99".into()),
+        ] {
+            fs::write(&manifest, original.replace(before, &after))?;
+            assert!(
+                verify_reservations(dir.path(), &graphs)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("wrong immutable identity")
+            );
+        }
+        fs::write(manifest, original)?;
+    }
+    for label in ["first", "second"] {
+        for name in ["Cargo.toml", "Cargo.lock"] {
+            let path = dir.path().join("protocol-bundles").join(label).join(name);
+            let original = fs::read(&path)?;
+            fs::write(&path, "substituted")?;
+            assert!(
+                verify_reservations(dir.path(), &graphs)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("historical proof inputs changed")
+            );
+            fs::write(path, original)?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn current_recipe_inputs_preserve_executor_and_proof_identity_separation() -> Result<()> {
+    let root = repository();
+    let proof = proof_graphs();
+    let executor = current_executors();
+    for graphs in [&proof, &executor] {
+        verify_reservations(&root, graphs)?;
+        for label in graphs.keys() {
+            let report = json!({"graph":label,"identity":identity(&root, label, graphs)?});
+            verify_identity(&root, &report, graphs)?;
+        }
+    }
+    let report = json!({"graph":"first","identity":identity(&root, "first", &executor)?});
+    assert!(verify_identity(&root, &report, &proof).is_err());
+    let mut mixed = proof;
+    mixed.insert("executor".into(), executor["first"].clone());
+    assert!(verify_reservations(&root, &mixed).is_err());
     Ok(())
 }
 
@@ -241,6 +270,14 @@ fn observations_require_both_exact_resolved_engines() -> Result<()> {
     let mut duplicate = items.clone();
     duplicate.push(items[0].clone());
     assert_eq!(verify_engine_observations(&log(&duplicate))?, duplicate);
+    for field in execution().as_object().unwrap().keys() {
+        let mut changed = items.clone();
+        changed[1].as_object_mut().unwrap().remove(field);
+        assert!(
+            verify_engine_observations(&log(&changed)).is_err(),
+            "missing {field}"
+        );
+    }
     for (field, value) in [
         ("target", json!("native")),
         ("lift_rate", json!(512)),

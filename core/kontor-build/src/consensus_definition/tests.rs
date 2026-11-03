@@ -19,6 +19,7 @@ fn fixture(root: &Path) -> Result<(Value, Value, Value, Value)> {
         "core/indexer/src/protocol/coordinator/activation.rs",
         "core/indexer/src/protocol/coordinator/certified_input.rs",
         "core/indexer/src/protocol/coordinator/certified_decision.rs",
+        "core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs",
         "core/indexer/src/protocol/coordinator/control.rs",
         "core/indexer/src/protocol/coordinator/manifest.rs",
     ]) {
@@ -92,11 +93,14 @@ fn transitive_features_aliases_targets_and_lock_checksums_are_bound() -> Result<
         }
         assert_ne!(reference(dir.path(), &changed)?, original, "{field}");
     }
-    for name in FILES
-        .iter()
-        .chain(BUILD_INPUTS)
-        .chain(&[GRAPH, "protocol-bundles/consensus/lib.rs"])
-    {
+    for name in FILES.iter().chain(BUILD_INPUTS).chain(&[
+        GRAPH,
+        "protocol-bundles/consensus/lib.rs",
+        "core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs",
+        "core/indexer/src/protocol/coordinator/activation.rs",
+        "core/indexer/src/protocol/coordinator/control.rs",
+        "core/indexer/src/protocol/coordinator/certified_input.rs",
+    ]) {
         let path = dir.path().join(name);
         let contents = fs::read(&path)?;
         fs::write(&path, b"changed")?;
@@ -196,6 +200,121 @@ fn substituted_graph_missing_dependencies_and_ambiguous_metadata_are_rejected() 
         assert!(reference(dir.path(), &changed).is_err(), "case {case}");
     }
     assert!(managed(dir.path(), &data.0, &data.1, &data.2, &data.3, "../first").is_err());
+    assert_eq!(graph_manifest("first")?, GRAPH);
+    for label in ["second", "future", "../first"] {
+        assert!(graph_manifest(label).is_err());
+        assert!(destination(label).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn legacy_coordinator_binds_selected_sources_and_dependency_edges() -> Result<()> {
+    let dir = tempdir()?;
+    let data = fixture(dir.path())?;
+    let original = coordinator(dir.path(), &data.0, &data.1)?;
+    for field in ["features", "checksum", "alias", "target"] {
+        let mut changed = data.clone();
+        match field {
+            "checksum" => {
+                let package = changed.1["package"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|p| p["name"] == "transitive")
+                    .unwrap();
+                package["checksum"] = json!("02".repeat(32));
+            }
+            "features" => {
+                let node = changed.0["resolve"]["nodes"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|n| n["id"] == "transitive")
+                    .unwrap();
+                node["features"] = json!(["other"]);
+            }
+            _ => {
+                let engine = changed.0["resolve"]["nodes"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|n| n["id"] == "arc-malachitebft-engine")
+                    .unwrap();
+                if field == "alias" {
+                    engine["deps"][0]["name"] = json!("other");
+                } else {
+                    engine["deps"][0]["dep_kinds"] = json!([{"kind":null,"target":"cfg(unix)"}]);
+                }
+            }
+        }
+        assert_ne!(
+            coordinator(dir.path(), &changed.0, &changed.1)?,
+            original,
+            "{field}"
+        );
+    }
+    let path = dir.path().join(TREES[0]).join("rules.rs");
+    fs::write(path, "changed rules")?;
+    assert_ne!(coordinator(dir.path(), &data.0, &data.1)?, original);
+    Ok(())
+}
+
+#[test]
+fn legacy_coordinator_relocation_exclusions_and_invalid_inputs() -> Result<()> {
+    let dir = tempdir()?;
+    let other = tempdir()?;
+    let mut data = fixture(dir.path())?;
+    let original = coordinator(dir.path(), &data.0, &data.1)?;
+    let other_data = fixture(other.path())?;
+    assert_eq!(
+        coordinator(other.path(), &other_data.0, &other_data.1)?,
+        original
+    );
+    data.1["package"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p["name"] == "unrelated")
+        .unwrap()["checksum"] = json!("ff".repeat(32));
+    data.0["resolve"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|n| n["id"] == "unrelated")
+        .unwrap()["features"] = json!(["http3"]);
+    assert_eq!(coordinator(dir.path(), &data.0, &data.1)?, original);
+    write(dir.path(), BASELINE, &bytes(&original)?)?;
+    verify(&dir.path().join(BASELINE), &original, false)?;
+    write(dir.path(), BASELINE, b"stale")?;
+    assert!(verify(&dir.path().join(BASELINE), &original, false).is_err());
+    assert_eq!(fs::read(dir.path().join(BASELINE))?, b"stale");
+    let mut missing = data.clone();
+    missing.1["package"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p["name"] == "transitive")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("checksum");
+    assert!(coordinator(dir.path(), &missing.0, &missing.1).is_err());
+    let mut missing = data.clone();
+    missing.0["resolve"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|n| n["id"] == "node")
+        .unwrap()["deps"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|d| d["name"] != "bitcoin");
+    assert!(coordinator(dir.path(), &missing.0, &missing.1).is_err());
+    let outside = other.path().join("outside.rs");
+    fs::write(&outside, "outside")?;
+    symlink(outside, dir.path().join(TREES[0]).join("escape.rs"))?;
+    assert!(coordinator(dir.path(), &data.0, &data.1).is_err());
     Ok(())
 }
 #[test]
