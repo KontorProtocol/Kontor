@@ -158,16 +158,6 @@ class ExecutionDefinitionTests(unittest.TestCase):
             self.assertEqual(bootstrap.call_args.kwargs["env"]["CARGO_NET_OFFLINE"], "true")
             self.assertEqual(bootstrap.call_args.args[0][0], "/tool")
 
-    def test_reference_metadata_is_unfiltered_and_locked(self):
-        with patch.object(build.subprocess, "check_output", return_value="{}") as cargo:
-            build.metadata(Path("Cargo.toml"), None, {}, True)
-            command = cargo.call_args.args[0]
-            self.assertNotIn("--filter-platform", command)
-            self.assertIn("--locked", command)
-            self.assertIn("--offline", command)
-            build.metadata(Path("Cargo.toml"), "target", {}, True)
-            command = cargo.call_args.args[0]
-            self.assertEqual(command[command.index("--filter-platform") + 1], "target")
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ CMD ["python3", "tools/protocol-bundles/qualify_node.py", "--output", "/evidence
 
 FROM cacher AS builder
 COPY . .
-RUN python3 tools/protocol-bundles/build.py --build-node --offline \
+RUN tools/kontor protocol-bundles --build-node --offline \
     --profile release --output /build/protocol-output --install-node /build/bin/kontor
 
 # ---------------------------------------------------------------------

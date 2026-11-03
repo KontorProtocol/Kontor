@@ -100,7 +100,7 @@ Both historical and active locks remain covered by the dependency audit.
 `tools/kontor recipes` accepts JSON operations for the typed graph catalog,
 source-root checks, manifest reservations, graph identities and resolved engine
 attestations. The transitional `tools/protocol-bundles/recipes.py` adapter uses
-that catalog while the builder is migrated. Retained snapshot hashes, execution
+that catalog for remaining evidence tools. Retained snapshot hashes, execution
 settings and successful identity reports are unchanged. Attestations require
 exact JSON types, so numeric zero cannot substitute for `false`, and a floating
 point number cannot substitute for an integer.
@@ -112,7 +112,7 @@ patch ownership. Duplicate package or resolve-node IDs and missing reachable
 nodes fail validation. Artifact selection keeps host proc macros separate from
 target archives and requires exactly one bundle facade. The capability check
 still verifies both the retained engine and proof settings, plus the node's
-delegation to the retained engine. The Python builder calls these Rust checks;
+delegation to the retained engine. The Rust builder uses these checks directly;
 the former `capabilities.py` module has been removed.
 
 `tools/kontor interface` runs and verifies the existing bundle interface controls
@@ -123,8 +123,8 @@ compiler arguments use the caller's working directory. Compiler and adapter
 subprocesses retain their 60/120/30-second limits, and a failed interface rerun
 removes the previous successful report. Graph fingerprints retain ASCII JSON
 escaping, including Unicode paths; malformed identities and non-integer numeric
-evidence are rejected. `type_boundary.py` remains a forwarding adapter until its
-builder and evidence-comparison callers are migrated.
+evidence are rejected. `type_boundary.py` remains a forwarding adapter for
+evidence-comparison callers.
 
 | Output | Directory | Wasmtime version | Immutable fork revision | Lifting rate |
 | --- | --- | --- | --- | ---: |
@@ -190,6 +190,14 @@ The successor-support case uses real committee/certificate/state transitions wit
 an explicit missing-support assumption, not different live node binaries.
 
 ## Build and evidence
+
+`tools/kontor protocol-bundles` now performs graph compilation, node linking,
+proof orchestration, audits and installation in Rust. Docker's production build
+and the node qualification launcher use this entry point directly. The remaining
+Python `build.py` provides compatibility helpers for evidence tools and forwards
+legacy CLI invocations, preserving their caller-relative output/install paths.
+Qualification and evidence tooling still need migration; this is not yet a
+claim that the entire repository or container build is Python-free.
 
 Run `RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor protocol-bundles` from
 the checkout. The command builds the two graphs sequentially with at most two

@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 import time
 
 from build import ROOT, digest, write_json
@@ -231,7 +230,7 @@ def main():
         report_directory /= args.link_set
     report = report_directory / 'node-build.json'
     (report.parent / 'node-execution.json').unlink(missing_ok=True)
-    command = [sys.executable, str(ROOT / 'tools/protocol-bundles/build.py'), '--build-node',
+    command = [str(ROOT / 'tools/kontor'), 'protocol-bundles', '--build-node',
                '--node-qualification', '--install-node', str(output / 'kontor'), '--output', str(output),
                '--profile', args.profile, '--target', target]
     if args.offline:

@@ -7,7 +7,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import build
 import freeze_sources
 import provenance
 from freeze_sources import verify_snapshot
@@ -135,10 +134,6 @@ class SourceRoots(unittest.TestCase):
                 with self.subTest(root=relative), self.assertRaises(RuntimeError):
                     graph_root(root, replace(EXECUTOR_GRAPHS["first"], source_root=relative))
 
-    def test_metadata_runs_from_graph_root(self):
-        with patch.object(build.subprocess, "check_output", return_value="{}") as cargo:
-            build.metadata(Path("retained/Cargo.toml"), None, {}, True, source_root=Path("retained"))
-            self.assertEqual(cargo.call_args.kwargs["cwd"], Path("retained"))
 
     def fixture(self, root):
         package = root / "core/local"

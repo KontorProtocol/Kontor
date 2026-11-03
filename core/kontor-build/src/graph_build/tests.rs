@@ -7,6 +7,10 @@ use tempfile::{TempDir, tempdir};
 const CARGO: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$TRACE"
 if [ "$1" = metadata ]; then
+    if [ -n "$EXPECTED_CWD" ] && [ "$PWD" != "$EXPECTED_CWD" ]; then
+        echo 'wrong metadata working directory' >&2
+        exit 19
+    fi
     cat "$METADATA"
     exit 0
 fi
@@ -239,7 +243,9 @@ fn stale_execution_definition_rejects_before_compiling_and_uses_unfiltered_metad
 }
 #[test]
 fn metadata_and_logging_preserve_arguments_working_directory_and_exit_status() -> Result<()> {
-    let f = Fixture::new()?;
+    let mut f = Fixture::new()?;
+    f.env
+        .insert("EXPECTED_CWD".into(), f.temp.path().display().to_string());
     metadata(
         &f.temp.path().join("manifest with spaces"),
         None,
@@ -251,6 +257,8 @@ fn metadata_and_logging_preserve_arguments_working_directory_and_exit_status() -
     let trace = fs::read_to_string(f.temp.path().join("trace"))?;
     assert!(trace.contains("--features one,two"));
     assert!(!trace.contains("--filter-platform"));
+    assert!(trace.contains("--locked"));
+    assert!(trace.contains("--offline"));
     let log = f.temp.path().join("failure.log");
     let args = vec![
         "/bin/sh".into(),

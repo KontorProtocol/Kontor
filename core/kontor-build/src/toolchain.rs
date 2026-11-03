@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::container::sha256;
 
 pub type Environment = BTreeMap<String, String>;
-const TOOLCHAIN: &str = "1.99.1";
+pub(crate) const TOOLCHAIN: &str = "1.99.1";
 
 pub(crate) fn output(
     cwd: &Path,
