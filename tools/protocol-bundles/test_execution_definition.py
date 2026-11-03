@@ -1,13 +1,11 @@
 import hashlib
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import build
 from execution_definition import SEMANTIC_TREES, encode, reference, verify_reference
-from recipes import EXECUTOR_GRAPHS
 
 
 class ExecutionDefinitionTests(unittest.TestCase):
@@ -148,26 +146,6 @@ class ExecutionDefinitionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "reference differs"):
                 verify_reference(root, manifest, metadata)
             self.assertEqual(destination.read_bytes(), encoded)
-
-    def test_bundle_build_rejects_stale_definition_before_compiling(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            manifest, metadata = self.fixture(root)
-            manifest.write_text(manifest.read_text() +
-                                '[profile.dev]\npanic="unwind"\n[profile.release]\npanic="unwind"\n')
-            wrapper = root / "tools/kontor-graph-rustc"
-            wrapper.parent.mkdir(parents=True)
-            wrapper.write_text("compiler wrapper")
-            manifest.with_name("definition.bin").write_bytes(b"stale reference")
-            args = SimpleNamespace(target="x86_64-unknown-linux-gnu", offline=True)
-            with patch.object(build, "ROOT", root), patch.object(build, "identity", return_value={}), \
-                    patch.object(build, "stage_compiler_wrapper", return_value=wrapper), \
-                    patch.object(build, "metadata", return_value=metadata) as resolve, \
-                    patch.object(build, "run") as compile_graph:
-                with self.assertRaisesRegex(ValueError, "reference differs"):
-                    build.build_graph("first", args, {}, root / "output", EXECUTOR_GRAPHS)
-                self.assertEqual([call.args[1] for call in resolve.call_args_list], [args.target, None])
-                compile_graph.assert_not_called()
 
     def test_compiler_bootstrap_forwards_offline_policy_without_mutating_environment(self):
         environment = {"CARGO_NET_OFFLINE": "false"}

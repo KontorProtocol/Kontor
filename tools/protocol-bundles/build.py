@@ -16,13 +16,12 @@ import tomllib
 
 from audit import audit_final, audit_inputs
 from common_ownership import verify as verify_common_ownership
-from execution_definition import verify_reference
 from coordinator_definition import verify as verify_coordinator_reference
 from managed_definition import graph_manifest, verify as verify_managed_reference
-from provenance import _request, check_source_policy, fingerprint, locked_packages, proc_macro_hashes, runtime_libraries, source_inputs
+from provenance import _request, fingerprint, proc_macro_hashes, runtime_libraries, source_inputs
 from provenance import tools as toolchain_inputs
 from symbol_tool import TOOLCHAIN
-from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, GRAPHS, executor_graphs, graph_root, identity, verify_engine_observations, verify_identity, verify_reservations
+from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, GRAPHS, executor_graphs, graph_root, verify_engine_observations, verify_identity, verify_reservations
 from type_boundary import verify as verify_type_boundary, verify_node_adapter
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -105,76 +104,12 @@ def verify_capabilities(root):
 
 def build_graph(graph, args, base_env, output, graphs=None):
     graphs = GRAPHS if graphs is None else graphs
-    selected_recipe = graphs[graph]
-    source_root = graph_root(ROOT, selected_recipe)
-    manifest = source_root / "protocol-bundles" / selected_recipe.directory / "Cargo.toml"
-    lock = manifest.with_name("Cargo.lock")
-    recipe = tomllib.loads(manifest.read_text())
-    if any(recipe["profile"][profile].get("panic") != "unwind" for profile in ("dev", "release")):
-        raise RuntimeError("bundle profiles must use the common unwind runtime")
-    graph_output = output / graph
-    graph_output.mkdir(parents=True, exist_ok=True)
-    lock_hash = digest(lock)
-    graph_identity = identity(ROOT, graph, graphs)
-    namespace = "kontor_" + graph + "_" + fingerprint(graph_identity)[:24]
-    wrapper = stage_compiler_wrapper(graph_output, base_env, args.offline)
-    wrapper_hash = digest(wrapper)
-    target_dir = graph_output / "target" / (namespace + "_" + wrapper_hash[:16])
-    env = dict(base_env, CARGO_TARGET_DIR=str(target_dir), KONTOR_PROTOCOL_BUNDLE="1",
-               KONTOR_NATIVE_NAMESPACE=namespace, BUNDLE_LIFT_RATE=str(selected_recipe.lift_rate),
-               BUNDLE_GRAPH=graph,
-               RUSTC_WRAPPER=str(wrapper),
-               RUSTFLAGS=f"-Cmetadata={namespace} -Cpanic=unwind")
-    data = metadata(manifest, args.target, env, args.offline, source_root=source_root)
-    definition = None
-    if selected_recipe.kind == "executor":
-        # Network identity covers all target dependencies, independently of the
-        # platform-filtered artifact inventory used below.
-        definition = verify_reference(source_root, manifest, metadata(
-            manifest, None, env, args.offline, source_root=source_root))
-    packages = identities(graph, data, graphs)
-    sources = source_inputs(source_root, data, kind=selected_recipe.kind, tool_root=ROOT, env=env)
-    source_policy = check_source_policy(source_root, data, kind=selected_recipe.kind, env=env)
-    write_json(graph_output / "source-inputs.json", sources)
-    write_json(graph_output / "metadata.json", data)
-    command = ["cargo", "build", "--locked", "--manifest-path", str(manifest),
-               "--target", args.target, "--profile", args.profile, "-j", str(args.jobs),
-               "--message-format=json-render-diagnostics"]
-    if args.offline:
-        command.append("--offline")
-    log = graph_output / "build.log"
-    run(command, source_root, env, log)
-    if digest(wrapper) != wrapper_hash:
-        raise RuntimeError("compiler wrapper changed during graph compilation")
-    if digest(lock) != lock_hash:
-        raise RuntimeError("locked build modified the dependency lock")
-    if source_inputs(source_root, data, kind=selected_recipe.kind, tool_root=ROOT, env=env) != sources:
-        raise RuntimeError("source inputs changed while the graph was compiling")
-    if metadata(manifest, args.target, env, args.offline, source_root=source_root) != data:
-        raise RuntimeError("resolved metadata changed while the graph was compiling")
-    if definition is not None and verify_reference(
-        source_root, manifest, metadata(manifest, None, env, args.offline, source_root=source_root)
-    ) != definition:
-        raise RuntimeError("execution definition changed while the graph was compiling")
-    archives, facade, native_outputs, proc_macros = current_artifacts(log, target_dir, args.target, recipe["package"]["name"])
-    staged = _artifacts("stage", output=str(graph_output), namespace=namespace,
-                        artifacts=dict(archives=list(map(str, archives)), facade=str(facade),
-                                       native_outputs=native_outputs, proc_macros=list(map(str, proc_macros))))
-    result = {"graph": graph, "identity": graph_identity, "namespace": namespace, "lock_sha256": lock_hash,
-              "build_log_sha256": digest(log),
-              "manifest_sha256": digest(manifest), "packages": packages,
-              **staged,
-              "source_inputs_sha256": fingerprint(sources), "locked_packages": locked_packages(lock),
-              "source_policy": source_policy,
-              "wrapper": str(wrapper), "wrapper_binary_sha256": wrapper_hash,
-              "wrapper_sha256": digest(ROOT / "core/kontor-build/src/bin/kontor-graph-rustc.rs"),
-              "injected_metadata": namespace,
-              "rustflags": env["RUSTFLAGS"],
-              "native_outputs": native_outputs}
-    if definition is not None:
-        result["execution_definition"] = definition
-    write_json(graph_output / "build-inputs.json", result)
-    return result
+    wrapper = stage_compiler_wrapper(output / graph, base_env, args.offline)
+    request = dict(root=str(ROOT), label=graph, graphs={name: asdict(recipe) for name, recipe in graphs.items()},
+                   options=dict(target=args.target, profile=args.profile, jobs=args.jobs, offline=args.offline),
+                   env=base_env, output=str(output.resolve()), wrapper=str(wrapper),
+                   cargo_home=str(Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")).absolute()))
+    return _request(dict(operation="build_graph", request=request), command="build-inputs", env=base_env)
 
 
 def qualify(graphs, args, env, output):
