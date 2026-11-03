@@ -25,6 +25,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-kontor-tools
+        with:
+          run-tests: "true"
       - name: Build abort fixture
         run: |
           cc -x c -o "$RUNNER_TEMP/ci-abort" - <<'C'
