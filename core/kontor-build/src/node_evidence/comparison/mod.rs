@@ -603,34 +603,4 @@ pub fn compare_node(root: &Path, args: CompareNodeArgs) -> Result<Value> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn failed_comparison_replaces_stale_success_and_never_passes_missing_cells() -> Result<()> {
-        let directory = tempdir()?;
-        let root = directory.path();
-        let output = root.join("result.json");
-        for status in ["failure", "cancelled", "success"] {
-            fs::write(&output, b"{\"status\":\"passed\"}")?;
-            let result = compare_node(
-                root,
-                CompareNodeArgs {
-                    directory: "missing".into(),
-                    output: "result.json".into(),
-                    profiles: "release".into(),
-                    upstream_status: status.into(),
-                    link_set: "managed-node".into(),
-                },
-            );
-            assert!(result.is_err());
-            let failure = read(&output)?;
-            assert_eq!(failure["status"], "failed");
-            assert_eq!(failure["upstream_status"], status);
-            assert!(failure.get("matching_observations").is_none());
-        }
-        assert!(compare(root, root, "unexpected", "success", None).is_err());
-        Ok(())
-    }
-}
+mod tests;

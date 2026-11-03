@@ -177,6 +177,9 @@ fn output_lock_precedes_invalidation_and_covers_all_configurations() -> Result<(
         fs::read_to_string(node.join("node-build.json"))?,
         "existing"
     );
+    // Other tests spawn children concurrently. A fork can briefly inherit this
+    // descriptor before exec closes it, so release the lock before dropping it.
+    lock.unlock()?;
     drop(lock);
     let lock = begin_output(&base, &node, true)?;
     for name in [
@@ -188,6 +191,7 @@ fn output_lock_precedes_invalidation_and_covers_all_configurations() -> Result<(
         assert!(!node.join(name).exists());
     }
     assert!(node.join("build-inputs.json").is_file());
+    lock.unlock()?;
     drop(lock);
     fs::create_dir_all(&proof)?;
     fs::write(proof.join("qualification.json"), "stale")?;

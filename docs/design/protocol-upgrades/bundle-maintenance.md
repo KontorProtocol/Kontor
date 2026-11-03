@@ -162,7 +162,7 @@ results and rerun affected checks when their source or build inputs change.
 
 `tools/kontor verify-node-evidence` accepts JSON requests for historical semantic,
 retained-executor, storage-construction, certified-history and managed-startup
-checks. The remaining Python runner and comparator delegate to this Rust module.
+checks. The Rust qualification runner and archive comparator share these validators.
 The same command verifies transition, recovery, authorization and join reports,
 including native-artifact selection, rollback contexts, crash checkpoints,
 successor authority and two successive approvals. Comparisons normalize live
@@ -175,6 +175,11 @@ simulation/rollback/commit observations must match. Certified history binds the
 selected genesis executor and consensus definition; P2 cannot substitute for P1.
 Malformed numeric or boolean evidence is rejected by JSON type as well as value.
 The historical baseline and execution identities have not been regenerated.
+Archive and execution test fixtures now live in the Rust tooling tests. These
+synthetic records exercise rejection and comparison rules, not real platform
+qualification. The qualification container runs `tools/kontor qualify-node` and
+no longer explicitly installs Python. A fresh Python-free production build
+remains the final acceptance check.
 
 From the repository root, build and qualify the actual node with:
 
@@ -192,7 +197,7 @@ and build report hashes before and after execution. Its subprocess deadlines are
 300 seconds for executor checks, 390 for transitions, 420 each for recovery and
 authorized replay, and 360 for joining. A timed-out child is killed and reaped.
 `run-node-qualification` accepts JSON for executing an already audited node or
-one diagnostic check. The Python runner is transitional compatibility glue.
+one diagnostic check. The former Python runner and comparator have been removed.
 
 For focused investigation after a recorded `--build-node --node-qualification`
 build, the installed executable offers these acceptance modes:

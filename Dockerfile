@@ -6,7 +6,7 @@ FROM ${CHEF_IMAGE} AS builder-base
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config cmake make g++ libzmq3-dev \
     libboost-system-dev libboost-thread-dev libboost-chrono-dev \
-    ca-certificates python3 binutils git \
+    ca-certificates binutils git \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup component add --toolchain 1.99.1 llvm-tools-preview
 ENV RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER="" CCACHE_DISABLE=1 CARGO_BUILD_JOBS=2
@@ -25,7 +25,7 @@ RUN cargo fetch --locked --manifest-path protocol-bundles/executor-first/Cargo.t
 
 FROM cacher AS protocol-bundle-qualification
 COPY . .
-CMD ["python3", "tools/protocol-bundles/qualify_node.py", "--output", "/evidence", "--profile", "release", "--offline"]
+CMD ["tools/kontor", "qualify-node", "--output", "/evidence", "--profile", "release", "--offline"]
 
 FROM cacher AS builder
 COPY . .

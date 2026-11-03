@@ -252,6 +252,39 @@ fn certified_evidence_binds_checks_counts_and_selected_genesis() -> Result<()> {
     Ok(())
 }
 #[test]
+fn managed_genesis_rejects_self_consistent_observer_substitution() -> Result<()> {
+    let mut sample = certified_sample("managed-node")?;
+    let mut manifest = hex::decode(sample["manifest"].as_str().unwrap())?;
+    let wrong = hashed(
+        b"kontor/execution-definition/v1",
+        &fs::read(root().join("protocol-bundles/executor-observer/definition.bin"))?,
+    );
+    manifest[76..108].copy_from_slice(&hex::decode(&wrong)?);
+    sample["manifest"] = json!(hex::encode(&manifest));
+    sample["executor_definition"] = json!(wrong);
+    let protocol = hashed(b"kontor/protocol-manifest/v1", &manifest);
+    sample["protocol"] = json!(protocol);
+    sample["era"] = json!(hashed(
+        b"kontor/genesis-era/v1",
+        &[
+            hex::decode(sample["chain"].as_str().unwrap())?,
+            hex::decode(&protocol)?
+        ]
+        .concat()
+    ));
+    assert!(
+        certified(
+            &json!({"certified_history":sample}),
+            Some("managed-node"),
+            &root()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("selected genesis executor")
+    );
+    Ok(())
+}
+#[test]
 fn startup_storage_and_executor_checks_require_complete_selected_evidence() -> Result<()> {
     let history = certified_sample("managed-node")?;
     let mut managed = fields(

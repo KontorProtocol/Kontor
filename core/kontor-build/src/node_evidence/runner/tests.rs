@@ -16,7 +16,7 @@ fn fixture(name: &str) -> PathBuf {
         .join("tests/fixtures/node-evidence")
         .join(format!("{name}.json"))
 }
-fn sample(link: Option<&str>) -> Result<Value> {
+pub(crate) fn sample(link: Option<&str>) -> Result<Value> {
     let graphs = executor_graphs(link)?;
     let names: Vec<_> = graphs.keys().map(String::as_str).collect();
     let baseline = baseline_graphs(link)?;
