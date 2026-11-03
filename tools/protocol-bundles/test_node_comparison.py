@@ -4,7 +4,6 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch
 
 from build import linker_wrapper_source_hash, ROOT, digest, write_json
 from compare_node import OWNERSHIP, TARGETS, compare, sources as validate_sources
@@ -520,6 +519,11 @@ class NodeComparison(unittest.TestCase):
         directory = self.cells[0]
         source = copy.deepcopy(self.sources['node'])
         source['qualification_sources']['tools/protocol-bundles/compare_node.py'] = 'previous comparator'
+        source['rust_build_tools']['src/node_evidence/comparison/mod.rs'] = 'previous Rust comparator'
+        files = package_sources(ROOT / 'core/kontor-build', root=ROOT)
+        files['src/node_evidence/comparison/sources.rs'] = 'previous Rust inventory checker'
+        source['packages'].append({'package': 'path+file://<repository>/core/kontor-build#0.1.0', 'files': files})
+        source['inherited_manifests_and_configuration']['/fixture/core/kontor-build/Cargo.toml'] = digest(ROOT / 'core/kontor-build/Cargo.toml')
         write_json(directory / 'node/source-inputs.json', source)
         build = json.loads((directory / 'node-build.json').read_text())
         build['node']['source_inputs_sha256'] = fingerprint(source)
@@ -606,13 +610,17 @@ class NodeComparison(unittest.TestCase):
                 shutil.copyfile(ROOT / relative, destination)
         shutil.copytree(ROOT / 'core/numerics', checkout / 'core/numerics', dirs_exist_ok=True)
         report = {'source_inputs_sha256': fingerprint(source)}
-        with patch('compare_node.repository_sources', return_value=source['qualification_sources']):
+        for relative in source['qualification_sources']:
+            destination = checkout / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / relative, destination)
+        validate_sources(self.cells[0] / 'node', report, checkout, 'node')
+        config = checkout / 'core/.cargo/config.toml'
+        config.parent.mkdir()
+        config.write_text('[build]\nrustflags = ["-C", "opt-level=1"]\n')
+        with self.assertRaisesRegex(ValueError, 'inherited repository input changed: core/.cargo/config.toml'):
             validate_sources(self.cells[0] / 'node', report, checkout, 'node')
-            config = checkout / 'core/.cargo/config.toml'
-            config.parent.mkdir()
-            config.write_text('[build]\nrustflags = ["-C", "opt-level=1"]\n')
-            with self.assertRaisesRegex(ValueError, 'inherited repository input changed: core/.cargo/config.toml'):
-                validate_sources(self.cells[0] / 'node', report, checkout, 'node')
+
 
 
 if __name__ == '__main__':

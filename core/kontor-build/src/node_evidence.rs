@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::recipes::executor_graphs;
 
+pub mod comparison;
 mod qualification;
 pub mod runner;
 mod semantics;

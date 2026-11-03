@@ -109,8 +109,9 @@ pub(super) fn build_metadata(path: &str) -> bool {
 
 pub(super) fn evidence_only(path: &str) -> bool {
     let name = basename(path);
-    path.starts_with("tools/protocol-bundles/")
-        && (name == "compare_node.py" || (name.starts_with("test_") && name.ends_with(".py")))
+    path.starts_with("core/kontor-build/src/node_evidence/comparison/")
+        || (path.starts_with("tools/protocol-bundles/")
+            && (name == "compare_node.py" || (name.starts_with("test_") && name.ends_with(".py"))))
 }
 
 pub(super) fn stack_relevant(path: &str) -> bool {

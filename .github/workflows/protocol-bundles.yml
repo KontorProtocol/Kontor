@@ -161,7 +161,7 @@ jobs:
           path: target/protocol-comparison-inputs
       - name: Compare explicitly required platforms and profiles
         run: |
-          python3 tools/protocol-bundles/compare_node.py --directory target/protocol-comparison-inputs --output target/protocol-node-comparison.json --profiles "${{ needs.scope.outputs.profile_policy }}" --upstream-status "${{ needs.qualification.result }}"
+          tools/kontor compare-node --directory target/protocol-comparison-inputs --output target/protocol-node-comparison.json --profiles "${{ needs.scope.outputs.profile_policy }}" --upstream-status "${{ needs.qualification.result }}"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

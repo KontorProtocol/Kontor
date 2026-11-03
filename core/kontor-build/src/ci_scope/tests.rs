@@ -200,6 +200,7 @@ fn stack_selection_preserves_execution_and_evidence_boundaries() {
         "core/.cargo/audit.toml",
         "tools/protocol-bundles/compare_node.py",
         "tools/protocol-bundles/test_node_comparison.py",
+        "core/kontor-build/src/node_evidence/comparison/mod.rs",
     ] {
         assert!(!stack_relevant(path), "{path}");
     }
@@ -318,6 +319,11 @@ fn bundle_evidence_only_runs_controls_and_paths_union_jobs() -> Result<()> {
     write(
         root.path(),
         "tools/protocol-bundles/test_node_comparison.py",
+        "evidence",
+    )?;
+    write(
+        root.path(),
+        "core/kontor-build/src/node_evidence/comparison/mod.rs",
         "evidence",
     )?;
     let head = commit(root.path())?;

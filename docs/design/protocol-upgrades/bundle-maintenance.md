@@ -16,7 +16,7 @@ migrated. This table does not create additional qualification jobs.
 
 | Configuration | Disposition | Minimum affected validation |
 | --- | --- | --- |
-| `managed-node`: retained P1, P2 observer and one pinned consensus runtime | Keep as the supported node composition. | `tools/kontor qualify-node` and `compare_node.py`, through the existing release workflow, after build/runtime changes stabilize. |
+| `managed-node`: retained P1, P2 observer and one pinned consensus runtime | Keep as the supported node composition. | `tools/kontor qualify-node` and `tools/kontor compare-node`, through the existing release workflow, after build/runtime changes stabilize. |
 | Retained P1 source and independent executor dependency graphs | Keep required execution inputs and identities; migrate support tooling separately. | Source-root inventory and execution-definition tests, followed by the managed-node validation above. |
 | Local runtime/test adapters | Keep intentional test coverage; remove only branches proven obsolete. | Focused ownership, cancellation, settlement and rollback tests when their code changes. |
 | `legacy-qualification`, `k4-node`, retained K3 and standalone proof graphs | Pending caller and coverage migration. They are still referenced by tooling and tests. | Build-recipe, node-execution and comparison tests before retiring any path. Preserve isolation assertions in supported fixtures. |
@@ -467,7 +467,7 @@ node build report hash in `executors/managed-node/node-execution.json`. Its 300-
 is a test timeout, not a Kontor execution cutoff. Full release-image and platform
 qualification is required for affected release candidates.
 
-`tools/protocol-bundles/compare_node.py` verifies the downloaded linked-node
+`tools/kontor compare-node` verifies the downloaded linked-node
 results against an explicit policy: `release` requires Linux x86-64, Linux ARM64
 and macOS ARM64 release results; `full` requires both dev and release on all three.
 The workflow uses release automatically and exposes full comparison only through
@@ -476,14 +476,19 @@ are errors. The comparator verifies raw logs, source inventories, local package
 files, workspace/graph identities, linker inputs and ownership-report hashes,
 then requires identical execution observations across the required cells.
 Package documentation and Git ignore files omitted by Docker are excluded from
-source equality. Python comparator and test edits do not invalidate unchanged
+source equality. Comparator-only edits (Python compatibility glue and Rust
+`src/node_evidence/comparison/`) and Python test edits do not invalidate unchanged
 runtime/build sources; the original source-inventory hashes remain verified.
+The exclusion applies to both tool and local-package inventories. Shared Rust
+validators, the execution runner and CLI/module wiring remain bound. The archive
+checker is not called by node execution or builds. Comparison failures replace
+any stale successful report with an explicit failed report.
 This bounded linked-node check complements the existing stack qualification and
 dev smoke checks. It does not replace their coverage or establish all executions
 from the sampled scenarios.
 
 The workflow selects changes from the complete Git diff, including deleted and
-renamed inputs. Comparator and Python test changes run the builder/evidence
+renamed inputs. Comparator-only and Python test changes run the builder/evidence
 controls on one Linux runner without repeating the platform builds. Changes to
 node execution or build inputs still require the selected matrix; missing Git
 history requires qualification. Unrelated changes skip both groups. Builder

@@ -18,7 +18,7 @@ use crate::container::sha256;
 use crate::recipes::{consensus_graphs, executor_graphs};
 use crate::write_json;
 
-const CASES: &[&str] = &[
+pub(super) const CASES: &[&str] = &[
     "native-genesis",
     "genesis-resume",
     "read-only-views",

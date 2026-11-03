@@ -16,6 +16,9 @@ use kontor_build::execution_definition::{
 };
 use kontor_build::interface::{Request as InterfaceRequest, run as interface};
 use kontor_build::linker_record::verify_input;
+use kontor_build::node_evidence::comparison::{
+    CompareNodeArgs, Request as CompareRequest, compare_node, run as compare_evidence,
+};
 use kontor_build::node_evidence::runner::{Request as NodeRunRequest, run as run_node};
 use kontor_build::node_evidence::{
     QualifyNodeArgs, Request as NodeEvidenceRequest, qualify_node, run as node_evidence,
@@ -41,6 +44,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Compare verified node evidence across the required platforms.
+    CompareNode(CompareNodeArgs),
+    /// Verify archived node evidence from a JSON request.
+    VerifyNodeArchive,
     /// Build and execute the retained node integration checks.
     QualifyNode(QualifyNodeArgs),
     /// Execute an audited node or one lifecycle check from a JSON request.
@@ -112,6 +119,15 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::CompareNode(args) => {
+            println!("{}", compare_node(&repository_root()?, args)?);
+            Ok(())
+        }
+        Command::VerifyNodeArchive => {
+            let request: CompareRequest = serde_json::from_reader(io::stdin().lock())?;
+            println!("{}", compare_evidence(request)?);
+            Ok(())
+        }
         Command::QualifyNode(args) => {
             println!("{}", qualify_node(&repository_root()?, args)?);
             Ok(())
