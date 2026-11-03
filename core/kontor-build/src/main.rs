@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use kontor_build::linker_record::verify_input;
 use kontor_build::object_tools::{Request as ObjectRequest, run as inspect_object};
 use kontor_build::provenance::{Request as ProvenanceRequest, run as provenance};
+use kontor_build::recipes::{Request as RecipeRequest, run as recipes};
 use kontor_build::shared_ownership::{Request as SharedRequest, run as audit_shared};
 use kontor_build::source_identity::{Metadata, verify_sources};
 use kontor_build::symbol_audit::{Request as AuditRequest, run as audit_symbols};
@@ -58,6 +59,8 @@ enum Command {
     AuditSymbols,
     /// Verify shared runtime and graph import ownership from JSON input.
     AuditShared,
+    /// Select and verify protocol graph recipes from a JSON request.
+    Recipes,
     /// Inventory build source inputs from a JSON request on standard input.
     Provenance,
     /// Select CI checks from the GitHub event and complete Git change set.
@@ -99,6 +102,11 @@ fn main() -> Result<()> {
         Command::AuditShared => {
             let request: SharedRequest = serde_json::from_reader(io::stdin().lock())?;
             println!("{}", audit_shared(request)?);
+            Ok(())
+        }
+        Command::Recipes => {
+            let request: RecipeRequest = serde_json::from_reader(io::stdin().lock())?;
+            println!("{}", recipes(request)?);
             Ok(())
         }
         Command::VerifySources => {

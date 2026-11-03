@@ -83,8 +83,9 @@ RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor verify-snapshot protocol-b
 
 The command prints the authenticated inventory as JSON and fails on changed,
 missing or additional files, changed symlink targets, or paths escaping the
-snapshot. It does not regenerate identities or inventories. Python orchestration
-still uses its original verifier until the bundle builder migration is complete.
+snapshot. It does not regenerate identities or inventories. Recipe source-root
+checks use this Rust verifier; snapshot creation still uses the original Python
+tool until its migration is complete.
 
 The standalone proof graphs below are build/isolation fixtures. Their results
 are separate from the real managed-node acceptance evidence recorded in the
@@ -93,8 +94,16 @@ are separate from the real managed-node acceptance evidence recorded in the
 K1-REPIN uses `protocol-bundles/pulley-first` and `pulley-second` as the active
 graphs, while retaining the original `first` and `second` manifests and locks
 unchanged as historical development inputs. Stable output labels `first` and
-`second` map to the active directories through `tools/protocol-bundles/recipes.py`.
+`second` map to the active directories through `core/kontor-build/src/recipes.rs`.
 Both historical and active locks remain covered by the dependency audit.
+
+`tools/kontor recipes` accepts JSON operations for the typed graph catalog,
+source-root checks, manifest reservations, graph identities and resolved engine
+attestations. The transitional `tools/protocol-bundles/recipes.py` adapter uses
+that catalog while the builder is migrated. Retained snapshot hashes, execution
+settings and successful identity reports are unchanged. Attestations require
+exact JSON types, so numeric zero cannot substitute for `false`, and a floating
+point number cannot substitute for an integer.
 
 | Output | Directory | Wasmtime version | Immutable fork revision | Lifting rate |
 | --- | --- | --- | --- | ---: |
