@@ -23,7 +23,8 @@ migrated. This table does not create additional qualification jobs.
 | Local cgroup workload supervisor and Python external Bitcoin/arrival/view services | Removed. Opt-in performance diagnostics had no CI or production caller. Historical implementation remains at `84ac9c72`; Rust correctness workloads and frozen-input validation remain. | Audit callers and local fallback paths; run remaining stack tooling tests. No renewed performance campaign. |
 | Retained K4 coordinator snapshot | Removed. It was a development baseline, not an executor selected by any current build recipe. | Source-root tests and bundle-tooling tests. No runtime or cross-platform rebuild is required for this deletion alone. |
 | Stack release qualification and bounded dev smoke | Keep. | Existing qualification/comparison commands, only for affected execution/build changes. |
-| Intermediate S2 discovery, guard, chain, vmmap and final diagnostic stages | Pending audit of imports and useful assertions before retirement or consolidation. | Relevant evidence-verifier unit tests; do not rerun the historical performance campaign. |
+| Separate S2 macOS VM-map stage | Removed. It collected explanatory maps and always reported qualification missing. The Rust map hook remains available for local diagnosis. | Pending-I/O evidence tests retain suspended-64 memory allowances, live owners, independent task progress, resumption and cleanup checks. No macOS rebuild is needed for removal of the wrapper alone. |
+| Intermediate S2 discovery, guard, chain and final diagnostic stages | Pending audit of imports and useful assertions before retirement or consolidation. | Relevant evidence-verifier unit tests; do not rerun the historical performance campaign. |
 
 The Python command names above identify current behavior to preserve or retire,
 not the final tooling interface. Replacements will live behind `tools/kontor`.

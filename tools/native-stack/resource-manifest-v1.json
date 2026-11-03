@@ -414,7 +414,7 @@
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "2ba38a843eda2b3c2bd65d0cc449637f8741608d8e8e606b2c48b41425d8d44f"
+      "sha256": "71241bc307fc01b8382048846b5a3fb7e564140de87599cf52c133beaecfcae5"
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -674,7 +674,7 @@
     },
     "suite_dispatch_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "2ba38a843eda2b3c2bd65d0cc449637f8741608d8e8e606b2c48b41425d8d44f"
+      "sha256": "71241bc307fc01b8382048846b5a3fb7e564140de87599cf52c133beaecfcae5"
     },
     "suite_registry_builder": {
       "path": "tools/native-stack/resource_suite_registry.py",
@@ -690,7 +690,7 @@
     },
     "suite_workflow": {
       "path": ".github/workflows/native-stack-s2.yml",
-      "sha256": "983bc978ba35faf76df68949c9b8c310cf14402538db774ba49e9aef364abc19"
+      "sha256": "b0fd4790acf1d9fe04add1e2e83c3633bbe145dabf9a3b40e7965e039dbb3496"
     },
     "suspended_64_plan": {
       "path": "tools/native-stack/resource-suspended-64-plan-v1.json",

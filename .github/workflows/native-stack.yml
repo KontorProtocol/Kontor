@@ -11,7 +11,7 @@ on:
         required: true
         default: qualify
         type: choice
-        options: [qualify, discovery, guard, chain, vmmap, final]
+        options: [qualify, discovery, guard, chain, final]
       profiles:
         description: Release qualification with dev smoke, or full dev/release comparison
         required: true
@@ -198,7 +198,7 @@ jobs:
           if-no-files-found: error
 
   s2:
-    if: github.event_name == 'workflow_dispatch' && (inputs.stage == 'discovery' || inputs.stage == 'guard' || inputs.stage == 'chain' || inputs.stage == 'vmmap' || inputs.stage == 'final')
+    if: github.event_name == 'workflow_dispatch' && (inputs.stage == 'discovery' || inputs.stage == 'guard' || inputs.stage == 'chain' || inputs.stage == 'final')
     uses: ./.github/workflows/native-stack-s2.yml
     with:
       stage: ${{ inputs.stage }}

@@ -70,9 +70,45 @@ Use the workflow's **Run workflow**, stage **qualify**, profiles **full**, to ru
 exhaustive dev/release qualification on a chosen ref when a compiler, engine or
 other relevant change warrants it. Profiles **release** runs the normal release
 qualification plus dev smoke. Full dev qualification is manual, not scheduled.
-Other manual S2 stages retain their existing behavior. The
+The separate S2 `vmmap` stage has been retired, as described below. Other manual
+S2 stages retain their existing behavior. The
 operator's accepted prelaunch performance disposition remains separate: this
 workflow checks bounded correctness and cross-platform agreement, not throughput.
+
+## Local macOS VM-map diagnosis
+
+The former `vmmap` workflow stage and `capture_suspended_vmmap.py` wrapper are
+archived at commit `5f3c28a2`. They collected explanatory VM regions, always
+reported qualification as missing, and could accept an exceeded mapped-memory
+allowance for diagnosis. Their output was not consumed by the final S2 gate.
+
+The retained pending-I/O suite still checks suspended-64 memory allowances,
+live Store ownership, progress of another Tokio task, repeated resumption and
+cleanup through `resource_pending_evidence.validate_suspended_64`. Its existing
+negative controls reject missing phases, invalid root counts and excess mapped
+memory. Removing the separate diagnostic does not relax those checks.
+
+For a local macOS investigation, the existing Rust test binary can still emit
+baseline and peak maps. Start with no other `KONTOR_*` overrides and set `binary`
+to the indexer test executable built for the revision being investigated:
+
+```sh
+KONTOR_FINITE_STACK_CASE=pending_host_io \
+KONTOR_FINITE_STACK_ROLE=target_observed \
+KONTOR_RESOURCE_MODE=production \
+KONTOR_RESOURCE_TEARDOWN_PROBE=on \
+KONTOR_SUSPENDED_64_VMMAP=1 \
+"$binary" --ignored --exact \
+  runtime::call::tests::native_stack_resource::finite_stack_worker_case \
+  --nocapture > suspended-64-vmmap.log 2>&1
+```
+
+The `SUSPENDED_64_VMMAP:` JSON records contain base64-encoded raw stdout/stderr
+and their hashes. The Rust hook bounds each `/usr/bin/vmmap` call to 45 seconds.
+This direct diagnostic has no overall driver deadline or archive validation and
+does not establish qualification; use the retained pending-I/O capture and
+validator for qualification evidence. No CI job is needed to decode or inspect
+these maps.
 
 ## Resource amendment preflight
 
