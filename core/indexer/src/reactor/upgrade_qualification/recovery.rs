@@ -79,6 +79,7 @@ pub(crate) async fn run() -> Result<Json> {
         result["finality_replay"] = super::replay::run(&service).await?;
         result["token_count"] = super::token_count::run(&service).await?;
         result["empty_successor"] = super::committee::run(&service).await?;
+        result["successor_support"] = Box::pin(super::support::run(&service)).await?;
         result["unsupported_cancel"] = super::unsupported::run(&service).await?;
         result["process_crashes"] = super::crash::run(&service).await?;
         Ok(result)

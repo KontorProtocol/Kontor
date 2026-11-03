@@ -190,13 +190,17 @@ REPLACEMENT_FLAGS = {
     'same_outpoint_replacement', 'original_removed', 'p2_replacement_execution',
     'one_canonical_charge', 'migration_replayed', 'reopened_state_matches',
 }
+SUPPORT_FLAGS = {
+    'old_quorum_certificate', 'paid_exit_in_h_lifecycle', 'nonempty_changed_successor',
+    'insufficient_subset_rejected', 'full_successor_accepted', 'reopen_preserves_committee_and_frontier',
+}
 REPLAY_FLAGS = {
     'same_bitcoin_history', 'reopened_state_matches', 'actual_p2_activation', 'retained_decisions_unchanged',
 }
 
 
 def verify_recovery(result):
-    keys = RECOVERY_FLAGS | {'schema', 'scope', 'closed_decisions', 'successor_height', 'finality_replay', 'token_count', 'empty_successor', 'unsupported_cancel', 'process_crashes', 'build_record'}
+    keys = RECOVERY_FLAGS | {'schema', 'scope', 'closed_decisions', 'successor_height', 'finality_replay', 'token_count', 'empty_successor', 'successor_support', 'unsupported_cancel', 'process_crashes', 'build_record'}
     if (not isinstance(result, dict) or set(result) != keys or result['schema'] != 1
             or result['closed_decisions'] != 1 or result['successor_height'] != 2
             or any(result[key] is not True for key in RECOVERY_FLAGS)):
@@ -221,6 +225,14 @@ def verify_recovery(result):
                 or case['signature_retry_preserved'] is not (stage == 'signed')):
             raise ValueError('process-crash recovery evidence incomplete')
     successor = result['empty_successor']
+    support = result['successor_support']
+    positions = {'activation_height': 13, 'closed_decisions': 14, 'old_signed_power': 300,
+                 'old_total_power': 400, 'supporting_successor_power': 100, 'successor_total_power': 200}
+    if (not isinstance(support, dict) or set(support) != SUPPORT_FLAGS | set(positions) | {'scope'}
+            or support['scope'] != 'composed support assumption, not live mixed binaries'
+            or any(support[key] is not True for key in SUPPORT_FLAGS)
+            or any(type(support[key]) is not int or support[key] != value for key, value in positions.items())):
+        raise ValueError('successor support mismatch evidence incomplete')
     positions = {'activation_height': 13, 'authenticated_decisions': 14, 'closed_decisions': 13}
     if (not isinstance(successor, dict) or set(successor) != EMPTY_SUCCESSOR_FLAGS | set(positions)
             or any(successor[key] is not True for key in EMPTY_SUCCESSOR_FLAGS)

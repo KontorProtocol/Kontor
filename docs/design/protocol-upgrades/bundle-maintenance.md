@@ -49,6 +49,38 @@ This qualifies coexistence of the proof engines. It does not replace production
 stack, cancellation, or retained semantic-runtime checks. Preserve those existing
 results and rerun affected checks when their source or build inputs change.
 
+## Managed-node acceptance commands
+
+From the repository root, build and qualify the actual node with:
+
+```sh
+CCACHE_DISABLE=1 python3 tools/protocol-bundles/qualify_node.py --profile release --output target/protocol-evidence --offline
+```
+
+Omit `--offline` only when dependencies need fetching. The default managed link
+set contains retained P1, the deliberately different P2 observer executor and one
+pinned consensus runtime. It is distinct from the standalone proof command below.
+Keep one Cargo operation at a time and the builder's two-job limit.
+
+For focused investigation after a recorded `--build-node --node-qualification`
+build, the installed executable offers these acceptance modes:
+
+| Command suffix | Evidence |
+| --- | --- |
+| `qualify-protocol-transition --cluster` | Real peers activate, roll back and reactivate while RPC/ingestion and engine ownership remain live. |
+| `qualify-protocol-transition --join` | Catch-up from P2 peers, quorum-loss stall, safe promotion and restored progress. |
+| `qualify-protocol-transition --authorized-replay` | Fresh approvals for two successive upgrades, two migrations, exact reopen and genesis reconstruction. |
+| `qualify-protocol-transition --recovery` | Crash checkpoints, finality replay, confirmation without double charging, same-outpoint replacement, unsupported target and successor committee cases. |
+
+These diagnostic modes do not replace the builder's source binding, artifact
+checks, ownership audits or cross-platform comparison. Preserve raw stdout/stderr
+and use `qualify_node.py`'s verifiers rather than accepting exit status alone.
+The second successor P3 is an exact qualification-only manifest using P2 execution
+and a schema-2 no-op migration, not another production executor. Replacement
+coverage starts from Bitcoin-accepted inputs, not Bitcoin mempool/RBF policy.
+The successor-support case uses real committee/certificate/state transitions with
+an explicit missing-support assumption, not different live node binaries.
+
 ## Build and evidence
 
 Run `RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor protocol-bundles` from

@@ -2,7 +2,7 @@ import copy
 import hashlib
 import unittest
 
-from transition_evidence import JOIN_FLAGS, REPLACEMENT_FLAGS, verify_join
+from transition_evidence import JOIN_FLAGS, REPLACEMENT_FLAGS, SUPPORT_FLAGS, verify_join
 
 from build import ROOT
 from recipes import executor_graphs
@@ -81,6 +81,10 @@ def recovery_sample():
                         'replacement_height': 3, 'finality_height': 7, 'closed_decisions': 8}}
     result['empty_successor'] = {**{key: True for key in EMPTY_SUCCESSOR_FLAGS},
         'activation_height': 13, 'authenticated_decisions': 14, 'closed_decisions': 13}
+    result['successor_support'] = {**{key: True for key in SUPPORT_FLAGS},
+        'scope': 'composed support assumption, not live mixed binaries',
+        'activation_height': 13, 'closed_decisions': 14, 'old_signed_power': 300,
+        'old_total_power': 400, 'supporting_successor_power': 100, 'successor_total_power': 200}
     result['build_record'] = {key: True for key in BUILD_RECORD_FLAGS}
     result['unsupported_cancel'] = {**{key: True for key in UNSUPPORTED_FLAGS}, 'validators': 1}
     result['process_crashes'] = [
@@ -269,6 +273,11 @@ class TransitionEvidence(unittest.TestCase):
                       lambda value: value['finality_replay'][0]['confirmation']['replacement'].update(replacement_height=2)]
         mutations += [lambda value, key=key: value['finality_replay'][0]['confirmation']['replacement'].update({key: False})
                       for key in REPLACEMENT_FLAGS]
+        mutations += [lambda value: value.pop('successor_support'),
+                      lambda value: value['successor_support'].update(scope='live mixed binaries'),
+                      lambda value: value['successor_support'].update(supporting_successor_power=200)]
+        mutations += [lambda value, key=key: value['successor_support'].update({key: False})
+                      for key in SUPPORT_FLAGS]
         mutations += [lambda value, key=key: value.update({key: False}) for key in RECOVERY_FLAGS]
         mutations += [lambda value, key=key: value['finality_replay'][0].update({key: False}) for key in REPLAY_FLAGS]
         for mutate in mutations:

@@ -4909,3 +4909,56 @@ case near activation compiles in the managed library, but is newer than the bina
 above and has not yet run. Its intended assertions cover original transaction
 removal, replayed migration, P2 replacement execution, one canonical charge, and
 reopen agreement. The remaining acceptance and final review/CI gates still apply.
+
+### K10/K11 integrated candidate and final committee case
+
+Candidate `81ac06f6db1a717bd21006a49558cb349ffc10a9` was reviewed against
+merge base `d671fb8294fe5358e5ad7c5ac900f0f5204b971c` by the lead and the
+single independent reviewer `/root/k2b_system_review`. The reviewer found no
+material source regression, covering discovery consistency, selected simulation,
+rollback, legacy/SDK compatibility and funding cleanup, runtime observation,
+P3 registration, migration/replacement accounting, quorum loss and linker bindings.
+The reviewer explicitly accepted the bounded composed successor-support fixture;
+its final implementation required focused follow-up. Remote freshness and final
+platform CI were not established by that source review.
+
+The validation binary SHA256
+`aac9826a1c5f3ce11a58ad64d1f41fbd0c5575ea6be5f83b512d94856cbeef98`
+passed the linked build/native audit and actual linker recording. Its recovery
+suite passed the new same-outpoint replacement case and existing crash/replay
+cases. Its join scenario passed an explicit stall without quorum, followed by
+promotion and the joining validator's required vote. Logs are retained under
+`.build-cache/client-acceptance-validation-runtime/`. Fifty-one focused Python
+controls passed, including actual GCC/Clang links with search/selection flags,
+response files, failure cases and evidence binding. Five SDK runtime/type tests
+cover funding cleanup without settlement/broadcast on all tested outcomes.
+
+The final added support fixture uses real old authority weights 200/100/100 and
+a valid 300/400 certificate, then a paid exit of the 200-power member whose delay
+expires in H's old lifecycle. The next committee is nonempty, with two 100-power
+members. Its real certificate verifier rejects the single-supporter certificate
+and accepts both signatures; reopen preserves exact state, committee and frontier.
+The missing support of one member is an explicit scenario assumption, combined
+with separate actual unknown-target refusal coverage. No live mixed-binary
+network or Bitcoin mempool/RBF policy qualification is claimed.
+
+This fixture and shared-helper refactor compile in the managed release library.
+All 34 focused evidence/comparison tests pass. The complete linked release build
+then passed with installed binary SHA256
+`98dde2b70d8442a7a0262e2d0e7a699c9ce159c2f1ea9c6a4d66a03862c46afa`.
+The full recovery command and evidence verifier passed against this binary,
+including the new committee case and all prior recovery cases. Raw recovery
+stdout SHA256 is
+`6549bb2d558df51a7315be501a941e9be8d35c6d1cec806a41a179ff2d1e37b0`;
+stderr is empty. Build and runtime evidence are retained in
+`.build-cache/client-acceptance-final-linked/` and
+`.build-cache/client-acceptance-final-runtime/`. These local ARM64 release
+results do not replace required current-head cross-platform CI.
+
+Lead follow-up traced the refactored fixture's default single-key behavior,
+old/new certificate authority at decisions 14/15, paid lifecycle exit, unchanged
+frontier after verification-only probes, and exact reopen comparison. The full
+recovery run exercises the previous callers of the shared helpers as well as the
+new case. Frozen P1, production protocol authorization, gas rules and engine
+ownership behavior are unchanged by this fixture. Final reviewer follow-up,
+full controls, documentation/Site review and current-head CI remain pending.
