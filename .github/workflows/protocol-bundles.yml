@@ -107,11 +107,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p target/protocol-evidence
-          docker run --rm --mount type=bind,src="$PWD/target/protocol-evidence",dst=/evidence kontor-protocol-qualification python3 tools/protocol-bundles/qualify_node.py --output /evidence --profile "${{ matrix.profile }}" --offline
+          docker run --rm --mount type=bind,src="$PWD/target/protocol-evidence",dst=/evidence kontor-protocol-qualification tools/kontor qualify-node --output /evidence --profile "${{ matrix.profile }}" --offline
       - name: Qualify executor and consensus bundles with the macOS node test profile
         if: runner.os == 'macOS'
         run: |
-          python3 tools/protocol-bundles/qualify_node.py --profile "${{ matrix.profile }}" --output target/protocol-evidence
+          tools/kontor qualify-node --profile "${{ matrix.profile }}" --output target/protocol-evidence
           test -f target/protocol-evidence/aarch64-apple-darwin/${{ matrix.profile }}/executors/managed-node/node-execution.json
       - uses: actions/upload-artifact@v7
         if: always()

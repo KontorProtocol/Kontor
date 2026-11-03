@@ -16,7 +16,10 @@ use kontor_build::execution_definition::{
 };
 use kontor_build::interface::{Request as InterfaceRequest, run as interface};
 use kontor_build::linker_record::verify_input;
-use kontor_build::node_evidence::{Request as NodeEvidenceRequest, run as node_evidence};
+use kontor_build::node_evidence::runner::{Request as NodeRunRequest, run as run_node};
+use kontor_build::node_evidence::{
+    QualifyNodeArgs, Request as NodeEvidenceRequest, qualify_node, run as node_evidence,
+};
 use kontor_build::object_tools::{Request as ObjectRequest, run as inspect_object};
 use kontor_build::provenance::{Request as ProvenanceRequest, run as provenance};
 use kontor_build::recipes::{Request as RecipeRequest, run as recipes};
@@ -38,6 +41,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Build and execute the retained node integration checks.
+    QualifyNode(QualifyNodeArgs),
+    /// Execute an audited node or one lifecycle check from a JSON request.
+    RunNodeQualification,
     /// Verify retained execution and node lifecycle evidence from a JSON request.
     VerifyNodeEvidence,
     /// Locate the built CLI for transitional callers without repeated Cargo launches.
@@ -105,6 +112,15 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::QualifyNode(args) => {
+            println!("{}", qualify_node(&repository_root()?, args)?);
+            Ok(())
+        }
+        Command::RunNodeQualification => {
+            let request: NodeRunRequest = serde_json::from_reader(io::stdin().lock())?;
+            println!("{}", run_node(request)?);
+            Ok(())
+        }
         Command::VerifyNodeEvidence => {
             let request: NodeEvidenceRequest = serde_json::from_reader(io::stdin().lock())?;
             println!("{}", node_evidence(request)?);

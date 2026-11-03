@@ -16,7 +16,7 @@ migrated. This table does not create additional qualification jobs.
 
 | Configuration | Disposition | Minimum affected validation |
 | --- | --- | --- |
-| `managed-node`: retained P1, P2 observer and one pinned consensus runtime | Keep as the supported node composition. | `qualify_node.py` and `compare_node.py`, through the existing release workflow, after build/runtime changes stabilize. |
+| `managed-node`: retained P1, P2 observer and one pinned consensus runtime | Keep as the supported node composition. | `tools/kontor qualify-node` and `compare_node.py`, through the existing release workflow, after build/runtime changes stabilize. |
 | Retained P1 source and independent executor dependency graphs | Keep required execution inputs and identities; migrate support tooling separately. | Source-root inventory and execution-definition tests, followed by the managed-node validation above. |
 | Local runtime/test adapters | Keep intentional test coverage; remove only branches proven obsolete. | Focused ownership, cancellation, settlement and rollback tests when their code changes. |
 | `legacy-qualification`, `k4-node`, retained K3 and standalone proof graphs | Pending caller and coverage migration. They are still referenced by tooling and tests. | Build-recipe, node-execution and comparison tests before retiring any path. Preserve isolation assertions in supported fixtures. |
@@ -179,13 +179,20 @@ The historical baseline and execution identities have not been regenerated.
 From the repository root, build and qualify the actual node with:
 
 ```sh
-CCACHE_DISABLE=1 python3 tools/protocol-bundles/qualify_node.py --profile release --output target/protocol-evidence --offline
+CCACHE_DISABLE=1 tools/kontor qualify-node --profile release --output target/protocol-evidence --offline
 ```
 
 Omit `--offline` only when dependencies need fetching. The default managed link
 set contains retained P1, the deliberately different P2 observer executor and one
 pinned consensus runtime. It is distinct from the standalone proof command below.
 Keep one Cargo operation at a time and the builder's two-job limit.
+The Rust runner preserves raw stdout/stderr, removes stale successful execution
+reports before a build or execution attempt, and checks the installed executable
+and build report hashes before and after execution. Its subprocess deadlines are
+300 seconds for executor checks, 390 for transitions, 420 each for recovery and
+authorized replay, and 360 for joining. A timed-out child is killed and reaped.
+`run-node-qualification` accepts JSON for executing an already audited node or
+one diagnostic check. The Python runner is transitional compatibility glue.
 
 For focused investigation after a recorded `--build-node --node-qualification`
 build, the installed executable offers these acceptance modes:
@@ -199,7 +206,7 @@ build, the installed executable offers these acceptance modes:
 
 These diagnostic modes do not replace the builder's source binding, artifact
 checks, ownership audits or cross-platform comparison. Preserve raw stdout/stderr
-and use `qualify_node.py`'s verifiers rather than accepting exit status alone.
+and use `tools/kontor verify-node-evidence` rather than accepting exit status alone.
 The second successor P3 is an exact qualification-only manifest using P2 execution
 and a schema-2 no-op migration, not another production executor. Replacement
 coverage starts from Bitcoin-accepted inputs, not Bitcoin mempool/RBF policy.
@@ -447,11 +454,11 @@ the binary. `node-build.json` records the installed path and hash. A plain
 `cargo build` in the core workspace remains an in-tree development/test build;
 it does not establish retained dependency isolation.
 
-The Docker `builder` stage invokes the same Python builder and installs that
+The Docker `builder` stage invokes the same Rust bundle builder and installs that
 audited output into the runtime image. Its `cacher` stage fetches the locked
 graphs; it no longer compiles a unified workspace whose artifacts the isolated
 graphs cannot reuse. The opt-in `protocol-bundle-qualification` image uses
-`tools/protocol-bundles/qualify_node.py` to build the managed node and execute both
+`tools/kontor qualify-node` to build the managed node and execute both
 real executor graphs. Managed qualification also compiles interface controls
 against the pinned consensus library and runs the actual node adapter tests.
 The runner rejects stale or changed binaries, missing graphs/cases, mismatched

@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Avoid inheriting a contract workspace's wasm target when bootstrapping the host CLI.
 cd "$repo_root/core"
-if [[ "${1:-}" == "protocol-bundles" ]]; then
+if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "qualify-node" ]]; then
     for argument in "$@"; do
         if [[ "$argument" == "--offline" ]]; then
             export CARGO_NET_OFFLINE=true
@@ -15,13 +15,13 @@ if [[ "${1:-}" == "freeze-execution" || "${1:-}" == "freeze-consensus" ]]; then
     export CARGO_NET_OFFLINE=true
 fi
 wrapper_bins=()
-if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "stage-graph-wrapper" ]]; then
+if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "qualify-node" || "${1:-}" == "stage-graph-wrapper" ]]; then
     wrapper_bins+=(--bin kontor-graph-rustc)
 fi
-if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "stage-node-wrapper" ]]; then
+if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "qualify-node" || "${1:-}" == "stage-node-wrapper" ]]; then
     wrapper_bins+=(--bin kontor-node-rustc)
 fi
-if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "stage-linker-wrapper" ]]; then
+if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "qualify-node" || "${1:-}" == "stage-linker-wrapper" ]]; then
     wrapper_bins+=(--bin kontor-node-linker)
 fi
 if (( ${#wrapper_bins[@]} )); then

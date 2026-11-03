@@ -9,7 +9,11 @@ use sha2::{Digest, Sha256};
 
 use crate::recipes::executor_graphs;
 
+mod qualification;
+pub mod runner;
 mod semantics;
+
+pub use qualification::{QualifyNodeArgs, qualify_node};
 mod transitions;
 
 const CERTIFIED_CHECKS: &[&str] = &[

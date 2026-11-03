@@ -4,7 +4,7 @@ use crate::container::sha256;
 use std::os::unix::fs::symlink;
 use tempfile::{TempDir, tempdir};
 
-fn root() -> PathBuf {
+pub(super) fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -16,7 +16,7 @@ fn baseline() -> Value {
     )
     .unwrap()
 }
-fn observations(names: &[&str]) -> Value {
+pub(super) fn observations(names: &[&str]) -> Value {
     let baseline = baseline();
     let source = &baseline["observations"];
     let mut observation = source.as_object().unwrap().clone();
@@ -157,7 +157,7 @@ fn oracle_binds_sources_log_schema_and_source_containment() -> Result<()> {
     );
     Ok(())
 }
-fn certified_sample(link_set: &str) -> Result<Value> {
+pub(super) fn certified_sample(link_set: &str) -> Result<Value> {
     let root = root();
     let graphs = executor_graphs(Some(link_set))?;
     let graph = &graphs[if link_set == "managed-node" {
