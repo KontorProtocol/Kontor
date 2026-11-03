@@ -32,11 +32,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Test qualification selection
-        run: python3 -m unittest discover -s tools/ci -p 'test_*qualification_scope.py'
+      - uses: ./.github/actions/setup-kontor-tools
       - name: Select linked-node builds
         id: select
-        run: python3 tools/ci/bundle_qualification_scope.py
+        run: RUSTC_WRAPPER= ./tools/kontor ci-scope bundles
 
   controls:
     name: Linked-node build and evidence controls
@@ -64,8 +63,8 @@ jobs:
           python3 -m unittest discover -s tools/protocol-bundles -p 'test_*.py'
       - name: Check builder CLI
         run: |
-          cargo clippy --locked --manifest-path core/Cargo.toml -p kontor-build --all-targets -j2 -- -D warnings
-          cargo test --locked --manifest-path core/Cargo.toml -p kontor-build -j2
+          cargo clippy --locked --manifest-path core/kontor-build/Cargo.toml --all-targets -j2 -- -D warnings
+          cargo test --locked --manifest-path core/kontor-build/Cargo.toml -j2
           ./tools/kontor protocol-bundles --help
 
   qualification:

@@ -4120,11 +4120,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "glob",
  "hex",
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "tempfile",
  "toml 0.8.23",
 ]
 

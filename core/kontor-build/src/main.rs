@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kontor_build::{
-    BuildArgs, ProtocolBundlesArgs, VerifySnapshotArgs, check_native_helper_lock, protocol_bundles,
-    run, verify_snapshot,
+    BuildArgs, CiScope, ProtocolBundlesArgs, VerifySnapshotArgs, check_native_helper_lock,
+    ci_scope, protocol_bundles, run, verify_snapshot,
 };
 
 #[derive(Parser)]
@@ -25,6 +25,11 @@ enum Command {
     VerifySnapshot(VerifySnapshotArgs),
     /// Check that native helper dependencies match the core lockfile.
     CheckNativeHelperLock,
+    /// Select CI checks from the GitHub event and complete Git change set.
+    CiScope {
+        #[arg(value_enum)]
+        kind: CiScope,
+    },
 }
 
 fn repository_root() -> Result<PathBuf> {
@@ -54,5 +59,6 @@ fn main() -> Result<()> {
             println!("Helper lock matches core native build dependencies (cc {version})");
             Ok(())
         }
+        Command::CiScope { kind } => ci_scope(&repository_root()?, kind),
     }
 }

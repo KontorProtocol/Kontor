@@ -31,11 +31,12 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - name: Test CI controls
-        run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
+      - uses: ./.github/actions/setup-kontor-tools
+      - name: Test crash diagnostics
+        run: python3 -m unittest discover -s tools/ci -p 'test_macos_diagnostics.py'
       - name: Select checks from complete change set
         id: select
-        run: python3 tools/ci/pr_scope.py
+        run: RUSTC_WRAPPER= ./tools/kontor ci-scope pr
 
   quality-checks:
     needs: scope
@@ -73,6 +74,8 @@ jobs:
       - name: Check formatting (core)
         run: cargo fmt --all -- --check
         working-directory: ./core
+      - name: Check formatting (repository tooling)
+        run: cargo fmt --manifest-path core/kontor-build/Cargo.toml -- --check
       - name: Run clippy (test-contracts)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./test-contracts
@@ -84,6 +87,8 @@ jobs:
       - name: Run clippy (core)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./core
+      - name: Run clippy (repository tooling)
+        run: cargo clippy --locked --manifest-path core/kontor-build/Cargo.toml --all-targets -j 2 -- -D warnings
       - name: Check native helper dependency pins
         run: ./tools/kontor check-native-helper-lock
       - name: Check wit-validator compiles to wasm32-unknown-unknown
@@ -366,21 +371,21 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: |
-          python3 - <<'PY_CHECK'
-          import json
-          import os
-          needs = json.loads(os.environ["NEEDS"])
-          assert needs["scope"]["result"] == "success", "CI scope did not succeed"
-          for job, flag in {
-              "quality-checks": "rust", "test": "rust",
-              "reproducible-build-setup": "reproducible",
-              "reproducible-build": "reproducible", "sdk": "sdk",
-          }.items():
-              selected = needs["scope"]["outputs"][flag]
-              assert selected in {"true", "false"}, f"invalid selection: {flag}"
-              expected = "success" if selected == "true" else "skipped"
-              assert needs[job]["result"] == expected, f"{job}: expected {expected}, got {needs[job]['result']}"
-          PY_CHECK
+          jq -e '
+            . as $needs |
+            $needs.scope.result == "success" and
+            ([
+              {job: "quality-checks", flag: "rust"},
+              {job: "test", flag: "rust"},
+              {job: "reproducible-build-setup", flag: "reproducible"},
+              {job: "reproducible-build", flag: "reproducible"},
+              {job: "sdk", flag: "sdk"}
+            ] | all(. as $check |
+              $needs.scope.outputs[$check.flag] as $selected |
+              ($selected == "true" or $selected == "false") and
+              $needs[$check.job].result == (if $selected == "true" then "success" else "skipped" end)
+            ))
+          ' <<<"$NEEDS"
 
   docker-cache-deps:
     name: Docker - Cache Dependencies (${{ matrix.arch }})

@@ -1,10 +1,12 @@
 mod bundles;
+mod ci_scope;
 mod container;
 mod native_lock;
 mod outputs;
 mod snapshot;
 
 pub use bundles::{ProtocolBundlesArgs, protocol_bundles};
+pub use ci_scope::{CiScope, ci_scope};
 pub use native_lock::check_native_helper_lock;
 pub use snapshot::{VerifySnapshotArgs, verify_snapshot};
 

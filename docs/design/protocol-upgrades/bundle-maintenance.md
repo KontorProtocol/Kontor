@@ -40,6 +40,20 @@ relocation and path-containment checks remain. K3 and P1 inventories are unchang
 
 ## Existing build fixtures
 
+CI selection now uses `tools/kontor ci-scope pr`, `stack`, or `bundles`. The CLI
+reads `GITHUB_EVENT_NAME` and `GITHUB_EVENT_PATH`, prints a JSON explanation, and
+appends action outputs when `GITHUB_OUTPUT` is present. Missing history or
+uncovered dependency inputs select checks conservatively; exhaustive development
+qualification still requires an explicit manual request.
+
+`core/kontor-build` has its own workspace and lockfile so selector bootstrap does
+not resolve the node's dependency graph. The node still consumes the same crate
+as a normal path dependency under its own lockfile. The four scope jobs share
+the tooling setup action and cache; its tests require Git and jq. Run tooling
+checks directly with `cargo test --locked --manifest-path core/kontor-build/Cargo.toml`.
+Ordinary CI also formats and lints this independent workspace. The rest of core
+continues to use its existing workspace commands.
+
 Individual retained inventories can now be verified by the Rust build CLI:
 
 ```sh

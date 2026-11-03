@@ -8,7 +8,8 @@ code, storage or canonical execution, pooled contract/signer entrypoints, shared
 execution crates, native/test contracts, protocol bundles, or qualification tools.
 Cargo manifests/locks, build scripts, Cargo configuration and Rust toolchain files
 also trigger it. The authoritative selection is
-[`stack_qualification_scope.py`](../ci/stack_qualification_scope.py).
+[`tools/kontor ci-scope stack`](../../core/kontor-build/src/ci_scope.rs), with
+the path policy in [`ci_scope/paths.rs`](../../core/kontor-build/src/ci_scope/paths.rs).
 
 Unrelated documentation, client/mobile code, read-only API presentation, logging,
 metrics and advisory-exception changes retain ordinary CI without the stack qualification
