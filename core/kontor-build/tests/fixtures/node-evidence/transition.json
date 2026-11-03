@@ -1,0 +1,172 @@
+{
+  "authorization_test": false,
+  "bitcoin_follower_continuity": true,
+  "block_decisions": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "client_contexts": [
+    {
+      "application_ordinal": "1",
+      "bitcoin_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+      "bitcoin_height": "1",
+      "checkpoint_hash": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+      "checkpoint_height": "1",
+      "execution_definition": "38f5d10caeac32db580e082762c16d21ab65b8cacdadf39a3047f376d2916fa5",
+      "lineage": "1111111111111111111111111111111111111111111111111111111111111111",
+      "protocol_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "receipt_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "rollback_generation": "0",
+      "simulation_height": "2"
+    },
+    {
+      "application_ordinal": "2",
+      "bitcoin_hash": "6666666666666666666666666666666666666666666666666666666666666666",
+      "bitcoin_height": "2",
+      "checkpoint_hash": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+      "checkpoint_height": "2",
+      "execution_definition": "6ddb20a07e04c700ea55903a15545344715ec2b598ceee3173bf4c949d8c2178",
+      "lineage": "2222222222222222222222222222222222222222222222222222222222222222",
+      "protocol_id": "2222222222222222222222222222222222222222222222222222222222222222",
+      "receipt_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "rollback_generation": "0",
+      "simulation_height": "3"
+    },
+    {
+      "application_ordinal": "3",
+      "bitcoin_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+      "bitcoin_height": "1",
+      "checkpoint_hash": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+      "checkpoint_height": "1",
+      "execution_definition": "38f5d10caeac32db580e082762c16d21ab65b8cacdadf39a3047f376d2916fa5",
+      "lineage": "3333333333333333333333333333333333333333333333333333333333333333",
+      "protocol_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "receipt_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "rollback_generation": "1",
+      "simulation_height": "2"
+    },
+    {
+      "application_ordinal": "4",
+      "bitcoin_hash": "8888888888888888888888888888888888888888888888888888888888888888",
+      "bitcoin_height": "2",
+      "checkpoint_hash": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+      "checkpoint_height": "2",
+      "execution_definition": "6ddb20a07e04c700ea55903a15545344715ec2b598ceee3173bf4c949d8c2178",
+      "lineage": "4444444444444444444444444444444444444444444444444444444444444444",
+      "protocol_id": "2222222222222222222222222222222222222222222222222222222222222222",
+      "receipt_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "rollback_generation": "1",
+      "simulation_height": "3"
+    }
+  ],
+  "closed_decisions": 6,
+  "first_protocol": "1111111111111111111111111111111111111111111111111111111111111111",
+  "handoff_heights": [
+    3,
+    5,
+    6
+  ],
+  "http_rpc_continuity": true,
+  "matching_closure_and_state": true,
+  "native_provenance": {
+    "publication": {
+      "effective_artifact": {
+        "execution_definition": "38f5d10caeac32db580e082762c16d21ab65b8cacdadf39a3047f376d2916fa5",
+        "protocol_id": "1111111111111111111111111111111111111111111111111111111111111111",
+        "published_sha256": "4b5a443f5b26740e61c0ac8fe6bab0b1132b7d6a0f4ae21036166beacb01e500",
+        "sha256": "4b5a443f5b26740e61c0ac8fe6bab0b1132b7d6a0f4ae21036166beacb01e500",
+        "source": "publication"
+      },
+      "entries": [
+        {
+          "synthetic": "publication claim"
+        }
+      ]
+    },
+    "restored_on_rollback": true,
+    "unaffected_native_uses_publication": true,
+    "upgraded": {
+      "effective_artifact": {
+        "execution_definition": "6ddb20a07e04c700ea55903a15545344715ec2b598ceee3173bf4c949d8c2178",
+        "protocol_id": "2222222222222222222222222222222222222222222222222222222222222222",
+        "published_sha256": "4b5a443f5b26740e61c0ac8fe6bab0b1132b7d6a0f4ae21036166beacb01e500",
+        "sha256": "5aad2956eec9f58ef9aa9bb7be8b80e42ca40e44e97aba5b32fb0f91b5809a38",
+        "source": "protocol_native"
+      },
+      "entries": [
+        {
+          "synthetic": "publication claim"
+        }
+      ]
+    }
+  },
+  "reapplied_migration": true,
+  "restored_p1_in_fresh_era": true,
+  "retained_history_unchanged": true,
+  "same_listeners": true,
+  "scope": "synthetic gate input",
+  "second_protocol": "2222222222222222222222222222222222222222222222222222222222222222",
+  "state": {
+    "block_execution_usage": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "blocks": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "bls_keys": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "contract_provenance": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "contract_results": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "contract_state": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "contracts": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "current_contract_state": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "depositor_footprint": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "nonces": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "signers": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "transaction_execution_usage": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "transactions": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "x_only_pubkeys": [
+      1,
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ]
+  },
+  "validators": 3
+}

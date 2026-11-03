@@ -9,8 +9,27 @@ import unittest
 from build import ROOT, digest
 from qualify_node import CASES, CERTIFIED_CHECKS, execute_node, verify_certified_history, verify_managed_startup, verify_executor_observations, execute_transition, execute_recovery, execute_authorization
 from qualify_node import execute_join
-from test_transition_evidence import join_sample
-from test_transition_evidence import transition_sample, recovery_sample, authorization_sample
+
+
+def _transition_fixture(name):
+    """Synthetic verifier input, never evidence that a managed node ran."""
+    return json.loads((ROOT / 'core/kontor-build/tests/fixtures/node-evidence' / f'{name}.json').read_text())
+
+
+def transition_sample():
+    return _transition_fixture('transition')
+
+
+def recovery_sample():
+    return _transition_fixture('recovery')
+
+
+def authorization_sample():
+    return _transition_fixture('authorization')
+
+
+def join_sample():
+    return _transition_fixture('join')
 
 
 def sample_observation():

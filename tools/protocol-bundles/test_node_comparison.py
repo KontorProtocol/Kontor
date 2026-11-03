@@ -14,7 +14,7 @@ from recipes import CONSENSUS_GRAPHS, EXECUTOR_GRAPHS, executor_graphs, graph_ro
 from semantic_baseline import verify as verify_semantics
 from test_node_execution import sample_observation
 from test_node_execution import certified_sample, managed_sample
-from test_transition_evidence import transition_sample, recovery_sample, authorization_sample, join_sample
+from test_node_execution import transition_sample, recovery_sample, authorization_sample, join_sample
 from symbol_tool import TOOLCHAIN
 from type_boundary import ADAPTER_TESTS, PROBES, inputs_for, probes_for
 

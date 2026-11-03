@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::recipes::executor_graphs;
 
 mod semantics;
+mod transitions;
 
 const CERTIFIED_CHECKS: &[&str] = &[
     "engine_free_recovery",
@@ -34,6 +35,21 @@ const CERTIFIED_CHECKS: &[&str] = &[
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
+    Transition {
+        root: PathBuf,
+        result: Value,
+        #[serde(default)]
+        semantic_only: bool,
+    },
+    Recovery {
+        result: Value,
+    },
+    Authorization {
+        result: Value,
+    },
+    Join {
+        result: Value,
+    },
     Semantics {
         root: PathBuf,
         observations: Value,
@@ -62,6 +78,14 @@ pub enum Request {
 }
 pub fn run(request: Request) -> Result<Value> {
     match request {
+        Request::Transition {
+            root,
+            result,
+            semantic_only,
+        } => return transitions::transition(&result, &root, semantic_only),
+        Request::Recovery { result } => return transitions::recovery(&result),
+        Request::Authorization { result } => return transitions::authorization(&result),
+        Request::Join { result } => return transitions::join(&result),
         Request::Semantics {
             root,
             observations,

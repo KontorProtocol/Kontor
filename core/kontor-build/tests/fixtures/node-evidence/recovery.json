@@ -1,0 +1,155 @@
+{
+  "activation_write_failure_atomic": true,
+  "actual_p2_migration": true,
+  "build_record": {
+    "changed_bindings_rejected": true,
+    "embedded_record_verified": true,
+    "incomplete_graphs_rejected": true,
+    "missing_record_rejected": true
+  },
+  "closed_decisions": 1,
+  "empty_successor": {
+    "activation_committed": true,
+    "activation_height": 13,
+    "authenticated_decisions": 14,
+    "closed_decisions": 13,
+    "empty_successor_gated": true,
+    "paid_exit_confirmed": true,
+    "reopen_preserves_gate": true,
+    "retained_certificate_unchanged": true
+  },
+  "finality_replay": [
+    {
+      "actual_p2_activation": true,
+      "closed_decisions": 8,
+      "confirmation": {
+        "closed_decisions": 5,
+        "confirmation_height": 3,
+        "confirmation_without_execution": true,
+        "p1_paid_transaction": true,
+        "p2_batch_at_h": true,
+        "reopened_state_matches": true,
+        "replacement": {
+          "closed_decisions": 8,
+          "finality_height": 7,
+          "migration_replayed": true,
+          "one_canonical_charge": true,
+          "original_removed": true,
+          "p2_replacement_execution": true,
+          "reopened_state_matches": true,
+          "replacement_height": 3,
+          "same_outpoint_replacement": true
+        },
+        "unchanged_usage_and_receipts": true
+      },
+      "reopened_state_matches": true,
+      "retained_decisions_unchanged": true,
+      "same_bitcoin_history": true,
+      "scenario": "SurvivingSchedule"
+    },
+    {
+      "actual_p2_activation": true,
+      "closed_decisions": 9,
+      "reopened_state_matches": true,
+      "retained_decisions_unchanged": true,
+      "same_bitcoin_history": true,
+      "scenario": "UndoCancel"
+    },
+    {
+      "actual_p2_activation": true,
+      "closed_decisions": 9,
+      "reopened_state_matches": true,
+      "retained_decisions_unchanged": true,
+      "same_bitcoin_history": true,
+      "scenario": "UndoPostpone"
+    }
+  ],
+  "invalid_input_rejected_after_reopen": true,
+  "process_crashes": [
+    {
+      "certificate_preserved": true,
+      "conflict_rejected": true,
+      "process_killed": true,
+      "signature_retry_preserved": false,
+      "stage": "certified",
+      "state_matches": true,
+      "successor_started": true
+    },
+    {
+      "certificate_preserved": true,
+      "conflict_rejected": true,
+      "process_killed": true,
+      "signature_retry_preserved": false,
+      "stage": "activated",
+      "state_matches": true,
+      "successor_started": true
+    },
+    {
+      "certificate_preserved": true,
+      "conflict_rejected": true,
+      "process_killed": true,
+      "signature_retry_preserved": false,
+      "stage": "closed",
+      "state_matches": true,
+      "successor_started": true
+    },
+    {
+      "certificate_preserved": true,
+      "conflict_rejected": true,
+      "process_killed": true,
+      "signature_retry_preserved": false,
+      "stage": "engine-ready",
+      "state_matches": true,
+      "successor_started": true
+    },
+    {
+      "certificate_preserved": true,
+      "conflict_rejected": true,
+      "process_killed": true,
+      "signature_retry_preserved": true,
+      "stage": "signed",
+      "state_matches": true,
+      "successor_started": true
+    }
+  ],
+  "reopened_state_matches": true,
+  "schema": 1,
+  "scope": "synthetic gate input",
+  "successor_gated_until_closure": true,
+  "successor_height": 2,
+  "successor_support": {
+    "activation_height": 13,
+    "closed_decisions": 14,
+    "full_successor_accepted": true,
+    "insufficient_subset_rejected": true,
+    "nonempty_changed_successor": true,
+    "old_quorum_certificate": true,
+    "old_signed_power": 300,
+    "old_total_power": 400,
+    "paid_exit_in_h_lifecycle": true,
+    "reopen_preserves_committee_and_frontier": true,
+    "scope": "composed support assumption, not live mixed binaries",
+    "successor_total_power": 200,
+    "supporting_successor_power": 100
+  },
+  "token_count": {
+    "checked_snapshots": 7,
+    "closed_decisions": 7,
+    "failed_call_consistent": true,
+    "full_ledger_count_matches": true,
+    "gas_escrow_refunded": true,
+    "migration_from_populated_p1": true,
+    "paid_mint_transfer_burn": true,
+    "reopened_state_matches": true,
+    "self_transfer": true,
+    "utxo_attach_detach": true
+  },
+  "unsupported_cancel": {
+    "bitcoin_progress_resumed": true,
+    "old_protocol_preserved": true,
+    "signed_cancel_certified": true,
+    "unsupported_block_not_proposed": true,
+    "unsupported_proposal_rejected": true,
+    "validators": 1
+  }
+}

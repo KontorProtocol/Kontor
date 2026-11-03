@@ -163,6 +163,13 @@ results and rerun affected checks when their source or build inputs change.
 `tools/kontor verify-node-evidence` accepts JSON requests for historical semantic,
 retained-executor, storage-construction, certified-history and managed-startup
 checks. The remaining Python runner and comparator delegate to this Rust module.
+The same command verifies transition, recovery, authorization and join reports,
+including native-artifact selection, rollback contexts, crash checkpoints,
+successor authority and two successive approvals. Comparisons normalize live
+idle-batch heights only after checking each observed handoff at C+1. Publication
+claims must be nonempty arrays, matching the node's emitted format. Synthetic
+JSON fixtures under `core/kontor-build/tests/fixtures/node-evidence` exercise
+these verifiers; they are not records of actual node execution.
 The preserved oracle still binds its raw log and fixture sources, and all three
 simulation/rollback/commit observations must match. Certified history binds the
 selected genesis executor and consensus definition; P2 cannot substitute for P1.
