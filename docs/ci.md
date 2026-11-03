@@ -1,8 +1,9 @@
 # CI selection and compilation reuse
 
-CI chooses checks from the complete PR diff or main push range. Missing history,
-unrecognized events and unclassified execution/build inputs select broader
-coverage. Renames include both the removed and added path.
+CI chooses checks from the complete PR diff or main push range. Missing history
+and unrecognized events select broader coverage. Renames include both the
+removed and added path. Unknown filenames retain ordinary checks but do not
+automatically select expensive qualification.
 
 | Change | Checks |
 | --- | --- |
@@ -11,14 +12,39 @@ coverage. Renames include both the removed and added path.
 | SDK client | SDK checks |
 | Contract, WIT or shared SDK build inputs | Rust, SDK and reproducibility checks as selected |
 | Ordinary API handlers or integration tests | Ordinary Rust and SDK checks |
-| Runtime, protocol, database, native graph or compiler inputs | Stack and linked-node qualification as applicable, plus ordinary checks |
+| Pricing, tokens, staking, storage accounting, ordinary queries and transaction logic | Ordinary relevant checks; no qualification solely for these changes |
+| Engine, call transitions, ownership, resource limits or stack fixtures | Stack qualification, plus ordinary checks |
+| Activation/recovery, executor adapters, retained bundles or native graph machinery | Linked-node qualification, plus ordinary checks |
+| Compiler settings, native libraries or relevant dependency changes | Applicable stack and linked-node qualification |
 | Stack evidence implementation | Stack qualification; no linked-node qualification solely for this change |
-| Unknown execution/build inputs | Conservative qualification |
+| Unknown ordinary source path | Ordinary checks; use manual qualification when needed |
 
-Some API files, including contract execution, signing and runtime construction,
-remain execution inputs. The authoritative paths and tests are in
-`core/kontor-build/src/ci_scope/`. Do not broaden a skip prefix without checking
-its callers and build inputs.
+The two qualification selectors are independent. Runtime ownership and native
+libraries can select both, but a change to upgrade coordination does not also
+select stack-boundary discovery. Contract execution and runtime-construction
+API files remain stack inputs. Canonical/certified recovery state, migration
+interfaces and the database adapters used by linked executors remain linked-node
+inputs. General database, reactor and protocol directories are not blanket
+triggers. Existing ordinary workspace tests retain bounded ownership, resource
+and call-chain checks without adding jobs or repeating ignored boundary sweeps.
+
+Dependency comparisons read the base and head Git objects, using the PR merge
+base for both paths and dependency contents. Lockfile comparisons follow
+Wasmtime/Cranelift/Pulley, runtime/pool, native-library and (for linked-node checks)
+Malachite dependencies. They also include packages that could change these
+dependencies' unified features, which lockfiles do not record. An unrelated
+version-only update can skip qualification even when it changes both the lockfile
+and manifest. Feature, patch, profile, dependency addition/removal and other
+manifest changes remain conservative. Retained bundle manifests and lockfiles
+remain linked-node inputs because they contribute to protocol identity.
+Missing, malformed, ambiguous or unsupported dependency evidence selects
+qualification rather than silently skipping it.
+
+The authoritative paths and tests are in `core/kontor-build/src/ci_scope/`.
+When a change affects an execution or upgrade boundary outside those paths,
+use the manual Native Wasm stack qualification or Protocol bundle qualification
+workflow and extend the selector. Their default runs release qualification
+plus applicable smoke coverage; exhaustive dev qualification stays manual.
 
 ## Shared compilation
 
@@ -124,3 +150,11 @@ A subsequent filtered workspace ownership test passed using the same executable;
 Cargo reused all 957 artifacts, preserved the 28-test-executable inventory, and
 finished its build phase in 0.23 seconds. This local check used no sccache and
 did not run the full workspace suite or cross-platform qualification matrix.
+
+Narrowed qualification selection was checked with local tooling and CLI tests,
+including dependency graph changes, feature contributors, PR merge bases,
+renames/deletions, malformed evidence, manual overrides and continued ordinary
+test selection. The required-check gate rejects missing or unsuccessful selected
+jobs. Historical replays include selector/documentation-only commits that skip
+both matrices, and node-building commits that select linked-node qualification
+without stack qualification. No hosted runs were used to validate this policy.

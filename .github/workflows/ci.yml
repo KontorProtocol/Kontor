@@ -321,6 +321,7 @@ jobs:
           jq -e '
             . as $needs |
             $needs.scope.result == "success" and
+            ($needs.scope.outputs.tooling == "true" or $needs.scope.outputs.tooling == "false") and
             $needs.tooling.result == (if $needs.scope.outputs.tooling == "true" or $needs.scope.outputs.rust == "true" then "success" else "skipped" end) and
             ([
               {job: "quality-checks", flag: "rust"},

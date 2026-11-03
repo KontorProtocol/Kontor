@@ -2,57 +2,114 @@ use std::collections::BTreeSet;
 
 use super::JOBS;
 
-pub(super) const STACK_PREFIXES: &[&str] = &[
-    "core/indexer/proto/",
-    "core/indexer/src/runtime/",
-    "core/indexer/src/protocol/",
-    "core/indexer/src/database/",
-    "core/indexer/src/reactor/",
-    "core/indexer/src/bls/",
-    "core/indexer/src/test_utils/",
-    "core/built-in-types/",
-    "core/indexer-types/",
-    "core/macros/",
-    "core/numerics/",
-    "core/stdlib/",
-    "core/wit-validator/",
-    "core/bls-crypto/",
-    "core/testlib/",
+const STACK_MODULES: &[&str] = &[
+    "call",
+    "component_cache",
+    "component_policy",
+    "conversion_probe",
+    "fuel",
+    "guest_memory",
+    "host_context",
+    "host_files",
+    "host_numbers",
+    "host_storage",
+    "host_system",
+    "invocation",
+    "lowering",
+    "ownership",
+    "pool",
+    "stack",
+    "storage",
+    "storage_host",
+    "system",
+    "types",
+    "wit",
+    "sequential_tests",
+    "resource_diagnostics",
+    "bundle_ownership",
+    "bundle_session",
+];
+
+const STACK_PREFIXES: &[&str] = &[
     "core/vendor/",
-    "native-contracts/",
-    "test-contracts/",
-    "protocol-bundles/",
+    "core/bls-crypto/",
+    "core/contract/wit/",
+    "test-contracts/stack-probe/",
+    "test-contracts/error-test/",
+    "test-contracts/proxy/",
+    "test-contracts/crypto/",
     "tools/native-stack/",
+    ".github/actions/run-stack/",
+    ".github/actions/run-workspace-tests/",
+];
+
+const STACK_FILES: &[&str] = &[
+    "core/indexer/src/runtime/mod.rs",
+    "core/indexer/src/config.rs",
+    "core/indexer/src/api/env.rs",
+    "core/indexer/src/api/handlers/contracts.rs",
+    "core/indexer/src/api/handlers/tests/ownership.rs",
+    "core/macros/src/contract.rs",
+    "core/macros/src/import.rs",
+    "core/macros/src/interface.rs",
+    "core/macros/src/wavey.rs",
+    "core/macros/src/lib.rs",
+    "core/stdlib/src/lib.rs",
+    "core/stdlib/src/wave_interfaces.rs",
+    "test-contracts/binaries/stack_probe.wasm.br",
+    "test-contracts/binaries/error_test.wasm.br",
+    "test-contracts/binaries/proxy.wasm.br",
+    "test-contracts/binaries/crypto.wasm.br",
+    ".github/workflows/native-stack.yml",
+    ".github/workflows/rust-tests.yml",
+];
+
+const BUNDLE_PREFIXES: &[&str] = &[
+    "protocol-bundles/",
+    "core/vendor/",
+    "core/bls-crypto/",
+    "core/indexer/proto/",
+    "core/indexer/src/bls/",
+    "core/indexer/src/protocol/coordinator/",
+    "core/indexer/src/reactor/upgrade_qualification/",
     "tools/protocol-bundles/",
     "tools/native-crypto/",
 ];
 
-pub(super) const STACK_FILES: &[&str] = &[
-    "core/indexer/src/block.rs",
-    "core/indexer/src/config.rs",
+const BUNDLE_FILES: &[&str] = &[
     "core/indexer/src/main.rs",
     "core/indexer/src/lib.rs",
-    "core/indexer/src/built_info.rs",
     "core/indexer/src/stopper.rs",
-    "core/indexer/src/test_utils.rs",
-    "core/indexer/src/testlib_exports.rs",
-    "core/indexer/src/legacy_test_utils.rs",
-    "core/indexer/src/multi_psbt_test_utils.rs",
-    "core/indexer/src/api/env.rs",
-    "core/indexer/src/api/mod.rs",
-    "core/indexer/src/api/router.rs",
-    "core/indexer/src/api/handlers/contracts.rs",
-    "core/indexer/src/api/handlers/signers.rs",
-    "core/indexer/src/api/handlers/tests/ownership.rs",
+    "core/indexer/src/runtime/mod.rs",
+    "core/indexer/src/runtime/selected.rs",
+    "core/indexer/src/database/init.rs",
+    "core/indexer/src/database/migration_input.rs",
+    "core/indexer/src/database/sql/upgrade_control.sql",
+    "core/indexer/src/database/sql/canonical_history.sql",
+    "core/indexer/src/database/sql/certified_history.sql",
+    "core/indexer/src/protocol/v1/mod.rs",
+    "core/indexer/src/protocol/v1/definition.rs",
+    "core/indexer/src/protocol/v1/migration.rs",
+    "core/indexer/src/protocol/v1/migration_definition.rs",
+    "core/indexer/src/protocol/v2/mod.rs",
+    "core/indexer/src/protocol/v2/token_migration.rs",
+    "core/indexer/src/protocol/v2/migration_definition.rs",
+    "core/indexer/src/reactor/mod.rs",
+    "core/indexer/src/reactor/upgrade_qualification.rs",
+    "core/indexer/src/reactor/upgrades.rs",
+    "core/indexer/src/reactor/session.rs",
+    "core/indexer/src/reactor/executor.rs",
+    "core/indexer/src/reactor/execution.rs",
+    "core/indexer/src/reactor/handoff.rs",
+    ".github/workflows/protocol-bundles.yml",
+];
+
+const SHARED_BUILD_FILES: &[&str] = &[
     "tools/kontor",
     "tools/build.json",
     "tools/kontor-build.Dockerfile",
     "Dockerfile",
     ".dockerignore",
-    ".github/workflows/native-stack.yml",
-    ".github/workflows/rust-tests.yml",
-    ".github/actions/run-stack/action.yml",
-    ".github/workflows/protocol-bundles.yml",
     ".github/workflows/publish-build-image.yml",
 ];
 
@@ -115,49 +172,77 @@ pub(super) fn tooling_only(path: &str) -> bool {
         || path == ".github/workflows/ci-diagnostics.yml"
 }
 
-fn ordinary_only(path: &str) -> bool {
-    path.starts_with("docs/")
-        || (!path.contains('/') && path.ends_with(".md"))
-        || path.starts_with("sdk/")
-        || path.starts_with("sdk-native/")
-        || path.starts_with("core/kontor-sdk")
-        || path.starts_with("core/indexer/tests/")
-        || path.starts_with("core/indexer/src/api/")
-        || [
-            "core/indexer/src/logging.rs",
-            "core/indexer/src/metrics.rs",
-            "core/.cargo/audit.toml",
-            ".github/workflows/mobile.yml",
-            ".github/workflows/build-mobile-artifacts.yml",
-            ".github/workflows/build-bitcoin.yml",
-            ".github/workflows/docker-cache.yml",
-        ]
-        .contains(&path)
+fn module(path: &str, stem: &str) -> bool {
+    path == format!("{stem}.rs") || path.starts_with(&format!("{stem}/"))
+}
+
+fn shared_build(path: &str) -> bool {
+    SHARED_BUILD_FILES.contains(&path) || build_metadata(path)
 }
 
 pub(super) fn stack_relevant(path: &str) -> bool {
     if tooling_only(path) {
         return false;
     }
-    if STACK_FILES.contains(&path)
+    shared_build(path)
+        || STACK_FILES.contains(&path)
         || STACK_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
-        || build_metadata(path)
-    {
-        return true;
-    }
-    // Unclassified inputs increase coverage; only known unrelated surfaces skip.
-    !ordinary_only(path)
+        || STACK_MODULES
+            .iter()
+            .any(|name| module(path, &format!("core/indexer/src/runtime/{name}")))
+        || module(path, "core/kontor-build/src/stack_evidence")
+        || module(path, "core/kontor-build/src/toolchain")
 }
 
 pub(super) fn bundle_relevant(path: &str) -> bool {
-    // Stack-specific capture/comparison changes exercise stack qualification only.
-    if path.starts_with("core/kontor-build/src/stack_evidence")
-        || path == ".github/workflows/native-stack.yml"
-        || path.starts_with(".github/actions/run-stack/")
-    {
+    if tooling_only(path) {
         return false;
     }
-    stack_relevant(path)
+    shared_build(path)
+        || BUNDLE_FILES.contains(&path)
+        || BUNDLE_PREFIXES
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+        || path.starts_with("core/indexer/src/runtime/bundle_")
+        || path
+            .strip_prefix("core/indexer/src/protocol/")
+            .is_some_and(|name| !name.contains('/') && name.ends_with(".rs"))
+        || path.starts_with("core/indexer/src/database/storage_")
+        || module(path, "core/indexer/src/database/canonical_history")
+        || module(path, "core/indexer/src/database/certified_history")
+        || module(path, "core/indexer/src/runtime/ownership")
+        || module(path, "core/indexer/src/reactor/engine")
+        || [
+            "node_build",
+            "graph_build",
+            "compiler_wrapper",
+            "linker_record",
+            "shared_ownership",
+            "symbol_audit",
+            "native_crypto",
+            "native_lock",
+            "metadata_control",
+            "execution_definition",
+            "consensus_definition",
+            "freeze_sources",
+            "source_identity",
+            "source_policy",
+            "snapshot",
+            "build_inputs",
+            "build_artifacts",
+            "provenance",
+            "canonical_json",
+            "outputs",
+            "recipes",
+            "toolchain",
+            "container",
+            "bundles",
+            "interface",
+            "node_evidence",
+        ]
+        .iter()
+        .any(|name| module(path, &format!("core/kontor-build/src/{name}")))
+        || path.starts_with("core/kontor-build/src/bin/kontor-")
 }
 
 pub(super) fn classify(path: &str, docker_targets: &BTreeSet<String>) -> BTreeSet<&'static str> {

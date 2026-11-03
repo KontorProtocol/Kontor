@@ -9,6 +9,7 @@ use tempfile::{TempDir, tempdir};
 
 use super::dependencies::{docker_target_paths, validate_repro_dependencies};
 use super::paths::{bundle_relevant, classify, stack_relevant};
+use super::qualification_dependencies::dependency_change_relevant;
 use super::{CiScope, JOBS, changed_paths, outputs, profile_policy, select};
 
 fn write(root: &Path, path: &str, text: &str) -> Result<()> {
@@ -78,7 +79,11 @@ fn git_fixture() -> Result<(TempDir, String)> {
         &["config", "user.email", "fixture@example.invalid"],
     )?;
     write(root.path(), "README.md", "base")?;
-    write(root.path(), "core/indexer/src/runtime/old.rs", "runtime")?;
+    write(
+        root.path(),
+        "core/indexer/src/runtime/call/old.rs",
+        "runtime",
+    )?;
     let base = commit(root.path())?;
     Ok((root, base))
 }
@@ -168,42 +173,109 @@ fn scope_distinguishes_docs_sdk_node_and_build_inputs() {
 }
 
 #[test]
-fn stack_selection_preserves_execution_and_evidence_boundaries() {
-    for path in [
-        "core/indexer/src/runtime/new.rs",
-        "core/indexer/src/protocol/v2/engine.rs",
-        "core/indexer/proto/new.proto",
-        "core/indexer/src/database/new.rs",
-        "core/indexer/src/reactor/new.rs",
-        "core/indexer/src/api/handlers/contracts.rs",
-        "core/indexer/src/api/env.rs",
-        "core/macros/src/lib.rs",
-        "protocol-bundles/new/Cargo.toml",
-        "tools/native-stack/new-input.json",
-        "core/kontor-build/src/graph_build.rs",
-        "new-executor/Cargo.lock",
-        "new-executor/build.rs",
-        "Dockerfile",
-        "tools/kontor",
-    ] {
-        assert!(stack_relevant(path), "{path}");
+fn qualification_scopes_follow_separate_execution_boundaries() {
+    let cases = [
+        ("core/indexer/src/runtime/ownership/leases.rs", true, true),
+        ("core/indexer/src/runtime/call/new.rs", true, false),
+        ("core/indexer/src/runtime/guest_memory.rs", true, false),
+        ("core/indexer/src/runtime/fuel/gauge.rs", true, false),
+        (
+            "core/indexer/src/runtime/host_context/contract.rs",
+            true,
+            false,
+        ),
+        ("core/indexer/src/runtime/mod.rs", true, true),
+        ("core/macros/src/interface.rs", true, false),
+        ("test-contracts/stack-probe/src/lib.rs", true, false),
+        ("test-contracts/binaries/stack_probe.wasm.br", true, false),
+        (
+            "core/indexer/src/protocol/coordinator/managed.rs",
+            false,
+            true,
+        ),
+        ("core/indexer/src/protocol/storage_session.rs", false, true),
+        ("core/indexer/src/runtime/bundle_exports.rs", false, true),
+        ("core/indexer/src/reactor/upgrades.rs", false, true),
+        ("core/indexer/src/reactor/engine/managed.rs", false, true),
+        ("core/indexer/src/database/init.rs", false, true),
+        (
+            "core/indexer/src/database/sql/upgrade_control.sql",
+            false,
+            true,
+        ),
+        ("protocol-bundles/retained/p1/core/src/lib.rs", false, true),
+        ("core/kontor-build/src/graph_build.rs", false, true),
+        ("core/indexer/proto/messages.proto", false, true),
+        ("core/kontor-build/src/compiler_wrapper.rs", false, true),
+        (
+            "core/kontor-build/src/stack_evidence/capture.rs",
+            true,
+            false,
+        ),
+        ("core/vendor/psm/src/lib.rs", true, true),
+        ("core/Cargo.lock", true, true),
+        ("core/Cargo.toml", true, true),
+        ("core/indexer/build.rs", true, true),
+        ("core/.cargo/config.toml", true, true),
+        ("rust-toolchain.toml", true, true),
+        (".github/workflows/rust-tests.yml", true, false),
+        (".github/workflows/protocol-bundles.yml", false, true),
+        (
+            "core/indexer/src/database/certified_history/activation.rs",
+            false,
+            true,
+        ),
+        (
+            "core/indexer/src/database/canonical_history.rs",
+            false,
+            true,
+        ),
+        (
+            "core/indexer/src/protocol/canonical_application.rs",
+            false,
+            true,
+        ),
+        (
+            "core/indexer/src/protocol/v2/token_migration.rs",
+            false,
+            true,
+        ),
+        ("test-contracts/binaries/proxy.wasm.br", true, false),
+        ("Dockerfile", true, true),
+    ];
+    for (path, stack, bundles) in cases {
+        assert_eq!(stack_relevant(path), stack, "stack: {path}");
+        assert_eq!(bundle_relevant(path), bundles, "bundles: {path}");
     }
     for path in [
-        "README.md",
-        "docs/design/plan.md",
-        "sdk/src/client.ts",
-        "core/kontor-sdk/src/client.rs",
+        "core/indexer/src/runtime/pricing.rs",
+        "core/indexer/src/runtime/staking/reward_tests.rs",
+        "core/indexer/src/runtime/token.rs",
+        "core/indexer/src/runtime/filestorage.rs",
+        "core/indexer/src/database/queries/contracts.rs",
+        "core/indexer/src/database/queries/new.rs",
+        "core/indexer/src/reactor/mempool_fee_index/mod.rs",
+        "core/indexer/src/reactor/status.rs",
+        "core/indexer/src/protocol/v1/transactions.rs",
         "core/indexer/src/api/handlers/info.rs",
         "core/indexer/src/logging.rs",
         "core/indexer/src/metrics.rs",
-        "core/.cargo/audit.toml",
-        "core/kontor-build/src/node_evidence/comparison/manifest.rs",
-        "core/kontor-build/tests/node_comparison.rs",
-        "core/kontor-build/src/node_evidence/comparison/mod.rs",
-        "core/kontor-build/src/ci_scope.rs",
-        "core/kontor-build/src/ci_scope/tests.rs",
+        "core/kontor-sdk/src/client.rs",
+        "core/macros/src/pagination.rs",
+        "core/stdlib/src/map.rs",
+        "core/numerics/src/lib.rs",
+        "native-contracts/token/src/lib.rs",
+        "test-contracts/ordinary/src/lib.rs",
+        "test-contracts/binaries/ordinary.wasm.br",
+        "core/indexer/tests/new.rs",
+        "core/indexer/src/new_module.rs",
+        "new-executor/unknown-input",
+        "README.md",
+        "docs/design/plan.md",
+        "sdk/src/client.ts",
     ] {
-        assert!(!stack_relevant(path), "{path}");
+        assert!(!stack_relevant(path), "stack: {path}");
+        assert!(!bundle_relevant(path), "bundles: {path}");
     }
 }
 
@@ -261,7 +333,7 @@ fn git_diff_handles_large_changes_renames_newlines_and_base_advancement() -> Res
     );
     git(
         root.path(),
-        &["mv", "core/indexer/src/runtime/old.rs", "renamed.rs"],
+        &["mv", "core/indexer/src/runtime/call/old.rs", "renamed.rs"],
     )?;
     let head = commit(root.path())?;
     let report = select(
@@ -274,7 +346,7 @@ fn git_diff_handles_large_changes_renames_newlines_and_base_advancement() -> Res
         report["paths"]
             .as_array()
             .unwrap()
-            .contains(&json!("core/indexer/src/runtime/old.rs"))
+            .contains(&json!("core/indexer/src/runtime/call/old.rs"))
     );
     fs::remove_file(root.path().join("renamed.rs"))?;
     git(
@@ -289,7 +361,7 @@ fn git_diff_handles_large_changes_renames_newlines_and_base_advancement() -> Res
     git(root.path(), &["checkout", "-q", "--detach", &base])?;
     write(
         root.path(),
-        "core/indexer/src/runtime/base.rs",
+        "core/indexer/src/runtime/call/base.rs",
         "base advancement",
     )?;
     let advanced = commit(root.path())?;
@@ -498,10 +570,11 @@ fn repository_dependency_coverage_remains_complete() -> Result<()> {
 }
 
 #[test]
-fn qualification_scope_is_conservative_but_tooling_does_not_launch_nodes() {
+fn tooling_only_changes_do_not_launch_qualification() {
     let targets = BTreeSet::new();
     for path in [
         "core/kontor-build/src/ci_scope.rs",
+        "core/kontor-build/src/ci_scope/qualification_dependencies.rs",
         "core/kontor-build/tests/linker_wrapper.rs",
         ".github/actions/setup-kontor-tools/action.yml",
         "core/kontor-build/src/node_evidence/comparison/mod.rs",
@@ -510,27 +583,6 @@ fn qualification_scope_is_conservative_but_tooling_does_not_launch_nodes() {
         assert!(!stack_relevant(path), "{path}");
         assert!(!bundle_relevant(path), "{path}");
     }
-    for path in [
-        "core/kontor-build/src/graph_build.rs",
-        "core/kontor-build/src/compiler_wrapper.rs",
-        "core/kontor-build/Cargo.lock",
-        "core/indexer/src/runtime/ownership/mod.rs",
-        "new-executor/unknown-input",
-        ".github/workflows/rust-tests.yml",
-    ] {
-        assert!(stack_relevant(path), "{path}");
-        assert!(bundle_relevant(path), "{path}");
-    }
-    assert!(stack_relevant(
-        "core/kontor-build/src/stack_evidence/capture.rs"
-    ));
-    assert!(!bundle_relevant(
-        "core/kontor-build/src/stack_evidence/capture.rs"
-    ));
-    assert!(!bundle_relevant("core/indexer/src/api/handlers/info.rs"));
-    assert!(bundle_relevant(
-        "core/indexer/src/api/handlers/contracts.rs"
-    ));
 }
 
 #[test]
@@ -571,6 +623,298 @@ fn test_matrix_runs_the_union_without_duplicate_platform_builds() -> Result<()> 
             .collect();
         assert_eq!(unique.len(), cells.len());
         assert!(text.contains(&format!("required={}\n", count > 0)));
+    }
+    Ok(())
+}
+
+fn dependency_lock(helper: &str, unrelated: &str) -> String {
+    format!(
+        r#"version = 4
+[[package]]
+name = "indexer"
+version = "0.2.0"
+dependencies = ["wasmtime", "unrelated"]
+[[package]]
+name = "wasmtime"
+version = "51.0.0"
+dependencies = ["helper {helper}"]
+[[package]]
+name = "helper"
+version = "{helper}"
+checksum = "engine dependency"
+[[package]]
+name = "helper"
+version = "9.0.0"
+checksum = "unreachable version"
+[[package]]
+name = "unrelated"
+version = "{unrelated}"
+[[package]]
+name = "arc-malachitebft-engine"
+version = "0.8.2"
+"#
+    )
+}
+
+fn dependency_manifest(helper: &str, unrelated: &str) -> String {
+    format!(
+        r#"[workspace.dependencies]
+wasmtime = "51.0.0"
+helper = "{helper}"
+client = {{ package = "unrelated", version = "{unrelated}" }}
+"#
+    )
+}
+
+#[test]
+fn qualification_compares_dependency_versions_sources_and_transitive_closures() -> Result<()> {
+    let (root, _) = git_fixture()?;
+    write(
+        root.path(),
+        "core/Cargo.lock",
+        &dependency_lock("1.0.0", "1.0.0"),
+    )?;
+    write(
+        root.path(),
+        "core/Cargo.toml",
+        &dependency_manifest("1.0.0", "1.0.0"),
+    )?;
+    let base = commit(root.path())?;
+    // The common pinned-dependency update changes both the manifest and the lock.
+    write(
+        root.path(),
+        "core/Cargo.lock",
+        &dependency_lock("1.0.0", "2.0.0"),
+    )?;
+    write(
+        root.path(),
+        "core/Cargo.toml",
+        &dependency_manifest("1.0.0", "2.0.0"),
+    )?;
+    let unrelated = commit(root.path())?;
+    for kind in [CiScope::Stack, CiScope::Bundles] {
+        assert_eq!(
+            select(root.path(), kind, "pull_request", &event(&base, &unrelated))?["required"],
+            false
+        );
+    }
+    let variants = [
+        (dependency_lock("2.0.0", "1.0.0"), true, true),
+        (
+            dependency_lock("1.0.0", "1.0.0").replace("engine dependency", "new checksum"),
+            true,
+            true,
+        ),
+        (
+            dependency_lock("1.0.0", "1.0.0").replace("unreachable version", "new checksum"),
+            false,
+            false,
+        ),
+        (
+            dependency_lock("1.0.0", "1.0.0").replace("version = \"0.8.2\"", "version = \"0.8.3\""),
+            false,
+            true,
+        ),
+        (
+            dependency_lock("1.0.0", "1.0.0").replace(
+                "version = \"51.0.0\"",
+                "version = \"51.0.0\"\nsource = \"git+https://example.invalid/engine#new\"",
+            ),
+            true,
+            true,
+        ),
+        (
+            dependency_lock("1.0.0", "1.0.0").replace("helper 1.0.0", "helper"),
+            true,
+            true,
+        ),
+        ("invalid TOML".into(), true, true),
+        (
+            dependency_lock("1.0.0", "1.0.0").replace("version = 4", "version = 99"),
+            true,
+            true,
+        ),
+    ];
+    for (lock, stack, bundles) in variants {
+        write(root.path(), "core/Cargo.lock", &lock)?;
+        write(
+            root.path(),
+            "core/Cargo.toml",
+            &dependency_manifest("1.0.0", "1.0.0"),
+        )?;
+        let head = commit(root.path())?;
+        for (kind, expected) in [(CiScope::Stack, stack), (CiScope::Bundles, bundles)] {
+            assert_eq!(
+                select(root.path(), kind, "pull_request", &event(&base, &head))?["required"],
+                expected,
+                "{kind:?}: {lock}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn qualification_dependency_diff_uses_pr_merge_base_and_ignores_checkout_files() -> Result<()> {
+    let (root, _) = git_fixture()?;
+    write(
+        root.path(),
+        "core/Cargo.lock",
+        &dependency_lock("1.0.0", "1.0.0"),
+    )?;
+    let base = commit(root.path())?;
+    write(
+        root.path(),
+        "core/Cargo.lock",
+        &dependency_lock("1.0.0", "2.0.0"),
+    )?;
+    let head = commit(root.path())?;
+    git(root.path(), &["checkout", "-q", "--detach", &base])?;
+    write(
+        root.path(),
+        "core/Cargo.lock",
+        &dependency_lock("2.0.0", "1.0.0"),
+    )?;
+    let advanced = commit(root.path())?;
+    write(root.path(), "core/Cargo.lock", "broken checkout content")?;
+    for kind in [CiScope::Stack, CiScope::Bundles] {
+        assert_eq!(
+            select(root.path(), kind, "pull_request", &event(&advanced, &head))?["required"],
+            false
+        );
+        assert_eq!(
+            select(
+                root.path(),
+                kind,
+                "push",
+                &json!({"before":base,"after":advanced})
+            )?["required"],
+            true
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn build_configuration_changes_and_missing_dependency_evidence_require_qualification() -> Result<()>
+{
+    let (root, _) = git_fixture()?;
+    write(
+        root.path(),
+        "core/Cargo.lock",
+        &dependency_lock("1.0.0", "1.0.0"),
+    )?;
+    let manifest = dependency_manifest("1.0.0", "1.0.0");
+    write(root.path(), "core/Cargo.toml", &manifest)?;
+    let base = commit(root.path())?;
+    for changed in [
+        manifest.replace(
+            "wasmtime = \"51.0.0\"",
+            "wasmtime = { version = \"51.0.0\", features = ['async'] }",
+        ),
+        format!("{manifest}\n[profile.release]\nopt-level = 2\n"),
+        format!("{manifest}\n[patch.crates-io]\nhelper = {{ path = '../helper' }}\n"),
+        format!("{manifest}\nnew_dependency = '1'\n"),
+        manifest.replace("helper = \"1.0.0\"", "helper = \"=1.0.0\""),
+    ] {
+        write(root.path(), "core/Cargo.toml", &changed)?;
+        let head = commit(root.path())?;
+        for kind in [CiScope::Stack, CiScope::Bundles] {
+            assert_eq!(
+                select(root.path(), kind, "pull_request", &event(&base, &head))?["required"],
+                true,
+                "{changed}"
+            );
+        }
+    }
+    git(root.path(), &["mv", "core/Cargo.lock", "moved.lock"])?;
+    let deleted = commit(root.path())?;
+    for kind in [CiScope::Stack, CiScope::Bundles] {
+        let report = select(root.path(), kind, "pull_request", &event(&base, &deleted))?;
+        assert_eq!(report["required"], true);
+        assert!(report["reason"].as_str().unwrap().contains("cannot read"));
+        assert_eq!(
+            select(root.path(), kind, "workflow_dispatch", &json!({}))?["required"],
+            true
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn current_repository_lockfiles_have_resolvable_qualification_dependencies() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let head = git(root, &["rev-parse", "HEAD"])?;
+    for path in [
+        "core/Cargo.lock",
+        "core/kontor-build/Cargo.lock",
+        "test-contracts/Cargo.lock",
+        "native-contracts/Cargo.lock",
+    ] {
+        for kind in [CiScope::Stack, CiScope::Bundles] {
+            assert!(
+                !dependency_change_relevant(root, kind, &head, &head, path)?,
+                "{path}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn dependency_updates_that_can_unify_engine_features_still_qualify() -> Result<()> {
+    let (root, _) = git_fixture()?;
+    let lock = dependency_lock("1.0.0", "1.0.0").replace(
+        "name = \"unrelated\"\nversion = \"1.0.0\"",
+        "name = \"unrelated\"\nversion = \"1.0.0\"\ndependencies = [\"helper 1.0.0\"]",
+    );
+    write(root.path(), "core/Cargo.lock", &lock)?;
+    let base = commit(root.path())?;
+    write(
+        root.path(),
+        "core/Cargo.lock",
+        &lock.replace(
+            "name = \"unrelated\"\nversion = \"1.0.0\"",
+            "name = \"unrelated\"\nversion = \"2.0.0\"",
+        ),
+    )?;
+    let head = commit(root.path())?;
+    for kind in [CiScope::Stack, CiScope::Bundles] {
+        assert_eq!(
+            select(root.path(), kind, "pull_request", &event(&base, &head))?["required"],
+            true
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn ordinary_application_changes_keep_rust_tests_without_qualification() -> Result<()> {
+    let (root, base) = git_fixture()?;
+    for path in [
+        "core/indexer/src/runtime/pricing.rs",
+        "core/indexer/src/runtime/filestorage.rs",
+        "core/indexer/src/database/queries/contracts.rs",
+        "core/indexer/src/reactor/status.rs",
+        "core/indexer/src/protocol/v1/transactions.rs",
+        "core/indexer/src/new_module.rs",
+    ] {
+        write(root.path(), path, "ordinary application change")?;
+    }
+    let head = commit(root.path())?;
+    let event = event(&base, &head);
+    let checks = select(root.path(), CiScope::Pr, "pull_request", &event)?;
+    assert_eq!(checks["jobs"]["rust"], true);
+    assert_eq!(checks["jobs"]["sdk"], true);
+    for kind in [CiScope::Stack, CiScope::Bundles] {
+        assert_eq!(
+            select(root.path(), kind, "pull_request", &event)?["required"],
+            false
+        );
     }
     Ok(())
 }

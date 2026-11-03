@@ -1,5 +1,6 @@
 mod dependencies;
 mod paths;
+mod qualification_dependencies;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -14,6 +15,7 @@ use serde_json::{Value, json};
 
 use dependencies::{docker_target_paths, validate_repro_dependencies};
 use paths::{bundle_relevant, classify, stack_relevant};
+use qualification_dependencies::dependency_change_relevant;
 
 const JOBS: [&str; 5] = ["rust", "sdk", "reproducible", "docker_cache", "tooling"];
 
@@ -96,14 +98,13 @@ fn profile_policy<'a>(name: &str, event: &'a Value) -> Result<&'a str> {
     Ok(policy)
 }
 
-fn changed_paths(root: &Path, name: &str, event: &Value) -> Result<Vec<String>> {
-    let (base, head, separator) = match name {
+fn comparison_commits(root: &Path, name: &str, event: &Value) -> Result<(String, String)> {
+    let (base, head) = match name {
         "pull_request" => (
             &event["pull_request"]["base"]["sha"],
             &event["pull_request"]["head"]["sha"],
-            "...",
         ),
-        "push" => (&event["before"], &event["after"], ".."),
+        "push" => (&event["before"], &event["after"]),
         _ => bail!("unsupported event: {name}"),
     };
     let commit = |value: &Value| -> Result<String> {
@@ -118,7 +119,21 @@ fn changed_paths(root: &Path, name: &str, event: &Value) -> Result<Vec<String>> 
         );
         Ok(sha.into())
     };
-    let revision = format!("{}{separator}{}", commit(base)?, commit(head)?);
+    let (mut base, head) = (commit(base)?, commit(head)?);
+    if name == "pull_request" {
+        let output = Command::new("git")
+            .current_dir(root)
+            .args(["merge-base", "--all", &base, &head])
+            .output()?;
+        ensure!(output.status.success(), "cannot determine PR merge base");
+        // Ambiguous ancestry must not let path and dependency comparisons disagree.
+        base = commit(&json!(String::from_utf8(output.stdout)?.trim()))?;
+    }
+    Ok((base, head))
+}
+
+fn changed_paths_between(root: &Path, base: &str, head: &str) -> Result<Vec<String>> {
+    let revision = format!("{base}..{head}");
     // No rename detection: both the removed and added names must participate.
     let output = Command::new("git")
         .current_dir(root)
@@ -135,6 +150,12 @@ fn changed_paths(root: &Path, name: &str, event: &Value) -> Result<Vec<String>> 
         .filter(|path| !path.is_empty())
         .map(|path| String::from_utf8(path.to_vec()).context("changed path is not UTF-8"))
         .collect()
+}
+
+#[cfg(test)]
+fn changed_paths(root: &Path, name: &str, event: &Value) -> Result<Vec<String>> {
+    let (base, head) = comparison_commits(root, name, event)?;
+    changed_paths_between(root, &base, &head)
 }
 
 fn select(root: &Path, kind: CiScope, name: &str, event: &Value) -> Result<Value> {
@@ -169,7 +190,8 @@ fn select_known(root: &Path, kind: CiScope, name: &str, event: &Value) -> Result
             json!({"required": true, "reason": "manual qualification", "paths": []})
         });
     }
-    let paths = changed_paths(root, name, event)?;
+    let (base, head) = comparison_commits(root, name, event)?;
+    let paths = changed_paths_between(root, &base, &head)?;
     if kind == CiScope::Pr {
         let targets = docker_target_paths(root)?;
         let jobs = paths
@@ -178,15 +200,17 @@ fn select_known(root: &Path, kind: CiScope, name: &str, event: &Value) -> Result
             .collect();
         return Ok(json!({"jobs": job_flags(&jobs), "reason": "changed inputs", "paths": paths}));
     }
-    let mut selected: Vec<_> = paths
-        .iter()
-        .filter(|path| match kind {
+    let mut selected = Vec::new();
+    for path in &paths {
+        let relevant = match kind {
             CiScope::Stack => stack_relevant(path),
             CiScope::Bundles => bundle_relevant(path),
             CiScope::Pr => unreachable!(),
-        })
-        .cloned()
-        .collect();
+        };
+        if relevant && dependency_change_relevant(root, kind, &base, &head, path)? {
+            selected.push(path.clone());
+        }
+    }
     selected.sort();
     let required = !selected.is_empty();
     let reason = match (kind, required) {

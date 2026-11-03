@@ -89,8 +89,9 @@ fn actual_required_check_gate_rejects_failed_cancelled_missing_or_unselected_suc
             .write_all(&serde_json::to_vec(needs)?)?;
         Ok(process.wait_with_output()?.status.success())
     };
-    let mut needs = json!({"scope":{"result":"success","outputs":{"rust":"false","sdk":"false","reproducible":"false"}},
+    let mut needs = json!({"scope":{"result":"success","outputs":{"rust":"false","tests":"false","tooling":"false","sdk":"false","reproducible":"false"}},
         "quality-checks":{"result":"skipped"},"test":{"result":"skipped"},
+        "tooling":{"result":"skipped"},
         "reproducible-build-setup":{"result":"skipped"},"reproducible-build":{"result":"skipped"},"sdk":{"result":"skipped"}});
     assert!(passes(&needs)?);
     needs["sdk"]["result"] = json!("success");
@@ -112,13 +113,32 @@ fn actual_required_check_gate_rejects_failed_cancelled_missing_or_unselected_suc
         assert!(!passes(&needs)?);
     }
     needs["scope"]["outputs"]["rust"] = json!("false");
+    for flag in ["tests", "tooling"] {
+        needs["scope"]["outputs"][flag] = json!("true");
+        let job = if flag == "tests" { "test" } else { "tooling" };
+        for state in [
+            json!("failure"),
+            json!("cancelled"),
+            json!("skipped"),
+            Value::Null,
+        ] {
+            needs[job]["result"] = state;
+            assert!(!passes(&needs)?);
+        }
+        needs[job]["result"] = json!("success");
+        assert!(passes(&needs)?);
+        needs["scope"]["outputs"][flag] = Value::Null;
+        assert!(!passes(&needs)?);
+        needs["scope"]["outputs"][flag] = json!("false");
+        needs[job]["result"] = json!("skipped");
+    }
     needs["scope"]["result"] = json!("failure");
     assert!(!passes(&needs)?);
     Ok(())
 }
 
 #[test]
-fn main_image_publication_is_not_gated_by_pr_scope() -> Result<()> {
+fn main_image_publication_requires_relevant_changes_and_successful_cache_build() -> Result<()> {
     let workflow = fs::read_to_string(repository().join(".github/workflows/ci.yml"))?;
     let cache = workflow
         .split("  docker-cache-deps:\n")
@@ -127,7 +147,8 @@ fn main_image_publication_is_not_gated_by_pr_scope() -> Result<()> {
         .split("  docker-build:")
         .next()
         .unwrap();
-    assert!(!cache.contains("    needs:"));
+    assert!(cache.contains("    needs: scope\n"));
+    assert!(cache.contains("    if: github.ref == 'refs/heads/main' && (needs.scope.outputs.rust == 'true' || needs.scope.outputs.docker_cache == 'true')\n"));
     assert!(workflow.contains("    needs: docker-cache-deps\n"));
     let docker = fs::read_to_string(repository().join(".github/workflows/docker-cache.yml"))?;
     assert!(docker.contains("  pull_request:\n  workflow_dispatch:"));
