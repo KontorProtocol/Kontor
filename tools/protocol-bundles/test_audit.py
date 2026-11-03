@@ -190,13 +190,6 @@ class Ownership(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "unknown defined-symbol output"):
                 definitions(Path("unreadable"))
 
-    def test_failed_symbol_reader_never_accepts_partial_output(self):
-        result = subprocess.CompletedProcess([], 1, "00000000 T partial\n", "incompatible bitcode")
-        with patch("symbol_tool.executable", return_value=Path("pinned-llvm-nm")):
-            with patch("symbol_tool.subprocess.run", return_value=result):
-                with self.assertRaisesRegex(RuntimeError, "incompatible bitcode"):
-                    inspect(["-g", Path("bad.rlib")])
-
     def test_unknown_c_symbol_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "unowned native"):
             owner("unregistered_state", self.graphs[0], "51.0.0-dev")

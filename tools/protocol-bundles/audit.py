@@ -6,10 +6,9 @@ from pathlib import Path
 import re
 import sys
 
-from symbol_tool import archive_member, archive_members, inspect, object_records, section_bytes
+from symbol_tool import archive_member, archive_members, compiler_debug_metadata, inspect
 
 GDB_SCRIPT = "__rustc_debug_gdb_scripts_section__"
-GDB_PAYLOAD = b"\x01gdb_load_rust_pretty_printers.py\x00"
 INPUT_RUNTIME = {"DW.ref.rust_eh_personality", GDB_SCRIPT}
 FINAL_RUNTIME = INPUT_RUNTIME | {
     "rust_eh_personality", "main", "_start", "__TMC_END__", "__bss_end__",
@@ -21,35 +20,6 @@ FINAL_RUNTIME = INPUT_RUNTIME | {
 RUST = re.compile(r"(?:_ZN.+17h[0-9a-f]{16}E|_R[A-Z].+)(?:\.llvm\.\d+)?$")
 ANONYMOUS = re.compile(r"anon\.[0-9a-f]+\.\d+(?:\.llvm\.\d+)?$")
 ALLOCATOR = re.compile(r"__(?:rg|rust)_(?:alloc|dealloc|realloc|alloc_zeroed|alloc_error_handler)(?:$|[^a-z_])")
-
-
-def compiler_debug_metadata(path, linked=False):
-    if sys.platform != "linux":
-        raise RuntimeError("compiler GDB metadata requires an audited ELF object")
-    found = 0
-    for record in object_records(path):
-        sections = {item["Section"]["Index"]: item["Section"] for item in record.get("Sections", [])}
-        for item in record.get("Symbols", []):
-            symbol = item["Symbol"]
-            if symbol["Name"]["Name"] != GDB_SCRIPT:
-                continue
-            found += 1
-            section = sections.get(symbol["Section"]["Value"])
-            if (symbol["Binding"]["Name"] != "Weak" or symbol["Type"]["Name"] != "Object"
-                    or symbol["Size"] != len(GDB_PAYLOAD) or symbol["Other"]["Value"] != 0
-                    or section is None or section["Name"]["Name"] != ".debug_gdb_scripts"
-                    or section["Type"]["Name"] != "SHT_PROGBITS"
-                    or section["Flags"]["Value"] != 0x32
-                    or section["AddressAlignment"] != 1 or section["EntrySize"] != 1):
-                raise RuntimeError(f"invalid compiler GDB metadata definition: {record['FileSummary']['File']}")
-            offset = symbol["Value"] - section["Address"]
-            if (offset < 0 or offset + len(GDB_PAYLOAD) > section["Size"]
-                    or (not linked and (offset != 0 or section["Size"] != len(GDB_PAYLOAD)))
-                    or section_bytes(path, record, section)[offset:offset + len(GDB_PAYLOAD)] != GDB_PAYLOAD):
-                raise RuntimeError(f"invalid compiler GDB metadata payload: {record['FileSummary']['File']}")
-    if not found:
-        raise RuntimeError(f"compiler GDB metadata definition missing: {path}")
-    return found
 
 
 def definitions(path, globals_only=True):

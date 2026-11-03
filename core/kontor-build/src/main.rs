@@ -6,6 +6,7 @@ use std::process;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kontor_build::linker_record::verify_input;
+use kontor_build::object_tools::{Request as ObjectRequest, run as inspect_object};
 use kontor_build::provenance::{Request as ProvenanceRequest, run as provenance};
 use kontor_build::source_identity::{Metadata, verify_sources};
 use kontor_build::{
@@ -49,6 +50,8 @@ enum Command {
     VerifyLinkerRecord,
     /// Verify pinned Git and registry sources from Cargo metadata on standard input.
     VerifySources,
+    /// Inspect compiler objects with the pinned LLVM tools from a JSON request.
+    InspectObject,
     /// Inventory build source inputs from a JSON request on standard input.
     Provenance,
     /// Select CI checks from the GitHub event and complete Git change set.
@@ -75,6 +78,11 @@ fn main() -> Result<()> {
         Command::Provenance => {
             let request: ProvenanceRequest = serde_json::from_reader(io::stdin().lock())?;
             println!("{}", provenance(request)?);
+            Ok(())
+        }
+        Command::InspectObject => {
+            let request: ObjectRequest = serde_json::from_reader(io::stdin().lock())?;
+            println!("{}", inspect_object(request)?);
             Ok(())
         }
         Command::VerifySources => {

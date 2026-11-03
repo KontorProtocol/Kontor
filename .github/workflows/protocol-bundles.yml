@@ -65,6 +65,7 @@ jobs:
         run: |
           cargo clippy --locked --manifest-path core/kontor-build/Cargo.toml --all-targets -j2 -- -D warnings
           cargo test --locked --manifest-path core/kontor-build/Cargo.toml -j2
+          cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test object_tools -j2 -- --ignored
           ./tools/kontor protocol-bundles --help
 
   qualification:
@@ -95,7 +96,7 @@ jobs:
         if: matrix.profile == 'release' && matrix.os != 'ubuntu-latest'
         run: python3 -m unittest discover -s tools/protocol-bundles -p 'test_audit.py'
       - name: Check compiler and linker output capture before the full build
-        run: cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test linker_wrapper -j2
+        run: cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test linker_wrapper --test object_tools -j2 -- --include-ignored
       - name: Install node dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install boost libevent zeromq

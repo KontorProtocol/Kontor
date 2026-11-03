@@ -6,6 +6,7 @@ mod diagnostics;
 pub mod linker_record;
 pub mod metadata_control;
 mod native_lock;
+pub mod object_tools;
 mod outputs;
 pub mod provenance;
 mod snapshot;

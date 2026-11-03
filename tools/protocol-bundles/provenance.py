@@ -19,11 +19,11 @@ def _tool_path(environment):
                                    cwd=root, env=dict(environment), text=True).strip()
 
 
-def _request(request, *, env=None):
+def _request(request, *, env=None, command="provenance"):
     env = dict(os.environ) if env is None else env
     root = Path(__file__).resolve().parents[2]
     tool = env.get("KONTOR_BUILD_TOOL") or _tool_path(tuple(sorted(env.items())))
-    result = subprocess.run([tool, "provenance"], input=json.dumps(request),
+    result = subprocess.run([tool, command], input=json.dumps(request),
                             capture_output=True, text=True, cwd=root, env=env)
     if result.returncode:
         raise RuntimeError(result.stderr.strip())

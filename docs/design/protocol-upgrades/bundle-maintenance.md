@@ -258,6 +258,21 @@ The `proc_macro_hashes` operation verifies reciprocal compiler rejection of
 foreign graph plugins, retains diagnostic logs and removes temporary probe
 directories. Its requests carry the original working directory and environment.
 
+`tools/kontor inspect-object` accepts JSON operations for pinned LLVM symbol and
+object records, archive members, section bytes and compiler GDB metadata checks.
+Requests include `working_directory` to preserve relative object paths. Binary
+results use hex strings at the transitional Python boundary. The Rust ownership
+helpers use bytes directly. Reader failures reject partial output, section reads
+check input identity and bounds, and GDB metadata requires the exact ELF shape and
+payload. The separate native-crypto object reporter retains its existing schema;
+LLVM tools remain necessary here to inspect compiler bitcode inputs.
+
+The real LLVM integration tests run in the existing bundle controls and platform
+qualification jobs, which already install `llvm-tools-preview`. Scope selection
+keeps running the default tooling tests without that component. Run the object
+integration checks locally with `cargo test --locked --manifest-path
+core/kontor-build/Cargo.toml --test object_tools -- --ignored`.
+
 Absolute source paths and platform inputs are recorded. This is an audit of
 the actual build, not a claim that different checkouts or platforms produce
 byte-identical executables.
