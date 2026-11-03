@@ -1,5 +1,13 @@
 # Bitcoin confirmation positions (ID3-node candidate)
 
+> Historical confirmation-metadata implementation record. The operator later
+> excluded the external Explorer and Explorer Indexer integrations from the
+> protocol-upgrade goal. References below to ID3 consumers or their deployment
+> requirements are historical, not current completion gates. For current merged
+> phases and acceptance evidence, see [the implementation plan](implementation-plan.md)
+> and [execution ledger](execution-ledger.md). SDK publication remains a separate
+> final handoff step; no downstream application change is authorized by this record.
+
 The candidate adds nullable `transactions.confirmed_bitcoin_tx_index` as node
 metadata. Its value is the transaction's position in the confirming raw Bitcoin
 block, including coinbase and unrelated transactions. `tx_index` retains its

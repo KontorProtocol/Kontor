@@ -1,5 +1,10 @@
 # Protocol upgrade implementation ledger
 
+This is a chronological evidence record. Dated entries describe their state at
+that time, not the current status. See the latest entries at the end and the
+[current delivery checkpoint](implementation-plan.md#current-delivery-checkpoint-2-november-2026)
+for the current architecture, merged phases and remaining gates.
+
 Current scope override, 1 November 2026: oversized-certificate paging and its
 greater-than-10-MiB proof acceptance tests are deferred outside this goal by the
 operator. Earlier entries describing those as unfinished requirements are
@@ -7,9 +12,9 @@ historical. See the latest scope-correction entry and certified-history plan.
 
 ## K2b local checkpoint, 31 October 2026
 
-K2b remains unmerged. The current implementation and outstanding phase gates are
-summarized in [the implementation plan](implementation-plan.md) and
-[the agreed production boundary](k2b-production-boundary.md). Earlier entries below
+At this historical checkpoint K2b was unmerged. Its implementation and outstanding
+phase gates were summarized in [the implementation plan](implementation-plan.md) and
+[the agreed production boundary](k2b-production-boundary.md). This entry and the dated entries below
 are historical evidence, not the current phase status.
 
 The local production worktree now builds both real independently locked executor
@@ -4974,3 +4979,28 @@ wording in the unpublished Site draft; that wording is updated. All 186
 protocol-bundle build/evidence controls and workspace formatting checks pass.
 The default branch was reverified at the unchanged PR623 merge before PR
 preparation. Current-head CI/platform qualification and merge remain outstanding.
+
+## K10/K11 PR624: macOS post-link provenance correction
+
+Candidate `7c952b3aaa7ad894177933696da56876748dd01e` passed ordinary
+Linux/macOS, SDK, reproducibility, stack qualification and Linux linked-node
+qualification. Run `41558120201`, macOS job `125662809467`, failed after
+compilation and before runtime qualification because the linker output hash did
+not equal Cargo's finished executable. The link-spec hash and compiler binding
+to the linker record agreed. The invocation requested `-C strip=debuginfo`.
+Rust 1.99.1's `rustc_codegen_ssa/src/back/link.rs` runs `rust-objcopy --strip-debug`
+after linking on Darwin, so equality across those stages was an invalid assumption.
+
+The correction retains the immediate linker record and captures the same output
+path after successful rustc completion in the compiler-object record. The builder
+and comparator require the completed output hash to equal the final executable,
+while retaining the spec and linker-record bindings. Failed compiler invocations
+remove stale success records. A small real Rust compilation with debug stripping
+runs before full platform builds; negative controls reject missing capture,
+changed output, wrong paths, stale specs and broken compiler/linker bindings.
+No runtime semantics or retained P1 sources change. The managed build reference
+is regenerated because the compiler wrapper is a tracked build input.
+
+The failed macOS run is not qualification evidence, and the prior Linux/runtime
+results retain their original source bindings. The corrected build needs its
+focused review and current-candidate CI before merge. No blind CI rerun was made.

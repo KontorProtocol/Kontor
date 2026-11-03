@@ -67,6 +67,24 @@ class LinkerRecord(unittest.TestCase):
         self.assertEqual(record['arguments'], ['@' + str(response)])
         self.assertIn('-fuse-ld=lld', record['expanded_arguments'])
 
+    @unittest.skipUnless(shutil.which('cc'), 'C driver required')
+    def test_completed_compiler_output_is_bound_without_replacing_linker_hash(self):
+        record = self.run_link([str(self.source), '-o', str(self.output)])
+        self.output.write_bytes(self.output.read_bytes() + b'post-link processing')
+        completed = {'path': str(self.output), 'sha256': digest(self.output)}
+        self.assertNotEqual(record['output_sha256'], completed['sha256'])
+        validate(record, digest(self.spec), digest(self.output), completed)
+        with self.assertRaises(RuntimeError):
+            validate(record, digest(self.spec), digest(self.output))
+        for changed in ({}, [], dict(completed, path='/another/output'),
+                        dict(completed, sha256=record['output_sha256'])):
+            with self.subTest(changed=changed), self.assertRaises(RuntimeError):
+                validate(record, digest(self.spec), digest(self.output), changed)
+        for field in ('spec_sha256', 'output_sha256', 'output'):
+            changed = dict(record, **{field: 'wrong'})
+            with self.subTest(field=field), self.assertRaises(RuntimeError):
+                validate(changed, digest(self.spec), digest(self.output), completed)
+
     @unittest.skipUnless(shutil.which('clang'), 'Clang driver required')
     def test_clang_plan_records_direct_backend(self):
         record = self.run_link([str(self.source), '-o', str(self.output)], 'clang')

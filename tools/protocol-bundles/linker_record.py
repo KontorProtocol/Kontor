@@ -87,10 +87,19 @@ def backend(driver, arguments):
     }
 
 
-def validate(record, spec_hash, output_hash):
+def validate(record, spec_hash, output_hash, compiler_output=None):
     if (record.get('schema') != 1 or record.get('spec_sha256') != spec_hash
-            or record.get('output_sha256') != output_hash):
+            or not isinstance(record.get('output_sha256'), str)
+            or len(record['output_sha256']) != 64
+            or any(character not in '0123456789abcdef' for character in record['output_sha256'])):
         raise RuntimeError('linker record does not match the node build')
+    if compiler_output is None:
+        if record['output_sha256'] != output_hash:
+            raise RuntimeError('linker record does not match the node build')
+    elif (not isinstance(compiler_output, dict) or set(compiler_output) != {'path', 'sha256'}
+          or compiler_output['path'] != record.get('output')
+          or compiler_output['sha256'] != output_hash):
+        raise RuntimeError('compiler output does not match the node build')
     for name in ('driver', 'backend'):
         tool = record.get(name, {})
         if (set(tool) != {'invocation_path', 'path', 'sha256'}

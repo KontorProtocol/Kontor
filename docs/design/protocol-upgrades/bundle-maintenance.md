@@ -129,8 +129,12 @@ program search with Rust's `-B` directories and selected `-fuse-ld` variant;
 Clang's plan names the backend directly. This is selection provenance, not a trace
 of arbitrary child processes. Custom GCC specs/wrappers and
 `COLLECT_LD_OVERRIDE` require explicit qualification and are rejected.
-The record binds the link specification and output hash, and the compiler-object
-record binds its hash. The final native-symbol audit remains independently required.
+The record binds the link specification and immediate linker-output hash. The
+compiler-object record binds that record's hash and the output path/hash after
+rustc completes, including post-link debug stripping on macOS. Cargo's final
+executable must match the completed compiler output. The two stages need not
+have equal hashes; neither stage is replaced by an unverified artifact hash.
+The final native-symbol audit remains independently required.
 Source and staged artifact checks run across compilation and qualification.
 Git checkouts must match their pinned commit objects, including raw tracked
 file contents, symlink targets, executable modes, staged indexes and recursive

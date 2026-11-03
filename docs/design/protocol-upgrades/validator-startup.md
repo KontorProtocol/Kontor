@@ -1,7 +1,8 @@
 # Validator startup and verified catch-up
 
-This describes the single-runtime startup implementation. Local live promotion,
-transition and crash recovery qualification passed. Review and merge remain pending.
+This describes the single-runtime startup implementation merged in
+[PR623](https://github.com/KontorProtocol/Kontor/pull/623), with live promotion,
+transition and crash recovery qualification.
 Protocol activation changes the selected executor and per-height signing
 authorization while keeping the same Malachite runtime running. Joining as a
 validator is a separate lifecycle transition.

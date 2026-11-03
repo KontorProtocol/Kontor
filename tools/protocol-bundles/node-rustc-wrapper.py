@@ -110,11 +110,20 @@ def main():
         if digest(spec['linker_wrapper']) != spec['linker_wrapper_sha256']:
             raise RuntimeError('linker wrapper changed before invocation')
         Path(spec['linker_record']).unlink(missing_ok=True)
+        Path(spec['root_objects']).unlink(missing_ok=True)
         arguments.extend(['-C', 'linker=' + spec['linker_wrapper']])
     result = subprocess.run([compiler, *arguments], close_fds=False, env=environment)
     if result.returncode:
         raise SystemExit(result.returncode)
     if capture is not None:
+        linker_record = json.loads(Path(spec['linker_record']).read_text())
+        output = directory.absolute() / pattern.removesuffix('.*.rcgu.o')
+        if (digest(spec_path) != spec_hash or linker_record.get('spec_sha256') != spec_hash
+                or linker_record.get('output') != str(output)):
+            raise RuntimeError('node compiler and linker output identity disagree')
+        # Darwin rustc strips debug information after the linker returns. Bind
+        # Cargo's artifact to the completed compiler output, retaining both stages.
+        compiler_output = {'path': str(output), 'sha256': digest(output)}
         objects = [{'path': str(path), 'sha256': digest(path)}
                    for path in sorted(directory.glob(pattern))]
         if not objects:
@@ -123,6 +132,7 @@ def main():
             'spec_sha256': spec_hash, 'objects': objects, 'compiler': compiler,
             'arguments': arguments, 'working_directory': os.getcwd(),
             'linker_record_sha256': digest(spec['linker_record']),
+            'compiler_output': compiler_output,
         }) + '\n')
 
 

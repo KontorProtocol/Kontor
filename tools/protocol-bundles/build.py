@@ -487,8 +487,12 @@ def build_node(graphs, args, base_env, output, consensus=()):
     run(command, ROOT, env, log)
     executable = node_executable(log)
     linker_record = json.loads(Path(spec['linker_record']).read_text())
-    validate_linker_record(linker_record, digest(spec_path), digest(executable))
-    if json.loads(Path(spec['root_objects']).read_text())['linker_record_sha256'] != digest(Path(spec['linker_record'])):
+    compiler_record = json.loads(Path(spec['root_objects']).read_text())
+    if not isinstance(compiler_record.get('compiler_output'), dict):
+        raise RuntimeError('missing completed compiler output')
+    validate_linker_record(linker_record, digest(spec_path), digest(executable),
+                           compiler_record['compiler_output'])
+    if compiler_record['linker_record_sha256'] != digest(Path(spec['linker_record'])):
         raise RuntimeError('node compiler and linker records disagree')
     archives, _, native_outputs, proc_macros = current_artifacts(log, directory / "target", args.target, "indexer")
     root_objects = node_codegen_objects(Path(spec["root_objects"]), spec_path)
