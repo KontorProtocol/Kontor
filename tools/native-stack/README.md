@@ -653,155 +653,35 @@ Run the comparator's negative controls with `python3 -m unittest discover -s too
 The synchronous probe's compressed SHA-256 is `e396317b4eb14c9a29d47acbe8a9f7b0e29770d47e7df53e4bed12d5c5bfce50`. Its exact encoder inventory is `encoder-inventory/inventory-s2-stack-probe.tsv`, with three embedded modules and zero core or component starts.
 
 S2 replaces S1's default Wasmtime feature selection with the explicit production features in `core/Cargo.toml`: `anyhow`, `async`, `backtrace`, `component-model`, `component-model-async`, `cranelift`, `gc-copying`, `gc-drc`, `gc-null`, `pooling-allocator`, `pulley`, `runtime`, `std`, `threads`, `wat`, `wave`, and `wit-parser`. Cargo additionally resolves `gc`, `once_cell`, and `wasmtime-jit-icache-coherence` through these features. `call-hook` appears only in the indexer's development dependency graph. The `threads` compile feature provides `wasm_threads(false)` for the nine-setting capability check; the runtime disables guest threads. Each cell retains Cargo's build JSON and both raw resolved feature lists. The comparator requires the approved production closure, its test-only `call-hook` addition, and absence of `cache`, `profiling`, and `debug-builtins`. This feature change and the new synchronous binary require fresh target and profile qualification, so S1's earlier measurements cannot be reused. `KONTOR_STACK_TIMING` lines in raw probe logs describe setup, publication, execution, and postcall time; they are diagnostic and excluded from deterministic cross-cell comparisons.
-# Local workload resource profiles
+## Archived local performance supervisor
 
-`run_workload_profile.py` runs one ignored Rust workload test in a transient
-user systemd service on Linux. `conservative` enforces two CPUs and 12 GiB;
-`burst` enforces eight CPUs and 16 GiB. Both disable swap. The worker verifies
-the actual cgroup limits and inherited limits before launching the binary,
-restricts CPU affinity, and records whole-service CPU usage, memory peak,
-memory events, binary/log hashes and terminal status. The whole service,
-including test children, is stopped on timeout. Its measurements include
-fixture setup and validation, so use the workload's event records for service
-latency rather than treating total process duration as block application time.
-The record also captures CPU topology, physical memory, page size, checkout and
-temporary-directory mounts, and visible block devices. This requires the Linux
-`lscpu`, `findmnt` and `lsblk` utilities. Storage metadata describes what the host
-exposes; it does not establish equivalence to a cloud disk or its performance.
+The Linux cgroup profiling supervisor and its Python Bitcoin, arrival and view
+services were retired during post-upgrade cleanup. They were an opt-in local
+performance experiment, not part of stack qualification CI or the production
+build. The previous implementation and usage instructions are preserved at
+commit `84ac9c7213e5d932951b1a4fc6123da9d5e86f46`, under this directory.
+Use that revision when examining its historical measurement records; this
+checkout no longer offers the `run_workload_profile.py` command.
 
-Prepare an environment JSON containing the exact `KONTOR_WORKLOAD_*` settings
-for the saved input and consumer identity. Then run, for example:
+The removed helpers measured CPU/memory limits, external-service separation,
+trial peaks and timing targets. Retiring them neither establishes performance
+acceptance nor weakens the retained stack/resource evidence validators. Those
+validators and the frozen workload fixture/schema/manifest checks remain.
+`assemble_workload.py` also remains because Rust frozen replay still consumes
+its verified input format. Their Python migration is separate work.
 
-```sh
-python3 -B tools/native-stack/run_workload_profile.py \
-  --profile conservative --binary /absolute/path/to/indexer-test-binary \
-  --test reactor::workload_tests::smoke::populated::timed::run::workload_timed_mixed_event_replay \
-  --environment /absolute/path/to/workload-environment.json \
-  --output /absolute/path/to/new-measurement-directory --timeout 1800
-```
-
-The output directory must be new. Inspect both `supervisor.json` and
-`measurement.json`: missing or nonterminal measurement records, failed tests,
-OOM events and nonzero supervisor exits are failures. The wrapper rejects
-zero selected tests and ignored tests. A successful measurement establishes
-only the recorded local resource constraints. It does not establish production
-hardware equivalence, freeze the workload envelope, compare S1 against S2, or
-satisfy the phase's performance acceptance criteria by itself.
-
-Use `--bitcoin-binary /absolute/path/to/bitcoind` to have the supervisor launch
-a fresh external regtest service. The supervisor verifies that this process
-owns the chosen RPC listener and records its executable hash, process start
-identity, version, cgroup and process memory fields in `bitcoin/service.json`.
-Before starting the workload, the measured worker checks that the daemon is
-still the same process and is outside its cgroup. Only the supervisor controls
-the external process lifetime, including cleanup on normal exit, workload
-failure or timeout. Unexpected supervisor death kills the disposable daemon.
-The test-only connection path rejects non-loopback endpoints and reused chains.
-Existing workloads without this option retain their own local daemon.
-
-This option excludes Bitcoin from the constrained service's accounting. The
-remaining measurement still includes the test process, its in-process workload
-driver, setup and oracle checks. It does not yet establish the separate
-node-only, per-trial peak-memory acceptance gate. Do not supply
-`KONTOR_WORKLOAD_BITCOIN_RPC_URL` in the environment JSON: the supervisor derives
-and verifies that setting from the service it owns.
-
-For either saved timed replay test, add `--trial-memory` together with
-`--bitcoin-binary`. Each restore records baseline and post-trial cgroup memory,
-swap, memory events, memory statistics, CPU counters, memory pressure and
-process RSS, plus a peak reset for that restore. Measurement begins after
-adapter setup and view initialization and ends after replay checkpoint checks,
-while competing views remain active. The same open `memory.peak` descriptor
-is retained across reset and read, as required by Linux's per-descriptor reset
-semantics. A kernel without writable reset support fails the run.
-Excluding setup refers to the measurement interval: allocations and charged
-file cache retained from setup still contribute to baseline, peak and final
-memory. This does not establish a cold OS page cache.
-
-Opt-in Store counters are attached to the replay runtime and all eight view
-pool runtimes. They count actual `InvocationStore` lifetimes through Store
-teardown, distinguishing roots at invocation depth one from nested Stores.
-Peaks reset atomically at the trial boundary, including any views already in
-flight. Each restore must drain to zero live Stores and roots. Replay and view
-cache reports include entry counts and encoded-component byte weights after
-pending cache maintenance, not estimates of compiled-code memory.
-For a declared cold replay, the canonical runtime's cache is cleared after
-reactor/oracle setup and must report zero entries and zero weight at the window
-boundary. Competing views retain their separately reported warm pool cache.
-
-The wrapper requires exactly two ordered records from the measured PID and
-cgroup with unchanged limits. Swap, OOM and memory-limit pressure events fail
-validation. Raw records remain in `workload.log` on failure. These windows still
-include in-process scheduling and semantic verification; they do not establish
-complete external load-generator separation or the full phase
-memory acceptance gate. The whole-service peak remains separately reported.
-
-## Historical replay with live API arrivals
-
-With the constrained runner, `--external-arrivals` schedules historical replay
-API arrivals in the supervisor, outside the measured cgroup. Each restore sends
-its finite schedule and Linux `CLOCK_MONOTONIC` epoch through a private local
-socket. The supervisor emits arrivals independently of node progress; the node
-checks their order and timestamps against that same clock. It does not move the
-epoch forward when the node falls behind. Contract calls and execution remain
-inside the node process.
-
-`arrivals.json` records the scheduler process identity, each schedule hash and
-actual emission timestamps. The runner verifies cgroup separation and matches
-both restore reports to the supervisor's emissions. Disconnect and supervisor
-shutdown stop the scheduler. This option covers frozen historical replay API
-arrivals. Add `--external-views` to move the eight competing view clients and
-their response oracles into the supervisor as well. A loopback HTTP listener in
-the measured process uses the production contract-view handler and the same
-eight-runtime pool, including production pool recycling. The runtime and all
-contract execution remain inside the node.
-
-Each external view session checks initial readiness, all five pagination
-samples against fixture-derived expected values, monotonic counters, overlap
-with writer work using the writer's exact Linux monotonic-clock interval, and
-a fresh final committed counter after the writer ends. Calls during the control
-handshake or final drain do not count as writer overlap.
-The runner verifies the client process is outside the measured cgroup and
-matches both node reports to `views.json`. Client errors or a control disconnect
-fail the session and stop its workers. HTTP calls and control reads have bounded
-timeouts; the node shuts down its listener and drains requests before reporting
-success. The reported page peak counts in-flight production handlers, including
-pool checkout; Store telemetry separately counts actual invocation Stores.
-This route exercises the production handler, not the full public router or its
-middleware. Canonical replay and simulation verification still use in-process
-harness code, so this is not a claim that all harness overhead has been removed.
-
-The ignored test
+Rust correctness workloads remain available as ignored tests, including
 `reactor::workload_tests::smoke::populated::timed::archive::workload_saved_timed_historical_replay`
-consumes the same frozen archive and explicit consumer identity as
-`workload_saved_timed_events_replay`. It requires complete mixed historical
-intervals (`fresh_backlog: 0`). Canonical blocks and all their batches replay
-without waiting for their historical timestamps. Eight existing view clients
-remain active throughout each of the two independent database restores.
+and `workload_saved_timed_events_replay`. They retain their explicit frozen
+archive and consumer identity requirements, independent database restores,
+checkpoints, accounting and rollback assertions. With no external-service
+variables set, they launch a local regtest daemon and use in-process arrivals
+and views. The Rust opt-in external-service interfaces and telemetry are still
+present for existing test clients, but no maintained Python supervisor is
+provided. Ordinary correctness runs should leave
+`KONTOR_WORKLOAD_BITCOIN_RPC_URL`, `KONTOR_WORKLOAD_ARRIVAL_SOCKET`,
+`KONTOR_WORKLOAD_VIEW_SOCKET` and `KONTOR_WORKLOAD_TRIAL_MEMORY` unset.
 
-An independent monotonic producer enqueues external API requests every ten
-seconds for the representative profile and every second for stress, starting
-at time zero. Requests use the archive's distinct signed API inputs exactly
-once, in order. At each canonical boundary, at most one due request runs; after
-the final boundary, all requests due strictly before the completion observation
-must drain. This keeps both canonical work and API work progressing while
-making overload visible. No future request is awaited to fill out the archive.
-Exceeding the archive's finite real-time input horizon fails the run.
-
-Historical API occurrences are omitted from execution but their frozen
-poststate checkpoints are still checked, since those calls originally rolled
-back. Each external API request executes at the current canonical tip, checks
-its results against the independent recipe oracle, and verifies complete
-database rollback and restored runtime context. Its actual tip and results are
-logged separately. Original-position API result equality remains the job of
-the existing semantic replay test; both tests are needed.
-
-`workload_historical_replay` reports the canonical historical seconds, canonical
-completion time, end-to-end completion time, separate canonical/API execution
-service totals, and per-request intended arrival, enqueue, dispatch and
-completion times. The reported queue peak is the maximum observed at dispatch
-boundaries, not a continuously sampled peak. Oracle/checkpoint work is included
-in elapsed time and excluded from execution service. Historical throughput is
-`historical_seconds / (completion_ns / 1e9)`; API requests never increase its
-historical numerator. These records do not by themselves establish release
-performance, paired S1/S2 results, or isolated node memory usage.
+No new performance run or full node build is required for this tooling-only
+retirement. The standard stack qualification, bounded dev smoke, resource-suite
+validators and their workflow selection remain unchanged.
