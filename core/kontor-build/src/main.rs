@@ -6,6 +6,10 @@ use std::process;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kontor_build::build_inputs::{Request as BuildInputRequest, run as build_inputs};
+use kontor_build::consensus_definition::{
+    FreezeArgs as ConsensusArgs, Request as ConsensusRequest, freeze as freeze_consensus,
+    run as consensus_definition,
+};
 use kontor_build::execution_definition::{
     FreezeArgs, Request as DefinitionRequest, freeze as freeze_execution,
     run as execution_definition,
@@ -75,6 +79,10 @@ enum Command {
     ExecutionDefinition,
     /// Verify an executor reference, or explicitly write an unreleased definition.
     FreezeExecution(FreezeArgs),
+    /// Build or verify consensus-reference JSON.
+    ConsensusDefinition,
+    /// Verify consensus provenance, or explicitly write an unreleased reference.
+    FreezeConsensus(ConsensusArgs),
     /// Inventory build source inputs from a JSON request on standard input.
     Provenance,
     /// Select CI checks from the GitHub event and complete Git change set.
@@ -140,6 +148,15 @@ fn main() -> Result<()> {
         }
         Command::FreezeExecution(args) => {
             println!("{}", freeze_execution(&repository_root()?, args)?);
+            Ok(())
+        }
+        Command::ConsensusDefinition => {
+            let request: ConsensusRequest = serde_json::from_reader(io::stdin().lock())?;
+            println!("{}", consensus_definition(request)?);
+            Ok(())
+        }
+        Command::FreezeConsensus(args) => {
+            println!("{}", freeze_consensus(&repository_root()?, args)?);
             Ok(())
         }
         Command::VerifySources => {

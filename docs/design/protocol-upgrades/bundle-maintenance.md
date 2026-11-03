@@ -561,8 +561,14 @@ Never overwrite a released definition to silence a mismatch. Preserve its
 source graph and add the new definition separately. Compatibility qualification
 of a new compiler/platform artifact is distinct from changing execution rules.
 Preserve the frozen P1 source and reference. Coordinator source changes may also
-require `python3 tools/protocol-bundles/managed_definition.py --write`; inspect the
+require `tools/kontor freeze-consensus --write`; inspect the
 changed source inventory instead of regenerating references automatically in CI.
+This Rust command resolves locked, unfiltered node and consensus Cargo metadata
+offline. Omitting `--write` verifies the managed reference without updating it.
+Previously acquired metadata can be supplied with `--node-metadata` and
+`--graph-metadata` (repository-relative or absolute paths). The legacy coordinator
+reference is selected only with `--baseline`; it is not refreshed by the managed
+command. Neither command changes execution definitions.
 
 The definition also commits the immutable `protocol/v1/storage-contract.json`
 reference. It specifies the required logical storage semantics and identifies

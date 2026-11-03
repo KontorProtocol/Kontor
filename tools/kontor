@@ -11,7 +11,7 @@ if [[ "${1:-}" == "protocol-bundles" ]]; then
         fi
     done
 fi
-if [[ "${1:-}" == "freeze-execution" ]]; then
+if [[ "${1:-}" == "freeze-execution" || "${1:-}" == "freeze-consensus" ]]; then
     export CARGO_NET_OFFLINE=true
 fi
 wrapper_bins=()

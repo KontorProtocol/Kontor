@@ -49,7 +49,7 @@ fn relative(root: &Path, path: &Path) -> Result<String> {
 }
 // Metadata can name not-yet-generated targets. Resolve existing symlinks while
 // retaining missing suffixes, as the original effective-manifest projection did.
-fn resolve(path: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve(path: &Path) -> Result<PathBuf> {
     resolve_inner(path, &mut BTreeSet::new())
 }
 fn resolve_inner(path: &Path, links: &mut BTreeSet<PathBuf>) -> Result<PathBuf> {
@@ -433,7 +433,7 @@ fn anchor_package(package: &mut Value, cwd: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn anchor_metadata(metadata: &mut Value, cwd: &Path) -> Result<()> {
+pub(crate) fn anchor_metadata(metadata: &mut Value, cwd: &Path) -> Result<()> {
     for package in metadata["packages"]
         .as_array_mut()
         .context("missing packages")?

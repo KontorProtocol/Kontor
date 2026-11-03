@@ -143,11 +143,11 @@ class ManagedDefinitionTests(unittest.TestCase):
             external = Path(outside) / 'lib.rs'
             external.write_text('external')
             source.symlink_to(external)
-            with self.assertRaisesRegex(RuntimeError, 'escapes'):
+            with self.assertRaisesRegex(ValueError, 'escapes'):
                 reference(root, *inputs)
             source.unlink()
             source.symlink_to(source.parent, target_is_directory=True)
-            with self.assertRaisesRegex(RuntimeError, 'cyclic'):
+            with self.assertRaisesRegex(ValueError, 'cyclic'):
                 reference(root, *inputs)
 
 

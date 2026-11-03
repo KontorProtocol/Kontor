@@ -3,6 +3,7 @@ mod bundles;
 mod canonical_json;
 mod ci_scope;
 mod compiler_wrapper;
+pub mod consensus_definition;
 mod container;
 mod diagnostics;
 pub mod execution_definition;
