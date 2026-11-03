@@ -12,12 +12,22 @@ import tarfile
 import tempfile
 import tomllib
 
-from coordinator_definition import DESTINATION as CONSENSUS_REFERENCE, verify as verify_coordinator
+from coordinator_definition import (
+    DESTINATION as CONSENSUS_REFERENCE,
+    FILES as COORDINATOR_FILES,
+    verify as verify_coordinator,
+)
 from execution_definition import SEMANTIC_TREES, verify_reference
 
 
 GRAPHS = ("first", "second")
-SUPPORT_TREES = ("protocol-bundles/proof", "tools/protocol-bundles", "tools/native-crypto/fixtures")
+SUPPORT_TREES = ("protocol-bundles/proof", "tools/native-crypto/fixtures")
+SUPPORT_FILES = (
+    "tools/protocol-bundles/historical_semantics.rs",
+    "tools/protocol-bundles/semantic-baseline.json",
+    "tools/protocol-bundles/semantic-baseline.log",
+    "tools/protocol-bundles/protocol-manifest-vector.json",
+)
 
 
 def verify_snapshot(root, expected):
@@ -74,6 +84,12 @@ def inputs(root, resolutions, graphs, extra_trees=()):
 
     for relative in (*SEMANTIC_TREES, *SUPPORT_TREES, *extra_trees):
         include(root / relative)
+    # Build orchestration comes from the current checkout. Retain historical
+    # fixtures referenced by source/tests, without copying obsolete tool programs.
+    for relative in SUPPORT_FILES:
+        path = root / relative
+        if path.exists():
+            include(path)
     # Cargo reads even unused path patches while resolving a locked graph.
     for graph in graphs:
         manifest = root / f"protocol-bundles/{graph}/Cargo.toml"
@@ -139,6 +155,9 @@ def freeze(repository, revision, destination, kind="executors"):
         resolutions = [metadata(root, graph) for graph in graphs]
         expected = definitions(root, resolutions, kind)
         extra_trees = (
+            # The legacy coordinator definition binds tool sources too, unlike
+            # executor definitions. Keep that closure until this mode is retired.
+            *COORDINATOR_FILES,
             "core/indexer",
             "protocol-bundles/retained/k3/protocol-bundles/executor-first/definition.bin",
             "protocol-bundles/executor-first/definition.bin",

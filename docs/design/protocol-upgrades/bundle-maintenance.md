@@ -36,7 +36,28 @@ The removed K4 snapshot remains available at commit
 `9359c0b7cdca0d9e2852262337061ce43a0856b32e36c173a41c4b874ba1ebf9`.
 The historical execution ledger records why it was originally captured. Its
 self-preservation test was removed with it; mutation, substituted-inventory,
-relocation and path-containment checks remain. K3 and P1 inventories are unchanged.
+relocation and path-containment checks remain.
+
+The P1 and K3 snapshots now omit 35 and 28 duplicate Python tooling files,
+respectively. Builds already use orchestration from the current checkout.
+Historical Rust fixtures, semantic baselines, manifest vectors, Cargo inputs and
+execution-definition bytes remain intact. All four retained definitions were
+verified against fresh locked, offline Cargo metadata before and after pruning.
+This changes packaging and build provenance, not execution identities.
+
+Each `snapshot.json` records the removed paths and its preceding inventory hash.
+The complete preceding snapshots remain at commit
+`68776fb86df37c48f474683a904d9703641aa190`. Inventory hashes changed as follows:
+
+| Snapshot | Previous SHA-256 | Current SHA-256 |
+| --- | --- | --- |
+| P1 | `4df4b75941b026b19a6dffcf2371afdd4d997e2b8cd33322002c782e3bc36cfc` | `42c18e71ed5af350fd43682869afc06716176f3198b90a9a76f0064ed46ab2dc` |
+| K3 | `fc85d7f7479662012faef9bc43e3efaf7c9299ddc940ffd5ef5865abe5667592` | `161d2f236cd8c033607f429d814276a404382ae1420529a94db750b9f2243b8e` |
+
+Historical ledger entries retain their original hashes. New executor source
+freezes copy required fixture assets individually instead of preserving old build
+tools. The legacy coordinator-freeze mode still includes its identity-bound tool
+sources until that mode is retired or migrated.
 
 ## Existing build fixtures
 
@@ -57,7 +78,7 @@ continues to use its existing workspace commands.
 Individual retained inventories can now be verified by the Rust build CLI:
 
 ```sh
-RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor verify-snapshot protocol-bundles/retained/p1 --sha256 4df4b75941b026b19a6dffcf2371afdd4d997e2b8cd33322002c782e3bc36cfc
+RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor verify-snapshot protocol-bundles/retained/p1 --sha256 42c18e71ed5af350fd43682869afc06716176f3198b90a9a76f0064ed46ab2dc
 ```
 
 The command prints the authenticated inventory as JSON and fails on changed,

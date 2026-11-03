@@ -3836,123 +3836,60 @@
     "tools/protocol-bundles/.gitignore": {
       "sha256": "32dae3052f331ee34d628ef535709b301259a45df7c7522c4d35dcf49873f00b"
     },
-    "tools/protocol-bundles/audit.py": {
-      "sha256": "0074b3958cfbabc3f3d229d76de615992ce99053bcc27e59e36887aea1ffa98e"
-    },
-    "tools/protocol-bundles/build.py": {
-      "sha256": "572e83e2756252416d59bf9d0f1715c661761c03eef8ef88b468e2ccb40f1027"
-    },
-    "tools/protocol-bundles/capabilities.py": {
-      "sha256": "bb9d1ea7c53984edcecf7a5a48d2624353e2a5be1e22cd2412858619937087a2"
-    },
-    "tools/protocol-bundles/common_ownership.py": {
-      "sha256": "ff39d50c879d749dedef9abfc5eb3d1821cc906c2e36f4de7cc6574094086530"
-    },
-    "tools/protocol-bundles/compare_node.py": {
-      "sha256": "ddf770a96900fba15901c80e515e65371c24343556d1d40a90d56f7f09e6e946"
-    },
-    "tools/protocol-bundles/coordinator_definition.py": {
-      "sha256": "c1e0b08318ae517d7319a82b2ec8576ee2acf1043d706ab62cec96f0f6015fc3"
-    },
-    "tools/protocol-bundles/execution_definition.py": {
-      "sha256": "a2c9fbc09bd7cdb130df448a72a19ea19b21549f2495492a56779e5925806771"
-    },
-    "tools/protocol-bundles/freeze_sources.py": {
-      "sha256": "b0a8329f0cff8811a782348dd09e0bc9bdd9314ea01e3b9c687b15897c223795"
-    },
     "tools/protocol-bundles/historical_semantics.rs": {
       "sha256": "add22266048a9c706488586d6a2962b0e6b58ef8ed73e8ca6c8ade3677f863e0"
     },
-    "tools/protocol-bundles/managed_definition.py": {
-      "sha256": "72cc14b234f7930752b822f871b06293696feb6e68c4da6ea71c431c382d9fd2"
-    },
-    "tools/protocol-bundles/metadata_control.py": {
-      "sha256": "da537b1e1ba226dfa1b0a4bb680746cfb2fb8df45abc807261bb0b277ba1fe4a"
-    },
-    "tools/protocol-bundles/node-rustc-wrapper.py": {
-      "sha256": "91c0d1b374f72e82175d0a12c8ab5ae7f634fb80589328ed1278cf4befff0738"
-    },
     "tools/protocol-bundles/protocol-manifest-vector.json": {
       "sha256": "0ce4152801cde833b30db9e12f6ca978fd0246aeb535bbf27a375d250498dfdd"
-    },
-    "tools/protocol-bundles/provenance.py": {
-      "sha256": "426338db5e528ce4a9ea90708ab14b293763552ff1c765af160639f91da680af"
-    },
-    "tools/protocol-bundles/qualify_node.py": {
-      "sha256": "0066f1a98cc954b740d1c6d14b16b288b38dccb84f946568a07f8d177eb40786"
-    },
-    "tools/protocol-bundles/recipes.py": {
-      "sha256": "7d1c5f9c3789dc7ba5525471b64869b6b7833e93b09429fd0dc1985a6082dd66"
-    },
-    "tools/protocol-bundles/rustc-wrapper.py": {
-      "sha256": "54ab111377992b5af36dcb5437cff16c94045ca903130bb609ac19af9c53d223"
     },
     "tools/protocol-bundles/semantic-baseline.json": {
       "sha256": "e0f09122e6523db4793f7227b25839f8cef1e5274e612eb052246c896bb0978d"
     },
     "tools/protocol-bundles/semantic-baseline.log": {
       "sha256": "186184009e4ecf78985a42ec6190c85dc0943abec667a307fa77d5292624f6d2"
-    },
-    "tools/protocol-bundles/semantic_baseline.py": {
-      "sha256": "7c855b79444931fe1777a4db23fcb023a95a7a52aeecf247597a84f3fdc9331d"
-    },
-    "tools/protocol-bundles/source_identity.py": {
-      "sha256": "454999248c9d01c0a85e1b86fa2140e3f4e5b23c02c7316463f7d766a025296e"
-    },
-    "tools/protocol-bundles/source_policy.py": {
-      "sha256": "16eb9de05eff242d68ecdcbbce813f437dc9a5078599f647ad3629981b737e9c"
-    },
-    "tools/protocol-bundles/symbol_tool.py": {
-      "sha256": "c0146f8bcecbfc8ec3174ad27ff9e1701db30c8e679e65e050b84f45169fc2dc"
-    },
-    "tools/protocol-bundles/test_audit.py": {
-      "sha256": "9f0392d4277302e0ed69af5a00c865cc9e0330febcb270d25a2771f28ccee53b"
-    },
-    "tools/protocol-bundles/test_consensus_inputs.py": {
-      "sha256": "13f9357431cbe5a7d17823a5fafce3cf60fcef0b8b33a19d191dff1f236a1523"
-    },
-    "tools/protocol-bundles/test_coordinator_definition.py": {
-      "sha256": "c54b261735581301b6c7e73c8d92a23b140cabefe33dfe735b25ba1220f9e941"
-    },
-    "tools/protocol-bundles/test_execution_definition.py": {
-      "sha256": "891e166d80c45c26298f5e425f7bc377b6df24b118b2a3c000a6a7da02328993"
-    },
-    "tools/protocol-bundles/test_executor_inputs.py": {
-      "sha256": "bdeb9c1db75abbbbeb56f84e306c1b5a640548728c92cfaf21f245f42f5a2f15"
-    },
-    "tools/protocol-bundles/test_managed_definition.py": {
-      "sha256": "a284364dc34824172f2d5d5fcbbb6bdedd068a1e70b4e4afd75eb0cca1baa136"
-    },
-    "tools/protocol-bundles/test_node_build.py": {
-      "sha256": "19add2154b34a8a9054dd9b9267f126a4ad97d7a77f4687907f41d44d581bae0"
-    },
-    "tools/protocol-bundles/test_node_comparison.py": {
-      "sha256": "061afda29c74b289d64bf36d377d18a11fda5e226a76224cc727eb8a66b28fff"
-    },
-    "tools/protocol-bundles/test_node_execution.py": {
-      "sha256": "6dfed45dbe9267236ca17f6c3c3272baaaa62f20dc1fc6594d659ee65709a153"
-    },
-    "tools/protocol-bundles/test_recipes.py": {
-      "sha256": "3bde3238519b60ff85d1307cc066ec5065a03e179e9e22fb97411f232510da24"
-    },
-    "tools/protocol-bundles/test_semantic_baseline.py": {
-      "sha256": "5cf889bf1565a995676aac77d6ffd086d9fb77259f35ceaa7547cf107d09b1a4"
-    },
-    "tools/protocol-bundles/test_source_identity.py": {
-      "sha256": "04704916732baade39289a44e5dfde54ed7a56b7e5b665e6fb667abac1169cb8"
-    },
-    "tools/protocol-bundles/test_source_roots.py": {
-      "sha256": "6045b901276fe109f0ec883b776ab3dc3ec3175f99df964526360ae9215aa0a9"
-    },
-    "tools/protocol-bundles/test_type_boundary.py": {
-      "sha256": "6bb3b02dc6a2903e10b8858795bb0390133d12241da41ef6ae3a4b0077ea91b9"
-    },
-    "tools/protocol-bundles/test_wrapper.py": {
-      "sha256": "bb40e0202637ca6a3fbc1a5929d0c7425385286fe49834e363cb2f9474add9d5"
-    },
-    "tools/protocol-bundles/type_boundary.py": {
-      "sha256": "715eb82d796ee0f0ad52c65c3743b1f33abf273dd1d367931f637f7ca18cd590"
     }
+  },
+  "packaging": {
+    "policy": "current-build-tools; retained noncompiled tool copies omitted",
+    "previous_snapshot_repository_commit": "68776fb86df37c48f474683a904d9703641aa190",
+    "previous_snapshot_sha256": "4df4b75941b026b19a6dffcf2371afdd4d997e2b8cd33322002c782e3bc36cfc",
+    "removed_support_files": [
+      "tools/protocol-bundles/audit.py",
+      "tools/protocol-bundles/build.py",
+      "tools/protocol-bundles/capabilities.py",
+      "tools/protocol-bundles/common_ownership.py",
+      "tools/protocol-bundles/compare_node.py",
+      "tools/protocol-bundles/coordinator_definition.py",
+      "tools/protocol-bundles/execution_definition.py",
+      "tools/protocol-bundles/freeze_sources.py",
+      "tools/protocol-bundles/managed_definition.py",
+      "tools/protocol-bundles/metadata_control.py",
+      "tools/protocol-bundles/node-rustc-wrapper.py",
+      "tools/protocol-bundles/provenance.py",
+      "tools/protocol-bundles/qualify_node.py",
+      "tools/protocol-bundles/recipes.py",
+      "tools/protocol-bundles/rustc-wrapper.py",
+      "tools/protocol-bundles/semantic_baseline.py",
+      "tools/protocol-bundles/source_identity.py",
+      "tools/protocol-bundles/source_policy.py",
+      "tools/protocol-bundles/symbol_tool.py",
+      "tools/protocol-bundles/test_audit.py",
+      "tools/protocol-bundles/test_consensus_inputs.py",
+      "tools/protocol-bundles/test_coordinator_definition.py",
+      "tools/protocol-bundles/test_execution_definition.py",
+      "tools/protocol-bundles/test_executor_inputs.py",
+      "tools/protocol-bundles/test_managed_definition.py",
+      "tools/protocol-bundles/test_node_build.py",
+      "tools/protocol-bundles/test_node_comparison.py",
+      "tools/protocol-bundles/test_node_execution.py",
+      "tools/protocol-bundles/test_recipes.py",
+      "tools/protocol-bundles/test_semantic_baseline.py",
+      "tools/protocol-bundles/test_source_identity.py",
+      "tools/protocol-bundles/test_source_roots.py",
+      "tools/protocol-bundles/test_type_boundary.py",
+      "tools/protocol-bundles/test_wrapper.py",
+      "tools/protocol-bundles/type_boundary.py"
+    ]
   },
   "source_commit": "2c26410e8419844bddf3d4967d157ce240f8b9c1"
 }
