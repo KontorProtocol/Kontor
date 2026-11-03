@@ -1,16 +1,16 @@
 {
   "definitions": [
     {
-      "bytes": 146380,
-      "execution_definition_id": "38f5d10caeac32db580e082762c16d21ab65b8cacdadf39a3047f376d2916fa5",
+      "bytes": 145613,
+      "execution_definition_id": "56fd93c0af8d716649aafd779038f1bc1dd5d47f9baeea08b5cd400528d362d2",
       "path": "protocol-bundles/executor-first/definition.bin",
-      "sha256": "a0f760c177f8d971724e82164259269e5d61de2f0dda152aa871972adffc842a"
+      "sha256": "8b6b4044ee3069117fb7f028f666119492fb843087802351c08f8afa6f0bdf0b"
     },
     {
-      "bytes": 146553,
-      "execution_definition_id": "730bc9d46a0d46969a2427f2abf3aa1ccf57bd1063a50ae2b885e631641cf6a8",
+      "bytes": 145786,
+      "execution_definition_id": "9f5a8d08224a6cfb5e8b404d0e3b477b1f381cc3456ad7161371080dd52daa37",
       "path": "protocol-bundles/executor-second/definition.bin",
-      "sha256": "b0e54867e5a452b6c15da0b51a32f14ef58a5b5e22ad2b941d4488cce55f1492"
+      "sha256": "b5871f4c31e48269083bd41f1a954ab277b251a2df560aa5fd1a7c2850c9595c"
     }
   ],
   "files": {
@@ -3105,7 +3105,7 @@
       "sha256": "cd072b07393bda13533938a3564ae41e5be06b70be58c575d193853da7922aeb"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/.github/workflows/ci.yml": {
-      "sha256": "5991e8230eae8477b9e11b7fed90e8efa3c42c2d38c1127682287a5b3b176bbe"
+      "sha256": "0cc335ae628086ed97041a3843a122b15713f8e2c3c6fcaf7cccf9b56a0acf62"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/.gitignore": {
       "sha256": "3fddc31c187843bc64b8c81cc6ab4b454b6337c6b9e8e3452ade6a5bb6dfd832"
@@ -3126,7 +3126,7 @@
       "sha256": "a735999c7e5649df6fcda6fb06ab97435851c392b1b93494ae8725f37441632f"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/Makefile.am": {
-      "sha256": "702c6ebdd24112cf549543d3d88da095d46ef0c0945780d417070624bb147952"
+      "sha256": "7f0f68c7c83560b97400abbeadb0574f672b2ec312b37fec7cfe7884ee4e16b8"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/README.md": {
       "sha256": "033449d748161716a1a89b82aa7d102922ce14e69e86b50161b11d9677adc2d9"
@@ -3144,7 +3144,7 @@
       "sha256": "05781f334c2a288537ce550e17d1e0c241bb08beca3816cce25bbce3c5593a7f"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/ci/linux-debian.Dockerfile": {
-      "sha256": "8dbd4007926552aae95d7ee0c489d8f235116930db89ad815c6b19f665677d20"
+      "sha256": "e32bcda457e14d9f4ec53884c181fb536925b44a46e88330eca0857a03b899fd"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/cmake/CheckArm32Assembly.cmake": {
       "sha256": "83b99d269388e22f3f2bddbbbef009eb99a82c4ef5a0221d0e74734d341541e0"
@@ -3241,24 +3241,6 @@
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/libsecp256k1.pc.in": {
       "sha256": "050affc52ee366bcb080d6fa86463b22222d0439de75a8705307f5997a1d1019"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/sage/gen_exhaustive_groups.sage": {
-      "sha256": "66e5a364478f23bc3ef11309e619064da068426f252e104822411341a4c3080c"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/sage/gen_split_lambda_constants.sage": {
-      "sha256": "59c1538cb44fc1ff816de2b19ea6299fb7262bb0ac434949db2a4b3268f67995"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/sage/group_prover.sage": {
-      "sha256": "9e3b3430494c3353b264bbb67261c775b423117084d29344df257d386306695d"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/sage/prove_group_implementations.sage": {
-      "sha256": "2e3bb2417361e626042891565313866a63e8729ea03e0a2e0ce158a5a7a68ef9"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/sage/secp256k1_params.sage": {
-      "sha256": "3536a1b8fc80a3eab2ee4927f84dea9677d717a51af1044f609f911df6ac06a7"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/sage/weierstrass_prover.sage": {
-      "sha256": "3608a703fa74c1c6cf0191e32e6f658e2f153558a272781bf30acfe2a30d1c14"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/src/CMakeLists.txt": {
       "sha256": "ef6f6ba521e7d9c4cbe50d90f3603aa7423e24412fbc476057118c55aeb9f230"
@@ -3522,7 +3504,7 @@
       "sha256": "ab1ab63744a79afa4ede5ef37dbc1521a7b30f3be60e0e3b3b61c93ee696786c"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/src/tests.c": {
-      "sha256": "62fed1be3d15f4f00c474477faaf54372f31daae5c3dbd5a200b7e3308baaad8"
+      "sha256": "e43335355a9c59a8fd6b50eddb01b62955764bab34587332bd93552d1d5f012e"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/src/tests_exhaustive.c": {
       "sha256": "7c7b370af45a6d0c145d8e6a17cdf7817c96cf283f205175dd8e806ecb5d60b6"
@@ -3547,9 +3529,6 @@
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/tools/check-abi.sh": {
       "sha256": "46701eddd7977df9a38476c0b376b3276baae7bb7ac025ac194c1802adb8910f"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/tools/tests_wycheproof_generate.py": {
-      "sha256": "4e9a29719dc8bd048f1f2ff4f710d1e8e271ac72ec5464eedbbf668ad36c7b35"
     },
     "core/vendor/secp256k1-sys/depend/util.h.patch": {
       "sha256": "870f3d292a761b5c87d9685dee373e856134796d72c31986b96476497355cb3d"
@@ -3792,7 +3771,7 @@
       "sha256": "b694c0ef761c3208171099bcd368cea5f8804011c85653f258aa20680fc7775f"
     },
     "protocol-bundles/executor-first/definition.bin": {
-      "sha256": "a0f760c177f8d971724e82164259269e5d61de2f0dda152aa871972adffc842a"
+      "sha256": "8b6b4044ee3069117fb7f028f666119492fb843087802351c08f8afa6f0bdf0b"
     },
     "protocol-bundles/executor-second/Cargo.lock": {
       "sha256": "3840d9d779b5cf36c1b899d8397d61acbc7c575501d61112b7a3020f84e9cef4"
@@ -3801,7 +3780,7 @@
       "sha256": "4194c921a7a83691eae4ad76d5901e399c4d9a9aa14b48f04b25d157e0b732c2"
     },
     "protocol-bundles/executor-second/definition.bin": {
-      "sha256": "b0e54867e5a452b6c15da0b51a32f14ef58a5b5e22ad2b941d4488cce55f1492"
+      "sha256": "b5871f4c31e48269083bd41f1a954ab277b251a2df560aa5fd1a7c2850c9595c"
     },
     "protocol-bundles/executor/build.rs": {
       "sha256": "0d8562dffa63fae9995fdee3422cfd07436cf46a15b2287bb29168f8e3b26c3b"
@@ -3889,6 +3868,34 @@
       "tools/protocol-bundles/test_type_boundary.py",
       "tools/protocol-bundles/test_wrapper.py",
       "tools/protocol-bundles/type_boundary.py"
+    ]
+  },
+  "prelaunch_identity_cleanup": {
+    "previous_definitions": [
+      {
+        "bytes": 146380,
+        "execution_definition_id": "38f5d10caeac32db580e082762c16d21ab65b8cacdadf39a3047f376d2916fa5",
+        "path": "protocol-bundles/executor-first/definition.bin",
+        "sha256": "a0f760c177f8d971724e82164259269e5d61de2f0dda152aa871972adffc842a"
+      },
+      {
+        "bytes": 146553,
+        "execution_definition_id": "730bc9d46a0d46969a2427f2abf3aa1ccf57bd1063a50ae2b885e631641cf6a8",
+        "path": "protocol-bundles/executor-second/definition.bin",
+        "sha256": "b0e54867e5a452b6c15da0b51a32f14ef58a5b5e22ad2b941d4488cce55f1492"
+      }
+    ],
+    "previous_repository_commit": "3cec820f",
+    "previous_snapshot_sha256": "42c18e71ed5af350fd43682869afc06716176f3198b90a9a76f0064ed46ab2dc",
+    "reason": "Remove unused Python and SageMath vendor generators; generated C vectors and execution behavior retained",
+    "removed_files": [
+      "core/vendor/secp256k1-sys/depend/secp256k1/sage/gen_exhaustive_groups.sage",
+      "core/vendor/secp256k1-sys/depend/secp256k1/sage/gen_split_lambda_constants.sage",
+      "core/vendor/secp256k1-sys/depend/secp256k1/sage/group_prover.sage",
+      "core/vendor/secp256k1-sys/depend/secp256k1/sage/prove_group_implementations.sage",
+      "core/vendor/secp256k1-sys/depend/secp256k1/sage/secp256k1_params.sage",
+      "core/vendor/secp256k1-sys/depend/secp256k1/sage/weierstrass_prover.sage",
+      "core/vendor/secp256k1-sys/depend/secp256k1/tools/tests_wycheproof_generate.py"
     ]
   },
   "source_commit": "2c26410e8419844bddf3d4967d157ce240f8b9c1"

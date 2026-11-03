@@ -13,6 +13,16 @@ The archive hash is authoritative, including for ring's published dirty VCS tree
 All upstream license files remain in the vendors. `kontor-native-build` is owned
 Kontor code, not part of the upstream archives.
 
+The secp256k1 patch also removes unused upstream Python and SageMath generators,
+their generation/clean rules, and the upstream Sage CI job. Checked-in C test
+vectors, cryptographic implementation sources and licenses remain. The historical
+vector-generation recipe is available upstream rather than embedded in a C
+comment. Upstream algorithm documentation is retained, including explanatory
+pseudocode. Kontor's Cargo builds consume the checked-in sources and do not run
+these generators. The same removal is applied to the retained prelaunch source
+copies; regenerating their source-bound execution IDs is an intentional prelaunch
+compatibility change.
+
 From the repository root:
 
 ```sh

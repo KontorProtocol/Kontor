@@ -765,22 +765,6 @@ jobs:
             g++ -Werror include/*.h
             clang -Werror -x c++-header include/*.h
 
-  sage:
-    name: "SageMath prover"
-    runs-on: ubuntu-latest
-    container:
-      image: sagemath/sagemath:latest
-      options: --user root
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: CI script
-        run: |
-          cd sage
-          sage prove_group_implementations.sage
-
   release:
     runs-on: ubuntu-latest
 
