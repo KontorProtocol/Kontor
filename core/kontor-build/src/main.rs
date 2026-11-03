@@ -14,6 +14,7 @@ use kontor_build::execution_definition::{
     FreezeArgs, Request as DefinitionRequest, freeze as freeze_execution,
     run as execution_definition,
 };
+use kontor_build::freeze_sources::{FreezeSourcesArgs, freeze_sources};
 use kontor_build::interface::{Request as InterfaceRequest, run as interface};
 use kontor_build::linker_record::verify_input;
 use kontor_build::node_evidence::comparison::{
@@ -63,6 +64,8 @@ enum Command {
     ProtocolBundles(ProtocolBundlesArgs),
     /// Verify an immutable source snapshot and print its inventory as JSON.
     VerifySnapshot(VerifySnapshotArgs),
+    /// Preserve executor inputs from an exact commit without redefining them.
+    FreezeSources(FreezeSourcesArgs),
     /// Check that native helper dependencies match the core lockfile.
     CheckNativeHelperLock,
     /// Preserve command output and macOS crash reports for CI diagnostics.
@@ -227,6 +230,10 @@ fn main() -> Result<()> {
             };
             let record = verify_snapshot(&root, &args.sha256)?;
             println!("{}", serde_json::to_string(&record)?);
+            Ok(())
+        }
+        Command::FreezeSources(args) => {
+            println!("{}", freeze_sources(&repository_root()?, args)?);
             Ok(())
         }
         Command::CheckNativeHelperLock => {

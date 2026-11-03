@@ -90,7 +90,7 @@ fn inventory(root: &Path, directory: &Path, files: &mut Map<String, Value>) -> R
     Ok(())
 }
 
-fn normalized_link(target: &str) -> String {
+pub(crate) fn normalized_link(target: &str) -> String {
     // Existing inventories use pathlib's lexical POSIX spelling. Preserve
     // parent components and exactly two leading slashes; do not resolve links.
     let prefix = if target.starts_with("//") && !target.starts_with("///") {

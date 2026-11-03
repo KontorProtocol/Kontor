@@ -8,6 +8,7 @@ pub mod consensus_definition;
 mod container;
 mod diagnostics;
 pub mod execution_definition;
+pub mod freeze_sources;
 pub mod graph_build;
 pub mod interface;
 pub mod linker_record;

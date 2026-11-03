@@ -97,6 +97,7 @@ fn platform_outputs_node_modules_and_checkout_location_do_not_change_identity() 
         "core/indexer/src/runtime/node.rs",
         "core/indexer/src/database/storage_callbacks_v1.rs",
         "core/Cargo.toml",
+        "protocol-bundles/node/Cargo.lock",
     ] {
         let path = first.path().join(relative);
         fs::create_dir_all(path.parent().unwrap())?;
@@ -148,6 +149,21 @@ fn verification_never_overwrites_and_named_graph_excludes_own_definition() -> Re
     let output = directory.join("definition.bin");
     fs::write(&output, &original)?;
     verify(dir.path(), &manifest, &data)?;
+    for path in [
+        dir.path().join("core/indexer/src/runtime/semantics.rs"),
+        manifest.with_file_name("Cargo.lock"),
+    ] {
+        let contents = fs::read(&path)?;
+        fs::write(&path, "substituted")?;
+        assert!(verify(dir.path(), &manifest, &data).is_err());
+        assert_eq!(fs::read(&output)?, original);
+        assert_eq!(fs::read(&path)?, b"substituted");
+        fs::write(path, contents)?;
+    }
+    let mut changed = data.clone();
+    changed["resolve"]["nodes"][0]["features"] = json!(["changed"]);
+    assert!(verify(dir.path(), &manifest, &changed).is_err());
+    assert_eq!(fs::read(&output)?, original);
     fs::write(&output, "stale")?;
     assert!(verify(dir.path(), &manifest, &data).is_err());
     assert_eq!(fs::read(&output)?, b"stale");

@@ -57,8 +57,9 @@ The complete preceding snapshots remain at commit
 
 Historical ledger entries retain their original hashes. New executor source
 freezes copy required fixture assets individually instead of preserving old build
-tools. The legacy coordinator-freeze mode still includes its identity-bound tool
-sources until that mode is retired or migrated.
+tools. The legacy coordinator-freeze mode was retired with its unused K4
+snapshot. Historical tooling remains available in Git; current snapshot creation
+supports executor graphs only.
 
 ## Existing build fixtures
 
@@ -85,8 +86,15 @@ RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor verify-snapshot protocol-b
 The command prints the authenticated inventory as JSON and fails on changed,
 missing or additional files, changed symlink targets, or paths escaping the
 snapshot. It does not regenerate identities or inventories. Recipe source-root
-checks use this Rust verifier; snapshot creation still uses the original Python
-tool until its migration is complete.
+checks use this Rust verifier. Create a new executor snapshot with
+`tools/kontor freeze-sources --revision <full-commit-id> --destination <new-directory>`.
+The destination is relative to the checkout root unless absolute. The command
+extracts that exact commit, resolves both executor graphs with locked offline
+Cargo metadata, retains their dependency/source closure, and verifies unchanged
+execution definitions after relocation. It then writes and verifies the frozen
+inventory. Existing destinations, escaping/cyclic inputs and stale definitions
+are rejected. A sibling `.NAME.freeze.lock` prevents concurrent writers to the
+same destination. This command preserves definitions; it never regenerates them.
 
 The standalone proof graphs below are build/isolation fixtures. Their results
 are separate from the real managed-node acceptance evidence recorded in the
