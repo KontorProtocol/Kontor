@@ -14,10 +14,21 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-from capture_fiber_source import capture as capture_fiber_source
-from resource_evidence import (check_guard_control, load_json_strict,
+from resource_evidence import (_rust_tool, check_guard_control, load_json_strict,
                                no_duplicate_keys, no_nonfinite_constants, sha256)
 from resource_manifest import MANIFEST, ROOT, build_manifest
+
+
+def capture_fiber_source(metadata_path, evidence_dir):
+    with subprocess.Popen(
+        [_rust_tool(), "capture-stack-sources", "--metadata", str(metadata_path),
+         "--evidence-dir", str(evidence_dir)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    ) as child:
+        stdout, stderr = child.communicate()
+        if child.returncode:
+            raise ValueError(f"Rust fiber source capture failed: {stderr}")
+    return json.loads(stdout)
 
 
 def ensure_no_cargo_config(core, cargo_home):

@@ -31,6 +31,7 @@ use kontor_build::shared_ownership::{Request as SharedRequest, run as audit_shar
 use kontor_build::source_identity::{Metadata, verify_sources};
 use kontor_build::stack_evidence::capture::{CaptureStackArgs, capture_stack};
 use kontor_build::stack_evidence::comparison::{CompareStackArgs, compare_stack};
+use kontor_build::stack_evidence::resource_sources::{CaptureSourcesArgs, capture_sources};
 use kontor_build::stack_evidence::smoke::{SmokeArgs, capture as stack_smoke};
 use kontor_build::stack_evidence::{Request as StackRequest, run as stack_evidence};
 use kontor_build::symbol_audit::{Request as AuditRequest, run as audit_symbols};
@@ -49,6 +50,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Archive the pinned Wasmtime fiber sources selected by Cargo metadata.
+    CaptureStackSources(CaptureSourcesArgs),
     /// Capture worker, fresh-control, and owned stack qualification evidence.
     QualifyStack(CaptureStackArgs),
     /// Compare archived stack qualification and required dev smoke evidence.
@@ -134,6 +137,10 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::CaptureStackSources(args) => {
+            println!("{}", capture_sources(args)?);
+            Ok(())
+        }
         Command::QualifyStack(args) => {
             println!("{}", capture_stack(&repository_root()?, args)?);
             Ok(())

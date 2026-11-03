@@ -9,6 +9,7 @@ mod chains;
 pub mod comparison;
 mod probes;
 pub mod resource_report;
+pub mod resource_sources;
 mod resources;
 pub mod smoke;
 

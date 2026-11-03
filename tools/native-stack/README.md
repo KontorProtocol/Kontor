@@ -247,9 +247,12 @@ and the approved feature closure. It checks the
 reported Engine request against the frozen 2 MiB or 1 MiB setting, rounds it
 to the observed host page size, and requires a separate one-page guard. The
 source path assumes no custom stack creator and no sanitizer allocation path.
-`capture_fiber_source.py` reads Cargo metadata, verifies the checkout revision
+`tools/kontor capture-stack-sources --metadata "$PWD/cargo-metadata.json" --evidence-dir "$PWD/evidence"`
+reads Cargo metadata, verifies the checkout revision
 and these six file hashes from their resolved package roots, then archives
-the files under `wasmtime-source/`.
+the files under `wasmtime-source/`. The expected hashes live in
+`fiber-source-inputs.json`, shared by the manifest and the Rust capture tool.
+Capture requires fresh archive paths and refuses to overwrite existing files.
 `capture_resource_control.py` binds the selected indexer test executable to
 one successful Cargo JSON artifact stream, requires a clean checkout at the
 explicit source revision, runs the host's guard control with a process deadline,

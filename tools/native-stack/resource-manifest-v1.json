@@ -80,6 +80,10 @@
       "path": "tools/native-stack/test_resource_canonical_evidence.py",
       "sha256": "a1288b73866c8787a6a1b55efa15efff8c15975b65f0b334c0294c84f53e60b4"
     },
+    "cargo_package_types": {
+      "path": "core/kontor-build/src/source_identity.rs",
+      "sha256": "bf76c9e7bfe55a1c3ca09f5d4563314345a6278f9cd65c786495a9805b205239"
+    },
     "chain_tests": {
       "path": "core/indexer/src/runtime/call/tests/sequential_chains.rs",
       "sha256": "2d02c2bce92155ad8e15b4344e6ea9157ad6c2a5ec84957165abfb3ca009d9bb"
@@ -145,8 +149,12 @@
       "sha256": "68e026fcb23f82e334148e69cfbcc44e84f7b7d3745badfb64b285761cf12a01"
     },
     "fiber_source_capture": {
-      "path": "tools/native-stack/capture_fiber_source.py",
-      "sha256": "22138893cc5f8171d172e324d1af35166fbc26ce5ca3ce20d5196083a09174ac"
+      "path": "core/kontor-build/src/stack_evidence/resource_sources.rs",
+      "sha256": "cde6ac6d33075f92eea2631ba26898a875e872d3bc6454689ee334c7a2340e00"
+    },
+    "fiber_source_inputs": {
+      "path": "tools/native-stack/fiber-source-inputs.json",
+      "sha256": "4c940379329dbc65a7969836a10133cb07c1294fb7eb159d3727d42336f91ccf"
     },
     "filestorage_costs": {
       "path": "core/indexer/src/runtime/filestorage/reward_costs.rs",
@@ -402,7 +410,7 @@
     },
     "production_sweep_validation": {
       "path": "core/kontor-build/src/stack_evidence.rs",
-      "sha256": "a8af18c909243a38949eeb795e3cf113a1d73d178c96b89e499346114b2fd807"
+      "sha256": "b179ef80ac07485314a7f2f6ed11294dbf3192b061d8843a75b596e8b058a55b"
     },
     "proxy": {
       "path": "test-contracts/binaries/proxy.wasm.br",
@@ -426,7 +434,7 @@
     },
     "resource_control_capture": {
       "path": "tools/native-stack/capture_resource_control.py",
-      "sha256": "d8485d6621ea40669b8d71b1c552259303a60a8bbbb78ad8cf7c5b5adada9c6a"
+      "sha256": "8c351bc05fa432550389109a95465c88e3343d7b63e33c8392a3d81b51f83aaa"
     },
     "resource_diagnostic_capture": {
       "path": "tools/native-stack/capture_resource_diagnostic.py",
@@ -462,7 +470,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "dfcfc9b17efed49f208a547496c77ddd41ad51edae66dc6c3930d008a64ca7b3"
+      "sha256": "11efc54379991cf6eb30483d54c7615d876c92e1da847758690c13791c397108"
     },
     "resource_observation_types": {
       "path": "core/kontor-build/src/stack_evidence/resource_report.rs",

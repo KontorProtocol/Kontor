@@ -25,14 +25,7 @@ FASTNUM_GENERATED = {
     "serde_deserialize_mode.rs":
         "const SERDE_DESERIALIZE_MODE: DeserializeMode = DeserializeMode::Strict;",
 }
-FIBER_SOURCE_FILES = {
-    "crates/wasmtime/src/config.rs": "681d6d278c7c0da051672c2c0acf0e658cab8338a5d461dba5f1596978336b8a",
-    "crates/wasmtime/src/runtime/fiber.rs": "6cb7d27f82be901b663a8ef54d9cf9ee2c797f937c59544403e82cae27b2cf4e",
-    "crates/wasmtime/src/runtime/store/async_.rs": "d06e41cc5ea602367d4286a54a5efd0672ef9503e4e55aff5a2a55885ac996e4",
-    "crates/wasmtime/src/runtime/vm/instance/allocator/on_demand.rs": "b2399776ffd454560d13182c410ed9cb280b22a9278a2ed94c009e4d350b4867",
-    "crates/fiber/src/lib.rs": "1d747766d66be57bc530917505a2469993a0dabb64c28a3cc4fe38fd597991b7",
-    "crates/fiber/src/unix.rs": "83121bc6a5becaeae393b99848f6c1fd169e44c1b7857b3b862f74c64b950c4c",
-}
+FIBER_SOURCE_FILES = json.loads(Path(__file__).with_name("fiber-source-inputs.json").read_text())
 BASE_COMMIT = "67a52fed58a893ce2c1c05483f86f4fffa02a675"
 RETAINED_NATIVE_INPUTS = {
     f"retained_native_{name}": f"core/indexer/src/protocol/v1/native/{name}"
@@ -137,7 +130,9 @@ INPUTS = {
     "production_smoke_validation": "core/kontor-build/src/stack_evidence/smoke.rs",
     "production_capture": "core/kontor-build/src/stack_evidence/capture.rs",
     "resource_manifest_source": "tools/native-stack/resource_manifest.py",
-    "fiber_source_capture": "tools/native-stack/capture_fiber_source.py",
+    "fiber_source_capture": "core/kontor-build/src/stack_evidence/resource_sources.rs",
+    "fiber_source_inputs": "tools/native-stack/fiber-source-inputs.json",
+    "cargo_package_types": "core/kontor-build/src/source_identity.rs",
     "resource_control_capture": "tools/native-stack/capture_resource_control.py",
     "resource_test_builder": "tools/native-stack/build_resource_test.py",
     "resource_test_builder_tests": "tools/native-stack/test_resource_build_attestation.py",
