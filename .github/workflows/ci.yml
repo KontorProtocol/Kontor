@@ -28,12 +28,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
       - uses: ./.github/actions/setup-kontor-tools
-      - name: Test crash diagnostics
-        run: python3 -m unittest discover -s tools/ci -p 'test_macos_diagnostics.py'
       - name: Select checks from complete change set
         id: select
         run: RUSTC_WRAPPER= ./tools/kontor ci-scope pr
@@ -119,6 +114,8 @@ jobs:
     if: needs.scope.outputs.rust == 'true'
     name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      KONTOR_TOOLS: ${{ github.workspace }}/core/kontor-build/target/debug/kontor-build
     strategy:
       # A flake on one OS shouldn't cancel the other's run — keep independent signal.
       fail-fast: false
@@ -169,9 +166,12 @@ jobs:
       # is still required by the stdlib macro-expansion tests.
       - name: Install cargo expand
         run: cargo binstall cargo-expand --version 1.0.127 --no-confirm
+      - name: Build macOS crash diagnostics
+        if: runner.os == 'macOS'
+        run: cargo build --locked --manifest-path core/kontor-build/Cargo.toml -j 2
       - name: Prepare macOS crash diagnostics
         if: runner.os == 'macOS'
-        run: python3 tools/ci/macos_diagnostics.py prepare "$RUNNER_TEMP/macos-crash-diagnostics"
+        run: '"$KONTOR_TOOLS" diagnostics prepare "$RUNNER_TEMP/macos-crash-diagnostics"'
       - name: Run tests
         id: tests
         working-directory: ./core
@@ -179,13 +179,13 @@ jobs:
         run: |
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             # Keep panic diagnostics without adding call-path-specific traces to compared errors.
-            RUST_BACKTRACE=1 RUST_LIB_BACKTRACE=0 REGTEST=1 python3 ../tools/ci/macos_diagnostics.py run "$RUNNER_TEMP/macos-crash-diagnostics/tests.log" cargo test --release --workspace -- --nocapture
+            RUST_BACKTRACE=1 RUST_LIB_BACKTRACE=0 REGTEST=1 "$KONTOR_TOOLS" diagnostics run "$RUNNER_TEMP/macos-crash-diagnostics/tests.log" cargo test --release --workspace -- --nocapture
           else
             REGTEST=1 cargo test --release --workspace -- --nocapture
           fi
       - name: Collect macOS crash diagnostics
         if: failure() && steps.tests.outcome == 'failure' && runner.os == 'macOS'
-        run: python3 tools/ci/macos_diagnostics.py collect "$RUNNER_TEMP/macos-crash-diagnostics"
+        run: '"$KONTOR_TOOLS" diagnostics collect "$RUNNER_TEMP/macos-crash-diagnostics"'
       - name: Preserve macOS crash diagnostics
         if: failure() && steps.tests.outcome == 'failure' && runner.os == 'macOS'
         uses: actions/upload-artifact@v7

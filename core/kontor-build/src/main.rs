@@ -1,11 +1,12 @@
 use std::env;
 use std::path::PathBuf;
+use std::process;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kontor_build::{
-    BuildArgs, CiScope, ProtocolBundlesArgs, VerifySnapshotArgs, check_native_helper_lock,
-    ci_scope, protocol_bundles, run, verify_snapshot,
+    BuildArgs, CiScope, DiagnosticsArgs, ProtocolBundlesArgs, VerifySnapshotArgs,
+    check_native_helper_lock, ci_scope, diagnostics, protocol_bundles, run, verify_snapshot,
 };
 
 #[derive(Parser)]
@@ -25,6 +26,8 @@ enum Command {
     VerifySnapshot(VerifySnapshotArgs),
     /// Check that native helper dependencies match the core lockfile.
     CheckNativeHelperLock,
+    /// Preserve command output and macOS crash reports for CI diagnostics.
+    Diagnostics(DiagnosticsArgs),
     /// Select CI checks from the GitHub event and complete Git change set.
     CiScope {
         #[arg(value_enum)]
@@ -60,5 +63,12 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::CiScope { kind } => ci_scope(&repository_root()?, kind),
+        Command::Diagnostics(args) => {
+            let status = diagnostics(args)?;
+            if status != 0 {
+                process::exit(status);
+            }
+            Ok(())
+        }
     }
 }

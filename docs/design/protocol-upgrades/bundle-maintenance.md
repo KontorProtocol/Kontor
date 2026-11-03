@@ -561,3 +561,23 @@ reexecution, unchanged transaction fuel and receipts, correct Bitcoin confirmati
 position, P2 selection for Batch(H), and full-state equality after database reopen.
 The raw recovery evidence verifier requires these observations; a successful
 process exit alone does not establish them.
+
+### CI crash diagnostics
+
+`tools/kontor diagnostics prepare OUTPUT` records the pre-test macOS report inventory.
+`tools/kontor diagnostics run LOG COMMAND [ARGS...]` streams combined output while
+preserving the command's exit status, including shell-style signal statuses. It
+stops following output when the direct child exits, even if descendants survive.
+`tools/kontor diagnostics collect OUTPUT` polls for new or changed crash reports
+for 30 seconds, then captures bounded system diagnostics. Missing or malformed
+baselines exclude historical reports; collection errors remain in `reports.json`.
+The files and metadata in `baseline.json` and `reports.json` retain their previous
+shape. `run.json` now records `started_at_unix_seconds` instead of a local-time
+string, and diagnostic error/command text uses Rust formatting.
+
+CI builds this small CLI before tests and invokes its binary directly afterward,
+so crash collection does not depend on a successful Cargo rebuild after failure.
+The existing macOS abort smoke test is restricted to collector/workflow/bootstrap
+changes and manual dispatch. The Linux tooling tests cover growing reports,
+missing baselines, copy errors, command timeouts, signal exits and surviving
+children; actual macOS report generation still needs the macOS smoke test.
