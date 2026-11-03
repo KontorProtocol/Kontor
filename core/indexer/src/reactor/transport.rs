@@ -8,6 +8,7 @@ use malachitebft_app_channel::{Channels, EngineHandle, NetworkMsg, NetworkReques
 use tokio::time::timeout;
 
 use super::message::Message;
+use super::status::EngineAuthority;
 use crate::consensus::signing::{Ed25519Provider, Signature};
 use crate::consensus::{Ctx, ProposalPart};
 use crate::protocol::coordinator::certified_decision::CommitteeRecord;
@@ -38,6 +39,7 @@ enum Backend {
         channels: Channels<Ctx>,
         handle: EngineHandle,
         signer: Ed25519Provider,
+        consensus_enabled: bool,
     },
     #[cfg(kontor_managed)]
     Managed {
@@ -47,16 +49,42 @@ enum Backend {
 }
 
 impl Engine {
+    pub(super) fn authority(&self) -> EngineAuthority {
+        match &self.backend {
+            #[cfg(kontor_managed)]
+            Backend::Stopped => EngineAuthority::Stopped,
+            Backend::Legacy {
+                consensus_enabled, ..
+            } => {
+                if *consensus_enabled {
+                    EngineAuthority::Validator
+                } else {
+                    EngineAuthority::Follower
+                }
+            }
+            #[cfg(kontor_managed)]
+            Backend::Managed { signer, .. } => {
+                if signer.is_some() {
+                    EngineAuthority::Validator
+                } else {
+                    EngineAuthority::Follower
+                }
+            }
+        }
+    }
+
     pub(super) fn legacy(
         channels: Channels<Ctx>,
         handle: EngineHandle,
         signer: Ed25519Provider,
+        consensus_enabled: bool,
     ) -> Self {
         Self {
             backend: Backend::Legacy {
                 channels,
                 handle,
                 signer,
+                consensus_enabled,
             },
         }
     }

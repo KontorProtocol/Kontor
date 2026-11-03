@@ -22,6 +22,7 @@ pub mod migration_rehearsal;
 #[cfg(not(kontor_node))]
 pub mod multi_psbt_test_utils;
 mod protocol;
+pub mod protocol_info;
 #[cfg(feature = "protocol-qualification")]
 pub mod protocol_qualification;
 pub mod reactor;

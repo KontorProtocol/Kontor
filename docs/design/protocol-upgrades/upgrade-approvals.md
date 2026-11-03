@@ -3,8 +3,10 @@
 The operator API prepares unsigned actions from closed canonical history. The
 offline CLI inspects those bytes, signs an explicitly selected action, and
 assembles approval files. Submission queues the resulting envelope at one node;
-it does not establish consensus acceptance. This K5/K6 workflow does not yet
-implement activation.
+it does not establish consensus acceptance. An accepted schedule activates only
+after Bitcoin block H and its old-protocol lifecycle have completed. Migration
+and the new canonical protocol are persisted atomically before subsequent work.
+The pinned Malachite runtime continues across that boundary.
 
 Use the node API base URL, for example `http://localhost:8080/api`. Heights, voting
 powers and nonces are decimal strings, including in SDK responses. Do not convert
@@ -55,13 +57,11 @@ verify the proposed manifest and installed implementation. Run migration rehears
 before approval and repeat as activation approaches; a rehearsal is advisory and
 never authorizes an upgrade.
 
-Until the activation transition is implemented, a pending schedule prevents an
-ordinary Bitcoin block at H or later from being proposed, accepted or applied.
-Valid Cancel and Postpone actions remain eligible and have proposal priority.
-This intermediate implementation must not be used to carry a network through an
-activation. A replacement Bitcoin block is checked against the control state
-that survives rollback to its parent, so removed schedules do not keep blocking
-the chain and undoing a postponement or cancellation restores the prior boundary.
+A node that lacks the exact target implementation cannot propose or vote for its
+activation. Valid Cancel and Postpone actions remain eligible and have proposal
+priority. A replacement Bitcoin block is checked against the control state that
+survives rollback to its parent, so removed schedules do not keep blocking the
+chain and undoing a postponement or cancellation restores the prior boundary.
 
 ## Rehearse the selected migration
 

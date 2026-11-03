@@ -11,6 +11,7 @@ use indexer_types::Fees;
 use tokio::sync::{mpsc::Sender, watch};
 
 use crate::protocol::coordinator::linked::new_read_pool;
+use crate::reactor::status::RuntimeStatus;
 use crate::{
     bitcoin_client::Client, config::Config, database, event::EventSubscriber, info::InfoCore,
     reactor::Simulation, runtime, stopper::ShutdownSignal,
@@ -46,6 +47,7 @@ pub struct Env {
     /// the bind event-driven rather than poll. `None` until bound / for
     /// non-consensus nodes.
     pub consensus_listen_addr: watch::Receiver<Option<String>>,
+    pub runtime_status: watch::Receiver<Option<RuntimeStatus>>,
     /// Latest fee tier snapshot published by the reactor. `borrow()` is
     /// non-blocking and returns the most recent value.
     pub fees_rx: watch::Receiver<Fees>,
@@ -69,6 +71,7 @@ pub struct DaemonEnv {
     pub reactor_ready: Arc<AtomicBool>,
     pub failed: Arc<AtomicBool>,
     pub consensus_listen_addr: watch::Receiver<Option<String>>,
+    pub runtime_status: watch::Receiver<Option<RuntimeStatus>>,
     pub fees_rx: watch::Receiver<Fees>,
     pub info_rx: watch::Receiver<InfoCore>,
     pub database_name: String,
@@ -95,6 +98,7 @@ impl Env {
             reactor_ready: parts.reactor_ready,
             failed: parts.failed,
             consensus_listen_addr: parts.consensus_listen_addr,
+            runtime_status: parts.runtime_status,
             fees_rx: parts.fees_rx,
             info_rx: parts.info_rx,
         })
@@ -119,6 +123,7 @@ impl Env {
             reactor_ready: Arc::new(AtomicBool::new(true)),
             failed: Arc::new(AtomicBool::new(false)),
             consensus_listen_addr: watch::channel(None).1,
+            runtime_status: watch::channel(None).1,
             event_subscriber: EventSubscriber::new(),
             runtime_pool: new_read_pool(
                 db_path.to_path_buf(),

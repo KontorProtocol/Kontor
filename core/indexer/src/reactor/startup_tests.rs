@@ -82,6 +82,7 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
         1_000,
         None,
         addr_tx,
+        watch::channel(None).0,
         bitcoin::Network::Regtest,
         PruneConfig {
             enabled: false,

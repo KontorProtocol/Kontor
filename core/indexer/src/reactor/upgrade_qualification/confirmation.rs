@@ -111,6 +111,14 @@ pub(super) async fn run(
     first: ExecutionIdentity,
     second: ExecutionIdentity,
 ) -> Result<Value> {
+    let replacement = Box::pin(super::replacement::run(
+        source,
+        service,
+        activation_block,
+        transaction,
+        second,
+    ))
+    .await?;
     let directory = TempDir::new()?;
     snapshot(source, directory.path()).await?;
     let mut execution = open(directory.path(), service).await?;
@@ -224,5 +232,6 @@ pub(super) async fn run(
     ensure!(service.active_roots().await == 0);
     Ok(json!({"p1_paid_transaction": true, "p2_batch_at_h": true,
         "confirmation_without_execution": true, "unchanged_usage_and_receipts": true,
-        "reopened_state_matches": true, "confirmation_height": 3, "closed_decisions": height}))
+        "reopened_state_matches": true, "confirmation_height": 3, "closed_decisions": height,
+        "replacement": replacement}))
 }

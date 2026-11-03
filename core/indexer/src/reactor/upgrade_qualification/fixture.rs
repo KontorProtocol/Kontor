@@ -71,11 +71,30 @@ async fn initialize_fixture(
     validator: Option<&str>,
     unavailable: bool,
 ) -> Result<ProtocolId> {
-    let conn = new_connection(path, DATABASE).await?;
     let mut parameters = genesis();
     if let Some(validator) = validator {
         parameters.validators[0].x_only_pubkey = validator.into();
     }
+    initialize_parameters(
+        path,
+        service,
+        activation,
+        parameters,
+        unavailable,
+        &[PrivateKey::from([7; 32])],
+    )
+    .await
+}
+
+pub(super) async fn initialize_parameters(
+    path: &Path,
+    service: &OwnerService,
+    activation: Option<u64>,
+    parameters: GenesisParameters,
+    unavailable: bool,
+    signers: &[PrivateKey],
+) -> Result<ProtocolId> {
+    let conn = new_connection(path, DATABASE).await?;
     let genesis = envelope(&parameters);
     let (baseline, fresh) = bootstrap::prepare(&conn, NETWORK, 1, &genesis).await?;
     ensure!(fresh);
@@ -108,35 +127,59 @@ async fn initialize_fixture(
             Some(transition) => input.with_transition(transition.descriptor)?,
             None => input,
         };
-    append(&conn, input).await?;
+    append_signed(&conn, input, signers).await?;
     Ok(target)
 }
 
 pub(super) async fn append(conn: &Connection, input: ExactInput) -> Result<u64> {
-    let key = PrivateKey::from([7; 32]);
+    append_signed(conn, input, &[PrivateKey::from([7; 32])]).await
+}
+
+pub(super) async fn append_signed(
+    conn: &Connection,
+    input: ExactInput,
+    signers: &[PrivateKey],
+) -> Result<u64> {
+    let certified = certify(conn, input, signers).await?;
+    let height = certified.decision().height;
+    certified_history::append(conn, &certified).await?;
+    Ok(height)
+}
+
+pub(super) async fn certify(
+    conn: &Connection,
+    input: ExactInput,
+    signers: &[PrivateKey],
+) -> Result<AuthenticatedDecision> {
     let height = certified_history::frontier(conn)
         .await?
         .authenticated_height
         + 1;
     let value = Value::from_input(input)?;
     let authority = certified_history::committee(conn, height).await?;
-    let address = Address::from_public_key(&key.public_key());
-    let vote = Vote::new_precommit(
-        Height::new(height),
-        Round::new(0),
-        NilOrVal::Val(value.id()),
-        address,
-    );
+    let commit_signatures = signers
+        .iter()
+        .map(|key| {
+            let address = Address::from_public_key(&key.public_key());
+            let vote = Vote::new_precommit(
+                Height::new(height),
+                Round::new(0),
+                NilOrVal::Val(value.id()),
+                address,
+            );
+            CommitSignature {
+                address,
+                signature: key.sign(&vote.to_sign_bytes()),
+            }
+        })
+        .collect();
     let proof = CommitCertificate::<Ctx> {
         height: Height::new(height),
         round: Round::new(0),
         value_id: value.id(),
-        commit_signatures: vec![CommitSignature {
-            address,
-            signature: key.sign(&vote.to_sign_bytes()),
-        }],
+        commit_signatures,
     };
-    let certified = AuthenticatedDecision::verify(
+    AuthenticatedDecision::verify(
         Decision {
             height,
             predecessor: authority.decision,
@@ -146,9 +189,7 @@ pub(super) async fn append(conn: &Connection, input: ExactInput) -> Result<u64> 
         value.input().clone(),
         encode_commit_certificate(&proof)?.encode_to_vec(),
         &authority,
-    )?;
-    certified_history::append(conn, &certified).await?;
-    Ok(height)
+    )
 }
 
 pub(super) async fn open(

@@ -10,6 +10,7 @@ use super::registry;
 use crate::database::canonical_history::{self, ApplicationCursor, HistoryState};
 use crate::database::certified_history::{self, Status, activation, eras, protocol};
 use crate::protocol::identity::{ExecutionDefinitionId, ExecutionIdentity, ProtocolId};
+use crate::protocol_info::ExecutionContextInfo;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApplicationPosition {
@@ -81,6 +82,35 @@ pub(crate) struct ExecutionSelection {
 }
 
 impl ExecutionSelection {
+    pub(crate) fn diagnostics(
+        &self,
+        definition: ExecutionDefinitionId,
+    ) -> Result<ExecutionContextInfo> {
+        self.execution_identity(definition)?;
+        Ok(ExecutionContextInfo {
+            protocol_id: self.protocol_id().map(|id| hex::encode(id.0)),
+            execution_definition: hex::encode(definition.0),
+            application_ordinal: self
+                .canonical
+                .as_ref()
+                .map(|binding| binding.cursor.ordinal.to_string()),
+            lineage: self
+                .canonical
+                .as_ref()
+                .map(|binding| hex::encode(binding.cursor.lineage)),
+            bitcoin_height: self.base.block_height.map(|height| height.to_string()),
+            bitcoin_hash: self.base.block_hash.clone(),
+            checkpoint_height: self.base.checkpoint_height.map(|height| height.to_string()),
+            checkpoint_hash: self.base.checkpoint_hash.clone(),
+            receipt_epoch: self.base.receipt_epoch.clone(),
+            rollback_generation: self.base.rollback_generation.to_string(),
+            simulation_height: match self.position {
+                ApplicationPosition::Simulation { height } => Some(height.to_string()),
+                _ => None,
+            },
+        })
+    }
+
     pub(crate) fn envelope(&self) -> SelectionEnvelope {
         let position = match self.position {
             ApplicationPosition::View => (0, 0, None, 0),
@@ -521,6 +551,21 @@ mod tests {
         canonical_history::bind_genesis(&conn, baseline.context.chain).await?;
         conn.execute("COMMIT", ()).await?;
         let selected = select_canonical(&conn, Network::Regtest, preparation(1)).await?;
+        let diagnostics = selected.diagnostics(baseline.manifest.executor)?;
+        assert_eq!(
+            diagnostics.protocol_id,
+            Some(hex::encode(baseline.context.protocol.0))
+        );
+        assert_eq!(diagnostics.application_ordinal.as_deref(), Some("0"));
+        assert_eq!(
+            diagnostics.lineage,
+            Some(hex::encode(baseline.context.chain.0))
+        );
+        assert!(
+            selected
+                .diagnostics(ExecutionDefinitionId([2; 32]))
+                .is_err()
+        );
         assert_eq!(
             selected.execution_identity(baseline.manifest.executor)?,
             ExecutionIdentity::Protocol {
@@ -556,6 +601,14 @@ mod tests {
         .await?;
         conn.execute("COMMIT", ()).await?;
         let after = select_canonical(&conn, Network::Regtest, preparation(1)).await?;
+        assert_ne!(
+            diagnostics.lineage,
+            after.diagnostics(baseline.manifest.executor)?.lineage
+        );
+        assert_eq!(
+            selected.diagnostics(baseline.manifest.executor)?,
+            diagnostics
+        );
         assert!(selected.verify_base(&conn).await.is_err());
         assert_eq!(
             selected.base, after.base,
@@ -633,6 +686,14 @@ mod tests {
         ensure!(!before.can_reuse_preparation(&after));
         ensure!(before.verify_base(&conn).await.is_err());
         ensure!(before.same_recognition_rules(&after));
+        let definition = ExecutionDefinitionId([5; 32]);
+        let old_context = before.diagnostics(definition)?;
+        let new_context = after.diagnostics(definition)?;
+        assert_eq!(old_context.bitcoin_hash, new_context.bitcoin_hash);
+        assert_ne!(
+            old_context.rollback_generation,
+            new_context.rollback_generation
+        );
         Ok(())
     }
 

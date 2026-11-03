@@ -26,7 +26,7 @@ use crate::stopper::Shutdown;
 
 const ACTIVATION_HEIGHT: u64 = 1009;
 
-async fn execute(
+pub(super) async fn execute(
     execution: &mut ExecutionContext<RuntimeExecutor>,
     input: ExactInput,
 ) -> Result<u64> {
@@ -35,7 +35,7 @@ async fn execute(
     Ok(height)
 }
 
-async fn block_input(
+pub(super) async fn block_input(
     execution: &ExecutionContext<RuntimeExecutor>,
     height: u64,
     block: &Block,
@@ -147,6 +147,12 @@ async fn exercise(service: &OwnerService) -> Result<Value> {
             == target
     );
     let second = execution.protocol_context;
+    let successive = super::successive::run(
+        &conn,
+        service,
+        blocks.last().context("first activation block")?,
+    )
+    .await?;
     let paid = transaction()?;
     let mut missing = paid.clone();
     missing.input[0].previous_output.vout = 1;
@@ -330,6 +336,7 @@ async fn exercise(service: &OwnerService) -> Result<Value> {
         "activation_height": ACTIVATION_HEIGHT, "closed_decisions": final_height,
         "schedule_retracted": true, "orphaned_p2_batch_not_replayed": true,
         "fresh_p1_batch_replayed": true,
+        "successive_upgrades": successive,
         "certificates_unchanged": true, "reopened_state_matches": true}),
     )
 }

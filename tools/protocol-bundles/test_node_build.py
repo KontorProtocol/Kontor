@@ -3,12 +3,14 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 
 from build import digest, install_node, node_codegen_objects, node_dependencies, node_executable, node_link_inputs
+from linker_record import validate as validate_linker_record
 from provenance import node_sources
 
 spec = importlib.util.spec_from_file_location('node_wrapper', Path(__file__).with_name('node-rustc-wrapper.py'))
@@ -17,6 +19,52 @@ spec.loader.exec_module(wrapper)
 
 
 class NodeBuild(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('rustc') and shutil.which('cc'), 'Rust and C driver required')
+    def test_real_compiler_output_includes_post_link_processing(self):
+        compiler = shutil.which('rustc')
+        self.spec['compiler'] = compiler
+        shim = self.root / 'cc'
+        shutil.copyfile(Path(__file__).with_name('linker_record.py'), shim)
+        shim.chmod(0o755)
+        self.spec.update(linker_wrapper=str(shim), linker_wrapper_sha256=digest(shim),
+                         linker_record=str(self.root / 'linker.json'),
+                         root_objects=str(self.root / 'objects.json'))
+        spec_path = self.root / 'link-spec.json'
+        spec_path.write_text(json.dumps(self.spec))
+        source = self.root / 'main.rs'
+        source.write_text('fn main() { println!("compiler output"); }\n')
+        result = subprocess.run([
+            sys.executable, str(Path(wrapper.__file__)), compiler, str(source),
+            '--crate-name', 'kontor', '--crate-type', 'bin', '--out-dir', str(self.root),
+            '-C', 'extra-filename=-test', '-C', 'debuginfo=2', '-C', 'strip=debuginfo',
+        ], env=dict(os.environ, KONTOR_NODE_LINK_SPEC=str(spec_path), CCACHE_DISABLE='1'),
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        link = json.loads(Path(self.spec['linker_record']).read_text())
+        root = json.loads(Path(self.spec['root_objects']).read_text())
+        output = self.root / 'kontor-test'
+        self.assertEqual(root['linker_record_sha256'], digest(Path(self.spec['linker_record'])))
+        self.assertEqual(root['compiler_output'], {'path': str(output), 'sha256': digest(output)})
+        validate_linker_record(link, digest(spec_path), digest(output), root['compiler_output'])
+        self.assertEqual(subprocess.check_output([str(output)], text=True), 'compiler output\n')
+        if sys.platform == 'darwin':
+            self.assertNotEqual(link['output_sha256'], digest(output))
+        output.write_bytes(output.read_bytes() + b'changed after compiler')
+        with self.assertRaisesRegex(RuntimeError, 'compiler output'):
+            validate_linker_record(link, digest(spec_path), digest(output), root['compiler_output'])
+        source.write_text('invalid Rust source')
+        failed = subprocess.run(result.args,
+                                env=dict(os.environ, KONTOR_NODE_LINK_SPEC=str(spec_path)),
+                                capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertFalse(Path(self.spec['root_objects']).exists())
+        self.assertFalse(Path(self.spec['linker_record']).exists())
+
+    def test_linker_driver_uses_last_rustc_override(self):
+        self.assertEqual(wrapper.linker_driver([]), 'cc')
+        self.assertEqual(wrapper.linker_driver(['-C', 'linker=/bin/clang']), '/bin/clang')
+        self.assertEqual(wrapper.linker_driver(['-Clinker=/bin/cc', '-C', 'linker=/bin/clang']), '/bin/clang')
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

@@ -1,5 +1,10 @@
 # Protocol upgrade implementation ledger
 
+This is a chronological evidence record. Dated entries describe their state at
+that time, not the current status. See the latest entries at the end and the
+[current delivery checkpoint](implementation-plan.md#current-delivery-checkpoint-2-november-2026)
+for the current architecture, merged phases and remaining gates.
+
 Current scope override, 1 November 2026: oversized-certificate paging and its
 greater-than-10-MiB proof acceptance tests are deferred outside this goal by the
 operator. Earlier entries describing those as unfinished requirements are
@@ -7,9 +12,9 @@ historical. See the latest scope-correction entry and certified-history plan.
 
 ## K2b local checkpoint, 31 October 2026
 
-K2b remains unmerged. The current implementation and outstanding phase gates are
-summarized in [the implementation plan](implementation-plan.md) and
-[the agreed production boundary](k2b-production-boundary.md). Earlier entries below
+At this historical checkpoint K2b was unmerged. Its implementation and outstanding
+phase gates were summarized in [the implementation plan](implementation-plan.md) and
+[the agreed production boundary](k2b-production-boundary.md). This entry and the dated entries below
 are historical evidence, not the current phase status.
 
 The local production worktree now builds both real independently locked executor
@@ -4832,3 +4837,179 @@ semantic oracle and evidence validation. Results and transcripts are preserved i
 `.build-cache/single-runtime-final-{build,recovery,executors}*`. This closes the
 linked-caller validation gap from focused review. No production changes follow
 that candidate in this evidence entry; required PR CI remains pending.
+
+### K9 merge and K10/K11 implementation checkpoint, 2 November 2026
+
+PR623 merged as `d671fb8294fe5358e5ad7c5ac900f0f5204b971c` from final
+head `75c8cb4a0b08c9d9ad3f1a07261e93d827f01a0c`, after all 26 applicable
+checks passed. The substantive lead and single independent review, including
+SR-WAL-1 closure, remains the review evidence. Later candidate fixes were the
+documented startup-enum lint allowance and a procfs disappearance race in an
+evidence-control test. Focused Clippy and all 235 native evidence controls passed.
+
+The successful PR test merge `ee2038d76c41c02852a84eff1b144795488acd5f`
+and actual merged commit have identical tree
+`02ba878aad6b43ea52fce457808b6efecc32877f`. Duplicate post-merge bundle
+run `41548595034` and stack run `41548595238` were cancelled; GitHub reports
+both completed/cancelled at the actual merge SHA. Ordinary main CI was not
+cancelled. No acceptance campaign was restarted for this bookkeeping.
+
+The combined K10/K11 group starts from that verified merge in
+`protocol-client-acceptance`, branch `feat/protocol-client-acceptance`.
+The current uncommitted implementation adds snapshot-based protocol/format/ABI
+discovery, execution-bound simulation context with the legacy response retained,
+typed SDK contextual previews, and reactor-published runtime authority,
+committee membership and join-floor diagnostics. It does not change upgrade
+authorization, gas caps, transaction encoding or promotion criteria.
+
+Focused local evidence so far: two protocol-discovery tests, five simulation API
+tests, five execution-selection tests, the runtime-observation API test, and 12
+SDK protocol/result tests pass. SDK web/native builds passed. The first diagnostic
+test drafts had invalid fixture setup (missing genesis authority, then a history
+status update violating its database constraint); both were corrected using the
+real genesis observation and a schema-valid unavailable state. Passing focused
+tests are not final managed-node or integrated qualification evidence.
+
+Still required: validate the managed diagnostic publication through the real
+runtime, complete remaining integrated acceptance gaps (including two successive
+upgrades and linker-backend provenance), consolidate final operator/developer
+documentation and the private dark Site, perform lead plus one independent
+review, and run the scoped final-candidate checks. The goal remains active.
+No publication or additional CI campaign has been started for this draft.
+
+The first K10/K11 managed Linux ARM64 release binary has SHA256
+`355c02a07f000cfd6b3855db6c052dbff95659122452d822cb8c23b19703c48c`.
+Its linked build and native ownership audit passed. The real authorization run
+passed two separately approved upgrades at Bitcoin heights 1009 and 2017, two
+distinct migration applications, reopen, and certificate-verified reconstruction
+from genesis through 2019 decisions. Only the fresh database's randomly generated
+receipt-stream epoch is excluded from cold full-state comparison. Reopen comparison
+is exact. The existing control rollback/fresh-retry scenario also passed.
+
+The single independent reviewer agreed to the bounded successive-upgrade fixture:
+qualification-only P3 has an exact manifest following P2, reuses P2 execution
+semantics, and selects an exact schema-2 no-op migration. Direct P1-to-P3 and
+altered-manifest installation are rejected. This is not a third distinct executor
+or production support promise, and planning agreement is not final code review.
+
+The same binary passed the three-node activation/rollback scenario with live
+protocol discovery and selection-bound simulation contexts at all four observed
+states. Its verifier initially rejected SQLite's uppercase checkpoint hashes;
+the verifier now accepts either hexadecimal case for that existing field, rejects
+malformed and mismatched optional checkpoint coordinates, and accepts the saved
+runtime output. No cluster rerun was needed for that correction. The first sandboxed
+attempt could not open listeners; the successful local run had loopback permission.
+
+The same binary also passed real validator catch-up from peers already on P2 and
+promotion. After an original validator stopped, the joining node's vote was needed
+for the next certificate. Its runtime diagnostic reported validator authority,
+committee membership and no remaining join floor. The listener and separate
+catch-up/validator WAL assertions passed. These are local ARM64 release results,
+not evidence for the other required platforms.
+
+SDK contextual HTTP simulation now also checks reservation release after composition,
+HTTP, and JSON failures, and after success, without settling or broadcasting funds.
+All five focused runtime/type tests pass. A new bounded same-outpoint replacement
+case near activation compiles in the managed library, but is newer than the binary
+above and has not yet run. Its intended assertions cover original transaction
+removal, replayed migration, P2 replacement execution, one canonical charge, and
+reopen agreement. The remaining acceptance and final review/CI gates still apply.
+
+### K10/K11 integrated candidate and final committee case
+
+Candidate `81ac06f6db1a717bd21006a49558cb349ffc10a9` was reviewed against
+merge base `d671fb8294fe5358e5ad7c5ac900f0f5204b971c` by the lead and the
+single independent reviewer `/root/k2b_system_review`. The reviewer found no
+material source regression, covering discovery consistency, selected simulation,
+rollback, legacy/SDK compatibility and funding cleanup, runtime observation,
+P3 registration, migration/replacement accounting, quorum loss and linker bindings.
+The reviewer explicitly accepted the bounded composed successor-support fixture;
+its final implementation required focused follow-up. Remote freshness and final
+platform CI were not established by that source review.
+
+The validation binary SHA256
+`aac9826a1c5f3ce11a58ad64d1f41fbd0c5575ea6be5f83b512d94856cbeef98`
+passed the linked build/native audit and actual linker recording. Its recovery
+suite passed the new same-outpoint replacement case and existing crash/replay
+cases. Its join scenario passed an explicit stall without quorum, followed by
+promotion and the joining validator's required vote. Logs are retained under
+`.build-cache/client-acceptance-validation-runtime/`. Fifty-one focused Python
+controls passed, including actual GCC/Clang links with search/selection flags,
+response files, failure cases and evidence binding. Five SDK runtime/type tests
+cover funding cleanup without settlement/broadcast on all tested outcomes.
+
+The final added support fixture uses real old authority weights 200/100/100 and
+a valid 300/400 certificate, then a paid exit of the 200-power member whose delay
+expires in H's old lifecycle. The next committee is nonempty, with two 100-power
+members. Its real certificate verifier rejects the single-supporter certificate
+and accepts both signatures; reopen preserves exact state, committee and frontier.
+The missing support of one member is an explicit scenario assumption, combined
+with separate actual unknown-target refusal coverage. No live mixed-binary
+network or Bitcoin mempool/RBF policy qualification is claimed.
+
+This fixture and shared-helper refactor compile in the managed release library.
+All 34 focused evidence/comparison tests pass. The complete linked release build
+then passed with installed binary SHA256
+`98dde2b70d8442a7a0262e2d0e7a699c9ce159c2f1ea9c6a4d66a03862c46afa`.
+The full recovery command and evidence verifier passed against this binary,
+including the new committee case and all prior recovery cases. Raw recovery
+stdout SHA256 is
+`6549bb2d558df51a7315be501a941e9be8d35c6d1cec806a41a179ff2d1e37b0`;
+stderr is empty. Build and runtime evidence are retained in
+`.build-cache/client-acceptance-final-linked/` and
+`.build-cache/client-acceptance-final-runtime/`. These local ARM64 release
+results do not replace required current-head cross-platform CI.
+
+Lead follow-up traced the refactored fixture's default single-key behavior,
+old/new certificate authority at decisions 14/15, paid lifecycle exit, unchanged
+frontier after verification-only probes, and exact reopen comparison. The full
+recovery run exercises the previous callers of the shared helpers as well as the
+new case. Frozen P1, production protocol authorization, gas rules and engine
+ownership behavior are unchanged by this fixture. Final reviewer follow-up,
+full controls, documentation/Site review and current-head CI remain pending.
+
+The same independent reviewer approved follow-up
+`81ac06f6db1a717bd21006a49558cb349ffc10a9` through
+`46bce9c954ab6b7ef41c5d9e36b64e64b873eab3`, with no material findings.
+They verified the recovery stdout hash, empty stderr, binary/build-record binding
+and semantic verification of the saved result without duplicating runtime runs.
+They confirmed the fixture closes the agreed gap and preserves shared-helper
+verification. Their documentation correction was limited to stale pending-test
+wording in the unpublished Site draft; that wording is updated. All 186
+protocol-bundle build/evidence controls and workspace formatting checks pass.
+The default branch was reverified at the unchanged PR623 merge before PR
+preparation. Current-head CI/platform qualification and merge remain outstanding.
+
+## K10/K11 PR624: macOS post-link provenance correction
+
+Candidate `7c952b3aaa7ad894177933696da56876748dd01e` passed ordinary
+Linux/macOS, SDK, reproducibility, stack qualification and Linux linked-node
+qualification. Run `41558120201`, macOS job `125662809467`, failed after
+compilation and before runtime qualification because the linker output hash did
+not equal Cargo's finished executable. The link-spec hash and compiler binding
+to the linker record agreed. The invocation requested `-C strip=debuginfo`.
+Rust 1.99.1's `rustc_codegen_ssa/src/back/link.rs` runs `rust-objcopy --strip-debug`
+after linking on Darwin, so equality across those stages was an invalid assumption.
+
+The correction retains the immediate linker record and captures the same output
+path after successful rustc completion in the compiler-object record. The builder
+and comparator require the completed output hash to equal the final executable,
+while retaining the spec and linker-record bindings. Failed compiler invocations
+remove stale success records. A small real Rust compilation with debug stripping
+runs before full platform builds; negative controls reject missing capture,
+changed output, wrong paths, stale specs and broken compiler/linker bindings.
+No runtime semantics or retained P1 sources change. The managed build reference
+is regenerated because the compiler wrapper is a tracked build input.
+
+The failed macOS run is not qualification evidence, and the prior Linux/runtime
+results retain their original source bindings. The corrected build needs its
+focused review and current-candidate CI before merge. No blind CI rerun was made.
+
+The lead and existing single independent reviewer approved correction
+`3842cf9cd69708cf5c5667e934fa8d779822115e` against `7c952b3a`, with no material
+findings. All 190 build/evidence controls passed locally in 16.8 seconds with
+`CCACHE_DISABLE=1`, including the real Rust wrapper test. The regenerated managed
+definition verifies. This is compiler/build provenance, not an independent trace
+of every post-link transformation. Current-candidate Darwin build/runtime evidence
+remains required. The SDK was rebuilt and its packed consumer checks passed for
+bundler, Node16 and React Native resolution; publication remains deferred.

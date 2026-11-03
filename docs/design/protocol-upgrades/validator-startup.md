@@ -1,7 +1,8 @@
 # Validator startup and verified catch-up
 
-This describes the single-runtime startup implementation. Local live promotion,
-transition and crash recovery qualification passed. Review and merge remain pending.
+This describes the single-runtime startup implementation merged in
+[PR623](https://github.com/KontorProtocol/Kontor/pull/623), with live promotion,
+transition and crash recovery qualification.
 Protocol activation changes the selected executor and per-height signing
 authorization while keeping the same Malachite runtime running. Joining as a
 validator is a separate lifecycle transition.
@@ -64,3 +65,25 @@ boundary, authorizes the next height, and starts the validator on the same
 listener. Old transport callbacks are discarded; application state, mempool and
 Bitcoin ingestion remain in the node. A failed join never starts a competing
 validator runtime.
+
+## Observing startup and catch-up
+
+`GET /api/status` keeps the configured `consensus_mode` separate from `runtime`,
+the last observation published by the reactor. Runtime `authority` describes
+whether the running engine has validator authority or is a follower.
+`committee_member` separately reports membership at the observed consensus
+height. A joining validator may therefore be a committee member while its
+engine remains a follower. `required_join_height` is the verified closure floor
+required before promotion, or null if no promotion is pending. Heights are
+decimal strings. None of these diagnostics grant signing permission.
+
+Runtime observations are null before startup, during role promotion, when the
+publisher is gone, or when the node is shutting down or has failed. They are
+observations rather than synchronous proofs of a live signer. The existing
+readiness and failure fields remain necessary when interpreting them.
+
+`GET /api/protocol` provides a separate consistent database snapshot of canonical
+protocol selection and retained certified progress. Its `ready` availability
+does not certify network freshness or validator participation. A recovery state,
+unsupported protocol, unavailable history or missing runtime observation must
+not be interpreted as permission to bootstrap or discard protected state.

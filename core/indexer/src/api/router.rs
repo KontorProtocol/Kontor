@@ -23,11 +23,11 @@ use tracing::{Level, Span, error, field, info, span};
 
 use crate::api::handlers::{
     get_block_transactions, get_blocks, get_contract, get_contract_provenance, get_contracts,
-    get_fees, get_healthz_live, get_healthz_ready, get_index, get_metrics, get_receipt_stream,
-    get_result, get_results, get_signer, get_signer_footprint, get_status, get_transaction,
-    get_transaction_inspect, get_transactions, get_upgrade_state, post_compose, post_contract,
-    post_prepare_upgrade, post_simulate, post_transaction_broadcast, post_transaction_hex_inspect,
-    post_upgrade,
+    get_fees, get_healthz_live, get_healthz_ready, get_index, get_metrics, get_protocol,
+    get_receipt_stream, get_result, get_results, get_signer, get_signer_footprint, get_status,
+    get_transaction, get_transaction_inspect, get_transactions, get_upgrade_state, post_compose,
+    post_contract, post_prepare_upgrade, post_simulate, post_simulate_context,
+    post_transaction_broadcast, post_transaction_hex_inspect, post_upgrade,
 };
 
 use crate::upgrade_control::SUBMISSION_BODY_LIMIT;
@@ -168,6 +168,7 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
                 .route("/{txid}/inspect", get(get_transaction_inspect))
                 .route("/inspect", post(post_transaction_hex_inspect))
                 .route("/simulate", post(post_simulate))
+                .route("/simulate/context", post(post_simulate_context))
                 .route("/broadcast", post(post_transaction_broadcast))
                 .nest(
                     "/compose",
@@ -200,7 +201,9 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
     // outside the `require_available` layer above. `/status` carries the
     // consensus listen addr (resolved at swarm-bind time), needed to bootstrap a
     // cluster before quorum (and thus availability) exists.
-    let always_available = Router::new().route("/status", get(get_status));
+    let always_available = Router::new()
+        .route("/status", get(get_status))
+        .route("/protocol", get(get_protocol));
 
     Router::new()
         .nest("/api", chain_routes.merge(always_available))

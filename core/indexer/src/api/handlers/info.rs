@@ -10,6 +10,7 @@ use tokio::time::timeout;
 
 use crate::api::{API_REQUEST_TIMEOUT_MS, Env, result::Result};
 use crate::built_info;
+use crate::reactor::status::RuntimeStatus;
 
 /// Upper bound on a long-poll `?wait=`, derived from the router's
 /// request-timeout budget. A request held past `API_REQUEST_TIMEOUT_MS`
@@ -100,6 +101,9 @@ pub struct NodeStatus {
     /// Resolved consensus listen multiaddr, or `null` until bound / for
     /// non-consensus nodes.
     pub consensus_listen_addr: Option<String>,
+    /// Last reactor observation. Null during startup, promotion or shutdown.
+    #[serde(default)]
+    pub runtime: Option<RuntimeStatus>,
 }
 
 /// `GET /api/status` — ungated node status (see [`NodeStatus`]).
@@ -113,6 +117,15 @@ pub async fn get_status(State(env): State<Env>) -> Json<NodeStatus> {
         shutting_down: env.shutdown.is_cancelled(),
         failed: env.failed.load(Ordering::Relaxed) || env.owner_service.is_fatal(),
         consensus_listen_addr: env.consensus_listen_addr.borrow().clone(),
+        runtime: if env.shutdown.is_cancelled()
+            || env.failed.load(Ordering::Relaxed)
+            || env.owner_service.is_fatal()
+            || env.runtime_status.has_changed().is_err()
+        {
+            None
+        } else {
+            env.runtime_status.borrow().clone()
+        },
     })
 }
 

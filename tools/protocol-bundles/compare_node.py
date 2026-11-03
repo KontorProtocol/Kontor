@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from build import ROOT, digest, write_json
+from linker_record import validate as validate_linker_record
 from provenance import fingerprint, package_sources, repository_sources
 from qualify_node import (CASES, baseline_graphs, verify_executor_observations,
                           verify_storage_contracts, verify_certified_history, verify_managed_startup)
@@ -166,7 +167,16 @@ def load_cell(path, root, link_set=None):
     require(spec.get('link_set') == link_set, 'node link specification uses another link set')
     require(spec['features'] == ['protocol-qualification'] and spec['lock_sha256'] == node['lock_sha256']
             and spec['source_inputs_sha256'] == node['source_inputs_sha256'], 'node link inputs disagree')
-    require(read(node_dir / 'root-objects.json')['spec_sha256'] == node['link_spec_sha256'], 'stale root objects')
+    compiler_record = read(node_dir / 'root-objects.json')
+    require(compiler_record['spec_sha256'] == node['link_spec_sha256'], 'stale root objects')
+    file_hash(node_dir / 'linker-record.json', node['linker_record_sha256'])
+    file_hash(root / 'tools/protocol-bundles/linker_record.py', node['linker_wrapper_sha256'])
+    require(spec.get('linker_wrapper_sha256') == node['linker_wrapper_sha256'], 'linker wrapper differs')
+    require(compiler_record.get('linker_record_sha256') == node['linker_record_sha256'],
+            'compiler and linker records disagree')
+    require(isinstance(compiler_record.get('compiler_output'), dict), 'missing completed compiler output')
+    validate_linker_record(read(node_dir / 'linker-record.json'), node['link_spec_sha256'],
+                           node['executable_sha256'], compiler_record['compiler_output'])
     require(set(node['ownership']) == OWNERSHIP, 'missing ownership audit')
     for name, expected in node['ownership'].items():
         file_hash(node_dir / name, expected)

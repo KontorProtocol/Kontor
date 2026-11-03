@@ -10,8 +10,11 @@ mod confirmation;
 pub(crate) mod crash;
 mod fixture;
 pub(crate) mod recovery;
+mod replacement;
 mod replay;
 mod services;
+mod successive;
+mod support;
 mod token_count;
 mod unsupported;
 
@@ -181,6 +184,7 @@ async fn restart(
             500,
             None,
             address_tx,
+            watch::channel(None).0,
             NETWORK,
             PruneConfig {
                 enabled: false,

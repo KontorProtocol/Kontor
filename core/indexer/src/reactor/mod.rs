@@ -39,6 +39,7 @@ mod session;
 mod simulation_context_tests;
 #[cfg(test)]
 mod startup_tests;
+pub mod status;
 #[cfg(test)]
 mod storage_penalty_tests;
 mod transport;
@@ -61,9 +62,11 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use self::status::RuntimeStatus;
+use crate::protocol_info::SimulationReport;
 use anyhow::{Context, Result, bail};
 use futures_util::future::{self, pending};
-use indexer_types::{BlockRow, Event, Fees, OpWithResult};
+use indexer_types::{BlockRow, Event, Fees};
 use tokio::{
     select,
     sync::{
@@ -138,7 +141,7 @@ use mempool::MempoolPreparation;
 /// Keep this constant and that config default in lockstep.
 const MAX_PENDING_BLOCKS: usize = 128;
 
-pub type SimulationOutcome = std::result::Result<Vec<OpWithResult>, String>;
+pub type SimulationOutcome = std::result::Result<SimulationReport, String>;
 
 pub type Simulation = (Vec<u8>, oneshot::Sender<Result<SimulationOutcome>>);
 
@@ -173,6 +176,7 @@ pub(crate) struct Reactor<E: Executor> {
     /// Shared with the API (`Env.consensus_listen_addr`); written on the first
     /// `Listening` (see `handle_consensus_msg`'s `ConsensusReady` arm).
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
+    runtime_status: Option<tokio::sync::watch::Sender<Option<RuntimeStatus>>>,
     /// Consensus I/O in flight — bitcoind validation running off the loop, ALL
     /// raced together as one arm of the root `select!` (`select_all`), so a
     /// stalled job cannot park another. Small, not a fixed size: at most one
@@ -314,6 +318,7 @@ impl<E: Executor> Reactor<E> {
             consensus,
             consensus_listen_addr,
             io_jobs: VecDeque::new(),
+            runtime_status: None,
             validated_candidates: None,
             fee_recompute: None,
             mempool_preparation: None,
@@ -434,6 +439,24 @@ impl<E: Executor> Reactor<E> {
         fee_publish_ticker.tick().await; // consume the immediate first tick
 
         loop {
+            if let Some(status) = &self.runtime_status {
+                let next = Some(RuntimeStatus {
+                    authority: self.consensus.engine.authority(),
+                    consensus_height: self.consensus.current_height.as_u64().to_string(),
+                    committee_member: self.consensus.validator_index.is_some(),
+                    required_join_height: self
+                        .consensus
+                        .promotion_floor
+                        .map(|height| height.to_string()),
+                });
+                status.send_if_modified(|current| {
+                    if *current == next {
+                        return false;
+                    }
+                    *current = next;
+                    true
+                });
+            }
             // Drain pending block events before entering select, but stop at the
             // high-water mark so the bounded channel backpressures the poller
             // instead of buffering to the chain tip.
@@ -1033,6 +1056,7 @@ pub fn run(
     consensus_propose_timeout_ms: u64,
     fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
+    runtime_status: tokio::sync::watch::Sender<Option<RuntimeStatus>>,
     network: bitcoin::Network,
     prune: PruneConfig,
 ) -> JoinHandle<Result<()>> {
@@ -1151,6 +1175,7 @@ pub fn run(
                 let mut reactor = Reactor::from_execution(execution, block_rx, mempool_rx,
                     shutdown.clone(), ready_tx, event_tx, simulate_rx, consensus, consensus_listen_addr);
                 reactor.upgrade_rx = upgrade_rx;
+                reactor.runtime_status = Some(runtime_status);
                 #[cfg(kontor_managed)]
                 {
                     reactor.coordinator = Some(coordinator);

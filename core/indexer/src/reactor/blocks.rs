@@ -27,6 +27,7 @@ use crate::protocol::coordinator::minimum_prune_retention_blocks;
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, ExecutionSelection, select_current,
 };
+use crate::protocol_info::SimulationReport;
 use crate::runtime::ownership::adapter::HostFailure;
 
 use super::consensus_state;
@@ -599,6 +600,7 @@ impl<E: Executor> ExecutionContext<E> {
         // an RPC request waits in the bounded simulation queue.
         let selection = self.simulation_selection().await?;
         self.select_session(&selection).await?;
+        let context = selection.diagnostics(self.session.executor.execution_definition?)?;
         let tx = match self
             .executor
             .prepare_simulation(&self.recognizer, &selection, raw)?
@@ -607,7 +609,11 @@ impl<E: Executor> ExecutionContext<E> {
             Ok(None) => return Ok(Err("Not a valid Kontor transaction".to_owned())),
             Err(error) => return Ok(Err(error)),
         };
-        self.simulate_selected(selection, tx).await.map(Ok)
+        let operations = self.simulate_selected(selection, tx).await?;
+        Ok(Ok(SimulationReport {
+            context,
+            operations,
+        }))
     }
 
     fn simulation_selection(

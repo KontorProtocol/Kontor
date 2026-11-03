@@ -55,6 +55,33 @@ campaign per group. This is not a cap on necessary corrective runs or a waiver o
 checks. Retain valid evidence with its original source bindings and rerun affected
 checks when changes require it.
 
+## Current delivery checkpoint, 2 November 2026
+
+K1–K9 and their prerequisites are merged. K3 is PR619, K4 is PR620,
+K5/K6 is PR621, K7/K8 is PR622 and K9 is
+[PR623](https://github.com/KontorProtocol/Kontor/pull/623), merged as
+`d671fb8294fe5358e5ad7c5ac900f0f5204b971c`. The combined K10/K11 group is
+under final validation and review. The complete goal remains open.
+
+The implemented architecture uses one pinned Malachite runtime and common
+consensus wire across protocol activations. Independently locked historical
+executors remain versioned. Activation does not restart the engine; follower
+promotion can use a controlled stop/join. The single-runtime amendment below
+supersedes historical requirements for separate Malachite versions, incompatible
+live codecs and an HTTP history service. Earlier milestone entries are historical
+evidence, not additional current deliverables.
+
+The K10/K11 candidate implements transactional protocol/format/ABI discovery,
+selection-bound simulation and SDK helpers, actual runtime-role diagnostics,
+two successive approved upgrades, replacement near activation, unavailable quorum,
+and explicit linker-driver/backend-selection provenance. The final committee
+support case composes a real old-quorum certificate and paid departure with
+next-committee certificate verification; missing support is an explicit scenario
+assumption, backed separately by real unsupported-target refusal. It does not
+claim a live mixed-binary experiment. The execution ledger records each result's
+source/binary scope. Remaining runtime validation, focused review, required
+current-head CI, merge and final private Site publication are not yet complete.
+
 ## Implementation checkpoint, 1 November 2026
 
 S2 merged in [PR 613](https://github.com/KontorProtocol/Kontor/pull/613) as

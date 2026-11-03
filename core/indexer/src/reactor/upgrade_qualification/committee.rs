@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
-use bitcoin::{blockdata::constants::genesis_block, consensus::serialize};
+use bitcoin::{Transaction, blockdata::constants::genesis_block, consensus::serialize};
 use indexer_types::{ContractAddress, Inst, InstKind, Insts};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -19,22 +19,7 @@ use crate::reactor::consensus_state::certified_startup;
 use crate::runtime::ownership::OwnerService;
 use crate::stopper::Shutdown;
 
-// Exit is an ordinary paid staking call. Its twelve-block delay expires in H's
-// old-protocol lifecycle, immediately before the scheduled migration.
-pub(super) async fn run(service: &OwnerService) -> Result<Value> {
-    let directory = TempDir::new()?;
-    let key = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[38; 32])?);
-    let target = seed_with_validator(
-        directory.path(),
-        service,
-        13,
-        &key.x_only_public_key().0.to_string(),
-    )
-    .await?;
-    let mut execution = open(directory.path(), service).await?;
-    ensure!(execution.recover(&Shutdown::new().signal()).await?);
-    let conn = execution.db_conn();
-    let context = execution.protocol_context;
+pub(super) fn exit_transaction() -> Result<Transaction> {
     let mut exit = raw_transaction(Insts::direct(vec![
         Inst {
             gas_limit: 100_000,
@@ -53,6 +38,26 @@ pub(super) async fn run(service: &OwnerService) -> Result<Value> {
         },
     ]))?;
     exit.input[0].previous_output.vout = 0;
+    Ok(exit)
+}
+
+// Exit is an ordinary paid staking call. Its twelve-block delay expires in H's
+// old-protocol lifecycle, immediately before the scheduled migration.
+pub(super) async fn run(service: &OwnerService) -> Result<Value> {
+    let directory = TempDir::new()?;
+    let key = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[38; 32])?);
+    let target = seed_with_validator(
+        directory.path(),
+        service,
+        13,
+        &key.x_only_public_key().0.to_string(),
+    )
+    .await?;
+    let mut execution = open(directory.path(), service).await?;
+    ensure!(execution.recover(&Shutdown::new().signal()).await?);
+    let conn = execution.db_conn();
+    let context = execution.protocol_context;
+    let exit = exit_transaction()?;
     let mut block = genesis_block(NETWORK);
     append(
         &conn,

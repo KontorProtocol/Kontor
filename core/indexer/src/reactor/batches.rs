@@ -1449,6 +1449,9 @@ impl<E: Executor> Reactor<E> {
             .context("joining engine lacks bound listener")?;
         // Finalized was consumed under the old context. The follower may receive
         // more network work until joined, but no old callbacks run past this gate.
+        if let Some(status) = &self.runtime_status {
+            status.send_replace(None);
+        }
         ensure!(
             self.consensus.engine.stop(Duration::from_secs(10)).await?,
             "catch-up engine failed to join before validator promotion"

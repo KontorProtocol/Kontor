@@ -39,6 +39,7 @@ import type {
 } from "./provenance.js";
 import { canSignSchnorr, type Signing } from "./signing.js";
 import type { Identity } from "./identity.js";
+import type { ProtocolSnapshot } from "./protocol.js";
 import type { FundingSource } from "./funding.js";
 import { BlsKey, buildRegistrationProof } from "./bls.js";
 import type { Chain } from "./chains.js";
@@ -107,8 +108,8 @@ export interface KontorSessionOptions {
   /**
    * Default gas cap for proc `Inst`s built via `call(...)`.
    * Overridable per-Inst with `inst.withGasLimit(...)`. When omitted,
-   * defaults to a provisional ceiling — the transport refines the
-   * actual gas at submit time; this is the signer's authorized cap.
+   * defaults to a provisional ceiling. This is the signer's authorized
+   * cap; submission does not automatically estimate or change it.
    */
   defaultGasLimit?: bigint;
   /**
@@ -130,8 +131,8 @@ export interface KontorSessionOptions {
 
 /**
  * Provisional default self-pay ceiling when `KontorSessionOptions`
- * doesn't specify one. Tunable; the transport estimates real gas at
- * submit time, so this is just the cap the signer authorizes.
+ * doesn't specify one. This is the cap the signer authorizes, not an
+ * automatic estimate of the gas a particular call will consume.
  */
 const DEFAULT_GAS_LIMIT: bigint = 100_000n;
 
@@ -281,6 +282,13 @@ export class KontorSession {
    */
   getProvenance(contract: ContractAddress): Promise<ProvenanceEntry[]> {
     return this.transport.provenance(contract);
+  }
+
+  getProtocol(): Promise<ProtocolSnapshot> {
+    if (!this.transport.protocol) {
+      throw new TransportError("Transport does not support protocol discovery");
+    }
+    return this.transport.protocol();
   }
 
   /** Read publication claims and the artifact selected by the active protocol. */
