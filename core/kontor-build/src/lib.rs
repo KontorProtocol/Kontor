@@ -9,6 +9,7 @@ mod native_lock;
 pub mod object_tools;
 mod outputs;
 pub mod provenance;
+pub mod shared_ownership;
 mod snapshot;
 pub mod source_identity;
 pub mod source_policy;

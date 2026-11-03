@@ -5,11 +5,11 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Result, ensure};
 use kontor_build::object_tools::ObjectTools;
+use kontor_build::shared_ownership::run as audit_shared;
 #[cfg(target_os = "linux")]
 use kontor_build::symbol_audit::run as audit_symbols;
 use kontor_build::toolchain::symbol_reader;
 use serde_json::{Value, json};
-#[cfg(target_os = "linux")]
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
@@ -211,5 +211,47 @@ fn real_linked_graphs_preserve_global_and_private_ownership() -> Result<()> {
         }
     }
     assert_eq!(result["result"]["native"].as_object().unwrap().len(), 4);
+    Ok(())
+}
+
+#[test]
+#[ignore = "native compiler/runtime fixture; exercised by protocol bundle controls"]
+fn shared_runtime_lookup_uses_actual_library_handles_and_hashes() -> Result<()> {
+    let dir = tempdir()?;
+    let root = dir.path();
+    let object = compile(root, "int main(void) { return 0; }\n", "main.c")?;
+    let executable = root.join("node");
+    ensure!(
+        Command::new("cc")
+            .arg(object)
+            .arg("-o")
+            .arg(&executable)
+            .status()?
+            .success(),
+        "link platform fixture"
+    );
+    let request = json!({"operation":"platform_owners", "working_directory":root, "executable":executable, "kind":"executor", "candidates":["puts", "kontor_definitely_absent", "_handle"]});
+    let result = audit_shared(serde_json::from_value(request)?)?;
+    let owners = result[0].as_object().unwrap();
+    assert!(!owners["puts"].as_array().unwrap().is_empty());
+    assert!(!owners.contains_key("kontor_definitely_absent"));
+    assert!(!owners.contains_key("_handle"));
+    for library in result[1].as_array().unwrap() {
+        let path = Path::new(library["path"].as_str().unwrap());
+        if path.is_file() {
+            assert_eq!(
+                library["sha256"],
+                hex::encode(Sha256::digest(fs::read(path)?))
+            );
+            assert_eq!(library["dyld_shared_cache"], false);
+        } else {
+            ensure!(
+                cfg!(target_os = "macos"),
+                "non-cache runtime library missing"
+            );
+            assert_eq!(library["sha256"], Value::Null);
+            assert_eq!(library["dyld_shared_cache"], true);
+        }
+    }
     Ok(())
 }

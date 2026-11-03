@@ -67,7 +67,7 @@ pub struct Symbol {
 
 #[derive(Clone, Deserialize)]
 pub struct Graph {
-    graph: String,
+    pub(crate) graph: String,
     namespace: String,
     packages: Option<Vec<Package>>,
     #[serde(default = "empty_identity")]
@@ -102,7 +102,7 @@ impl Graph {
                     .context("graph native artifact inventory missing")?,
             ))
     }
-    fn paths(&self) -> Result<BTreeSet<&Path>> {
+    pub(crate) fn paths(&self) -> Result<BTreeSet<&Path>> {
         Ok(self.artifacts()?.map(|item| item.path.as_path()).collect())
     }
 }
@@ -235,7 +235,7 @@ pub fn suffix(version: &str) -> String {
         .collect()
 }
 
-trait Inspector {
+pub(crate) trait Inspector {
     fn definitions(&self, path: &Path, globals_only: bool) -> Result<Definitions>;
     fn debug_metadata(&self, path: &Path, linked: bool) -> Result<()>;
     fn members(&self, path: &Path) -> Result<Vec<String>>;

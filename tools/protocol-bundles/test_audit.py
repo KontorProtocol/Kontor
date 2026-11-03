@@ -7,11 +7,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from audit import GDB_SCRIPT, audit_inputs, audit_final, compiler_debug_metadata, definitions, owner, private_local_inputs
 from build import digest, verify_staged_inputs
-from common_ownership import graph_references, linker_owners, platform_owners, reject_common_shadow, reject_unowned_references, runtime_paths, verify
+from common_ownership import graph_references, linker_owners, reject_common_shadow, reject_unowned_references, verify
 from provenance import fingerprint, source_inputs
 
 
@@ -82,62 +82,6 @@ class Ownership(unittest.TestCase):
     def test_unknown_c_symbol_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "unowned native"):
             owner("unregistered_state", self.graphs[0], "51.0.0-dev")
-
-    def test_darwin_platform_libraries_require_exact_system_paths(self):
-        paths = ["/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
-                 "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
-                 "/usr/lib/libiconv.2.dylib", "/usr/lib/libSystem.B.dylib"]
-        def listing(libraries):
-            return "fixture:\n" + "".join(f"\t{path} (compatibility version 1.0.0, current version 1.0.0)\n"
-                                         for path in libraries)
-        with patch("common_ownership.sys.platform", "darwin"):
-            with patch("common_ownership.subprocess.check_output", return_value=listing(paths)):
-                self.assertEqual(runtime_paths(Path("fixture")), paths)
-            for unexpected in ("/opt/homebrew/lib/libiconv.2.dylib", "@rpath/libiconv.2.dylib",
-                               "/usr/lib/libiconv.3.dylib", "/usr/lib/libunregistered.dylib"):
-                with self.subTest(unexpected=unexpected):
-                    with patch("common_ownership.subprocess.check_output", return_value=listing(paths + [unexpected])):
-                        with self.assertRaisesRegex(RuntimeError, "undeclared shared platform libraries"):
-                            runtime_paths(Path("fixture"))
-            cpp = "/usr/lib/libc++.1.dylib"
-            with patch("common_ownership.subprocess.check_output", return_value=listing(paths + [cpp])):
-                self.assertEqual(runtime_paths(Path("fixture"), kind="executor"), paths + [cpp])
-                with self.assertRaisesRegex(RuntimeError, "undeclared shared platform libraries"):
-                    runtime_paths(Path("fixture"))
-            with patch("common_ownership.subprocess.check_output",
-                       return_value=listing(paths + ["/opt/homebrew/lib/libc++.1.dylib"])):
-                with self.assertRaisesRegex(RuntimeError, "undeclared shared platform libraries"):
-                    runtime_paths(Path("fixture"), kind="executor")
-
-    def test_linux_node_cpp_runtime_is_explicit_and_unknown_libraries_stay_rejected(self):
-        def listing(paths):
-            return "".join(f"{Path(path).name} => {path} (0x1234)\n" for path in paths)
-        paths = ["/lib64/libc.so.6", "/lib64/libstdc++.so.6"]
-        with patch("common_ownership.sys.platform", "linux"):
-            with patch("common_ownership.subprocess.check_output", return_value=listing(paths)):
-                self.assertEqual(runtime_paths(Path("fixture"), kind="executor"), paths)
-                with self.assertRaisesRegex(RuntimeError, "undeclared shared platform libraries"):
-                    runtime_paths(Path("fixture"))
-            with patch("common_ownership.subprocess.check_output",
-                       return_value=listing(paths + ["/opt/lib/libunregistered.so"])):
-                with self.assertRaisesRegex(RuntimeError, "undeclared shared platform libraries"):
-                    runtime_paths(Path("fixture"), kind="executor")
-            with self.assertRaisesRegex(RuntimeError, "unknown runtime audit kind"):
-                runtime_paths(Path("fixture"), kind="other")
-
-    def test_node_runtime_still_hashes_actual_library_and_resolves_its_exports(self):
-        with tempfile.TemporaryDirectory() as directory:
-            library = Path(directory) / "libstdc++.so.6"
-            library.write_bytes(b"fixture-cpp-runtime")
-            with patch("common_ownership.runtime_paths", return_value=[str(library)]) as paths:
-                with patch("common_ownership.ctypes.CDLL", return_value=Mock(spec=["owned_export"])):
-                    owners, libraries = platform_owners(Path("fixture"), {"owned_export", "absent_export"},
-                                                         kind="executor")
-            paths.assert_called_once_with(Path("fixture"), kind="executor")
-            self.assertEqual(owners, {"owned_export": [str(library)]})
-            self.assertEqual(libraries[0]["path"], str(library))
-            self.assertEqual(libraries[0]["sha256"], digest(library))
-            self.assertEqual(libraries[0]["symbols_resolved_in_library_scope"], ["owned_export"])
 
     def test_bundle_allocator_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "process allocator"):
@@ -403,26 +347,6 @@ class Ownership(unittest.TestCase):
                     self.assertFalse(optional)
                     with self.assertRaisesRegex(RuntimeError, "no declared owner"):
                         reject_unowned_references(self.graphs[0], sets[0], refs, {}, {}, optional, linker)
-
-    def test_linker_got_requires_local_final_definition(self):
-        got = {"_GLOBAL_OFFSET_TABLE_": {"kind": "d", "address": "1234"}}
-        with patch("common_ownership.sys.platform", "linux"):
-            with patch("common_ownership.definitions", return_value=got) as inventory:
-                self.assertEqual(linker_owners(Path("fixture")), got)
-                inventory.assert_called_once_with(Path("fixture"), globals_only=False)
-            absolute = {"_GLOBAL_OFFSET_TABLE_": {"kind": "a", "address": "1234"}}
-            with patch("common_ownership.definitions", return_value=absolute):
-                self.assertEqual(linker_owners(Path("fixture")), absolute)
-            with patch("common_ownership.definitions", return_value={}):
-                self.assertEqual(linker_owners(Path("fixture")), {})
-            for kind in ("D", "U", "w", "t"):
-                with patch("common_ownership.definitions", return_value={"_GLOBAL_OFFSET_TABLE_": {"kind": kind}}):
-                    with self.assertRaisesRegex(RuntimeError, "not local linker data"):
-                        linker_owners(Path("fixture"))
-        with patch("common_ownership.sys.platform", "darwin"):
-            with patch("common_ownership.definitions", return_value=got) as inventory:
-                self.assertEqual(linker_owners(Path("fixture")), {})
-                inventory.assert_not_called()
 
     def test_linker_got_does_not_allow_other_imports_or_bundle_definitions(self):
         graph = self.graphs[0]

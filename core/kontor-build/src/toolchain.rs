@@ -15,7 +15,12 @@ use crate::container::sha256;
 pub type Environment = BTreeMap<String, String>;
 const TOOLCHAIN: &str = "1.99.1";
 
-fn output(cwd: &Path, program: &Path, args: &[&str], env: Option<&Environment>) -> Result<String> {
+pub(crate) fn output(
+    cwd: &Path,
+    program: &Path,
+    args: &[&str],
+    env: Option<&Environment>,
+) -> Result<String> {
     let program = if program.components().count() > 1 {
         cwd.join(program)
     } else {

@@ -284,6 +284,16 @@ The transitional Python adapter writes the same successful JSON report bytes.
 Malformed graph/ownership list lengths now fail before symbol inspection, and
 failed final audits do not write a partial local-input report.
 
+`tools/kontor audit-shared` checks retained graph imports against concrete sysroot,
+platform-library and root-compiler owners. Ordinary node definitions remain
+separate and cannot satisfy retained graph imports. Only the named weak system
+unwind references are optional; a strong reference to the same name remains
+required. The platform-library allowlists and ELF GOT constraints are unchanged.
+Library export lookup uses local loader handles and never calls resolved symbols;
+handles are released after lookup. The remaining Python adapter preserves the
+successful shared/node ownership report bytes. Python object attributes are no
+longer eligible as apparent library exports.
+
 Absolute source paths and platform inputs are recorded. This is an audit of
 the actual build, not a claim that different checkouts or platforms produce
 byte-identical executables.
