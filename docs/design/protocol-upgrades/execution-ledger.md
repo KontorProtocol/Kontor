@@ -5004,3 +5004,12 @@ is regenerated because the compiler wrapper is a tracked build input.
 The failed macOS run is not qualification evidence, and the prior Linux/runtime
 results retain their original source bindings. The corrected build needs its
 focused review and current-candidate CI before merge. No blind CI rerun was made.
+
+The lead and existing single independent reviewer approved correction
+`3842cf9cd69708cf5c5667e934fa8d779822115e` against `7c952b3a`, with no material
+findings. All 190 build/evidence controls passed locally in 16.8 seconds with
+`CCACHE_DISABLE=1`, including the real Rust wrapper test. The regenerated managed
+definition verifies. This is compiler/build provenance, not an independent trace
+of every post-link transformation. Current-candidate Darwin build/runtime evidence
+remains required. The SDK was rebuilt and its packed consumer checks passed for
+bundler, Node16 and React Native resolution; publication remains deferred.
