@@ -1,8 +1,12 @@
 mod bundles;
 mod container;
+mod native_lock;
 mod outputs;
+mod snapshot;
 
 pub use bundles::{ProtocolBundlesArgs, protocol_bundles};
+pub use native_lock::check_native_helper_lock;
+pub use snapshot::{VerifySnapshotArgs, verify_snapshot};
 
 use std::collections::BTreeSet;
 use std::env;

@@ -17,7 +17,7 @@ From the repository root:
 
 ```sh
 python3 tools/native-crypto/vendor.py
-python3 tools/native-crypto/check-helper-lock.py
+RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor check-native-helper-lock
 cargo test --locked --manifest-path core/vendor/kontor-native-build/Cargo.toml -j2
 python3 tools/native-crypto/qualify.py --output /absolute/path/to/new-evidence-directory
 ```
@@ -90,7 +90,7 @@ those platforms. Real library/platform and SDK/mobile checks are separate gates.
 ## Updating a vendor
 
 Changing core's `cc` version also requires updating the helper's exact pin and
-standalone lock; `check-helper-lock.py` enforces their agreement.
+standalone lock; `tools/kontor check-native-helper-lock` enforces their agreement.
 
 The ordinary reproducible-build CI job also compares the actual SDK Wasm crypto
 API with the committed pristine reference identified in `fixtures/sdk-vectors.json`.

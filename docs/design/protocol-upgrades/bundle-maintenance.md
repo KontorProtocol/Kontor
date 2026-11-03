@@ -40,6 +40,17 @@ relocation and path-containment checks remain. K3 and P1 inventories are unchang
 
 ## Existing build fixtures
 
+Individual retained inventories can now be verified by the Rust build CLI:
+
+```sh
+RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor verify-snapshot protocol-bundles/retained/p1 --sha256 4df4b75941b026b19a6dffcf2371afdd4d997e2b8cd33322002c782e3bc36cfc
+```
+
+The command prints the authenticated inventory as JSON and fails on changed,
+missing or additional files, changed symlink targets, or paths escaping the
+snapshot. It does not regenerate identities or inventories. Python orchestration
+still uses its original verifier until the bundle builder migration is complete.
+
 The standalone proof graphs below are build/isolation fixtures. Their results
 are separate from the real managed-node acceptance evidence recorded in the
 [execution ledger](execution-ledger.md).

@@ -63,7 +63,7 @@ jobs:
         run: cargo clippy --locked --manifest-path tools/native-crypto/object-report/Cargo.toml -- -D warnings
       - name: Test namespace helper
         run: |
-          python3 tools/native-crypto/check-helper-lock.py
+          ./tools/kontor check-native-helper-lock
           cargo clippy --locked --manifest-path core/vendor/kontor-native-build/Cargo.toml --all-targets -j2 -- -D warnings
           cargo test --locked --manifest-path core/vendor/kontor-native-build/Cargo.toml -j2
       - name: Qualify pristine, default and dual namespaced graphs
