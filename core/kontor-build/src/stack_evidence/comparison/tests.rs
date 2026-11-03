@@ -25,7 +25,7 @@ fn strip_log(sample: &Value) -> Value {
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
-fn case(kind: &str, os: &str, arch: &str) -> Value {
+pub(crate) fn case(kind: &str, os: &str, arch: &str) -> Value {
     let mut case = json!({"kind":kind,"boundary":if kind=="paid_huge" {"bounded"} else {"first_failure"},
         "last_success":Value::Null,"first_failure":Value::Null,"first_failure_outcome":Value::Null,
         "worker_log":format!("{kind}-worker.log"),"control_log":format!("{kind}-control.log"),"owned_log":format!("{kind}-owned.log")});

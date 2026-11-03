@@ -29,6 +29,7 @@ use kontor_build::provenance::{Request as ProvenanceRequest, run as provenance};
 use kontor_build::recipes::{Request as RecipeRequest, run as recipes};
 use kontor_build::shared_ownership::{Request as SharedRequest, run as audit_shared};
 use kontor_build::source_identity::{Metadata, verify_sources};
+use kontor_build::stack_evidence::capture::{CaptureStackArgs, capture_stack};
 use kontor_build::stack_evidence::comparison::{CompareStackArgs, compare_stack};
 use kontor_build::stack_evidence::smoke::{SmokeArgs, capture as stack_smoke};
 use kontor_build::stack_evidence::{Request as StackRequest, run as stack_evidence};
@@ -48,6 +49,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Capture worker, fresh-control, and owned stack qualification evidence.
+    QualifyStack(CaptureStackArgs),
     /// Compare archived stack qualification and required dev smoke evidence.
     CompareStack(CompareStackArgs),
     /// Run the bounded dev-profile ownership and resource smoke tests.
@@ -131,6 +134,10 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::QualifyStack(args) => {
+            println!("{}", capture_stack(&repository_root()?, args)?);
+            Ok(())
+        }
         Command::CompareStack(args) => {
             println!("{}", compare_stack(&repository_root()?, args)?);
             Ok(())

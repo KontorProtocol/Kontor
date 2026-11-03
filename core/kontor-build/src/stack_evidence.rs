@@ -4,6 +4,7 @@ use serde_json::{Map, Value, json};
 use std::path::PathBuf;
 
 mod build;
+pub mod capture;
 mod chains;
 pub mod comparison;
 mod probes;

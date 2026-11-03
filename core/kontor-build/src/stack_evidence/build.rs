@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 
+use crate::toolchain::{Environment, output as command_output};
+
 pub(super) const FORK_REVISION: &str = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7";
 pub(super) const FEATURE_LOGS: [(&str, &str); 2] = [
     ("production", "wasmtime-production-features.txt"),
@@ -136,4 +138,74 @@ pub(super) fn validate(report: &Value, directory: &Path, binary: &str) -> Result
         "Cargo build log lacks successful terminal completion"
     );
     Ok(artifacts.remove(0))
+}
+
+pub(super) fn source_identity(root: &Path, environment: &Environment) -> Result<String> {
+    let source = command_output(
+        root,
+        Path::new("git"),
+        &["rev-parse", "HEAD"],
+        Some(environment),
+    )?;
+    ensure!(
+        command_output(
+            root,
+            Path::new("git"),
+            &["status", "--porcelain"],
+            Some(environment)
+        )?
+        .trim()
+        .is_empty(),
+        "qualification source worktree is dirty"
+    );
+    Ok(source.trim().to_owned())
+}
+
+pub(super) fn resolve_features(
+    root: &Path,
+    environment: &Environment,
+    target: &str,
+    directory: &Path,
+) -> Result<Value> {
+    let mut features = json!({});
+    for ((graph, log), edges) in FEATURE_LOGS.into_iter().zip(["no-dev", "all"]) {
+        let raw = command_output(
+            root,
+            Path::new("cargo"),
+            &[
+                "tree",
+                "--locked",
+                "--offline",
+                "--manifest-path",
+                "core/Cargo.toml",
+                "-p",
+                "indexer",
+                "-e",
+                edges,
+                "-i",
+                "wasmtime",
+                "-f",
+                "{f}",
+                "--depth",
+                "0",
+                "--target",
+                target,
+            ],
+            Some(environment),
+        )?;
+        fs::write(directory.join(log), &raw)?;
+        let lines: Vec<_> = raw.lines().collect();
+        ensure!(
+            lines.len() == 1 && !lines[0].is_empty(),
+            "unexpected Wasmtime feature resolution for {edges}"
+        );
+        let mut list: Vec<_> = lines[0].split(',').collect();
+        ensure!(
+            !list.contains(&"") && list.iter().collect::<BTreeSet<_>>().len() == list.len(),
+            "invalid Wasmtime feature resolution for {edges}"
+        );
+        list.sort_unstable();
+        features[graph] = json!(list);
+    }
+    Ok(features)
 }

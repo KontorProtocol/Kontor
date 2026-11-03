@@ -5,10 +5,9 @@ import argparse
 import hashlib
 import json
 import tomllib
+import subprocess
+from functools import lru_cache
 from pathlib import Path
-
-from sweep import _run as stack_evidence
-
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = Path(__file__).with_name("resource-manifest-v1.json")
@@ -134,6 +133,7 @@ INPUTS = {
     "production_build_validation": "core/kontor-build/src/stack_evidence/build.rs",
     "production_sweep_validation": "core/kontor-build/src/stack_evidence.rs",
     "production_smoke_validation": "core/kontor-build/src/stack_evidence/smoke.rs",
+    "production_capture": "core/kontor-build/src/stack_evidence/capture.rs",
     "resource_manifest_source": "tools/native-stack/resource_manifest.py",
     "fiber_source_capture": "tools/native-stack/capture_fiber_source.py",
     "resource_control_capture": "tools/native-stack/capture_resource_control.py",
@@ -484,6 +484,19 @@ def cases():
     return sorted(result, key=lambda item: item["id"])
 
 
+@lru_cache(maxsize=1)
+def feature_policy():
+    with subprocess.Popen(
+        [str(ROOT / "tools/kontor"), "verify-stack-evidence"], cwd=ROOT,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    ) as child:
+        stdout, stderr = child.communicate('{"operation":"feature_policy"}')
+        if child.returncode:
+            raise ValueError(f"Rust feature policy failed: {stderr}")
+    json.loads(stdout)
+    return stdout
+
+
 def build_manifest():
     if sha256(ROOT / AMENDMENT) != AMENDMENT_SHA256:
         raise ValueError("approved resource amendment bytes changed")
@@ -520,7 +533,7 @@ def build_manifest():
         "amendment": {"path": AMENDMENT, "sha256": AMENDMENT_SHA256},
         "source_baseline_commit": BASE_COMMIT,
         "wasmtime_revision": WASMTIME_REVISION,
-        "wasmtime_features": stack_evidence({"operation": "feature_policy"}),
+        "wasmtime_features": json.loads(feature_policy()),
         "build_policy": {"rustc_release": "1.99.1", "cargo_features": [],
                          "dependency_feature_attestation": 1,
                          "fastnum_build_script_sha256": FASTNUM_BUILD_SCRIPT_SHA256,

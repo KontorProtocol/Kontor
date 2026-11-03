@@ -47,7 +47,7 @@ const REPORT_FIELDS: &[&str] = &[
     "cargo_log",
 ];
 
-fn report(path: &Path, cell: &str, os: &str, arch: &str) -> Result<(Value, Value)> {
+pub(super) fn report(path: &Path, cell: &str, os: &str, arch: &str) -> Result<(Value, Value)> {
     let directory = path.parent().context("missing report parent")?;
     let path = artifact_file(directory, "qualification.json")?;
     let report: Value = serde_json::from_slice(&fs::read(path)?)?;
@@ -374,4 +374,4 @@ pub fn compare_stack(root: &Path, args: CompareStackArgs) -> Result<Value> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

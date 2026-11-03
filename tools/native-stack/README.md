@@ -4,13 +4,17 @@
 
 Stack sweep parsing and fresh-control comparison now use
 `tools/kontor verify-stack-evidence` (`parse_sweep` and `sweep_pair` JSON requests).
-The temporary `sweep.py` adapter remains for the qualification runner and archive
-comparator until those callers move to Rust. Bootstrap uses the existing tooling
+Capture and archive comparison use `tools/kontor qualify-stack` and
+`tools/kontor compare-stack`; the temporary Python adapter is removed.
+Bootstrap uses the existing tooling
 lockfile and respects Cargo's offline environment. It requires the pinned Rust
 toolchain, including when comparing downloaded reports. Parsed observations and
 report formats are unchanged; integer evidence explicitly rejects booleans and
 floating-point substitutes. The former sweep unit tests now run with the Rust
-tooling tests. No stack-boundary or performance runs are added by this migration.
+tooling tests. Capture retains the worker, fresh-control and owned-control
+process sequence, preserving partial logs and reaping failed or timed-out
+children without retries. A failed rerun removes its stale qualification report.
+No stack-boundary or performance runs are added by this migration.
 
 Every PR runs the lightweight `Stack qualification change scope` job. Full
 release qualification and bounded dev smoke run when the Git diff touches runtime/ownership, retained protocol
@@ -647,7 +651,7 @@ production stack configuration. The memory profiles require separate
 uninstrumented production-capacity runs and preserve actual host hardware and
 OS field definitions alongside the reference profiles.
 
-`qualify.py` invokes one worker process and one fresh control process per probe kind. Each process funds and publishes the synchronous `stack-probe` fixture through the normal user contract path, then executes it through `Runtime::execute` or `Runtime::execute_system_view`. Publication populates the compiled component cache once per process. Each observation uses fresh invocation Stores. These measurements describe warm compiled-cache execution, not cold compilation or loading.
+`tools/kontor qualify-stack` invokes one worker process and one fresh control process per probe kind. Each process funds and publishes the synchronous `stack-probe` fixture through the normal user contract path, then executes it through `Runtime::execute` or `Runtime::execute_system_view`. Publication populates the compiled component cache once per process. Each observation uses fresh invocation Stores. These measurements describe warm compiled-cache execution, not cold compilation or loading.
 
 After each call, the worker checks guest cleanup before attempting any harness reset. It then rolls back an outer savepoint and verifies the persistent-state digest, balances, collateral floor, token supply, resource count, call stack, savepoints, and actual live invocation leases. A reset failure fails the entire kind. The separate control process builds the same fixture and exercises both discovered boundary depths, or the single bounded large-frame case. Its execution observations must match the worker, including fuel and receipts.
 
@@ -662,7 +666,7 @@ cargo test --locked --manifest-path core/Cargo.toml -p indexer --lib --no-run --
 Pass the resulting test executable to the driver:
 
 ```sh
-python3 tools/native-stack/qualify.py --binary path/to/indexer-test --cell Linux-ARM64/dev --output path/to/evidence --chain-log path/to/chain-matrix.log --owned-chain-log path/to/owned-chain-matrix.log --ownership-log path/to/ownership-controls.log
+tools/kontor qualify-stack --binary path/to/indexer-test --cell Linux-ARM64/dev --output path/to/evidence --chain-log path/to/chain-matrix.log --owned-chain-log path/to/owned-chain-matrix.log --ownership-log path/to/ownership-controls.log
 ```
 
 The Rust worker adaptively finds adjacent boundaries for plain recursion and recursion with 32 live `u64` values per frame, then repeats both depths in forward and reverse order. Separate-contract reentry directly samples depths 62, 63, and 64 three times each, including a reverse pass. It publishes the same 65-contract fixture in both processes. The driver also runs one fixed 256-value frame. Each JSON observation includes the component hash, stack settings, fuel usage, outcome, persisted receipt, state marker, sample identity, and reset evidence. A failed paid or Core procedure must leave its marker at zero and record the matching `Trap` or `Other` receipt. View calls must not record a procedure receipt.

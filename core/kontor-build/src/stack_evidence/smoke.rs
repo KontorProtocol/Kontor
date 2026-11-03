@@ -11,7 +11,10 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::Args;
 use serde_json::{Value, json};
 
-use super::build::{self, FEATURE_LOGS, FORK_REVISION, artifact_file, feature_logs, hex_digest};
+use super::build::{
+    self, FEATURE_LOGS, FORK_REVISION, artifact_file, feature_logs, hex_digest, resolve_features,
+    source_identity,
+};
 use crate::container::sha256;
 use crate::toolchain::{Environment, output as command_output};
 use crate::write_json;
@@ -214,26 +217,6 @@ pub struct SmokeArgs {
 pub fn capture(root: &Path, args: SmokeArgs) -> Result<Value> {
     capture_with_environment(root, args, &env::vars().collect())
 }
-fn source_identity(root: &Path, environment: &Environment) -> Result<String> {
-    let source = command_output(
-        root,
-        Path::new("git"),
-        &["rev-parse", "HEAD"],
-        Some(environment),
-    )?;
-    ensure!(
-        command_output(
-            root,
-            Path::new("git"),
-            &["status", "--porcelain"],
-            Some(environment)
-        )?
-        .trim()
-        .is_empty(),
-        "qualification source worktree is dirty"
-    );
-    Ok(source.trim().to_owned())
-}
 fn capture_with_environment(
     root: &Path,
     args: SmokeArgs,
@@ -257,46 +240,7 @@ fn capture_with_environment(
     let binary_hash = sha256(&binary)?;
     let lock_path = root.join("core/Cargo.lock");
     let lock_hash = sha256(&lock_path)?;
-    let mut features = json!({});
-    for ((graph, log), edges) in FEATURE_LOGS.into_iter().zip(["no-dev", "all"]) {
-        let raw = command_output(
-            root,
-            Path::new("cargo"),
-            &[
-                "tree",
-                "--locked",
-                "--offline",
-                "--manifest-path",
-                "core/Cargo.toml",
-                "-p",
-                "indexer",
-                "-e",
-                edges,
-                "-i",
-                "wasmtime",
-                "-f",
-                "{f}",
-                "--depth",
-                "0",
-                "--target",
-                target,
-            ],
-            Some(environment),
-        )?;
-        fs::write(directory.join(log), &raw)?;
-        let lines: Vec<_> = raw.lines().collect();
-        ensure!(
-            lines.len() == 1 && !lines[0].is_empty(),
-            "unexpected Wasmtime feature resolution for {edges}"
-        );
-        let mut list: Vec<_> = lines[0].split(',').collect();
-        ensure!(
-            !list.contains(&"") && list.iter().collect::<BTreeSet<_>>().len() == list.len(),
-            "invalid Wasmtime feature resolution for {edges}"
-        );
-        list.sort_unstable();
-        features[graph] = json!(list);
-    }
+    let features = resolve_features(root, environment, target, &directory)?;
     let compiler = command_output(root, Path::new("rustc"), &["-Vv"], Some(environment))?;
     let host = command_output(root, Path::new("uname"), &["-a"], Some(environment))?;
     let mut report = json!({"schema_version": 1, "cell": cell, "source_sha": source,

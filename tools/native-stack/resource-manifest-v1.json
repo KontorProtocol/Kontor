@@ -378,7 +378,11 @@
     },
     "production_build_validation": {
       "path": "core/kontor-build/src/stack_evidence/build.rs",
-      "sha256": "7c847b7a85d3b1a646353960d4dc612774e44baf8a7da3497bb14a2c9ea92307"
+      "sha256": "cb4d487786c11fac210f5497e3afb083f73138f93cba110246b02a8ea032e8d4"
+    },
+    "production_capture": {
+      "path": "core/kontor-build/src/stack_evidence/capture.rs",
+      "sha256": "61b69178f087a45d30dd574de0cf8982232877827d44293be8b73f60ffb74c3c"
     },
     "production_chain_validation": {
       "path": "core/kontor-build/src/stack_evidence/chains.rs",
@@ -390,15 +394,15 @@
     },
     "production_qualification": {
       "path": "core/kontor-build/src/stack_evidence/comparison.rs",
-      "sha256": "211cc8c843d20e0e7477eaca696ee33de3a09e42d08aa84d3dbcda033097c736"
+      "sha256": "4356e8a69b4b432b816a25ee96bdbe7699ef4b528e8fed4240251a8ddb280cdc"
     },
     "production_smoke_validation": {
       "path": "core/kontor-build/src/stack_evidence/smoke.rs",
-      "sha256": "f1a5f7c4fcd7cb9e63906f92eaeaddefd8a46b40ba610ad0b73e695c8ad9b9a1"
+      "sha256": "05ea9c53824d3da6fe9ae047d29783551788b28ae8944df38f06a5ebdfa09646"
     },
     "production_sweep_validation": {
       "path": "core/kontor-build/src/stack_evidence.rs",
-      "sha256": "0a8babed2b909901ab118b73e41aa192ad3c4bc43951068d6b94536cb2fa2971"
+      "sha256": "2d26f1fca1133b2e9287a179d2c7361dbefb8838c8304f763ca08af0af831c88"
     },
     "proxy": {
       "path": "test-contracts/binaries/proxy.wasm.br",
@@ -410,7 +414,7 @@
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "3c7e241bc2bfd4e6eceec0ef561d7a42b8bd86c12f796592739ef512a4ac0736"
+      "sha256": "2ba38a843eda2b3c2bd65d0cc449637f8741608d8e8e606b2c48b41425d8d44f"
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -458,7 +462,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "aaddabb20e1f2b2d13cb8efb6ec8f11c70d52e74862ae5ac615a9d266465e87b"
+      "sha256": "3bd6632f6966fdaab32680a537317b2bffdb1085bb366b1db489f9a690be4157"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -670,7 +674,7 @@
     },
     "suite_dispatch_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "3c7e241bc2bfd4e6eceec0ef561d7a42b8bd86c12f796592739ef512a4ac0736"
+      "sha256": "2ba38a843eda2b3c2bd65d0cc449637f8741608d8e8e606b2c48b41425d8d44f"
     },
     "suite_registry_builder": {
       "path": "tools/native-stack/resource_suite_registry.py",
