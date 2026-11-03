@@ -8,10 +8,21 @@ import unittest
 
 from build import ROOT, digest
 from qualify_node import CASES, CERTIFIED_CHECKS, execute_node, verify_certified_history, verify_managed_startup, verify_executor_observations, execute_transition, execute_recovery, execute_authorization
-from test_semantic_baseline import sample_observation
 from qualify_node import execute_join
 from test_transition_evidence import join_sample
 from test_transition_evidence import transition_sample, recovery_sample, authorization_sample
+
+
+def sample_observation():
+    """Synthetic comparator input, never evidence of execution."""
+    baseline = json.loads((ROOT / 'tools/protocol-bundles/semantic-baseline.json').read_text())
+    observed = baseline['observations']
+    return {**{key: value for key, value in observed.items()
+               if key not in ('recognition', 'transaction')},
+            'gas': 17, 'state': 'same',
+            'transactions': {**baseline['inputs'], 'recognition': observed['recognition'],
+                             'executions': [copy.deepcopy(observed['transaction']) for _ in range(3)]}}
+
 
 
 def certified_sample(link_set="k4-node"):

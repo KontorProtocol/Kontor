@@ -160,6 +160,15 @@ results and rerun affected checks when their source or build inputs change.
 
 ## Managed-node acceptance commands
 
+`tools/kontor verify-node-evidence` accepts JSON requests for historical semantic,
+retained-executor, storage-construction, certified-history and managed-startup
+checks. The remaining Python runner and comparator delegate to this Rust module.
+The preserved oracle still binds its raw log and fixture sources, and all three
+simulation/rollback/commit observations must match. Certified history binds the
+selected genesis executor and consensus definition; P2 cannot substitute for P1.
+Malformed numeric or boolean evidence is rejected by JSON type as well as value.
+The historical baseline and execution identities have not been regenerated.
+
 From the repository root, build and qualify the actual node with:
 
 ```sh

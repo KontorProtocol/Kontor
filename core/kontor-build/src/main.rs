@@ -16,6 +16,7 @@ use kontor_build::execution_definition::{
 };
 use kontor_build::interface::{Request as InterfaceRequest, run as interface};
 use kontor_build::linker_record::verify_input;
+use kontor_build::node_evidence::{Request as NodeEvidenceRequest, run as node_evidence};
 use kontor_build::object_tools::{Request as ObjectRequest, run as inspect_object};
 use kontor_build::provenance::{Request as ProvenanceRequest, run as provenance};
 use kontor_build::recipes::{Request as RecipeRequest, run as recipes};
@@ -37,6 +38,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Verify retained execution and node lifecycle evidence from a JSON request.
+    VerifyNodeEvidence,
     /// Locate the built CLI for transitional callers without repeated Cargo launches.
     #[command(hide = true)]
     ToolPath,
@@ -102,6 +105,11 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::VerifyNodeEvidence => {
+            let request: NodeEvidenceRequest = serde_json::from_reader(io::stdin().lock())?;
+            println!("{}", node_evidence(request)?);
+            Ok(())
+        }
         Command::ToolPath => {
             println!("{}", env::current_exe()?.display());
             Ok(())

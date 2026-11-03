@@ -12,7 +12,7 @@ from provenance import fingerprint, package_sources, repository_sources
 from qualify_node import CASES, baseline_graphs
 from recipes import CONSENSUS_GRAPHS, EXECUTOR_GRAPHS, executor_graphs, graph_root, identity
 from semantic_baseline import verify as verify_semantics
-from test_semantic_baseline import sample_observation
+from test_node_execution import sample_observation
 from test_node_execution import certified_sample, managed_sample
 from test_transition_evidence import transition_sample, recovery_sample, authorization_sample, join_sample
 from symbol_tool import TOOLCHAIN
