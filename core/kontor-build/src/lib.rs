@@ -1,3 +1,4 @@
+pub mod build_artifacts;
 pub mod build_inputs;
 mod bundles;
 mod canonical_json;

@@ -157,36 +157,13 @@ def build_graph(graph, args, base_env, output, graphs=None):
     ) != definition:
         raise RuntimeError("execution definition changed while the graph was compiling")
     archives, facade, native_outputs, proc_macros = current_artifacts(log, target_dir, args.target, recipe["package"]["name"])
-    # Supply rustc only this invocation's rlibs, never stale target-directory glob matches.
-    inputs = graph_output / "link-inputs"
-    if inputs.exists():
-        shutil.rmtree(inputs)
-    inputs.mkdir()
-    for archive in archives:
-        shutil.copyfile(archive, inputs / archive.name)
-    native_artifacts = []
-    for index, script in enumerate(native_outputs):
-        for path in sorted(Path(script["out_dir"]).rglob("*.a")):
-            staged = inputs / "native" / str(index) / path.name
-            staged.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, staged)
-            native_artifacts.append({"path": str(staged), "source_path": str(path), "sha256": digest(staged)})
-    # rustc loads proc-macro metadata while reading dependent rlibs. These shared
-    # libraries execute in the compiler, not in the retained node executable.
-    compiler_inputs = []
-    for artifact in proc_macros:
-        prefix, original_suffix = artifact.name.rsplit("-", 1)
-        staged = inputs / f"{prefix}-{namespace}-{original_suffix}"
-        shutil.copyfile(artifact, staged)
-        compiler_inputs.append({"path": str(artifact), "staged": str(staged), "sha256": digest(artifact)})
+    staged = _artifacts("stage", output=str(graph_output), namespace=namespace,
+                        artifacts=dict(archives=list(map(str, archives)), facade=str(facade),
+                                       native_outputs=native_outputs, proc_macros=list(map(str, proc_macros))))
     result = {"graph": graph, "identity": graph_identity, "namespace": namespace, "lock_sha256": lock_hash,
               "build_log_sha256": digest(log),
               "manifest_sha256": digest(manifest), "packages": packages,
-              "artifacts": [{"path": str(inputs / p.name), "source_path": str(p),
-                             "sha256": digest(inputs / p.name)} for p in archives],
-              "native_artifacts": native_artifacts,
-              "facade": str(inputs / facade.name), "link_inputs": str(inputs),
-              "compiler_proc_macros": compiler_inputs,
+              **staged,
               "source_inputs_sha256": fingerprint(sources), "locked_packages": locked_packages(lock),
               "source_policy": source_policy,
               "wrapper": str(wrapper), "wrapper_binary_sha256": wrapper_hash,
@@ -284,68 +261,25 @@ second = { package = "itoa", version = "=1.0.15" }
             raise RuntimeError("unified Cargo graph did not reject the conflicting patch requirements")
 
 
-def verify_staged_inputs(graph):
-    if digest(Path(graph["wrapper"])) != graph["wrapper_binary_sha256"]:
-        raise RuntimeError("staged compiler wrapper changed")
-    for item in graph["artifacts"] + graph["native_artifacts"]:
-        if digest(Path(item["path"])) != item["sha256"]:
-            raise RuntimeError(f"staged compiler input changed: {item['path']}")
-    for item in graph["compiler_proc_macros"]:
-        if digest(Path(item["staged"])) != item["sha256"]:
-            raise RuntimeError(f"staged compiler plugin changed: {item['staged']}")
+def _artifacts(action, **values):
+    return _request(dict(operation="artifacts", action=action, cwd=str(Path.cwd()), **values), command="build-inputs")
 
+
+def verify_staged_inputs(graph):
+    _artifacts("verify_staged", graph=graph)
 
 def node_dependencies(data):
-    names = {package["name"] for package in data["packages"]}
-    if any(name.startswith(("wasmtime", "kontor-executor-", "kontor-consensus-")) for name in names):
-        raise RuntimeError("node Cargo graph contains a retained execution implementation")
-    for package in data["packages"]:
-        if package["name"] in {"blst", "secp256k1-sys", "ring", "psm", "wit-bindgen"}:
-            expected = ROOT / "core/vendor" / package["name"]
-            if Path(package["manifest_path"]).parent.resolve() != expected:
-                raise RuntimeError(f"node is missing native patch for {package['name']}")
-
+    _artifacts("node_dependencies", root=str(ROOT), data=data)
 
 def node_executable(log):
-    executables = set()
-    for line in log.read_text().splitlines():
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if (isinstance(item, dict) and item.get("reason") == "compiler-artifact"
-                and item["target"]["name"] == "kontor" and "bin" in item["target"]["kind"]
-                and item.get("executable")):
-            executables.add(Path(item["executable"]))
-    if len(executables) != 1:
-        raise RuntimeError("missing or ambiguous current node executable")
-    return executables.pop()
-
+    return Path(_artifacts("node_executable", log=str(log.absolute())))
 
 def node_codegen_objects(path, spec):
-    record = json.loads(path.read_text())
-    if record["spec_sha256"] != digest(spec) or not record["objects"]:
-        raise RuntimeError("node codegen objects do not match this link specification")
-    for item in record["objects"]:
-        if digest(Path(item["path"])) != item["sha256"]:
-            raise RuntimeError("node codegen object changed after compilation")
-    return [Path(item["path"]) for item in record["objects"]]
-
+    return list(map(Path, _artifacts("node_codegen", record=str(path.absolute()), spec=str(spec.absolute()))))
 
 def node_link_inputs(graphs, consensus):
-    # Audit ownership is global across the final executable, even when two
-    # independently resolved roles both call their first version "first".
-    audited = []
-    libraries = []
-    for role, reports in (("executor", graphs), ("consensus", consensus)):
-        for graph in reports:
-            audited.append(dict(graph, graph=role + "-" + graph["graph"]) if consensus else graph)
-            libraries.append({"role": role, "graph": graph["graph"], "facade": graph["facade"],
-                              "facade_sha256": digest(Path(graph["facade"])),
-                              "link_inputs": graph["link_inputs"],
-                              "build_inputs_sha256": fingerprint(graph)})
-    return audited, libraries
-
+    result = _artifacts("node_link_inputs", graphs=graphs, consensus=consensus)
+    return result["audited"], result["libraries"]
 
 def build_node(graphs, args, base_env, output, consensus=()):
     recipes = executor_graphs(args.link_set)
@@ -504,24 +438,7 @@ def build_node(graphs, args, base_env, output, consensus=()):
 
 
 def install_node(node, destination):
-    source = Path(node["executable"])
-    destination = destination.absolute()
-    if source.resolve() == destination.resolve():
-        raise RuntimeError("installation must not overwrite the audited build output")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    # Verify the copied bytes before replacing an existing installed executable.
-    with tempfile.NamedTemporaryFile(dir=destination.parent, prefix=".kontor-", delete=False) as file:
-        temporary = Path(file.name)
-    try:
-        shutil.copyfile(source, temporary)
-        if digest(temporary) != node["executable_sha256"]:
-            raise RuntimeError("node executable changed after its ownership audit")
-        temporary.chmod(0o755)
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return {"path": str(destination), "sha256": node["executable_sha256"]}
-
+    return _artifacts("install_node", node=node, destination=str(destination.absolute()))
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

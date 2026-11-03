@@ -7,6 +7,7 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::build_artifacts::{Request as ArtifactRequest, run as artifacts};
 use crate::recipes::{Graph, Kind, MALACHITE_REVISION, MALACHITE_VERSION, graph_root};
 
 #[derive(Deserialize)]
@@ -276,6 +277,10 @@ pub fn capabilities(root: &Path) -> Result<()> {
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
+    Artifacts {
+        #[serde(flatten)]
+        request: ArtifactRequest,
+    },
     Identities {
         root: PathBuf,
         recipe: Graph,
@@ -293,6 +298,7 @@ pub enum Request {
 }
 pub fn run(request: Request) -> Result<Value> {
     match request {
+        Request::Artifacts { request } => artifacts(request),
         Request::Identities { root, recipe, data } => identities(&root, &recipe, &data),
         Request::CurrentArtifacts {
             log,

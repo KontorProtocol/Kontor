@@ -158,6 +158,9 @@ fn node_inventory_binds_schema_generator_and_qualification_artifacts() -> Result
     let root = dir.path();
     let paths = [
         "core/indexer/src/main.rs",
+        "core/indexer/src/protocol/coordinator/linked.rs",
+        "core/indexer/src/database/storage_callbacks_v1.rs",
+        "core/indexer/src/database/sql/current_state.sql",
         "core/indexer/proto/consensus.proto",
         "core/indexer/build.rs",
         "test-contracts/binaries/counter.wasm.br",
