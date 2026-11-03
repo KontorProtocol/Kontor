@@ -193,7 +193,7 @@ jobs:
           path: target/native-smoke-compare
       - name: Compare required variants
         run: |
-          python3 tools/native-stack/compare.py --directory target/native-stack-compare --output target/native-stack-comparison.json --upstream-status "${{ needs.qualify.result }}" --profiles "${{ needs.scope.outputs.profile_policy }}" --smoke-directory target/native-smoke-compare
+          tools/kontor compare-stack --directory target/native-stack-compare --output target/native-stack-comparison.json --upstream-status "${{ needs.qualify.result }}" --profiles "${{ needs.scope.outputs.profile_policy }}" --smoke-directory target/native-smoke-compare
       - name: Preserve comparison
         if: always()
         uses: actions/upload-artifact@v7

@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use super::{CACHE_MODE, REPORT_PREFIX, SUMMARY_PREFIX, parse_sweep, validate_pair};
 
-fn fixture(kind: &str, role: &str) -> (Vec<Value>, Value) {
+pub(super) fn fixture(kind: &str, role: &str) -> (Vec<Value>, Value) {
     let depths: Vec<u64> = match (kind, role) {
         ("paid_huge", _) => vec![0],
         ("paid_reenter", "control") => vec![63, 64],
@@ -48,7 +48,7 @@ fn fixture(kind: &str, role: &str) -> (Vec<Value>, Value) {
     (samples, summary)
 }
 
-fn transcript(samples: &[Value], summary: &Value) -> String {
+pub(super) fn transcript(samples: &[Value], summary: &Value) -> String {
     let mut raw = String::new();
     for sample in samples {
         raw.push_str(&format!("{REPORT_PREFIX}{sample}\n"));

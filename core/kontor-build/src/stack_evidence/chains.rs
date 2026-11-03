@@ -434,4 +434,4 @@ pub fn validate_owned(
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

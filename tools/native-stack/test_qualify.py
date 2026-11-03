@@ -6,12 +6,72 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from test_compare import add_sweep_fields, observation, transcript
 
 
 SPEC = importlib.util.spec_from_file_location("native_stack_qualify", Path(__file__).with_name("qualify.py"))
 qualify = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(qualify)
+
+
+def observation(kind, depth, outcome, target_os, target_arch, log):
+    return {
+        "kind": kind,
+        "depth": depth,
+        "outcome": outcome,
+        "value": str(32640 if kind == "paid_huge" else 496 * depth if kind.endswith("_wide") else depth) if outcome == "ok" else None,
+        "receipt": None if kind.startswith(("view_", "system_")) else {
+            "status": {"ok": "Ok", "stack_overflow": "Trap", "invocation_limit": "Other"}[outcome],
+            "gas": 10,
+        },
+        "last_depth": (1 if kind == "paid_huge" else depth) if outcome == "ok" and not kind.startswith(("view_", "system_")) else 0,
+        "child_markers": (list(range(depth - 1, -1, -1)) + [0] * (64 - depth) if outcome == "ok" else [0] * 64) if kind == "paid_reenter" else [],
+        "rolled_back": outcome != "ok",
+        "fuel": {"user": 100, "system": 0, "deposit": 0},
+        "gas_limit": 100000,
+        "paid_fuel_limit": 100000000,
+        "view_gas_limit": 100000,
+        "view_fuel_limit": 100000000,
+        "system_fuel_ceiling": 9223372036854775807,
+        "gas_to_fuel_multiplier": 1000,
+        "max_wasm_stack": 524288,
+        "async_stack_size": 2097152,
+        "engine_target": "pulley64-unknown-unknown-elf",
+        "component_sha256": "d" * 64,
+        "target_os": target_os,
+        "target_arch": target_arch,
+        "log": log,
+    }
+
+
+def add_sweep_fields(samples, kind, role, boundaries):
+    for index, sample in enumerate(samples):
+        sample.update(
+            role=role, sample_index=index, sample_id=f"{role}:{kind}:{index:04}",
+            cache_mode="warm_compiled_cache", fixture_contracts=65 if kind == "paid_reenter" else 1,
+            call_hook_installed=False,
+            log=f"{kind}-{role}-{index:04}.log",
+            reset={
+                "pre": {"live_invocations": 0, "stack_empty": True, "savepoint_intact": True,
+                        "resource_count": 0, "baseline_resource_count": 0,
+                        "failure_rolled_back": None if sample["outcome"] == "ok" else True},
+                "post": {"persistent_digest_sha256": "1" * 64, "baseline_digest_sha256": "1" * 64,
+                         "digest_matches": True, "live_invocations": 0, "stack_empty": True,
+                         "savepoint_restored": True, "resource_count": 0, "balances_restored": True,
+                         "floor_restored": True, "supply_restored": True},
+            },
+        )
+    return {
+        "role": role, "kind": kind, "cache_mode": "warm_compiled_cache",
+        "fixture_contracts": 65 if kind == "paid_reenter" else 1,
+        "boundaries": boundaries,
+        "ordered_sample_indices": list(range(len(samples))),
+        "ordered_sample_ids": [sample["sample_id"] for sample in samples],
+        "baseline_digest_sha256": "1" * 64,
+    }
+
+
+def transcript(samples, summary):
+    return "".join("KONTOR_STACK_REPORT:" + json.dumps({key: value for key, value in sample.items() if key != "log"}) + "\n" for sample in samples) + "KONTOR_STACK_SWEEP_SUMMARY:" + json.dumps(summary) + "\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1s\n"
 
 
 def reentry(role="worker"):

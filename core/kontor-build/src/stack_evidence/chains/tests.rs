@@ -38,7 +38,7 @@ fn decimal_accounting_is_exact_and_rejects_invalid_amounts() {
     }
 }
 
-fn fixture() -> (Value, Value) {
+pub(crate) fn fixture() -> (Value, Value) {
     let mut chains = Vec::new();
     let mut owned = Vec::new();
     for mode in ["core", "paid", "view"] {

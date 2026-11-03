@@ -7,7 +7,7 @@ import json
 import tomllib
 from pathlib import Path
 
-from compare import PRODUCTION_FEATURES, QUALIFICATION_FEATURES
+from sweep import _run as stack_evidence
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -128,7 +128,12 @@ INPUTS = {
     "native_filestorage_rewards": "native-contracts/filestorage/src/rewards.rs",
     "native_filestorage_wit": "native-contracts/filestorage/wit/contract.wit",
     "native_filestorage_binary": "native-contracts/binaries/filestorage.wasm.br",
-    "production_qualification": "tools/native-stack/compare.py",
+    "production_qualification": "core/kontor-build/src/stack_evidence/comparison.rs",
+    "production_probe_validation": "core/kontor-build/src/stack_evidence/probes.rs",
+    "production_chain_validation": "core/kontor-build/src/stack_evidence/chains.rs",
+    "production_build_validation": "core/kontor-build/src/stack_evidence/build.rs",
+    "production_sweep_validation": "core/kontor-build/src/stack_evidence.rs",
+    "production_smoke_validation": "core/kontor-build/src/stack_evidence/smoke.rs",
     "resource_manifest_source": "tools/native-stack/resource_manifest.py",
     "fiber_source_capture": "tools/native-stack/capture_fiber_source.py",
     "resource_control_capture": "tools/native-stack/capture_resource_control.py",
@@ -515,8 +520,7 @@ def build_manifest():
         "amendment": {"path": AMENDMENT, "sha256": AMENDMENT_SHA256},
         "source_baseline_commit": BASE_COMMIT,
         "wasmtime_revision": WASMTIME_REVISION,
-        "wasmtime_features": {"production": sorted(PRODUCTION_FEATURES),
-                              "qualification": sorted(QUALIFICATION_FEATURES)},
+        "wasmtime_features": stack_evidence({"operation": "feature_policy"}),
         "build_policy": {"rustc_release": "1.99.1", "cargo_features": [],
                          "dependency_feature_attestation": 1,
                          "fastnum_build_script_sha256": FASTNUM_BUILD_SCRIPT_SHA256,

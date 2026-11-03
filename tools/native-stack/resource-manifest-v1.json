@@ -376,9 +376,29 @@
       "path": "core/indexer/src/runtime/pricing.rs",
       "sha256": "ce91326d50ae97404892852bef041cdafe119a068c2196f9972be9cd745393db"
     },
+    "production_build_validation": {
+      "path": "core/kontor-build/src/stack_evidence/build.rs",
+      "sha256": "7c847b7a85d3b1a646353960d4dc612774e44baf8a7da3497bb14a2c9ea92307"
+    },
+    "production_chain_validation": {
+      "path": "core/kontor-build/src/stack_evidence/chains.rs",
+      "sha256": "10332597a6eca05c38250c8bd3bf93eaf9e7db0613dc6448ced26c09062f44e8"
+    },
+    "production_probe_validation": {
+      "path": "core/kontor-build/src/stack_evidence/probes.rs",
+      "sha256": "0bd379db2624327228f348d290704c309a04e40aabf23d80a0ce1b2385b03834"
+    },
     "production_qualification": {
-      "path": "tools/native-stack/compare.py",
-      "sha256": "19c220a749a859525484f1bafa8542ea97dcc41e5df67118955b37824697c07c"
+      "path": "core/kontor-build/src/stack_evidence/comparison.rs",
+      "sha256": "211cc8c843d20e0e7477eaca696ee33de3a09e42d08aa84d3dbcda033097c736"
+    },
+    "production_smoke_validation": {
+      "path": "core/kontor-build/src/stack_evidence/smoke.rs",
+      "sha256": "f1a5f7c4fcd7cb9e63906f92eaeaddefd8a46b40ba610ad0b73e695c8ad9b9a1"
+    },
+    "production_sweep_validation": {
+      "path": "core/kontor-build/src/stack_evidence.rs",
+      "sha256": "0a8babed2b909901ab118b73e41aa192ad3c4bc43951068d6b94536cb2fa2971"
     },
     "proxy": {
       "path": "test-contracts/binaries/proxy.wasm.br",
@@ -390,7 +410,7 @@
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "4500494b44a6b1cdccef407e9a4df758600edf01ae0cde74ca6ef63f8007f97b"
+      "sha256": "3c7e241bc2bfd4e6eceec0ef561d7a42b8bd86c12f796592739ef512a4ac0736"
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -438,7 +458,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "20ce5d193c8791ceec3bf4bc963ce0e4c80665ef8b9bac159731008c07978d30"
+      "sha256": "aaddabb20e1f2b2d13cb8efb6ec8f11c70d52e74862ae5ac615a9d266465e87b"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -650,7 +670,7 @@
     },
     "suite_dispatch_workflow": {
       "path": ".github/workflows/native-stack.yml",
-      "sha256": "4500494b44a6b1cdccef407e9a4df758600edf01ae0cde74ca6ef63f8007f97b"
+      "sha256": "3c7e241bc2bfd4e6eceec0ef561d7a42b8bd86c12f796592739ef512a4ac0736"
     },
     "suite_registry_builder": {
       "path": "tools/native-stack/resource_suite_registry.py",
@@ -666,7 +686,7 @@
     },
     "suite_workflow": {
       "path": ".github/workflows/native-stack-s2.yml",
-      "sha256": "827cd3eb3d28447acd366858723a14784ed060a6999ffa423ae8ae1d480e4328"
+      "sha256": "983bc978ba35faf76df68949c9b8c310cf14402538db774ba49e9aef364abc19"
     },
     "suspended_64_plan": {
       "path": "tools/native-stack/resource-suspended-64-plan-v1.json",

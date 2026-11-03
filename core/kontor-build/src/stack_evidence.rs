@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 mod build;
 mod chains;
+pub mod comparison;
+mod probes;
 pub mod smoke;
 
 pub const REPORT_PREFIX: &str = "KONTOR_STACK_REPORT:";
@@ -24,6 +26,15 @@ pub const SWEEP_FIELDS: &[&str] = &[
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
+    FeaturePolicy,
+    Compare {
+        directory: PathBuf,
+        upstream_status: String,
+        source_sha: Option<String>,
+        lockfile_sha256: Option<String>,
+        component_hashes: Option<Value>,
+        profiles: String,
+    },
     Chains {
         chains: Value,
         target_os: String,
@@ -71,6 +82,25 @@ pub enum Request {
 
 pub fn run(request: Request) -> Result<Value> {
     match request {
+        Request::FeaturePolicy => Ok(json!({
+            "production": build::expected_features("production"),
+            "qualification": build::expected_features("qualification"),
+        })),
+        Request::Compare {
+            directory,
+            upstream_status,
+            source_sha,
+            lockfile_sha256,
+            component_hashes,
+            profiles,
+        } => comparison::compare(
+            &directory,
+            &upstream_status,
+            source_sha.as_deref(),
+            lockfile_sha256.as_deref(),
+            component_hashes.as_ref(),
+            &profiles,
+        ),
         Request::Chains {
             chains,
             target_os,
