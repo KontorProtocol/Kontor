@@ -7,6 +7,7 @@ use tempfile::tempdir;
 
 use super::{GUARD_MARKER, TARGET_MARKER, TERMINAL_MARKER, guard_control, thread_capacities};
 use crate::container::sha256;
+use crate::stack_evidence::resource_report::ThreadObservation;
 
 fn runtime(os: &str, mode: &str, page: u64) -> Value {
     let requested = if mode == "reduced" {
@@ -34,6 +35,26 @@ fn runtime(os: &str, mode: &str, page: u64) -> Value {
         }).collect();
     json!({"flavor":"multi_thread","worker_count":2,"worker_requested_bytes":requested,
         "thread_observations":threads,"blocking_pool_observed":true,"block_on_caller_observed":true})
+}
+
+#[test]
+fn shared_observation_preserves_archived_shape_and_requires_nullable_request() {
+    for os in ["linux", "macos"] {
+        let fixture = runtime(os, "production", 4096);
+        for record in fixture["thread_observations"].as_array().unwrap() {
+            let observation: ThreadObservation = serde_json::from_value(record.clone()).unwrap();
+            assert_eq!(serde_json::to_value(observation).unwrap(), *record);
+
+            let mut missing = record.clone();
+            missing.as_object_mut().unwrap().remove("requested_bytes");
+            assert!(serde_json::from_value::<ThreadObservation>(missing).is_err());
+            for invalid in [json!(true), json!(1.5), json!(-1), json!("4096")] {
+                let mut malformed = record.clone();
+                malformed["requested_bytes"] = invalid;
+                assert!(serde_json::from_value::<ThreadObservation>(malformed).is_err());
+            }
+        }
+    }
 }
 
 #[test]

@@ -258,7 +258,7 @@
     },
     "macos_worker_capacity_guard": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource/macos.rs",
-      "sha256": "55264866e785b6e5679fed896cbe4068c67686396831df57f359e7d75e9c87d0"
+      "sha256": "172d51333f14d6b69011f209b9e17d5e9e830954688ed1d44b28091470d5742c"
     },
     "native_bootstrap_abi": {
       "path": "core/indexer/src/protocol/native_bootstrap.rs",
@@ -402,7 +402,7 @@
     },
     "production_sweep_validation": {
       "path": "core/kontor-build/src/stack_evidence.rs",
-      "sha256": "3af764f6e61735dc8a7dc1f55c6df03548ef792a9ce40023cde8b84e88ab869b"
+      "sha256": "a8af18c909243a38949eeb795e3cf113a1d73d178c96b89e499346114b2fd807"
     },
     "proxy": {
       "path": "test-contracts/binaries/proxy.wasm.br",
@@ -418,7 +418,7 @@
     },
     "resource_capacity_validator": {
       "path": "core/kontor-build/src/stack_evidence/resources.rs",
-      "sha256": "bcd58901f6965d045d898a8625a3ea38380675732e1c2ae2bca68cce1733d7e2"
+      "sha256": "eff0dde11551d2d0ca259aca21a1d872cb3fc30e55dc1dc4d429fadb29b5d37c"
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -462,7 +462,11 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "f6ae004d0bc1e9911a62ad1dc3e91d61383b13c370cdc1ecb81c38a2ebb87f80"
+      "sha256": "dfcfc9b17efed49f208a547496c77ddd41ad51edae66dc6c3930d008a64ca7b3"
+    },
+    "resource_observation_types": {
+      "path": "core/kontor-build/src/stack_evidence/resource_report.rs",
+      "sha256": "de209ba3099d2cb17d92427b281e6c4dfe7cf6f519e7f5cb6bca41ba12874870"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -490,7 +494,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "1f61c34150b1048d12c1754534c4a7a42d86fe993abb3792c9d63682340ce2e8"
+      "sha256": "ee4ade291ede890f854aec3ccab7c2908ec114b6bb5d15be01581619a7c8bd2f"
     },
     "retained_deposit_policy": {
       "path": "core/indexer/src/protocol/v1/deposit.rs",
@@ -2290,7 +2294,7 @@
   },
   "guard_control_runner": {
     "macos_test_name": "runtime::call::tests::native_stack_resource::macos_worker_guard_fault_control",
-    "source_sha256": "1f61c34150b1048d12c1754534c4a7a42d86fe993abb3792c9d63682340ce2e8",
+    "source_sha256": "ee4ade291ede890f854aec3ccab7c2908ec114b6bb5d15be01581619a7c8bd2f",
     "status": "diagnostic_only",
     "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
   },
@@ -2442,7 +2446,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "1f61c34150b1048d12c1754534c4a7a42d86fe993abb3792c9d63682340ce2e8",
+    "sha256": "ee4ade291ede890f854aec3ccab7c2908ec114b6bb5d15be01581619a7c8bd2f",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

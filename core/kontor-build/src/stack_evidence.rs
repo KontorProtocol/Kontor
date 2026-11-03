@@ -8,6 +8,7 @@ pub mod capture;
 mod chains;
 pub mod comparison;
 mod probes;
+pub mod resource_report;
 mod resources;
 pub mod smoke;
 

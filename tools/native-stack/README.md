@@ -159,6 +159,10 @@ verify-stack-evidence`, using the `resource_threads` and `resource_guard` JSON
 operations. Their typed Rust implementation is in
 `core/kontor-build/src/stack_evidence/resources.rs`; it validates archived raw
 guard logs as well as the supplied report, including duplicate-field rejection.
+Linux and macOS diagnostic producers construct the same `ThreadObservation`
+record that the validator reads, defined in `stack_evidence/resource_report.rs`.
+This shares the serialized field contract while keeping capacity and guard
+validation independent of the measurements.
 The remaining Python callers are temporary until the case-group suite migrates.
 Malformed numeric evidence is rejected explicitly, including boolean or floating
 substitutes for integer fields and invalid platform/mode/page contexts. Measured

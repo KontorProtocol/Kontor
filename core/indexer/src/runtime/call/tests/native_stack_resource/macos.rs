@@ -10,6 +10,7 @@ use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
+use kontor_build::stack_evidence::resource_report::ThreadObservation;
 use libc::{
     _SC_PAGESIZE, RLIMIT_CORE, SIGABRT, pthread_get_stackaddr_np, pthread_get_stacksize_np,
     pthread_self, pthread_threadid_np, rlimit, setrlimit, sysconf,
@@ -156,27 +157,29 @@ pub(super) fn thread_observation(
     category: &str,
     requested_bytes: Option<usize>,
 ) -> JsonValue {
-    json!({
-        "thread_category": category,
-        "thread_id": format!("{:?}", stack.thread_id),
-        "process_id": stack.process_id,
-        "os_thread_id": stack.os_thread_id,
-        "identity_api": "macos_pthread_threadid_np",
-        "page_size_bytes": stack.page_size_bytes,
-        "requested_bytes": requested_bytes,
-        "mapped_bytes": stack.mapped_end - stack.mapped_start,
-        "guard_bytes": stack.guard_bytes,
-        "guard_start": stack.guard_start,
-        "guard_end": stack.guard_end,
-        "guard_verification": "macos_mach_vm_region_prot_none",
-        "usable_bytes": stack.usable_end - stack.usable_start,
-        "mapped_start": stack.mapped_start,
-        "mapped_end": stack.mapped_end,
-        "usable_start": stack.usable_start,
-        "usable_end": stack.usable_end,
-        "measurement_api": "pthread_get_stackaddr_np,pthread_get_stacksize_np,pthread_threadid_np,mach_vm_region",
-        "guard_treatment": "guard protected below pthread stack range",
-        "guard_verified": true,
+    json!(ThreadObservation {
+        thread_category: category.into(),
+        thread_id: format!("{:?}", stack.thread_id),
+        process_id: stack.process_id.into(),
+        os_thread_id: u64::try_from(stack.os_thread_id).expect("positive kernel thread ID"),
+        identity_api: "macos_pthread_threadid_np".into(),
+        page_size_bytes: stack.page_size_bytes as u64,
+        requested_bytes: requested_bytes.map(|bytes| bytes as u64),
+        mapped_bytes: (stack.mapped_end - stack.mapped_start) as u64,
+        guard_bytes: stack.guard_bytes as u64,
+        guard_start: stack.guard_start as u64,
+        guard_end: stack.guard_end as u64,
+        guard_verification: "macos_mach_vm_region_prot_none".into(),
+        usable_bytes: (stack.usable_end - stack.usable_start) as u64,
+        mapped_start: stack.mapped_start as u64,
+        mapped_end: stack.mapped_end as u64,
+        usable_start: stack.usable_start as u64,
+        usable_end: stack.usable_end as u64,
+        measurement_api:
+            "pthread_get_stackaddr_np,pthread_get_stacksize_np,pthread_threadid_np,mach_vm_region"
+                .into(),
+        guard_treatment: "guard protected below pthread stack range".into(),
+        guard_verified: true,
     })
 }
 

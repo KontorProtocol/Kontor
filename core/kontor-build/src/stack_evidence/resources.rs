@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::probes::{number, string};
+use super::resource_report::ThreadObservation;
 use crate::container::sha256;
 
 const CATEGORIES: [&str; 3] = ["tokio_worker", "blocking_pool", "block_on_caller"];
@@ -19,35 +20,11 @@ const TARGET_MARKER: &str = "KONTOR_RESOURCE_GUARD_TARGET=";
 struct Runtime {
     flavor: String,
     worker_count: u64,
-    worker_requested_bytes: Value,
-    thread_observations: Vec<Thread>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    worker_requested_bytes: Option<u64>,
+    thread_observations: Vec<ThreadObservation>,
     blocking_pool_observed: bool,
     block_on_caller_observed: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Thread {
-    thread_category: String,
-    thread_id: String,
-    process_id: u64,
-    os_thread_id: u64,
-    identity_api: String,
-    page_size_bytes: u64,
-    requested_bytes: Value,
-    mapped_bytes: u64,
-    guard_bytes: u64,
-    guard_start: u64,
-    guard_end: u64,
-    guard_verification: String,
-    usable_bytes: u64,
-    mapped_start: u64,
-    mapped_end: u64,
-    usable_start: u64,
-    usable_end: u64,
-    measurement_api: String,
-    guard_treatment: String,
-    guard_verified: bool,
 }
 
 pub(super) fn thread_capacities(
@@ -71,14 +48,9 @@ pub(super) fn thread_capacities(
         "{mode}: runtime is not multithreaded"
     );
     ensure!(runtime.worker_count >= 2, "{mode}: invalid worker count");
-    ensure!(
-        runtime.worker_requested_bytes.is_null()
-            || runtime.worker_requested_bytes.as_u64().is_some(),
-        "{mode}: invalid worker request"
-    );
     if mode == "reduced" {
         ensure!(
-            runtime.worker_requested_bytes == json!(1_015_808),
+            runtime.worker_requested_bytes == Some(1_015_808),
             "reduced workers did not request 992 KiB"
         );
     }
@@ -128,7 +100,9 @@ pub(super) fn thread_capacities(
                 "{mode}: unexpected macOS pthread stack offset or layout"
             );
             if mode == "reduced" {
-                let requested = number(&thread.requested_bytes)?;
+                let requested = thread
+                    .requested_bytes
+                    .context("missing reduced worker request")?;
                 ensure!(
                     requested.is_multiple_of(page)
                         && thread.mapped_bytes.checked_sub(requested)

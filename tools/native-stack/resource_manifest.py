@@ -49,6 +49,7 @@ RETAINED_NATIVE_INPUTS.update({
 })
 INPUTS = {
     "resource_capacity_validator": "core/kontor-build/src/stack_evidence/resources.rs",
+    "resource_observation_types": "core/kontor-build/src/stack_evidence/resource_report.rs",
     **RETAINED_NATIVE_INPUTS,
     "core_lockfile": "core/Cargo.lock",
     "indexer_manifest": "core/indexer/Cargo.toml",
