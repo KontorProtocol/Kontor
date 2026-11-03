@@ -13,9 +13,9 @@ use clap::ValueEnum;
 use serde_json::{Value, json};
 
 use dependencies::{docker_target_paths, validate_repro_dependencies};
-use paths::{classify, evidence_only, stack_relevant};
+use paths::{bundle_relevant, classify, stack_relevant};
 
-const JOBS: [&str; 4] = ["rust", "sdk", "reproducible", "docker_cache"];
+const JOBS: [&str; 5] = ["rust", "sdk", "reproducible", "docker_cache", "tooling"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum CiScope {
@@ -180,12 +180,10 @@ fn select_known(root: &Path, kind: CiScope, name: &str, event: &Value) -> Result
     }
     let mut selected: Vec<_> = paths
         .iter()
-        .filter(|path| {
-            stack_relevant(path)
-                || (kind == CiScope::Bundles
-                    && !evidence_only(path)
-                    && (path.starts_with("core/indexer/")
-                        || path.as_str() == "tools/ci/bundle_qualification_scope.py"))
+        .filter(|path| match kind {
+            CiScope::Stack => stack_relevant(path),
+            CiScope::Bundles => bundle_relevant(path),
+            CiScope::Pr => unreachable!(),
         })
         .cloned()
         .collect();
@@ -199,7 +197,7 @@ fn select_known(root: &Path, kind: CiScope, name: &str, event: &Value) -> Result
     };
     let mut result = json!({"required": required, "reason": reason, "paths": selected});
     if kind == CiScope::Bundles {
-        result["controls"] = json!(required || paths.iter().any(|path| evidence_only(path)));
+        result["controls"] = json!(required);
     }
     Ok(result)
 }

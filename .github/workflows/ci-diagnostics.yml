@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - .github/workflows/ci.yml
+      - .github/workflows/rust-tests.yml
+      - .github/actions/run-workspace-tests/**
       - .github/workflows/ci-diagnostics.yml
       - .github/actions/setup-kontor-tools/**
       - core/kontor-build/Cargo.toml
@@ -14,6 +16,10 @@ on:
       - core/kontor-build/src/diagnostics/**
       - core/kontor-build/tests/diagnostics_cli.rs
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   smoke:

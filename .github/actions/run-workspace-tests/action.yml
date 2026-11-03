@@ -1,0 +1,54 @@
+name: Run workspace tests
+description: Preserve Cargo workspace targets, doctests and shared regtest setup.
+runs:
+  using: composite
+  steps:
+  - name: Download Bitcoin Core v31.1
+    shell: bash
+    run: |
+      curl -L -o bitcoin.zip "https://github.com/KontorProtocol/Kontor/releases/download/bitcoin-v31.1/bitcoin-${{ runner.os }}-${{ runner.arch }}.zip"
+      unzip bitcoin.zip -d bitcoin-bin
+      chmod +x bitcoin-bin/*
+      echo "${{ github.workspace }}/bitcoin-bin" >> "$GITHUB_PATH"
+  - name: Test bitcoind
+    shell: bash
+    run: bitcoind --version
+  - name: Install cargo-binstall
+    uses: cargo-bins/cargo-binstall@v1.25.3
+  # Contracts are committed (test-contracts/binaries/), so the test build
+  # compiles no wasm — no wasm32 target or wasm-opt needed here. cargo-expand
+  # is still required by the stdlib macro-expansion tests.
+  - name: Install cargo expand
+    shell: bash
+    run: cargo binstall cargo-expand --version 1.0.127 --no-confirm
+  - name: Build macOS crash diagnostics
+    if: runner.os == 'macOS'
+    shell: bash
+    run: cargo build --locked --manifest-path core/kontor-build/Cargo.toml -j 2
+  - name: Prepare macOS crash diagnostics
+    if: runner.os == 'macOS'
+    shell: bash
+    run: '"$KONTOR_TOOLS" diagnostics prepare "$RUNNER_TEMP/macos-crash-diagnostics"'
+  - name: Run tests
+    id: tests
+    working-directory: ./core
+    shell: bash
+    run: |
+      if [[ "$RUNNER_OS" == "macOS" ]]; then
+        # Keep panic diagnostics without adding call-path-specific traces to compared errors.
+        RUST_BACKTRACE=1 RUST_LIB_BACKTRACE=0 REGTEST=1 "$KONTOR_TOOLS" diagnostics run "$RUNNER_TEMP/macos-crash-diagnostics/tests.log" cargo test --locked --release --workspace -- --nocapture
+      else
+        REGTEST=1 cargo test --locked --release --workspace -- --nocapture
+      fi
+  - name: Collect macOS crash diagnostics
+    if: failure() && steps.tests.outcome == 'failure' && runner.os == 'macOS'
+    shell: bash
+    run: '"$KONTOR_TOOLS" diagnostics collect "$RUNNER_TEMP/macos-crash-diagnostics"'
+  - name: Preserve macOS crash diagnostics
+    if: failure() && steps.tests.outcome == 'failure' && runner.os == 'macOS'
+    uses: actions/upload-artifact@v7
+    with:
+      name: macos-crash-reports-${{ github.run_attempt }}
+      path: ${{ runner.temp }}/macos-crash-diagnostics/
+      if-no-files-found: error
+      retention-days: 14

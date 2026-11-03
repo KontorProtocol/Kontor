@@ -35,7 +35,7 @@ jobs:
       - uses: ./.github/actions/setup-kontor-tools
       - name: Select linked-node builds
         id: select
-        run: RUSTC_WRAPPER= ./tools/kontor ci-scope bundles
+        run: RUSTC_WRAPPER='' ./tools/kontor ci-scope bundles
 
   controls:
     name: Linked-node build and evidence controls
@@ -50,9 +50,8 @@ jobs:
       CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.99.1
-        with:
-          components: rustfmt, clippy, llvm-tools-preview
+      - uses: ./.github/actions/setup-kontor-tools
+      - run: rustup component add --toolchain 1.99.1 rustfmt clippy llvm-tools-preview
       - name: Check formats and ownership negative controls
         run: |
           rustfmt --edition 2024 --check protocol-bundles/proof/*.rs
@@ -85,14 +84,42 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy, llvm-tools-preview
+      - uses: ./.github/actions/setup-kontor-tools
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          key: bundle-sources-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/Cargo.lock', 'protocol-bundles/**/Cargo.lock') }}
+      - name: Identify hosted build environment
+        id: environment
+        run: printf 'image=%s\n' "${ImageOS:?}-${ImageVersion:?}" >> "$GITHUB_OUTPUT"
+      - name: Restore isolated graph compilation
+        id: graphs
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            target/protocol-evidence/**/target
+          key: node-graphs-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.99.1-${{ matrix.profile }}-${{ hashFiles('Dockerfile', 'core/**/Cargo.toml', 'core/Cargo.lock', 'protocol-bundles/**', 'core/kontor-build/src/**') }}-${{ github.sha }}
+          restore-keys: |
+            node-graphs-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.99.1-${{ matrix.profile }}-${{ hashFiles('Dockerfile', 'core/**/Cargo.toml', 'core/Cargo.lock', 'protocol-bundles/**', 'core/kontor-build/src/**') }}-
       - name: Check compiler and linker output capture before the full build
         run: cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test linker_wrapper --test object_tools -j2 -- --include-ignored
       - name: Install node dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install boost libevent zeromq
+      - uses: docker/setup-buildx-action@v4
+        if: runner.os == 'Linux'
       - name: Build node qualification image
         if: runner.os == 'Linux'
-        run: docker build --target protocol-bundle-qualification -t kontor-protocol-qualification .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: protocol-bundle-qualification
+          tags: kontor-protocol-qualification
+          load: true
+          cache-from: type=gha,scope=node-image-${{ runner.arch }}
+          cache-to: ${{ github.ref == 'refs/heads/main' && format('type=gha,scope=node-image-{0},mode=min', runner.arch) || '' }}
       - name: Qualify executor and consensus bundles in the node Docker environment
         if: runner.os == 'Linux'
         run: |
@@ -103,6 +130,24 @@ jobs:
         run: |
           tools/kontor qualify-node --profile "${{ matrix.profile }}" --output target/protocol-evidence
           test -f target/protocol-evidence/aarch64-apple-darwin/${{ matrix.profile }}/executors/managed-node/node-execution.json
+      - name: Normalize container cache ownership
+        if: always() && runner.os == 'Linux'
+        run: sudo chown -R "$(id -u):$(id -g)" target/protocol-evidence
+      - name: Bound graph cache uploads
+        id: budget
+        if: github.ref == 'refs/heads/main'
+        env:
+          MAX_CACHE_KIB: '12582912'
+        run: |
+          shopt -s globstar nullglob
+          tools/ci/cache-budget.sh target/protocol-evidence/**/target
+      - name: Save isolated graph compilation
+        if: success() && github.ref == 'refs/heads/main' && steps.graphs.outputs.cache-hit != 'true' && steps.budget.outputs.save == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            target/protocol-evidence/**/target
+          key: ${{ steps.graphs.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -135,13 +180,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.99.1
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            core/kontor-build/target
-          key: kontor-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/kontor-build/Cargo.lock', 'core/kontor-build/Cargo.toml') }}
+      - uses: ./.github/actions/setup-kontor-tools
       - uses: actions/download-artifact@v8
         with:
           pattern: protocol-bundle-evidence-*

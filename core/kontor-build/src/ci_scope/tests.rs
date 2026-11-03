@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
 use super::dependencies::{docker_target_paths, validate_repro_dependencies};
-use super::paths::{classify, stack_relevant};
+use super::paths::{bundle_relevant, classify, stack_relevant};
 use super::{CiScope, JOBS, changed_paths, outputs, profile_policy, select};
 
 fn write(root: &Path, path: &str, text: &str) -> Result<()> {
@@ -139,7 +139,7 @@ fn scope_distinguishes_docs_sdk_node_and_build_inputs() {
         "rust-toolchain.toml",
         "unknown/input",
         ".github/workflows/ci.yml",
-        "tools/ci/pr_scope.py",
+        "tools/ci/test-matrix.sh",
         ".github/actions/setup-docker/action.yml",
     ] {
         assert_eq!(
@@ -178,10 +178,9 @@ fn stack_selection_preserves_execution_and_evidence_boundaries() {
         "core/indexer/src/api/handlers/contracts.rs",
         "core/indexer/src/api/env.rs",
         "core/macros/src/lib.rs",
-        "core/kontor-build/src/ci_scope.rs",
         "protocol-bundles/new/Cargo.toml",
-        "tools/native-stack/qualify.py",
-        "tools/protocol-bundles/build.py",
+        "tools/native-stack/new-input.json",
+        "core/kontor-build/src/graph_build.rs",
         "new-executor/Cargo.lock",
         "new-executor/build.rs",
         "Dockerfile",
@@ -198,9 +197,11 @@ fn stack_selection_preserves_execution_and_evidence_boundaries() {
         "core/indexer/src/logging.rs",
         "core/indexer/src/metrics.rs",
         "core/.cargo/audit.toml",
-        "tools/protocol-bundles/compare_node.py",
-        "tools/protocol-bundles/test_node_comparison.py",
+        "core/kontor-build/src/node_evidence/comparison/manifest.rs",
+        "core/kontor-build/tests/node_comparison.rs",
         "core/kontor-build/src/node_evidence/comparison/mod.rs",
+        "core/kontor-build/src/ci_scope.rs",
+        "core/kontor-build/src/ci_scope/tests.rs",
     ] {
         assert!(!stack_relevant(path), "{path}");
     }
@@ -314,11 +315,11 @@ fn git_diff_handles_large_changes_renames_newlines_and_base_advancement() -> Res
 }
 
 #[test]
-fn bundle_evidence_only_runs_controls_and_paths_union_jobs() -> Result<()> {
+fn tooling_changes_use_focused_checks_and_paths_union_jobs() -> Result<()> {
     let (root, base) = git_fixture()?;
     write(
         root.path(),
-        "tools/protocol-bundles/test_node_comparison.py",
+        "core/kontor-build/tests/node_comparison.rs",
         "evidence",
     )?;
     write(
@@ -334,7 +335,16 @@ fn bundle_evidence_only_runs_controls_and_paths_union_jobs() -> Result<()> {
         &event(&base, &head),
     )?;
     assert_eq!(report["required"], false);
-    assert_eq!(report["controls"], true);
+    assert_eq!(report["controls"], false);
+    assert_eq!(
+        select(
+            root.path(),
+            CiScope::Pr,
+            "pull_request",
+            &event(&base, &head)
+        )?["jobs"]["tooling"],
+        true
+    );
     assert_eq!(
         outputs(CiScope::Bundles, &report)?["profile_policy"],
         "release"
@@ -348,7 +358,7 @@ fn bundle_evidence_only_runs_controls_and_paths_union_jobs() -> Result<()> {
             "pull_request",
             &event(&base, &head)
         )?["required"],
-        true
+        false
     );
     write(root.path(), "core/macros/src/interface.rs", "macros")?;
     let head = commit(root.path())?;
@@ -484,5 +494,83 @@ fn repository_dependency_coverage_remains_complete() -> Result<()> {
         .to_owned();
     validate_repro_dependencies(&root)?;
     assert!(docker_target_paths(&root)?.contains("core/indexer/src/main.rs"));
+    Ok(())
+}
+
+#[test]
+fn qualification_scope_is_conservative_but_tooling_does_not_launch_nodes() {
+    let targets = BTreeSet::new();
+    for path in [
+        "core/kontor-build/src/ci_scope.rs",
+        "core/kontor-build/tests/linker_wrapper.rs",
+        ".github/actions/setup-kontor-tools/action.yml",
+        "core/kontor-build/src/node_evidence/comparison/mod.rs",
+    ] {
+        assert_eq!(classify(path, &targets), BTreeSet::from(["tooling"]));
+        assert!(!stack_relevant(path), "{path}");
+        assert!(!bundle_relevant(path), "{path}");
+    }
+    for path in [
+        "core/kontor-build/src/graph_build.rs",
+        "core/kontor-build/src/compiler_wrapper.rs",
+        "core/kontor-build/Cargo.lock",
+        "core/indexer/src/runtime/ownership/mod.rs",
+        "new-executor/unknown-input",
+        ".github/workflows/rust-tests.yml",
+    ] {
+        assert!(stack_relevant(path), "{path}");
+        assert!(bundle_relevant(path), "{path}");
+    }
+    assert!(stack_relevant(
+        "core/kontor-build/src/stack_evidence/capture.rs"
+    ));
+    assert!(!bundle_relevant(
+        "core/kontor-build/src/stack_evidence/capture.rs"
+    ));
+    assert!(!bundle_relevant("core/indexer/src/api/handlers/info.rs"));
+    assert!(bundle_relevant(
+        "core/indexer/src/api/handlers/contracts.rs"
+    ));
+}
+
+#[test]
+fn test_matrix_runs_the_union_without_duplicate_platform_builds() -> Result<()> {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/ci/test-matrix.sh");
+    for (ordinary, stack, count, workspace_count) in [
+        (false, false, 0, 0),
+        (true, false, 2, 2),
+        (false, true, 6, 0),
+        (true, true, 6, 2),
+    ] {
+        let root = tempdir()?;
+        let output = root.path().join("outputs");
+        let status = Command::new("bash")
+            .arg(&script)
+            .env("RUST_TESTS", ordinary.to_string())
+            .env("STACK_TESTS", stack.to_string())
+            .env("GITHUB_OUTPUT", &output)
+            .status()?;
+        assert!(status.success());
+        let text = fs::read_to_string(output)?;
+        let report: Value = serde_json::from_str(
+            text.lines()
+                .next()
+                .unwrap()
+                .strip_prefix("matrix=")
+                .unwrap(),
+        )?;
+        let cells = report["include"].as_array().unwrap();
+        assert_eq!(cells.len(), count);
+        assert_eq!(
+            cells.iter().filter(|c| c["workspace"] == true).count(),
+            workspace_count
+        );
+        let unique: BTreeSet<_> = cells
+            .iter()
+            .map(|c| (c["os"].as_str().unwrap(), c["profile"].as_str().unwrap()))
+            .collect();
+        assert_eq!(unique.len(), cells.len());
+        assert!(text.contains(&format!("required={}\n", count > 0)));
+    }
     Ok(())
 }

@@ -24,6 +24,11 @@ jobs:
       rust: ${{ steps.select.outputs.rust }}
       sdk: ${{ steps.select.outputs.sdk }}
       reproducible: ${{ steps.select.outputs.reproducible }}
+      tooling: ${{ steps.select.outputs.tooling }}
+      docker_cache: ${{ steps.select.outputs.docker_cache }}
+      stack: ${{ steps.stack.outputs.required }}
+      tests: ${{ steps.matrix.outputs.required }}
+      test_matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -31,7 +36,14 @@ jobs:
       - uses: ./.github/actions/setup-kontor-tools
       - name: Select checks from complete change set
         id: select
-        run: RUSTC_WRAPPER= ./tools/kontor ci-scope pr
+        run: RUSTC_WRAPPER='' ./tools/kontor ci-scope pr
+      - id: stack
+        run: RUSTC_WRAPPER='' ./tools/kontor ci-scope stack
+      - id: matrix
+        env:
+          RUST_TESTS: ${{ steps.select.outputs.rust }}
+          STACK_TESTS: ${{ steps.stack.outputs.required }}
+        run: tools/ci/test-matrix.sh
 
   quality-checks:
     needs: scope
@@ -69,8 +81,6 @@ jobs:
       - name: Check formatting (core)
         run: cargo fmt --all -- --check
         working-directory: ./core
-      - name: Check formatting (repository tooling)
-        run: cargo fmt --manifest-path core/kontor-build/Cargo.toml -- --check
       - name: Run clippy (test-contracts)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./test-contracts
@@ -82,8 +92,6 @@ jobs:
       - name: Run clippy (core)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./core
-      - name: Run clippy (repository tooling)
-        run: cargo clippy --locked --manifest-path core/kontor-build/Cargo.toml --all-targets -j 2 -- -D warnings
       - name: Check native helper dependency pins
         run: ./tools/kontor check-native-helper-lock
       - name: Check wit-validator compiles to wasm32-unknown-unknown
@@ -111,89 +119,28 @@ jobs:
 
   test:
     needs: scope
-    if: needs.scope.outputs.rust == 'true'
-    name: Tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    if: needs.scope.outputs.tests == 'true'
+    uses: ./.github/workflows/rust-tests.yml
+    with:
+      matrix: ${{ needs.scope.outputs.test_matrix }}
+      stack: ${{ needs.scope.outputs.stack == 'true' }}
+
+  tooling:
+    needs: scope
+    if: needs.scope.outputs.tooling == 'true' || needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
     env:
-      KONTOR_TOOLS: ${{ github.workspace }}/core/kontor-build/target/debug/kontor-build
-    strategy:
-      # A flake on one OS shouldn't cancel the other's run — keep independent signal.
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+      RUSTC_WRAPPER: ''
+      CCACHE_DISABLE: '1'
     steps:
       - uses: actions/checkout@v7
-      - name: Initial disk usage
-        run: df -h
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Cache Cargo registry
-        uses: actions/cache@v6
+      - uses: ./.github/actions/setup-kontor-tools
         with:
-          path: |
-            ~/.cargo/bin
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: cargo-registry-${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-registry-${{ github.job }}-${{ runner.os }}-
-      - uses: mozilla-actions/sccache-action@v0.0.11
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libzmq3-dev libboost-all-dev libevent-dev
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        # `libevent` is mandatory at runtime — the bitcoind binary's dyld
-        # path resolves directly to Homebrew's libevent_core dylib, and a
-        # missing/ABI-skewed version aborts before `--version` can print.
-        run: brew install boost libevent zeromq
-      - name: Download Bitcoin Core v31.1
-        run: |
-          curl -L -o bitcoin.zip "https://github.com/KontorProtocol/Kontor/releases/download/bitcoin-v31.1/bitcoin-${{ runner.os }}-${{ runner.arch }}.zip"
-          unzip bitcoin.zip -d bitcoin-bin
-          chmod +x bitcoin-bin/*
-          echo "${{ github.workspace }}/bitcoin-bin" >> $GITHUB_PATH
-      - name: Test bitcoind
-        run: bitcoind --version
-      - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@v1.25.3
-      # Contracts are committed (test-contracts/binaries/), so the test build
-      # compiles no wasm — no wasm32 target or wasm-opt needed here. cargo-expand
-      # is still required by the stdlib macro-expansion tests.
-      - name: Install cargo expand
-        run: cargo binstall cargo-expand --version 1.0.127 --no-confirm
-      - name: Build macOS crash diagnostics
-        if: runner.os == 'macOS'
-        run: cargo build --locked --manifest-path core/kontor-build/Cargo.toml -j 2
-      - name: Prepare macOS crash diagnostics
-        if: runner.os == 'macOS'
-        run: '"$KONTOR_TOOLS" diagnostics prepare "$RUNNER_TEMP/macos-crash-diagnostics"'
-      - name: Run tests
-        id: tests
-        working-directory: ./core
-        shell: bash
-        run: |
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            # Keep panic diagnostics without adding call-path-specific traces to compared errors.
-            RUST_BACKTRACE=1 RUST_LIB_BACKTRACE=0 REGTEST=1 "$KONTOR_TOOLS" diagnostics run "$RUNNER_TEMP/macos-crash-diagnostics/tests.log" cargo test --release --workspace -- --nocapture
-          else
-            REGTEST=1 cargo test --release --workspace -- --nocapture
-          fi
-      - name: Collect macOS crash diagnostics
-        if: failure() && steps.tests.outcome == 'failure' && runner.os == 'macOS'
-        run: '"$KONTOR_TOOLS" diagnostics collect "$RUNNER_TEMP/macos-crash-diagnostics"'
-      - name: Preserve macOS crash diagnostics
-        if: failure() && steps.tests.outcome == 'failure' && runner.os == 'macOS'
-        uses: actions/upload-artifact@v7
-        with:
-          name: macos-crash-reports-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/macos-crash-diagnostics/
-          if-no-files-found: error
-          retention-days: 14
+          run-tests: 'true'
+      - run: cargo fmt --manifest-path core/kontor-build/Cargo.toml -- --check
+      - run: cargo clippy --locked --manifest-path core/kontor-build/Cargo.toml --all-targets -j2 -- -D warnings
+      - run: rustup component add --toolchain 1.99.1 llvm-tools-preview
+      - run: cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test object_tools -j2 -- --ignored
 
   # Match the canonical platform used by both local generation and CI.
   reproducible-build-setup:
@@ -364,7 +311,7 @@ jobs:
   required-checks:
     name: CI required checks
     if: always()
-    needs: [scope, quality-checks, test, reproducible-build-setup, reproducible-build, sdk]
+    needs: [scope, quality-checks, test, tooling, reproducible-build-setup, reproducible-build, sdk]
     runs-on: ubuntu-latest
     steps:
       - name: Require all selected checks
@@ -374,9 +321,10 @@ jobs:
           jq -e '
             . as $needs |
             $needs.scope.result == "success" and
+            $needs.tooling.result == (if $needs.scope.outputs.tooling == "true" or $needs.scope.outputs.rust == "true" then "success" else "skipped" end) and
             ([
               {job: "quality-checks", flag: "rust"},
-              {job: "test", flag: "rust"},
+              {job: "test", flag: "tests"},
               {job: "reproducible-build-setup", flag: "reproducible"},
               {job: "reproducible-build", flag: "reproducible"},
               {job: "sdk", flag: "sdk"}
@@ -391,7 +339,8 @@ jobs:
     name: Docker - Cache Dependencies (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    if: github.ref == 'refs/heads/main'
+    needs: scope
+    if: github.ref == 'refs/heads/main' && (needs.scope.outputs.rust == 'true' || needs.scope.outputs.docker_cache == 'true')
     permissions:
       contents: read
     strategy:

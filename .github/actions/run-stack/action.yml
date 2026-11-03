@@ -1,0 +1,80 @@
+name: Qualify stack using the job's Cargo output
+description: Preserve the isolated indexer build and its Cargo provenance, reusing compatible dependencies.
+inputs:
+  profile:
+    required: true
+    description: Cargo profile
+  profiles:
+    default: release
+    description: Release plus dev smoke, or full qualification
+runs:
+  using: composite
+  steps:
+  - name: Compile qualification test
+    env:
+      PROFILE: ${{ inputs.profile }}
+    shell: bash
+    run: |
+      evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$PROFILE"
+      mkdir -p "$evidence"
+      flags=()
+      if [[ "$PROFILE" == release ]]; then flags+=(--release); fi
+      cargo test --locked --manifest-path core/Cargo.toml -p indexer --lib --no-run --message-format=json -j2 "${flags[@]}" > "$evidence/cargo.json"
+      jq -ser '[.[] | select(.reason == "compiler-artifact" and .target.name == "indexer" and (.target.kind | index("lib")) != null and .profile.test == true and .executable != null)] | if length == 1 then .[0].executable else error("expected exactly one indexer lib test executable") end' "$evidence/cargo.json" > target/native-stack-evidence/binary-path
+      test -s target/native-stack-evidence/binary-path
+  - name: Exercise paid, view, and Core chain boundaries
+    if: inputs.profile == 'release' || inputs.profiles == 'full'
+    shell: bash
+    run: |
+      set -o pipefail
+      binary=$(cat target/native-stack-evidence/binary-path)
+      mkdir -p "target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ inputs.profile }}"
+      "$binary" --exact runtime::call::tests::sequential_chains::deep_sequential_chains_survive_in_separate_processes --nocapture 2>&1 | tee "target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ inputs.profile }}/chain-matrix.log"
+  - name: Exercise owned paid, view, and Core chain boundaries
+    if: inputs.profile == 'release' || inputs.profiles == 'full'
+    shell: bash
+    run: |
+      set -o pipefail
+      binary=$(cat target/native-stack-evidence/binary-path)
+      evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ inputs.profile }}"
+      : > "$evidence/owned-chain-matrix.log"
+      for mode in paid view core; do
+        for depth in 63 64; do
+          KONTOR_CHAIN_MODE="$mode" KONTOR_CHAIN_DEPTH="$depth" "$binary" --exact runtime::call::tests::sequential_chains::owned_chain_probe_child --ignored --nocapture 2>&1 | tee -a "$evidence/owned-chain-matrix.log"
+        done
+      done
+  - name: Exercise ownership cancellation, yielding, and drain controls
+    if: inputs.profile == 'release' || inputs.profiles == 'full'
+    shell: bash
+    run: |
+      set -o pipefail
+      binary=$(cat target/native-stack-evidence/binary-path)
+      evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ inputs.profile }}"
+      : > "$evidence/ownership-controls.log"
+      for test in canonical_lease_drains_native_guest_before_releasing_runtime canonical_and_simulation_children_keep_no_yield_policy nested_api_children_inherit_actual_fuel_yields cancelling_nested_yielding_api_guest_joins_before_runtime_reuse cancelling_fuel_yielding_guest_joins_before_pool_reuse; do
+        "$binary" --exact "runtime::ownership::tests::$test" --nocapture 2>&1 | tee -a "$evidence/ownership-controls.log"
+      done
+  - name: Measure stack boundaries
+    if: inputs.profile == 'release' || inputs.profiles == 'full'
+    env:
+      PROFILE: ${{ inputs.profile }}
+    shell: bash
+    run: |
+      binary=$(cat target/native-stack-evidence/binary-path)
+      evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$PROFILE"
+      tools/kontor qualify-stack --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/$PROFILE" --output "$evidence" --chain-log "$evidence/chain-matrix.log" --owned-chain-log "$evidence/owned-chain-matrix.log" --ownership-log "$evidence/ownership-controls.log"
+  - name: Run bounded dev smoke
+    if: inputs.profile == 'dev' && inputs.profiles == 'release'
+    shell: bash
+    run: |
+      binary=$(cat target/native-stack-evidence/binary-path)
+      evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/dev"
+      ./tools/kontor stack-smoke --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/dev" --output "$evidence"
+  - name: Preserve qualification evidence
+    if: always()
+    uses: actions/upload-artifact@v7
+    with:
+      name: ${{ inputs.profile == 'dev' && inputs.profiles == 'release' && format('native-smoke-{0}-{1}', runner.os, runner.arch) || format('native-stack-{0}-{1}-{2}', runner.os, runner.arch, inputs.profile) }}
+      path: target/native-stack-evidence/${{ runner.os }}-${{ runner.arch }}/${{ inputs.profile }}/
+      if-no-files-found: error
+      retention-days: 30

@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   scope:
     name: Docker cache change scope
@@ -19,7 +23,7 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/setup-kontor-tools
       - id: select
-        run: RUSTC_WRAPPER= ./tools/kontor ci-scope pr
+        run: RUSTC_WRAPPER='' ./tools/kontor ci-scope pr
 
   cacher:
     needs: scope

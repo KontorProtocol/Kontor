@@ -61,6 +61,10 @@ env:
   # min_ios_version_supported) so C objects and the link agree.
   IPHONEOS_DEPLOYMENT_TARGET: "15.1"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # ─── Cheap gate (Linux): the SDK emits both bundles and the RN bundle
   # is WASM-free and wired to @kontor/sdk-native. Mirrors the local check.

@@ -1,0 +1,114 @@
+name: Rust tests and stack qualification
+on:
+  workflow_call:
+    inputs:
+      matrix:
+        type: string
+        required: true
+      stack:
+        type: boolean
+        required: true
+      profiles:
+        type: string
+        default: release
+permissions:
+  contents: read
+jobs:
+  tests:
+    name: Rust (${{ matrix.os }}, ${{ matrix.profile }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ inputs.profiles == 'full' && 360 || 90 }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix) }}
+    env:
+      RUSTUP_TOOLCHAIN: '1.99.1'
+      RUSTC_WRAPPER: ''
+      CCACHE_DISABLE: '1'
+      CARGO_BUILD_JOBS: '2'
+      KONTOR_TOOLS: ${{ github.workspace }}/core/kontor-build/target/debug/kontor-build
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-kontor-tools
+      - name: Identify hosted build environment
+        id: environment
+        run: printf 'image=%s\n' "${ImageOS:?}-${ImageVersion:?}" >> "$GITHUB_OUTPUT"
+      - name: Check runner architecture
+        run: test "$RUNNER_ARCH" = "${{ matrix.arch }}"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          key: cargo-sources-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/Cargo.lock') }}
+      - uses: actions/cache/restore@v6
+        id: compiled
+        with:
+          path: |
+            core/target
+          key: rust-tests-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.99.1-${{ matrix.profile }}-${{ hashFiles('core/Cargo.lock', 'core/**/Cargo.toml', 'core/**/build.rs', 'core/.cargo/**') }}-${{ github.sha }}
+          restore-keys: |
+            rust-tests-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.99.1-${{ matrix.profile }}-${{ hashFiles('core/Cargo.lock', 'core/**/Cargo.toml', 'core/**/build.rs', 'core/.cargo/**') }}-
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libzmq3-dev libboost-all-dev libevent-dev
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install boost libevent zeromq
+      - name: Run selected stack qualification
+        if: inputs.stack
+        uses: ./.github/actions/run-stack
+        with:
+          profile: ${{ matrix.profile }}
+          profiles: ${{ inputs.profiles }}
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        if: matrix.workspace
+      - name: Run workspace tests
+        if: matrix.workspace
+        uses: ./.github/actions/run-workspace-tests
+        env:
+          RUSTC_WRAPPER: sccache
+          SCCACHE_GHA_ENABLED: 'true'
+      - name: Bound compilation cache uploads
+        id: budget
+        if: github.ref == 'refs/heads/main'
+        env:
+          MAX_CACHE_KIB: '10485760'
+        run: tools/ci/cache-budget.sh core/target
+      - name: Save compiled inputs for subsequent PRs
+        if: success() && github.ref == 'refs/heads/main' && steps.compiled.outputs.cache-hit != 'true' && steps.budget.outputs.save == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            core/target
+          key: ${{ steps.compiled.outputs.cache-primary-key }}
+
+  compare:
+    name: Compare native stack outcomes
+    needs: tests
+    if: always() && inputs.stack
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-kontor-tools
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-stack-*
+          path: target/native-stack-compare
+      - uses: actions/download-artifact@v8
+        if: inputs.profiles == 'release'
+        with:
+          pattern: native-smoke-*
+          path: target/native-smoke-compare
+      - name: Compare required variants
+        run: |
+          tools/kontor compare-stack --directory target/native-stack-compare --output target/native-stack-comparison.json --upstream-status "${{ needs.tests.result }}" --profiles "${{ inputs.profiles }}" --smoke-directory target/native-smoke-compare
+      - name: Preserve comparison
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-stack-comparison
+          path: target/native-stack-comparison.json
+          if-no-files-found: error

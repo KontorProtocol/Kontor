@@ -13,7 +13,9 @@ runs:
         path: |
           ~/.cargo/registry
           core/kontor-build/target
-        key: kontor-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/kontor-build/Cargo.lock', 'core/kontor-build/Cargo.toml') }}
+        key: kontor-tools-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/kontor-build/Cargo.lock', 'core/kontor-build/Cargo.toml') }}-${{ hashFiles('core/kontor-build/src/**', 'core/kontor-build/tests/**') }}
+        restore-keys: |
+          kontor-tools-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/kontor-build/Cargo.lock', 'core/kontor-build/Cargo.toml') }}-
     - name: Build repository tooling
       if: inputs.run-tests != 'true'
       shell: bash

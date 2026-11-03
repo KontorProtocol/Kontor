@@ -18,7 +18,6 @@ pub(super) const STACK_PREFIXES: &[&str] = &[
     "core/wit-validator/",
     "core/bls-crypto/",
     "core/testlib/",
-    "core/kontor-build/",
     "core/vendor/",
     "native-contracts/",
     "test-contracts/",
@@ -29,7 +28,6 @@ pub(super) const STACK_PREFIXES: &[&str] = &[
 ];
 
 pub(super) const STACK_FILES: &[&str] = &[
-    ".github/actions/setup-kontor-tools/action.yml",
     "core/indexer/src/block.rs",
     "core/indexer/src/config.rs",
     "core/indexer/src/main.rs",
@@ -52,11 +50,10 @@ pub(super) const STACK_FILES: &[&str] = &[
     "Dockerfile",
     ".dockerignore",
     ".github/workflows/native-stack.yml",
-    ".github/workflows/native-stack-s2.yml",
+    ".github/workflows/rust-tests.yml",
+    ".github/actions/run-stack/action.yml",
     ".github/workflows/protocol-bundles.yml",
     ".github/workflows/publish-build-image.yml",
-    "tools/ci/stack_qualification_scope.py",
-    "tools/ci/test_stack_qualification_scope.py",
 ];
 
 pub(super) const BUILD_NAMES: &[&str] = &[
@@ -107,21 +104,66 @@ pub(super) fn build_metadata(path: &str) -> bool {
             && ["config", "config.toml"].contains(&basename(path)))
 }
 
-pub(super) fn evidence_only(path: &str) -> bool {
-    let name = basename(path);
-    path.starts_with("core/kontor-build/src/node_evidence/comparison/")
-        || (path.starts_with("tools/protocol-bundles/")
-            && (name == "compare_node.py" || (name.starts_with("test_") && name.ends_with(".py"))))
+pub(super) fn tooling_only(path: &str) -> bool {
+    path.starts_with("core/kontor-build/src/ci_scope/")
+        || path == "core/kontor-build/src/ci_scope.rs"
+        || path.starts_with("core/kontor-build/tests/")
+        || path.starts_with("core/kontor-build/src/diagnostics/")
+        || path == "core/kontor-build/src/diagnostics.rs"
+        || path.starts_with("core/kontor-build/src/node_evidence/comparison/")
+        || path.starts_with(".github/actions/setup-kontor-tools/")
+        || path == ".github/workflows/ci-diagnostics.yml"
+}
+
+fn ordinary_only(path: &str) -> bool {
+    path.starts_with("docs/")
+        || (!path.contains('/') && path.ends_with(".md"))
+        || path.starts_with("sdk/")
+        || path.starts_with("sdk-native/")
+        || path.starts_with("core/kontor-sdk")
+        || path.starts_with("core/indexer/tests/")
+        || path.starts_with("core/indexer/src/api/")
+        || [
+            "core/indexer/src/logging.rs",
+            "core/indexer/src/metrics.rs",
+            "core/.cargo/audit.toml",
+            ".github/workflows/mobile.yml",
+            ".github/workflows/build-mobile-artifacts.yml",
+            ".github/workflows/build-bitcoin.yml",
+            ".github/workflows/docker-cache.yml",
+        ]
+        .contains(&path)
 }
 
 pub(super) fn stack_relevant(path: &str) -> bool {
-    !evidence_only(path)
-        && (STACK_FILES.contains(&path)
-            || STACK_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
-            || build_metadata(path))
+    if tooling_only(path) {
+        return false;
+    }
+    if STACK_FILES.contains(&path)
+        || STACK_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
+        || build_metadata(path)
+    {
+        return true;
+    }
+    // Unclassified inputs increase coverage; only known unrelated surfaces skip.
+    !ordinary_only(path)
+}
+
+pub(super) fn bundle_relevant(path: &str) -> bool {
+    // Stack-specific capture/comparison changes exercise stack qualification only.
+    if path.starts_with("core/kontor-build/src/stack_evidence")
+        || path == ".github/workflows/native-stack.yml"
+        || path.starts_with(".github/actions/run-stack/")
+    {
+        return false;
+    }
+    stack_relevant(path)
 }
 
 pub(super) fn classify(path: &str, docker_targets: &BTreeSet<String>) -> BTreeSet<&'static str> {
+    if tooling_only(path) {
+        return BTreeSet::from(["tooling"]);
+    }
     if path.starts_with("docs/") || (!path.contains('/') && path.ends_with(".md")) {
         return BTreeSet::new();
     }

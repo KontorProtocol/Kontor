@@ -25,6 +25,8 @@ RUN cargo fetch --locked --manifest-path protocol-bundles/executor-first/Cargo.t
 
 FROM cacher AS protocol-bundle-qualification
 COPY . .
+RUN cargo build --locked --offline --manifest-path core/kontor-build/Cargo.toml \
+    --bin kontor-build --bin kontor-graph-rustc --bin kontor-node-rustc --bin kontor-node-linker
 CMD ["tools/kontor", "qualify-node", "--output", "/evidence", "--profile", "release", "--offline"]
 
 FROM cacher AS builder
