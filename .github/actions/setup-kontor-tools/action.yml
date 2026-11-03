@@ -15,4 +15,4 @@ runs:
       env:
         RUSTC_WRAPPER: ""
         CCACHE_DISABLE: "1"
-      run: cargo test --locked --manifest-path core/kontor-build/Cargo.toml -j 2
+      run: cargo test --locked --manifest-path core/kontor-build/Cargo.toml -j 2 --no-fail-fast

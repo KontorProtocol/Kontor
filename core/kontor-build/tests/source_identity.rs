@@ -1,8 +1,10 @@
 #![cfg(unix)]
 
+#[cfg(target_os = "linux")]
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
+#[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
@@ -102,10 +104,7 @@ impl GitFixture {
 fn git_checks_both_object_formats_and_raw_paths() -> Result<()> {
     for format in ["sha1", "sha256"] {
         let mut f = GitFixture::new(format)?;
-        fs::write(
-            f.root.join(OsString::from_vec(b"raw-\xff.rs".to_vec())),
-            "raw",
-        )?;
+        fs::write(f.root.join("raw-λ.rs"), "unicode")?;
         fs::write(f.root.join("new\nline.rs"), "newline")?;
         f.revision = commit(&f.root)?;
         fs::write(f.root.join(".cargo-ok"), "")?;
@@ -121,6 +120,25 @@ fn git_checks_both_object_formats_and_raw_paths() -> Result<()> {
             verify_git_tree(&f.root, &"0".repeat(f.revision.len())),
             "revision mismatch",
         );
+    }
+    Ok(())
+}
+
+// The macOS CI filesystem rejects invalid UTF-8 names before the verifier can read them.
+#[cfg(target_os = "linux")]
+#[test]
+fn git_checks_non_utf8_paths_and_their_contents() -> Result<()> {
+    for format in ["sha1", "sha256"] {
+        let mut f = GitFixture::new(format)?;
+        let path = f.root.join(OsString::from_vec(b"raw-\xff.rs".to_vec()));
+        fs::write(&path, "raw")?;
+        f.revision = commit(&f.root)?;
+        assert_eq!(
+            f.verify()?,
+            json!({"revision": f.revision, "files": 4, "submodules": {}})
+        );
+        fs::write(path, "substituted")?;
+        fails(f.verify(), "Git source differs");
     }
     Ok(())
 }
