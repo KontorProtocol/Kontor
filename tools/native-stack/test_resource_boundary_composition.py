@@ -19,7 +19,7 @@ from resource_boundary_manifest import (CONFIGURATIONS, DISCOVERY_ROLE,
 from resource_evidence import sha256
 from resource_manifest import ROOT, build_manifest
 from resource_suite_registry import build_registry
-from test_resource_report import guard_control
+from test_resource_guard import guard_control
 
 
 SOURCE_SHA = "1" * 40

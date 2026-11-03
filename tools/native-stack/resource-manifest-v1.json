@@ -420,10 +420,6 @@
       "path": "tools/native-stack/capture_resource_chain.py",
       "sha256": "4399e3b3e27f2bb2fb2ebafb05aad756b7dd450d2c2272e3ccbee5d9ebe20f52"
     },
-    "resource_comparator_source": {
-      "path": "tools/native-stack/compare_resource.py",
-      "sha256": "ee7eeb730de1c6a371d88b37688e4395df69dfa7402b702b7c1778201ac00a44"
-    },
     "resource_control_capture": {
       "path": "tools/native-stack/capture_resource_control.py",
       "sha256": "d8485d6621ea40669b8d71b1c552259303a60a8bbbb78ad8cf7c5b5adada9c6a"
@@ -462,7 +458,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "3bd6632f6966fdaab32680a537317b2bffdb1085bb366b1db489f9a690be4157"
+      "sha256": "d532f65072826de28444da6122b105221c1a22769cdbf5f86388e18215129f52"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -486,7 +482,7 @@
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "f3fc8308bd8270a9c3fb5f979ec4e9b3162b1f7f87477535a8ac72c8143cc6dc"
+      "sha256": "9209b82af2b74e1f88c707503b19d37d3d26df0a14a60a4a634b4ecade2fb6e1"
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",

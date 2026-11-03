@@ -216,7 +216,6 @@ INPUTS = {
     "resource_chain_capture": "tools/native-stack/capture_resource_chain.py",
     "resource_validator_source": "tools/native-stack/resource_evidence.py",
     "resource_schema": "tools/native-stack/resource-evidence-schema-v1.json",
-    "resource_comparator_source": "tools/native-stack/compare_resource.py",
     "resource_python_requirements": "tools/native-stack/requirements-resource.txt",
     "qualification_workflow": ".github/workflows/native-stack.yml",
 }

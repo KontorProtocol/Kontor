@@ -143,23 +143,36 @@ The report source commit must match captured `git rev-parse HEAD`, a clean
 The resource runner and workflow do not emit this evidence yet, so the gate
 remains blocked by explicit build and source capture statuses.
 
-`resource-evidence-schema-v1.json` defines the required raw process, build
-closure, engine, actual thread ranges, per-attempt worker phases, per-case,
-and production-only memory records. `resource_evidence.py`
-checks one paired cell and `compare_resource.py` requires all six cells and
-equal execution observations across them. Both reject the current preflight
-manifest for acceptance. A case may be marked ready only after its complete
-operation runs on the explicit multithread Tokio workers in both independent
-child processes, with actual capacity observations and raw logs. Missing
-native Core, deepest-frame host-call, SQLite range/large-value, cold publish,
-blocking Brotli, foreign WAVE, and canonical result-shape fixtures are visible
-in the manifest and remain open work. The named native Core cases require the
-coordinator's exact staking and filestorage workload budgets. The memory gate
-also requires a hashed workload plan with its occupancy, cache and allowance
-values frozen before measurements. The worker runner's source hash and each
-sample's preparation, operation, conversion and teardown worker IDs must be
-bound before acceptance. A successful preflight schema check is not a resource
-qualification result.
+The original monolithic v1 acceptance interface (`resource_evidence.validate`
+and `compare_resource.py`) is retired. It rejected the current manifest's missing
+readiness flags, and its complete reports were synthetic tests that patched
+those flags. Current capture workflows use the 16 case-group validators and
+`compare_resource_suite.py` instead. The old interface and its synthetic report
+fixtures remain in Git at `89c7dc36`.
+
+`resource-evidence-schema-v1.json` remains because chain-v2 and pending-I/O
+validation reuse its observation definitions. `resource_evidence.py` remains a
+shared helper module for strict JSON, raw-file identity, measured thread capacity
+and guard controls. Removing the unused top-level report does not make the
+preflight manifest qualified or waive any current group check.
+
+The retirement audit maps useful assertions to the active checks below. Tests
+for the removed report format are not evidence that a native qualification ran.
+
+| Assertion | Retained implementation and focused tests |
+| --- | --- |
+| Guard faults, distinct child identities, measured Linux/macOS stack ranges and pthread offsets | Shared `check_guard_control` / `thread_capacities`; `test_resource_guard` and `test_resource_manifest`. Guard mutation tests now exercise the shared helper directly. |
+| Build source, binary, Cargo terminal, dependency/features, compiler flags and formatter provenance | `capture_resource_control` and `build_resource_test`; `test_resource_build_attestation` and `test_capture_resource_control`. These validate actual capture formats rather than the retired synthetic build closure. |
+| Paid/core/view chain results, accounting, rollback, lifetime ordering and historical comparison | `resource_evidence_v2` and `resource_boundary_evidence`; their corresponding tests and `test_capture_resource_chain`. |
+| Plain/wide Pulley boundaries, deepest host callback, exact search/replay order and measured worker execution | `resource_boundary_evidence`; `test_resource_boundary_evidence` and `test_resource_boundary_composition`. |
+| Suspension, resumption, live owners, task progress and memory allowances | `resource_pending_evidence`; `test_resource_pending_evidence`. The old synthetic multi-root workload-plan report is retired with the already removed performance supervisor. |
+| Finite paid execution, canonical ABI/types, lifecycle, foreign WAVE, initialization, native staking/filestorage, SQLite, Brotli and cold publication | Existing Rust fixtures under `core/indexer/src/runtime/call/tests/native_stack`, plus the corresponding `resource_*_evidence` validators and tests. External checks still enforce transcript identity, measured phase/thread routing, repeated runs and configuration parity that a successful Rust test alone does not establish. |
+| Complete case coverage, archive closure and cross-cell agreement | `resource_suite_registry`, `resource_suite_closure` and `compare_resource_suite`, with their existing tests. Their result still reports qualification as missing, separately from case-semantic agreement. |
+
+The remaining per-group suite needs consolidation before Python removal; it is
+not safe to delete it merely because its workloads are written in Rust. Preserve
+the verifier-only checks above in the existing Rust tooling. This audit does not
+add CI jobs, require a new performance campaign, or change acceptance statuses.
 
 The ignored `real_paid_large_frame_on_tokio_worker` test is an initial real
 call diagnostic. Run it in separate child processes with
