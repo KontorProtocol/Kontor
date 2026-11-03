@@ -2,6 +2,16 @@
 
 ## Automatic qualification scope
 
+Stack sweep parsing and fresh-control comparison now use
+`tools/kontor verify-stack-evidence` (`parse_sweep` and `sweep_pair` JSON requests).
+The temporary `sweep.py` adapter remains for the qualification runner and archive
+comparator until those callers move to Rust. Bootstrap uses the existing tooling
+lockfile and respects Cargo's offline environment. It requires the pinned Rust
+toolchain, including when comparing downloaded reports. Parsed observations and
+report formats are unchanged; integer evidence explicitly rejects booleans and
+floating-point substitutes. The former sweep unit tests now run with the Rust
+tooling tests. No stack-boundary or performance runs are added by this migration.
+
 Every PR runs the lightweight `Stack qualification change scope` job. Full
 release qualification and bounded dev smoke run when the Git diff touches runtime/ownership, retained protocol
 code, storage or canonical execution, pooled contract/signer entrypoints, shared

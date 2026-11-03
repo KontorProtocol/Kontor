@@ -6,13 +6,21 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from test_compare import transcript
-from test_sweep import reentry
+from test_compare import add_sweep_fields, observation, transcript
 
 
 SPEC = importlib.util.spec_from_file_location("native_stack_qualify", Path(__file__).with_name("qualify.py"))
 qualify = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(qualify)
+
+
+def reentry(role="worker"):
+    depths = [62, 63, 64, 64, 63, 62, 62, 63, 64] if role == "worker" else [63, 64]
+    samples = [observation("paid_reenter", depth, "invocation_limit" if depth == 64 else "ok", "linux", "aarch64", "") for depth in depths]
+    summary = add_sweep_fields(samples, "paid_reenter", role, {
+        "last_success": 63, "first_failure": 64, "first_failure_outcome": "invocation_limit",
+    })
+    return samples, summary
 
 
 class QualifyTests(unittest.TestCase):

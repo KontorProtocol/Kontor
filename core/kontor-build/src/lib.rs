@@ -24,6 +24,7 @@ pub mod shared_ownership;
 mod snapshot;
 pub mod source_identity;
 pub mod source_policy;
+pub mod stack_evidence;
 pub mod symbol_audit;
 pub mod toolchain;
 
