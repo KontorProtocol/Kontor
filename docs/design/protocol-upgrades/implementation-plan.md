@@ -55,13 +55,17 @@ campaign per group. This is not a cap on necessary corrective runs or a waiver o
 checks. Retain valid evidence with its original source bindings and rerun affected
 checks when changes require it.
 
-## Current delivery checkpoint, 2 November 2026
+## Implementation delivery, 3 November 2026
 
-K1–K9 and their prerequisites are merged. K3 is PR619, K4 is PR620,
+K1–K11 and their prerequisites are merged. K3 is PR619, K4 is PR620,
 K5/K6 is PR621, K7/K8 is PR622 and K9 is
 [PR623](https://github.com/KontorProtocol/Kontor/pull/623), merged as
 `d671fb8294fe5358e5ad7c5ac900f0f5204b971c`. The combined K10/K11 group is
-under final validation and review. The complete goal remains open.
+[PR624](https://github.com/KontorProtocol/Kontor/pull/624), merged as
+`9ed04f1cbae48bc2c05f9e2e1dee4875e9a81f3a` after lead and independent review,
+required CI and three-platform linked-node comparison passed. Its merge tree
+exactly matches the qualified PR tree. The SDK prerelease and private Site are
+the final release handoff, separate from the completed implementation milestones.
 
 The implemented architecture uses one pinned Malachite runtime and common
 consensus wire across protocol activations. Independently locked historical
@@ -71,7 +75,7 @@ supersedes historical requirements for separate Malachite versions, incompatible
 live codecs and an HTTP history service. Earlier milestone entries are historical
 evidence, not additional current deliverables.
 
-The K10/K11 candidate implements transactional protocol/format/ABI discovery,
+K10/K11 implements transactional protocol/format/ABI discovery,
 selection-bound simulation and SDK helpers, actual runtime-role diagnostics,
 two successive approved upgrades, replacement near activation, unavailable quorum,
 and explicit linker-driver/backend-selection provenance. The final committee
@@ -79,8 +83,11 @@ support case composes a real old-quorum certificate and paid departure with
 next-committee certificate verification; missing support is an explicit scenario
 assumption, backed separately by real unsupported-target refusal. It does not
 claim a live mixed-binary experiment. The execution ledger records each result's
-source/binary scope. Remaining runtime validation, focused review, required
-current-head CI, merge and final private Site publication are not yet complete.
+source/binary scope. Final linked-node release qualification passed on Linux
+x86-64, Linux ARM64 and macOS ARM64, with matching execution observations.
+Ordinary tests, SDK/package checks, reproducibility, release stack comparisons
+and bounded dev smoke checks also passed. The execution ledger links the exact
+runs and records limitations; throughput qualification remains explicitly deferred.
 
 ## Implementation checkpoint, 1 November 2026
 

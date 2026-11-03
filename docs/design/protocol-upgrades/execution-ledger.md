@@ -5013,3 +5013,40 @@ definition verifies. This is compiler/build provenance, not an independent trace
 of every post-link transformation. Current-candidate Darwin build/runtime evidence
 remains required. The SDK was rebuilt and its packed consumer checks passed for
 bundler, Node16 and React Native resolution; publication remains deferred.
+
+
+## K10/K11 merged implementation and final qualification
+
+PR624 merged as `9ed04f1cbae48bc2c05f9e2e1dee4875e9a81f3a` on 3 November 2026.
+The reviewed final candidate was `1a71a7a5fc6f43792a788dab562e4c2ad0b64da4`.
+The PR test merge `6282665dc152408b03baf93e66d5aa9c07175b09`, candidate and actual
+merge all have tree `19e2d2863692fc91dd665cddba47e6dda27ed517`.
+All applicable checks passed; only intended scope/publication jobs were skipped.
+
+- [Ordinary CI, SDK and reproducibility](https://github.com/KontorProtocol/Kontor/actions/runs/41568472221).
+- [Release stack qualification and bounded dev smoke](https://github.com/KontorProtocol/Kontor/actions/runs/41568472481).
+- [Three-platform linked-node qualification](https://github.com/KontorProtocol/Kontor/actions/runs/41568472292).
+
+The downloaded linked-node artifacts also passed the existing comparator locally,
+without rerunning builds or runtime workloads. Linux x86-64, Linux ARM64 and macOS
+ARM64 agree on observations hash
+`55c8801c25ea52218697836c001b24143805e1c8bb0441f67466b2820f554844`.
+The final stack comparison covers the three release cells and three dev smoke
+cells. Its report SHA256 is
+`276419027a4041adcdfc2b7f00293b45506cc68dc36de08cfedce81c8b18075a`.
+The final macOS linker and completed compiler hashes differ, as expected after
+post-link processing, while both Linux pairs match. All final artifact bindings
+and ownership checks pass. The earlier failed macOS build remains a failed run.
+
+Post-merge stack run `41574710183` and linked-node run `41574710254` duplicate the
+qualified tree and were cancelled under the approved CI-cost policy. Ordinary
+main-branch CI was retained. No new performance campaign or qualification waiver
+was introduced. Previous local evidence retains its original binary/source scope.
+
+SDK `0.3.0-rc.7` was built and its packed consumer checks passed for bundler,
+Node16 and React Native. All 94 packed files matched the validated build. Prepared
+tarball SHA256 is
+`da21419d2d5d137efdf572de1a89125145b457be341b28a0137abfdf90c3a2f6`.
+Publication uses the `rc` tag, preserving `latest`. The private design Site is the
+final publication handoff; its current implementation chapter supersedes archived
+research. Publishing does not change the accepted limitations recorded above.
