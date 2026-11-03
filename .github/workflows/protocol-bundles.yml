@@ -32,11 +32,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Test qualification selection
-        run: python3 -m unittest discover -s tools/ci -p 'test_*qualification_scope.py'
+      - uses: ./.github/actions/setup-kontor-tools
       - name: Select linked-node builds
         id: select
-        run: python3 tools/ci/bundle_qualification_scope.py
+        run: RUSTC_WRAPPER= ./tools/kontor ci-scope bundles
 
   controls:
     name: Linked-node build and evidence controls
@@ -54,18 +53,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy, llvm-tools-preview
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
       - name: Check formats and ownership negative controls
         run: |
           rustfmt --edition 2024 --check protocol-bundles/proof/*.rs
           cargo fmt --manifest-path core/Cargo.toml --all -- --check
-          python3 -m unittest discover -s tools/protocol-bundles -p 'test_*.py'
       - name: Check builder CLI
         run: |
-          cargo clippy --locked --manifest-path core/Cargo.toml -p kontor-build --all-targets -j2 -- -D warnings
-          cargo test --locked --manifest-path core/Cargo.toml -p kontor-build -j2
+          cargo clippy --locked --manifest-path core/kontor-build/Cargo.toml --all-targets -j2 -- -D warnings
+          cargo test --locked --manifest-path core/kontor-build/Cargo.toml -j2
+          cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test object_tools -j2 -- --ignored
           ./tools/kontor protocol-bundles --help
 
   qualification:
@@ -89,14 +85,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy, llvm-tools-preview
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Check native ownership controls on the target platform
-        if: matrix.profile == 'release' && matrix.os != 'ubuntu-latest'
-        run: python3 -m unittest discover -s tools/protocol-bundles -p 'test_audit.py'
       - name: Check compiler and linker output capture before the full build
-        run: python3 -m unittest discover -s tools/protocol-bundles -p 'test_node_build.py'
+        run: cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test linker_wrapper --test object_tools -j2 -- --include-ignored
       - name: Install node dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install boost libevent zeromq
@@ -107,11 +97,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p target/protocol-evidence
-          docker run --rm --mount type=bind,src="$PWD/target/protocol-evidence",dst=/evidence kontor-protocol-qualification python3 tools/protocol-bundles/qualify_node.py --output /evidence --profile "${{ matrix.profile }}" --offline
+          docker run --rm --mount type=bind,src="$PWD/target/protocol-evidence",dst=/evidence kontor-protocol-qualification tools/kontor qualify-node --output /evidence --profile "${{ matrix.profile }}" --offline
       - name: Qualify executor and consensus bundles with the macOS node test profile
         if: runner.os == 'macOS'
         run: |
-          python3 tools/protocol-bundles/qualify_node.py --profile "${{ matrix.profile }}" --output target/protocol-evidence
+          tools/kontor qualify-node --profile "${{ matrix.profile }}" --output target/protocol-evidence
           test -f target/protocol-evidence/aarch64-apple-darwin/${{ matrix.profile }}/executors/managed-node/node-execution.json
       - uses: actions/upload-artifact@v7
         if: always()
@@ -145,16 +135,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: actions/cache@v6
         with:
-          python-version: "3.13"
+          path: |
+            ~/.cargo/registry
+            core/kontor-build/target
+          key: kontor-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/kontor-build/Cargo.lock', 'core/kontor-build/Cargo.toml') }}
       - uses: actions/download-artifact@v8
         with:
           pattern: protocol-bundle-evidence-*
           path: target/protocol-comparison-inputs
       - name: Compare explicitly required platforms and profiles
         run: |
-          python3 tools/protocol-bundles/compare_node.py --directory target/protocol-comparison-inputs --output target/protocol-node-comparison.json --profiles "${{ needs.scope.outputs.profile_policy }}" --upstream-status "${{ needs.qualification.result }}"
+          tools/kontor compare-node --directory target/protocol-comparison-inputs --output target/protocol-node-comparison.json --profiles "${{ needs.scope.outputs.profile_policy }}" --upstream-status "${{ needs.qualification.result }}"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

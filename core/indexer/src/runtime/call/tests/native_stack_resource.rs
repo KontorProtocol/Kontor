@@ -11,6 +11,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail, ensure};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use hex::encode;
+#[cfg(target_os = "linux")]
+use kontor_build::stack_evidence::resource_report::ThreadObservation;
 use serde_json::{Value as JsonValue, from_str, json};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use sha2::{Digest, Sha256};
@@ -1377,27 +1379,27 @@ fn linux_thread_observation(
         "pthread reports no guard" => "pthread_reports_none",
         _ => unreachable!("current_linux_stack_range returned unknown guard treatment"),
     };
-    json!({
-        "thread_category": category,
-        "thread_id": format!("{:?}", stack.thread_id),
-        "process_id": stack.process_id,
-        "os_thread_id": stack.os_thread_id,
-        "identity_api": "linux_gettid",
-        "page_size_bytes": stack.page_size_bytes,
-        "requested_bytes": requested_bytes,
-        "mapped_bytes": stack.mapped_end - stack.mapped_start,
-        "guard_bytes": stack.guard_bytes,
-        "guard_start": stack.guard_start,
-        "guard_end": stack.guard_end,
-        "guard_verification": guard_verification,
-        "usable_bytes": stack.usable_end - stack.usable_start,
-        "mapped_start": stack.mapped_start,
-        "mapped_end": stack.mapped_end,
-        "usable_start": stack.usable_start,
-        "usable_end": stack.usable_end,
-        "measurement_api": "pthread_getattr_np,pthread_attr_getstack,pthread_attr_getguardsize,/proc/self/maps,/proc/self/mem",
-        "guard_treatment": stack.guard_treatment,
-        "guard_verified": true,
+    json!(ThreadObservation {
+        thread_category: category.into(),
+        thread_id: format!("{:?}", stack.thread_id),
+        process_id: stack.process_id.into(),
+        os_thread_id: u64::try_from(stack.os_thread_id).expect("positive kernel thread ID"),
+        identity_api: "linux_gettid".into(),
+        page_size_bytes: stack.page_size_bytes as u64,
+        requested_bytes: requested_bytes.map(|bytes| bytes as u64),
+        mapped_bytes: (stack.mapped_end - stack.mapped_start) as u64,
+        guard_bytes: stack.guard_bytes as u64,
+        guard_start: stack.guard_start as u64,
+        guard_end: stack.guard_end as u64,
+        guard_verification: guard_verification.into(),
+        usable_bytes: (stack.usable_end - stack.usable_start) as u64,
+        mapped_start: stack.mapped_start as u64,
+        mapped_end: stack.mapped_end as u64,
+        usable_start: stack.usable_start as u64,
+        usable_end: stack.usable_end as u64,
+        measurement_api: "pthread_getattr_np,pthread_attr_getstack,pthread_attr_getguardsize,/proc/self/maps,/proc/self/mem".into(),
+        guard_treatment: stack.guard_treatment.into(),
+        guard_verified: true,
     })
 }
 

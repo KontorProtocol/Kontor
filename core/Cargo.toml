@@ -7,7 +7,6 @@ members = [
     "kontor-sdk",
     "kontor-sdk-native",
     "kontor-sdk-wasm",
-    "kontor-build",
     "macros",
     "numerics",
     "stdlib",
@@ -16,7 +15,7 @@ members = [
 ]
 # Cargo Chef must preserve this build dependency's real API when cooking the
 # workspace skeleton used by vendored native build scripts.
-exclude = ["vendor/kontor-native-build"]
+exclude = ["vendor/kontor-native-build", "kontor-build"]
 resolver = "2"
 
 [workspace.lints.clippy]

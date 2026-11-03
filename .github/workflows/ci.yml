@@ -28,14 +28,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Test CI controls
-        run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
+      - uses: ./.github/actions/setup-kontor-tools
       - name: Select checks from complete change set
         id: select
-        run: python3 tools/ci/pr_scope.py
+        run: RUSTC_WRAPPER= ./tools/kontor ci-scope pr
 
   quality-checks:
     needs: scope
@@ -73,6 +69,8 @@ jobs:
       - name: Check formatting (core)
         run: cargo fmt --all -- --check
         working-directory: ./core
+      - name: Check formatting (repository tooling)
+        run: cargo fmt --manifest-path core/kontor-build/Cargo.toml -- --check
       - name: Run clippy (test-contracts)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./test-contracts
@@ -84,6 +82,10 @@ jobs:
       - name: Run clippy (core)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./core
+      - name: Run clippy (repository tooling)
+        run: cargo clippy --locked --manifest-path core/kontor-build/Cargo.toml --all-targets -j 2 -- -D warnings
+      - name: Check native helper dependency pins
+        run: ./tools/kontor check-native-helper-lock
       - name: Check wit-validator compiles to wasm32-unknown-unknown
         run: cargo check -p wit-validator --target wasm32-unknown-unknown
         working-directory: ./core
@@ -112,6 +114,8 @@ jobs:
     if: needs.scope.outputs.rust == 'true'
     name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      KONTOR_TOOLS: ${{ github.workspace }}/core/kontor-build/target/debug/kontor-build
     strategy:
       # A flake on one OS shouldn't cancel the other's run — keep independent signal.
       fail-fast: false
@@ -162,9 +166,12 @@ jobs:
       # is still required by the stdlib macro-expansion tests.
       - name: Install cargo expand
         run: cargo binstall cargo-expand --version 1.0.127 --no-confirm
+      - name: Build macOS crash diagnostics
+        if: runner.os == 'macOS'
+        run: cargo build --locked --manifest-path core/kontor-build/Cargo.toml -j 2
       - name: Prepare macOS crash diagnostics
         if: runner.os == 'macOS'
-        run: python3 tools/ci/macos_diagnostics.py prepare "$RUNNER_TEMP/macos-crash-diagnostics"
+        run: '"$KONTOR_TOOLS" diagnostics prepare "$RUNNER_TEMP/macos-crash-diagnostics"'
       - name: Run tests
         id: tests
         working-directory: ./core
@@ -172,13 +179,13 @@ jobs:
         run: |
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             # Keep panic diagnostics without adding call-path-specific traces to compared errors.
-            RUST_BACKTRACE=1 RUST_LIB_BACKTRACE=0 REGTEST=1 python3 ../tools/ci/macos_diagnostics.py run "$RUNNER_TEMP/macos-crash-diagnostics/tests.log" cargo test --release --workspace -- --nocapture
+            RUST_BACKTRACE=1 RUST_LIB_BACKTRACE=0 REGTEST=1 "$KONTOR_TOOLS" diagnostics run "$RUNNER_TEMP/macos-crash-diagnostics/tests.log" cargo test --release --workspace -- --nocapture
           else
             REGTEST=1 cargo test --release --workspace -- --nocapture
           fi
       - name: Collect macOS crash diagnostics
         if: failure() && steps.tests.outcome == 'failure' && runner.os == 'macOS'
-        run: python3 tools/ci/macos_diagnostics.py collect "$RUNNER_TEMP/macos-crash-diagnostics"
+        run: '"$KONTOR_TOOLS" diagnostics collect "$RUNNER_TEMP/macos-crash-diagnostics"'
       - name: Preserve macOS crash diagnostics
         if: failure() && steps.tests.outcome == 'failure' && runner.os == 'macOS'
         uses: actions/upload-artifact@v7
@@ -364,21 +371,21 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: |
-          python3 - <<'PY_CHECK'
-          import json
-          import os
-          needs = json.loads(os.environ["NEEDS"])
-          assert needs["scope"]["result"] == "success", "CI scope did not succeed"
-          for job, flag in {
-              "quality-checks": "rust", "test": "rust",
-              "reproducible-build-setup": "reproducible",
-              "reproducible-build": "reproducible", "sdk": "sdk",
-          }.items():
-              selected = needs["scope"]["outputs"][flag]
-              assert selected in {"true", "false"}, f"invalid selection: {flag}"
-              expected = "success" if selected == "true" else "skipped"
-              assert needs[job]["result"] == expected, f"{job}: expected {expected}, got {needs[job]['result']}"
-          PY_CHECK
+          jq -e '
+            . as $needs |
+            $needs.scope.result == "success" and
+            ([
+              {job: "quality-checks", flag: "rust"},
+              {job: "test", flag: "rust"},
+              {job: "reproducible-build-setup", flag: "reproducible"},
+              {job: "reproducible-build", flag: "reproducible"},
+              {job: "sdk", flag: "sdk"}
+            ] | all(. as $check |
+              $needs.scope.outputs[$check.flag] as $selected |
+              ($selected == "true" or $selected == "false") and
+              $needs[$check.job].result == (if $selected == "true" then "success" else "skipped" end)
+            ))
+          ' <<<"$NEEDS"
 
   docker-cache-deps:
     name: Docker - Cache Dependencies (${{ matrix.arch }})

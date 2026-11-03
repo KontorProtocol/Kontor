@@ -144,7 +144,7 @@ incremental-BLOB calls. No size-dependent SQL/BLOB split is proposed.
 
 ## Loadable extension experiment
 
-The [reproducible prototype](../../experiments/storage-blob-extension/README.md)
+The [archived prototype](../../experiments/storage-blob-extension/README.md)
 uses the unmodified locked libSQL dependency. A loadable C extension registers a
 SQL function that checks the supplied byte budget, opens/reopens the selected
 BLOB on the calling connection, validates its length, and returns its bytes.

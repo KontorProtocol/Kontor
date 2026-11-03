@@ -1,13 +1,13 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::{Block as BitcoinBlock, BlockHash, Network};
 use brotli::Decompressor;
 use indexer_types::{Block, ContractAddress, InstKind};
+use kontor_build::workload::{VerifiedDocuments, verify};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -47,37 +47,14 @@ fn contract(value: &Value) -> Result<ContractAddress> {
 
 pub(super) struct Frozen {
     root: PathBuf,
-    pub documents: Value,
+    pub documents: VerifiedDocuments,
     pub sha256: String,
 }
 
 impl Frozen {
     pub(super) fn load(path: &Path, expected_sha256: &str) -> Result<Self> {
         let path = path.canonicalize()?;
-        let raw = fs::read(&path)?;
-        ensure!(
-            hex::encode(Sha256::digest(&raw)) == expected_sha256,
-            "manifest SHA-256 differs"
-        );
-        let script = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tools/native-stack/workload_manifest.py");
-        // The shared closed-schema validator checks duplicate keys and exact
-        // numbers before Rust consumes its output. Ignore Python environment
-        // and site hooks; -B keeps the checkout clean.
-        let result = Command::new("python3")
-            .args(["-E", "-S", "-B"])
-            .arg(script)
-            .arg(&path)
-            .args(["--sha256", expected_sha256])
-            .output()?;
-        ensure!(
-            result.status.success(),
-            "frozen document validation failed: {}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        let documents: Value = serde_json::from_slice(&result.stdout)?;
-        ensure!(documents["manifest_sha256"] == expected_sha256);
-        ensure!(documents["manifest"] == serde_json::from_slice::<Value>(&raw)?);
+        let documents = verify(&path, expected_sha256)?;
         Ok(Self {
             root: path.parent().context("manifest parent")?.to_path_buf(),
             documents,
@@ -86,7 +63,7 @@ impl Frozen {
     }
 
     pub(super) fn manifest(&self) -> &Value {
-        &self.documents["manifest"]
+        &self.documents.manifest
     }
 
     fn path(&self, reference: &Value) -> Result<PathBuf> {
@@ -195,14 +172,14 @@ impl Frozen {
             }],
         };
         ensure!(
-            capture::lifecycle(&genesis)? == self.documents["lifecycle"],
+            capture::lifecycle(&genesis)? == self.documents.lifecycle,
             "frozen lifecycle parameters differ"
         );
         Ok(())
     }
 
     pub(super) async fn bitcoin(&self, client: &Client) -> Result<()> {
-        let record = &self.documents["bitcoin"];
+        let record = &self.documents.bitcoin;
         let input = &self.manifest()["input"];
         ensure!(
             record["network"] == "regtest" && record["accepted_block_hash"] == input["block_hash"]
@@ -324,7 +301,7 @@ impl Frozen {
             contract(&manifest["input"]["operations"][0]["contract"])?,
             contract(&manifest["input"]["operations"][1]["contract"])?,
         ];
-        let versions = self.documents["before"]["state_versions"]
+        let versions = self.documents.before["state_versions"]
             .as_array()
             .context("before versions")?;
         let pruning: Vec<_> = versions
@@ -388,7 +365,7 @@ async fn workload_frozen_replay() -> Result<()> {
     )
     .await?;
     ensure!(
-        numeric.report == frozen.documents["numeric"],
+        numeric.report == frozen.documents.numeric,
         "independent numeric replay differs from frozen report"
     );
     let mut engine_cleanup = EngineCleanup::default();
@@ -436,7 +413,7 @@ async fn workload_frozen_replay() -> Result<()> {
                     &[]
                 )
                 .await?
-                == frozen.documents["before"],
+                == frozen.documents.before,
             "restored report differs from frozen report"
         );
         let balances =
@@ -492,7 +469,7 @@ async fn workload_frozen_replay() -> Result<()> {
             )
             .await?;
         ensure!(
-            report == frozen.documents["after"],
+            report == frozen.documents.after,
             "replay differs from frozen expected report"
         );
         ensure!(
@@ -525,7 +502,7 @@ async fn workload_frozen_replay() -> Result<()> {
     println!(
         "WORKLOAD_FROZEN_REPLAY {}",
         json!({"manifest_sha256":frozen.sha256,
-            "source":source,"python_version":frozen.documents["python_version"],
+            "source":source,"document_validator":"kontor-build",
             "independent_resets":2,"scope":"paid-success-failure-success-v1",
         "report_sha256":frozen.manifest()["expected_report"]["sha256"],"result":"pass"})
     );

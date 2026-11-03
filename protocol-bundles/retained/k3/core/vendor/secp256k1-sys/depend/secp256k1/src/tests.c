@@ -628,42 +628,8 @@ The tests verify that the SHA256 counter doesn't wrap around at message length
 implementation of the counter and it catches multiple natural 32-bit overflows
 (e.g., counting bits, counting bytes, counting blocks, ...).
 
-The test vectors have been generated using following Python script which relies
-on https://github.com/cloudtools/sha256/ (v0.3 on Python v3.10.2).
-
-```
-from sha256 import sha256
-from copy import copy
-
-def midstate_c_definition(hasher):
-    ret  = '    {{0x' + hasher.state[0].hex('_', 4).replace('_', ', 0x') + '},\n'
-    ret += '    {0x00}, ' + str(hex(hasher.state[1])) + '}'
-    return ret
-
-def output_c_literal(hasher):
-    return '{0x' + hasher.digest().hex('_').replace('_', ', 0x') + '}'
-
-MESSAGE = b'abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmno'
-assert(len(MESSAGE) == 64)
-BYTE_BOUNDARIES = [(2**b)//len(MESSAGE) - 1 for b in range(20, 34)]
-
-midstates = []
-digests = []
-hasher = sha256()
-for i in range(BYTE_BOUNDARIES[-1] + 1):
-    if i in BYTE_BOUNDARIES:
-        midstates.append(midstate_c_definition(hasher))
-        hasher_copy = copy(hasher)
-        hasher_copy.update(MESSAGE)
-        digests.append(output_c_literal(hasher_copy))
-    hasher.update(MESSAGE)
-
-for x in midstates:
-    print(x + ',')
-
-for x in digests:
-    print(x + ',')
-```
+The checked-in vectors and their original generation recipe are preserved in
+upstream secp256k1 history. Kontor does not regenerate these vectors.
 */
 static void run_sha256_counter_tests(void) {
     static const char *input = "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmno";

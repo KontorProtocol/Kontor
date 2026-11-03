@@ -1,0 +1,31 @@
+{
+  "activation_height": 1009,
+  "authorization_test": true,
+  "certificates_unchanged": true,
+  "closed_decisions": 2028,
+  "fresh_p1_batch_replayed": true,
+  "notice_blocks": 1008,
+  "orphaned_p2_batch_not_replayed": true,
+  "reopened_state_matches": true,
+  "schedule_retracted": true,
+  "schema": 1,
+  "successive_upgrades": {
+    "activation_heights": [
+      1009,
+      2017
+    ],
+    "closed_decisions": 2019,
+    "fresh_second_approval": true,
+    "migration_applications": 2,
+    "node_local_epoch_excluded": true,
+    "p2_p3_share_executor": true,
+    "protocols": [
+      "1111111111111111111111111111111111111111111111111111111111111111",
+      "2222222222222222222222222222222222222222222222222222222222222222",
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "qualification_only_p3": true,
+    "reopen_and_genesis_replay_match": true,
+    "second_notice_blocks": 1008
+  }
+}

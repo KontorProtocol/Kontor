@@ -6,22 +6,12 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      stage:
-        description: Qualification or S2 resource evidence stage
-        required: true
-        default: qualify
-        type: choice
-        options: [qualify, discovery, guard, chain, vmmap, final]
       profiles:
         description: Release qualification with dev smoke, or full dev/release comparison
         required: true
         default: release
         type: choice
         options: [release, full]
-      reviewed_discovery_run_id:
-        description: Reviewed S2 discovery run ID for the final stage
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -33,7 +23,6 @@ concurrency:
 jobs:
   scope:
     name: Stack qualification change scope
-    if: github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -43,36 +32,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Test qualification selection
-        run: python3 -m unittest discover -s tools/ci -p 'test_stack_qualification_scope.py' -v
+      - uses: ./.github/actions/setup-kontor-tools
       - name: Select qualification from the complete change set
         id: select
-        run: python3 tools/ci/stack_qualification_scope.py
-
-  controls:
-    name: Native stack evidence controls
-    needs: scope
-    if: needs.scope.outputs.required == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      RUSTUP_TOOLCHAIN: "1.99.1"
-      PYTHONDONTWRITEBYTECODE: "1"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.99.1
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Install Python evidence validator
-        run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
-      # Process-identity controls exercise Linux /proc and cgroups.
-      - name: Test qualification controls
-        run: python3 -m unittest discover -s tools/native-stack -p 'test_*.py' -v
+        run: RUSTC_WRAPPER= ./tools/kontor ci-scope stack
 
   qualify:
     name: Native stack (${{ matrix.os }}, ${{ matrix.profile }}${{ matrix.profile == 'dev' && needs.scope.outputs.profile_policy == 'release' && ' smoke' || '' }})
-    needs: [scope, controls]
+    needs: scope
     if: needs.scope.outputs.required == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
@@ -93,15 +60,9 @@ jobs:
       RUSTC_WRAPPER: ""
       CCACHE_DISABLE: "1"
       CARGO_BUILD_JOBS: "2"
-      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.1
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Install Python evidence validator
-        run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
       - name: Check runner architecture
         run: test "$RUNNER_ARCH" = "${{ matrix.arch }}"
       - name: Install dependencies (Linux)
@@ -159,13 +120,13 @@ jobs:
         run: |
           binary=$(cat target/native-stack-evidence/binary-path)
           evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$PROFILE"
-          python3 tools/native-stack/qualify.py --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/$PROFILE" --output "$evidence" --chain-log "$evidence/chain-matrix.log" --owned-chain-log "$evidence/owned-chain-matrix.log" --ownership-log "$evidence/ownership-controls.log"
+          tools/kontor qualify-stack --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/$PROFILE" --output "$evidence" --chain-log "$evidence/chain-matrix.log" --owned-chain-log "$evidence/owned-chain-matrix.log" --ownership-log "$evidence/ownership-controls.log"
       - name: Run bounded dev smoke
         if: matrix.profile == 'dev' && needs.scope.outputs.profile_policy == 'release'
         run: |
           binary=$(cat target/native-stack-evidence/binary-path)
           evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/dev"
-          python3 tools/native-stack/dev_smoke.py --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/dev" --output "$evidence"
+          ./tools/kontor stack-smoke --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/dev" --output "$evidence"
       - name: Preserve qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -178,10 +139,11 @@ jobs:
   compare:
     name: Compare native stack outcomes
     needs: [scope, qualify]
-    if: always() && (github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify') && (needs.scope.result != 'success' || needs.scope.outputs.required == 'true')
+    if: always() && (needs.scope.result != 'success' || needs.scope.outputs.required == 'true')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: actions/download-artifact@v8
         with:
           pattern: native-stack-*
@@ -193,7 +155,7 @@ jobs:
           path: target/native-smoke-compare
       - name: Compare required variants
         run: |
-          python3 tools/native-stack/compare.py --directory target/native-stack-compare --output target/native-stack-comparison.json --upstream-status "${{ needs.qualify.result }}" --profiles "${{ needs.scope.outputs.profile_policy }}" --smoke-directory target/native-smoke-compare
+          tools/kontor compare-stack --directory target/native-stack-compare --output target/native-stack-comparison.json --upstream-status "${{ needs.qualify.result }}" --profiles "${{ needs.scope.outputs.profile_policy }}" --smoke-directory target/native-smoke-compare
       - name: Preserve comparison
         if: always()
         uses: actions/upload-artifact@v7
@@ -201,13 +163,3 @@ jobs:
           name: native-stack-comparison
           path: target/native-stack-comparison.json
           if-no-files-found: error
-
-  s2:
-    if: github.event_name == 'workflow_dispatch' && (inputs.stage == 'discovery' || inputs.stage == 'guard' || inputs.stage == 'chain' || inputs.stage == 'vmmap' || inputs.stage == 'final')
-    uses: ./.github/workflows/native-stack-s2.yml
-    with:
-      stage: ${{ inputs.stage }}
-      reviewed_discovery_run_id: ${{ inputs.reviewed_discovery_run_id }}
-    permissions:
-      contents: read
-      actions: read

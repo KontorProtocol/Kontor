@@ -2,17 +2,29 @@
 name = "kontor-build"
 version = "0.1.0"
 edition = "2024"
+default-run = "kontor-build"
 
-[lints]
-workspace = true
+[workspace]
+
+[lints.clippy]
+new_without_default = "allow"
+uninlined_format_args = "allow"
+too_many_arguments = "allow"
 
 [dependencies]
-anyhow = { workspace = true, features = ["std"] }
-clap = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true, features = ["std"] }
+anyhow = { version = "=1.0.104", default-features = false, features = ["std"] }
+clap = { version = "=4.6.7", features = ["derive"] }
+serde = { version = "=1.0.229", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "=1.0.154", default-features = false, features = ["alloc", "std"] }
 sha2 = "=0.11.1"
 hex = "=0.4.3"
-
-[dev-dependencies]
-tempfile = { workspace = true }
+toml = { version = "=0.8.23", default-features = false, features = ["parse"] }
+glob = "=0.3.4"
+libc = "=0.2.191"
+sha1 = "=0.10.7"
+flate2 = "=1.1.10"
+tar = { version = "=0.4.46", default-features = false }
+regex = "=1.13.1"
+tempfile = "=3.27.0"
+num-bigint = "=0.4.8"
+num-rational = "=0.4.2"

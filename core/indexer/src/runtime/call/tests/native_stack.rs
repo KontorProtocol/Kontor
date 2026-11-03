@@ -163,7 +163,7 @@ async fn pending_host_io_diagnostic() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "run through tools/native-stack/qualify.py so process aborts are observable"]
+#[ignore = "run through tools/kontor qualify-stack so process aborts are observable"]
 async fn qualification_probe() -> Result<()> {
     if let Ok(mode) = env::var("KONTOR_STACK_MODE") {
         return sweep::run(&mode).await;

@@ -12,7 +12,7 @@ cd "$(dirname "$0")"
 
 # Workspace member: cargo writes to the workspace target/ (core/target/).
 TARGET_DIR="$(cd ../core && cargo metadata --format-version=1 --no-deps \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+  | jq -er '.target_directory | select(type == "string" and length > 0)')"
 LIB="$TARGET_DIR/debug/libkontor_sdk_native.dylib"
 [ -f "$LIB" ] || LIB="$TARGET_DIR/debug/libkontor_sdk_native.so"
 

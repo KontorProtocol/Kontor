@@ -4,30 +4,48 @@ These patches add opt-in symbol namespaces to the exact crypto versions already
 used by Kontor. They do not update the algorithms or dependency versions. The
 ordinary node and SDK builds omit `KONTOR_NATIVE_NAMESPACE`. A retained protocol
 bundle sets both `KONTOR_PROTOCOL_BUNDLE=1` and an explicit
-`KONTOR_NATIVE_NAMESPACE`; missing or invalid namespaces fail the build. The K1
-bundle builder will derive that namespace from immutable bundle identity and
-record it in the artifact attestation. F2 alone does not implement that builder.
+`KONTOR_NATIVE_NAMESPACE`; missing or invalid namespaces fail the build. The bundle
+builder derives that namespace from immutable bundle identity and records it in
+the artifact attestation.
 
 `sources.json` records each published crate archive's SHA-256 and VCS metadata.
 The archive hash is authoritative, including for ring's published dirty VCS tree.
 All upstream license files remain in the vendors. `kontor-native-build` is owned
 Kontor code, not part of the upstream archives.
 
+The secp256k1 patch also removes unused upstream Python and SageMath generators,
+their generation/clean rules, and the upstream Sage CI job. Checked-in C test
+vectors, cryptographic implementation sources and licenses remain. The historical
+vector-generation recipe is available upstream rather than embedded in a C
+comment. Upstream algorithm documentation is retained, including explanatory
+pseudocode. Kontor's Cargo builds consume the checked-in sources and do not run
+these generators. The same removal is applied to the retained prelaunch source
+copies; regenerating their source-bound execution IDs is an intentional prelaunch
+compatibility change.
+
 From the repository root:
 
 ```sh
-python3 tools/native-crypto/vendor.py
-python3 tools/native-crypto/check-helper-lock.py
+./tools/kontor native-crypto-vendor
+RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor check-native-helper-lock
 cargo test --locked --manifest-path core/vendor/kontor-native-build/Cargo.toml -j2
-python3 tools/native-crypto/qualify.py --output /absolute/path/to/new-evidence-directory
+./tools/kontor qualify-native-crypto --output /absolute/path/to/new-evidence-directory
 ```
 
 The qualification harness uses Rust 1.99.1 and cached Cargo dependencies. Fetch
-the locked dependencies for `core/Cargo.toml`,
+the locked dependencies for `core/kontor-build/Cargo.toml`, `core/Cargo.toml`,
 `core/vendor/kontor-native-build/Cargo.toml`, and
 `tools/native-crypto/object-report/Cargo.toml` before running on a fresh machine.
 Builds run serially with two Cargo jobs. It refuses to reuse an evidence directory
-so stale archives cannot become acceptance evidence.
+so stale archives cannot become acceptance evidence. The existing Rust CLI owns
+the orchestration, reuses Cargo metadata/lock records and symbol parsing, and
+binds its own sources into the evidence. JSON reports use sorted keys; normalized
+object hashes retain the previous sorted ASCII representation. Vendor patch
+refresh uses the system `diff -u`, so hunk layout can differ from historical
+patches without changing the verified reconstructed tree. Extraction rejects
+entries and symlinks outside the package. Unexpected symbol-reader output fails
+closed. Object parser controls run directly as Rust tests; cross-format cases
+require clang (available on the qualification CI runners).
 
 The helper is deliberately excluded from the core workspace. Cargo Chef replaces
 workspace member sources with skeletons, which would erase the helper API used
@@ -75,8 +93,7 @@ belong to their own graph. Final live crypto entry points have distinct addresse
 Comparator negative controls:
 
 ```sh
-RUSTUP_TOOLCHAIN=1.99.1 cargo build --locked --manifest-path tools/native-crypto/object-report/Cargo.toml
-python3 tools/native-crypto/test_object_report.py
+RUSTUP_TOOLCHAIN=1.99.1 cargo test --locked --manifest-path tools/native-crypto/object-report/Cargo.toml -j2
 ```
 
 The tests deliberately change instructions, initialized data, zero-fill size,
@@ -90,7 +107,7 @@ those platforms. Real library/platform and SDK/mobile checks are separate gates.
 ## Updating a vendor
 
 Changing core's `cc` version also requires updating the helper's exact pin and
-standalone lock; `check-helper-lock.py` enforces their agreement.
+standalone lock; `tools/kontor check-native-helper-lock` enforces their agreement.
 
 The ordinary reproducible-build CI job also compares the actual SDK Wasm crypto
 API with the committed pristine reference identified in `fixtures/sdk-vectors.json`.
@@ -109,9 +126,9 @@ evidence from the recorded reference, not replacement with candidate output.
 3. Reapply the namespace patch deliberately. Check every optional Rust FFI module,
    assembly architecture, mutable CPU capability global, and exported Rust callback.
    Update blst's symbol inventory from every supported target, not just the host.
-4. Record intentional changes with `vendor.py --refresh-patches`. Review the patch
-   against pristine source. `vendor.py --apply` reconstructs the vendor from the
-   verified archive plus patch and removes obsolete files. Ordinary `vendor.py`
+4. Record intentional changes with `./tools/kontor native-crypto-vendor --refresh-patches`. Review the patch
+   against pristine source. `./tools/kontor native-crypto-vendor --apply` reconstructs the vendor from the
+   verified archive plus patch and removes obsolete files. Ordinary `./tools/kontor native-crypto-vendor`
    verifies without changing the vendor.
 5. Run object equivalence and concurrent dual-graph qualification on every shipped
    node target. Run the ordinary node, SDK Wasm/native and mobile checks too. Keep

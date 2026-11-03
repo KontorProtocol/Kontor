@@ -5,7 +5,14 @@ on:
     paths:
       - .github/workflows/ci.yml
       - .github/workflows/ci-diagnostics.yml
-      - tools/ci/**
+      - .github/actions/setup-kontor-tools/**
+      - core/kontor-build/Cargo.toml
+      - core/kontor-build/Cargo.lock
+      - core/kontor-build/src/main.rs
+      - core/kontor-build/src/lib.rs
+      - core/kontor-build/src/diagnostics.rs
+      - core/kontor-build/src/diagnostics/**
+      - core/kontor-build/tests/diagnostics_cli.rs
   workflow_dispatch:
 
 jobs:
@@ -13,10 +20,13 @@ jobs:
     name: Crash capture smoke test
     runs-on: macos-latest
     timeout-minutes: 5
+    env:
+      KONTOR_TOOLS: ${{ github.workspace }}/core/kontor-build/target/debug/kontor-build
     steps:
       - uses: actions/checkout@v7
-      - name: Test collector failure scenarios
-        run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
+      - uses: ./.github/actions/setup-kontor-tools
+        with:
+          run-tests: "true"
       - name: Build abort fixture
         run: |
           cc -x c -o "$RUNNER_TEMP/ci-abort" - <<'C'
@@ -24,30 +34,23 @@ jobs:
           int main(void) { abort(); }
           C
       - name: Prepare diagnostics
-        run: python3 tools/ci/macos_diagnostics.py prepare "$RUNNER_TEMP/macos-crash-diagnostics"
+        run: '"$KONTOR_TOOLS" diagnostics prepare "$RUNNER_TEMP/macos-crash-diagnostics"'
       - name: Abort fixture
         shell: bash
         run: |
           set +e
-          python3 tools/ci/macos_diagnostics.py run "$RUNNER_TEMP/macos-crash-diagnostics/tests.log" "$RUNNER_TEMP/ci-abort"
+          "$KONTOR_TOOLS" diagnostics run "$RUNNER_TEMP/macos-crash-diagnostics/tests.log" "$RUNNER_TEMP/ci-abort"
           status=$?
           set -e
           echo "Fixture exit status: $status" >> "$RUNNER_TEMP/macos-crash-diagnostics/tests.log"
           test "$status" -eq 134
       - name: Collect diagnostics
         if: always()
-        run: python3 tools/ci/macos_diagnostics.py collect "$RUNNER_TEMP/macos-crash-diagnostics"
+        run: '"$KONTOR_TOOLS" diagnostics collect "$RUNNER_TEMP/macos-crash-diagnostics"'
       - name: Verify native crash report was captured
         run: |
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          output = Path(os.environ["RUNNER_TEMP"]) / "macos-crash-diagnostics"
-          reports = json.loads((output / "reports.json").read_text())["copied"]
-          assert any(Path(name).name.startswith("ci-abort") for name in reports), reports
-          assert "Exit status: 0" in (output / "system.log").read_text()
-          PY
+          jq -e '.copied | keys | any(split("/")[-1] | startswith("ci-abort"))' "$RUNNER_TEMP/macos-crash-diagnostics/reports.json"
+          grep -q 'Exit status: 0' "$RUNNER_TEMP/macos-crash-diagnostics/system.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

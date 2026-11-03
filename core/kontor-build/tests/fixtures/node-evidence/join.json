@@ -1,0 +1,19 @@
+{
+  "initial_signers": 3,
+  "matching_verified_prefix": true,
+  "promoted_runtime": {
+    "authority": "validator",
+    "committee_member": true,
+    "consensus_height": "7",
+    "required_join_height": null
+  },
+  "promotion_generation": 2,
+  "required_promoted_vote": true,
+  "same_listener": true,
+  "separate_wals": true,
+  "signed_decision": 6,
+  "source_already_p2": true,
+  "stalled_without_quorum": true,
+  "validators": 4,
+  "verified_floor": 3
+}

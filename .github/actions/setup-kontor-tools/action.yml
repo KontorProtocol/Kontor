@@ -1,0 +1,30 @@
+name: Set up repository tooling
+description: Build the isolated Rust CLI without resolving the node workspace.
+inputs:
+  run-tests:
+    description: Run the tooling suite in validation jobs, rather than change selectors.
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@1.99.1
+    - uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cargo/registry
+          core/kontor-build/target
+        key: kontor-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/kontor-build/Cargo.lock', 'core/kontor-build/Cargo.toml') }}
+    - name: Build repository tooling
+      if: inputs.run-tests != 'true'
+      shell: bash
+      env:
+        RUSTC_WRAPPER: ""
+        CCACHE_DISABLE: "1"
+      run: cargo build --locked --manifest-path core/kontor-build/Cargo.toml --bin kontor-build -j 2
+    - name: Test repository tooling
+      if: inputs.run-tests == 'true'
+      shell: bash
+      env:
+        RUSTC_WRAPPER: ""
+        CCACHE_DISABLE: "1"
+      run: cargo test --locked --manifest-path core/kontor-build/Cargo.toml -j 2 --no-fail-fast

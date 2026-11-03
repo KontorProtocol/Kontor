@@ -221,36 +221,14 @@ clean-precomp:
 	rm -f $(PRECOMP)
 maintainer-clean-local: clean-precomp
 
-### Pregenerated test vectors
-### (see the comments in the previous section for detailed rationale)
-TESTVECTORS = src/wycheproof/ecdsa_rustsecp256k1_v0_10_0_sha256_bitcoin_test.h
-
-src/wycheproof/ecdsa_rustsecp256k1_v0_10_0_sha256_bitcoin_test.h:
-	mkdir -p $(@D)
-	python3 $(top_srcdir)/tools/tests_wycheproof_generate.py $(top_srcdir)/src/wycheproof/ecdsa_rustsecp256k1_v0_10_0_sha256_bitcoin_test.json > $@
-
-testvectors: $(TESTVECTORS)
-
-BUILT_SOURCES += $(TESTVECTORS)
-
-.PHONY: clean-testvectors
-clean-testvectors:
-	rm -f $(TESTVECTORS)
-maintainer-clean-local: clean-testvectors
+# Test vectors are checked in; regeneration is maintained upstream.
 
 ### Additional files to distribute
 EXTRA_DIST = autogen.sh CHANGELOG.md SECURITY.md
 EXTRA_DIST += doc/release-process.md doc/safegcd_implementation.md
 EXTRA_DIST += examples/EXAMPLES_COPYING
-EXTRA_DIST += sage/gen_exhaustive_groups.sage
-EXTRA_DIST += sage/gen_split_lambda_constants.sage
-EXTRA_DIST += sage/group_prover.sage
-EXTRA_DIST += sage/prove_group_implementations.sage
-EXTRA_DIST += sage/rustsecp256k1_v0_10_0_params.sage
-EXTRA_DIST += sage/weierstrass_prover.sage
 EXTRA_DIST += src/wycheproof/WYCHEPROOF_COPYING
 EXTRA_DIST += src/wycheproof/ecdsa_rustsecp256k1_v0_10_0_sha256_bitcoin_test.json
-EXTRA_DIST += tools/tests_wycheproof_generate.py
 
 if ENABLE_MODULE_ECDH
 include src/modules/ecdh/Makefile.am.include

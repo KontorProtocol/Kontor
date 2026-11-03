@@ -4,4 +4,27 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Avoid inheriting a contract workspace's wasm target when bootstrapping the host CLI.
 cd "$repo_root/core"
-exec cargo run --locked --quiet -j 2 -p kontor-build -- "$@"
+if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "qualify-node" ]]; then
+    for argument in "$@"; do
+        if [[ "$argument" == "--offline" ]]; then
+            export CARGO_NET_OFFLINE=true
+        fi
+    done
+fi
+if [[ "${1:-}" == "freeze-execution" || "${1:-}" == "freeze-consensus" || "${1:-}" == "freeze-sources" ]]; then
+    export CARGO_NET_OFFLINE=true
+fi
+wrapper_bins=()
+if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "qualify-node" || "${1:-}" == "stage-graph-wrapper" ]]; then
+    wrapper_bins+=(--bin kontor-graph-rustc)
+fi
+if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "qualify-node" || "${1:-}" == "stage-node-wrapper" ]]; then
+    wrapper_bins+=(--bin kontor-node-rustc)
+fi
+if [[ "${1:-}" == "protocol-bundles" || "${1:-}" == "qualify-node" || "${1:-}" == "stage-linker-wrapper" ]]; then
+    wrapper_bins+=(--bin kontor-node-linker)
+fi
+if (( ${#wrapper_bins[@]} )); then
+    cargo build --locked --quiet -j 2 --manifest-path kontor-build/Cargo.toml "${wrapper_bins[@]}"
+fi
+exec cargo run --locked --quiet -j 2 --manifest-path kontor-build/Cargo.toml --bin kontor-build -- "$@"

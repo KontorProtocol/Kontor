@@ -77,6 +77,13 @@
 -               .file("depend/secp256k1/src/precomputed_ecmult_gen.c")
 -               .file("depend/secp256k1/src/precomputed_ecmult.c")
 -               .file("depend/secp256k1/src/secp256k1.c");
+-
+-    if base_config.try_compile("libsecp256k1.a").is_err() {
+-        // Some embedded platforms may not have, eg, string.h available, so if the build fails
+-        // simply try again with the wasm sysroot (but without the wasm type sizes) in the hopes
+-        // that it works.
+-        base_config.include("wasm/wasm-sysroot");
+-        base_config.compile("libsecp256k1.a");
 +    sources.extend(
 +        [
 +            "depend/secp256k1/contrib/lax_der_parsing.c",
@@ -86,13 +93,7 @@
 +        ]
 +        .map(PathBuf::from),
 +    );
- 
--    if base_config.try_compile("libsecp256k1.a").is_err() {
--        // Some embedded platforms may not have, eg, string.h available, so if the build fails
--        // simply try again with the wasm sysroot (but without the wasm type sizes) in the hopes
--        // that it works.
--        base_config.include("wasm/wasm-sysroot");
--        base_config.compile("libsecp256k1.a");
++
 +    if let Some(namespace) = namespace {
 +        namespace.require_preprocessable_target();
 +        if compile_namespaced(&base_config, &sources, &namespace).is_err() {
@@ -124,6 +125,1488 @@
 +        .try_compile("libsecp256k1.a")?;
 +    Ok(())
 +}
+--- a/depend/secp256k1/.github/workflows/ci.yml
++++ b/depend/secp256k1/.github/workflows/ci.yml
+@@ -765,22 +765,6 @@
+             g++ -Werror include/*.h
+             clang -Werror -x c++-header include/*.h
+ 
+-  sage:
+-    name: "SageMath prover"
+-    runs-on: ubuntu-latest
+-    container:
+-      image: sagemath/sagemath:latest
+-      options: --user root
+-
+-    steps:
+-      - name: Checkout
+-        uses: actions/checkout@v4
+-
+-      - name: CI script
+-        run: |
+-          cd sage
+-          sage prove_group_implementations.sage
+-
+   release:
+     runs-on: ubuntu-latest
+ 
+--- a/depend/secp256k1/Makefile.am
++++ b/depend/secp256k1/Makefile.am
+@@ -221,36 +221,14 @@
+ 	rm -f $(PRECOMP)
+ maintainer-clean-local: clean-precomp
+ 
+-### Pregenerated test vectors
+-### (see the comments in the previous section for detailed rationale)
+-TESTVECTORS = src/wycheproof/ecdsa_rustsecp256k1_v0_10_0_sha256_bitcoin_test.h
+-
+-src/wycheproof/ecdsa_rustsecp256k1_v0_10_0_sha256_bitcoin_test.h:
+-	mkdir -p $(@D)
+-	python3 $(top_srcdir)/tools/tests_wycheproof_generate.py $(top_srcdir)/src/wycheproof/ecdsa_rustsecp256k1_v0_10_0_sha256_bitcoin_test.json > $@
+-
+-testvectors: $(TESTVECTORS)
+-
+-BUILT_SOURCES += $(TESTVECTORS)
+-
+-.PHONY: clean-testvectors
+-clean-testvectors:
+-	rm -f $(TESTVECTORS)
+-maintainer-clean-local: clean-testvectors
++# Test vectors are checked in; regeneration is maintained upstream.
+ 
+ ### Additional files to distribute
+ EXTRA_DIST = autogen.sh CHANGELOG.md SECURITY.md
+ EXTRA_DIST += doc/release-process.md doc/safegcd_implementation.md
+ EXTRA_DIST += examples/EXAMPLES_COPYING
+-EXTRA_DIST += sage/gen_exhaustive_groups.sage
+-EXTRA_DIST += sage/gen_split_lambda_constants.sage
+-EXTRA_DIST += sage/group_prover.sage
+-EXTRA_DIST += sage/prove_group_implementations.sage
+-EXTRA_DIST += sage/rustsecp256k1_v0_10_0_params.sage
+-EXTRA_DIST += sage/weierstrass_prover.sage
+ EXTRA_DIST += src/wycheproof/WYCHEPROOF_COPYING
+ EXTRA_DIST += src/wycheproof/ecdsa_rustsecp256k1_v0_10_0_sha256_bitcoin_test.json
+-EXTRA_DIST += tools/tests_wycheproof_generate.py
+ 
+ if ENABLE_MODULE_ECDH
+ include src/modules/ecdh/Makefile.am.include
+--- a/depend/secp256k1/ci/linux-debian.Dockerfile
++++ b/depend/secp256k1/ci/linux-debian.Dockerfile
+@@ -31,8 +31,7 @@
+         gcc-arm-linux-gnueabihf libc6-dev-armhf-cross libc6-dbg:armhf \
+         gcc-powerpc64le-linux-gnu libc6-dev-ppc64el-cross libc6-dbg:ppc64el \
+         gcc-mingw-w64-x86-64-win32 wine64 wine \
+-        gcc-mingw-w64-i686-win32 wine32 \
+-        python3 && \
++        gcc-mingw-w64-i686-win32 wine32 && \
+         if ! ( dpkg --print-architecture | grep --quiet "arm64" ) ; then \
+          apt-get install --no-install-recommends -y \
+          gcc-aarch64-linux-gnu libc6-dev-arm64-cross libc6-dbg:arm64 ;\
+--- a/depend/secp256k1/sage/gen_exhaustive_groups.sage
++++ /dev/null
+@@ -1,156 +0,0 @@
+-load("rustsecp256k1_v0_10_0_params.sage")
+-
+-MAX_ORDER = 1000
+-
+-# Set of (curve) orders we have encountered so far.
+-orders_done = set()
+-
+-# Map from (subgroup) orders to [b, int(gen.x), int(gen.y), gen, lambda] for those subgroups.
+-solutions = {}
+-
+-# Iterate over curves of the form y^2 = x^3 + B.
+-for b in range(1, P):
+-    # There are only 6 curves (up to isomorphism) of the form y^2 = x^3 + B. Stop once we have tried all.
+-    if len(orders_done) == 6:
+-        break
+-
+-    E = EllipticCurve(F, [0, b])
+-    print("Analyzing curve y^2 = x^3 + %i" % b)
+-    n = E.order()
+-
+-    # Skip curves with an order we've already tried
+-    if n in orders_done:
+-        print("- Isomorphic to earlier curve")
+-        print()
+-        continue
+-    orders_done.add(n)
+-
+-    # Skip curves isomorphic to the real secp256k1
+-    if n.is_pseudoprime():
+-        assert E.is_isomorphic(C)
+-        print("- Isomorphic to secp256k1")
+-        print()
+-        continue
+-
+-    print("- Finding prime subgroups")
+-
+-    # Map from group_order to a set of independent generators for that order.
+-    curve_gens = {}
+-
+-    for g in E.gens():
+-        # Find what prime subgroups of group generated by g exist.
+-        g_order = g.order()
+-        for f, _ in g.order().factor():
+-            # Skip subgroups that have bad size.
+-            if f < 4:
+-                print(f"  - Subgroup of size {f}: too small")
+-                continue
+-            if f > MAX_ORDER:
+-                print(f"  - Subgroup of size {f}: too large")
+-                continue
+-
+-            # Construct a generator for that subgroup.
+-            gen = g * (g_order // f)
+-            assert(gen.order() == f)
+-
+-            # Add to set the minimal multiple of gen.
+-            curve_gens.setdefault(f, set()).add(min([j*gen for j in range(1, f)]))
+-            print(f"  - Subgroup of size {f}: ok")
+-
+-    for f in sorted(curve_gens.keys()):
+-        print(f"- Constructing group of order {f}")
+-        cbrts = sorted([int(c) for c in Integers(f)(1).nth_root(3, all=true) if c != 1])
+-        gens = list(curve_gens[f])
+-        sol_count = 0
+-        no_endo_count = 0
+-
+-        # Consider all non-zero linear combinations of the independent generators.
+-        for j in range(1, f**len(gens)):
+-            gen = sum(gens[k] * ((j // f**k) % f) for k in range(len(gens)))
+-            assert not gen.is_zero()
+-            assert (f*gen).is_zero()
+-
+-            # Find lambda for endomorphism. Skip if none can be found.
+-            lam = None
+-            for l in cbrts:
+-                if l*gen == E(BETA*gen[0], gen[1]):
+-                    lam = l
+-                    break
+-
+-            if lam is None:
+-                no_endo_count += 1
+-            else:
+-                sol_count += 1
+-                solutions.setdefault(f, []).append((b, int(gen[0]), int(gen[1]), gen, lam))
+-
+-        print(f"  - Found {sol_count} generators (plus {no_endo_count} without endomorphism)")
+-
+-    print()
+-
+-def output_generator(g, name):
+-    print(f"#define {name} SECP256K1_GE_CONST(\\")
+-    print("    0x%08x, 0x%08x, 0x%08x, 0x%08x,\\" % tuple((int(g[0]) >> (32 * (7 - i))) & 0xffffffff for i in range(4)))
+-    print("    0x%08x, 0x%08x, 0x%08x, 0x%08x,\\" % tuple((int(g[0]) >> (32 * (7 - i))) & 0xffffffff for i in range(4, 8)))
+-    print("    0x%08x, 0x%08x, 0x%08x, 0x%08x,\\" % tuple((int(g[1]) >> (32 * (7 - i))) & 0xffffffff for i in range(4)))
+-    print("    0x%08x, 0x%08x, 0x%08x, 0x%08x\\" % tuple((int(g[1]) >> (32 * (7 - i))) & 0xffffffff for i in range(4, 8)))
+-    print(")")
+-
+-def output_b(b):
+-    print(f"#define SECP256K1_B {int(b)}")
+-
+-print()
+-print("To be put in src/group_impl.h:")
+-print()
+-print("/* Begin of section generated by sage/gen_exhaustive_groups.sage. */")
+-for f in sorted(solutions.keys()):
+-    # Use as generator/2 the one with lowest b, and lowest (x, y) generator (interpreted as non-negative integers).
+-    b, _, _, HALF_G, lam = min(solutions[f])
+-    output_generator(2 * HALF_G, f"SECP256K1_G_ORDER_{f}")
+-print("/** Generator for secp256k1, value 'g' defined in")
+-print(" *  \"Standards for Efficient Cryptography\" (SEC2) 2.7.1.")
+-print(" */")
+-output_generator(G, "SECP256K1_G")
+-print("/* These exhaustive group test orders and generators are chosen such that:")
+-print(" * - The field size is equal to that of secp256k1, so field code is the same.")
+-print(" * - The curve equation is of the form y^2=x^3+B for some small constant B.")
+-print(" * - The subgroup has a generator 2*P, where P.x is as small as possible.")
+-print(f" * - The subgroup has size less than {MAX_ORDER} to permit exhaustive testing.")
+-print(" * - The subgroup admits an endomorphism of the form lambda*(x,y) == (beta*x,y).")
+-print(" */")
+-print("#if defined(EXHAUSTIVE_TEST_ORDER)")
+-first = True
+-for f in sorted(solutions.keys()):
+-    b, _, _, _, lam = min(solutions[f])
+-    print(f"#  {'if' if first else 'elif'} EXHAUSTIVE_TEST_ORDER == {f}")
+-    first = False
+-    print()
+-    print(f"static const rustsecp256k1_v0_10_0_ge rustsecp256k1_v0_10_0_ge_const_g = SECP256K1_G_ORDER_{f};")
+-    output_b(b)
+-    print()
+-print("#  else")
+-print("#    error No known generator for the specified exhaustive test group order.")
+-print("#  endif")
+-print("#else")
+-print()
+-print("static const rustsecp256k1_v0_10_0_ge rustsecp256k1_v0_10_0_ge_const_g = SECP256K1_G;")
+-output_b(7)
+-print()
+-print("#endif")
+-print("/* End of section generated by sage/gen_exhaustive_groups.sage. */")
+-
+-
+-print()
+-print()
+-print("To be put in src/scalar_impl.h:")
+-print()
+-print("/* Begin of section generated by sage/gen_exhaustive_groups.sage. */")
+-first = True
+-for f in sorted(solutions.keys()):
+-    _, _, _, _, lam = min(solutions[f])
+-    print("#  %s EXHAUSTIVE_TEST_ORDER == %i" % ("if" if first else "elif", f))
+-    first = False
+-    print("#    define EXHAUSTIVE_TEST_LAMBDA %i" % lam)
+-print("#  else")
+-print("#    error No known lambda for the specified exhaustive test group order.")
+-print("#  endif")
+-print("/* End of section generated by sage/gen_exhaustive_groups.sage. */")
+--- a/depend/secp256k1/sage/gen_split_lambda_constants.sage
++++ /dev/null
+@@ -1,114 +0,0 @@
+-""" Generates the constants used in rustsecp256k1_v0_10_0_scalar_split_lambda.
+-
+-See the comments for rustsecp256k1_v0_10_0_scalar_split_lambda in src/scalar_impl.h for detailed explanations.
+-"""
+-
+-load("rustsecp256k1_v0_10_0_params.sage")
+-
+-def inf_norm(v):
+-    """Returns the infinity norm of a vector."""
+-    return max(map(abs, v))
+-
+-def gauss_reduction(i1, i2):
+-    v1, v2 = i1.copy(), i2.copy()
+-    while True:
+-        if inf_norm(v2) < inf_norm(v1):
+-            v1, v2 = v2, v1
+-        # This is essentially
+-        #    m = round((v1[0]*v2[0] + v1[1]*v2[1]) / (inf_norm(v1)**2))
+-        # (rounding to the nearest integer) without relying on floating point arithmetic.
+-        m = ((v1[0]*v2[0] + v1[1]*v2[1]) + (inf_norm(v1)**2) // 2) // (inf_norm(v1)**2)
+-        if m == 0:
+-            return v1, v2
+-        v2[0] -= m*v1[0]
+-        v2[1] -= m*v1[1]
+-
+-def find_split_constants_gauss():
+-    """Find constants for rustsecp256k1_v0_10_0_scalar_split_lamdba using gauss reduction."""
+-    (v11, v12), (v21, v22) = gauss_reduction([0, N], [1, int(LAMBDA)])
+-
+-    # We use related vectors in rustsecp256k1_v0_10_0_scalar_split_lambda.
+-    A1, B1 = -v21, -v11
+-    A2, B2 = v22, -v21
+-
+-    return A1, B1, A2, B2
+-
+-def find_split_constants_explicit_tof():
+-    """Find constants for rustsecp256k1_v0_10_0_scalar_split_lamdba using the trace of Frobenius.
+-
+-    See Benjamin Smith: "Easy scalar decompositions for efficient scalar multiplication on
+-    elliptic curves and genus 2 Jacobians" (https://eprint.iacr.org/2013/672), Example 2
+-    """
+-    assert P % 3 == 1 # The paper says P % 3 == 2 but that appears to be a mistake, see [10].
+-    assert C.j_invariant() == 0
+-
+-    t = C.trace_of_frobenius()
+-
+-    c = Integer(sqrt((4*P - t**2)/3))
+-    A1 = Integer((t - c)/2 - 1)
+-    B1 = c
+-
+-    A2 = Integer((t + c)/2 - 1)
+-    B2 = Integer(1 - (t - c)/2)
+-
+-    # We use a negated b values in rustsecp256k1_v0_10_0_scalar_split_lambda.
+-    B1, B2 = -B1, -B2
+-
+-    return A1, B1, A2, B2
+-
+-A1, B1, A2, B2 = find_split_constants_explicit_tof()
+-
+-# For extra fun, use an independent method to recompute the constants.
+-assert (A1, B1, A2, B2) == find_split_constants_gauss()
+-
+-# PHI : Z[l] -> Z_n where phi(a + b*l) == a + b*lambda mod n.
+-def PHI(a,b):
+-    return Z(a + LAMBDA*b)
+-
+-# Check that (A1, B1) and (A2, B2) are in the kernel of PHI.
+-assert PHI(A1, B1) == Z(0)
+-assert PHI(A2, B2) == Z(0)
+-
+-# Check that the parallelogram generated by (A1, A2) and (B1, B2)
+-# is a fundamental domain by containing exactly N points.
+-# Since the LHS is the determinant and N != 0, this also checks that
+-# (A1, A2) and (B1, B2) are linearly independent. By the previous
+-# assertions, (A1, A2) and (B1, B2) are a basis of the kernel.
+-assert A1*B2 - B1*A2 == N
+-
+-# Check that their components are short enough.
+-assert (A1 + A2)/2 < sqrt(N)
+-assert B1 < sqrt(N)
+-assert B2 < sqrt(N)
+-
+-G1 = round((2**384)*B2/N)
+-G2 = round((2**384)*(-B1)/N)
+-
+-def rnddiv2(v):
+-    if v & 1:
+-        v += 1
+-    return v >> 1
+-
+-def scalar_lambda_split(k):
+-    """Equivalent to rustsecp256k1_v0_10_0_scalar_lambda_split()."""
+-    c1 = rnddiv2((k * G1) >> 383)
+-    c2 = rnddiv2((k * G2) >> 383)
+-    c1 = (c1 * -B1) % N
+-    c2 = (c2 * -B2) % N
+-    r2 = (c1 + c2) % N
+-    r1 = (k + r2 * -LAMBDA) % N
+-    return (r1, r2)
+-
+-# The result of scalar_lambda_split can depend on the representation of k (mod n).
+-SPECIAL = (2**383) // G2 + 1
+-assert scalar_lambda_split(SPECIAL) != scalar_lambda_split(SPECIAL + N)
+-
+-print('  A1     =', hex(A1))
+-print(' -B1     =', hex(-B1))
+-print('  A2     =', hex(A2))
+-print(' -B2     =', hex(-B2))
+-print('         =', hex(Z(-B2)))
+-print(' -LAMBDA =', hex(-LAMBDA))
+-
+-print('  G1     =', hex(G1))
+-print('  G2     =', hex(G2))
+--- a/depend/secp256k1/sage/group_prover.sage
++++ /dev/null
+@@ -1,353 +0,0 @@
+-# This code supports verifying group implementations which have branches
+-# or conditional statements (like cmovs), by allowing each execution path
+-# to independently set assumptions on input or intermediary variables.
+-#
+-# The general approach is:
+-# * A constraint is a tuple of two sets of symbolic expressions:
+-#   the first of which are required to evaluate to zero, the second of which
+-#   are required to evaluate to nonzero.
+-#   - A constraint is said to be conflicting if any of its nonzero expressions
+-#     is in the ideal with basis the zero expressions (in other words: when the
+-#     zero expressions imply that one of the nonzero expressions are zero).
+-# * There is a list of laws that describe the intended behaviour, including
+-#   laws for addition and doubling. Each law is called with the symbolic point
+-#   coordinates as arguments, and returns:
+-#   - A constraint describing the assumptions under which it is applicable,
+-#     called "assumeLaw"
+-#   - A constraint describing the requirements of the law, called "require"
+-# * Implementations are transliterated into functions that operate as well on
+-#   algebraic input points, and are called once per combination of branches
+-#   executed. Each execution returns:
+-#   - A constraint describing the assumptions this implementation requires
+-#     (such as Z1=1), called "assumeFormula"
+-#   - A constraint describing the assumptions this specific branch requires,
+-#     but which is by construction guaranteed to cover the entire space by
+-#     merging the results from all branches, called "assumeBranch"
+-#   - The result of the computation
+-# * All combinations of laws with implementation branches are tried, and:
+-#   - If the combination of assumeLaw, assumeFormula, and assumeBranch results
+-#     in a conflict, it means this law does not apply to this branch, and it is
+-#     skipped.
+-#   - For others, we try to prove the require constraints hold, assuming the
+-#     information in assumeLaw + assumeFormula + assumeBranch, and if this does
+-#     not succeed, we fail.
+-#     + To prove an expression is zero, we check whether it belongs to the
+-#       ideal with the assumed zero expressions as basis. This test is exact.
+-#     + To prove an expression is nonzero, we check whether each of its
+-#       factors is contained in the set of nonzero assumptions' factors.
+-#       This test is not exact, so various combinations of original and
+-#       reduced expressions' factors are tried.
+-#   - If we succeed, we print out the assumptions from assumeFormula that
+-#     weren't implied by assumeLaw already. Those from assumeBranch are skipped,
+-#     as we assume that all constraints in it are complementary with each other.
+-#
+-# Based on the sage verification scripts used in the Explicit-Formulas Database
+-# by Tanja Lange and others, see https://hyperelliptic.org/EFD
+-
+-class fastfrac:
+-  """Fractions over rings."""
+-
+-  def __init__(self,R,top,bot=1):
+-    """Construct a fractional, given a ring, a numerator, and denominator."""
+-    self.R = R
+-    if parent(top) == ZZ or parent(top) == R:
+-      self.top = R(top)
+-      self.bot = R(bot)
+-    elif top.__class__ == fastfrac:
+-      self.top = top.top
+-      self.bot = top.bot * bot
+-    else:
+-      self.top = R(numerator(top))
+-      self.bot = R(denominator(top)) * bot
+-
+-  def iszero(self,I):
+-    """Return whether this fraction is zero given an ideal."""
+-    return self.top in I and self.bot not in I
+-
+-  def reduce(self,assumeZero):
+-    zero = self.R.ideal(list(map(numerator, assumeZero)))
+-    return fastfrac(self.R, zero.reduce(self.top)) / fastfrac(self.R, zero.reduce(self.bot))
+-
+-  def __add__(self,other):
+-    """Add two fractions."""
+-    if parent(other) == ZZ:
+-      return fastfrac(self.R,self.top + self.bot * other,self.bot)
+-    if other.__class__ == fastfrac:
+-      return fastfrac(self.R,self.top * other.bot + self.bot * other.top,self.bot * other.bot)
+-    return NotImplemented
+-
+-  def __sub__(self,other):
+-    """Subtract two fractions."""
+-    if parent(other) == ZZ:
+-      return fastfrac(self.R,self.top - self.bot * other,self.bot)
+-    if other.__class__ == fastfrac:
+-      return fastfrac(self.R,self.top * other.bot - self.bot * other.top,self.bot * other.bot)
+-    return NotImplemented
+-
+-  def __neg__(self):
+-    """Return the negation of a fraction."""
+-    return fastfrac(self.R,-self.top,self.bot)
+-
+-  def __mul__(self,other):
+-    """Multiply two fractions."""
+-    if parent(other) == ZZ:
+-      return fastfrac(self.R,self.top * other,self.bot)
+-    if other.__class__ == fastfrac:
+-      return fastfrac(self.R,self.top * other.top,self.bot * other.bot)
+-    return NotImplemented
+-
+-  def __rmul__(self,other):
+-    """Multiply something else with a fraction."""
+-    return self.__mul__(other)
+-
+-  def __truediv__(self,other):
+-    """Divide two fractions."""
+-    if parent(other) == ZZ:
+-      return fastfrac(self.R,self.top,self.bot * other)
+-    if other.__class__ == fastfrac:
+-      return fastfrac(self.R,self.top * other.bot,self.bot * other.top)
+-    return NotImplemented
+-
+-  # Compatibility wrapper for Sage versions based on Python 2
+-  def __div__(self,other):
+-     """Divide two fractions."""
+-     return self.__truediv__(other)
+-
+-  def __pow__(self,other):
+-    """Compute a power of a fraction."""
+-    if parent(other) == ZZ:
+-      if other < 0:
+-        # Negative powers require flipping top and bottom
+-        return fastfrac(self.R,self.bot ^ (-other),self.top ^ (-other))
+-      else:
+-        return fastfrac(self.R,self.top ^ other,self.bot ^ other)
+-    return NotImplemented
+-
+-  def __str__(self):
+-    return "fastfrac((" + str(self.top) + ") / (" + str(self.bot) + "))"
+-  def __repr__(self):
+-    return "%s" % self
+-
+-  def numerator(self):
+-    return self.top
+-
+-class constraints:
+-  """A set of constraints, consisting of zero and nonzero expressions.
+-
+-  Constraints can either be used to express knowledge or a requirement.
+-
+-  Both the fields zero and nonzero are maps from expressions to description
+-  strings. The expressions that are the keys in zero are required to be zero,
+-  and the expressions that are the keys in nonzero are required to be nonzero.
+-
+-  Note that (a != 0) and (b != 0) is the same as (a*b != 0), so all keys in
+-  nonzero could be multiplied into a single key. This is often much less
+-  efficient to work with though, so we keep them separate inside the
+-  constraints. This allows higher-level code to do fast checks on the individual
+-  nonzero elements, or combine them if needed for stronger checks.
+-
+-  We can't multiply the different zero elements, as it would suffice for one of
+-  the factors to be zero, instead of all of them. Instead, the zero elements are
+-  typically combined into an ideal first.
+-  """
+-
+-  def __init__(self, **kwargs):
+-    if 'zero' in kwargs:
+-      self.zero = dict(kwargs['zero'])
+-    else:
+-      self.zero = dict()
+-    if 'nonzero' in kwargs:
+-      self.nonzero = dict(kwargs['nonzero'])
+-    else:
+-      self.nonzero = dict()
+-
+-  def negate(self):
+-    return constraints(zero=self.nonzero, nonzero=self.zero)
+-
+-  def map(self, fun):
+-    return constraints(zero={fun(k): v for k, v in self.zero.items()}, nonzero={fun(k): v for k, v in self.nonzero.items()})
+-
+-  def __add__(self, other):
+-    zero = self.zero.copy()
+-    zero.update(other.zero)
+-    nonzero = self.nonzero.copy()
+-    nonzero.update(other.nonzero)
+-    return constraints(zero=zero, nonzero=nonzero)
+-
+-  def __str__(self):
+-    return "constraints(zero=%s,nonzero=%s)" % (self.zero, self.nonzero)
+-
+-  def __repr__(self):
+-    return "%s" % self
+-
+-def normalize_factor(p):
+-  """Normalizes the sign of primitive polynomials (as returned by factor())
+-
+-  This function ensures that the polynomial has a positive leading coefficient.
+-
+-  This is necessary because recent sage versions (starting with v9.3 or v9.4,
+-  we don't know) are inconsistent about the placement of the minus sign in
+-  polynomial factorizations:
+-  ```
+-  sage: R.<ax,bx,ay,by,Az,Bz,Ai,Bi> = PolynomialRing(QQ,8,order='invlex')
+-  sage: R((-2 * (bx - ax)) ^ 1).factor()
+-  (-2) * (bx - ax)
+-  sage: R((-2 * (bx - ax)) ^ 2).factor()
+-  (4) * (-bx + ax)^2
+-  sage: R((-2 * (bx - ax)) ^ 3).factor()
+-  (8) * (-bx + ax)^3
+-  ```
+-  """
+-  # Assert p is not 0 and that its non-zero coefficients are coprime.
+-  # (We could just work with the primitive part p/p.content() but we want to be
+-  # aware if factor() does not return a primitive part in future sage versions.)
+-  assert p.content() == 1
+-  # Ensure that the first non-zero coefficient is positive.
+-  return p if p.lc() > 0 else -p
+-
+-def conflicts(R, con):
+-  """Check whether any of the passed non-zero assumptions is implied by the zero assumptions"""
+-  zero = R.ideal(list(map(numerator, con.zero)))
+-  if 1 in zero:
+-    return True
+-  # First a cheap check whether any of the individual nonzero terms conflict on
+-  # their own.
+-  for nonzero in con.nonzero:
+-    if nonzero.iszero(zero):
+-      return True
+-  # It can be the case that entries in the nonzero set do not individually
+-  # conflict with the zero set, but their combination does. For example, knowing
+-  # that either x or y is zero is equivalent to having x*y in the zero set.
+-  # Having x or y individually in the nonzero set is not a conflict, but both
+-  # simultaneously is, so that is the right thing to check for.
+-  if reduce(lambda a,b: a * b, con.nonzero, fastfrac(R, 1)).iszero(zero):
+-    return True
+-  return False
+-
+-
+-def get_nonzero_set(R, assume):
+-  """Calculate a simple set of nonzero expressions"""
+-  zero = R.ideal(list(map(numerator, assume.zero)))
+-  nonzero = set()
+-  for nz in map(numerator, assume.nonzero):
+-    for (f,n) in nz.factor():
+-      nonzero.add(normalize_factor(f))
+-    rnz = zero.reduce(nz)
+-    for (f,n) in rnz.factor():
+-      nonzero.add(normalize_factor(f))
+-  return nonzero
+-
+-
+-def prove_nonzero(R, exprs, assume):
+-  """Check whether an expression is provably nonzero, given assumptions"""
+-  zero = R.ideal(list(map(numerator, assume.zero)))
+-  nonzero = get_nonzero_set(R, assume)
+-  expl = set()
+-  ok = True
+-  for expr in exprs:
+-    if numerator(expr) in zero:
+-      return (False, [exprs[expr]])
+-  allexprs = reduce(lambda a,b: numerator(a)*numerator(b), exprs, 1)
+-  for (f, n) in allexprs.factor():
+-    if normalize_factor(f) not in nonzero:
+-      ok = False
+-  if ok:
+-    return (True, None)
+-  ok = True
+-  for (f, n) in zero.reduce(allexprs).factor():
+-    if normalize_factor(f) not in nonzero:
+-      ok = False
+-  if ok:
+-    return (True, None)
+-  ok = True
+-  for expr in exprs:
+-    for (f,n) in numerator(expr).factor():
+-      if normalize_factor(f) not in nonzero:
+-        ok = False
+-  if ok:
+-    return (True, None)
+-  ok = True
+-  for expr in exprs:
+-    for (f,n) in zero.reduce(numerator(expr)).factor():
+-      if normalize_factor(f) not in nonzero:
+-        expl.add(exprs[expr])
+-  if expl:
+-    return (False, list(expl))
+-  else:
+-    return (True, None)
+-
+-
+-def prove_zero(R, exprs, assume):
+-  """Check whether all of the passed expressions are provably zero, given assumptions"""
+-  r, e = prove_nonzero(R, dict(map(lambda x: (fastfrac(R, x.bot, 1), exprs[x]), exprs)), assume)
+-  if not r:
+-    return (False, list(map(lambda x: "Possibly zero denominator: %s" % x, e)))
+-  zero = R.ideal(list(map(numerator, assume.zero)))
+-  nonzero = prod(x for x in assume.nonzero)
+-  expl = []
+-  for expr in exprs:
+-    if not expr.iszero(zero):
+-      expl.append(exprs[expr])
+-  if not expl:
+-    return (True, None)
+-  return (False, expl)
+-
+-
+-def describe_extra(R, assume, assumeExtra):
+-  """Describe what assumptions are added, given existing assumptions"""
+-  zerox = assume.zero.copy()
+-  zerox.update(assumeExtra.zero)
+-  zero = R.ideal(list(map(numerator, assume.zero)))
+-  zeroextra = R.ideal(list(map(numerator, zerox)))
+-  nonzero = get_nonzero_set(R, assume)
+-  ret = set()
+-  # Iterate over the extra zero expressions
+-  for base in assumeExtra.zero:
+-    if base not in zero:
+-      add = []
+-      for (f, n) in numerator(base).factor():
+-        if normalize_factor(f) not in nonzero:
+-          add += ["%s" % normalize_factor(f)]
+-      if add:
+-        ret.add((" * ".join(add)) + " = 0 [%s]" % assumeExtra.zero[base])
+-  # Iterate over the extra nonzero expressions
+-  for nz in assumeExtra.nonzero:
+-    nzr = zeroextra.reduce(numerator(nz))
+-    if nzr not in zeroextra:
+-      for (f,n) in nzr.factor():
+-        if normalize_factor(zeroextra.reduce(f)) not in nonzero:
+-          ret.add("%s != 0" % normalize_factor(zeroextra.reduce(f)))
+-  return ", ".join(x for x in ret)
+-
+-
+-def check_symbolic(R, assumeLaw, assumeAssert, assumeBranch, require):
+-  """Check a set of zero and nonzero requirements, given a set of zero and nonzero assumptions"""
+-  assume = assumeLaw + assumeAssert + assumeBranch
+-
+-  if conflicts(R, assume):
+-    # This formula does not apply
+-    return (True, None)
+-
+-  describe = describe_extra(R, assumeLaw + assumeBranch, assumeAssert)
+-  if describe != "":
+-    describe = " (assuming " + describe + ")"
+-
+-  ok, msg = prove_zero(R, require.zero, assume)
+-  if not ok:
+-    return (False, "FAIL, %s fails%s" % (str(msg), describe))
+-
+-  res, expl = prove_nonzero(R, require.nonzero, assume)
+-  if not res:
+-    return (False, "FAIL, %s fails%s" % (str(expl), describe))
+-
+-  return (True, "OK%s" % describe)
+-
+-
+-def concrete_verify(c):
+-  for k in c.zero:
+-    if k != 0:
+-      return (False, c.zero[k])
+-  for k in c.nonzero:
+-    if k == 0:
+-      return (False, c.nonzero[k])
+-  return (True, None)
+--- a/depend/secp256k1/sage/prove_group_implementations.sage
++++ /dev/null
+@@ -1,285 +0,0 @@
+-# Test libsecp256k1' group operation implementations using prover.sage
+-
+-import sys
+-
+-load("group_prover.sage")
+-load("weierstrass_prover.sage")
+-
+-def formula_rustsecp256k1_v0_10_0_gej_double_var(a):
+-  """libsecp256k1's rustsecp256k1_v0_10_0_gej_double_var, used by various addition functions"""
+-  rz = a.Z * a.Y
+-  s = a.Y^2
+-  l = a.X^2
+-  l = l * 3
+-  l = l / 2
+-  t = -s
+-  t = t * a.X
+-  rx = l^2
+-  rx = rx + t
+-  rx = rx + t
+-  s = s^2
+-  t = t + rx
+-  ry = t * l
+-  ry = ry + s
+-  ry = -ry
+-  return jacobianpoint(rx, ry, rz)
+-
+-def formula_rustsecp256k1_v0_10_0_gej_add_var(branch, a, b):
+-  """libsecp256k1's rustsecp256k1_v0_10_0_gej_add_var"""
+-  if branch == 0:
+-    return (constraints(), constraints(nonzero={a.Infinity : 'a_infinite'}), b)
+-  if branch == 1:
+-    return (constraints(), constraints(zero={a.Infinity : 'a_finite'}, nonzero={b.Infinity : 'b_infinite'}), a)
+-  z22 = b.Z^2
+-  z12 = a.Z^2
+-  u1 = a.X * z22
+-  u2 = b.X * z12
+-  s1 = a.Y * z22
+-  s1 = s1 * b.Z
+-  s2 = b.Y * z12
+-  s2 = s2 * a.Z
+-  h = -u1
+-  h = h + u2
+-  i = -s2
+-  i = i + s1
+-  if branch == 2:
+-    r = formula_rustsecp256k1_v0_10_0_gej_double_var(a)
+-    return (constraints(), constraints(zero={h : 'h=0', i : 'i=0', a.Infinity : 'a_finite', b.Infinity : 'b_finite'}), r)
+-  if branch == 3:
+-    return (constraints(), constraints(zero={h : 'h=0', a.Infinity : 'a_finite', b.Infinity : 'b_finite'}, nonzero={i : 'i!=0'}), point_at_infinity())
+-  t = h * b.Z
+-  rz = a.Z * t
+-  h2 = h^2
+-  h2 = -h2
+-  h3 = h2 * h
+-  t = u1 * h2
+-  rx = i^2
+-  rx = rx + h3
+-  rx = rx + t
+-  rx = rx + t
+-  t = t + rx
+-  ry = t * i
+-  h3 = h3 * s1
+-  ry = ry + h3
+-  return (constraints(), constraints(zero={a.Infinity : 'a_finite', b.Infinity : 'b_finite'}, nonzero={h : 'h!=0'}), jacobianpoint(rx, ry, rz))
+-
+-def formula_rustsecp256k1_v0_10_0_gej_add_ge_var(branch, a, b):
+-  """libsecp256k1's rustsecp256k1_v0_10_0_gej_add_ge_var, which assume bz==1"""
+-  if branch == 0:
+-    return (constraints(zero={b.Z - 1 : 'b.z=1'}), constraints(nonzero={a.Infinity : 'a_infinite'}), b)
+-  if branch == 1:
+-    return (constraints(zero={b.Z - 1 : 'b.z=1'}), constraints(zero={a.Infinity : 'a_finite'}, nonzero={b.Infinity : 'b_infinite'}), a)
+-  z12 = a.Z^2
+-  u1 = a.X
+-  u2 = b.X * z12
+-  s1 = a.Y
+-  s2 = b.Y * z12
+-  s2 = s2 * a.Z
+-  h = -u1
+-  h = h + u2
+-  i = -s2
+-  i = i + s1
+-  if (branch == 2):
+-    r = formula_rustsecp256k1_v0_10_0_gej_double_var(a)
+-    return (constraints(zero={b.Z - 1 : 'b.z=1'}), constraints(zero={a.Infinity : 'a_finite', b.Infinity : 'b_finite', h : 'h=0', i : 'i=0'}), r)
+-  if (branch == 3):
+-    return (constraints(zero={b.Z - 1 : 'b.z=1'}), constraints(zero={a.Infinity : 'a_finite', b.Infinity : 'b_finite', h : 'h=0'}, nonzero={i : 'i!=0'}), point_at_infinity())
+-  rz = a.Z * h
+-  h2 = h^2
+-  h2 = -h2
+-  h3 = h2 * h
+-  t = u1 * h2
+-  rx = i^2
+-  rx = rx + h3
+-  rx = rx + t
+-  rx = rx + t
+-  t = t + rx
+-  ry = t * i
+-  h3 = h3 * s1
+-  ry = ry + h3
+-  return (constraints(zero={b.Z - 1 : 'b.z=1'}), constraints(zero={a.Infinity : 'a_finite', b.Infinity : 'b_finite'}, nonzero={h : 'h!=0'}), jacobianpoint(rx, ry, rz))
+-
+-def formula_rustsecp256k1_v0_10_0_gej_add_zinv_var(branch, a, b):
+-  """libsecp256k1's rustsecp256k1_v0_10_0_gej_add_zinv_var"""
+-  bzinv = b.Z^(-1)
+-  if branch == 0:
+-    rinf = b.Infinity
+-    bzinv2 = bzinv^2
+-    bzinv3 = bzinv2 * bzinv
+-    rx = b.X * bzinv2
+-    ry = b.Y * bzinv3
+-    rz = 1
+-    return (constraints(), constraints(nonzero={a.Infinity : 'a_infinite'}), jacobianpoint(rx, ry, rz, rinf))
+-  if branch == 1:
+-    return (constraints(), constraints(zero={a.Infinity : 'a_finite'}, nonzero={b.Infinity : 'b_infinite'}), a)
+-  azz = a.Z * bzinv
+-  z12 = azz^2
+-  u1 = a.X
+-  u2 = b.X * z12
+-  s1 = a.Y
+-  s2 = b.Y * z12
+-  s2 = s2 * azz
+-  h = -u1
+-  h = h + u2
+-  i = -s2
+-  i = i + s1
+-  if branch == 2:
+-    r = formula_rustsecp256k1_v0_10_0_gej_double_var(a)
+-    return (constraints(), constraints(zero={a.Infinity : 'a_finite', b.Infinity : 'b_finite', h : 'h=0', i : 'i=0'}), r)
+-  if branch == 3:
+-    return (constraints(), constraints(zero={a.Infinity : 'a_finite', b.Infinity : 'b_finite', h : 'h=0'}, nonzero={i : 'i!=0'}), point_at_infinity())
+-  rz = a.Z * h
+-  h2 = h^2
+-  h2 = -h2
+-  h3 = h2 * h
+-  t = u1 * h2
+-  rx = i^2
+-  rx = rx + h3
+-  rx = rx + t
+-  rx = rx + t
+-  t = t + rx
+-  ry = t * i
+-  h3 = h3 * s1
+-  ry = ry + h3
+-  return (constraints(), constraints(zero={a.Infinity : 'a_finite', b.Infinity : 'b_finite'}, nonzero={h : 'h!=0'}), jacobianpoint(rx, ry, rz))
+-
+-def formula_rustsecp256k1_v0_10_0_gej_add_ge(branch, a, b):
+-  """libsecp256k1's rustsecp256k1_v0_10_0_gej_add_ge"""
+-  zeroes = {}
+-  nonzeroes = {}
+-  a_infinity = False
+-  if (branch & 2) != 0:
+-    nonzeroes.update({a.Infinity : 'a_infinite'})
+-    a_infinity = True
+-  else:
+-    zeroes.update({a.Infinity : 'a_finite'})
+-  zz = a.Z^2
+-  u1 = a.X
+-  u2 = b.X * zz
+-  s1 = a.Y
+-  s2 = b.Y * zz
+-  s2 = s2 * a.Z
+-  t = u1
+-  t = t + u2
+-  m = s1
+-  m = m + s2
+-  rr = t^2
+-  m_alt = -u2
+-  tt = u1 * m_alt
+-  rr = rr + tt
+-  degenerate = (branch & 1) != 0
+-  if degenerate:
+-    zeroes.update({m : 'm_zero'})
+-  else:
+-    nonzeroes.update({m : 'm_nonzero'})
+-  rr_alt = s1
+-  rr_alt = rr_alt * 2
+-  m_alt = m_alt + u1
+-  if not degenerate:
+-    rr_alt = rr
+-    m_alt = m
+-  n = m_alt^2
+-  q = -t
+-  q = q * n
+-  n = n^2
+-  if degenerate:
+-    n = m
+-  t = rr_alt^2
+-  rz = a.Z * m_alt
+-  t = t + q
+-  rx = t
+-  t = t * 2
+-  t = t + q
+-  t = t * rr_alt
+-  t = t + n
+-  ry = -t
+-  ry = ry / 2
+-  if a_infinity:
+-    rx = b.X
+-    ry = b.Y
+-    rz = 1
+-  if (branch & 4) != 0:
+-    zeroes.update({rz : 'r.z = 0'})
+-    return (constraints(zero={b.Z - 1 : 'b.z=1', b.Infinity : 'b_finite'}), constraints(zero=zeroes, nonzero=nonzeroes), point_at_infinity())
+-  else:
+-    nonzeroes.update({rz : 'r.z != 0'})
+-  return (constraints(zero={b.Z - 1 : 'b.z=1', b.Infinity : 'b_finite'}), constraints(zero=zeroes, nonzero=nonzeroes), jacobianpoint(rx, ry, rz))
+-
+-def formula_rustsecp256k1_v0_10_0_gej_add_ge_old(branch, a, b):
+-  """libsecp256k1's old rustsecp256k1_v0_10_0_gej_add_ge, which fails when ay+by=0 but ax!=bx"""
+-  a_infinity = (branch & 1) != 0
+-  zero = {}
+-  nonzero = {}
+-  if a_infinity:
+-    nonzero.update({a.Infinity : 'a_infinite'})
+-  else:
+-    zero.update({a.Infinity : 'a_finite'})
+-  zz = a.Z^2
+-  u1 = a.X
+-  u2 = b.X * zz
+-  s1 = a.Y
+-  s2 = b.Y * zz
+-  s2 = s2 * a.Z
+-  z = a.Z
+-  t = u1
+-  t = t + u2
+-  m = s1
+-  m = m + s2
+-  n = m^2
+-  q = n * t
+-  n = n^2
+-  rr = t^2
+-  t = u1 * u2
+-  t = -t
+-  rr = rr + t
+-  t = rr^2
+-  rz = m * z
+-  infinity = False
+-  if (branch & 2) != 0:
+-    if not a_infinity:
+-      infinity = True
+-    else:
+-      return (constraints(zero={b.Z - 1 : 'b.z=1', b.Infinity : 'b_finite'}), constraints(nonzero={z : 'conflict_a'}, zero={z : 'conflict_b'}), point_at_infinity())
+-    zero.update({rz : 'r.z=0'})
+-  else:
+-    nonzero.update({rz : 'r.z!=0'})
+-  rz = rz * (0 if a_infinity else 2)
+-  rx = t
+-  q = -q
+-  rx = rx + q
+-  q = q * 3
+-  t = t * 2
+-  t = t + q
+-  t = t * rr
+-  t = t + n
+-  ry = -t
+-  rx = rx * (0 if a_infinity else 4)
+-  ry = ry * (0 if a_infinity else 4)
+-  t = b.X
+-  t = t * (1 if a_infinity else 0)
+-  rx = rx + t
+-  t = b.Y
+-  t = t * (1 if a_infinity else 0)
+-  ry = ry + t
+-  t = (1 if a_infinity else 0)
+-  rz = rz + t
+-  if infinity:
+-    return (constraints(zero={b.Z - 1 : 'b.z=1', b.Infinity : 'b_finite'}), constraints(zero=zero, nonzero=nonzero), point_at_infinity())
+-  return (constraints(zero={b.Z - 1 : 'b.z=1', b.Infinity : 'b_finite'}), constraints(zero=zero, nonzero=nonzero), jacobianpoint(rx, ry, rz))
+-
+-if __name__ == "__main__":
+-  success = True
+-  success = success & check_symbolic_jacobian_weierstrass("rustsecp256k1_v0_10_0_gej_add_var", 0, 7, 5, formula_rustsecp256k1_v0_10_0_gej_add_var)
+-  success = success & check_symbolic_jacobian_weierstrass("rustsecp256k1_v0_10_0_gej_add_ge_var", 0, 7, 5, formula_rustsecp256k1_v0_10_0_gej_add_ge_var)
+-  success = success & check_symbolic_jacobian_weierstrass("rustsecp256k1_v0_10_0_gej_add_zinv_var", 0, 7, 5, formula_rustsecp256k1_v0_10_0_gej_add_zinv_var)
+-  success = success & check_symbolic_jacobian_weierstrass("rustsecp256k1_v0_10_0_gej_add_ge", 0, 7, 8, formula_rustsecp256k1_v0_10_0_gej_add_ge)
+-  success = success & (not check_symbolic_jacobian_weierstrass("rustsecp256k1_v0_10_0_gej_add_ge_old [should fail]", 0, 7, 4, formula_rustsecp256k1_v0_10_0_gej_add_ge_old))
+-
+-  if len(sys.argv) >= 2 and sys.argv[1] == "--exhaustive":
+-    success = success & check_exhaustive_jacobian_weierstrass("rustsecp256k1_v0_10_0_gej_add_var", 0, 7, 5, formula_rustsecp256k1_v0_10_0_gej_add_var, 43)
+-    success = success & check_exhaustive_jacobian_weierstrass("rustsecp256k1_v0_10_0_gej_add_ge_var", 0, 7, 5, formula_rustsecp256k1_v0_10_0_gej_add_ge_var, 43)
+-    success = success & check_exhaustive_jacobian_weierstrass("rustsecp256k1_v0_10_0_gej_add_zinv_var", 0, 7, 5, formula_rustsecp256k1_v0_10_0_gej_add_zinv_var, 43)
+-    success = success & check_exhaustive_jacobian_weierstrass("rustsecp256k1_v0_10_0_gej_add_ge", 0, 7, 8, formula_rustsecp256k1_v0_10_0_gej_add_ge, 43)
+-    success = success & (not check_exhaustive_jacobian_weierstrass("rustsecp256k1_v0_10_0_gej_add_ge_old [should fail]", 0, 7, 4, formula_rustsecp256k1_v0_10_0_gej_add_ge_old, 43))
+-
+-  sys.exit(int(not success))
+--- a/depend/secp256k1/sage/secp256k1_params.sage
++++ /dev/null
+@@ -1,39 +0,0 @@
+-"""Prime order of finite field underlying secp256k1 (2^256 - 2^32 - 977)"""
+-P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+-
+-"""Finite field underlying secp256k1"""
+-F = FiniteField(P)
+-
+-"""Elliptic curve secp256k1: y^2 = x^3 + 7"""
+-C = EllipticCurve([F(0), F(7)])
+-
+-"""Base point of secp256k1"""
+-G = C.lift_x(0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798)
+-if int(G[1]) & 1:
+-    # G.y is even
+-    G = -G
+-
+-"""Prime order of secp256k1"""
+-N = C.order()
+-
+-"""Finite field of scalars of secp256k1"""
+-Z = FiniteField(N)
+-
+-""" Beta value of secp256k1 non-trivial endomorphism: lambda * (x, y) = (beta * x, y)"""
+-BETA = F(2)^((P-1)/3)
+-
+-""" Lambda value of secp256k1 non-trivial endomorphism: lambda * (x, y) = (beta * x, y)"""
+-LAMBDA = Z(3)^((N-1)/3)
+-
+-assert is_prime(P)
+-assert is_prime(N)
+-
+-assert BETA != F(1)
+-assert BETA^3 == F(1)
+-assert BETA^2 + BETA + 1 == 0
+-
+-assert LAMBDA != Z(1)
+-assert LAMBDA^3 == Z(1)
+-assert LAMBDA^2 + LAMBDA + 1 == 0
+-
+-assert Integer(LAMBDA)*G == C(BETA*G[0], G[1])
+--- a/depend/secp256k1/sage/weierstrass_prover.sage
++++ /dev/null
+@@ -1,275 +0,0 @@
+-# Prover implementation for Weierstrass curves of the form
+-# y^2 = x^3 + A * x + B, specifically with a = 0 and b = 7, with group laws
+-# operating on affine and Jacobian coordinates, including the point at infinity
+-# represented by a 4th variable in coordinates.
+-
+-load("group_prover.sage")
+-
+-
+-class affinepoint:
+-  def __init__(self, x, y, infinity=0):
+-    self.x = x
+-    self.y = y
+-    self.infinity = infinity
+-  def __str__(self):
+-    return "affinepoint(x=%s,y=%s,inf=%s)" % (self.x, self.y, self.infinity)
+-
+-
+-class jacobianpoint:
+-  def __init__(self, x, y, z, infinity=0):
+-    self.X = x
+-    self.Y = y
+-    self.Z = z
+-    self.Infinity = infinity
+-  def __str__(self):
+-    return "jacobianpoint(X=%s,Y=%s,Z=%s,inf=%s)" % (self.X, self.Y, self.Z, self.Infinity)
+-
+-
+-def point_at_infinity():
+-  return jacobianpoint(1, 1, 1, 1)
+-
+-
+-def negate(p):
+-  if p.__class__ == affinepoint:
+-    return affinepoint(p.x, -p.y)
+-  if p.__class__ == jacobianpoint:
+-    return jacobianpoint(p.X, -p.Y, p.Z)
+-  assert(False)
+-
+-
+-def on_weierstrass_curve(A, B, p):
+-  """Return a set of zero-expressions for an affine point to be on the curve"""
+-  return constraints(zero={p.x^3 + A*p.x + B - p.y^2: 'on_curve'})
+-
+-
+-def tangential_to_weierstrass_curve(A, B, p12, p3):
+-  """Return a set of zero-expressions for ((x12,y12),(x3,y3)) to be a line that is tangential to the curve at (x12,y12)"""
+-  return constraints(zero={
+-    (p12.y - p3.y) * (p12.y * 2) - (p12.x^2 * 3 + A) * (p12.x - p3.x): 'tangential_to_curve'
+-  })
+-
+-
+-def colinear(p1, p2, p3):
+-  """Return a set of zero-expressions for ((x1,y1),(x2,y2),(x3,y3)) to be collinear"""
+-  return constraints(zero={
+-    (p1.y - p2.y) * (p1.x - p3.x) - (p1.y - p3.y) * (p1.x - p2.x): 'colinear_1',
+-    (p2.y - p3.y) * (p2.x - p1.x) - (p2.y - p1.y) * (p2.x - p3.x): 'colinear_2',
+-    (p3.y - p1.y) * (p3.x - p2.x) - (p3.y - p2.y) * (p3.x - p1.x): 'colinear_3'
+-  })
+-
+-
+-def good_affine_point(p):
+-  return constraints(nonzero={p.x : 'nonzero_x', p.y : 'nonzero_y'})
+-
+-
+-def good_jacobian_point(p):
+-  return constraints(nonzero={p.X : 'nonzero_X', p.Y : 'nonzero_Y', p.Z^6 : 'nonzero_Z'})
+-
+-
+-def good_point(p):
+-  return constraints(nonzero={p.Z^6 : 'nonzero_X'})
+-
+-
+-def finite(p, *affine_fns):
+-  con = good_point(p) + constraints(zero={p.Infinity : 'finite_point'})
+-  if p.Z != 0:
+-    return con + reduce(lambda a, b: a + b, (f(affinepoint(p.X / p.Z^2, p.Y / p.Z^3)) for f in affine_fns), con)
+-  else:
+-    return con
+-
+-def infinite(p):
+-  return constraints(nonzero={p.Infinity : 'infinite_point'})
+-
+-
+-def law_jacobian_weierstrass_add(A, B, pa, pb, pA, pB, pC):
+-  """Check whether the passed set of coordinates is a valid Jacobian add, given assumptions"""
+-  assumeLaw = (good_affine_point(pa) +
+-               good_affine_point(pb) +
+-               good_jacobian_point(pA) +
+-               good_jacobian_point(pB) +
+-               on_weierstrass_curve(A, B, pa) +
+-               on_weierstrass_curve(A, B, pb) +
+-               finite(pA) +
+-               finite(pB) +
+-               constraints(nonzero={pa.x - pb.x : 'different_x'}))
+-  require = (finite(pC, lambda pc: on_weierstrass_curve(A, B, pc) +
+-             colinear(pa, pb, negate(pc))))
+-  return (assumeLaw, require)
+-
+-
+-def law_jacobian_weierstrass_double(A, B, pa, pb, pA, pB, pC):
+-  """Check whether the passed set of coordinates is a valid Jacobian doubling, given assumptions"""
+-  assumeLaw = (good_affine_point(pa) +
+-               good_affine_point(pb) +
+-               good_jacobian_point(pA) +
+-               good_jacobian_point(pB) +
+-               on_weierstrass_curve(A, B, pa) +
+-               on_weierstrass_curve(A, B, pb) +
+-               finite(pA) +
+-               finite(pB) +
+-               constraints(zero={pa.x - pb.x : 'equal_x', pa.y - pb.y : 'equal_y'}))
+-  require = (finite(pC, lambda pc: on_weierstrass_curve(A, B, pc) +
+-             tangential_to_weierstrass_curve(A, B, pa, negate(pc))))
+-  return (assumeLaw, require)
+-
+-
+-def law_jacobian_weierstrass_add_opposites(A, B, pa, pb, pA, pB, pC):
+-  assumeLaw = (good_affine_point(pa) +
+-               good_affine_point(pb) +
+-               good_jacobian_point(pA) +
+-               good_jacobian_point(pB) +
+-               on_weierstrass_curve(A, B, pa) +
+-               on_weierstrass_curve(A, B, pb) +
+-               finite(pA) +
+-               finite(pB) +
+-               constraints(zero={pa.x - pb.x : 'equal_x', pa.y + pb.y : 'opposite_y'}))
+-  require = infinite(pC)
+-  return (assumeLaw, require)
+-
+-
+-def law_jacobian_weierstrass_add_infinite_a(A, B, pa, pb, pA, pB, pC):
+-  assumeLaw = (good_affine_point(pa) +
+-               good_affine_point(pb) +
+-               good_jacobian_point(pA) +
+-               good_jacobian_point(pB) +
+-               on_weierstrass_curve(A, B, pb) +
+-               infinite(pA) +
+-               finite(pB))
+-  require = finite(pC, lambda pc: constraints(zero={pc.x - pb.x : 'c.x=b.x', pc.y - pb.y : 'c.y=b.y'}))
+-  return (assumeLaw, require)
+-
+-
+-def law_jacobian_weierstrass_add_infinite_b(A, B, pa, pb, pA, pB, pC):
+-  assumeLaw = (good_affine_point(pa) +
+-               good_affine_point(pb) +
+-               good_jacobian_point(pA) +
+-               good_jacobian_point(pB) +
+-               on_weierstrass_curve(A, B, pa) +
+-               infinite(pB) +
+-               finite(pA))
+-  require = finite(pC, lambda pc: constraints(zero={pc.x - pa.x : 'c.x=a.x', pc.y - pa.y : 'c.y=a.y'}))
+-  return (assumeLaw, require)
+-
+-
+-def law_jacobian_weierstrass_add_infinite_ab(A, B, pa, pb, pA, pB, pC):
+-  assumeLaw = (good_affine_point(pa) +
+-               good_affine_point(pb) +
+-               good_jacobian_point(pA) +
+-               good_jacobian_point(pB) +
+-               infinite(pA) +
+-               infinite(pB))
+-  require = infinite(pC)
+-  return (assumeLaw, require)
+-
+-
+-laws_jacobian_weierstrass = {
+-  'add': law_jacobian_weierstrass_add,
+-  'double': law_jacobian_weierstrass_double,
+-  'add_opposite': law_jacobian_weierstrass_add_opposites,
+-  'add_infinite_a': law_jacobian_weierstrass_add_infinite_a,
+-  'add_infinite_b': law_jacobian_weierstrass_add_infinite_b,
+-  'add_infinite_ab': law_jacobian_weierstrass_add_infinite_ab
+-}
+-
+-
+-def check_exhaustive_jacobian_weierstrass(name, A, B, branches, formula, p):
+-  """Verify an implementation of addition of Jacobian points on a Weierstrass curve, by executing and validating the result for every possible addition in a prime field"""
+-  F = Integers(p)
+-  print("Formula %s on Z%i:" % (name, p))
+-  points = []
+-  for x in range(0, p):
+-    for y in range(0, p):
+-      point = affinepoint(F(x), F(y))
+-      r, e = concrete_verify(on_weierstrass_curve(A, B, point))
+-      if r:
+-        points.append(point)
+-
+-  ret = True
+-  for za in range(1, p):
+-    for zb in range(1, p):
+-      for pa in points:
+-        for pb in points:
+-          for ia in range(2):
+-            for ib in range(2):
+-              pA = jacobianpoint(pa.x * F(za)^2, pa.y * F(za)^3, F(za), ia)
+-              pB = jacobianpoint(pb.x * F(zb)^2, pb.y * F(zb)^3, F(zb), ib)
+-              for branch in range(0, branches):
+-                assumeAssert, assumeBranch, pC = formula(branch, pA, pB)
+-                pC.X = F(pC.X)
+-                pC.Y = F(pC.Y)
+-                pC.Z = F(pC.Z)
+-                pC.Infinity = F(pC.Infinity)
+-                r, e = concrete_verify(assumeAssert + assumeBranch)
+-                if r:
+-                  match = False
+-                  for key in laws_jacobian_weierstrass:
+-                    assumeLaw, require = laws_jacobian_weierstrass[key](A, B, pa, pb, pA, pB, pC)
+-                    r, e = concrete_verify(assumeLaw)
+-                    if r:
+-                      if match:
+-                        print("  multiple branches for (%s,%s,%s,%s) + (%s,%s,%s,%s)" % (pA.X, pA.Y, pA.Z, pA.Infinity, pB.X, pB.Y, pB.Z, pB.Infinity))
+-                      else:
+-                        match = True
+-                      r, e = concrete_verify(require)
+-                      if not r:
+-                        ret = False
+-                        print("  failure in branch %i for (%s,%s,%s,%s) + (%s,%s,%s,%s) = (%s,%s,%s,%s): %s" % (branch, pA.X, pA.Y, pA.Z, pA.Infinity, pB.X, pB.Y, pB.Z, pB.Infinity, pC.X, pC.Y, pC.Z, pC.Infinity, e))
+-
+-  print()
+-  return ret
+-
+-
+-def check_symbolic_function(R, assumeAssert, assumeBranch, f, A, B, pa, pb, pA, pB, pC):
+-  assumeLaw, require = f(A, B, pa, pb, pA, pB, pC)
+-  return check_symbolic(R, assumeLaw, assumeAssert, assumeBranch, require)
+-
+-def check_symbolic_jacobian_weierstrass(name, A, B, branches, formula):
+-  """Verify an implementation of addition of Jacobian points on a Weierstrass curve symbolically"""
+-  R.<ax,bx,ay,by,Az,Bz,Ai,Bi> = PolynomialRing(QQ,8,order='invlex')
+-  lift = lambda x: fastfrac(R,x)
+-  ax = lift(ax)
+-  ay = lift(ay)
+-  Az = lift(Az)
+-  bx = lift(bx)
+-  by = lift(by)
+-  Bz = lift(Bz)
+-  Ai = lift(Ai)
+-  Bi = lift(Bi)
+-
+-  pa = affinepoint(ax, ay, Ai)
+-  pb = affinepoint(bx, by, Bi)
+-  pA = jacobianpoint(ax * Az^2, ay * Az^3, Az, Ai)
+-  pB = jacobianpoint(bx * Bz^2, by * Bz^3, Bz, Bi)
+-
+-  res = {}
+-
+-  for key in laws_jacobian_weierstrass:
+-    res[key] = []
+-
+-  print("Formula " + name + ":")
+-  count = 0
+-  ret = True
+-  for branch in range(branches):
+-    assumeFormula, assumeBranch, pC = formula(branch, pA, pB)
+-    assumeBranch = assumeBranch.map(lift)
+-    assumeFormula = assumeFormula.map(lift)
+-    pC.X = lift(pC.X)
+-    pC.Y = lift(pC.Y)
+-    pC.Z = lift(pC.Z)
+-    pC.Infinity = lift(pC.Infinity)
+-
+-    for key in laws_jacobian_weierstrass:
+-      success, msg = check_symbolic_function(R, assumeFormula, assumeBranch, laws_jacobian_weierstrass[key], A, B, pa, pb, pA, pB, pC)
+-      if not success:
+-        ret = False
+-      res[key].append((msg, branch))
+-
+-  for key in res:
+-    print("  %s:" % key)
+-    val = res[key]
+-    for x in val:
+-      if x[0] is not None:
+-        print("    branch %i: %s" % (x[1], x[0]))
+-
+-  print()
+-  return ret
+--- a/depend/secp256k1/src/tests.c
++++ b/depend/secp256k1/src/tests.c
+@@ -628,42 +628,8 @@
+ implementation of the counter and it catches multiple natural 32-bit overflows
+ (e.g., counting bits, counting bytes, counting blocks, ...).
+ 
+-The test vectors have been generated using following Python script which relies
+-on https://github.com/cloudtools/sha256/ (v0.3 on Python v3.10.2).
+-
+-```
+-from sha256 import sha256
+-from copy import copy
+-
+-def midstate_c_definition(hasher):
+-    ret  = '    {{0x' + hasher.state[0].hex('_', 4).replace('_', ', 0x') + '},\n'
+-    ret += '    {0x00}, ' + str(hex(hasher.state[1])) + '}'
+-    return ret
+-
+-def output_c_literal(hasher):
+-    return '{0x' + hasher.digest().hex('_').replace('_', ', 0x') + '}'
+-
+-MESSAGE = b'abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmno'
+-assert(len(MESSAGE) == 64)
+-BYTE_BOUNDARIES = [(2**b)//len(MESSAGE) - 1 for b in range(20, 34)]
+-
+-midstates = []
+-digests = []
+-hasher = sha256()
+-for i in range(BYTE_BOUNDARIES[-1] + 1):
+-    if i in BYTE_BOUNDARIES:
+-        midstates.append(midstate_c_definition(hasher))
+-        hasher_copy = copy(hasher)
+-        hasher_copy.update(MESSAGE)
+-        digests.append(output_c_literal(hasher_copy))
+-    hasher.update(MESSAGE)
+-
+-for x in midstates:
+-    print(x + ',')
+-
+-for x in digests:
+-    print(x + ',')
+-```
++The checked-in vectors and their original generation recipe are preserved in
++upstream secp256k1 history. Kontor does not regenerate these vectors.
+ */
+ static void run_sha256_counter_tests(void) {
+     static const char *input = "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmno";
+--- a/depend/secp256k1/tools/tests_wycheproof_generate.py
++++ /dev/null
+@@ -1,115 +0,0 @@
+-#!/usr/bin/env python3
+-# Copyright (c) 2023 Random "Randy" Lattice and Sean Andersen
+-# Distributed under the MIT software license, see the accompanying
+-# file COPYING or https://www.opensource.org/licenses/mit-license.php.
+-'''
+-Generate a C file with ECDSA testvectors from the Wycheproof project.
+-'''
+-
+-import json
+-import sys
+-
+-filename_input = sys.argv[1]
+-
+-with open(filename_input) as f:
+-    doc = json.load(f)
+-
+-num_groups = len(doc['testGroups'])
+-
+-def to_c_array(x):
+-    if x == "":
+-        return ""
+-    s = ',0x'.join(a+b for a,b in zip(x[::2], x[1::2]))
+-    return "0x" + s
+-
+-
+-num_vectors = 0
+-offset_msg_running, offset_pk_running, offset_sig = 0, 0, 0
+-out = ""
+-messages = ""
+-signatures = ""
+-public_keys = ""
+-cache_msgs = {}
+-cache_public_keys = {}
+-
+-for i in range(num_groups):
+-    group = doc['testGroups'][i]
+-    num_tests = len(group['tests'])
+-    public_key = group['publicKey']
+-    for j in range(num_tests):
+-        test_vector = group['tests'][j]
+-        # // 2 to convert hex to byte length
+-        sig_size = len(test_vector['sig']) // 2
+-        msg_size = len(test_vector['msg']) // 2
+-
+-        if test_vector['result'] == "invalid":
+-            expected_verify = 0
+-        elif test_vector['result'] == "valid":
+-            expected_verify = 1
+-        else:
+-            raise ValueError("invalid result field")
+-
+-        if num_vectors != 0 and sig_size != 0:
+-            signatures += ",\n  "
+-
+-        new_msg = False
+-        msg = to_c_array(test_vector['msg'])
+-        msg_offset = offset_msg_running
+-        # check for repeated msg
+-        if msg not in cache_msgs:
+-            if num_vectors != 0 and msg_size != 0:
+-                messages += ",\n  "
+-            cache_msgs[msg] = offset_msg_running
+-            messages += msg
+-            new_msg = True
+-        else:
+-            msg_offset = cache_msgs[msg]
+-
+-        new_pk = False
+-        pk = to_c_array(public_key['uncompressed'])
+-        pk_offset = offset_pk_running
+-        # check for repeated pk
+-        if pk not in cache_public_keys:
+-            if num_vectors != 0:
+-                public_keys += ",\n  "
+-            cache_public_keys[pk] = offset_pk_running
+-            public_keys += pk
+-            new_pk = True
+-        else:
+-            pk_offset = cache_public_keys[pk]
+-
+-        signatures += to_c_array(test_vector['sig'])
+-
+-        out += "  /" + "* tcId: " + str(test_vector['tcId']) + ". " + test_vector['comment'] + " *" + "/\n"
+-        out += f"  {{{pk_offset}, {msg_offset}, {msg_size}, {offset_sig}, {sig_size}, {expected_verify} }},\n"
+-        if new_msg:
+-            offset_msg_running += msg_size
+-        if new_pk:
+-            offset_pk_running += 65
+-        offset_sig += sig_size
+-        num_vectors += 1
+-
+-struct_definition = """
+-typedef struct {
+-    size_t pk_offset;
+-    size_t msg_offset;
+-    size_t msg_len;
+-    size_t sig_offset;
+-    size_t sig_len;
+-    int expected_verify;
+-} wycheproof_ecdsa_testvector;
+-"""
+-
+-
+-print("/* Note: this file was autogenerated using tests_wycheproof_generate.py. Do not edit. */")
+-print(f"#define SECP256K1_ECDSA_WYCHEPROOF_NUMBER_TESTVECTORS ({num_vectors})")
+-
+-print(struct_definition)
+-
+-print("static const unsigned char wycheproof_ecdsa_messages[]    = { " + messages + "};\n")
+-print("static const unsigned char wycheproof_ecdsa_public_keys[] = { " + public_keys + "};\n")
+-print("static const unsigned char wycheproof_ecdsa_signatures[]  = { " + signatures + "};\n")
+-
+-print("static const wycheproof_ecdsa_testvector testvectors[SECP256K1_ECDSA_WYCHEPROOF_NUMBER_TESTVECTORS] = {")
+-print(out)
+-print("};")
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -545,110 +545,110 @@

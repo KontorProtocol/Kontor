@@ -1,16 +1,16 @@
 {
   "definitions": [
     {
-      "bytes": 146223,
-      "execution_definition_id": "a69902e230dfa7ae50079838c5d90cf33c6a00de9fc901bf2c26e363449e19e4",
+      "bytes": 145456,
+      "execution_definition_id": "1a4b7f5c32f873382bbb4af186012af4debb152054cbd4effdaf661956af4072",
       "path": "protocol-bundles/executor-first/definition.bin",
-      "sha256": "3d72ba9ab2f27a591dd9a1f2fa6d0d6d38319abe69e20666fa3ea13d2ca401bb"
+      "sha256": "15fa612f83da4ff139bf896198689478b5e1addb635fae6e0e7f6ffc46cd8511"
     },
     {
-      "bytes": 146396,
-      "execution_definition_id": "0565ceaf03d95097c02f86ad4bfb6f0c352900ecdfcf071960a408404a81bc48",
+      "bytes": 145629,
+      "execution_definition_id": "cd2324f9ac7d54831059947ae7a58c8fe8f17e7e0406d773763c589a58146084",
       "path": "protocol-bundles/executor-second/definition.bin",
-      "sha256": "a642d965b61c69ccf38899b5f5a2cf073e39d414b599f29be055b5610071124d"
+      "sha256": "bdb1d55540cb5cb5fe32333b518f04145c1fb2b86c0d2d659c20999bbcbe2fc4"
     }
   ],
   "files": {
@@ -2982,7 +2982,7 @@
       "sha256": "cd072b07393bda13533938a3564ae41e5be06b70be58c575d193853da7922aeb"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/.github/workflows/ci.yml": {
-      "sha256": "5991e8230eae8477b9e11b7fed90e8efa3c42c2d38c1127682287a5b3b176bbe"
+      "sha256": "0cc335ae628086ed97041a3843a122b15713f8e2c3c6fcaf7cccf9b56a0acf62"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/.gitignore": {
       "sha256": "3fddc31c187843bc64b8c81cc6ab4b454b6337c6b9e8e3452ade6a5bb6dfd832"
@@ -3003,7 +3003,7 @@
       "sha256": "a735999c7e5649df6fcda6fb06ab97435851c392b1b93494ae8725f37441632f"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/Makefile.am": {
-      "sha256": "702c6ebdd24112cf549543d3d88da095d46ef0c0945780d417070624bb147952"
+      "sha256": "7f0f68c7c83560b97400abbeadb0574f672b2ec312b37fec7cfe7884ee4e16b8"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/README.md": {
       "sha256": "033449d748161716a1a89b82aa7d102922ce14e69e86b50161b11d9677adc2d9"
@@ -3021,7 +3021,7 @@
       "sha256": "05781f334c2a288537ce550e17d1e0c241bb08beca3816cce25bbce3c5593a7f"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/ci/linux-debian.Dockerfile": {
-      "sha256": "8dbd4007926552aae95d7ee0c489d8f235116930db89ad815c6b19f665677d20"
+      "sha256": "e32bcda457e14d9f4ec53884c181fb536925b44a46e88330eca0857a03b899fd"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/cmake/CheckArm32Assembly.cmake": {
       "sha256": "83b99d269388e22f3f2bddbbbef009eb99a82c4ef5a0221d0e74734d341541e0"
@@ -3118,24 +3118,6 @@
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/libsecp256k1.pc.in": {
       "sha256": "050affc52ee366bcb080d6fa86463b22222d0439de75a8705307f5997a1d1019"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/sage/gen_exhaustive_groups.sage": {
-      "sha256": "66e5a364478f23bc3ef11309e619064da068426f252e104822411341a4c3080c"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/sage/gen_split_lambda_constants.sage": {
-      "sha256": "59c1538cb44fc1ff816de2b19ea6299fb7262bb0ac434949db2a4b3268f67995"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/sage/group_prover.sage": {
-      "sha256": "9e3b3430494c3353b264bbb67261c775b423117084d29344df257d386306695d"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/sage/prove_group_implementations.sage": {
-      "sha256": "2e3bb2417361e626042891565313866a63e8729ea03e0a2e0ce158a5a7a68ef9"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/sage/secp256k1_params.sage": {
-      "sha256": "3536a1b8fc80a3eab2ee4927f84dea9677d717a51af1044f609f911df6ac06a7"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/sage/weierstrass_prover.sage": {
-      "sha256": "3608a703fa74c1c6cf0191e32e6f658e2f153558a272781bf30acfe2a30d1c14"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/src/CMakeLists.txt": {
       "sha256": "ef6f6ba521e7d9c4cbe50d90f3603aa7423e24412fbc476057118c55aeb9f230"
@@ -3399,7 +3381,7 @@
       "sha256": "ab1ab63744a79afa4ede5ef37dbc1521a7b30f3be60e0e3b3b61c93ee696786c"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/src/tests.c": {
-      "sha256": "62fed1be3d15f4f00c474477faaf54372f31daae5c3dbd5a200b7e3308baaad8"
+      "sha256": "e43335355a9c59a8fd6b50eddb01b62955764bab34587332bd93552d1d5f012e"
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/src/tests_exhaustive.c": {
       "sha256": "7c7b370af45a6d0c145d8e6a17cdf7817c96cf283f205175dd8e806ecb5d60b6"
@@ -3424,9 +3406,6 @@
     },
     "core/vendor/secp256k1-sys/depend/secp256k1/tools/check-abi.sh": {
       "sha256": "46701eddd7977df9a38476c0b376b3276baae7bb7ac025ac194c1802adb8910f"
-    },
-    "core/vendor/secp256k1-sys/depend/secp256k1/tools/tests_wycheproof_generate.py": {
-      "sha256": "4e9a29719dc8bd048f1f2ff4f710d1e8e271ac72ec5464eedbbf668ad36c7b35"
     },
     "core/vendor/secp256k1-sys/depend/util.h.patch": {
       "sha256": "870f3d292a761b5c87d9685dee373e856134796d72c31986b96476497355cb3d"
@@ -3669,7 +3648,7 @@
       "sha256": "b694c0ef761c3208171099bcd368cea5f8804011c85653f258aa20680fc7775f"
     },
     "protocol-bundles/executor-first/definition.bin": {
-      "sha256": "3d72ba9ab2f27a591dd9a1f2fa6d0d6d38319abe69e20666fa3ea13d2ca401bb"
+      "sha256": "15fa612f83da4ff139bf896198689478b5e1addb635fae6e0e7f6ffc46cd8511"
     },
     "protocol-bundles/executor-second/Cargo.lock": {
       "sha256": "3840d9d779b5cf36c1b899d8397d61acbc7c575501d61112b7a3020f84e9cef4"
@@ -3678,7 +3657,7 @@
       "sha256": "4194c921a7a83691eae4ad76d5901e399c4d9a9aa14b48f04b25d157e0b732c2"
     },
     "protocol-bundles/executor-second/definition.bin": {
-      "sha256": "a642d965b61c69ccf38899b5f5a2cf073e39d414b599f29be055b5610071124d"
+      "sha256": "bdb1d55540cb5cb5fe32333b518f04145c1fb2b86c0d2d659c20999bbcbe2fc4"
     },
     "protocol-bundles/executor/build.rs": {
       "sha256": "e42f76fea306a2b7d22fdb786ee8f488141ea00c06b885e76677389a938cc0f3"
@@ -3713,99 +3692,78 @@
     "tools/protocol-bundles/.gitignore": {
       "sha256": "32dae3052f331ee34d628ef535709b301259a45df7c7522c4d35dcf49873f00b"
     },
-    "tools/protocol-bundles/audit.py": {
-      "sha256": "a691546e7c2cc342d57970f9f6c7702fd0702d8cbc3f989406f2c4c1d2476daf"
-    },
-    "tools/protocol-bundles/build.py": {
-      "sha256": "914c071ce41b73694078bdf46573a87e5007f6c19ac0f950bb7c658e925924f4"
-    },
-    "tools/protocol-bundles/capabilities.py": {
-      "sha256": "bb9d1ea7c53984edcecf7a5a48d2624353e2a5be1e22cd2412858619937087a2"
-    },
-    "tools/protocol-bundles/common_ownership.py": {
-      "sha256": "ff39d50c879d749dedef9abfc5eb3d1821cc906c2e36f4de7cc6574094086530"
-    },
-    "tools/protocol-bundles/compare_node.py": {
-      "sha256": "09e7567b57a42c6f8c7d57d7daf124529ff8881f85c83ac3bd23706319c98e8d"
-    },
-    "tools/protocol-bundles/execution_definition.py": {
-      "sha256": "f0390e494dc3e77cd70ae4db8baf1e6213d80e65156ccdcee91b2796e8a0aed5"
-    },
     "tools/protocol-bundles/historical_semantics.rs": {
       "sha256": "add22266048a9c706488586d6a2962b0e6b58ef8ed73e8ca6c8ade3677f863e0"
-    },
-    "tools/protocol-bundles/metadata_control.py": {
-      "sha256": "da537b1e1ba226dfa1b0a4bb680746cfb2fb8df45abc807261bb0b277ba1fe4a"
-    },
-    "tools/protocol-bundles/node-rustc-wrapper.py": {
-      "sha256": "1427a86ef46514fbd2c3c9603415235a83ef94181e8772c583091be347bdfecd"
-    },
-    "tools/protocol-bundles/provenance.py": {
-      "sha256": "0c60cf85f22f1f45139a2085521e0af239b33c542bd571d2f33d2630b3790265"
-    },
-    "tools/protocol-bundles/qualify_node.py": {
-      "sha256": "26f2a319f10d5d1db24a0759543079829eb0bdc8aece0cf3b867f5a75c151298"
-    },
-    "tools/protocol-bundles/recipes.py": {
-      "sha256": "7b4ff786fd8378b395cfc46926a68cb0d7a8214d124f73cb1fda0f4953ffc0e8"
-    },
-    "tools/protocol-bundles/rustc-wrapper.py": {
-      "sha256": "48ce0f23ad76ca5aa46763ff544591ace3391df944b3f1a83b6cbe272030dd3f"
     },
     "tools/protocol-bundles/semantic-baseline.json": {
       "sha256": "e0f09122e6523db4793f7227b25839f8cef1e5274e612eb052246c896bb0978d"
     },
     "tools/protocol-bundles/semantic-baseline.log": {
       "sha256": "186184009e4ecf78985a42ec6190c85dc0943abec667a307fa77d5292624f6d2"
-    },
-    "tools/protocol-bundles/semantic_baseline.py": {
-      "sha256": "c74b4ca0d254a8e23dbda2cf3381e2d0b1dc30de1f6b64db0946a3642087c27d"
-    },
-    "tools/protocol-bundles/source_identity.py": {
-      "sha256": "454999248c9d01c0a85e1b86fa2140e3f4e5b23c02c7316463f7d766a025296e"
-    },
-    "tools/protocol-bundles/source_policy.py": {
-      "sha256": "957164394f03479fc61cb309d30351b4ab85c9965cfacaada9f5c325a4495086"
-    },
-    "tools/protocol-bundles/symbol_tool.py": {
-      "sha256": "c0146f8bcecbfc8ec3174ad27ff9e1701db30c8e679e65e050b84f45169fc2dc"
-    },
-    "tools/protocol-bundles/test_audit.py": {
-      "sha256": "9f0392d4277302e0ed69af5a00c865cc9e0330febcb270d25a2771f28ccee53b"
-    },
-    "tools/protocol-bundles/test_execution_definition.py": {
-      "sha256": "8217769bc142e80d87c0b1cac93f11147cea809eb2e163c10ffe959a2028898e"
-    },
-    "tools/protocol-bundles/test_executor_inputs.py": {
-      "sha256": "bdeb9c1db75abbbbeb56f84e306c1b5a640548728c92cfaf21f245f42f5a2f15"
-    },
-    "tools/protocol-bundles/test_node_build.py": {
-      "sha256": "c3cb5afe061933436e7eadbd72a6567de20d5e6e71e1ba7df4815567967fdc01"
-    },
-    "tools/protocol-bundles/test_node_comparison.py": {
-      "sha256": "5a66cfb870fe9834ca3d17024080797285d01f528aafa7ca93a59a4272d18be7"
-    },
-    "tools/protocol-bundles/test_node_execution.py": {
-      "sha256": "7f0784c4ceccedb874a9ca40cb8cda6cdd15dc2a63c4906bf3f2ac1742884fe7"
-    },
-    "tools/protocol-bundles/test_recipes.py": {
-      "sha256": "3bde3238519b60ff85d1307cc066ec5065a03e179e9e22fb97411f232510da24"
-    },
-    "tools/protocol-bundles/test_semantic_baseline.py": {
-      "sha256": "5cf889bf1565a995676aac77d6ffd086d9fb77259f35ceaa7547cf107d09b1a4"
-    },
-    "tools/protocol-bundles/test_source_identity.py": {
-      "sha256": "04704916732baade39289a44e5dfde54ed7a56b7e5b665e6fb667abac1169cb8"
-    },
-    "tools/protocol-bundles/test_type_boundary.py": {
-      "sha256": "e3906651b5c6eef2b5b1d4f07df939195bd9a658409ff1515e3b5965d937a6b4"
-    },
-    "tools/protocol-bundles/test_wrapper.py": {
-      "sha256": "bb40e0202637ca6a3fbc1a5929d0c7425385286fe49834e363cb2f9474add9d5"
-    },
-    "tools/protocol-bundles/type_boundary.py": {
-      "sha256": "f5cfee724c40c994926ee8675a7a6ccc9aa5be72698a595710a04bec6e450938"
     }
+  },
+  "packaging": {
+    "policy": "current-build-tools; retained noncompiled tool copies omitted",
+    "previous_snapshot_repository_commit": "68776fb86df37c48f474683a904d9703641aa190",
+    "previous_snapshot_sha256": "fc85d7f7479662012faef9bc43e3efaf7c9299ddc940ffd5ef5865abe5667592",
+    "removed_support_files": [
+      "tools/protocol-bundles/audit.py",
+      "tools/protocol-bundles/build.py",
+      "tools/protocol-bundles/capabilities.py",
+      "tools/protocol-bundles/common_ownership.py",
+      "tools/protocol-bundles/compare_node.py",
+      "tools/protocol-bundles/execution_definition.py",
+      "tools/protocol-bundles/metadata_control.py",
+      "tools/protocol-bundles/node-rustc-wrapper.py",
+      "tools/protocol-bundles/provenance.py",
+      "tools/protocol-bundles/qualify_node.py",
+      "tools/protocol-bundles/recipes.py",
+      "tools/protocol-bundles/rustc-wrapper.py",
+      "tools/protocol-bundles/semantic_baseline.py",
+      "tools/protocol-bundles/source_identity.py",
+      "tools/protocol-bundles/source_policy.py",
+      "tools/protocol-bundles/symbol_tool.py",
+      "tools/protocol-bundles/test_audit.py",
+      "tools/protocol-bundles/test_execution_definition.py",
+      "tools/protocol-bundles/test_executor_inputs.py",
+      "tools/protocol-bundles/test_node_build.py",
+      "tools/protocol-bundles/test_node_comparison.py",
+      "tools/protocol-bundles/test_node_execution.py",
+      "tools/protocol-bundles/test_recipes.py",
+      "tools/protocol-bundles/test_semantic_baseline.py",
+      "tools/protocol-bundles/test_source_identity.py",
+      "tools/protocol-bundles/test_type_boundary.py",
+      "tools/protocol-bundles/test_wrapper.py",
+      "tools/protocol-bundles/type_boundary.py"
+    ]
+  },
+  "prelaunch_identity_cleanup": {
+    "previous_definitions": [
+      {
+        "bytes": 146223,
+        "execution_definition_id": "a69902e230dfa7ae50079838c5d90cf33c6a00de9fc901bf2c26e363449e19e4",
+        "path": "protocol-bundles/executor-first/definition.bin",
+        "sha256": "3d72ba9ab2f27a591dd9a1f2fa6d0d6d38319abe69e20666fa3ea13d2ca401bb"
+      },
+      {
+        "bytes": 146396,
+        "execution_definition_id": "0565ceaf03d95097c02f86ad4bfb6f0c352900ecdfcf071960a408404a81bc48",
+        "path": "protocol-bundles/executor-second/definition.bin",
+        "sha256": "a642d965b61c69ccf38899b5f5a2cf073e39d414b599f29be055b5610071124d"
+      }
+    ],
+    "previous_repository_commit": "3cec820f",
+    "previous_snapshot_sha256": "161d2f236cd8c033607f429d814276a404382ae1420529a94db750b9f2243b8e",
+    "reason": "Remove unused Python and SageMath vendor generators; generated C vectors and execution behavior retained",
+    "removed_files": [
+      "core/vendor/secp256k1-sys/depend/secp256k1/sage/gen_exhaustive_groups.sage",
+      "core/vendor/secp256k1-sys/depend/secp256k1/sage/gen_split_lambda_constants.sage",
+      "core/vendor/secp256k1-sys/depend/secp256k1/sage/group_prover.sage",
+      "core/vendor/secp256k1-sys/depend/secp256k1/sage/prove_group_implementations.sage",
+      "core/vendor/secp256k1-sys/depend/secp256k1/sage/secp256k1_params.sage",
+      "core/vendor/secp256k1-sys/depend/secp256k1/sage/weierstrass_prover.sage",
+      "core/vendor/secp256k1-sys/depend/secp256k1/tools/tests_wycheproof_generate.py"
+    ]
   },
   "source_commit": "fdf6a65d3a14cf88af7271d666bf13b001849d2f"
 }

@@ -1,21 +1,13 @@
 # SQLite BLOB extension experiment
 
-Local prototype against the unmodified, locked libSQL dependency. This code is
-not built into Kontor or loaded in production.
+This discarded prototype was never built into Kontor or loaded in production.
+Measurements found no speedup, so the implementation retains prepared SQL.
+The source-injecting runner and prototype sources have been retired rather than
+maintained as a supported workflow.
 
-Run from the repository root:
-
-```sh
-python3 experiments/storage-blob-extension/run.py
-```
-
-Requires the repository's Rust build prerequisites and a C compiler on Linux or
-macOS. The runner compiles against the locked libSQL headers, temporarily attaches
-the ignored probe tests to the indexer, runs them in release mode, and restores
-the source file in `finally`. Run without another build or editor modifying
-`contract_state.rs`. No dependency patch, lockfile change, or installed extension
-is needed. Forced process termination can require removing the final
-`extension_probe` module declaration manually.
+The [archived prototype and instructions](https://github.com/KontorProtocol/Kontor/tree/5e4d7f38/experiments/storage-blob-extension)
+remain available for historical reproduction. The description below records that
+experiment, not a current extension API or maintained command.
 
 ## Interface and ownership
 
