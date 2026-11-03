@@ -211,7 +211,7 @@ def build_graph(graph, args, base_env, output, graphs=None):
         definition = verify_reference(source_root, manifest, metadata(
             manifest, None, env, args.offline, source_root=source_root))
     packages = identities(graph, data, graphs)
-    sources = source_inputs(source_root, data, kind=selected_recipe.kind, tool_root=ROOT)
+    sources = source_inputs(source_root, data, kind=selected_recipe.kind, tool_root=ROOT, env=env)
     source_policy = check_source_policy(source_root, data, kind=selected_recipe.kind)
     write_json(graph_output / "source-inputs.json", sources)
     write_json(graph_output / "metadata.json", data)
@@ -226,7 +226,7 @@ def build_graph(graph, args, base_env, output, graphs=None):
         raise RuntimeError("compiler wrapper changed during graph compilation")
     if digest(lock) != lock_hash:
         raise RuntimeError("locked build modified the dependency lock")
-    if source_inputs(source_root, data, kind=selected_recipe.kind, tool_root=ROOT) != sources:
+    if source_inputs(source_root, data, kind=selected_recipe.kind, tool_root=ROOT, env=env) != sources:
         raise RuntimeError("source inputs changed while the graph was compiling")
     if metadata(manifest, args.target, env, args.offline, source_root=source_root) != data:
         raise RuntimeError("resolved metadata changed while the graph was compiling")
@@ -465,7 +465,7 @@ def build_node(graphs, args, base_env, output, consensus=()):
         return verify_coordinator_reference(ROOT, coordinator_data, coordinator_lock)
 
     coordinator = verify_definition()
-    sources = source_inputs(ROOT, data, kind="node")
+    sources = source_inputs(ROOT, data, kind="node", env=env)
     lock_hash = digest(lock)
     write_json(directory / "metadata.json", data)
     write_json(directory / "source-inputs.json", sources)
@@ -539,7 +539,7 @@ def build_node(graphs, args, base_env, output, consensus=()):
     helpers = audit_final(executable, audited, sets, versions, directory, common,
                           kind="executor", node=node)
     libraries = runtime_libraries(executable, env, audited)
-    if digest(lock) != lock_hash or source_inputs(ROOT, data, kind="node") != sources:
+    if digest(lock) != lock_hash or source_inputs(ROOT, data, kind="node", env=env) != sources:
         raise RuntimeError("node source or lock changed during compilation")
     if metadata(manifest, args.target, env, args.offline, features) != data:
         raise RuntimeError("node dependency metadata changed during compilation")
@@ -636,6 +636,8 @@ def main():
         parser.error("protocol qualification uses one or two compiler jobs")
     env = dict(os.environ, RUSTUP_TOOLCHAIN=TOOLCHAIN, RUSTC_WRAPPER="", CCACHE_DISABLE="1",
                CARGO_BUILD_JOBS=str(args.jobs))
+    if args.offline:
+        env["CARGO_NET_OFFLINE"] = "true"
     for key in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTC_WORKSPACE_WRAPPER",
                 "CARGO_BUILD_RUSTC", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"):
         env.pop(key, None)
@@ -696,11 +698,11 @@ def main():
         data = json.loads((output / report["graph"] / "metadata.json").read_text())
         recipe = graphs[report["graph"]]
         if fingerprint(source_inputs(graph_root(ROOT, recipe), data, kind=recipe.kind,
-                                     tool_root=ROOT)) != report["source_inputs_sha256"]:
+                                     tool_root=ROOT, env=env)) != report["source_inputs_sha256"]:
             raise RuntimeError("source inputs changed before qualification finished")
     for report in consensus_reports:
         data = json.loads((consensus_output / report["graph"] / "metadata.json").read_text())
-        if fingerprint(source_inputs(ROOT, data, kind="consensus")) != report["source_inputs_sha256"]:
+        if fingerprint(source_inputs(ROOT, data, kind="consensus", env=env)) != report["source_inputs_sha256"]:
             raise RuntimeError("consensus source inputs changed before node build finished")
         verify_identity(ROOT, report, CONSENSUS_GRAPHS)
         verify_staged_inputs(report)

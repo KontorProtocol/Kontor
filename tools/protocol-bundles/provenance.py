@@ -7,12 +7,22 @@ from pathlib import Path
 import subprocess
 import tomllib
 
-from source_identity import verify_sources
 from symbol_tool import executable as symbol_tool
 
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_sources(data, *, env=None):
+    env = dict(os.environ) if env is None else env
+    root = Path(__file__).resolve().parents[2]
+    tool = env.get("KONTOR_BUILD_TOOL") or str(root / "tools/kontor")
+    result = subprocess.run([tool, "verify-sources"], input=json.dumps(data),
+                            capture_output=True, text=True, cwd=root, env=env)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip())
+    return json.loads(result.stdout)
 
 
 RETAINED_TREES = (
@@ -140,12 +150,12 @@ def package_sources(directory, *, root=None):
     return files
 
 
-def source_inputs(root, data, *, kind="proof", tool_root=None):
+def source_inputs(root, data, *, kind="proof", tool_root=None, env=None):
     if kind not in ("proof", "executor", "node", "consensus"):
         raise RuntimeError(f"unknown graph source kind: {kind}")
     root = root.resolve()
     tool_root = root if tool_root is None else tool_root.resolve()
-    verified = verify_sources(data)
+    verified = verify_sources(data, env=env)
     packages = []
     trees = {}
     inherited = {}

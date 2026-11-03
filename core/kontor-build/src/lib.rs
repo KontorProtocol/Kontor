@@ -7,6 +7,7 @@ pub mod linker_record;
 mod native_lock;
 mod outputs;
 mod snapshot;
+pub mod source_identity;
 
 pub use bundles::{ProtocolBundlesArgs, protocol_bundles};
 pub use ci_scope::{CiScope, ci_scope};

@@ -225,6 +225,16 @@ database's mapping. Git's own corruption checks vary by operation and version.
 Registry source files must match the cached crate archive whose SHA256 matches
 the lockfile. Keep those archives in Cargo's cache for offline qualification;
 missing archives fail verification rather than trusting an edited extraction.
+`tools/kontor verify-sources` performs these checks in Rust, reading Cargo
+metadata JSON on standard input and returning the existing Git/registry evidence
+object. The transitional Python builder calls this same verifier with its pinned
+build environment, including offline policy. The verifier supports SHA1 and
+SHA256 Git repositories. Ordinary Git filenames retain raw Unix bytes; submodule
+names must be UTF8 to appear as JSON object keys. No sources are extracted or
+rewritten during verification. Unlike the previous Python tar reader, the Rust
+verifier rejects global PAX and GNU sparse entries. The locked registry archives
+checked during migration do not require those extensions; unsupported formats
+fail verification rather than silently bypassing source checks.
 Absolute source paths and platform inputs are recorded. This is an audit of
 the actual build, not a claim that different checkouts or platforms produce
 byte-identical executables.

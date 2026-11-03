@@ -1,10 +1,12 @@
 use std::env;
+use std::io;
 use std::path::PathBuf;
 use std::process;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kontor_build::linker_record::verify_input;
+use kontor_build::source_identity::{Metadata, verify_sources};
 use kontor_build::{
     BuildArgs, CiScope, DiagnosticsArgs, ProtocolBundlesArgs, VerifySnapshotArgs,
     check_native_helper_lock, ci_scope, diagnostics, protocol_bundles, run, stage_graph_wrapper,
@@ -41,6 +43,8 @@ enum Command {
     StageLinkerWrapper { output: PathBuf },
     /// Verify linker evidence supplied as JSON on standard input.
     VerifyLinkerRecord,
+    /// Verify pinned Git and registry sources from Cargo metadata on standard input.
+    VerifySources,
     /// Select CI checks from the GitHub event and complete Git change set.
     CiScope {
         #[arg(value_enum)]
@@ -58,6 +62,11 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::VerifySources => {
+            let data: Metadata = serde_json::from_reader(io::stdin().lock())?;
+            println!("{}", verify_sources(&data)?);
+            Ok(())
+        }
         Command::VerifyLinkerRecord => verify_input(),
         Command::StageLinkerWrapper { output } => {
             println!("{}", stage_linker_wrapper(&output)?.display());

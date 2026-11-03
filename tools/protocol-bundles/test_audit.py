@@ -606,7 +606,8 @@ class Ownership(unittest.TestCase):
             manifest.write_text('[package]\nname="example"\n')
             (root / "Cargo.lock").write_text('version=4\npackage=[]\n')
             source.write_text("pub fn result() -> u8 { 1 }")
-            data = {"workspace_root": str(root), "packages": [{"manifest_path": str(manifest), "id": "example"}]}
+            data = {"workspace_root": str(root), "packages": [{"manifest_path": str(manifest), "id": "example",
+                                                              "name": "example", "version": "0.1.0"}]}
             before = fingerprint(source_inputs(root, data))
             source.write_text("pub fn result() -> u8 { 2 }")
             self.assertNotEqual(before, fingerprint(source_inputs(root, data)))
@@ -629,7 +630,8 @@ class Ownership(unittest.TestCase):
             package = root / "crates/example/Cargo.toml"
             package.parent.mkdir(parents=True)
             package.write_text('[package]\nname="example"\n')
-            data = {"workspace_root": str(root), "packages": [{"manifest_path": str(package), "id": "example"}]}
+            data = {"workspace_root": str(root), "packages": [{"manifest_path": str(package), "id": "example",
+                                                              "name": "example", "version": "0.1.0"}]}
             before = fingerprint(source_inputs(root, data))
             manifest.write_text('[workspace.dependencies]\nitoa="=1.0.15"\n')
             self.assertNotEqual(before, fingerprint(source_inputs(root, data)))

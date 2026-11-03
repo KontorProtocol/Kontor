@@ -18,6 +18,21 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class SourceRoots(unittest.TestCase):
+    def test_source_verifier_uses_pinned_tool_and_offline_environment(self):
+        env = {"KONTOR_BUILD_TOOL": "/pinned/kontor-build", "CARGO_NET_OFFLINE": "true"}
+        data = {"packages": []}
+        with patch.object(provenance.subprocess, "run") as process:
+            process.return_value.returncode = 0
+            process.return_value.stdout = '{"git": {}, "registry": {}}'
+            self.assertEqual(provenance.verify_sources(data, env=env), {"git": {}, "registry": {}})
+            self.assertEqual(process.call_args.args[0], ["/pinned/kontor-build", "verify-sources"])
+            self.assertEqual(process.call_args.kwargs["env"], env)
+            self.assertEqual(json.loads(process.call_args.kwargs["input"]), data)
+            process.return_value.returncode = 1
+            process.return_value.stderr = "pinned source differs"
+            with self.assertRaisesRegex(RuntimeError, "pinned source differs"):
+                provenance.verify_sources(data, env=env)
+
     def test_freeze_keeps_fixture_and_package_inputs_without_tool_programs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
