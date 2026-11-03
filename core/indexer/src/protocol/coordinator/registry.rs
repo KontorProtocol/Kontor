@@ -36,5 +36,12 @@ pub(crate) fn resolve(manifest: &ProtocolManifest) -> Result<InstalledProtocol> 
             migration: p2_migration::token_count(manifest.executor),
         });
     }
+    #[cfg(all(kontor_managed, feature = "protocol-qualification"))]
+    if manifest == &successor::qualification_third(manifest.chain)? {
+        return Ok(InstalledProtocol {
+            executor: ExecutorVersion::P2,
+            migration: p2_migration::preserve(manifest.executor),
+        });
+    }
     bail!(UnavailableProtocol(manifest.id()?))
 }

@@ -47,6 +47,9 @@ impl BundleSession {
                     return Ok(Err((0, Some([0; 5]))));
                 };
                 let routine = match runtime.executor_version() {
+                    ExecutorVersion::P2 if definition == p2_migration::preserve(execution) => {
+                        Routine::Noop
+                    }
                     ExecutorVersion::P2 if definition == p2_migration::token_count(execution) => {
                         Routine::TokenCount
                     }

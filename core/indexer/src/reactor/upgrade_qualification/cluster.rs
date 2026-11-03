@@ -3,7 +3,9 @@ use std::num::NonZeroU64;
 use std::time::Duration;
 
 use anyhow::{Context, Error, Result, anyhow, ensure};
-use bitcoin::{Block, BlockHash, blockdata::constants::genesis_block, hashes::Hash};
+use bitcoin::{
+    Block, BlockHash, blockdata::constants::genesis_block, consensus::serialize, hashes::Hash,
+};
 use indexer_types::{BlockRow, ContractArtifactSource, ContractProvenanceResponse, ViewResult};
 use libsql::{Connection, params};
 use malachitebft_app_channel::app::config::{BootstrapProtocol, DiscoveryConfig, Selector};
@@ -13,6 +15,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 
+use super::confirmation::transaction;
 use super::services::Services;
 use super::{DATABASE, NETWORK, accepted_schedule_at};
 use crate::bitcoin_client::Client;
@@ -29,6 +32,7 @@ use crate::protocol::coordinator::linked::{canonical_session, initialize};
 use crate::protocol::identity::ProtocolId;
 use crate::protocol_qualification::application_state as state;
 use crate::reactor::engine::{EngineConfig, NodeCoordinator};
+use crate::reactor::status::EngineAuthority;
 use crate::reactor::{self, PruneConfig};
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::{Decimal, GenesisParameters, GenesisValidator};
@@ -147,6 +151,7 @@ impl Node {
             500,
             Some(io.fees),
             address_tx,
+            io.runtime_status,
             NETWORK,
             PruneConfig {
                 enabled: false,
@@ -296,6 +301,44 @@ async fn broadcast(nodes: &[Node], height: u64, block: Block) -> Result<()> {
     Ok(())
 }
 
+async fn check_client_context(
+    node: &Node,
+    height: u64,
+    hash: BlockHash,
+    protocol: ProtocolId,
+) -> Result<Value> {
+    let discovery = node.services.protocol().await?;
+    let selected = &discovery["canonical"]["protocol"];
+    ensure!(selected["protocol_id"] == hex::encode(protocol.0));
+    ensure!(selected["installed"] == true);
+    ensure!(
+        selected["transaction_formats"]
+            .as_array()
+            .is_some_and(|formats| !formats.is_empty())
+    );
+    ensure!(
+        selected["host_abis"]
+            .as_array()
+            .is_some_and(|abis| !abis.is_empty())
+    );
+    let simulation = node.services.simulate(&serialize(&transaction()?)).await?;
+    let context = &simulation["context"];
+    ensure!(context["protocol_id"] == selected["protocol_id"]);
+    ensure!(context["execution_definition"] == selected["execution_definition"]);
+    ensure!(context["bitcoin_height"] == height.to_string());
+    ensure!(context["bitcoin_hash"] == hash.to_string());
+    ensure!(context["simulation_height"] == (height + 1).to_string());
+    ensure!(context["lineage"].as_str().is_some());
+    ensure!(
+        simulation["operations"]
+            .as_array()
+            .is_some_and(|operations| !operations.is_empty())
+    );
+    let runtime = node.services.runtime(EngineAuthority::Validator).await?;
+    ensure!(runtime.committee_member && runtime.required_join_height.is_none());
+    Ok(context.clone())
+}
+
 pub(crate) async fn run() -> Result<Value> {
     let keys: Vec<_> = (0..3)
         .map(|index| keygen::derive_validator(&[0x73; 32], index))
@@ -329,6 +372,7 @@ pub(crate) async fn run() -> Result<Value> {
         let block = genesis_block(NETWORK);
         broadcast(&nodes, 1, block.clone()).await?;
         let c1 = wait_all(&mut nodes, 1, block.block_hash(), first).await?;
+        let p1_preview = check_client_context(&nodes[0], 1, block.block_hash(), first).await?;
         for node in &nodes {
             ensure!(node.view().await?.get("Err").is_some(), "activation ran before H");
         }
@@ -337,6 +381,7 @@ pub(crate) async fn run() -> Result<Value> {
         next.header.nonce = next.header.nonce.wrapping_add(1);
         broadcast(&nodes, 2, next.clone()).await?;
         let c2 = wait_all(&mut nodes, 2, next.block_hash(), target).await?;
+        let p2_preview = check_client_context(&nodes[0], 2, next.block_hash(), target).await?;
         for node in &nodes {
             ensure!(node.view().await? == json!({"Ok":"1"}), "P2 migration count differs");
         }
@@ -371,6 +416,8 @@ pub(crate) async fn run() -> Result<Value> {
         replacement.header.nonce = replacement.header.nonce.wrapping_add(10);
         broadcast(&nodes, 1, replacement.clone()).await?;
         let c4 = wait_all(&mut nodes, 1, replacement.block_hash(), first).await?;
+        let restored_preview = check_client_context(&nodes[0], 1, replacement.block_hash(), first).await?;
+        ensure!(restored_preview["rollback_generation"] != p1_preview["rollback_generation"]);
         let restored_era = eras::at(&nodes[0].observer, c4).await?.context("restored P1 era")?;
         ensure!(restored_era.start_height()? == c4 + 1);
         ensure!(restored_era.next != initial_context && restored_era.next.protocol == first);
@@ -383,6 +430,8 @@ pub(crate) async fn run() -> Result<Value> {
         replacement.header.nonce = replacement.header.nonce.wrapping_add(1);
         broadcast(&nodes, 2, replacement.clone()).await?;
         let c5 = wait_all(&mut nodes, 2, replacement.block_hash(), target).await?;
+        let reapplied_preview = check_client_context(&nodes[0], 2, replacement.block_hash(), target).await?;
+        ensure!(reapplied_preview["lineage"] != p2_preview["lineage"]);
         let reapplied = activation::current(&nodes[0].observer).await?.context("reapplied activation")?;
         ensure!(reapplied.application.migration_key()? != original_activation.application.migration_key()?,
             "replacement branch reused old migration receipt");
@@ -419,6 +468,7 @@ pub(crate) async fn run() -> Result<Value> {
             "restored_p1_in_fresh_era": true, "reapplied_migration": true, "retained_history_unchanged": true,
             "authorization_test": false,
             "http_rpc_continuity": true, "bitcoin_follower_continuity": true,
+            "client_contexts": [p1_preview, p2_preview, restored_preview, reapplied_preview],
             "scope": "seeded surviving schedule; real multi-validator P1/P2/P1/P2 execution and rollback with one continuous Malachite runtime; production HTTP router and Bitcoin follower with fixture Bitcoin RPC and ZMQ publisher",
             "native_provenance": {"publication": original_provenance, "upgraded": upgraded_provenance,
                 "restored_on_rollback": true, "unaffected_native_uses_publication": true},
@@ -493,7 +543,31 @@ pub(crate) async fn run_join() -> Result<Value> {
         block.header.nonce = block.header.nonce.wrapping_add(1);
         broadcast(&nodes, 2, block.clone()).await?;
         let floor = wait_all(&mut nodes, 2, block.block_hash(), target).await?;
-        let peers = nodes.iter().map(|node| node.listener.clone()).collect();
+        // Two of four members cannot certify new work. Offer H+1 before the
+        // fourth member joins so its later vote restores a genuinely absent quorum.
+        nodes[0].shutdown.cancel();
+        nodes[0].join().await?;
+        let mut pending = block.clone();
+        pending.header.prev_blockhash = block.block_hash();
+        pending.header.nonce = pending.header.nonce.wrapping_add(1);
+        broadcast(&nodes[1..], 3, pending.clone()).await?;
+        for node in &mut nodes[1..] {
+            node.services.progress().await?;
+        }
+        match timeout(
+            Duration::from_secs(3),
+            wait_all(&mut nodes[1..], 3, pending.block_hash(), target),
+        )
+        .await
+        {
+            Err(_) => {}
+            Ok(Err(error)) => return Err(error),
+            Ok(Ok(_)) => return Err(anyhow!("two of four members certified H+1")),
+        }
+        let peers = nodes[1..]
+            .iter()
+            .map(|node| node.listener.clone())
+            .collect();
         nodes.push(
             Node::start(
                 PrivateKey::from(keys[3].ed25519_private),
@@ -506,7 +580,7 @@ pub(crate) async fn run_join() -> Result<Value> {
             .await?,
         );
         nodes[3].ready().await?;
-        wait_all(&mut nodes, 2, block.block_hash(), target).await?;
+        wait_all(&mut nodes[1..], 2, block.block_hash(), target).await?;
         for height in 1..=floor {
             let original = certified_history::load(&nodes[0].observer, height).await?;
             let joined = certified_history::load(&nodes[3].observer, height).await?;
@@ -518,14 +592,13 @@ pub(crate) async fn run_join() -> Result<Value> {
         }
         nodes[3].services.advance(1, &genesis_block(NETWORK));
         nodes[3].services.advance(2, &block);
-        // Three of four votes are required. Removing an original validator makes
-        // the next certificate evidence that the catch-up node actually promoted.
-        nodes[0].shutdown.cancel();
-        nodes[0].join().await?;
-        block.header.prev_blockhash = block.block_hash();
-        block.header.nonce = block.header.nonce.wrapping_add(1);
-        broadcast(&nodes[1..], 3, block.clone()).await?;
-        let decided = wait_all(&mut nodes[1..], 3, block.block_hash(), target).await?;
+        broadcast(&nodes[1..], 3, pending.clone()).await?;
+        let decided = wait_all(&mut nodes[1..], 3, pending.block_hash(), target).await?;
+        let promoted_status = nodes[3]
+            .services
+            .runtime(EngineAuthority::Validator)
+            .await?;
+        ensure!(promoted_status.committee_member && promoted_status.required_join_height.is_none());
         ensure!(
             nodes[3].addresses.borrow().as_ref() == Some(&nodes[3].listener),
             "promotion changed listener"
@@ -566,8 +639,10 @@ pub(crate) async fn run_join() -> Result<Value> {
         );
         Ok::<_, Error>(json!({"validators": 4, "initial_signers": 3,
             "source_already_p2": true, "verified_floor": floor,
+            "stalled_without_quorum": true,
             "signed_decision": decided, "promotion_generation": authorized.generation,
             "same_listener": true, "matching_verified_prefix": true,
+            "promoted_runtime": promoted_status,
             "separate_wals": true, "required_promoted_vote": true}))
     })
     .await

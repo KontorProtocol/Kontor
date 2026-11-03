@@ -1,6 +1,21 @@
 use crate::protocol::identity::{ExecutionDefinitionId, MigrationDefinition, domain_digest};
 use crate::protocol::migration_work::MigrationWork;
 
+pub(crate) fn preserve(execution: ExecutionDefinitionId) -> MigrationDefinition {
+    let schema = domain_digest(
+        b"kontor/storage-schema/v1",
+        b"token-positive-balance-count-v2",
+    );
+    MigrationDefinition {
+        execution,
+        routine: "kontor/noop/v2".into(),
+        input_schema: schema,
+        output_schema: schema,
+        accounting_version: 1,
+        budget: MigrationWork::default(),
+    }
+}
+
 pub(crate) fn token_count(execution: ExecutionDefinitionId) -> MigrationDefinition {
     MigrationDefinition {
         execution,

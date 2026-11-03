@@ -1006,6 +1006,7 @@ impl ReactorCluster {
         ret_rx
             .await
             .map_err(|_| anyhow::anyhow!("simulate response channel closed"))??
+            .map(|report| report.operations)
             .map_err(anyhow::Error::msg)
     }
 

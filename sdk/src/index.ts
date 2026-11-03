@@ -20,7 +20,7 @@ export type {
 
 export type * from "./bindings.js";
 export { generate } from "./codegen.js";
-export type { KontorTransport } from "./json-codec.js";
+export type { KontorTransport, OpResult, OpResultRaw } from "./json-codec.js";
 // Client layer. Codegen output references KontorSession / Inst; callers
 // (and the e2e test) also need the chain config + the Account type.
 // The full client-layer export pass — Account impls, transport, errors,
@@ -86,6 +86,13 @@ export { HolderRef } from "./canonical/HolderRef.js";
 export type { OutPoint } from "./canonical/HolderRef.js";
 export { ContractAddress } from "./canonical/ContractAddress.js";
 export { UpgradeClient } from "./upgrades.js";
+export type {
+  ExecutionContextInfo,
+  SimulationReport,
+  SimulationPreview,
+  ProtocolDescriptor,
+  ProtocolSnapshot,
+} from "./protocol.js";
 export type {
   UpgradeClientOptions,
   UpgradeState,

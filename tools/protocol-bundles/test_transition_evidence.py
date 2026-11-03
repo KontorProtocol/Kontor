@@ -2,7 +2,7 @@ import copy
 import hashlib
 import unittest
 
-from transition_evidence import JOIN_FLAGS, verify_join
+from transition_evidence import JOIN_FLAGS, REPLACEMENT_FLAGS, verify_join
 
 from build import ROOT
 from recipes import executor_graphs
@@ -11,7 +11,9 @@ from transition_evidence import STATE_TABLES, TRANSITION_FLAGS, RECOVERY_FLAGS, 
 
 def join_sample():
     return {**{key: True for key in JOIN_FLAGS}, 'validators': 4, 'initial_signers': 3,
-            'promotion_generation': 2, 'verified_floor': 3, 'signed_decision': 6}
+            'promotion_generation': 2, 'verified_floor': 3, 'signed_decision': 6,
+            'promoted_runtime': {'authority': 'validator', 'consensus_height': '7',
+                                 'committee_member': True, 'required_join_height': None}}
 
 
 class JoinEvidence(unittest.TestCase):
@@ -51,11 +53,20 @@ def transition_sample():
             'sha256': hashlib.sha256(artifact).hexdigest(),
             'execution_definition': hashlib.sha256(b'kontor/execution-definition/v1\0' + definition).hexdigest(),
         }}
+    contexts = [
+        {'protocol_id': protocols[index % 2],
+         'execution_definition': provenance[label]['effective_artifact']['execution_definition'],
+         'application_ordinal': str(index + 1), 'lineage': str(index + 1) * 64,
+         'bitcoin_height': str(height), 'bitcoin_hash': str(index + 5) * 64,
+         'checkpoint_height': str(height), 'checkpoint_hash': 'AB' * 32, 'receipt_epoch': 'aa' * 32,
+         'rollback_generation': str(index // 2), 'simulation_height': str(height + 1)}
+        for index, (label, height) in enumerate(zip(['publication', 'upgraded'] * 2, [1, 2, 1, 2]))]
     return {**{key: True for key in TRANSITION_FLAGS}, 'validators': 3,
             'closed_decisions': 6, 'block_decisions': [1, 2, 3, 4, 5, 6], 'handoff_heights': [3, 5, 6],
             'first_protocol': protocols[0], 'second_protocol': protocols[1],
             'authorization_test': False, 'scope': 'synthetic gate input',
-            'native_provenance': provenance, 'state': {table: [1, '33' * 32] for table in STATE_TABLES}}
+            'native_provenance': provenance, 'client_contexts': contexts,
+            'state': {table: [1, '33' * 32] for table in STATE_TABLES}}
 
 
 def recovery_sample():
@@ -65,7 +76,9 @@ def recovery_sample():
                 {**{key: True for key in REPLAY_FLAGS}, 'scenario': name, 'closed_decisions': height}
                 for name, height in [('SurvivingSchedule', 8), ('UndoCancel', 9), ('UndoPostpone', 9)]]}
     result['finality_replay'][0]['confirmation'] = {
-        **{key: True for key in CONFIRMATION_FLAGS}, 'confirmation_height': 3, 'closed_decisions': 5}
+        **{key: True for key in CONFIRMATION_FLAGS}, 'confirmation_height': 3, 'closed_decisions': 5,
+        'replacement': {**{key: True for key in REPLACEMENT_FLAGS},
+                        'replacement_height': 3, 'finality_height': 7, 'closed_decisions': 8}}
     result['empty_successor'] = {**{key: True for key in EMPTY_SUCCESSOR_FLAGS},
         'activation_height': 13, 'authenticated_decisions': 14, 'closed_decisions': 13}
     result['build_record'] = {key: True for key in BUILD_RECORD_FLAGS}
@@ -81,7 +94,12 @@ def recovery_sample():
 def authorization_sample():
     """Synthetic verifier input, never runtime evidence."""
     return {**{key: True for key in AUTHORIZATION_FLAGS}, 'schema': 1,
-            'notice_blocks': 1008, 'activation_height': 1009, 'closed_decisions': 2028}
+            'notice_blocks': 1008, 'activation_height': 1009, 'closed_decisions': 2028,
+            'successive_upgrades': {'qualification_only_p3': True, 'fresh_second_approval': True,
+                'p2_p3_share_executor': True, 'reopen_and_genesis_replay_match': True,
+                'node_local_epoch_excluded': True, 'second_notice_blocks': 1008,
+                'migration_applications': 2, 'closed_decisions': 2019,
+                'activation_heights': [1009, 2017], 'protocols': ['11' * 32, '22' * 32, '33' * 32]}}
 
 
 class TransitionEvidence(unittest.TestCase):
@@ -170,9 +188,32 @@ class TransitionEvidence(unittest.TestCase):
             with self.subTest(missing=key), self.assertRaises(ValueError):
                 verify_authorization(value)
             value = copy.deepcopy(original)
-            value[key] = False if key in AUTHORIZATION_FLAGS else value[key] - 1
+            value[key] = False if key in AUTHORIZATION_FLAGS or key == 'successive_upgrades' else value[key] - 1
             with self.subTest(changed=key), self.assertRaises(ValueError):
                 verify_authorization(value)
+
+    def test_rejects_reactivation_in_place_of_a_second_upgrade(self):
+        for field, value in [('protocols', ['11' * 32, '22' * 32, '22' * 32]),
+                             ('migration_applications', 1), ('second_notice_blocks', 0),
+                             ('fresh_second_approval', False), ('reopen_and_genesis_replay_match', False)]:
+            sample = authorization_sample()
+            sample['successive_upgrades'][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                verify_authorization(sample)
+
+    def test_rejects_context_from_another_execution_or_before_rollback(self):
+        for field, value in [('protocol_id', 'ff' * 32), ('execution_definition', 'ff' * 32),
+                             ('simulation_height', '2'), ('application_ordinal', 4),
+                             ('checkpoint_hash', 'not a digest'), ('checkpoint_hash', 12),
+                             ('checkpoint_height', None)]:
+            sample = transition_sample()
+            sample['client_contexts'][1][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                verify_transition(sample, ROOT)
+        sample = transition_sample()
+        sample['client_contexts'][2]['rollback_generation'] = sample['client_contexts'][0]['rollback_generation']
+        with self.assertRaises(ValueError):
+            verify_transition(sample, ROOT)
 
     def test_requires_complete_distinct_protocol_and_artifact_results(self):
         original = transition_sample()
@@ -224,6 +265,10 @@ class TransitionEvidence(unittest.TestCase):
                       lambda value: value['finality_replay'][0]['confirmation'].update(closed_decisions=4)]
         mutations += [lambda value, key=key: value['finality_replay'][0]['confirmation'].update({key: False})
                       for key in CONFIRMATION_FLAGS]
+        mutations += [lambda value: value['finality_replay'][0]['confirmation'].pop('replacement'),
+                      lambda value: value['finality_replay'][0]['confirmation']['replacement'].update(replacement_height=2)]
+        mutations += [lambda value, key=key: value['finality_replay'][0]['confirmation']['replacement'].update({key: False})
+                      for key in REPLACEMENT_FLAGS]
         mutations += [lambda value, key=key: value.update({key: False}) for key in RECOVERY_FLAGS]
         mutations += [lambda value, key=key: value['finality_replay'][0].update({key: False}) for key in REPLAY_FLAGS]
         for mutate in mutations:

@@ -9,15 +9,59 @@ use axum::http::StatusCode;
 use axum::{Router, routing::get};
 use axum_test::TestServer;
 use indexer_types::{Event, Info};
+use serde_json::{Value as JsonValue, json};
 use tempfile::TempDir;
 use tokio::sync::{broadcast, watch};
 
 use super::get_index;
+use super::info::get_status;
 use super::tests::{ApiResult, insert_block_at, new_test_env};
 use crate::info::{InfoCore, compute_info_core, run_info_publisher};
+use crate::reactor::status::{EngineAuthority, RuntimeStatus};
 
 const ZERO_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 const ONE_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+
+#[tokio::test]
+async fn status_distinguishes_joining_role_and_withdraws_dead_reactor_observation() -> Result<()> {
+    let (mut env, _conn, _dir) = new_test_env().await?;
+    let (status_tx, status_rx) = watch::channel(None);
+    env.runtime_status = status_rx;
+    let app = Router::new()
+        .route("/status", get(get_status))
+        .with_state(env);
+    let server = TestServer::new(app);
+    assert!(server.get("/status").await.json::<JsonValue>()["runtime"].is_null());
+
+    status_tx.send(Some(RuntimeStatus {
+        authority: EngineAuthority::Follower,
+        consensus_height: "9007199254740993".into(),
+        committee_member: true,
+        required_join_height: Some("9007199254740994".into()),
+    }))?;
+    let joining = server.get("/status").await.json::<JsonValue>();
+    assert_eq!(joining["runtime"]["authority"], "follower");
+    assert_eq!(joining["runtime"]["committee_member"], json!(true));
+    assert_eq!(
+        joining["runtime"]["required_join_height"],
+        "9007199254740994"
+    );
+    status_tx.send(None)?;
+    assert!(server.get("/status").await.json::<JsonValue>()["runtime"].is_null());
+    status_tx.send(Some(RuntimeStatus {
+        authority: EngineAuthority::Validator,
+        consensus_height: "9007199254740995".into(),
+        committee_member: true,
+        required_join_height: None,
+    }))?;
+    assert_eq!(
+        server.get("/status").await.json::<JsonValue>()["runtime"]["authority"],
+        "validator"
+    );
+    drop(status_tx);
+    assert!(server.get("/status").await.json::<JsonValue>()["runtime"].is_null());
+    Ok(())
+}
 
 /// A `GET /api/` test server whose `InfoCore` snapshot is driven by the
 /// returned `watch::Sender` — the test plays the role of the publisher.

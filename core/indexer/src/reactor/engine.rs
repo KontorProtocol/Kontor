@@ -73,12 +73,18 @@ pub struct LegacyEngineOutput {
     pub _handle: EngineHandle,
     pub address: Address,
     signer: Ed25519Provider,
+    consensus_enabled: bool,
 }
 
 impl From<LegacyEngineOutput> for EngineOutput {
     fn from(output: LegacyEngineOutput) -> Self {
         Self {
-            engine: Engine::legacy(output.channels, output._handle, output.signer),
+            engine: Engine::legacy(
+                output.channels,
+                output._handle,
+                output.signer,
+                output.consensus_enabled,
+            ),
             promotion_floor: None,
             address: output.address,
         }
@@ -159,5 +165,6 @@ pub async fn start(config: EngineConfig) -> Result<LegacyEngineOutput> {
         _handle: handle,
         address,
         signer: app_provider,
+        consensus_enabled: config.consensus_enabled,
     })
 }

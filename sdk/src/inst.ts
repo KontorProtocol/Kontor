@@ -48,6 +48,7 @@ import type { ChainEvent } from "./events.js";
 import type { ExtraOutput } from "./outputs.js";
 import type { BroadcastResult, OpResult, OpResultRaw } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
+import type { SimulationPreview } from "./protocol.js";
 
 /**
  * The payload of an `Inst`. Codegen-emitted Contract methods always
@@ -243,6 +244,22 @@ export class Inst<T> implements PromiseLike<T> {
       await this.session.transport.simulate(wire),
       "simulate",
     );
+  }
+
+  /** Preview results and gas with the exact execution context used by the node. */
+  async simulateWithContext(): Promise<SimulationPreview<OpResult<T>>> {
+    const transport = this.session.transport;
+    if (!transport.simulateWithContext) {
+      throw new TransportError("Transport does not support simulation context");
+    }
+    const report = await transport.simulateWithContext({
+      ops: [instToWire(this)],
+      aggregate: null,
+    });
+    return {
+      context: report.context,
+      result: this.decodeOwnOp(report.operations, "simulateWithContext"),
+    };
   }
 
   /**

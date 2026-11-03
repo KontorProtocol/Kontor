@@ -17,6 +17,11 @@ spec.loader.exec_module(wrapper)
 
 
 class NodeBuild(unittest.TestCase):
+    def test_linker_driver_uses_last_rustc_override(self):
+        self.assertEqual(wrapper.linker_driver([]), 'cc')
+        self.assertEqual(wrapper.linker_driver(['-C', 'linker=/bin/clang']), '/bin/clang')
+        self.assertEqual(wrapper.linker_driver(['-Clinker=/bin/cc', '-C', 'linker=/bin/clang']), '/bin/clang')
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

@@ -56,6 +56,7 @@ import type {
   ViewResult,
 } from "../bindings.js";
 import { executionCoordinates } from "../confirmation.js";
+import type { ProtocolSnapshot, SimulationReport } from "../protocol.js";
 import {
   type ProvenanceEntry,
   type ContractProvenance,
@@ -95,8 +96,9 @@ export interface HttpTransportOptions {
    */
   feeRate?: number;
   /**
-   * Override automatic gas estimation. Default: simulate the call first
-   * and use the reported gas + a small buffer.
+   * @deprecated This option is not applied. Set the cap with
+   * `KontorSession.defaultGasLimit` or `Inst.withGasLimit`. Use
+   * `simulateWithContext()` for an explicit estimate before choosing a cap.
    */
   gasLimit?: bigint | (() => Promise<bigint>);
   /**
@@ -280,16 +282,28 @@ export class HttpTransport implements KontorTransport {
    * surface as `TransportError`.
    */
   private async postJson<T>(path: string, body: unknown): Promise<T> {
+    return this.requestJson("POST", path, body);
+  }
+
+  protocol(): Promise<ProtocolSnapshot> {
+    return this.requestJson("GET", "/protocol");
+  }
+
+  private async requestJson<T>(
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+  ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
-        method: "POST",
+        method,
         headers: { "content-type": "application/json", ...this.opts.headers },
-        body: JSON.stringify(body),
+        body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (cause) {
-      throw new TransportError(`POST ${url} failed`, {
+      throw new TransportError(`${method} ${url} failed`, {
         cause: cause instanceof Error ? cause : undefined,
         docsPath: "/sdk/transport",
       });
@@ -304,7 +318,7 @@ export class HttpTransport implements KontorTransport {
       } catch {
         /* not JSON — keep the raw text */
       }
-      throw new TransportError(`POST ${url} returned HTTP ${res.status}`, {
+      throw new TransportError(`${method} ${url} returned HTTP ${res.status}`, {
         details: detail,
         docsPath: "/sdk/transport",
       });
@@ -312,7 +326,7 @@ export class HttpTransport implements KontorTransport {
     try {
       return (JSON.parse(text) as ResultResponse<T>).result;
     } catch (cause) {
-      throw new TransportError(`POST ${url} returned a non-JSON body`, {
+      throw new TransportError(`${method} ${url} returned a non-JSON body`, {
         cause: cause instanceof Error ? cause : undefined,
         details: text.slice(0, 200),
         docsPath: "/sdk/transport",
@@ -588,16 +602,38 @@ export class HttpTransport implements KontorTransport {
    * `inspect`, it `release()`s its funding (nothing is spent).
    */
   async simulate(insts: WireInsts): Promise<OpResultRaw[]> {
+    const ops = await this.simulationRequest<OpWithResult[]>(
+      insts,
+      "/transactions/simulate",
+    );
+    return ops.map(opWithResultToRaw);
+  }
+
+  async simulateWithContext(
+    insts: WireInsts,
+  ): Promise<SimulationReport<OpResultRaw>> {
+    const report = await this.simulationRequest<SimulationReport>(
+      insts,
+      "/transactions/simulate/context",
+    );
+    return {
+      context: report.context,
+      operations: report.operations.map(opWithResultToRaw),
+    };
+  }
+
+  private async simulationRequest<T>(
+    insts: WireInsts,
+    path: string,
+  ): Promise<T> {
     const funding = this.funding();
     const taken = await funding.take();
     try {
       const reveal = await this.buildSimpleReveal(insts, taken);
       const { revealTx } = await this.composeAndSign(reveal);
-      const ops = await this.postJson<OpWithResult[]>(
-        "/transactions/simulate",
-        { hex: hex.encode(revealTx.extract()) },
-      );
-      return ops.map(opWithResultToRaw);
+      return await this.postJson<T>(path, {
+        hex: hex.encode(revealTx.extract()),
+      });
     } finally {
       funding.release(taken);
     }

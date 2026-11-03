@@ -41,6 +41,7 @@ import type {
   WireInsts,
 } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
+import type { SimulationPreview } from "./protocol.js";
 
 /**
  * Mapped-tuple type: turn `[Inst<A>, Inst<B>, ...]` into
@@ -129,6 +130,19 @@ export class Insts<T extends readonly unknown[]> implements PromiseLike<T> {
       this.insts,
       await this.session.transport.simulate(this.toWire()),
     );
+  }
+
+  /** Preview the entire bundle under one execution context, preserving tuple types. */
+  async simulateWithContext(): Promise<SimulationPreview<InstsOpResults<T>>> {
+    const transport = this.session.transport;
+    if (!transport.simulateWithContext) {
+      throw new TransportError("Transport does not support simulation context");
+    }
+    const report = await transport.simulateWithContext(this.toWire());
+    return {
+      context: report.context,
+      result: mapBundleOutcomes<T>(this.insts, report.operations),
+    };
   }
 
   /** Static analysis; returns the same tuple shape as `submit`. */

@@ -89,17 +89,31 @@ class NodeComparison(unittest.TestCase):
                 'installed': {'sha256': 'synthetic-binary-hash'},
                 'source_inputs_sha256': fingerprint(self.sources['node']),
                 'lock_sha256': digest(ROOT / 'protocol-bundles/node/Cargo.lock'),
-                'wrapper_sha256': digest(ROOT / 'tools/protocol-bundles/node-rustc-wrapper.py')}
+                'wrapper_sha256': digest(ROOT / 'tools/protocol-bundles/node-rustc-wrapper.py'),
+                'linker_wrapper_sha256': digest(ROOT / 'tools/protocol-bundles/linker_record.py')}
         write_json(node_dir / 'source-inputs.json', self.sources['node'])
         (node_dir / 'build.log').write_text('synthetic node build transcript')
         node['build_log_sha256'] = digest(node_dir / 'build.log')
         spec = {'features': ['protocol-qualification'], 'lock_sha256': node['lock_sha256'], 'link_set': link_set,
+                'linker_wrapper_sha256': node['linker_wrapper_sha256'],
                 'source_inputs_sha256': node['source_inputs_sha256'],
                 'graphs': [{'graph': graph['graph'], 'role': role, 'build_inputs_sha256': fingerprint(graph)}
                            for role, group in (('executor', graphs), ('consensus', consensus)) for graph in group]}
         write_json(node_dir / 'link-spec.json', spec)
         node['link_spec_sha256'] = digest(node_dir / 'link-spec.json')
-        write_json(node_dir / 'root-objects.json', {'spec_sha256': node['link_spec_sha256']})
+        link = {'schema': 1, 'spec_sha256': node['link_spec_sha256'],
+                'output_sha256': node['executable_sha256'], 'output': '/synthetic/kontor',
+                'arguments': ['-o', '/synthetic/kontor'], 'expanded_arguments': ['-o', '/synthetic/kontor'],
+                'working_directory': '/synthetic',
+                'driver': {'invocation_path': '/synthetic/cc', 'path': '/synthetic/cc', 'sha256': 'ab' * 32},
+                'backend': {'invocation_path': '/synthetic/ld', 'path': '/synthetic/ld', 'sha256': 'cd' * 32},
+                'selection': {'method': 'compiler-driver-plan',
+                              'command': ['/synthetic/cc', '-###', '-o', '/synthetic/kontor'],
+                              'stderr': 'synthetic driver plan'}}
+        write_json(node_dir / 'linker-record.json', link)
+        node['linker_record_sha256'] = digest(node_dir / 'linker-record.json')
+        write_json(node_dir / 'root-objects.json', {'spec_sha256': node['link_spec_sha256'],
+                                                  'linker_record_sha256': node['linker_record_sha256']})
         node['root_codegen_sha256'] = digest(node_dir / 'root-objects.json')
         node['ownership'] = {}
         for name in OWNERSHIP:
@@ -481,7 +495,12 @@ class NodeComparison(unittest.TestCase):
         spec['source_inputs_sha256'] = fingerprint(source)
         write_json(directory / 'node/link-spec.json', spec)
         build['node']['link_spec_sha256'] = digest(directory / 'node/link-spec.json')
-        write_json(directory / 'node/root-objects.json', {'spec_sha256': build['node']['link_spec_sha256']})
+        link = json.loads((directory / 'node/linker-record.json').read_text())
+        link['spec_sha256'] = build['node']['link_spec_sha256']
+        write_json(directory / 'node/linker-record.json', link)
+        build['node']['linker_record_sha256'] = digest(directory / 'node/linker-record.json')
+        write_json(directory / 'node/root-objects.json', {'spec_sha256': build['node']['link_spec_sha256'],
+            'linker_record_sha256': build['node']['linker_record_sha256']})
         build['node']['root_codegen_sha256'] = digest(directory / 'node/root-objects.json')
         write_json(directory / 'node-build.json', build)
         self.bind(directory)

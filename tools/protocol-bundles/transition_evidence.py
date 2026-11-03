@@ -12,23 +12,31 @@ TRANSITION_FLAGS = {
 }
 JOIN_FLAGS = {
     'source_already_p2', 'same_listener', 'matching_verified_prefix',
-    'separate_wals', 'required_promoted_vote',
+    'separate_wals', 'required_promoted_vote', 'stalled_without_quorum',
 }
 
 
 def verify_join(result):
     keys = JOIN_FLAGS | {'validators', 'initial_signers', 'verified_floor',
-                         'signed_decision', 'promotion_generation'}
+                         'signed_decision', 'promotion_generation', 'promoted_runtime'}
     if not isinstance(result, dict) or set(result) != keys:
         raise ValueError('validator join evidence missing or incomplete')
     if (any(result[key] is not True for key in JOIN_FLAGS)
-            or any(type(result[key]) is not int for key in keys - JOIN_FLAGS)
+            or any(type(result[key]) is not int for key in keys - JOIN_FLAGS - {'promoted_runtime'})
             or result['validators'] != 4 or result['initial_signers'] != 3
             or result['promotion_generation'] != 2
             or not 0 < result['verified_floor'] < result['signed_decision']):
         raise ValueError('validator join did not verify progress before promotion and signing')
+    runtime = result['promoted_runtime']
+    if (not isinstance(runtime, dict) or set(runtime) != {
+            'authority', 'consensus_height', 'committee_member', 'required_join_height'}
+            or runtime['authority'] != 'validator' or runtime['committee_member'] is not True
+            or runtime['required_join_height'] is not None
+            or not decimal(runtime['consensus_height'])
+            or int(runtime['consensus_height']) < result['signed_decision']):
+        raise ValueError('promoted runtime diagnostics are incomplete')
     # Empty batches can shift consensus heights between independent live runs.
-    return {key: result[key] for key in keys - {'verified_floor', 'signed_decision'}}
+    return {key: result[key] for key in keys - {'verified_floor', 'signed_decision', 'promoted_runtime'}}
 
 
 STATE_TABLES = {
@@ -48,10 +56,41 @@ def is_digest(value):
             and all(character in '0123456789abcdef' for character in value))
 
 
+def decimal(value):
+    return isinstance(value, str) and value.isascii() and value.isdecimal()
+
+
+def verify_client_contexts(contexts, first, second, provenance):
+    fields = {'protocol_id', 'execution_definition', 'application_ordinal', 'lineage',
+              'bitcoin_height', 'bitcoin_hash', 'checkpoint_height', 'checkpoint_hash',
+              'receipt_epoch', 'rollback_generation', 'simulation_height'}
+    if not isinstance(contexts, list) or len(contexts) != 4:
+        raise ValueError('four execution-bound client contexts required')
+    for item, protocol, label, height in zip(contexts, [first, second, first, second],
+                                           ['publication', 'upgraded'] * 2, [1, 2, 1, 2]):
+        if (not isinstance(item, dict) or set(item) != fields
+                or item['protocol_id'] != protocol
+                or item['execution_definition'] != provenance[label]['effective_artifact']['execution_definition']
+                or item['bitcoin_height'] != str(height) or item['simulation_height'] != str(height + 1)
+                or not all(is_digest(item[key]) for key in ['lineage', 'bitcoin_hash', 'receipt_epoch'])
+                or not decimal(item['application_ordinal']) or int(item['application_ordinal']) == 0
+                or not decimal(item['rollback_generation'])
+                or (item['checkpoint_height'] is not None and not decimal(item['checkpoint_height']))
+                or (item['checkpoint_height'] is None) != (item['checkpoint_hash'] is None)
+                # SQLite's hex() checkpoint representation is uppercase.
+                or (item['checkpoint_hash'] is not None and
+                    (not isinstance(item['checkpoint_hash'], str)
+                     or not is_digest(item['checkpoint_hash'].lower())))):
+            raise ValueError('client context does not match execution selection')
+    if (contexts[0]['rollback_generation'] == contexts[2]['rollback_generation']
+            or contexts[1]['lineage'] == contexts[3]['lineage']):
+        raise ValueError('client context did not distinguish rollback and reactivation')
+
+
 def verify_transition(result, root):
     keys = TRANSITION_FLAGS | {
         'validators', 'closed_decisions', 'block_decisions', 'handoff_heights', 'first_protocol',
-        'second_protocol', 'authorization_test', 'scope', 'native_provenance', 'state',
+        'second_protocol', 'authorization_test', 'scope', 'native_provenance', 'state', 'client_contexts',
     }
     if not isinstance(result, dict) or set(result) != keys:
         raise ValueError('transition evidence missing or incomplete')
@@ -99,6 +138,7 @@ def verify_transition(result, root):
     if (not provenance['publication']['entries']
             or provenance['publication']['entries'] != provenance['upgraded']['entries']):
         raise ValueError('native replacement changed the original publication claims')
+    verify_client_contexts(result['client_contexts'], first, second, provenance)
     state = result['state']
     if (not isinstance(state, dict) or set(state) != STATE_TABLES
             or any(not isinstance(value, list) or len(value) != 2
@@ -113,7 +153,7 @@ def transition_semantics(result, root):
     # Live peers can certify idle batches between follower polls. Validate each
     # observed C+1 above; compare outcomes, not a wall-clock-dependent transcript.
     return {key: value for key, value in checked.items()
-            if key not in {'closed_decisions', 'block_decisions', 'handoff_heights'}}
+            if key not in {'closed_decisions', 'block_decisions', 'handoff_heights', 'client_contexts'}}
 
 
 BUILD_RECORD_FLAGS = {
@@ -145,6 +185,10 @@ TOKEN_COUNT_FLAGS = {
 CONFIRMATION_FLAGS = {
     "p1_paid_transaction", "p2_batch_at_h", "confirmation_without_execution",
     "unchanged_usage_and_receipts", "reopened_state_matches",
+}
+REPLACEMENT_FLAGS = {
+    'same_outpoint_replacement', 'original_removed', 'p2_replacement_execution',
+    'one_canonical_charge', 'migration_replayed', 'reopened_state_matches',
 }
 REPLAY_FLAGS = {
     'same_bitcoin_history', 'reopened_state_matches', 'actual_p2_activation', 'retained_decisions_unchanged',
@@ -204,10 +248,17 @@ def verify_recovery(result):
         if name == 'SurvivingSchedule':
             confirmation = case['confirmation']
             if (not isinstance(confirmation, dict)
-                    or set(confirmation) != CONFIRMATION_FLAGS | {'confirmation_height', 'closed_decisions'}
+                    or set(confirmation) != CONFIRMATION_FLAGS | {'confirmation_height', 'closed_decisions', 'replacement'}
                     or confirmation['confirmation_height'] != 3 or confirmation['closed_decisions'] != 5
                     or any(confirmation[key] is not True for key in CONFIRMATION_FLAGS)):
                 raise ValueError('cross-activation confirmation evidence incomplete')
+            replacement = confirmation['replacement']
+            positions = {'replacement_height': 3, 'finality_height': 7, 'closed_decisions': 8}
+            if (not isinstance(replacement, dict) or set(replacement) != REPLACEMENT_FLAGS | set(positions)
+                    or any(replacement[key] is not True for key in REPLACEMENT_FLAGS)
+                    or any(type(replacement[key]) is not int or replacement[key] != value
+                           for key, value in positions.items())):
+                raise ValueError('cross-activation replacement evidence incomplete')
     return result
 
 
@@ -220,9 +271,21 @@ AUTHORIZATION_FLAGS = {
 def verify_authorization(result):
     expected = {'schema': 1, 'notice_blocks': 1008, 'activation_height': 1009,
                 'closed_decisions': 2028}
-    if (not isinstance(result, dict) or set(result) != AUTHORIZATION_FLAGS | set(expected)
+    if (not isinstance(result, dict) or set(result) != AUTHORIZATION_FLAGS | set(expected) | {'successive_upgrades'}
             or any(type(result[key]) is not int or result[key] != value
                    for key, value in expected.items())
             or any(result[key] is not True for key in AUTHORIZATION_FLAGS)):
         raise ValueError('managed authorization replay evidence missing or incomplete')
+    successive = result['successive_upgrades']
+    flags = {'qualification_only_p3', 'fresh_second_approval', 'p2_p3_share_executor',
+             'reopen_and_genesis_replay_match', 'node_local_epoch_excluded'}
+    expected = {'second_notice_blocks': 1008, 'migration_applications': 2, 'closed_decisions': 2019}
+    if (not isinstance(successive, dict) or set(successive) != flags | set(expected) | {'activation_heights', 'protocols'}
+            or any(successive[key] is not True for key in flags)
+            or any(type(successive[key]) is not int or successive[key] != value for key, value in expected.items())
+            or successive['activation_heights'] != [1009, 2017]
+            or not isinstance(successive['protocols'], list) or len(successive['protocols']) != 3
+            or not all(is_digest(value) for value in successive['protocols'])
+            or len(set(successive['protocols'])) != 3):
+        raise ValueError('two successive authorized upgrades and replay are incomplete')
     return result

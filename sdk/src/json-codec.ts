@@ -42,6 +42,7 @@ import type { ContractError } from "./errors.js";
 import type { ContractProvenance, ProvenanceEntry } from "./provenance.js";
 import type { ExtraOutput } from "./outputs.js";
 import type { ExecutionCoordinates } from "./confirmation.js";
+import type { ProtocolSnapshot, SimulationReport } from "./protocol.js";
 import type {
   ComposeOutputs,
   FootprintResponse,
@@ -169,6 +170,14 @@ export interface KontorTransport {
    * but accurate.
    */
   simulate(insts: WireInsts): Promise<OpResultRaw[]>;
+
+  /** Provenance from the same admission that executes the simulation. */
+  simulateWithContext?(
+    insts: WireInsts,
+  ): Promise<SimulationReport<OpResultRaw>>;
+
+  /** Installed support and current canonical/ordering contexts, without signing. */
+  protocol?(): Promise<ProtocolSnapshot>;
 
   /**
    * For-real broadcast. Composes the Bitcoin tx, signs via the

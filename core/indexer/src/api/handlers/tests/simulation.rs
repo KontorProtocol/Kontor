@@ -14,12 +14,14 @@ use bitcoin::taproot::{LeafVersion, TaprootBuilder};
 use bitcoin::transaction::Version;
 use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
 use indexer_types::{ErrorResponse, Inst, InstKind, Insts, TransactionHex, serialize};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use super::new_test_env;
-use crate::api::handlers::post_simulate;
+use crate::api::handlers::{post_simulate, post_simulate_context};
 use crate::protocol::v1::transactions::decode_simulation;
+use crate::protocol_info::{ExecutionContextInfo, SimulationReport};
 use crate::test_utils::{PublicKey, build_inscription};
 
 fn transaction() -> Transaction {
@@ -41,6 +43,58 @@ fn transaction() -> Transaction {
                 .into_script(),
         }],
     }
+}
+
+#[tokio::test]
+async fn simulation_context_comes_from_execution_reply_and_legacy_shape_is_preserved() -> Result<()>
+{
+    let (mut env, _conn, _dir) = new_test_env().await?;
+    let (sender, mut receiver) = mpsc::channel(1);
+    env.simulate_tx = sender;
+    let server = TestServer::new(
+        Router::new()
+            .route("/simulate", post(post_simulate))
+            .route("/simulate/context", post(post_simulate_context))
+            .with_state(env),
+    );
+    let context: ExecutionContextInfo = serde_json::from_value(json!({
+        "protocol_id": "aa".repeat(32), "execution_definition": "bb".repeat(32),
+        "application_ordinal": "9007199254740993", "lineage": "cc".repeat(32),
+        "bitcoin_height": "9007199254740994", "bitcoin_hash": "dd".repeat(32),
+        "checkpoint_height": null, "checkpoint_hash": null,
+        "receipt_epoch": "local", "rollback_generation": "9007199254740995",
+        "simulation_height": "9007199254740995"
+    }))?;
+    for path in ["/simulate", "/simulate/context"] {
+        let raw = transaction();
+        let request = TransactionHex {
+            hex: serialize_hex(&raw),
+        };
+        let reply_context = context.clone();
+        let respond = async {
+            let (queued, reply) = receiver.recv().await.unwrap();
+            assert_eq!(queued, serialize_bitcoin(&raw));
+            reply
+                .send(Ok(Ok(SimulationReport {
+                    context: reply_context,
+                    operations: vec![],
+                })))
+                .unwrap();
+        };
+        let (response, ()) = timeout(Duration::from_secs(5), async {
+            tokio::join!(server.post(path).json(&request), respond)
+        })
+        .await?;
+        response.assert_status_ok();
+        let result = response.json::<Value>()["result"].clone();
+        if path.ends_with("/context") {
+            assert_eq!(result["context"], serde_json::to_value(&context)?);
+            assert_eq!(result["operations"], json!([]));
+        } else {
+            assert_eq!(result, json!([]));
+        }
+    }
+    Ok(())
 }
 
 fn inscription_input(payload: Vec<u8>) -> Result<TxIn> {

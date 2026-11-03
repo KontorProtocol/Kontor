@@ -3,6 +3,7 @@ use serde::Deserialize;
 
 use crate::protocol::coordinator::{baseline::Baseline, successor};
 use crate::protocol::identity::{ChainId, DefinitionReference, domain_digest};
+use crate::protocol_info::BuildProvenance;
 
 const RUNTIME: &[u8] = include_bytes!("protocol/coordinator/managed/definitions/first.json");
 
@@ -102,6 +103,24 @@ fn verify_record(input: Option<&str>) -> Result<()> {
 /// Final executable/native-symbol auditing remains a release-builder check.
 pub fn verify() -> Result<()> {
     verify_record(option_env!("KONTOR_NODE_ATTESTATION"))
+}
+
+pub(crate) fn diagnostics() -> Result<BuildProvenance> {
+    verify()?;
+    let record: BuildRecord = serde_json::from_str(
+        option_env!("KONTOR_NODE_ATTESTATION").context("missing build record")?,
+    )?;
+    Ok(BuildProvenance {
+        target: record.target,
+        profile: record.profile,
+        compiler_sha256: record.compiler_sha256,
+        source_inputs_sha256: record.source_inputs_sha256,
+        lock_sha256: record.lock_sha256,
+        consensus_runtime_definition: hex::encode(domain_digest(
+            b"kontor/consensus-definition/v1",
+            RUNTIME,
+        )),
+    })
 }
 
 #[cfg(feature = "protocol-qualification")]

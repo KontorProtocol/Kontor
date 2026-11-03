@@ -13,10 +13,15 @@ use indexer_types::{
 use libsql::TransactionBehavior;
 
 use super::validate_query;
-use crate::api::{Env, confirmation, error::HttpError, result::Result};
+use crate::api::{
+    Env, confirmation,
+    error::{Error as ApiError, HttpError},
+    result::Result,
+};
 use crate::block::{filter_map, inspect};
 use crate::database::queries::{get_transaction_by_txid, get_transactions_paginated};
 use crate::database::types::TransactionQuery;
+use crate::protocol_info::SimulationReport;
 
 pub async fn get_transactions(
     Query(query): Query<TransactionQuery>,
@@ -154,6 +159,17 @@ pub async fn post_simulate(
     State(env): State<Env>,
     Json(TransactionHex { hex }): Json<TransactionHex>,
 ) -> Result<Vec<OpWithResult>> {
+    Ok(simulate(&env, hex).await?.operations.into())
+}
+
+pub async fn post_simulate_context(
+    State(env): State<Env>,
+    Json(TransactionHex { hex }): Json<TransactionHex>,
+) -> Result<SimulationReport> {
+    Ok(simulate(&env, hex).await?.into())
+}
+
+async fn simulate(env: &Env, hex: String) -> std::result::Result<SimulationReport, ApiError> {
     let raw = HexSliceToBytesIter::new(&hex)
         .map_err(encode::FromHexError::from)
         .and_then(|bytes| {
@@ -173,6 +189,5 @@ pub async fn post_simulate(
     Ok(ret_rx
         .await?
         .map_err(|e| HttpError::BadRequest(e.to_string()))?
-        .map_err(HttpError::BadRequest)?
-        .into())
+        .map_err(HttpError::BadRequest)?)
 }

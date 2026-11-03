@@ -15,6 +15,7 @@ import tomllib
 from audit import audit_final, audit_inputs
 from common_ownership import verify as verify_common_ownership
 from execution_definition import verify_reference
+from linker_record import validate as validate_linker_record
 from coordinator_definition import verify as verify_coordinator_reference
 from managed_definition import graph_manifest, verify as verify_managed_reference
 from metadata_control import proc_macro_hashes
@@ -442,10 +443,17 @@ def build_node(graphs, args, base_env, output, consensus=()):
         verify_staged_inputs(graph)
     audited, libraries = node_link_inputs(graphs, consensus)
     sets, versions = audit_inputs(audited, directory)
+    linker_directory = directory / 'linker'
+    linker_directory.mkdir(exist_ok=True)
+    linker_wrapper = linker_directory / 'cc'
+    shutil.copyfile(ROOT / 'tools/protocol-bundles/linker_record.py', linker_wrapper)
+    linker_wrapper.chmod(0o755)
     spec = {"compiler": env["RUSTC"], "features": features, "link_set": args.link_set,
             "source_inputs_sha256": fingerprint(sources),
             "lock_sha256": lock_hash, "root_objects": str(directory / "root-objects.json"),
-            "graphs": libraries}
+            "graphs": libraries, 'linker_wrapper': str(linker_wrapper),
+            'linker_wrapper_sha256': digest(linker_wrapper),
+            'linker_record': str(directory / 'linker-record.json')}
     if managed:
         spec["attestation"] = {
             "schema": 1, "link_set": args.link_set, "target": args.target, "profile": args.profile,
@@ -478,6 +486,10 @@ def build_node(graphs, args, base_env, output, consensus=()):
     log = directory / "build.log"
     run(command, ROOT, env, log)
     executable = node_executable(log)
+    linker_record = json.loads(Path(spec['linker_record']).read_text())
+    validate_linker_record(linker_record, digest(spec_path), digest(executable))
+    if json.loads(Path(spec['root_objects']).read_text())['linker_record_sha256'] != digest(Path(spec['linker_record'])):
+        raise RuntimeError('node compiler and linker records disagree')
     archives, _, native_outputs, proc_macros = current_artifacts(log, directory / "target", args.target, "indexer")
     root_objects = node_codegen_objects(Path(spec["root_objects"]), spec_path)
     node_inputs = set(archives)
@@ -506,6 +518,8 @@ def build_node(graphs, args, base_env, output, consensus=()):
               "source_inputs_sha256": fingerprint(sources), "lock_sha256": lock_hash,
               "link_spec_sha256": digest(spec_path), "build_log_sha256": digest(log),
               "root_codegen_sha256": digest(Path(spec["root_objects"])), "wrapper_sha256": digest(wrapper),
+              "linker_record_sha256": digest(Path(spec['linker_record'])),
+              "linker_wrapper_sha256": digest(linker_wrapper),
               "native_helpers": helpers, "runtime_libraries": libraries,
               "compiler_proc_macros": [{"path": str(path), "sha256": digest(path)} for path in proc_macros],
               "ownership": {name: digest(directory / name) for name in (

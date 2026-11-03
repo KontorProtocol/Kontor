@@ -156,9 +156,12 @@ async fn scenario(
             .await?
             .map_err(anyhow::Error::msg)
             .context("recognized simulation")?;
+        ensure!(simulated.context.execution_definition == hex::encode(execution.session.executor.execution_definition?.0));
+        ensure!(simulated.context.protocol_id == selection.protocol_id().map(|id| hex::encode(id.0)));
+        ensure!(simulated.context.simulation_height.as_deref() == Some("2"));
         report.states.insert(
             format!("{label}/simulation"),
-            serde_json::to_value(simulated)?,
+            serde_json::to_value(simulated.operations)?,
         );
         ensure!(
             state(&conn).await? == initial,

@@ -1,9 +1,16 @@
 # Independently built protocol bundles
 
-K1 introduces a qualification executable and reusable builder. The production
-node still uses its existing P1 execution path. K2a defines the semantic adapter,
-K2b extracts P1 and changes the node build, and K7 introduces actual activation.
-Passing this qualification does not mean those phases are implemented.
+The production `managed-node` build links independently locked historical
+executors into one executable. Validated canonical history selects the executor;
+installing a newer implementation does not activate it. One pinned Malachite
+runtime handles networking and consensus across activations. It is independently
+built for dependency ownership, but is not replaced on every protocol upgrade.
+See [validator startup](validator-startup.md) for role promotion and protected
+state, and [upgrade approvals](upgrade-approvals.md) for authorization and rehearsal.
+
+The standalone proof graphs below are build/isolation fixtures. Their results
+are separate from the real managed-node acceptance evidence recorded in the
+[execution ledger](execution-ledger.md).
 
 K1-REPIN uses `protocol-bundles/pulley-first` and `pulley-second` as the active
 graphs, while retaining the original `first` and `second` manifests and locks
@@ -38,10 +45,9 @@ argument tuple and guest result tuple accounts for two tuple nodes and two u32
 nodes. Host readiness must not change this charge. The existing pure component
 proof retains its distinct 1026/1028 charges.
 
-This qualifies coexistence of the proof engines. S2 still qualifies the actual
-production runtime's stack and performance behavior, OWNERSHIP handles
-cancellation, and K2b must exercise the full semantic runtime through both
-bundles. These proof settings do not close those gates.
+This qualifies coexistence of the proof engines. It does not replace production
+stack, cancellation, or retained semantic-runtime checks. Preserve those existing
+results and rerun affected checks when their source or build inputs change.
 
 ## Build and evidence
 
@@ -82,11 +88,17 @@ The evidence records resolved packages and features, both lockfiles, source
 hashes, inherited workspace manifests and Cargo configuration, compiler and
 sysroot inputs, build flags, exact staged rlibs and native archives, compiler
 plugins, common runtime ownership, final symbol ownership and executable hash.
-The symbol reader's path, hash and version are also recorded. The current report
-records the native environment and C compiler version, but does not hash the
-selected linker backend. K11 release attestation must capture the actual driver
-invocation and backend selection, including Rust's linker flags, before claiming
-that identity. K1 verifies ownership in the produced executable itself.
+The symbol reader's path, hash and version are also recorded. The node's
+`linker-record.json` records the actual driver invocation, expanded response-file
+arguments, working directory, driver identity and selected backend path/hash.
+Backend selection comes from the same compiler driver's plan while temporary
+link inputs still exist. GCC's collect2 path additionally uses the driver's
+program search with Rust's `-B` directories and selected `-fuse-ld` variant;
+Clang's plan names the backend directly. This is selection provenance, not a trace
+of arbitrary child processes. Custom GCC specs/wrappers and
+`COLLECT_LD_OVERRIDE` require explicit qualification and are rejected.
+The record binds the link specification and output hash, and the compiler-object
+record binds its hash. The final native-symbol audit remains independently required.
 Source and staged artifact checks run across compilation and qualification.
 Git checkouts must match their pinned commit objects, including raw tracked
 file contents, symlink targets, executable modes, staged indexes and recursive
@@ -105,7 +117,7 @@ byte-identical executables.
 
 ## Isolation and common ownership
 
-### Production node build under development
+### Production node build
 
 K2b adds `--build-executors` and `--build-node` to the same builder. These modes
 use production recipes independently of the proof recipes. The executor contains
@@ -114,9 +126,9 @@ The separate `protocol-bundles/node` workspace owns node services and physical
 storage, and its resolved graph must not contain Wasmtime, an executor crate or
 one of the independently built consensus crates.
 
-The K5 builder defaults to the `managed-node` link set: retained `first` and
-current `observer` executors, plus independent `consensus-first` and
-`consensus-second` graphs. It enables managed startup in the daemon. The earlier
+The builder defaults to the `managed-node` link set: retained `first` and
+current `observer` executors, plus the single pinned `consensus-first` graph.
+It enables managed startup in the daemon. The earlier
 link sets remain explicit qualification configurations, not a promise to support
 intermediate development databases. Executor and consensus roles are recorded
 separately, so their shared `first` label cannot alias native ownership or evidence.
@@ -203,12 +215,12 @@ graphs; it no longer compiles a unified workspace whose artifacts the isolated
 graphs cannot reuse. The opt-in `protocol-bundle-qualification` image uses
 `tools/protocol-bundles/qualify_node.py` to build the managed node and execute both
 real executor graphs. Managed qualification also compiles interface controls
-against both consensus libraries and runs the actual node adapter tests.
+against the pinned consensus library and runs the actual node adapter tests.
 The runner rejects stale or changed binaries, missing graphs/cases, mismatched
 observations and subprocess failures, and records raw output hashes with the
 node build report hash in `executors/managed-node/node-execution.json`. Its 300-second timeout
 is a test timeout, not a Kontor execution cutoff. Full release-image and platform
-qualification is still required before the phase can merge.
+qualification is required for affected release candidates.
 
 `tools/protocol-bundles/compare_node.py` verifies the downloaded linked-node
 results against an explicit policy: `release` requires Linux x86-64, Linux ARM64
@@ -291,7 +303,7 @@ that boundary. Wrong-graph opaque owners are rejected. Exported calls contain
 panics, including a panic in the host callback. Engine owners are dropped on
 control threads, where their graph's destructor can finish joining workers.
 
-## Process resources
+## Standalone proof process-resource checks
 
 Bundles may not subscribe to node control signals or spawn children. A source
 check guards maintained Kontor/Malachite call sites; it is a review tripwire,
@@ -324,13 +336,16 @@ remain separate build evidence. A stale reference fails the build; a build does
 not regenerate it. The retained crate embeds its own reference directly, without
 depending on a build-script environment variable.
 
-For a deliberately changed, unreleased definition, run
-`python3 tools/protocol-bundles/execution_definition.py first --write` (or
-`second`) under the pinned toolchain, inspect the changed inputs and ID, then
+For a deliberately changed, unreleased P2 definition, run
+`python3 tools/protocol-bundles/execution_definition.py observer --write`
+under the pinned toolchain, inspect the changed inputs and ID, then
 qualify the resulting executors. Omitting `--write` only verifies the reference.
 Never overwrite a released definition to silence a mismatch. Preserve its
 source graph and add the new definition separately. Compatibility qualification
 of a new compiler/platform artifact is distinct from changing execution rules.
+Preserve the frozen P1 source and reference. Coordinator source changes may also
+require `python3 tools/protocol-bundles/managed_definition.py --write`; inspect the
+changed source inventory instead of regenerating references automatically in CI.
 
 The definition also commits the immutable `protocol/v1/storage-contract.json`
 reference. It specifies the required logical storage semantics and identifies
@@ -357,12 +372,12 @@ The migration qualification factory registers a fixed test-only Rust routine
 alongside the no-op migration. It exercises budgeted reads and writes, immutable
 input, atomic rollback and retry through the real executor adapters. The normal
 factory rejects that routine. It is not a deployed smart contract or an enabled
-network upgrade; authorization and activation remain later milestones.
+network upgrade. Production migration registration and approval are separate.
 
 ### Retained graph changes
 
 1. Preserve the old manifest, lock, source identity and semantics. Add a new
-   protocol mapping in the later production phases rather than rewriting history.
+   protocol mapping rather than rewriting history.
 2. Assign each retained Wasmtime graph a unique immutable package version and
    native prefix, even when its VM code is otherwise unchanged. Reusing VM code
    requires a new version-only fork release until a separate native namespace

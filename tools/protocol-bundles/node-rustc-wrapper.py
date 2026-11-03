@@ -79,6 +79,15 @@ def attestation_environment(arguments, spec):
     return {'KONTOR_NODE_ATTESTATION': json.dumps(record, sort_keys=True, separators=(',', ':')),
             'KONTOR_NODE_TARGET': record['target']}
 
+
+def linker_driver(arguments):
+    driver = 'cc'
+    for index, argument in enumerate(arguments):
+        option = arguments[index + 1] if argument == '-C' else argument.removeprefix('-C')
+        if option.startswith('linker='):
+            driver = option.removeprefix('linker=')
+    return driver
+
 def main():
     spec_path = Path(os.environ['KONTOR_NODE_LINK_SPEC'])
     spec_hash = digest(spec_path)
@@ -96,6 +105,12 @@ def main():
     environment.pop('KONTOR_NODE_TARGET', None)
     if '--crate-name' in original and original[original.index('--crate-name') + 1] in ('indexer', 'kontor'):
         environment.update(attestation_environment(original, spec))
+    if capture is not None:
+        environment['KONTOR_REAL_LINKER'] = linker_driver(arguments)
+        if digest(spec['linker_wrapper']) != spec['linker_wrapper_sha256']:
+            raise RuntimeError('linker wrapper changed before invocation')
+        Path(spec['linker_record']).unlink(missing_ok=True)
+        arguments.extend(['-C', 'linker=' + spec['linker_wrapper']])
     result = subprocess.run([compiler, *arguments], close_fds=False, env=environment)
     if result.returncode:
         raise SystemExit(result.returncode)
@@ -107,6 +122,7 @@ def main():
         Path(spec['root_objects']).write_text(json.dumps({
             'spec_sha256': spec_hash, 'objects': objects, 'compiler': compiler,
             'arguments': arguments, 'working_directory': os.getcwd(),
+            'linker_record_sha256': digest(spec['linker_record']),
         }) + '\n')
 
 

@@ -63,6 +63,40 @@ This changes the generated SDK API. Regenerate bindings and replace
 handling around ordinary calls into `try` / `catch`. The contract WIT and on-chain
 behavior are unchanged; low-level WIT decoding still preserves result values.
 
+## Protocol discovery and simulation context
+
+`await session.getProtocol()` reads `/api/protocol`: the canonical protocol,
+installed protocol manifests, supported transaction formats and host ABIs, and
+certified-history progress. Heights and ordinals in this endpoint are decimal
+strings, so use `BigInt` rather than `Number` for arithmetic. Managed nodes also
+report build provenance separately from protocol identity. A `ready` response
+means the reported local history is closed and its protocol is installed. It
+does not prove that the node is at the network tip or authorized to sign.
+
+Use `simulateWithContext()` when retaining an execution preview or gas estimate:
+
+```ts
+const preview = await call.simulateWithContext();
+console.log(preview.result.status, preview.result.gas);
+console.log(preview.context.protocol_id, preview.context.lineage);
+const batch = await session.bulk(firstCall, secondCall).simulateWithContext();
+console.log(batch.result[0].gas, batch.result[1].status);
+```
+
+The context comes from the same execution selection as the simulated operations,
+including the fabricated next-block height and rollback generation. It is not
+fetched separately through discovery. Gas and results predict execution only
+against that state; an intervening upgrade, rollback or other transaction can
+change them. Re-simulate before relying on an old estimate. These methods neither
+broadcast nor change the call's gas cap. Bitcoin fee rates remain a separate
+estimate. Context identifiers are local provenance, not certified state roots or
+promises of future inclusion.
+
+Existing `simulate()` responses retain their original shape. Custom transports
+may implement the optional `protocol` and `simulateWithContext` methods. If they
+do not, the new SDK methods throw a `TransportError` rather than invent context
+from a later discovery request.
+
 ## Token balance pages
 
 Regenerate contract bindings from the current token WIT. `balances` takes an optional

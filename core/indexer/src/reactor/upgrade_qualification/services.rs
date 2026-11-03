@@ -10,13 +10,15 @@ use indexer_types::{
 };
 use metrics_exporter_prometheus::PrometheusBuilder;
 use reqwest::Client as HttpClient;
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 
 use super::{DATABASE, NETWORK};
+use crate::api::handlers::NodeStatus;
 use crate::api::{DaemonEnv, Env, router};
 use crate::bitcoin_client::Client;
 use crate::bitcoin_client::mock::MockBitcoinRpc;
@@ -27,9 +29,15 @@ use crate::database::Reader;
 use crate::event::EventSubscriber;
 use crate::info::{compute_info_core, run_info_publisher};
 use crate::reactor::Simulation;
+use crate::reactor::status::{EngineAuthority, RuntimeStatus};
 use crate::runtime::ownership::OwnerService;
 use crate::stopper::Shutdown;
 use crate::upgrade_control::UpgradeSubmission;
+
+#[derive(Deserialize)]
+struct DiagnosticResponse {
+    result: Value,
+}
 
 pub(super) struct Connections {
     pub(super) blocks: mpsc::Receiver<BlockEvent>,
@@ -39,6 +47,7 @@ pub(super) struct Connections {
     pub(super) simulate: mpsc::Receiver<Simulation>,
     pub(super) upgrade: mpsc::Receiver<UpgradeSubmission>,
     pub(super) fees: watch::Sender<Fees>,
+    pub(super) runtime_status: watch::Sender<Option<RuntimeStatus>>,
 }
 
 pub(super) struct Services {
@@ -112,6 +121,7 @@ impl Services {
         let (simulate_tx, simulate) = mpsc::channel(1);
         let (upgrade_tx, upgrade) = mpsc::channel(1);
         let (fees, fees_rx) = watch::channel(Fees::floor(1));
+        let (runtime_status, runtime_status_rx) = watch::channel(None);
         let env = Env::new_daemon(DaemonEnv {
             config,
             shutdown: shutdown.signal(),
@@ -124,6 +134,7 @@ impl Services {
             reactor_ready: reactor_ready.clone(),
             failed: Arc::new(AtomicBool::new(false)),
             consensus_listen_addr: addresses,
+            runtime_status: runtime_status_rx,
             fees_rx,
             info_rx,
             database_name: DATABASE.into(),
@@ -198,6 +209,7 @@ impl Services {
                 simulate,
                 upgrade,
                 fees,
+                runtime_status,
             },
         ))
     }
@@ -243,6 +255,59 @@ impl Services {
             .json::<ResultResponse<ViewResult>>()
             .await?
             .result)
+    }
+
+    pub(super) async fn protocol(&self) -> Result<Value> {
+        Ok(self
+            .http
+            .get(format!("http://{}/api/protocol", self.address))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<DiagnosticResponse>()
+            .await?
+            .result)
+    }
+
+    pub(super) async fn simulate(&self, raw: &[u8]) -> Result<Value> {
+        Ok(self
+            .http
+            .post(format!(
+                "http://{}/api/transactions/simulate/context",
+                self.address
+            ))
+            .json(&json!({"hex": hex::encode(raw)}))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<DiagnosticResponse>()
+            .await?
+            .result)
+    }
+
+    pub(super) async fn runtime(&self, authority: EngineAuthority) -> Result<RuntimeStatus> {
+        timeout(Duration::from_secs(10), async {
+            loop {
+                self.healthy()?;
+                let status = self
+                    .http
+                    .get(format!("http://{}/api/status", self.address))
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<NodeStatus>()
+                    .await?;
+                ensure!(!status.failed && !status.shutting_down);
+                if let Some(runtime) = status.runtime
+                    && runtime.authority == authority
+                {
+                    return Ok(runtime);
+                }
+                sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .context("runtime authority observation timed out")?
     }
 
     pub(super) async fn provenance(&self, name: &str) -> Result<ContractProvenanceResponse> {

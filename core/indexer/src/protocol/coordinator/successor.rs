@@ -47,6 +47,18 @@ fn compose(first: &Baseline, reference: &DefinitionReference) -> Result<Protocol
     Ok(next)
 }
 
+// A second genuine transition for qualification, sharing P2's execution semantics.
+// Normal nodes do not install this manifest merely because they have its executor.
+#[cfg(all(kontor_managed, feature = "protocol-qualification"))]
+pub(crate) fn qualification_third(chain: ChainId) -> Result<ProtocolManifest> {
+    let mut next = manifest(chain)?;
+    next.predecessor = next.id()?;
+    next.protocol_number = 3;
+    next.input_state_schema = 2;
+    next.migration = migration_definition::preserve(next.executor).id()?;
+    Ok(next)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

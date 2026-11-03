@@ -387,6 +387,7 @@ async fn run_daemon(config: Config) -> Result<()> {
     // Whether we are stopping because something died — see `Env::failed`.
     let failed = Arc::new(AtomicBool::new(false));
     let (consensus_listen_addr_tx, consensus_listen_addr_rx) = tokio::sync::watch::channel(None);
+    let (runtime_status_tx, runtime_status_rx) = tokio::sync::watch::channel(None);
     let (event_tx, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
     // Seed the info snapshot from current DB state; the reactor republishes
@@ -419,6 +420,7 @@ async fn run_daemon(config: Config) -> Result<()> {
             reactor_ready: reactor_ready.clone(),
             failed: failed.clone(),
             consensus_listen_addr: consensus_listen_addr_rx.clone(),
+            runtime_status: runtime_status_rx,
             reader: reader.clone(),
             event_subscriber: event_subscriber.clone(),
             bitcoin: bitcoin.clone(),
@@ -473,6 +475,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         config.consensus_propose_timeout_ms,
         Some(fees_tx),
         consensus_listen_addr_tx,
+        runtime_status_tx,
         config.network,
         reactor::PruneConfig {
             enabled: config.prune,
