@@ -137,9 +137,9 @@ jobs:
       - uses: ./.github/actions/setup-kontor-tools
         with:
           run-tests: 'true'
+      - run: rustup component add --toolchain 1.99.1 rustfmt clippy llvm-tools-preview
       - run: cargo fmt --manifest-path core/kontor-build/Cargo.toml -- --check
       - run: cargo clippy --locked --manifest-path core/kontor-build/Cargo.toml --all-targets -j2 -- -D warnings
-      - run: rustup component add --toolchain 1.99.1 llvm-tools-preview
       - run: cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test object_tools -j2 -- --ignored
 
   # Match the canonical platform used by both local generation and CI.
