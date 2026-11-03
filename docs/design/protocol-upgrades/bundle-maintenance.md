@@ -115,6 +115,17 @@ still verifies both the retained engine and proof settings, plus the node's
 delegation to the retained engine. The Python builder calls these Rust checks;
 the former `capabilities.py` module has been removed.
 
+`tools/kontor interface` runs and verifies the existing bundle interface controls
+and node-adapter checks. Probe selection still distinguishes retained K3, release
+P1 and the pinned consensus runtime. Expected compiler error codes, probe order,
+source bytes and report bindings are preserved. Relative library reads and
+compiler arguments use the caller's working directory. Compiler and adapter
+subprocesses retain their 60/120/30-second limits, and a failed interface rerun
+removes the previous successful report. Graph fingerprints retain ASCII JSON
+escaping, including Unicode paths; malformed identities and non-integer numeric
+evidence are rejected. `type_boundary.py` remains a forwarding adapter until its
+builder and evidence-comparison callers are migrated.
+
 | Output | Directory | Wasmtime version | Immutable fork revision | Lifting rate |
 | --- | --- | --- | --- | ---: |
 | first | pulley-first | 51.0.0-kontor.2 | 0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7 | 512 |

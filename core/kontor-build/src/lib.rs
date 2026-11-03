@@ -4,6 +4,7 @@ mod ci_scope;
 mod compiler_wrapper;
 mod container;
 mod diagnostics;
+pub mod interface;
 pub mod linker_record;
 pub mod metadata_control;
 mod native_lock;

@@ -6,6 +6,7 @@ use std::process;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kontor_build::build_inputs::{Request as BuildInputRequest, run as build_inputs};
+use kontor_build::interface::{Request as InterfaceRequest, run as interface};
 use kontor_build::linker_record::verify_input;
 use kontor_build::object_tools::{Request as ObjectRequest, run as inspect_object};
 use kontor_build::provenance::{Request as ProvenanceRequest, run as provenance};
@@ -64,6 +65,8 @@ enum Command {
     Recipes,
     /// Verify resolved dependencies, Cargo artifacts and guest capabilities.
     BuildInputs,
+    /// Run or verify independent bundle interface controls.
+    Interface,
     /// Inventory build source inputs from a JSON request on standard input.
     Provenance,
     /// Select CI checks from the GitHub event and complete Git change set.
@@ -115,6 +118,11 @@ fn main() -> Result<()> {
         Command::BuildInputs => {
             let request: BuildInputRequest = serde_json::from_reader(io::stdin().lock())?;
             println!("{}", build_inputs(request)?);
+            Ok(())
+        }
+        Command::Interface => {
+            let request: InterfaceRequest = serde_json::from_reader(io::stdin().lock())?;
+            println!("{}", interface(request)?);
             Ok(())
         }
         Command::VerifySources => {
