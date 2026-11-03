@@ -1,3 +1,4 @@
+pub mod build_inputs;
 mod bundles;
 mod ci_scope;
 mod compiler_wrapper;

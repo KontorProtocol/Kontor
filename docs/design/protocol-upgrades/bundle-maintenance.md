@@ -105,6 +105,16 @@ settings and successful identity reports are unchanged. Attestations require
 exact JSON types, so numeric zero cannot substitute for `false`, and a floating
 point number cannot substitute for an integer.
 
+`tools/kontor build-inputs` checks the resolved dependency closure, selects current
+Cargo artifacts and checks synchronous guest-capability settings. Dependency
+reports preserve package and feature ordering, immutable fork pins and native
+patch ownership. Duplicate package or resolve-node IDs and missing reachable
+nodes fail validation. Artifact selection keeps host proc macros separate from
+target archives and requires exactly one bundle facade. The capability check
+still verifies both the retained engine and proof settings, plus the node's
+delegation to the retained engine. The Python builder calls these Rust checks;
+the former `capabilities.py` module has been removed.
+
 | Output | Directory | Wasmtime version | Immutable fork revision | Lifting rate |
 | --- | --- | --- | --- | ---: |
 | first | pulley-first | 51.0.0-kontor.2 | 0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7 | 512 |

@@ -2,6 +2,7 @@
 """Resolve, build and attest separately owned protocol dependency graphs."""
 
 import argparse
+from dataclasses import asdict
 import fcntl
 from functools import lru_cache
 import hashlib
@@ -18,17 +19,14 @@ from common_ownership import verify as verify_common_ownership
 from execution_definition import verify_reference
 from coordinator_definition import verify as verify_coordinator_reference
 from managed_definition import graph_manifest, verify as verify_managed_reference
-from provenance import check_source_policy, fingerprint, locked_packages, proc_macro_hashes, runtime_libraries, source_inputs
+from provenance import _request, check_source_policy, fingerprint, locked_packages, proc_macro_hashes, runtime_libraries, source_inputs
 from provenance import tools as toolchain_inputs
 from symbol_tool import TOOLCHAIN
-from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, GRAPHS, MALACHITE_REVISION, MALACHITE_VERSION, executor_graphs, graph_root, identity, verify_engine_observations, verify_identity, verify_reservations
-from capabilities import verify as verify_capabilities
+from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, GRAPHS, executor_graphs, graph_root, identity, verify_engine_observations, verify_identity, verify_reservations
 from type_boundary import verify as verify_type_boundary, verify_node_adapter
 
 ROOT = Path(__file__).resolve().parents[2]
-MALACHITE = MALACHITE_REVISION
 TARGETS = {"aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "aarch64-apple-darwin"}
-FORBIDDEN = {"cache", "profiling", "debug-builtins"}
 
 
 def digest(path):
@@ -89,94 +87,20 @@ def metadata(manifest, target, env, offline, features=(), *, source_root=None):
 
 def identities(graph, data, graphs=None):
     recipe = (GRAPHS if graphs is None else graphs)[graph]
-    source_root = graph_root(ROOT, recipe)
-    revision, version, itoa = recipe.revision, recipe.version, recipe.itoa
-    packages = {p["id"]: p for p in data["packages"]}
-    nodes = {node["id"]: node for node in data["resolve"]["nodes"]}
-    root = data["resolve"]["root"]
-    reachable = set()
-    pending = [root]
-    while pending:
-        key = pending.pop()
-        if key in reachable:
-            continue
-        reachable.add(key)
-        pending.extend(dep["pkg"] for dep in nodes[key]["deps"])
-    selected = [packages[key] for key in sorted(reachable)]
-    def one(name):
-        found = [p for p in selected if p["name"] == name]
-        if len(found) != 1:
-            raise RuntimeError(f"{graph}: expected one {name}, found {len(found)}")
-        return found[0]
-    if recipe.kind == "consensus":
-        if {"wasmtime", "libsql"} & {p["name"] for p in selected}:
-            raise RuntimeError(f"{graph}: consensus graph contains execution or storage services")
-        for package in selected:
-            if package["name"].startswith("arc-malachite"):
-                if (package["version"] != MALACHITE_VERSION
-                        or not (package["source"] or "").endswith("#" + MALACHITE)):
-                    raise RuntimeError(f"{graph}: unqualified {package['name']} source or version")
-    else:
-        vm = one("wasmtime")
-        if vm["version"] != version or not vm["source"].endswith("#" + revision):
-            raise RuntimeError(f"{graph}: immutable Wasmtime identity changed")
-        if FORBIDDEN & set(nodes[vm["id"]]["features"]):
-            raise RuntimeError(f"{graph}: forbidden Wasmtime feature")
-    for name in (("arc-malachitebft-app-channel", "if-watch") if recipe.malachite_engine else ()):
-        package = one(name)
-        if not package["source"].endswith("#" + MALACHITE):
-            raise RuntimeError(f"{graph}: unqualified {name} source")
-    if itoa is not None and one("itoa")["version"] != itoa:
-        raise RuntimeError(f"{graph}: missing conflicting itoa version")
-    for name in recipe.native_patches:
-        package = one(name)
-        if Path(package["manifest_path"]).parent.resolve() != source_root / "core/vendor" / name:
-            raise RuntimeError(f"{graph}: missing native patch for {name}")
-    if recipe.kind == "executor":
-        forbidden = {"libsql", "arc-malachitebft-app-channel", "if-watch"}
-        if forbidden & {p["name"] for p in selected}:
-            raise RuntimeError(f"{graph}: executor graph contains node-owned storage or consensus services")
-        # An optional native library still needs its patch if a new dependency
-        # makes it reachable. Absence is not permission to use unowned symbols.
-        for package in selected:
-            if package["name"] == "ring" and Path(package["manifest_path"]).parent.resolve() != source_root / "core/vendor/ring":
-                raise RuntimeError(f"{graph}: missing native patch for ring")
-    return [{"name": p["name"], "version": p["version"], "source": p["source"],
-             "features": sorted(nodes[p["id"]]["features"])} for p in selected]
+    return _request(dict(operation="identities", root=str(ROOT), recipe=asdict(recipe),
+                         data=data), command="build-inputs")
 
 
 def current_artifacts(log, target_dir, target, package):
-    messages = []
-    for line in log.read_text().splitlines():
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            messages.append(value)
-    target_root = target_dir / target
-    archives = set()
-    proc_macros = set()
-    facades = set()
-    native_outputs = []
-    for item in messages:
-        if item.get("reason") == "compiler-artifact":
-            if "proc-macro" in item["target"]["kind"]:
-                proc_macros.update(Path(path) for path in item["filenames"]
-                                   if Path(path).suffix in (".so", ".dylib"))
-            for filename in item["filenames"]:
-                path = Path(filename)
-                if path.suffix == ".rlib" and path.is_relative_to(target_root):
-                    archives.add(path)
-                    if item["target"]["name"] == package.replace("-", "_"):
-                        facades.add(path)
-        elif item.get("reason") == "build-script-executed":
-            output = Path(item["out_dir"])
-            if output.is_relative_to(target_root):
-                native_outputs.append(item)
-    if len(facades) != 1 or not archives:
-        raise RuntimeError(f"missing or ambiguous current bundle rlib: {facades}")
-    return sorted(archives), facades.pop(), native_outputs, sorted(proc_macros)
+    result = _request(dict(operation="current_artifacts", log=str(log.absolute()),
+                           target_dir=str(target_dir), target=target, package=package),
+                      command="build-inputs")
+    return (list(map(Path, result["archives"])), Path(result["facade"]),
+            result["native_outputs"], list(map(Path, result["proc_macros"])))
+
+
+def verify_capabilities(root):
+    _request(dict(operation="capabilities", root=str(root.absolute())), command="build-inputs")
 
 
 def build_graph(graph, args, base_env, output, graphs=None):
