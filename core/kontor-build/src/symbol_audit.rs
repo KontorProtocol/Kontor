@@ -13,7 +13,7 @@ pub use crate::object_tools::GDB_SCRIPT;
 use crate::object_tools::ObjectTools;
 
 pub const INPUT_RUNTIME: &[&str] = &["DW.ref.rust_eh_personality", GDB_SCRIPT];
-const FINAL_RUNTIME: &[&str] = &[
+pub(crate) const FINAL_RUNTIME: &[&str] = &[
     "rust_eh_personality",
     "main",
     "_start",
@@ -35,16 +35,16 @@ const FINAL_RUNTIME: &[&str] = &[
     "__udivti3",
     "__umodti3",
 ];
-const CRYPTO: &[&str] = &[
+pub(crate) const CRYPTO: &[&str] = &[
     "blst_keygen",
     "rustsecp256k1_v0_10_0_ecdsa_sign_recoverable",
     "rustsecp256k1_v0_10_0_default_illegal_callback_fn",
     "ring_core_0_17_14__CRYPTO_memcmp",
 ];
-static RUST: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static RUST: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\A(?:_ZN.+17h[0-9a-f]{16}E|_R[A-Z].+)(?:\.llvm\.\d+)?\z").unwrap()
 });
-static ANONYMOUS: LazyLock<Regex> =
+pub(crate) static ANONYMOUS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\Aanon\.[0-9a-f]+\.\d+(?:\.llvm\.\d+)?\z").unwrap());
 static ALLOCATOR: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(

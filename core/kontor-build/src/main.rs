@@ -17,6 +17,8 @@ use kontor_build::execution_definition::{
 use kontor_build::freeze_sources::{FreezeSourcesArgs, freeze_sources};
 use kontor_build::interface::{Request as InterfaceRequest, run as interface};
 use kontor_build::linker_record::verify_input;
+use kontor_build::native_crypto::vendor::{VendorArgs, verify as verify_vendor};
+use kontor_build::native_crypto::{QualifyArgs as CryptoArgs, qualify as qualify_crypto};
 use kontor_build::node_evidence::comparison::{
     CompareNodeArgs, Request as CompareRequest, compare_node, run as compare_evidence,
 };
@@ -50,6 +52,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Verify or regenerate pinned native crypto vendor patches.
+    NativeCryptoVendor(VendorArgs),
+    /// Compare pristine, default and independent namespaced crypto graphs.
+    QualifyNativeCrypto(CryptoArgs),
     /// Verify frozen workload inputs and exact accounting before replay.
     VerifyWorkload {
         manifest: PathBuf,
@@ -143,6 +149,14 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::NativeCryptoVendor(args) => {
+            print!("{}", verify_vendor(&repository_root()?, args)?);
+            Ok(())
+        }
+        Command::QualifyNativeCrypto(args) => {
+            print!("{}", qualify_crypto(&repository_root()?, args)?);
+            Ok(())
+        }
         Command::VerifyWorkload { manifest, sha256 } => {
             println!(
                 "{}",

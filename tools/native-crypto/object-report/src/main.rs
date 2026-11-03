@@ -185,6 +185,22 @@ fn object_report(data: &[u8], namespace: &str) -> Result<Value> {
     }))
 }
 
+fn report(data: &[u8], namespace: &str) -> Result<Value> {
+    if data.starts_with(b"!<arch>\n") {
+        let archive = ArchiveFile::parse(data)?;
+        let mut members = Vec::new();
+        for member in archive.members() {
+            members.push(object_report(member?.data(data)?, namespace)?);
+        }
+        if members.is_empty() {
+            return Err("empty native archive".into());
+        }
+        Ok(json!({"members": members}))
+    } else {
+        object_report(data, namespace)
+    }
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
@@ -192,21 +208,10 @@ fn main() -> Result<()> {
             "usage: kontor-native-object-report FILE NAMESPACE (empty for upstream)".into(),
         );
     }
-    let data = fs::read(&args[1])?;
-    let result = if data.starts_with(b"!<arch>\n") {
-        let archive = ArchiveFile::parse(data.as_slice())?;
-        let mut members = Vec::new();
-        for member in archive.members() {
-            let member = member?;
-            members.push(object_report(member.data(data.as_slice())?, &args[2])?);
-        }
-        if members.is_empty() {
-            return Err("empty native archive".into());
-        }
-        json!({"members": members})
-    } else {
-        object_report(&data, &args[2])?
-    };
+    let result = report(&fs::read(&args[1])?, &args[2])?;
     println!("{}", serde_json::to_string(&result)?);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

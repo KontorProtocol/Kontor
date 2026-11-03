@@ -24,7 +24,7 @@ pub struct Metadata {
 
 #[derive(Deserialize)]
 pub(crate) struct Package {
-    name: String,
+    pub(crate) name: String,
     version: String,
     pub(crate) source: Option<String>,
     pub(crate) manifest_path: PathBuf,
@@ -32,13 +32,13 @@ pub(crate) struct Package {
 }
 
 #[derive(Deserialize)]
-struct Lockfile {
-    package: Vec<LockedPackage>,
+pub(crate) struct Lockfile {
+    pub(crate) package: Vec<LockedPackage>,
 }
 
-#[derive(Deserialize)]
-struct LockedPackage {
-    name: String,
+#[derive(Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct LockedPackage {
+    pub(crate) name: String,
     version: String,
     source: Option<String>,
     checksum: Option<String>,

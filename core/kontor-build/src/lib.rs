@@ -13,6 +13,7 @@ pub mod graph_build;
 pub mod interface;
 pub mod linker_record;
 pub mod metadata_control;
+pub mod native_crypto;
 mod native_lock;
 pub mod node_build;
 pub mod node_evidence;
