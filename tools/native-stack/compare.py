@@ -12,7 +12,7 @@ from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from pathlib import Path
 
-from sweep import IDENTITY_FIELDS, SWEEP_FIELDS, parse_transcript
+from sweep import IDENTITY_FIELDS, SWEEP_FIELDS, parse_transcript, _run as stack_evidence
 
 
 FORK_REVISION = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
@@ -367,45 +367,8 @@ def validate_owned_chains(owned_chains, chains, target_os, target_arch):
 
 
 def validate_build_provenance(report, directory, binary):
-    features = report["wasmtime_features"]
-    check(isinstance(features, dict) and set(features) == set(FEATURE_LOGS), "missing Wasmtime feature closures")
-    for graph, expected in (("production", PRODUCTION_FEATURES), ("qualification", QUALIFICATION_FEATURES)):
-        resolved = features[graph]
-        check(isinstance(resolved, list) and all(isinstance(value, str) for value in resolved), f"invalid {graph} Wasmtime features")
-        check(not FORBIDDEN_FEATURES.intersection(resolved), f"{graph}: forbidden Wasmtime feature")
-        check(resolved == sorted(expected), f"{graph}: unexpected Wasmtime feature closure")
-    check(set(features["qualification"]) - set(features["production"]) == {"call-hook"}, "unexpected test-only Wasmtime feature delta")
-    check(report["feature_logs"] == FEATURE_LOGS, "missing Wasmtime feature logs")
-    for graph, log in FEATURE_LOGS.items():
-        check((directory / log).is_file(), f"{graph}: missing feature log")
-        check((directory / log).read_text() == ",".join(features[graph]) + "\n", f"{graph}: feature log disagrees with report")
-    cargo_log = report["cargo_log"]
-    check(cargo_log == "cargo.json" and (directory / cargo_log).is_file(), "missing Cargo build log")
-    artifacts = []
-    compiled_features = []
-    build_finished = []
-    item = None
-    for line in (directory / cargo_log).read_text().splitlines():
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError as error:
-            raise ValueError("invalid Cargo build log") from error
-        if not isinstance(item, dict):
-            raise ValueError("invalid Cargo build log entry")
-        if item.get("reason") == "build-finished":
-            build_finished.append(item.get("success"))
-        if item.get("reason") == "compiler-artifact" and item.get("target", {}).get("name") == "indexer" and "lib" in item["target"].get("kind", []) and item.get("profile", {}).get("test") is True and item.get("executable") is not None:
-            artifacts.append(item["executable"])
-        if item.get("reason") == "compiler-artifact" and item.get("target", {}).get("name") == "wasmtime" and "lib" in item["target"].get("kind", []):
-            source = f"git+https://github.com/wilfreddenton/wasmtime?rev={FORK_REVISION}#"
-            check(item.get("package_id") in {source + "wasmtime@51.0.0-kontor.2", source + "51.0.0-kontor.2"}, "compiled Wasmtime package identity mismatch")
-            actual_features = item.get("features")
-            check(isinstance(actual_features, list) and all(isinstance(value, str) for value in actual_features), "missing compiled Wasmtime features")
-            check(len(actual_features) == len(set(actual_features)), "duplicate compiled Wasmtime feature")
-            compiled_features.append(sorted(actual_features))
-    check(artifacts == [binary], "Cargo build log disagrees with test binary")
-    check(compiled_features == [features["qualification"]], "compiled Wasmtime features disagree with resolution")
-    check(len(build_finished) == 1 and build_finished[0] is True and item.get("reason") == "build-finished", "Cargo build log lacks successful terminal completion")
+    stack_evidence({"operation": "build_provenance", "report": report,
+                    "directory": str(directory.resolve()), "binary": binary})
 
 
 def validate_report(path, cell):
@@ -520,9 +483,11 @@ def main():
         }
         result = compare(args.directory, args.upstream_status, source_sha, lockfile_sha256, component_hashes, args.profiles)
         if args.profiles == "release":
-            from dev_smoke import validate_set
             check(args.smoke_directory is not None, "release policy requires dev smoke evidence")
-            result["dev_smoke"] = validate_set(args.smoke_directory, source_sha, lockfile_sha256)
+            result["dev_smoke"] = stack_evidence({
+                "operation": "smoke_set", "directory": str(args.smoke_directory.resolve()),
+                "source_sha": source_sha, "lockfile_sha256": lockfile_sha256,
+            })
     except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError) as error:
         print(f"native stack qualification rejected: {error}", file=sys.stderr)
         return 1

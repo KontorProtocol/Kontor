@@ -164,7 +164,7 @@ jobs:
         run: |
           binary=$(cat target/native-stack-evidence/binary-path)
           evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/dev"
-          python3 tools/native-stack/dev_smoke.py --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/dev" --output "$evidence"
+          ./tools/kontor stack-smoke --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/dev" --output "$evidence"
       - name: Preserve qualification evidence
         if: always()
         uses: actions/upload-artifact@v7

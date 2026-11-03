@@ -1,6 +1,10 @@
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use std::path::PathBuf;
+
+mod build;
+pub mod smoke;
 
 pub const REPORT_PREFIX: &str = "KONTOR_STACK_REPORT:";
 pub const SUMMARY_PREFIX: &str = "KONTOR_STACK_SWEEP_SUMMARY:";
@@ -19,6 +23,27 @@ pub const SWEEP_FIELDS: &[&str] = &[
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
+    BuildProvenance {
+        report: Value,
+        directory: PathBuf,
+        binary: String,
+    },
+    SmokeTest {
+        raw: String,
+        name: String,
+    },
+    SmokeReport {
+        path: PathBuf,
+        cell: String,
+        target: String,
+        source_sha: String,
+        lockfile_sha256: String,
+    },
+    SmokeSet {
+        directory: PathBuf,
+        source_sha: String,
+        lockfile_sha256: String,
+    },
     ParseSweep {
         raw: String,
         kind: String,
@@ -34,6 +59,30 @@ pub enum Request {
 
 pub fn run(request: Request) -> Result<Value> {
     match request {
+        Request::BuildProvenance {
+            report,
+            directory,
+            binary,
+        } => {
+            build::validate(&report, &directory, &binary)?;
+            Ok(Value::Null)
+        }
+        Request::SmokeTest { raw, name } => {
+            smoke::validate_test(&raw, &name)?;
+            Ok(Value::Null)
+        }
+        Request::SmokeReport {
+            path,
+            cell,
+            target,
+            source_sha,
+            lockfile_sha256,
+        } => smoke::validate_report(&path, &cell, &target, &source_sha, &lockfile_sha256),
+        Request::SmokeSet {
+            directory,
+            source_sha,
+            lockfile_sha256,
+        } => smoke::validate_set(&directory, &source_sha, &lockfile_sha256),
         Request::ParseSweep { raw, kind, role } => {
             let (observations, summary) = parse_sweep(&raw, &kind, &role)?;
             Ok(json!([observations, summary]))
