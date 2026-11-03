@@ -49,9 +49,6 @@ class SourceRoots(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "pinned source differs"):
                 provenance._request(data, env=env)
 
-    def test_retained_tree_policy_matches_rust_inventory(self):
-        self.assertEqual(tuple(provenance._request({"operation": "retained_trees"})), provenance.RETAINED_TREES)
-
     def test_freeze_keeps_fixture_and_package_inputs_without_tool_programs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

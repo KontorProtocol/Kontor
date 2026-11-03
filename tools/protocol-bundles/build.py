@@ -18,10 +18,8 @@ from common_ownership import verify as verify_common_ownership
 from execution_definition import verify_reference
 from coordinator_definition import verify as verify_coordinator_reference
 from managed_definition import graph_manifest, verify as verify_managed_reference
-from metadata_control import proc_macro_hashes
-from provenance import fingerprint, locked_packages, runtime_libraries, source_inputs
+from provenance import check_source_policy, fingerprint, locked_packages, proc_macro_hashes, runtime_libraries, source_inputs
 from provenance import tools as toolchain_inputs
-from source_policy import check as check_source_policy
 from symbol_tool import TOOLCHAIN
 from recipes import CONSENSUS_GRAPHS, EXECUTOR_LINK_SETS, GRAPHS, MALACHITE_REVISION, MALACHITE_VERSION, executor_graphs, graph_root, identity, verify_engine_observations, verify_identity, verify_reservations
 from capabilities import verify as verify_capabilities
@@ -212,7 +210,7 @@ def build_graph(graph, args, base_env, output, graphs=None):
             manifest, None, env, args.offline, source_root=source_root))
     packages = identities(graph, data, graphs)
     sources = source_inputs(source_root, data, kind=selected_recipe.kind, tool_root=ROOT, env=env)
-    source_policy = check_source_policy(source_root, data, kind=selected_recipe.kind)
+    source_policy = check_source_policy(source_root, data, kind=selected_recipe.kind, env=env)
     write_json(graph_output / "source-inputs.json", sources)
     write_json(graph_output / "metadata.json", data)
     command = ["cargo", "build", "--locked", "--manifest-path", str(manifest),

@@ -10,7 +10,7 @@ from audit import audit_final, audit_inputs, owner
 from build import ROOT, identities
 from provenance import consensus_sources, fingerprint, repository_sources
 from recipes import CONSENSUS_GRAPHS, MALACHITE_REVISION, MALACHITE_VERSION, identity, verify_identity, verify_reservations
-from source_policy import CONTROL, check
+from provenance import check_source_policy as check
 
 
 class ConsensusInputs(unittest.TestCase):
@@ -110,12 +110,6 @@ class ConsensusInputs(unittest.TestCase):
         self.assertIn(str(ROOT / "core/indexer/src/consensus/codec.rs"), paths)
         self.assertIn(str(ROOT / "core/indexer/src/protocol/coordinator/certified_decision/proof_stream.rs"), paths)
 
-    def test_process_tripwire_distinguishes_enum_variants_and_read_only_pid(self):
-        for source in ("Command::Block { height }", "Command :: Batch { anchor }", "Command::Control { anchor }", "std::process:: id()"):
-            self.assertIsNone(CONTROL.search(source), source)
-        for source in ('Command::new("child")', "std::process::exit(1)", "tokio::process::Command",
-                       "tokio::signal::ctrl_c()", "waitpid(pid)"):
-            self.assertIsNotNone(CONTROL.search(source), source)
 
 
 class ConsensusOwnership(unittest.TestCase):

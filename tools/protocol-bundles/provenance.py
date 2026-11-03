@@ -30,14 +30,17 @@ def _request(request, *, env=None):
     return json.loads(result.stdout)
 
 
-# The remaining Python process-policy check uses this list until it is migrated.
-RETAINED_TREES = (
-    "protocol-bundles/executor",
-    "core/indexer/src/runtime",
-    "core/indexer/src/protocol",
-    "core/indexer/src/bls",
-    *(f"native-contracts/{name}/wit" for name in ("token", "filestorage", "staking", "system", "nft")),
-)
+def retained_trees():
+    return tuple(_request(dict(operation="retained_trees")))
+
+
+def check_source_policy(root, data, *, kind="proof", env=None):
+    return _request(dict(operation="source_policy", root=str(root.absolute()), data=data, kind=kind), env=env)
+
+
+def proc_macro_hashes(graphs, options, env, output):
+    return _request(dict(operation="proc_macro_hashes", graphs=graphs, options=options, env=env,
+                         output=str(output.absolute()), working_directory=str(Path.cwd())), env=env)
 
 
 def retained_sources(root):

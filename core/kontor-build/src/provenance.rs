@@ -7,7 +7,11 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::container::sha256;
+use crate::metadata_control::{Graph as MetadataGraph, proc_macro_hashes};
 use crate::source_identity::{Metadata, verify_sources};
+use crate::source_policy::{
+    Kind as PolicyKind, Metadata as PolicyMetadata, check as source_policy,
+};
 use crate::toolchain::{Environment, Graph, runtime_libraries, tools};
 
 pub const RETAINED_TREES: &[&str] = &[
@@ -63,6 +67,18 @@ pub enum GraphKind {
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
+    SourcePolicy {
+        root: PathBuf,
+        data: PolicyMetadata,
+        kind: PolicyKind,
+    },
+    ProcMacroHashes {
+        graphs: Vec<MetadataGraph>,
+        options: Vec<String>,
+        env: Environment,
+        output: PathBuf,
+        working_directory: PathBuf,
+    },
     LockedPackages {
         lock: PathBuf,
     },
@@ -110,6 +126,14 @@ pub enum Request {
 
 pub fn run(request: Request) -> Result<Value> {
     match request {
+        Request::SourcePolicy { root, data, kind } => source_policy(&root, &data, kind),
+        Request::ProcMacroHashes {
+            graphs,
+            options,
+            env,
+            output,
+            working_directory,
+        } => proc_macro_hashes(&graphs, &options, &env, &output, &working_directory),
         Request::LockedPackages { lock } => {
             let data: toml::Value = toml::from_str(&fs::read_to_string(lock)?)?;
             Ok(serde_json::to_value(

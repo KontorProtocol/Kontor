@@ -4134,11 +4134,13 @@ dependencies = [
  "glob",
  "hex",
  "libc",
+ "regex",
  "serde",
  "serde_json",
  "sha1",
  "sha2 0.11.1",
  "tar",
+ "tempfile",
  "toml 0.8.23",
 ]
 

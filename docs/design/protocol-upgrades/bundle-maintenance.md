@@ -250,6 +250,14 @@ working directory so relative compiler paths and PATH entries keep their meaning
 The evidence schema, source hashes, compiler/sysroot records, environment allowlist,
 and compiler proc-macro runtime-dependency rejection are preserved. This tooling
 migration does not regenerate executor identities.
+
+The `source_policy` operation preserves the process-control review tripwire and
+guarded source exclusions for proof, executor and consensus graphs. Excluded
+sources remain hash-bound, and imported consensus source paths must resolve.
+The `proc_macro_hashes` operation verifies reciprocal compiler rejection of
+foreign graph plugins, retains diagnostic logs and removes temporary probe
+directories. Its requests carry the original working directory and environment.
+
 Absolute source paths and platform inputs are recorded. This is an audit of
 the actual build, not a claim that different checkouts or platforms produce
 byte-identical executables.

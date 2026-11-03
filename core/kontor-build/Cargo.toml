@@ -24,6 +24,5 @@ libc = "=0.2.191"
 sha1 = "=0.10.7"
 flate2 = "=1.1.10"
 tar = { version = "=0.4.46", default-features = false }
-
-[dev-dependencies]
+regex = "=1.13.1"
 tempfile = "=3.27.0"

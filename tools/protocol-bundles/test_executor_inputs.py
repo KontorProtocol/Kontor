@@ -4,9 +4,9 @@ import tempfile
 import unittest
 
 from build import ROOT, identities
-from provenance import RETAINED_TREES, fingerprint, retained_sources
+from provenance import fingerprint, retained_sources, retained_trees
 from recipes import EXECUTOR_GRAPHS, GRAPHS
-from source_policy import check
+from provenance import check_source_policy as check
 
 
 class ExecutorDependencies(unittest.TestCase):
@@ -65,7 +65,7 @@ class ExecutorSources(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        for relative in RETAINED_TREES:
+        for relative in retained_trees():
             (self.root / relative).mkdir(parents=True)
         self.files = (
             "protocol-bundles/executor/lib.rs",

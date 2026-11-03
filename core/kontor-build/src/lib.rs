@@ -4,11 +4,13 @@ mod compiler_wrapper;
 mod container;
 mod diagnostics;
 pub mod linker_record;
+pub mod metadata_control;
 mod native_lock;
 mod outputs;
 pub mod provenance;
 mod snapshot;
 pub mod source_identity;
+pub mod source_policy;
 pub mod toolchain;
 
 pub use bundles::{ProtocolBundlesArgs, protocol_bundles};
