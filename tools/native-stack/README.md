@@ -140,8 +140,9 @@ transcripts that report the executable path and SHA-256 observed by each child.
 The child command must name that Cargo artifact and the pinned resource test.
 The report source commit must match captured `git rev-parse HEAD`, a clean
 `git status --porcelain` record, and the commit embedded in each child binary.
-The resource runner and workflow do not emit this evidence yet, so the gate
-remains blocked by explicit build and source capture statuses.
+Current per-group captures bind these inputs using control-build attestations.
+Their aggregate result establishes case-semantic agreement, separately from
+full resource acceptance.
 
 The original monolithic v1 acceptance interface (`resource_evidence.validate`
 and `compare_resource.py`) is retired. It rejected the current manifest's missing
@@ -153,7 +154,16 @@ fixtures remain in Git at `89c7dc36`.
 `resource-evidence-schema-v1.json` remains because chain-v2 and pending-I/O
 validation reuse its observation definitions. `resource_evidence.py` remains a
 shared helper module for strict JSON, raw-file identity, measured thread capacity
-and guard controls. Removing the unused top-level report does not make the
+and guard controls. The latter two now delegate to `tools/kontor
+verify-stack-evidence`, using the `resource_threads` and `resource_guard` JSON
+operations. Their typed Rust implementation is in
+`core/kontor-build/src/stack_evidence/resources.rs`; it validates archived raw
+guard logs as well as the supplied report, including duplicate-field rejection.
+The remaining Python callers are temporary until the case-group suite migrates.
+Malformed numeric evidence is rejected explicitly, including boolean or floating
+substitutes for integer fields and invalid platform/mode/page contexts. Measured
+capacities, supported records and grouped output are unchanged.
+Removing the unused top-level report does not make the
 preflight manifest qualified or waive any current group check.
 
 The retirement audit maps useful assertions to the active checks below. Tests

@@ -402,7 +402,7 @@
     },
     "production_sweep_validation": {
       "path": "core/kontor-build/src/stack_evidence.rs",
-      "sha256": "2d26f1fca1133b2e9287a179d2c7361dbefb8838c8304f763ca08af0af831c88"
+      "sha256": "3af764f6e61735dc8a7dc1f55c6df03548ef792a9ce40023cde8b84e88ab869b"
     },
     "proxy": {
       "path": "test-contracts/binaries/proxy.wasm.br",
@@ -415,6 +415,10 @@
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
       "sha256": "71241bc307fc01b8382048846b5a3fb7e564140de87599cf52c133beaecfcae5"
+    },
+    "resource_capacity_validator": {
+      "path": "core/kontor-build/src/stack_evidence/resources.rs",
+      "sha256": "bcd58901f6965d045d898a8625a3ea38380675732e1c2ae2bca68cce1733d7e2"
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
@@ -458,7 +462,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "d532f65072826de28444da6122b105221c1a22769cdbf5f86388e18215129f52"
+      "sha256": "f6ae004d0bc1e9911a62ad1dc3e91d61383b13c370cdc1ecb81c38a2ebb87f80"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -482,7 +486,7 @@
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "9209b82af2b74e1f88c707503b19d37d3d26df0a14a60a4a634b4ecade2fb6e1"
+      "sha256": "6174a1e738ae84bbeb6f237259d9464d63b94d4ab34d2bea7add14694c89febd"
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
