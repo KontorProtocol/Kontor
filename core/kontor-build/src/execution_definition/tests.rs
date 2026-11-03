@@ -194,6 +194,25 @@ fn effective_manifest_resolves_local_paths_but_allows_missing_generated_targets(
 }
 
 #[test]
+fn effective_manifest_accepts_aliased_roots_without_allowing_escaped_inputs() -> Result<()> {
+    let dir = tempdir()?;
+    let aliases = tempdir()?;
+    let (_, mut data) = fixture(dir.path())?;
+    let alias = aliases.path().join("checkout");
+    symlink(dir.path(), &alias)?;
+    data["packages"][0]["targets"] = json!([{"src_path":alias.join("generated.rs")}]);
+    data["packages"][0]["dependencies"] = json!([{"name":"local","path":alias.join("core")}]);
+    assert_eq!(
+        effective_manifest(&alias, &data["packages"][0])?,
+        effective_manifest(dir.path(), &data["packages"][0])?
+    );
+    symlink(aliases.path(), alias.join("outside"))?;
+    data["packages"][0]["targets"][0]["src_path"] = json!(alias.join("outside/generated.rs"));
+    assert!(effective_manifest(&alias, &data["packages"][0]).is_err());
+    Ok(())
+}
+
+#[test]
 fn dangling_metadata_links_keep_their_targets_and_reject_escape_or_cycles() -> Result<()> {
     let dir = tempdir()?;
     let outside = tempdir()?;

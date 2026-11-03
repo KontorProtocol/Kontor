@@ -97,6 +97,7 @@ fn sort_values(values: Vec<Value>) -> Result<Vec<Value>> {
     Ok(keyed.into_iter().map(|(_, value)| value).collect())
 }
 pub fn effective_manifest(root: &Path, package: &Value) -> Result<String> {
+    let root = root.canonicalize()?;
     let mut fields = BTreeMap::new();
     for key in ["name", "version", "edition", "rust_version", "links"] {
         fields.insert(key, package.get(key).cloned().unwrap_or(Value::Null));
@@ -111,7 +112,7 @@ pub fn effective_manifest(root: &Path, package: &Value) -> Result<String> {
                 .filter(|v| !v.is_null() && **v != json!(""))
             {
                 item["path"] = json!(relative(
-                    root,
+                    &root,
                     &resolve(Path::new(path.as_str().context("invalid dependency path")?))?
                 )?);
             }
@@ -135,7 +136,7 @@ pub fn effective_manifest(root: &Path, package: &Value) -> Result<String> {
             item.insert(
                 "src_path",
                 json!(relative(
-                    root,
+                    &root,
                     &resolve(Path::new(text(target, "src_path")?))?
                 )?),
             );

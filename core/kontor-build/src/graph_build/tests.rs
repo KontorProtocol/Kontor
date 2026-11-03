@@ -244,8 +244,11 @@ fn stale_execution_definition_rejects_before_compiling_and_uses_unfiltered_metad
 #[test]
 fn metadata_and_logging_preserve_arguments_working_directory_and_exit_status() -> Result<()> {
     let mut f = Fixture::new()?;
-    f.env
-        .insert("EXPECTED_CWD".into(), f.temp.path().display().to_string());
+    let working_directory = f.temp.path().canonicalize()?;
+    f.env.insert(
+        "EXPECTED_CWD".into(),
+        working_directory.display().to_string(),
+    );
     metadata(
         &f.temp.path().join("manifest with spaces"),
         None,
@@ -273,7 +276,7 @@ fn metadata_and_logging_preserve_arguments_working_directory_and_exit_status() -
     );
     assert_eq!(
         fs::read_to_string(log)?,
-        format!("{}stderr", f.temp.path().display())
+        format!("{}stderr", working_directory.display())
     );
     Ok(())
 }

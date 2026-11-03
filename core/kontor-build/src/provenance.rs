@@ -228,8 +228,9 @@ fn local_files(
 }
 
 pub fn local_source_files(directory: &Path, root: &Path) -> Result<Vec<PathBuf>> {
+    let root = root.canonicalize()?;
     let mut result = Vec::new();
-    local_files(directory, root, &mut BTreeSet::new(), &mut result)?;
+    local_files(directory, &root, &mut BTreeSet::new(), &mut result)?;
     Ok(result)
 }
 

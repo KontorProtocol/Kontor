@@ -326,7 +326,8 @@ fn subprocess_failures_and_timeouts_keep_raw_logs_and_reap_child() {
 #[test]
 fn capture_uses_checkout_paths_filters_guest_overrides_and_invalidates_stale_success() {
     let temp = TempDir::new().unwrap();
-    let root = temp.path();
+    let canonical = temp.path().canonicalize().unwrap();
+    let root = canonical.as_path();
     fs::create_dir_all(root.join("core")).unwrap();
     fs::write(root.join("core/Cargo.lock"), "fixture lock").unwrap();
     fs::write(root.join(".gitignore"), "target/\n").unwrap();

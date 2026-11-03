@@ -50,7 +50,7 @@ fn preserves_combined_output_exit_status_arguments_and_working_directory() -> Re
     let text = String::from_utf8(result.stdout)?;
     assert!(text.contains("argument with spaces"));
     assert!(text.contains("stderr"));
-    assert!(text.contains(directory.path().to_str().unwrap()));
+    assert!(text.contains(directory.path().canonicalize()?.to_str().unwrap()));
     Ok(())
 }
 

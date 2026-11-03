@@ -233,36 +233,32 @@ fn failed_reference_and_destination_lock_leave_no_snapshot() -> Result<()> {
 
 #[test]
 fn source_closure_rejects_missing_escaping_and_cyclic_inputs() -> Result<()> {
-    let root = tempdir()?;
+    let directory = tempdir()?;
+    let root = directory.path().canonicalize()?;
     let outside = tempdir()?;
-    let path = root.path().join("source.rs");
+    let path = root.join("source.rs");
     fs::write(&path, "source")?;
     let mut paths = BTreeSet::new();
-    symlink("source.rs", root.path().join("alias"))?;
-    include(
-        root.path(),
-        &root.path().join("alias"),
-        &mut BTreeSet::new(),
-        &mut paths,
-    )?;
-    assert_eq!(paths, BTreeSet::from([path, root.path().join("alias")]));
-    symlink(outside.path(), root.path().join("outside"))?;
+    symlink("source.rs", root.join("alias"))?;
+    include(&root, &root.join("alias"), &mut BTreeSet::new(), &mut paths)?;
+    assert_eq!(paths, BTreeSet::from([path, root.join("alias")]));
+    symlink(outside.path(), root.join("outside"))?;
     assert!(
         include(
-            root.path(),
-            &root.path().join("outside"),
+            &root,
+            &root.join("outside"),
             &mut BTreeSet::new(),
             &mut paths
         )
         .is_err()
     );
-    fs::remove_file(root.path().join("outside"))?;
-    symlink(".", root.path().join("cycle"))?;
-    assert!(include(root.path(), root.path(), &mut BTreeSet::new(), &mut paths).is_err());
+    fs::remove_file(root.join("outside"))?;
+    symlink(".", root.join("cycle"))?;
+    assert!(include(&root, &root, &mut BTreeSet::new(), &mut paths).is_err());
     assert!(
         include(
-            root.path(),
-            &root.path().join("missing"),
+            &root,
+            &root.join("missing"),
             &mut BTreeSet::new(),
             &mut paths
         )

@@ -180,7 +180,7 @@ fn gcc_response_files_preserve_b_search_and_fuse_ld() -> Result<()> {
             .output()?,
     )?;
     assert_eq!(fs::read_to_string(marker)?, "used");
-    assert_eq!(record["backend"]["path"], json!(linker));
+    assert_eq!(record["backend"]["path"], json!(linker.canonicalize()?));
     assert_eq!(record["backend"]["sha256"], digest(&linker)?);
     assert_eq!(record["expanded_arguments"], json!(arguments));
     Ok(())

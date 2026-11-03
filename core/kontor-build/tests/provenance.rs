@@ -64,7 +64,9 @@ fn metadata(root: &Path) -> Result<Metadata> {
 #[test]
 fn local_walk_contains_links_detects_cycles_and_excludes_build_outputs() -> Result<()> {
     let dir = tempdir()?;
-    let root = dir.path().canonicalize()?;
+    let aliases = tempdir()?;
+    let root = aliases.path().join("checkout");
+    symlink(dir.path(), &root)?;
     write(&root, "pkg/a.rs", "a")?;
     write(&root, "pkg/child/b.rs", "b")?;
     for excluded in ["target", ".git", "__pycache__"] {
@@ -74,6 +76,10 @@ fn local_walk_contains_links_detects_cycles_and_excludes_build_outputs() -> Resu
     symlink("child", package.join("alias"))?;
     symlink("a.rs", package.join("file.rs"))?;
     let inventory = package_sources(&package, Some(&root))?;
+    assert_eq!(
+        inventory,
+        package_sources(&dir.path().join("pkg"), Some(dir.path()))?
+    );
     assert_eq!(inventory.len(), 4);
     assert_eq!(
         inventory[Path::new("child/b.rs")],
