@@ -579,7 +579,7 @@ pub struct CompareNodeArgs {
     pub profiles: String,
     #[arg(long)]
     pub upstream_status: String,
-    #[arg(long,default_value="managed-node",value_parser=["legacy-qualification","k4-node","managed-node"])]
+    #[arg(long,default_value="managed-node",value_parser=["legacy-qualification","managed-node"])]
     pub link_set: String,
 }
 pub fn compare_node(root: &Path, args: CompareNodeArgs) -> Result<Value> {

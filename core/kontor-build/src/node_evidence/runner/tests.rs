@@ -24,12 +24,10 @@ pub(crate) fn sample(link: Option<&str>) -> Result<Value> {
     value["schema"] = json!(1);
     value["cases"] = json!(CASES);
     value["storage_contracts"] = json!({"rejected_before_construction":names.iter().flat_map(|graph| ["missing","unknown","changed","multiple"].map(|mutation|format!("{graph}:{mutation}"))).collect::<Vec<_>>()});
-    if let Some(link @ ("managed-node" | "k4-node")) = link {
-        let history = certified_sample(link)?;
-        if link == "managed-node" {
-            value["managed_startup"] = json!({"chain":history["chain"], "protocol":history["protocol"], "era":history["era"], "executor_definition":history["executor_definition"],
+    if link == Some("managed-node") {
+        let history = certified_sample()?;
+        value["managed_startup"] = json!({"chain":history["chain"], "protocol":history["protocol"], "era":history["era"], "executor_definition":history["executor_definition"],
                 "rounds_started":2,"engines_joined":2,"next_generation":3,"same_listener":true,"same_era_wal":true,"database_remained_available":true,"competing_writer_rejected":true});
-        }
         value["certified_history"] = history;
     }
     Ok(value)
@@ -79,12 +77,7 @@ fn prepare(link: Option<&str>, observations: &Value, tail: &str) -> Result<TempD
 }
 #[test]
 fn actual_processes_bind_all_supported_reports_and_raw_logs() -> Result<()> {
-    for link in [
-        None,
-        Some("legacy-qualification"),
-        Some("k4-node"),
-        Some("managed-node"),
-    ] {
+    for link in [None, Some("legacy-qualification"), Some("managed-node")] {
         let directory = prepare(link, &sample(link)?, "printf 'raw stderr\\r\\n' >&2")?;
         let path = directory.path();
         let report = path.join("node-build.json");

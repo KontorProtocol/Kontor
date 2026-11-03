@@ -25,9 +25,9 @@ fn modes_preserve_defaults_and_reject_invalid_combinations() -> Result<()> {
     );
     assert_eq!(
         mode(&arguments(&["--build-executors"]))?,
-        (Mode::Executors, Some("k4-node".into()))
+        (Mode::Executors, Some("managed-node".into()))
     );
-    for set in ["legacy-qualification", "k4-node", "managed-node"] {
+    for set in ["legacy-qualification", "managed-node"] {
         assert_eq!(
             mode(&arguments(&["--build-node", "--link-set", set]))?,
             (Mode::Node, Some(set.into()))
@@ -43,6 +43,7 @@ fn modes_preserve_defaults_and_reject_invalid_combinations() -> Result<()> {
         vec!["--jobs", "3"],
         vec!["--profile", "custom"],
         vec!["--link-set", "unknown"],
+        vec!["--build-node", "--link-set", "k4-node"],
     ] {
         assert!(Cli::try_parse_from(std::iter::once("bundle").chain(args)).is_err());
     }

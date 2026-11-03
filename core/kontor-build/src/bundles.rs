@@ -53,8 +53,8 @@ pub struct ProtocolBundlesArgs {
     /// Output directory, relative to the checkout root unless absolute.
     #[arg(long)]
     pub output: Option<PathBuf>,
-    /// Retained executor configuration; node builds default to managed-node.
-    #[arg(long, value_parser = ["legacy-qualification", "k4-node", "managed-node"])]
+    /// Retained executor configuration; node and executor builds default to managed-node.
+    #[arg(long, value_parser = ["legacy-qualification", "managed-node"])]
     pub link_set: Option<String>,
     /// Maximum concurrent compiler jobs across sequential graph builds.
     #[arg(short = 'j', long, default_value_t = 2, value_parser = clap::value_parser!(u32).range(1..=2))]
@@ -99,13 +99,11 @@ fn mode(args: &ProtocolBundlesArgs) -> Result<(Mode, Option<String>)> {
         "--link-set requires --build-executors or --build-node"
     );
     let link_set = if matches!(mode, Mode::Node | Mode::Executors) {
-        Some(args.link_set.clone().unwrap_or_else(|| {
-            if mode == Mode::Node {
-                "managed-node".into()
-            } else {
-                "k4-node".into()
-            }
-        }))
+        Some(
+            args.link_set
+                .clone()
+                .unwrap_or_else(|| "managed-node".into()),
+        )
     } else {
         None
     };

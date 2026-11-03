@@ -18,7 +18,7 @@ pub struct QualifyNodeArgs {
     pub profile: String,
     #[arg(long)]
     pub offline: bool,
-    #[arg(long, default_value = "managed-node", value_parser = ["legacy-qualification", "k4-node", "managed-node"])]
+    #[arg(long, default_value = "managed-node", value_parser = ["legacy-qualification", "managed-node"])]
     pub link_set: String,
 }
 pub fn qualify_node(root: &Path, args: QualifyNodeArgs) -> Result<Value> {

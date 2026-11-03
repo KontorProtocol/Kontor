@@ -157,14 +157,10 @@ fn oracle_binds_sources_log_schema_and_source_containment() -> Result<()> {
     );
     Ok(())
 }
-pub(super) fn certified_sample(link_set: &str) -> Result<Value> {
+pub(super) fn certified_sample() -> Result<Value> {
     let root = root();
-    let graphs = executor_graphs(Some(link_set))?;
-    let graph = &graphs[if link_set == "managed-node" {
-        "first"
-    } else {
-        "observer"
-    }];
+    let graphs = executor_graphs(Some("managed-node"))?;
+    let graph = &graphs["first"];
     let execution = hashed(
         b"kontor/execution-definition/v1",
         &fs::read(
@@ -176,11 +172,7 @@ pub(super) fn certified_sample(link_set: &str) -> Result<Value> {
     );
     let consensus = hashed(
         b"kontor/consensus-definition/v1",
-        &fs::read(root.join(if link_set == "managed-node" {
-            "core/indexer/src/protocol/coordinator/consensus-rules-v1.json"
-        } else {
-            "core/indexer/src/protocol/coordinator/baseline/consensus.json"
-        }))?,
+        &fs::read(root.join("core/indexer/src/protocol/coordinator/consensus-rules-v1.json"))?,
     );
     let chain = vec![7; 32];
     let mut manifest = b"KPM1".to_vec();
@@ -195,15 +187,14 @@ pub(super) fn certified_sample(link_set: &str) -> Result<Value> {
     for name in CERTIFIED_CHECKS {
         result[*name] = json!(true);
     }
-    if link_set == "managed-node" {
-        result["migration_rehearsal_cli"] = json!(true);
-    }
+    result["migration_rehearsal_cli"] = json!(true);
     Ok(result)
 }
 #[test]
 fn certified_evidence_binds_checks_counts_and_selected_genesis() -> Result<()> {
-    for link in ["k4-node", "managed-node"] {
-        let sample = certified_sample(link)?;
+    {
+        let link = "managed-node";
+        let sample = certified_sample()?;
         certified(&json!({"certified_history":sample}), Some(link), &root())?;
         for key in sample.as_object().unwrap().keys() {
             let mut value = sample.clone();
@@ -238,22 +229,13 @@ fn certified_evidence_binds_checks_counts_and_selected_genesis() -> Result<()> {
             .is_err()
         );
     }
-    let mut wrong = certified_sample("k4-node")?;
-    wrong["migration_rehearsal_cli"] = json!(true);
-    assert!(
-        certified(
-            &json!({"certified_history":wrong}),
-            Some("managed-node"),
-            &root()
-        )
-        .is_err()
-    );
     certified(&json!({}), None, &root())?;
+    assert!(certified(&json!({}), Some("k4-node"), &root()).is_err());
     Ok(())
 }
 #[test]
 fn managed_genesis_rejects_self_consistent_observer_substitution() -> Result<()> {
-    let mut sample = certified_sample("managed-node")?;
+    let mut sample = certified_sample()?;
     let mut manifest = hex::decode(sample["manifest"].as_str().unwrap())?;
     let wrong = hashed(
         b"kontor/execution-definition/v1",
@@ -286,7 +268,7 @@ fn managed_genesis_rejects_self_consistent_observer_substitution() -> Result<()>
 }
 #[test]
 fn startup_storage_and_executor_checks_require_complete_selected_evidence() -> Result<()> {
-    let history = certified_sample("managed-node")?;
+    let history = certified_sample()?;
     let mut managed = fields(
         &history,
         &["chain", "protocol", "era", "executor_definition"],
@@ -295,14 +277,10 @@ fn startup_storage_and_executor_checks_require_complete_selected_evidence() -> R
     let mut value = json!({"certified_history":history,"managed_startup":managed});
     startup(&value, Some("managed-node"))?;
     assert!(startup(&value, Some("k4-node")).is_err());
+    assert!(startup(&value, Some("legacy-qualification")).is_err());
     value["managed_startup"]["chain"] = json!("other chain");
     assert!(startup(&value, Some("managed-node")).is_err());
-    for link in [
-        None,
-        Some("legacy-qualification"),
-        Some("k4-node"),
-        Some("managed-node"),
-    ] {
+    for link in [None, Some("legacy-qualification"), Some("managed-node")] {
         let rejected: Vec<_> = executor_graphs(link)?
             .keys()
             .flat_map(|graph| {

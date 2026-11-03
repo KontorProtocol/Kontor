@@ -15,11 +15,9 @@ use indexer_types::Transaction;
 use kontor_executor_first::registration_observer as first_registration_observer;
 #[cfg(kontor_linked)]
 use kontor_executor_first::{execution_definition as first_definition, factory as first_factory};
-#[cfg(all(kontor_linked, kontor_observer, not(kontor_managed)))]
-use kontor_executor_observer::factory as observer_factory;
 #[cfg(kontor_managed)]
 use kontor_executor_observer::p2_factory;
-#[cfg(all(kontor_linked, kontor_observer))]
+#[cfg(kontor_managed)]
 use kontor_executor_observer::{
     execution_definition as observer_definition, registration_observer,
 };
@@ -49,7 +47,7 @@ use crate::protocol::operations::MigrationCall;
 #[cfg(any(test, feature = "protocol-qualification"))]
 use crate::protocol::operations::{AddressEnvelope, ViewOutcome};
 use crate::protocol::operations::{GenesisEnvelope, RecognitionCall, SessionOwner};
-#[cfg(all(kontor_linked, kontor_observer))]
+#[cfg(kontor_managed)]
 use crate::protocol::registration::RegistrationCall;
 use crate::protocol::registration::RegistrationObservation;
 #[cfg(kontor_linked)]
@@ -224,9 +222,6 @@ pub(crate) fn session_factory(
     network: Network,
     view_gas_limit: Option<u64>,
 ) -> Result<SessionFactory> {
-    #[cfg(all(kontor_observer, not(kontor_managed)))]
-    let reference = observer_definition();
-    #[cfg(any(not(kontor_observer), kontor_managed))]
     let reference = first_definition();
     if reference != REFERENCE {
         return Err(anyhow!(
@@ -252,7 +247,7 @@ pub(crate) fn session_factory_for_definition(
     #[cfg(kontor_linked)]
     {
         let first_id = DefinitionReference::decode(first_definition())?.id()?;
-        #[cfg(kontor_observer)]
+        #[cfg(kontor_managed)]
         {
             let observer_id = DefinitionReference::decode(observer_definition())?.id()?;
             if first_id == observer_id {
@@ -261,20 +256,12 @@ pub(crate) fn session_factory_for_definition(
                 ));
             }
             if definition == observer_id {
-                #[cfg(kontor_managed)]
                 let factory = retained_session_factory_for_version(
                     network,
                     view_gas_limit,
                     p2_factory,
                     observer_definition(),
                     ExecutorVersion::P2,
-                )?;
-                #[cfg(not(kontor_managed))]
-                let factory = retained_session_factory(
-                    network,
-                    view_gas_limit,
-                    observer_factory,
-                    observer_definition(),
                 )?;
                 return Ok(with_registration_observer(factory));
             }
@@ -297,12 +284,12 @@ pub(crate) fn session_factory_for_definition(
     Err(UnavailableExecutionDefinition(definition).into())
 }
 
-#[cfg(all(kontor_linked, kontor_observer))]
+#[cfg(kontor_managed)]
 pub(crate) fn with_registration_observer(factory: SessionFactory) -> SessionFactory {
     with_registration_export(factory, registration_observer)
 }
 
-#[cfg(all(kontor_linked, kontor_observer))]
+#[cfg(kontor_managed)]
 fn with_registration_export(
     factory: SessionFactory,
     export: fn(SessionOwner) -> Result<RegistrationCall, HostError>,

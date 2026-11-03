@@ -9,12 +9,7 @@ use fixtures::{Archive, bind, change, rejects};
 
 #[test]
 fn supported_archive_policies() -> Result<()> {
-    for link in [
-        None,
-        Some("legacy-qualification"),
-        Some("k4-node"),
-        Some("managed-node"),
-    ] {
+    for link in [None, Some("legacy-qualification"), Some("managed-node")] {
         let archive = Archive::new(link)?;
         assert_eq!(
             archive.compare("release")?["cells"]
@@ -66,8 +61,8 @@ fn failed_comparison_replaces_stale_success_and_never_passes_missing_cells() -> 
 
 #[test]
 fn missing_duplicate_failed_and_wrong_link_cells_reject() -> Result<()> {
-    let archive = Archive::new(Some("k4-node"))?;
-    for link in [None, Some("legacy-qualification"), Some("unknown")] {
+    let archive = Archive::new(Some("legacy-qualification"))?;
+    for link in [None, Some("managed-node"), Some("unknown")] {
         assert!(
             compare(
                 archive.temporary.path(),
@@ -188,7 +183,7 @@ fn consensus_controls_and_certified_history_cannot_be_substituted() -> Result<()
     write_json(&build_path, &build)?;
     bind(directory)?;
     rejects(&archive, "tests missing or failed");
-    let archive = Archive::new(Some("k4-node"))?;
+    let archive = Archive::new(Some("managed-node"))?;
     let directory = &archive.cells[0];
     change(&directory.join("node-execution.stdout.json"), |v| {
         v.as_object_mut().unwrap().remove("certified_history");

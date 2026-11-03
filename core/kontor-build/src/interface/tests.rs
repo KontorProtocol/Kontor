@@ -25,13 +25,15 @@ fn selection_requires_retained_identity_and_consensus_role() -> Result<()> {
         ])
         .is_err()
     );
-    for (set, expected) in [("managed-node", PROBES), ("k4-node", ADAPTED)] {
-        let recipe = executor_graphs(Some(set))?.remove("first").unwrap();
+    {
+        let recipe = executor_graphs(Some("managed-node"))?
+            .remove("first")
+            .unwrap();
         let mut graphs = vec![
             json!({"graph":"first","identity":{"source_root":recipe.source_root,"source_snapshot":recipe.source_snapshot}}),
             json!({"graph":"observer"}),
         ];
-        assert!(selection(&graphs)? == expected);
+        assert!(selection(&graphs)? == PROBES);
         graphs[0]["identity"]["source_snapshot"] = json!("substituted");
         assert!(selection(&graphs).is_err());
     }

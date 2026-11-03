@@ -20,7 +20,7 @@ use crate::recipes::executor_graphs;
 use crate::toolchain::Environment;
 
 mod probes;
-use probes::{ADAPTED, ADAPTER_TESTS, CONSENSUS, PROBES};
+use probes::{ADAPTER_TESTS, CONSENSUS, PROBES};
 
 #[derive(PartialEq)]
 pub struct Probe {
@@ -57,13 +57,13 @@ fn selection(graphs: &[Value]) -> Result<&'static [Probe]> {
         return Ok(CONSENSUS);
     }
     if names == ["first", "observer"] {
-        for (set, probes) in [("managed-node", PROBES), ("k4-node", ADAPTED)] {
-            let recipe = executor_graphs(Some(set))?.remove("first").unwrap();
-            if graphs[0]["identity"]["source_root"] == recipe.source_root
-                && graphs[0]["identity"]["source_snapshot"] == json!(recipe.source_snapshot)
-            {
-                return Ok(probes);
-            }
+        let recipe = executor_graphs(Some("managed-node"))?
+            .remove("first")
+            .unwrap();
+        if graphs[0]["identity"]["source_root"] == recipe.source_root
+            && graphs[0]["identity"]["source_snapshot"] == json!(recipe.source_snapshot)
+        {
+            return Ok(PROBES);
         }
         bail!("unknown retained executor interface");
     }
@@ -534,7 +534,7 @@ pub enum Request {
 pub fn run(request: Request) -> Result<Value> {
     match request {
         Request::Catalog => Ok(
-            json!({"probes":catalog(PROBES),"adapted":catalog(ADAPTED),"consensus":catalog(CONSENSUS),"adapter_tests":ADAPTER_TESTS}),
+            json!({"probes":catalog(PROBES),"consensus":catalog(CONSENSUS),"adapter_tests":ADAPTER_TESTS}),
         ),
         Request::Probes { graphs } => Ok(catalog(selection(&graphs)?)),
         Request::Diagnostics {

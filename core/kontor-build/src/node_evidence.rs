@@ -148,8 +148,9 @@ fn certified(observations: &Value, link_set: Option<&str>, root: &Path) -> Resul
     observations
         .as_object()
         .context("observations must be an object")?;
+    executor_graphs(link_set)?;
     let result = &observations["certified_history"];
-    if !matches!(link_set, Some("k4-node" | "managed-node")) {
+    if link_set != Some("managed-node") {
         ensure!(
             result.is_null(),
             "legacy qualification cannot claim certified baseline coverage"
@@ -157,9 +158,7 @@ fn certified(observations: &Value, link_set: Option<&str>, root: &Path) -> Resul
         return Ok(());
     }
     let mut checks: Vec<_> = CERTIFIED_CHECKS.to_vec();
-    if link_set == Some("managed-node") {
-        checks.push("migration_rehearsal_cli");
-    }
+    checks.push("migration_rehearsal_cli");
     let expected: BTreeSet<_> = checks
         .iter()
         .copied()
@@ -192,11 +191,7 @@ fn certified(observations: &Value, link_set: Option<&str>, root: &Path) -> Resul
         let chain = decoded(result, "chain")?;
         let protocol = decoded(result, "protocol")?;
         let graphs = executor_graphs(link_set)?;
-        let graph = &graphs[if link_set == Some("managed-node") {
-            "first"
-        } else {
-            "observer"
-        }];
+        let graph = &graphs["first"];
         let executor = hashed(
             b"kontor/execution-definition/v1",
             &fs::read(
@@ -208,11 +203,7 @@ fn certified(observations: &Value, link_set: Option<&str>, root: &Path) -> Resul
         );
         let consensus = hashed(
             b"kontor/consensus-definition/v1",
-            &fs::read(root.join(if link_set == Some("managed-node") {
-                "core/indexer/src/protocol/coordinator/consensus-rules-v1.json"
-            } else {
-                "core/indexer/src/protocol/coordinator/baseline/consensus.json"
-            }))?,
+            &fs::read(root.join("core/indexer/src/protocol/coordinator/consensus-rules-v1.json"))?,
         );
         Ok(manifest.len() == 272
             && chain.len() == 32
@@ -254,6 +245,7 @@ fn startup(observations: &Value, link_set: Option<&str>) -> Result<()> {
     observations
         .as_object()
         .context("observations must be an object")?;
+    executor_graphs(link_set)?;
     let result = &observations["managed_startup"];
     if link_set != Some("managed-node") {
         ensure!(

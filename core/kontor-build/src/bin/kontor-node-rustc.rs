@@ -103,7 +103,6 @@ fn prepare(compiler: &Path, arguments: &mut Vec<OsString>, spec: &Spec) -> Resul
     if let Some(link_set) = spec.link_set.as_deref() {
         let expected = match link_set {
             "legacy-qualification" => vec![("executor", "first"), ("executor", "second")],
-            "k4-node" => vec![("executor", "first"), ("executor", "observer")],
             "managed-node" => vec![
                 ("executor", "first"),
                 ("executor", "observer"),
@@ -122,11 +121,13 @@ fn prepare(compiler: &Path, arguments: &mut Vec<OsString>, spec: &Spec) -> Resul
             .all(|(role, _)| matches!(*role, "executor" | "consensus")),
         "unknown independent library role"
     );
-    if matches!(spec.link_set.as_deref(), Some("k4-node" | "managed-node")) {
-        arguments.extend(["--cfg".into(), "kontor_observer".into()]);
-    }
     if spec.link_set.as_deref() == Some("managed-node") {
-        arguments.extend(["--cfg".into(), "kontor_managed".into()]);
+        arguments.extend([
+            "--cfg".into(),
+            "kontor_observer".into(),
+            "--cfg".into(),
+            "kontor_managed".into(),
+        ]);
     }
     for graph in &spec.graphs {
         ensure!(
@@ -439,14 +440,10 @@ mod tests {
     }
 
     #[test]
-    fn managed_and_observer_link_sets_require_exact_roles_and_order() -> Result<()> {
+    fn supported_link_sets_require_exact_roles_and_order() -> Result<()> {
         let (directory, mut value) = fixture()?;
         let prototype = value["graphs"][0].clone();
         for (link_set, roles) in [
-            (
-                "k4-node",
-                vec![("executor", "first"), ("executor", "observer")],
-            ),
             (
                 "managed-node",
                 vec![
@@ -510,6 +507,18 @@ mod tests {
                 }
             }
         }
+        value["link_set"] = json!("k4-node");
+        let spec: Spec = serde_json::from_value(value)?;
+        assert!(
+            prepare(
+                &spec.compiler,
+                &mut arguments("indexer", directory.path()),
+                &spec
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("unknown node link set")
+        );
         Ok(())
     }
 

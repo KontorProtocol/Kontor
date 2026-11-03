@@ -10,16 +10,17 @@ state, and [upgrade approvals](upgrade-approvals.md) for authorization and rehea
 
 ## Cleanup configuration inventory
 
-The post-upgrade cleanup uses the following boundaries. Entries marked pending
-remain available until their callers and useful regression checks have been
-migrated. This table does not create additional qualification jobs.
+The post-upgrade cleanup retains the following production and diagnostic
+configurations. This table does not create additional qualification jobs.
 
 | Configuration | Disposition | Minimum affected validation |
 | --- | --- | --- |
 | `managed-node`: retained P1, P2 observer and one pinned consensus runtime | Keep as the supported node composition. | `tools/kontor qualify-node` and `tools/kontor compare-node`, through the existing release workflow, after build/runtime changes stabilize. |
 | Retained P1 source and independent executor dependency graphs | Keep required execution inputs and identities; migrate support tooling separately. | Source-root inventory and execution-definition tests, followed by the managed-node validation above. |
 | Local runtime/test adapters | Keep intentional test coverage; remove only branches proven obsolete. | Focused ownership, cancellation, settlement and rollback tests when their code changes. |
-| `legacy-qualification`, `k4-node`, retained K3 and standalone proof graphs | Pending caller and coverage migration. They are still referenced by tooling and tests. | Build-recipe, node-execution and comparison tests before retiring any path. Preserve isolation assertions in supported fixtures. |
+| `legacy-qualification` and retained K3 | Keep for the preserved pre-extraction, unversioned database replay oracle. Managed history must not be relabeled as this old baseline. This is a diagnostic configuration, not production database compatibility support. | Existing baseline replay, recipe and evidence checks when affected. |
+| Standalone proof graphs | Keep the independent VM/type, allocator/import ownership, signal/child-process and resource-lifecycle checks. These assertions are not all supplied by the managed-node harness. | Existing proof/interface/object controls when affected; no new automatic qualification. |
+| `k4-node` | Removed. It combined the pre-extraction K3 executor with the observer before managed P1 startup existed. No maintained workflow selected it. Certified-history and rejection checks now exercise managed-node; old factory adapter probes retired with the incompatible predecessor interface. | Builder, wrapper, interface and evidence tests; managed release build after changes stabilize. |
 | Local cgroup workload supervisor and Python external Bitcoin/arrival/view services | Removed. Opt-in performance diagnostics had no CI or production caller. Historical implementation remains at `84ac9c72`; Rust correctness workloads and frozen-input validation remain. | Audit callers and local fallback paths; run remaining stack tooling tests. No renewed performance campaign. |
 | Retained K4 coordinator snapshot | Removed. It was a development baseline, not an executor selected by any current build recipe. | Source-root tests and bundle-tooling tests. No runtime or cross-platform rebuild is required for this deletion alone. |
 | Stack release qualification and bounded dev smoke | Keep. | Existing qualification/comparison commands, only for affected execution/build changes. |
@@ -377,11 +378,12 @@ The separate `protocol-bundles/node` workspace owns node services and physical
 storage, and its resolved graph must not contain Wasmtime, an executor crate or
 one of the independently built consensus crates.
 
-The builder defaults to the `managed-node` link set: retained `first` and
-current `observer` executors, plus the single pinned `consensus-first` graph.
-It enables managed startup in the daemon. The earlier
-link sets remain explicit qualification configurations, not a promise to support
-intermediate development databases. Executor and consensus roles are recorded
+Both `--build-node` and `--build-executors` default to the `managed-node` executor
+pair: retained `first` and current `observer`. Node builds additionally compile
+the pinned `consensus-first` graph and enable managed startup in the daemon. The explicit `legacy-qualification`
+link set remains for the preserved baseline oracle, not intermediate database
+compatibility. The retired `k4-node` name is rejected by the CLI, recipes and
+compiler wrapper. Executor and consensus roles are recorded
 separately, so their shared `first` label cannot alias native ownership or evidence.
 
 The production recipes `executor-first` and `executor-second` build the actual

@@ -134,13 +134,6 @@ pub fn executor_graphs(link_set: Option<&str>) -> Result<Graphs> {
     Ok(match link_set {
         None => current_executors(),
         Some("legacy-qualification") => retained_executors(),
-        Some("k4-node") => BTreeMap::from([
-            (
-                "first".into(),
-                retained_executors().remove("first").unwrap(),
-            ),
-            ("observer".into(), observer()),
-        ]),
         Some("managed-node") => {
             BTreeMap::from([("first".into(), p1()), ("observer".into(), observer())])
         }
@@ -165,7 +158,7 @@ pub fn consensus_graphs() -> Graphs {
     )])
 }
 fn catalog() -> Result<Value> {
-    let links: BTreeMap<_, _> = ["legacy-qualification", "k4-node", "managed-node"]
+    let links: BTreeMap<_, _> = ["legacy-qualification", "managed-node"]
         .into_iter()
         .map(|name| Ok((name, executor_graphs(Some(name))?)))
         .collect::<Result<_>>()?;

@@ -24,9 +24,11 @@ fn node_graph_selection_requires_exact_roles_order_and_membership() -> Result<()
     let graphs = vec![json!({"graph":"first"}), json!({"graph":"observer"})];
     let consensus = vec![json!({"graph":"first"})];
     selected_graphs("managed-node", &graphs, &consensus)?;
-    selected_graphs("k4-node", &graphs, &[])?;
+    let legacy = vec![json!({"graph":"first"}), json!({"graph":"second"})];
+    selected_graphs("legacy-qualification", &legacy, &[])?;
+    assert!(selected_graphs("k4-node", &graphs, &[]).is_err());
     assert!(selected_graphs("managed-node", &graphs, &[]).is_err());
-    assert!(selected_graphs("k4-node", &graphs, &consensus).is_err());
+    assert!(selected_graphs("legacy-qualification", &legacy, &consensus).is_err());
     let mut reversed = graphs.clone();
     reversed.reverse();
     assert!(selected_graphs("managed-node", &reversed, &consensus).is_err());
@@ -126,13 +128,15 @@ fn link_attestation_binds_executor_and_consensus_definitions_without_crossing_ro
         )
         .is_err()
     );
+    let mut legacy_libraries = libraries[..2].to_vec();
+    legacy_libraries[1]["graph"] = json!("second");
     let legacy = link_spec(
         root,
-        &options("k4-node"),
+        &options("legacy-qualification"),
         &compiler,
         &json!({}),
         "lock",
-        &libraries[..2],
+        &legacy_libraries,
         &graphs,
         &coordinator,
         &linker,
