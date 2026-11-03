@@ -6,22 +6,12 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      stage:
-        description: Qualification or S2 resource evidence stage
-        required: true
-        default: qualify
-        type: choice
-        options: [qualify, discovery, guard, chain, final]
       profiles:
         description: Release qualification with dev smoke, or full dev/release comparison
         required: true
         default: release
         type: choice
         options: [release, full]
-      reviewed_discovery_run_id:
-        description: Reviewed S2 discovery run ID for the final stage
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -33,7 +23,6 @@ concurrency:
 jobs:
   scope:
     name: Stack qualification change scope
-    if: github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -59,15 +48,11 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - name: Install Python evidence validator
-        run: python3 -m pip install -r tools/native-stack/requirements-resource.txt
-      # Process-identity controls exercise Linux /proc and cgroups.
-      - name: Test qualification controls
-        run: python3 -m unittest discover -s tools/native-stack -p 'test_*.py' -v
+      - name: Test retained frozen workload validation
+        run: python3 -m unittest discover -s tools/native-stack -p 'test_workload_*.py' -v
 
   qualify:
     name: Native stack (${{ matrix.os }}, ${{ matrix.profile }}${{ matrix.profile == 'dev' && needs.scope.outputs.profile_policy == 'release' && ' smoke' || '' }})
@@ -172,7 +157,7 @@ jobs:
   compare:
     name: Compare native stack outcomes
     needs: [scope, qualify]
-    if: always() && (github.event_name != 'workflow_dispatch' || inputs.stage == 'qualify') && (needs.scope.result != 'success' || needs.scope.outputs.required == 'true')
+    if: always() && (needs.scope.result != 'success' || needs.scope.outputs.required == 'true')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -196,13 +181,3 @@ jobs:
           name: native-stack-comparison
           path: target/native-stack-comparison.json
           if-no-files-found: error
-
-  s2:
-    if: github.event_name == 'workflow_dispatch' && (inputs.stage == 'discovery' || inputs.stage == 'guard' || inputs.stage == 'chain' || inputs.stage == 'final')
-    uses: ./.github/workflows/native-stack-s2.yml
-    with:
-      stage: ${{ inputs.stage }}
-      reviewed_discovery_run_id: ${{ inputs.reviewed_discovery_run_id }}
-    permissions:
-      contents: read
-      actions: read

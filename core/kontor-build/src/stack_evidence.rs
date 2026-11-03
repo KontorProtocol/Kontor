@@ -9,8 +9,6 @@ mod chains;
 pub mod comparison;
 mod probes;
 pub mod resource_report;
-pub mod resource_sources;
-mod resources;
 pub mod smoke;
 
 pub const REPORT_PREFIX: &str = "KONTOR_STACK_REPORT:";
@@ -30,18 +28,6 @@ pub const SWEEP_FIELDS: &[&str] = &[
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
-    ResourceThreads {
-        runtime: Value,
-        mode: String,
-        page_size: u64,
-        os_name: String,
-        process_id: u64,
-    },
-    ResourceGuard {
-        report: Value,
-        manifest: Value,
-        directory: PathBuf,
-    },
     FeaturePolicy,
     Compare {
         directory: PathBuf,
@@ -98,21 +84,6 @@ pub enum Request {
 
 pub fn run(request: Request) -> Result<Value> {
     match request {
-        Request::ResourceThreads {
-            runtime,
-            mode,
-            page_size,
-            os_name,
-            process_id,
-        } => resources::thread_capacities(&runtime, &mode, page_size, &os_name, process_id),
-        Request::ResourceGuard {
-            report,
-            manifest,
-            directory,
-        } => {
-            resources::guard_control(&report, &manifest, &directory)?;
-            Ok(Value::Null)
-        }
         Request::FeaturePolicy => Ok(json!({
             "production": build::expected_features("production"),
             "qualification": build::expected_features("qualification"),

@@ -24,8 +24,8 @@ pub struct Metadata {
 
 #[derive(Deserialize)]
 pub(crate) struct Package {
-    pub(crate) name: String,
-    pub(crate) version: String,
+    name: String,
+    version: String,
     pub(crate) source: Option<String>,
     pub(crate) manifest_path: PathBuf,
     pub(crate) id: String,
