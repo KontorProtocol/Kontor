@@ -57,14 +57,18 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install boost libevent zeromq
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        if: matrix.workspace
       - name: Run selected stack qualification
         if: inputs.stack
         uses: ./.github/actions/run-stack
+        env:
+          RUSTC_WRAPPER: ${{ matrix.workspace && 'sccache' || '' }}
+          SCCACHE_GHA_ENABLED: 'true'
         with:
           profile: ${{ matrix.profile }}
           profiles: ${{ inputs.profiles }}
-      - uses: mozilla-actions/sccache-action@v0.0.11
-        if: matrix.workspace
+          workspace: ${{ matrix.workspace }}
       - name: Run workspace tests
         if: matrix.workspace
         uses: ./.github/actions/run-workspace-tests

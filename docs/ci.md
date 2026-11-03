@@ -32,13 +32,20 @@ Each cell owns one Cargo target directory. The compiler and runners are pinned
 to the qualification configuration: Rust 1.99.1, Ubuntu 24.04 and macOS 15.
 Compatible dependencies compile once. Ordinary tests retain sccache support.
 
-**The workspace and stack test executables are not interchangeable.** The
-workspace enables additional dependency features, including serde_json's
-`unbounded_depth`. Qualification still compiles `-p indexer --lib`, captures
-its original Cargo JSON, and verifies the executable and Wasmtime feature
-closure. Ordinary tests still run `cargo test --locked --release --workspace`,
-including other packages, binary targets, integration tests and doctests.
-Cargo rebuilds incompatible units instead of borrowing the wrong binary.
+When a release cell runs both suites, it builds all workspace test targets
+once with `cargo test --locked --release --workspace --no-run`. Stack checks
+select the indexer library test executable from that build's original Cargo
+JSON and retain the executable and Wasmtime feature validation. Ordinary tests
+then run `cargo test --locked --release --workspace`, reusing those outputs
+and preserving other packages, binary targets, integration tests and doctests.
+Both compilation steps use the same toolchain, profile and sccache wrapper.
+
+This deliberately selects the workspace feature configuration for shared
+cells. It includes additional dependency features such as serde_json's
+`unbounded_depth`, while the indexer and Wasmtime feature sets match the
+package-only build. Stack-only cells still build `-p indexer --lib` so they
+do not compile unrelated workspace targets. Qualification compares outcomes
+across these configurations; it does not assume their binaries are identical.
 
 This uses steps in the same job rather than uploading test binaries into new
 jobs. It avoids artifact transfer, relocation and repeated runner setup. It
@@ -109,3 +116,11 @@ restore, and 2.12 seconds after changing source. The archive was approximately
 validates cache behavior, not hosted node-build performance. Historical
 tooling-only commits `8b4f4a99` and `2bbeec22` select tooling checks without
 Rust, SDK, stack or linked-node jobs under the new policy.
+
+Shared-binary validation used a local Linux ARM64 release workspace build with
+Rust 1.99.1. Its Cargo JSON passed the unchanged stack provenance validator.
+Bounded paid and Core recursion probes passed using its indexer test executable.
+A subsequent filtered workspace ownership test passed using the same executable;
+Cargo reused all 957 artifacts, preserved the 28-test-executable inventory, and
+finished its build phase in 0.23 seconds. This local check used no sccache and
+did not run the full workspace suite or cross-platform qualification matrix.

@@ -1,5 +1,5 @@
 name: Qualify stack using the job's Cargo output
-description: Preserve the isolated indexer build and its Cargo provenance, reusing compatible dependencies.
+description: Qualify the indexer test executable from the selected Cargo build with its original provenance.
 inputs:
   profile:
     required: true
@@ -7,19 +7,28 @@ inputs:
   profiles:
     default: release
     description: Release plus dev smoke, or full qualification
+  workspace:
+    default: 'false'
+    description: Build all workspace test targets for reuse by ordinary release tests
 runs:
   using: composite
   steps:
-  - name: Compile qualification test
+  - name: Compile selected test targets
     env:
       PROFILE: ${{ inputs.profile }}
+      WORKSPACE: ${{ inputs.workspace }}
     shell: bash
     run: |
       evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$PROFILE"
       mkdir -p "$evidence"
       flags=()
       if [[ "$PROFILE" == release ]]; then flags+=(--release); fi
-      cargo test --locked --manifest-path core/Cargo.toml -p indexer --lib --no-run --message-format=json -j2 "${flags[@]}" > "$evidence/cargo.json"
+      targets=(-p indexer --lib)
+      if [[ "$WORKSPACE" == true ]]; then
+        test "$PROFILE" = release
+        targets=(--workspace)
+      fi
+      cargo test --locked --manifest-path core/Cargo.toml "${targets[@]}" --no-run --message-format=json -j2 "${flags[@]}" > "$evidence/cargo.json"
       jq -ser '[.[] | select(.reason == "compiler-artifact" and .target.name == "indexer" and (.target.kind | index("lib")) != null and .profile.test == true and .executable != null)] | if length == 1 then .[0].executable else error("expected exactly one indexer lib test executable") end' "$evidence/cargo.json" > target/native-stack-evidence/binary-path
       test -s target/native-stack-evidence/binary-path
   - name: Exercise paid, view, and Core chain boundaries
