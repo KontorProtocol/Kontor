@@ -8,8 +8,6 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
-from decimal import Decimal, InvalidOperation
-from fractions import Fraction
 from pathlib import Path
 
 from sweep import IDENTITY_FIELDS, SWEEP_FIELDS, parse_transcript, _run as stack_evidence
@@ -238,132 +236,18 @@ def validate_owned_stack(case, directory):
     return normalized
 
 
-CHAIN_FIELDS = {
-    "mode", "stores", "trials", "component_sha256", "engine_target", "max_wasm_stack",
-    "async_stack_size", "target_os", "target_arch", "call_hook_installed",
-}
-TRIAL_FIELDS = {
-    "outcome", "fuel", "receipt", "receipt_count", "value", "storage_state", "rolled_back",
-    "resource_count", "baseline_resource_count", "savepoint_restored", "stack_empty",
-    "host_io_suspended", "leaf_callback_seen", "rollback_clean", "balances",
-    "repeat_index", "state_before_sha256", "state_after_sha256",
-}
-BALANCE_FIELDS = {
-    "before", "after", "restored", "burned_before", "burned_after", "supply_before",
-    "supply_after", "floor_before", "floor_after", "floor_restored",
-}
 CHAIN_KEYS = {(mode, stores) for mode in ("paid", "view", "core") for stores in (33, 63, 64, 65)}
 OWNED_CHAIN_KEYS = {(mode, stores) for mode in ("paid", "view", "core") for stores in (64, 65)}
 
 
-def decimal_fraction(value):
-    check(isinstance(value, str), "chain balances must be decimal strings")
-    try:
-        number = Decimal(value)
-        check(number.is_finite() and number >= 0, "invalid chain balance")
-        return Fraction(number)
-    except InvalidOperation as error:
-        raise ValueError("invalid chain decimal") from error
-
-
 def validate_chains(chains, target_os, target_arch):
-    check(isinstance(chains, list) and len(chains) == len(CHAIN_KEYS), "missing chain cells")
-    seen = set()
-    normalized = []
-    for chain in chains:
-        check(isinstance(chain, dict) and CHAIN_FIELDS <= chain.keys(), "missing chain fields")
-        mode, stores = chain["mode"], chain["stores"]
-        check(isinstance(mode, str) and type(stores) is int, "invalid chain key")
-        key = (mode, stores)
-        check(key in CHAIN_KEYS and key not in seen, "duplicate or unexpected chain key")
-        seen.add(key)
-        check((chain["target_os"], chain["target_arch"]) == (target_os, target_arch), "chain target mismatch")
-        check(chain["engine_target"] == "pulley64-unknown-unknown-elf", "chain engine mismatch")
-        check(chain["call_hook_installed"] is False, "chain enabled a test-only call hook")
-        check((chain["max_wasm_stack"], chain["async_stack_size"]) == STACK_SIZES, "chain stack settings mismatch")
-        hashes = chain["component_sha256"]
-        check(isinstance(hashes, dict) and set(hashes) == {"error_test", "proxy"}, "missing chain component hashes")
-        check(all(isinstance(value, str) and HEX_64.fullmatch(value) for value in hashes.values()), "invalid chain component hash")
-        trials = chain["trials"]
-        check(isinstance(trials, list) and len(trials) == 3, "chain requires three trials")
-        expected = ["invocation_limit"] * 3 if stores == 65 else ["ok", "trap", "ok"]
-        for repeat_index, (trial, outcome) in enumerate(zip(trials, expected)):
-            check(isinstance(trial, dict) and TRIAL_FIELDS <= trial.keys(), "missing chain trial fields")
-            check(type(trial["repeat_index"]) is int and trial["repeat_index"] == repeat_index, "wrong chain repeat index")
-            before, after = trial["state_before_sha256"], trial["state_after_sha256"]
-            check(isinstance(before, str) and HEX_64.fullmatch(before) and after == before, "chain persisted state was not restored")
-            check(trial["outcome"] == outcome, "wrong chain outcome")
-            check(trial["value"] == ("42" if outcome == "ok" else None), "wrong chain result")
-            state = "[2, 0, 0, 0]" if mode != "view" and outcome == "ok" else "[0, 0, 0, 0]"
-            check(trial["storage_state"] == state, "wrong chain state")
-            for field in ("rolled_back", "rollback_clean", "savepoint_restored", "stack_empty"):
-                check(trial[field] is True, f"chain cleanup failed: {field}")
-            for field in ("host_io_suspended", "leaf_callback_seen"):
-                check(trial[field] is (stores != 65), f"chain host callback mismatch: {field}")
-            for field in ("resource_count", "baseline_resource_count", "receipt_count"):
-                check(type(trial[field]) is int and trial[field] >= 0, f"invalid chain {field}")
-            check(trial["resource_count"] == trial["baseline_resource_count"], "chain resources leaked")
-            check(trial["receipt_count"] == (0 if mode == "view" else stores if outcome == "ok" else 1), "wrong chain receipt count")
-            receipt = trial["receipt"]
-            if mode == "view":
-                check(receipt is None, "view chain persisted a receipt")
-            else:
-                check(isinstance(receipt, dict) and set(receipt) == {"contract_id", "status", "gas", "value"}, "invalid chain receipt")
-                check(type(receipt["contract_id"]) is int and receipt["contract_id"] >= 0, "invalid chain receipt contract")
-                check(receipt["status"] == ("Ok" if outcome == "ok" else "Other"), "wrong chain receipt status")
-                check(type(receipt["gas"]) is int and receipt["gas"] > 0, "invalid chain receipt gas")
-                check(receipt["value"] == ("42" if outcome == "ok" else None), "wrong chain receipt value")
-            fuel = trial["fuel"]
-            check(isinstance(fuel, dict) and set(fuel) == {"user", "system", "deposit"}, "missing chain fuel")
-            check(all(type(value) is int and value >= 0 for value in fuel.values()), "invalid chain fuel")
-            check(fuel["user" if mode == "paid" else "system"] > 0, "chain fuel missing from expected category")
-            balances = trial["balances"]
-            check(isinstance(balances, dict) and set(balances) == BALANCE_FIELDS, "missing chain balances")
-            amounts = {field: decimal_fraction(value) for field, value in balances.items()}
-            paid = amounts["before"] - amounts["after"]
-            check(paid == amounts["burned_after"] - amounts["burned_before"] == amounts["supply_before"] - amounts["supply_after"], "chain accounting mismatch")
-            check(paid > 0 if mode == "paid" else paid == 0, "wrong chain payer charge")
-            check(amounts["restored"] == amounts["before"] and amounts["floor_restored"] == amounts["floor_before"], "chain rollback changed balances")
-            if mode == "core" and outcome == "ok":
-                check(amounts["floor_after"] < amounts["floor_before"], "Core overwrite did not remove prior deposit")
-            else:
-                check(amounts["floor_after"] == amounts["floor_before"], "unexpected chain deposit change")
-        if stores == 65:
-            repeated = [{field: value for field, value in trial.items() if field != "repeat_index"} for trial in trials]
-            check(repeated[0] == repeated[1] == repeated[2], "over-cap chain trials differ")
-        normalized.append({field: value for field, value in chain.items() if field not in {"target_os", "target_arch"}})
-    return sorted(normalized, key=lambda chain: (chain["mode"], chain["stores"]))
+    return stack_evidence({"operation": "chains", "chains": chains,
+                           "target_os": target_os, "target_arch": target_arch})
 
 
 def validate_owned_chains(owned_chains, chains, target_os, target_arch):
-    check(isinstance(owned_chains, list) and len(owned_chains) == len(OWNED_CHAIN_KEYS), "missing owned chain cells")
-    oracle = {(chain["mode"], chain["stores"]): chain for chain in chains}
-    seen = set()
-    normalized = []
-    for chain in owned_chains:
-        check(isinstance(chain, dict) and CHAIN_FIELDS <= chain.keys(), "owned chain lacks report fields")
-        key = (chain["mode"], chain["stores"])
-        check(key in OWNED_CHAIN_KEYS and key not in seen, "duplicate or unexpected owned chain key")
-        seen.add(key)
-        check((chain["target_os"], chain["target_arch"]) == (target_os, target_arch), "owned chain target mismatch")
-        reference = oracle[key]
-        for field in ("component_sha256", "engine_target", "max_wasm_stack", "async_stack_size", "call_hook_installed"):
-            check(chain[field] == reference[field], f"owned chain {key}: {field} differs")
-        trials = chain["trials"]
-        check(isinstance(trials, list) and len(trials) == 1, f"owned chain {key}: missing boundary trial")
-        trial = trials[0]
-        check(isinstance(trial, dict) and TRIAL_FIELDS <= trial.keys(), f"owned chain {key}: missing trial fields")
-        owner = trial.get("ownership")
-        check(isinstance(owner, dict) and set(owner) == {"kind", "fuel_yield_interval", "registered_peak"}, f"owned chain {key}: missing owner evidence")
-        check(owner == {
-            "kind": "api" if key[0] == "view" else "canonical",
-            "fuel_yield_interval": 100_000 if key[0] == "view" else None,
-            "registered_peak": min(key[1], 64),
-        }, f"owned chain {key}: wrong owner policy or descendant count")
-        for field in TRIAL_FIELDS:
-            check(trial[field] == reference["trials"][0][field], f"owned chain {key}: {field} differs from unowned oracle")
-        normalized.append({"mode": key[0], "stores": key[1], "trial": {field: trial[field] for field in sorted(TRIAL_FIELDS)}, "ownership": owner})
-    return sorted(normalized, key=lambda chain: (chain["mode"], chain["stores"]))
+    return stack_evidence({"operation": "owned_chains", "owned_chains": owned_chains,
+                           "chains": chains, "target_os": target_os, "target_arch": target_arch})
 
 
 def validate_build_provenance(report, directory, binary):

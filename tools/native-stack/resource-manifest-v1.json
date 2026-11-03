@@ -106,7 +106,7 @@
     },
     "core_lockfile": {
       "path": "core/Cargo.lock",
-      "sha256": "4dd691d40b6f7561ee58f5efe39974cc31042635eef94d1977b20d33fff68365"
+      "sha256": "111e6337ce9b2b2cbeb6467b5b1e58ca5cc7696cda6c2ef85105744e8d384ffe"
     },
     "counter_guest": {
       "path": "test-contracts/binaries/counter.wasm.br",
@@ -378,7 +378,7 @@
     },
     "production_qualification": {
       "path": "tools/native-stack/compare.py",
-      "sha256": "0d464ca3e4283b934a6eb71b423edb87245bf870ca9c1b59252edfb03b07dee8"
+      "sha256": "19c220a749a859525484f1bafa8542ea97dcc41e5df67118955b37824697c07c"
     },
     "proxy": {
       "path": "test-contracts/binaries/proxy.wasm.br",

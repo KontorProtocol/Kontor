@@ -4,6 +4,7 @@ use serde_json::{Map, Value, json};
 use std::path::PathBuf;
 
 mod build;
+mod chains;
 pub mod smoke;
 
 pub const REPORT_PREFIX: &str = "KONTOR_STACK_REPORT:";
@@ -23,6 +24,17 @@ pub const SWEEP_FIELDS: &[&str] = &[
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
+    Chains {
+        chains: Value,
+        target_os: String,
+        target_arch: String,
+    },
+    OwnedChains {
+        owned_chains: Value,
+        chains: Value,
+        target_os: String,
+        target_arch: String,
+    },
     BuildProvenance {
         report: Value,
         directory: PathBuf,
@@ -59,6 +71,17 @@ pub enum Request {
 
 pub fn run(request: Request) -> Result<Value> {
     match request {
+        Request::Chains {
+            chains,
+            target_os,
+            target_arch,
+        } => chains::validate(&chains, &target_os, &target_arch),
+        Request::OwnedChains {
+            owned_chains,
+            chains,
+            target_os,
+            target_arch,
+        } => chains::validate_owned(&owned_chains, &chains, &target_os, &target_arch),
         Request::BuildProvenance {
             report,
             directory,
