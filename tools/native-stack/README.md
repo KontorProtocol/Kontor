@@ -104,9 +104,8 @@ The retained boundaries are:
 - The frozen workload fixture/schema/manifest checks below, which have an
   independent Rust replay caller.
 
-The scope job already tests the Rust tooling through `setup-kontor-tools`.
-The controls job retains the frozen-workload tests without installing the retired
-JSON-schema dependency or running the deleted resource-report tests.
+The scope job tests the Rust tooling, including frozen-workload validation,
+through `setup-kontor-tools`. The separate Python controls job is removed.
 
 ## Local macOS VM-map diagnosis
 
@@ -131,11 +130,24 @@ no overall driver deadline or certification claim. No CI job runs it.
 
 ## Retained frozen workloads
 
-`assemble_workload.py`, `workload_fixture.py`, `workload_schema.py` and
-`workload_manifest.py` remain temporarily because Rust frozen replay calls the
-closed-schema validator before consuming an archive. Their two test modules
-remain in ordinary controls. Migrating this live caller to Rust is separate from
-retiring the S2 resource certification framework.
+Frozen replay calls `kontor_build::workload::verify` directly. The same Rust
+validator is available from the existing CLI:
+
+```sh
+tools/kontor verify-workload "$PWD/capture/manifest.json" --sha256 <reviewed-sha256>
+tools/kontor assemble-workload "$PWD/capture"
+```
+
+The validator preserves exact monetary arithmetic, closed document shapes,
+archive containment and hashes, receipt ordering, rollback and pruning checks.
+Its tests run in the existing tooling setup, without a separate CI job.
+Assembly creates an unapproved `candidate-manifest.json`, refuses an existing
+file and removes a newly created candidate if verification fails. It does not
+approve a workload or replace replay at the captured source revision. Newly
+assembled JSON can have different key ordering and therefore a new digest;
+existing frozen manifests retain their original bytes and pinned hashes.
+Replay output now reports `document_validator: "kontor-build"` instead of the
+former informational `python_version` field.
 
 The Linux cgroup performance supervisor and Python external Bitcoin, arrival and
 view services were previously retired. Their source and usage are preserved at

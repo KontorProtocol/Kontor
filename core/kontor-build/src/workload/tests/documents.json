@@ -1,0 +1,514 @@
+[
+  {
+    "schema_version": 1,
+    "kind": "smoke",
+    "case_id": "paid-success-failure-success-v1",
+    "funding_seed_hex": "01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+    "source": {
+      "kontor_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "rustc_verbose": "synthetic",
+      "target": "synthetic",
+      "profile": "dev",
+      "features": [],
+      "core_lockfile": {
+        "path": "Cargo.lock",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+      },
+      "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
+      "engine": "pulley",
+      "pulley_stack_bytes": 524288,
+      "native_fiber_bytes": 2097152
+    },
+    "artifacts": [
+      {
+        "id": "error_test",
+        "compressed": {
+          "path": "error_test.wasm.br",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+        },
+        "raw_sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+        "addresses": [
+          "smokea_2_0",
+          "smokeb_2_1"
+        ]
+      },
+      {
+        "id": "filestorage",
+        "compressed": {
+          "path": "filestorage.wasm.br",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+        },
+        "raw_sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+        "addresses": [
+          "filestorage_0_0"
+        ]
+      },
+      {
+        "id": "nft",
+        "compressed": {
+          "path": "nft.wasm.br",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+        },
+        "raw_sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+        "addresses": [
+          "nft_0_0"
+        ]
+      },
+      {
+        "id": "staking",
+        "compressed": {
+          "path": "staking.wasm.br",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+        },
+        "raw_sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+        "addresses": [
+          "staking_0_0"
+        ]
+      },
+      {
+        "id": "system",
+        "compressed": {
+          "path": "system.wasm.br",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+        },
+        "raw_sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+        "addresses": [
+          "system_0_0"
+        ]
+      },
+      {
+        "id": "token",
+        "compressed": {
+          "path": "token.wasm.br",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+        },
+        "raw_sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+        "addresses": [
+          "token_0_0"
+        ]
+      }
+    ],
+    "snapshot": {
+      "database": {
+        "path": "snapshot.db",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+      },
+      "schema_sha256": "0000000000000000000000000000000000000000000000000000000000000009",
+      "anchor_height": 9,
+      "anchor_hash": "0000000000000000000000000000000000000000000000000000000000000009",
+      "checkpoint": "before",
+      "prune_watermark": 0,
+      "reset_report": {
+        "path": "before.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+      }
+    },
+    "input": {
+      "raw_block": {
+        "path": "block.bin",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+      },
+      "height": 10,
+      "block_hash": "000000000000000000000000000000000000000000000000000000000000000a",
+      "previous_hash": "0000000000000000000000000000000000000000000000000000000000000009",
+      "raw_txids": [
+        "0000000000000000000000000000000000000000000000000000000000000001",
+        "0000000000000000000000000000000000000000000000000000000000000002",
+        "0000000000000000000000000000000000000000000000000000000000000003"
+      ],
+      "kontor_txids": [
+        "0000000000000000000000000000000000000000000000000000000000000003"
+      ],
+      "kontor_input_count": 1,
+      "operation_count": 3,
+      "payer_x_only_pubkey": "0000000000000000000000000000000000000000000000000000000000000014",
+      "operations": [
+        {
+          "txid": "0000000000000000000000000000000000000000000000000000000000000003",
+          "tx_index": 2,
+          "input_index": 0,
+          "op_index": 0,
+          "contract": "smokea_2_0",
+          "expression": "write-result-payload(1)",
+          "gas_limit": 100000
+        },
+        {
+          "txid": "0000000000000000000000000000000000000000000000000000000000000003",
+          "tx_index": 2,
+          "input_index": 0,
+          "op_index": 1,
+          "contract": "smokeb_2_1",
+          "expression": "scan-compound(false)",
+          "gas_limit": 100000
+        },
+        {
+          "txid": "0000000000000000000000000000000000000000000000000000000000000003",
+          "tx_index": 2,
+          "input_index": 0,
+          "op_index": 2,
+          "contract": "smokea_2_0",
+          "expression": "write-result-payload(2)",
+          "gas_limit": 100000
+        }
+      ],
+      "bitcoin_validation": {
+        "network": "regtest",
+        "bitcoind_version": "synthetic",
+        "accepted_block_hash": "000000000000000000000000000000000000000000000000000000000000000a",
+        "record": {
+          "path": "bitcoin.json",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+        }
+      }
+    },
+    "execution": {
+      "executor": "RuntimeExecutor",
+      "component_cache": "cold",
+      "network": "regtest",
+      "starting_block_height": 1,
+      "prune_enabled": true,
+      "retain_blocks": 6,
+      "gas_to_fuel_multiplier": 1000,
+      "execution_price": "0.000000001",
+      "storage_gas_per_byte": 1,
+      "lifecycle_parameters": {
+        "path": "lifecycle.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+      },
+      "independent_resets": 2,
+      "timing_claim": "none"
+    },
+    "expected_report": {
+      "path": "after.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+    },
+    "numeric_check": {
+      "path": "numeric.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000063"
+    },
+    "decision": {
+      "consensus_height": 10,
+      "certificate_hex": "",
+      "value_kind": "block",
+      "block_height": 10,
+      "block_hash": "000000000000000000000000000000000000000000000000000000000000000a",
+      "certified_txs": null
+    }
+  },
+  {
+    "schema_version": 1,
+    "height": 9,
+    "block_hash": "0000000000000000000000000000000000000000000000000000000000000009",
+    "checkpoint": "before",
+    "prune_watermark": 0,
+    "receipts": [],
+    "usage": [],
+    "accounts": {
+      "payer": {
+        "balance": "1",
+        "floor": "0"
+      },
+      "burner": {
+        "balance": "0",
+        "floor": "0"
+      },
+      "core": {
+        "balance": "0",
+        "floor": "0"
+      },
+      "ordering_pool": {
+        "balance": "0",
+        "floor": "0"
+      },
+      "storage_pool": {
+        "balance": "0",
+        "floor": "0"
+      },
+      "total_supply": {
+        "balance": "1",
+        "floor": "0"
+      }
+    },
+    "contract_views": {
+      "A": {
+        "address": "smokea_2_0",
+        "storage_state": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "B": {
+        "address": "smokeb_2_1",
+        "storage_state": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    "state_versions": [
+      {
+        "contract": "history_1_0",
+        "path_hex": "01",
+        "height": 1,
+        "value_hex": "01",
+        "deleted": false,
+        "depositor": null,
+        "deposited_gas": null
+      },
+      {
+        "contract": "history_1_0",
+        "path_hex": "01",
+        "height": 3,
+        "value_hex": "03",
+        "deleted": false,
+        "depositor": null,
+        "deposited_gas": null
+      }
+    ],
+    "table_counts": [
+      {
+        "table": "contract_state",
+        "rows": 2
+      }
+    ]
+  },
+  {
+    "schema_version": 1,
+    "height": 10,
+    "block_hash": "000000000000000000000000000000000000000000000000000000000000000a",
+    "checkpoint": "after",
+    "prune_watermark": 4,
+    "receipts": [
+      {
+        "id": 1,
+        "height": 10,
+        "tx_index": 0,
+        "input_index": 0,
+        "op_index": 0,
+        "result_index": 0,
+        "func": "write-result-payload",
+        "gas": 10,
+        "status": "Ok",
+        "value": "\"é\\n\"",
+        "contract": "smokea_2_0",
+        "txid": "0000000000000000000000000000000000000000000000000000000000000003",
+        "signer_id": 10,
+        "payer_signer_id": 10
+      },
+      {
+        "id": 2,
+        "height": 10,
+        "tx_index": 0,
+        "input_index": 0,
+        "op_index": 1,
+        "result_index": 0,
+        "func": "scan-compound",
+        "gas": 10,
+        "status": "Other",
+        "value": null,
+        "contract": "smokeb_2_1",
+        "txid": "0000000000000000000000000000000000000000000000000000000000000003",
+        "signer_id": 10,
+        "payer_signer_id": 10
+      },
+      {
+        "id": 3,
+        "height": 10,
+        "tx_index": 0,
+        "input_index": 0,
+        "op_index": 2,
+        "result_index": 0,
+        "func": "write-result-payload",
+        "gas": 10,
+        "status": "Ok",
+        "value": "\"é\\né\\n\"",
+        "contract": "smokea_2_0",
+        "txid": "0000000000000000000000000000000000000000000000000000000000000003",
+        "signer_id": 10,
+        "payer_signer_id": 10
+      }
+    ],
+    "usage": [
+      {
+        "height": 10,
+        "tx_index": 2,
+        "txid": "0000000000000000000000000000000000000000000000000000000000000003",
+        "kind": "transaction",
+        "user_fuel": 24000,
+        "system_fuel": 3000,
+        "deposit_fuel": 6000
+      },
+      {
+        "height": 10,
+        "tx_index": null,
+        "txid": null,
+        "kind": "block",
+        "user_fuel": 0,
+        "system_fuel": 5000,
+        "deposit_fuel": 0
+      }
+    ],
+    "accounts": {
+      "payer": {
+        "balance": "0.999999976",
+        "floor": "0.000000002"
+      },
+      "burner": {
+        "balance": "0.000000024",
+        "floor": "0"
+      },
+      "core": {
+        "balance": "0",
+        "floor": "0"
+      },
+      "ordering_pool": {
+        "balance": "0",
+        "floor": "0"
+      },
+      "storage_pool": {
+        "balance": "0",
+        "floor": "0"
+      },
+      "total_supply": {
+        "balance": "1",
+        "floor": "0"
+      }
+    },
+    "contract_views": {
+      "A": {
+        "address": "smokea_2_0",
+        "storage_state": [
+          1,
+          0,
+          0,
+          1
+        ]
+      },
+      "B": {
+        "address": "smokeb_2_1",
+        "storage_state": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    "state_versions": [
+      {
+        "contract": "history_1_0",
+        "path_hex": "01",
+        "height": 3,
+        "value_hex": "03",
+        "deleted": false,
+        "depositor": null,
+        "deposited_gas": null
+      }
+    ],
+    "table_counts": [
+      {
+        "table": "contract_state",
+        "rows": 1
+      }
+    ]
+  },
+  {
+    "schema_version": 1,
+    "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000063",
+    "raw_block_sha256": "0000000000000000000000000000000000000000000000000000000000000063",
+    "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "operations": [
+      {
+        "txid": "0000000000000000000000000000000000000000000000000000000000000003",
+        "tx_index": 2,
+        "input_index": 0,
+        "op_index": 0,
+        "contract": "smokea_2_0",
+        "expression": "write-result-payload(1)",
+        "status": "Ok",
+        "value": "\"é\\n\"",
+        "gas": 10,
+        "user_fuel": 8000,
+        "system_fuel": 1000,
+        "deposit_fuel": 2000,
+        "reserved_deposit_gas": 2,
+        "payer_before": "1",
+        "payer_after": "0.999999992",
+        "burner_before": "0",
+        "burner_after": "0.000000008",
+        "floor_before": "0",
+        "floor_after": "0.000000002",
+        "execution_fee": "0.000000008",
+        "error_message": null,
+        "storage_state": [
+          1,
+          0,
+          0,
+          1
+        ]
+      },
+      {
+        "txid": "0000000000000000000000000000000000000000000000000000000000000003",
+        "tx_index": 2,
+        "input_index": 0,
+        "op_index": 1,
+        "contract": "smokeb_2_1",
+        "expression": "scan-compound(false)",
+        "status": "Other",
+        "value": null,
+        "gas": 10,
+        "user_fuel": 8000,
+        "system_fuel": 1000,
+        "deposit_fuel": 2000,
+        "reserved_deposit_gas": 2,
+        "payer_before": "0.999999992",
+        "payer_after": "0.999999984",
+        "burner_before": "0.000000008",
+        "burner_after": "0.000000016",
+        "floor_before": "0.000000002",
+        "floor_after": "0.000000002",
+        "execution_fee": "0.000000008",
+        "error_message": "row scan requires direct scalar leaves",
+        "storage_state": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "txid": "0000000000000000000000000000000000000000000000000000000000000003",
+        "tx_index": 2,
+        "input_index": 0,
+        "op_index": 2,
+        "contract": "smokea_2_0",
+        "expression": "write-result-payload(2)",
+        "status": "Ok",
+        "value": "\"é\\né\\n\"",
+        "gas": 10,
+        "user_fuel": 8000,
+        "system_fuel": 1000,
+        "deposit_fuel": 2000,
+        "reserved_deposit_gas": 2,
+        "payer_before": "0.999999984",
+        "payer_after": "0.999999976",
+        "burner_before": "0.000000016",
+        "burner_after": "0.000000024",
+        "floor_before": "0.000000002",
+        "floor_after": "0.000000002",
+        "execution_fee": "0.000000008",
+        "error_message": null,
+        "storage_state": [
+          1,
+          0,
+          0,
+          1
+        ]
+      }
+    ]
+  }
+]

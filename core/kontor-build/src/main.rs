@@ -34,6 +34,7 @@ use kontor_build::stack_evidence::comparison::{CompareStackArgs, compare_stack};
 use kontor_build::stack_evidence::smoke::{SmokeArgs, capture as stack_smoke};
 use kontor_build::stack_evidence::{Request as StackRequest, run as stack_evidence};
 use kontor_build::symbol_audit::{Request as AuditRequest, run as audit_symbols};
+use kontor_build::workload::{assemble as assemble_workload, verify as verify_workload};
 use kontor_build::{
     BuildArgs, CiScope, DiagnosticsArgs, ProtocolBundlesArgs, VerifySnapshotArgs,
     check_native_helper_lock, ci_scope, diagnostics, protocol_bundles, run, stage_graph_wrapper,
@@ -49,6 +50,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Verify frozen workload inputs and exact accounting before replay.
+    VerifyWorkload {
+        manifest: PathBuf,
+        #[arg(long)]
+        sha256: String,
+    },
+    /// Assemble an unapproved frozen workload candidate from a smoke capture.
+    AssembleWorkload { directory: PathBuf },
     /// Capture worker, fresh-control, and owned stack qualification evidence.
     QualifyStack(CaptureStackArgs),
     /// Compare archived stack qualification and required dev smoke evidence.
@@ -134,6 +143,17 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::VerifyWorkload { manifest, sha256 } => {
+            println!(
+                "{}",
+                serde_json::to_string(&verify_workload(&manifest, &sha256)?)?
+            );
+            Ok(())
+        }
+        Command::AssembleWorkload { directory } => {
+            println!("{}", assemble_workload(&directory)?);
+            Ok(())
+        }
         Command::QualifyStack(args) => {
             println!("{}", capture_stack(&repository_root()?, args)?);
             Ok(())

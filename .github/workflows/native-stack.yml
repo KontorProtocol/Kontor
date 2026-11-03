@@ -37,26 +37,9 @@ jobs:
         id: select
         run: RUSTC_WRAPPER= ./tools/kontor ci-scope stack
 
-  controls:
-    name: Native stack evidence controls
-    needs: scope
-    if: needs.scope.outputs.required == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      RUSTUP_TOOLCHAIN: "1.99.1"
-      PYTHONDONTWRITEBYTECODE: "1"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Test retained frozen workload validation
-        run: python3 -m unittest discover -s tools/native-stack -p 'test_workload_*.py' -v
-
   qualify:
     name: Native stack (${{ matrix.os }}, ${{ matrix.profile }}${{ matrix.profile == 'dev' && needs.scope.outputs.profile_policy == 'release' && ' smoke' || '' }})
-    needs: [scope, controls]
+    needs: scope
     if: needs.scope.outputs.required == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360

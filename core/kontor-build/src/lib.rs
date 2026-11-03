@@ -27,6 +27,7 @@ pub mod source_policy;
 pub mod stack_evidence;
 pub mod symbol_audit;
 pub mod toolchain;
+pub mod workload;
 
 pub use bundles::{ProtocolBundlesArgs, protocol_bundles};
 pub use ci_scope::{CiScope, ci_scope};
