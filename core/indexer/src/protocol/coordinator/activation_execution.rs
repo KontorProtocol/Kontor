@@ -35,10 +35,7 @@ pub(crate) async fn step(
     let (_, anchor, hash) = boundary(session, height).await?;
     let pending = activation::pending(&session.conn, anchor, hash).await?;
     if let Some(state) = pending {
-        let target = &state
-            .pending
-            .context("activation plan disappeared")?
-            .manifest;
+        let target = &state.plan.manifest;
         let installed = registry::resolve(target)?;
         ensure!(
             session.origin() == installed.executor,
@@ -89,10 +86,7 @@ pub(crate) async fn apply(
     let state = activation::pending(&session.conn, anchor_height, anchor_hash)
         .await?
         .context("activation no longer has a pending plan")?;
-    let plan = state
-        .pending
-        .clone()
-        .context("activation plan disappeared")?;
+    let plan = &state.plan;
     ensure!(
         definition.id()? == plan.manifest.migration
             && definition.execution == plan.manifest.executor,

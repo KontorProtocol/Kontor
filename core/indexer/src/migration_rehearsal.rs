@@ -19,7 +19,7 @@ use crate::protocol::coordinator::manifest::ProtocolManifest;
 use crate::protocol::coordinator::migration::{
     self, MigrationAttemptWork, MigrationRejected, MigrationRequest,
 };
-use crate::protocol::coordinator::selection::{ApplicationPosition, select_legacy_p1};
+use crate::protocol::coordinator::selection::select_rehearsal;
 use crate::protocol::identity::{ExecutionIdentity, MigrationDefinition, PlanId, domain_digest};
 use crate::protocol::migration_work::MigrationWork;
 use crate::runtime::ownership::OwnerService;
@@ -245,15 +245,8 @@ async fn rehearse(
         let executor = factory(conn.clone().into()).await?;
         let session = LinkedSession::new(conn.clone(), executor);
         let anchor_hash = BlockHash::from_byte_array(closed.bitcoin_hash);
-        let selection = select_legacy_p1(
-            conn,
-            network,
-            ApplicationPosition::Migration {
-                anchor_height: closed.bitcoin_height,
-                anchor_hash,
-            },
-        )
-        .await?;
+        let selection =
+            select_rehearsal(&session, network, closed.bitcoin_height, anchor_hash).await?;
         // This identity belongs only to the disposable rehearsal. It cannot
         // serve as an authorized plan or a receipt for live activation.
         let request = MigrationRequest {

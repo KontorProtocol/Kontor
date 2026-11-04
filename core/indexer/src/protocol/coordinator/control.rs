@@ -413,87 +413,13 @@ impl UpgradeControl {
     ) -> Result<AcceptedControl, ControlError> {
         let control = self.id()?;
         let action = self.action.id()?;
-        if state.current_manifest.chain != state.context.chain
-            || state.current_manifest.id()? != state.context.protocol
-            || state.context.codec != 1
-            || state.current_manifest.control_codec != 1
-            || self.action.context != state.context
-            || inclusion.context != state.context
-        {
-            return Err(ControlError::Context);
-        }
-        if inclusion.validate().is_err() {
-            return Err(ControlError::Committee);
-        }
-        if self.action.head != state.head
-            || self.action.nonce != state.nonce.checked_add(1).ok_or(ControlError::Overflow)?
-            || self.action.expected_pending != state.pending.as_ref().map(|plan| plan.id)
-        {
-            return Err(ControlError::Stale);
-        }
-        let latest_expiry = reference
-            .bitcoin_height
-            .checked_add(MAX_REFERENCE_AGE)
-            .ok_or(ControlError::Overflow)?;
-        if reference.height == 0
-            || reference.height < minimum_reference_height
-            || inclusion.height <= reference.height
-            || self.action.reference_height != reference.height
-            || self.action.reference_decision != reference.decision
-            || reference.bitcoin_height > inclusion_bitcoin_height
-            || self.action.expires_at < reference.bitcoin_height
-            || self.action.expires_at > latest_expiry
-            || inclusion_bitcoin_height > self.action.expires_at
-        {
-            return Err(ControlError::Reference);
-        }
-        let mut next = state.clone();
-        next.head = control;
-        next.nonce = self.action.nonce;
-        match &self.action.operation {
-            ControlOperation::Schedule {
-                manifest,
-                activation,
-            } => {
-                if state.pending.is_some() || self.action.expected_pending.is_some() {
-                    return Err(ControlError::Plan);
-                }
-                validate_target(manifest, &state.current_manifest)?;
-                validate_notice(*activation, inclusion_bitcoin_height)?;
-                next.pending = Some(PendingPlan {
-                    id: PlanId(action),
-                    manifest: manifest.clone(),
-                    activation: *activation,
-                    consumed: false,
-                });
-            }
-            ControlOperation::Postpone {
-                target,
-                previous_activation,
-                activation,
-            } => {
-                let pending = state.pending.as_ref().ok_or(ControlError::Plan)?;
-                if pending.consumed
-                    || pending.manifest.id()? != *target
-                    || pending.activation != *previous_activation
-                    || *activation <= *previous_activation
-                {
-                    return Err(ControlError::Plan);
-                }
-                validate_notice(*activation, inclusion_bitcoin_height)?;
-                next.pending.as_mut().ok_or(ControlError::Plan)?.activation = *activation;
-            }
-            ControlOperation::Cancel { target, activation } => {
-                let pending = state.pending.as_ref().ok_or(ControlError::Plan)?;
-                if pending.consumed
-                    || pending.manifest.id()? != *target
-                    || pending.activation != *activation
-                {
-                    return Err(ControlError::Plan);
-                }
-                next.pending = None;
-            }
-        }
+        let pending = self.action.validate_proposal(
+            state,
+            inclusion,
+            reference,
+            inclusion_bitcoin_height,
+            minimum_reference_height,
+        )?;
         let mut by_key = BTreeMap::new();
         let mut total = 0u128;
         for member in &inclusion.members {
@@ -536,8 +462,105 @@ impl UpgradeControl {
             control,
             signed_power: signed,
             total_power: total,
-            next,
+            next: ControlState {
+                head: control,
+                nonce: self.action.nonce,
+                pending,
+                ..state.clone()
+            },
         })
+    }
+}
+
+impl ControlAction {
+    // This validates a proposed effect without inventing a signed control head.
+    pub(crate) fn validate_proposal(
+        &self,
+        state: &ControlState,
+        inclusion: &CommitteeRecord,
+        reference: AuthenticatedReference,
+        inclusion_bitcoin_height: u64,
+        minimum_reference_height: u64,
+    ) -> Result<Option<PendingPlan>, ControlError> {
+        let action = self.id()?;
+        if state.current_manifest.chain != state.context.chain
+            || state.current_manifest.id()? != state.context.protocol
+            || state.context.codec != 1
+            || state.current_manifest.control_codec != 1
+            || self.context != state.context
+            || inclusion.context != state.context
+        {
+            return Err(ControlError::Context);
+        }
+        if inclusion.validate().is_err() {
+            return Err(ControlError::Committee);
+        }
+        if self.head != state.head
+            || self.nonce != state.nonce.checked_add(1).ok_or(ControlError::Overflow)?
+            || self.expected_pending != state.pending.as_ref().map(|plan| plan.id)
+        {
+            return Err(ControlError::Stale);
+        }
+        let latest_expiry = reference
+            .bitcoin_height
+            .checked_add(MAX_REFERENCE_AGE)
+            .ok_or(ControlError::Overflow)?;
+        if reference.height == 0
+            || reference.height < minimum_reference_height
+            || inclusion.height <= reference.height
+            || self.reference_height != reference.height
+            || self.reference_decision != reference.decision
+            || reference.bitcoin_height > inclusion_bitcoin_height
+            || self.expires_at < reference.bitcoin_height
+            || self.expires_at > latest_expiry
+            || inclusion_bitcoin_height > self.expires_at
+        {
+            return Err(ControlError::Reference);
+        }
+        let mut pending = state.pending.clone();
+        match &self.operation {
+            ControlOperation::Schedule {
+                manifest,
+                activation,
+            } => {
+                if state.pending.is_some() || self.expected_pending.is_some() {
+                    return Err(ControlError::Plan);
+                }
+                validate_target(manifest, &state.current_manifest)?;
+                validate_notice(*activation, inclusion_bitcoin_height)?;
+                pending = Some(PendingPlan {
+                    id: PlanId(action),
+                    manifest: manifest.clone(),
+                    activation: *activation,
+                    consumed: false,
+                });
+            }
+            ControlOperation::Postpone {
+                target,
+                previous_activation,
+                activation,
+            } => {
+                let plan = state.pending.as_ref().ok_or(ControlError::Plan)?;
+                if plan.consumed
+                    || plan.manifest.id()? != *target
+                    || plan.activation != *previous_activation
+                    || *activation <= *previous_activation
+                {
+                    return Err(ControlError::Plan);
+                }
+                validate_notice(*activation, inclusion_bitcoin_height)?;
+                pending.as_mut().ok_or(ControlError::Plan)?.activation = *activation;
+            }
+            ControlOperation::Cancel { target, activation } => {
+                let plan = state.pending.as_ref().ok_or(ControlError::Plan)?;
+                if plan.consumed || plan.manifest.id()? != *target || plan.activation != *activation
+                {
+                    return Err(ControlError::Plan);
+                }
+                pending = None;
+            }
+        }
+        Ok(pending)
     }
 }
 

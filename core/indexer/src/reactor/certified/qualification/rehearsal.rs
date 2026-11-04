@@ -10,6 +10,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::database::certified_history::{self, control};
+use crate::protocol::coordinator::{baseline::Baseline, registry, successor};
 use crate::protocol::v1::migration_definition;
 use crate::protocol_qualification::snapshot::full_state;
 
@@ -25,11 +26,16 @@ pub(super) async fn run(directory: &Path, conn: &Connection) -> Result<()> {
     let wal_before = fs::read(&wal).ok();
     let state_before = full_state(conn).await?;
     let target_file = directory.join("rehearsal-target.json");
-    for registered in [true, false] {
+    ensure!(state.current_manifest == Baseline::for_node(context.chain)?.manifest);
+    for (registered, successor_case) in [(true, false), (false, false), (true, true)] {
         let mut target = state.current_manifest.clone();
         target.protocol_number += 1;
         target.predecessor = context.protocol;
         let mut definition = migration_definition::noop(target.executor);
+        if successor_case {
+            target = successor::manifest(context.chain)?;
+            definition = registry::resolve(&target)?.migration;
+        }
         if !registered {
             definition.routine = "not-installed".into();
         }
@@ -68,7 +74,15 @@ pub(super) async fn run(directory: &Path, conn: &Connection) -> Result<()> {
         ensure!(report["decision_height"] == frontier.closed_height.to_string());
         ensure!(report["target_support"]["executor_registered"] == true);
         ensure!(report["target_support"]["migration_registered"] == registered);
-        ensure!(report["work_consumed"]["computation_steps"] == "0");
+        let steps: u64 = report["work_consumed"]["computation_steps"]
+            .as_str()
+            .context("missing rehearsal work")?
+            .parse()?;
+        ensure!(if successor_case {
+            steps > 0
+        } else {
+            steps == 0
+        });
         if registered {
             ensure!(report["error"].is_null());
             ensure!(

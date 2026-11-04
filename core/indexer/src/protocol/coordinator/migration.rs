@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow, ensure};
 use bitcoin::{BlockHash, Network, hashes::Hash};
 use thiserror::Error;
 
-use super::linked::{begin_unit, finish_canonical_unit};
+use super::linked::{abort_failed_begin, begin_unit, finish_canonical_unit};
 use super::selection::ExecutionSelection;
 use crate::database::canonical_history::{self, ApplicationCursor, HistoryState, MigrationReceipt};
 use crate::database::migration_input::MigrationInput;
@@ -84,10 +84,6 @@ impl MigrationRequest {
 
 // Authorization and after-H scheduling belong to the upgrade controller. This
 // entry point owns the atomic state transition for its already selected request.
-#[cfg_attr(
-    not(any(test, feature = "protocol-qualification")),
-    allow(dead_code, reason = "K3 substrate; live activation is wired in K7")
-)]
 pub(crate) async fn apply(
     service: &OwnerService,
     session: &LinkedSession,
@@ -109,8 +105,14 @@ pub(crate) struct OwnedMigration<'a> {
     request: &'a MigrationRequest,
     input: Arc<MigrationInput>,
     used: Option<MigrationWork>,
-    attempted: bool,
-    successful: bool,
+    phase: MigrationPhase,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MigrationPhase {
+    Ready,
+    Failed,
+    Succeeded,
 }
 
 pub(crate) async fn begin<'a>(
@@ -133,16 +135,7 @@ async fn begin_inner<'a>(
     request: &'a MigrationRequest,
 ) -> Result<OwnedMigration<'a>> {
     selection.ensure_runtime(network, session.origin())?;
-    ensure!(
-        selection.envelope().3
-            == (
-                8,
-                request.anchor_height,
-                Some(request.anchor_hash.to_byte_array()),
-                0
-            ),
-        "migration request does not match its execution selection"
-    );
+    selection.ensure_migration_at(request.anchor_height, request.anchor_hash)?;
     let execution = session.executor.execution_definition?;
     let selected_identity = match request.execution {
         ExecutionIdentity::Baseline(execution) | ExecutionIdentity::Protocol { execution, .. } => {
@@ -157,15 +150,11 @@ async fn begin_inner<'a>(
     request.definition.encode()?;
     let input = MigrationInput::open(&session.conn).await?;
     let capacity = service.reserve_root_capacity().await?;
-    let mut lease = service
+    let lease = service
         .begin_linked_migration_reserved(session, capacity, selection.clone(), input.clone())
         .await?;
     if let Err(error) = begin_unit(session, selection, network).await {
-        lease.drain().await?;
-        if !session.conn.is_autocommit() {
-            lease.settle(false).await?;
-        }
-        lease.complete().await?;
+        abort_failed_begin(lease, session).await?;
         return Err(error);
     }
     Ok(OwnedMigration {
@@ -175,17 +164,22 @@ async fn begin_inner<'a>(
         request,
         input,
         used: Some(MigrationWork::default()),
-        attempted: false,
-        successful: false,
+        phase: MigrationPhase::Ready,
     })
 }
 
 impl OwnedMigration<'_> {
     pub(crate) async fn execute(&mut self) -> Result<MigrationReceipt> {
-        ensure!(!self.attempted, "migration unit was already executed");
-        self.attempted = true;
+        ensure!(
+            self.phase == MigrationPhase::Ready,
+            "migration unit was already executed"
+        );
+        // Cancellation or an error must not leave this unit eligible to commit.
+        self.phase = MigrationPhase::Failed;
         let result = self.execute_inner().await;
-        self.successful = result.is_ok();
+        if result.is_ok() {
+            self.phase = MigrationPhase::Succeeded;
+        }
         result
     }
 
@@ -276,7 +270,7 @@ impl OwnedMigration<'_> {
     pub(crate) async fn finish<T>(self, result: Result<T>) -> Result<T> {
         let result = result.and_then(|value| {
             ensure!(
-                self.successful,
+                self.phase == MigrationPhase::Succeeded,
                 "cannot commit an unfinished or failed migration"
             );
             Ok(value)
