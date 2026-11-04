@@ -266,7 +266,7 @@ fn adapter_runner_binds_sources_logs_and_named_test_results() -> Result<()> {
     fs::write(source, original)?;
     fs::write(
         directory.join("test.log"),
-        &format!(
+        format!(
             "test result: ok. {} passed; 0 failed; 0 ignored;",
             ADAPTER_TESTS.len()
         ),
