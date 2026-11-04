@@ -256,6 +256,52 @@ fn identities_bind_all_execution_fields_and_manifest_bytes() -> Result<()> {
 }
 
 #[test]
+fn active_node_manifests_share_the_pinned_consensus_revision() -> Result<()> {
+    let root = repository();
+    let workspace: Toml = toml::from_str(&fs::read_to_string(root.join("core/Cargo.toml"))?)?;
+    let shared = &workspace["workspace"]["dependencies"];
+    for manifest in [
+        "core/indexer/Cargo.toml",
+        "protocol-bundles/node/Cargo.toml",
+    ] {
+        let dependencies = dependencies(&root.join(manifest))?;
+        let mut engines = 0;
+        for (name, value) in dependencies.as_table().unwrap() {
+            let value = if value.get("workspace").and_then(Toml::as_bool) == Some(true) {
+                shared.get(name).context("workspace dependency missing")?
+            } else {
+                value
+            };
+            if !value
+                .get("package")
+                .and_then(Toml::as_str)
+                .is_some_and(|name| name.starts_with("arc-malachite"))
+            {
+                continue;
+            }
+            engines += 1;
+            assert_eq!(
+                value.get("git").and_then(Toml::as_str),
+                Some("https://github.com/KontorProtocol/malachite"),
+                "{manifest}: {name}"
+            );
+            assert_eq!(
+                value.get("rev").and_then(Toml::as_str),
+                Some(MALACHITE_REVISION),
+                "{manifest}: {name}"
+            );
+            assert_eq!(
+                value.get("version").and_then(Toml::as_str),
+                Some(format!("={MALACHITE_VERSION}").as_str()),
+                "{manifest}: {name}"
+            );
+        }
+        assert!(engines > 0, "{manifest} has no consensus dependencies");
+    }
+    Ok(())
+}
+
+#[test]
 fn consensus_pins_require_engine_roots_and_reject_vm_dependency() -> Result<()> {
     let dir = tempdir()?;
     copy_manifests(dir.path())?;

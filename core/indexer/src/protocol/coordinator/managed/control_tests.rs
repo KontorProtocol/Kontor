@@ -11,7 +11,7 @@ use crate::protocol::coordinator::certified_decision::{AuthorityMember, Committe
 use crate::protocol::coordinator::durable_signer::{
     GenerationOwner, SigningError, SigningRequest, VoteStep,
 };
-use crate::protocol::coordinator::managed::startup::{Bootstrap, PeerSelection};
+use crate::protocol::coordinator::managed::startup::{Bootstrap, Discovery, PeerSelection};
 use crate::protocol::coordinator::managed::types::{
     HeightParameters, Request, Timeouts, Validator,
 };
@@ -25,9 +25,11 @@ fn config(directory: &TempDir, generation: u64) -> Configuration {
         listen_address: "/ip4/127.0.0.1/tcp/0".into(),
         persistent_peers: vec![],
         wal_path: directory.path().join(format!("consensus-{generation}.wal")),
-        discovery_enabled: false,
-        bootstrap: Bootstrap::Full,
-        peer_selection: PeerSelection::Random,
+        discovery: Discovery {
+            enabled: false,
+            bootstrap: Bootstrap::Full,
+            selection: PeerSelection::Random,
+        },
         readiness_timeout: Duration::from_secs(10),
     }
 }

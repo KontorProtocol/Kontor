@@ -6,7 +6,7 @@ use tokio::time::timeout;
 
 use super::*;
 use crate::consensus::{Validator as NodeValidator, ValidatorSet};
-use crate::protocol::coordinator::managed::startup::{Bootstrap, PeerSelection};
+use crate::protocol::coordinator::managed::startup::{Bootstrap, Discovery, PeerSelection};
 
 fn config(directory: &TempDir, generation: u64) -> Configuration {
     Configuration {
@@ -17,9 +17,11 @@ fn config(directory: &TempDir, generation: u64) -> Configuration {
         listen_address: "/ip4/127.0.0.1/tcp/0".into(),
         persistent_peers: vec![],
         wal_path: directory.path().join(format!("consensus-{generation}.wal")),
-        discovery_enabled: false,
-        bootstrap: Bootstrap::Full,
-        peer_selection: PeerSelection::Random,
+        discovery: Discovery {
+            enabled: false,
+            bootstrap: Bootstrap::Full,
+            selection: PeerSelection::Random,
+        },
         readiness_timeout: Duration::from_secs(10),
     }
 }

@@ -14,6 +14,18 @@ use crate::protocol::identity::{ExecutionDefinitionId, ExecutionIdentity, Protoc
 use crate::protocol_info::ExecutionContextInfo;
 use crate::runtime::pool::LinkedSession;
 
+mod position_tag {
+    pub const VIEW: u8 = 0;
+    pub const COMMITTEE: u8 = 1;
+    pub const PREPARATION: u8 = 2;
+    pub const BLOCK: u8 = 3;
+    pub const BATCH: u8 = 4;
+    pub const SIMULATION: u8 = 5;
+    pub const MAINTENANCE: u8 = 6;
+    pub const INITIALIZATION: u8 = 7;
+    pub const MIGRATION: u8 = 8;
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApplicationPosition {
     View,
@@ -131,15 +143,22 @@ impl ExecutionSelection {
 
     pub(crate) fn envelope(&self) -> SelectionEnvelope {
         let position = match self.position {
-            ApplicationPosition::View => (0, 0, None, 0),
-            ApplicationPosition::Committee => (1, 0, None, 0),
+            ApplicationPosition::View => (position_tag::VIEW, 0, None, 0),
+            ApplicationPosition::Committee => (position_tag::COMMITTEE, 0, None, 0),
             ApplicationPosition::Migration {
                 anchor_height,
                 anchor_hash,
-            } => (8, anchor_height, Some(anchor_hash.to_byte_array()), 0),
-            ApplicationPosition::Initialization { step } => (7, 0, None, step),
+            } => (
+                position_tag::MIGRATION,
+                anchor_height,
+                Some(anchor_hash.to_byte_array()),
+                0,
+            ),
+            ApplicationPosition::Initialization { step } => {
+                (position_tag::INITIALIZATION, 0, None, step)
+            }
             ApplicationPosition::Maintenance { rollback_height } => (
-                6,
+                position_tag::MAINTENANCE,
                 rollback_height.unwrap_or(0),
                 None,
                 u64::from(rollback_height.is_some()),
@@ -148,7 +167,7 @@ impl ExecutionSelection {
                 anchor_height,
                 anchor_hash,
             } => (
-                2,
+                position_tag::PREPARATION,
                 anchor_height,
                 anchor_hash.map(|hash| hash.to_byte_array()),
                 0,
@@ -157,18 +176,25 @@ impl ExecutionSelection {
                 height,
                 hash,
                 consensus_height,
-            } => (3, height, Some(hash.to_byte_array()), consensus_height),
+            } => (
+                position_tag::BLOCK,
+                height,
+                Some(hash.to_byte_array()),
+                consensus_height,
+            ),
             ApplicationPosition::Batch {
                 anchor_height,
                 anchor_hash,
                 consensus_height,
             } => (
-                4,
+                position_tag::BATCH,
                 anchor_height,
                 Some(anchor_hash.to_byte_array()),
                 consensus_height,
             ),
-            ApplicationPosition::Simulation { height } => (5, height, None, 0),
+            ApplicationPosition::Simulation { height } => {
+                (position_tag::SIMULATION, height, None, 0)
+            }
         };
         (
             self.version.tag(),
@@ -345,6 +371,14 @@ impl ExecutionSelection {
 
     pub(crate) fn ensure_execution(&self, network: Network, height: u64) -> Result<()> {
         ensure!(
+            self.execution_height(network)? == height,
+            "executor selection position mismatch"
+        );
+        Ok(())
+    }
+
+    pub(crate) fn execution_height(&self, network: Network) -> Result<u64> {
+        ensure!(
             self.network == network,
             "executor selection network mismatch"
         );
@@ -367,11 +401,7 @@ impl ExecutionSelection {
                 bail!("committee selection cannot execute canonical transactions")
             }
         };
-        ensure!(
-            selected_height == height,
-            "executor selection position mismatch"
-        );
-        Ok(())
+        Ok(selected_height)
     }
 
     pub(crate) fn ensure_block_execution(

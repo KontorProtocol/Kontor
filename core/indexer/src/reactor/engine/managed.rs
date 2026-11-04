@@ -23,7 +23,9 @@ use crate::protocol::coordinator::durable_signer::{
 };
 use crate::protocol::coordinator::managed::control::EngineSlot;
 use crate::protocol::coordinator::managed::reactor::ReactorEngine;
-use crate::protocol::coordinator::managed::startup::{Bootstrap, Configuration, PeerSelection};
+use crate::protocol::coordinator::managed::startup::{
+    Bootstrap, Configuration, Discovery, PeerSelection,
+};
 use crate::protocol::coordinator::registry;
 use crate::protocol::identity::domain_digest;
 use crate::reactor::consensus_state::certified_startup;
@@ -237,14 +239,16 @@ impl NodeCoordinator {
             } else {
                 "consensus-catchup.wal"
             }),
-            discovery_enabled: config.discovery.enabled,
-            bootstrap: match config.discovery.bootstrap_protocol {
-                BootstrapProtocol::Kademlia => Bootstrap::Kademlia,
-                BootstrapProtocol::Full => Bootstrap::Full,
-            },
-            peer_selection: match config.discovery.selector {
-                Selector::Kademlia => PeerSelection::Kademlia,
-                Selector::Random => PeerSelection::Random,
+            discovery: Discovery {
+                enabled: config.discovery.enabled,
+                bootstrap: match config.discovery.bootstrap_protocol {
+                    BootstrapProtocol::Kademlia => Bootstrap::Kademlia,
+                    BootstrapProtocol::Full => Bootstrap::Full,
+                },
+                selection: match config.discovery.selector {
+                    Selector::Kademlia => PeerSelection::Kademlia,
+                    Selector::Random => PeerSelection::Random,
+                },
             },
             readiness_timeout: Duration::from_secs(30),
         };

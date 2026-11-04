@@ -788,7 +788,7 @@ pub(crate) async fn execute_transaction(
     tx_id: u64,
 ) -> Result<Vec<Vec<Option<String>>>> {
     selection.ensure_runtime(network, session.origin())?;
-    selection.ensure_execution(network, selection.envelope().3.1)?;
+    selection.execution_height(network)?;
     let ((user_fuel, system_fuel, deposit_fuel), failures) =
         (session.executor.operations.transaction)(
             session.executor.owner.clone(),

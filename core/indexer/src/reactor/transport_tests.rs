@@ -23,7 +23,7 @@ use crate::protocol::coordinator::durable_signer::{DurableSigner, GenerationOwne
 use crate::protocol::coordinator::managed::control::EngineSlot;
 use crate::protocol::coordinator::managed::reactor::ReactorEngine;
 use crate::protocol::coordinator::managed::startup::{
-    self, Bootstrap, Configuration, PeerSelection,
+    self, Bootstrap, Configuration, Discovery, PeerSelection,
 };
 
 #[tokio::test]
@@ -53,9 +53,11 @@ async fn managed_transport_signs_publishes_and_decides_across_generations() -> R
             listen_address: "/ip4/127.0.0.1/tcp/0".into(),
             persistent_peers: vec![],
             wal_path: directory.path().join(format!("{generation}.wal")),
-            discovery_enabled: false,
-            bootstrap: Bootstrap::Full,
-            peer_selection: PeerSelection::Random,
+            discovery: Discovery {
+                enabled: false,
+                bootstrap: Bootstrap::Full,
+                selection: PeerSelection::Random,
+            },
             readiness_timeout: Duration::from_secs(10),
         };
         let signer = Arc::new(DurableSigner::open_owned(
