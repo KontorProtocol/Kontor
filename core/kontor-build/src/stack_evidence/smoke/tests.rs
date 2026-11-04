@@ -9,13 +9,13 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::{
-    CELLS, SmokeArgs, TESTS, capture_with_environment, run_test, validate_report, validate_set,
-    validate_test,
+    CELLS, SmokeArgs, TESTS, capture_with_environment, validate_report, validate_set, validate_test,
 };
 use crate::container::sha256;
 use crate::stack_evidence::build::{
     self, FEATURE_LOGS, FORK_REVISION, expected_features, feature_logs,
 };
+use crate::stack_evidence::test_group::{self, run as run_tests};
 use crate::toolchain::Environment;
 use crate::write_json;
 
@@ -37,16 +37,11 @@ fn fixture(directory: &Path, cell: &str, target: &str, binary: &str) -> Value {
     ];
     write_cargo(directory, &cargo);
     let mut tests = json!({});
-    for (index, name) in TESTS.iter().enumerate() {
-        let filename = format!("test-{index}.log");
-        tests[*name] = json!(filename);
-        fs::write(
-            directory.join(tests[*name].as_str().unwrap()),
-            test_log(name),
-        )
-        .unwrap();
+    for name in TESTS {
+        tests[*name] = json!("tests.log");
     }
-    let mut report = json!({"schema_version":1, "cell":cell,"source_sha":"a".repeat(40),"lockfile_sha256":"b".repeat(64),
+    fs::write(directory.join("tests.log"), group_log(TESTS)).unwrap();
+    let mut report = json!({"schema_version":2, "cell":cell,"source_sha":"a".repeat(40),"lockfile_sha256":"b".repeat(64),
         "wasmtime_revision":FORK_REVISION,"binary":binary,"binary_sha256":"c".repeat(64),"cargo_log":"cargo.json",
         "rustc_version_verbose":format!("rustc 1.99.1\nhost: {target}\n"),"wasmtime_features":features,"feature_logs":feature_logs(),"tests":tests});
     rehash(directory, &mut report);
@@ -55,6 +50,16 @@ fn fixture(directory: &Path, cell: &str, target: &str, binary: &str) -> Value {
 }
 fn test_log(name: &str) -> String {
     format!("test {name} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n")
+}
+fn group_log(names: &[&str]) -> String {
+    names
+        .iter()
+        .map(|name| format!("test {name} ... ok\n"))
+        .collect::<String>()
+        + &format!(
+            "test result: ok. {} passed; 0 failed; 0 ignored;\n",
+            names.len()
+        )
 }
 fn write_cargo(directory: &Path, cargo: &[Value]) {
     fs::write(
@@ -65,9 +70,8 @@ fn write_cargo(directory: &Path, cargo: &[Value]) {
 }
 fn rehash(directory: &Path, report: &mut Value) {
     let mut logs = json!({});
-    for name in (0..TESTS.len())
-        .map(|i| format!("test-{i}.log"))
-        .chain(["cargo.json".to_owned()])
+    for name in ["tests.log".to_owned(), "cargo.json".to_owned()]
+        .into_iter()
         .chain(FEATURE_LOGS.iter().map(|(_, n)| (*n).to_owned()))
     {
         logs[&name] = json!(sha256(&directory.join(&name)).unwrap());
@@ -148,7 +152,7 @@ fn smoke_rejects_stale_identity_profile_compiler_logs_and_test_results() {
         assert!(validate(dir).is_err(), "{field}");
     }
     write_json(&dir.join("smoke.json"), &original).unwrap();
-    fs::write(dir.join("test-0.log"), test_log(TESTS[0]) + "tampered\n").unwrap();
+    fs::write(dir.join("tests.log"), group_log(TESTS) + "tampered\n").unwrap();
     assert!(validate(dir).is_err());
     let valid = test_log(TESTS[0]);
     for raw in [
@@ -160,7 +164,7 @@ fn smoke_rejects_stale_identity_profile_compiler_logs_and_test_results() {
         valid.clone() + &valid,
     ] {
         assert!(validate_test(&raw, TESTS[0]).is_err());
-        fs::write(dir.join("test-0.log"), raw).unwrap();
+        fs::write(dir.join("tests.log"), raw).unwrap();
         let mut report = original.clone();
         rehash(dir, &mut report);
         write_json(&dir.join("smoke.json"), &report).unwrap();
@@ -250,13 +254,13 @@ fn evidence_cannot_escape_through_symlinks() {
     let external = TempDir::new().unwrap();
     one_fixture(root.path());
     fs::rename(
-        root.path().join("test-0.log"),
+        root.path().join("tests.log"),
         external.path().join("test.log"),
     )
     .unwrap();
     symlink(
         external.path().join("test.log"),
-        root.path().join("test-0.log"),
+        root.path().join("tests.log"),
     )
     .unwrap();
     assert!(validate(root.path()).is_err());
@@ -277,12 +281,12 @@ fn subprocess_failures_and_timeouts_keep_raw_logs_and_reap_child() {
     let environment: Environment = env::vars().collect();
     executable(
         &binary,
-        "echo diagnostic >&2\nprintf 'test %s ... ok\\ntest result: ok. 1 passed; 0 failed; 0 ignored;\\n' \"$2\"",
+        "test \"$1\" = --exact\ntest \"$2\" = --test-threads=1\nshift 5\necho diagnostic >&2\nprintf 'test %s ... ok\\ntest result: ok. 1 passed; 0 failed; 0 ignored;\\n' \"$1\"",
     );
-    run_test(
+    run_tests(
         &binary,
         temp.path(),
-        TESTS[0],
+        &TESTS[..1],
         &log,
         &environment,
         Duration::from_secs(1),
@@ -301,10 +305,10 @@ fn subprocess_failures_and_timeouts_keep_raw_logs_and_reap_child() {
     ] {
         executable(&binary, body);
         assert!(
-            run_test(
+            run_tests(
                 &binary,
                 temp.path(),
-                TESTS[0],
+                &TESTS[..1],
                 &log,
                 &environment,
                 Duration::from_millis(50)
@@ -360,7 +364,7 @@ fn capture_uses_checkout_paths_filters_guest_overrides_and_invalidates_stale_suc
     let binary = bin.join("indexer-smoke");
     executable(
         &binary,
-        "test -f core/Cargo.lock\ntest -z \"${KONTOR_SMOKE_SENTINEL+x}\"\nprintf 'test %s ... ok\\ntest result: ok. 1 passed; 0 failed; 0 ignored;\\n' \"$2\"",
+        "test -f core/Cargo.lock\ntest -z \"${KONTOR_SMOKE_SENTINEL+x}\"\ntest \"$1\" = --exact\ntest \"$2\" = --test-threads=1\nshift 5\necho invocation >> target/invocations\nprintf 'test %s ... ok\\n' \"$@\"\nprintf 'test result: ok. %s passed; 0 failed; 0 ignored;\\n' \"$#\"",
     );
     let tools = root.join("target/tools");
     fs::create_dir(&tools).unwrap();
@@ -399,18 +403,41 @@ fn capture_uses_checkout_paths_filters_guest_overrides_and_invalidates_stale_suc
     };
     let result = capture_with_environment(root, args(), &environment).unwrap();
     assert_eq!(result["tests"].as_object().unwrap().len(), TESTS.len());
+    assert_eq!(
+        fs::read_to_string(root.join("target/invocations")).unwrap(),
+        "invocation\n"
+    );
     executable(&binary, "echo failed; exit 1");
     assert!(capture_with_environment(root, args(), &environment).is_err());
     assert!(!directory.join("smoke.json").exists());
     assert_eq!(
-        fs::read_to_string(directory.join("test-0.log")).unwrap(),
+        fs::read_to_string(directory.join("tests.log")).unwrap(),
         "failed\n"
     );
     executable(
         &binary,
-        "echo changed >> core/Cargo.lock\nprintf 'test %s ... ok\\ntest result: ok. 1 passed; 0 failed; 0 ignored;\\n' \"$2\"",
+        "echo changed >> core/Cargo.lock\nshift 5\nprintf 'test %s ... ok\\n' \"$@\"\nprintf 'test result: ok. %s passed; 0 failed; 0 ignored;\\n' \"$#\"",
     );
     assert!(capture_with_environment(root, args(), &environment).is_err());
     assert!(!directory.join("smoke.json").exists());
-    assert!(directory.join("test-7.log").is_file());
+    assert!(directory.join("tests.log").is_file());
+}
+
+#[test]
+fn grouped_evidence_requires_exactly_one_complete_successful_run() {
+    let valid = group_log(TESTS);
+    test_group::validate(&valid, TESTS).unwrap();
+    for raw in [
+        valid.replace("8 passed", "7 passed"),
+        valid.replace("0 ignored", "1 ignored"),
+        valid.replace("0 failed", "1 failed"),
+        valid.replace(TESTS[0], TESTS[1]),
+        valid.replace(TESTS[0], "unexpected"),
+        valid.replace(&format!("test {} ... ok\n", TESTS[0]), ""),
+        valid.clone() + &format!("test {} ... ok\n", TESTS[0]),
+        valid.clone() + &valid,
+        TESTS.iter().map(|name| test_log(name)).collect(),
+    ] {
+        assert!(test_group::validate(&raw, TESTS).is_err(), "{raw}");
+    }
 }

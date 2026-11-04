@@ -8,18 +8,12 @@ use serde_json::{Map, Value, json};
 
 use super::build::{self, FEATURE_LOGS, FORK_REVISION, artifact_file, hex_digest};
 use super::probes::{self, CASES, fields, string};
+use super::test_group::{self, OWNERSHIP_TESTS};
 use super::{chains, smoke};
 use crate::container::sha256;
 use crate::toolchain::output as command_output;
 use crate::write_json;
 
-pub(super) const OWNERSHIP_TESTS: &[&str] = &[
-    "canonical_lease_drains_native_guest_before_releasing_runtime",
-    "canonical_and_simulation_children_keep_no_yield_policy",
-    "nested_api_children_inherit_actual_fuel_yields",
-    "cancelling_nested_yielding_api_guest_joins_before_runtime_reuse",
-    "cancelling_fuel_yielding_guest_joins_before_pool_reuse",
-];
 const PLATFORMS: &[(&str, &str, &str, &str)] = &[
     ("macos-15", "macOS-ARM64", "macos", "aarch64"),
     ("ubuntu-24.04", "Linux-X64", "linux", "x86_64"),
@@ -144,24 +138,7 @@ pub(super) fn report(path: &Path, cell: &str, os: &str, arch: &str) -> Result<(V
         "duplicate ownership lifecycle log"
     );
     let raw = fs::read_to_string(artifact_file(directory, lifecycle)?)?;
-    let summaries: Vec<_> = raw
-        .lines()
-        .filter(|s| s.starts_with("test result:"))
-        .collect();
-    ensure!(
-        summaries.len() == OWNERSHIP_TESTS.len()
-            && summaries
-                .iter()
-                .all(|s| s.starts_with("test result: ok. 1 passed;")),
-        "ownership lifecycle controls incomplete"
-    );
-    for test in OWNERSHIP_TESTS {
-        let expected = format!("test runtime::ownership::tests::{test} ... ok");
-        ensure!(
-            raw.lines().filter(|s| *s == expected).count() == 1,
-            "ownership lifecycle control missing or duplicated: {test}"
-        );
-    }
+    test_group::validate(&raw, OWNERSHIP_TESTS)?;
     ensure!(
         logs.insert(string(&report["cargo_log"])?.to_owned()),
         "duplicate Cargo log"

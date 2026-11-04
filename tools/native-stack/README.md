@@ -42,8 +42,10 @@ Automatic runs fully qualify release builds on Linux x86-64, Linux ARM64 and
 macOS ARM64. Dev builds on those platforms run the eight existing tests listed in
 `core/kontor-build/src/stack_evidence/smoke.rs`, covering paid-call settlement, inherited yield policy, nested
 cancellation, canonical drainage, Store admission and shared memory accounting.
-They do not discover stack boundaries or run deep-chain sweeps. Each test has a
-180-second process timeout and must report exactly one passing test. Evidence
+They do not discover stack boundaries or run deep-chain sweeps. The eight tests
+run sequentially in one process, sharing the fixture's compiled native contracts
+while retaining independent test databases. The entire group has a 15-minute
+timeout and must report exactly eight passing tests. Evidence
 binds the source, lockfile, compiler host, binary and Cargo/feature/test logs.
 Ordinary `ci.yml` tests use release mode and do not substitute for this dev smoke.
 Smoke is regression coverage, not proof of dev/release boundary equivalence.
@@ -51,7 +53,8 @@ Smoke is regression coverage, not proof of dev/release boundary equivalence.
 Run `tools/kontor stack-smoke --binary <dev-test-binary> --cell <platform>/dev
 --output <evidence-directory>` after writing the Cargo JSON build log to
 `<evidence-directory>/cargo.json`. Paths are relative to the checkout root unless
-absolute. The Rust runner retains the eight tests and their 180-second limits,
+absolute. The Rust runner retains the eight tests, writes their combined output
+to `tests.log` (smoke report schema 2),
 removes stale `smoke.json` before reruns, preserves partial failure logs, and
 checks that source, lockfile and executable stayed unchanged. The informational
 `host` field now uses `uname -a`; compiler host validation is unchanged.
@@ -60,6 +63,12 @@ checks that source, lockfile and executable stayed unchanged. The informational
 validators reject evidence links outside their directories. The former Python
 dev-smoke runner and tests have been removed; release qualification uses the
 same Rust Cargo/feature validator directly.
+
+Release ownership lifecycle checks likewise run in one sequential process via
+`tools/kontor stack-ownership-controls --binary <test-binary> --log <log-path>`.
+The five exact tests must all pass within a 10-minute whole-process timeout.
+Stack-overflow and deep-chain probes retain separate processes and their existing
+timeouts because a native abort must not take down unrelated tests.
 
 The aggregate requires an explicit profile policy: exactly three release reports
 plus all three dev smoke reports, or exactly six full qualification reports.
@@ -94,7 +103,7 @@ investigation.
 The retained boundaries are:
 
 - Rust release capture/comparison, owned chain and cancellation checks, and the
-  eight bounded dev smoke tests. Their cases, limits and required cells are unchanged.
+  eight bounded dev smoke tests. Their cases, protocol limits and required cells are unchanged.
 - Runtime regression assertions and manual diagnostics in `native_stack_resource`,
   `native_stack`, `sequential_chains`, and the ownership tests. This includes
   logical-stack preservation and fresh-process measured worker-capacity checks.

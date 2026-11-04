@@ -120,7 +120,15 @@ fn setup() -> (TempDir, Environment) {
         )
         .unwrap();
     }
-    fs::write(root.join("target/fixtures/ownership.log"),OWNERSHIP_TESTS.iter().map(|t|format!("test runtime::ownership::tests::{t} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n")).collect::<String>()).unwrap();
+    fs::write(
+        root.join("target/fixtures/ownership.log"),
+        OWNERSHIP_TESTS
+            .iter()
+            .map(|t| format!("test {t} ... ok\n"))
+            .collect::<String>()
+            + "test result: ok. 5 passed; 0 failed; 0 ignored;\n",
+    )
+    .unwrap();
     executable(
         &root.join("target/debug/deps/indexer-capture"),
         r#"

@@ -14,8 +14,8 @@ use tempfile::tempfile;
 use toml::Value as TomlValue;
 
 use super::build::{FEATURE_LOGS, FORK_REVISION, feature_logs, resolve_features, source_identity};
-use super::comparison::OWNERSHIP_TESTS;
 use super::probes::{CASES, number, reports};
+use super::test_group::{self, OWNERSHIP_TESTS};
 use super::{REPORT_PREFIX, parse_sweep, smoke, validate_pair};
 use crate::container::sha256;
 use crate::toolchain::{Environment, output as command_output};
@@ -430,13 +430,7 @@ fn capture_with_environment(
         "ownership-controls.log",
     )?;
     let lifecycle = fs::read_to_string(directory.join("ownership-controls.log"))?;
-    ensure!(
-        lifecycle.matches("test result: ok. 1 passed;").count() == OWNERSHIP_TESTS.len()
-            && OWNERSHIP_TESTS.iter().all(
-                |name| lifecycle.contains(&format!("runtime::ownership::tests::{name} ... ok"))
-            ),
-        "ownership lifecycle controls are incomplete"
-    );
+    test_group::validate(&lifecycle, OWNERSHIP_TESTS)?;
     logs.insert("ownership-controls.log".into());
     let compiler = command_output(
         root,

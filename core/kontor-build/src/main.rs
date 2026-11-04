@@ -34,6 +34,7 @@ use kontor_build::source_identity::{Metadata, verify_sources};
 use kontor_build::stack_evidence::capture::{CaptureStackArgs, capture_stack};
 use kontor_build::stack_evidence::comparison::{CompareStackArgs, compare_stack};
 use kontor_build::stack_evidence::smoke::{SmokeArgs, capture as stack_smoke};
+use kontor_build::stack_evidence::test_group::{OwnershipControlsArgs, ownership_controls};
 use kontor_build::stack_evidence::{Request as StackRequest, run as stack_evidence};
 use kontor_build::symbol_audit::{Request as AuditRequest, run as audit_symbols};
 use kontor_build::workload::{assemble as assemble_workload, verify as verify_workload};
@@ -70,6 +71,8 @@ enum Command {
     CompareStack(CompareStackArgs),
     /// Run the bounded dev-profile ownership and resource smoke tests.
     StackSmoke(SmokeArgs),
+    /// Run ownership lifecycle checks together with a bounded process lifetime.
+    StackOwnershipControls(OwnershipControlsArgs),
     /// Verify stack qualification transcripts and paired observations from JSON.
     VerifyStackEvidence,
     /// Compare verified node evidence across the required platforms.
@@ -180,6 +183,7 @@ fn main() -> Result<()> {
             println!("{}", stack_smoke(&repository_root()?, args)?);
             Ok(())
         }
+        Command::StackOwnershipControls(args) => ownership_controls(&repository_root()?, args),
         Command::VerifyStackEvidence => {
             let request: StackRequest = serde_json::from_reader(io::stdin().lock())?;
             println!("{}", stack_evidence(request)?);

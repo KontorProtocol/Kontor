@@ -10,6 +10,7 @@ pub mod comparison;
 mod probes;
 pub mod resource_report;
 pub mod smoke;
+pub mod test_group;
 
 pub const REPORT_PREFIX: &str = "KONTOR_STACK_REPORT:";
 pub const SUMMARY_PREFIX: &str = "KONTOR_STACK_SWEEP_SUMMARY:";

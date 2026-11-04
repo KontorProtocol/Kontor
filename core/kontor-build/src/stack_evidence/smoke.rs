@@ -1,13 +1,11 @@
 use std::collections::BTreeSet;
 use std::env;
-use std::fs::{self, File};
+use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use clap::Args;
 use serde_json::{Value, json};
 
@@ -15,6 +13,7 @@ use super::build::{
     self, FEATURE_LOGS, FORK_REVISION, artifact_file, feature_logs, hex_digest, resolve_features,
     source_identity,
 };
+use super::test_group;
 use crate::container::sha256;
 use crate::toolchain::{Environment, output as command_output};
 use crate::write_json;
@@ -48,21 +47,7 @@ pub const CELLS: &[(&str, &str, &str)] = &[
 ];
 
 pub fn validate_test(raw: &str, name: &str) -> Result<()> {
-    let summaries: Vec<_> = raw
-        .lines()
-        .filter(|line| line.starts_with("test result:"))
-        .collect();
-    ensure!(summaries.len() == 1, "missing or duplicate test summary");
-    ensure!(
-        summaries[0].starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;"),
-        "smoke must execute exactly one successful test"
-    );
-    let expected = format!("test {name} ... ok");
-    ensure!(
-        raw.lines().filter(|line| *line == expected).count() == 1,
-        "intended smoke test did not pass: {name}"
-    );
-    Ok(())
+    test_group::validate(raw, &[name])
 }
 
 pub fn validate_report(
@@ -83,7 +68,7 @@ pub fn validate_report(
     )?;
     let report: Value = serde_json::from_slice(&fs::read(&path)?)?;
     ensure!(
-        report["schema_version"].as_u64() == Some(1) && report["cell"] == cell,
+        report["schema_version"].as_u64() == Some(2) && report["cell"] == cell,
         "wrong dev smoke cell"
     );
     ensure!(
@@ -135,8 +120,7 @@ pub fn validate_report(
             == TESTS.iter().copied().collect(),
         "missing or extra dev smoke test"
     );
-    let mut expected_logs: BTreeSet<_> =
-        (0..TESTS.len()).map(|i| format!("test-{i}.log")).collect();
+    let mut expected_logs: BTreeSet<_> = ["tests.log".to_owned()].into_iter().collect();
     expected_logs.insert("cargo.json".into());
     expected_logs.extend(FEATURE_LOGS.iter().map(|(_, log)| (*log).to_owned()));
     let logs = report["log_sha256"]
@@ -152,11 +136,13 @@ pub fn validate_report(
             "dev smoke log hash mismatch"
         );
     }
-    for (index, name) in TESTS.iter().enumerate() {
-        let log = format!("test-{index}.log");
-        ensure!(tests[*name] == log, "wrong smoke test log");
-        validate_test(&fs::read_to_string(artifact_file(directory, &log)?)?, name)?;
+    for name in TESTS {
+        ensure!(tests[*name] == "tests.log", "wrong smoke test log");
     }
+    test_group::validate(
+        &fs::read_to_string(artifact_file(directory, "tests.log")?)?,
+        TESTS,
+    )?;
     Ok(
         json!({"cell": cell, "tests": TESTS, "binary_sha256": report["binary_sha256"], "report_sha256": sha256(&path)?}),
     )
@@ -243,7 +229,7 @@ fn capture_with_environment(
     let features = resolve_features(root, environment, target, &directory)?;
     let compiler = command_output(root, Path::new("rustc"), &["-Vv"], Some(environment))?;
     let host = command_output(root, Path::new("uname"), &["-a"], Some(environment))?;
-    let mut report = json!({"schema_version": 1, "cell": cell, "source_sha": source,
+    let mut report = json!({"schema_version": 2, "cell": cell, "source_sha": source,
         "lockfile_sha256": lock_hash, "wasmtime_revision": FORK_REVISION,
         "binary": binary, "binary_sha256": binary_hash, "cargo_log": "cargo.json",
         "rustc_version_verbose": compiler, "host": host.trim(), "wasmtime_features": features,
@@ -258,18 +244,16 @@ fn capture_with_environment(
         .filter(|(name, _)| !name.starts_with("KONTOR_"))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    for (index, name) in TESTS.iter().enumerate() {
-        let filename = format!("test-{index}.log");
-        run_test(
-            &binary,
-            root,
-            name,
-            &directory.join(&filename),
-            &clean_environment,
-            Duration::from_secs(180),
-        )?;
-        report["tests"][*name] = json!(filename);
-        eprintln!("Passed {name}");
+    test_group::run(
+        &binary,
+        root,
+        TESTS,
+        &directory.join("tests.log"),
+        &clean_environment,
+        Duration::from_secs(900),
+    )?;
+    for name in TESTS {
+        report["tests"][*name] = json!("tests.log");
     }
     ensure!(
         source_identity(root, environment)? == source
@@ -296,44 +280,5 @@ fn capture_with_environment(
     }
     Ok(report)
 }
-fn run_test(
-    binary: &Path,
-    root: &Path,
-    name: &str,
-    log: &Path,
-    environment: &Environment,
-    timeout: Duration,
-) -> Result<()> {
-    let stream = File::create(log)?;
-    let mut child = Command::new(binary)
-        .current_dir(root)
-        .args(["--exact", name, "--nocapture"])
-        .env_clear()
-        .envs(environment)
-        .stdin(Stdio::null())
-        .stdout(stream.try_clone()?)
-        .stderr(stream)
-        .spawn()?;
-    let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() < timeout => thread::sleep(Duration::from_millis(10)),
-            result => {
-                let _ = child.kill();
-                let _ = child.wait();
-                result?;
-                bail!("dev smoke timed out: {name}, see {}", log.display());
-            }
-        }
-    };
-    ensure!(
-        status.success(),
-        "dev smoke failed ({status}): {name}, see {}",
-        log.display()
-    );
-    validate_test(&fs::read_to_string(log)?, name)
-}
-
 #[cfg(test)]
 mod tests;

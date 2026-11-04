@@ -59,10 +59,7 @@ runs:
       set -o pipefail
       binary=$(cat target/native-stack-evidence/binary-path)
       evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/${{ inputs.profile }}"
-      : > "$evidence/ownership-controls.log"
-      for test in canonical_lease_drains_native_guest_before_releasing_runtime canonical_and_simulation_children_keep_no_yield_policy nested_api_children_inherit_actual_fuel_yields cancelling_nested_yielding_api_guest_joins_before_runtime_reuse cancelling_fuel_yielding_guest_joins_before_pool_reuse; do
-        "$binary" --exact "runtime::ownership::tests::$test" --nocapture 2>&1 | tee -a "$evidence/ownership-controls.log"
-      done
+      tools/kontor stack-ownership-controls --binary "$binary" --log "$evidence/ownership-controls.log"
   - name: Measure stack boundaries
     if: inputs.profile == 'release' || inputs.profiles == 'full'
     env:

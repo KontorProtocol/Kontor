@@ -214,7 +214,14 @@ fn write_evidence(directory: &Path, report: &mut Value) {
                 .collect(),
         );
     }
-    write(report["ownership_log"].as_str().unwrap(),OWNERSHIP_TESTS.iter().map(|name|format!("test runtime::ownership::tests::{name} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n")).collect());
+    write(
+        report["ownership_log"].as_str().unwrap(),
+        OWNERSHIP_TESTS
+            .iter()
+            .map(|name| format!("test {name} ... ok\n"))
+            .collect::<String>()
+            + "test result: ok. 5 passed; 0 failed; 0 ignored;\n",
+    );
     report["log_sha256"] = logs;
     save(directory, report);
 }
