@@ -566,18 +566,27 @@ pub(crate) async fn begin_canonical_unit(
     simulation: bool,
 ) -> Result<LinkedCanonicalRootLease> {
     let capacity = service.reserve_root_capacity().await?;
-    let mut lease = service
+    let lease = service
         .begin_linked_canonical_reserved(session, capacity, selection.clone(), simulation)
         .await?;
     if let Err(error) = begin_unit(session, selection, network).await {
-        lease.drain().await?;
-        if !session.conn.is_autocommit() {
-            lease.settle(false).await?;
-        }
-        lease.complete().await?;
+        abort_failed_begin(lease, session).await?;
         return Err(error);
     }
     Ok(lease)
+}
+
+pub(crate) async fn abort_failed_begin(
+    mut lease: LinkedCanonicalRootLease,
+    session: &LinkedSession,
+) -> Result<()> {
+    lease.drain().await?;
+    // Admission can fail before opening its transaction.
+    if !session.conn.is_autocommit() {
+        lease.settle(false).await?;
+    }
+    lease.complete().await?;
+    Ok(())
 }
 
 pub(crate) async fn finish_canonical_unit<T>(
@@ -779,7 +788,7 @@ pub(crate) async fn execute_transaction(
     tx_id: u64,
 ) -> Result<Vec<Vec<Option<String>>>> {
     selection.ensure_runtime(network, session.origin())?;
-    selection.ensure_execution(network, selection.envelope().3.1)?;
+    selection.execution_height(network)?;
     let ((user_fuel, system_fuel, deposit_fuel), failures) =
         (session.executor.operations.transaction)(
             session.executor.owner.clone(),

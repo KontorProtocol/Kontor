@@ -81,9 +81,5 @@ pub fn move_owner() { require_send::<Engine>(); }
 "#,
     },
 ];
-pub const ADAPTER_TESTS: &[&str] = &[
-    "managed::adapter::runtime::tests::height_parameters_preserve_committee_order_and_all_timeouts",
-    "managed::adapter::runtime::tests::event_keeps_generation_rounds_and_canonical_payload",
-    "managed::adapter::runtime::tests::local_failure_is_not_reclassified_as_a_peer_fault",
-    "managed::adapter::tests::publication_rejection_returns_the_original_buffer_for_retry",
-];
+pub const ADAPTER_TESTS: &[&str] =
+    &["managed::adapter::tests::publication_rejection_returns_the_original_buffer_for_retry"];

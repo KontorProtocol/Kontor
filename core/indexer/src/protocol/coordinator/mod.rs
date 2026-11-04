@@ -15,11 +15,11 @@ pub(crate) mod committee;
 pub(crate) mod consensus_rules;
 pub(crate) mod control;
 pub(crate) mod decision;
-#[cfg(any(test, kontor_managed))]
+#[cfg(any(test, kontor_consensus_runtime))]
 pub(crate) mod durable_signer;
 pub(crate) mod genesis;
 pub(crate) mod linked;
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 pub(crate) mod managed;
 pub(crate) mod manifest;
 pub(crate) mod migration;

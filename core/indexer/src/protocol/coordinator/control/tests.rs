@@ -126,6 +126,39 @@ fn pending(state: &ControlState, committee: &CommitteeRecord) -> ControlState {
 }
 
 #[test]
+fn proposal_validation_preserves_signed_effect_without_granting_authority() {
+    let state = state();
+    let committee = make_committee(&state, &[(1, 5), (2, 1)]);
+    let action = schedule(&state);
+    let effect = action
+        .validate_proposal(&state, &committee, reference(), 100, 0)
+        .unwrap();
+    let unsigned = UpgradeControl {
+        action: action.clone(),
+        approvals: vec![],
+    };
+    assert!(matches!(
+        unsigned.verify(&state, &committee, reference(), 100, 0),
+        Err(ControlError::Threshold)
+    ));
+    let signed = signed(action.clone(), &committee.members, &[1]);
+    let accepted = signed
+        .verify(&state, &committee, reference(), 100, 0)
+        .unwrap();
+    assert_eq!(accepted.next.pending, effect);
+    assert_eq!(accepted.next.head, signed.id().unwrap());
+    assert_ne!(accepted.next.head, unsigned.id().unwrap());
+    assert!(matches!(
+        action.validate_proposal(&state, &committee, reference(), 245, 0),
+        Err(ControlError::Reference)
+    ));
+    assert!(matches!(
+        action.validate_proposal(&state, &committee, reference(), 100, 10),
+        Err(ControlError::Reference)
+    ));
+}
+
+#[test]
 fn exact_thresholds_and_inclusion_power_changes() {
     let state = state();
     let committee = make_committee(&state, &[(1, 5), (2, 1)]);

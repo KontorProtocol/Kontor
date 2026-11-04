@@ -78,18 +78,21 @@ bls-crypto = { path = "../bls-crypto" }
 metrics = "=0.24.6"
 metrics-exporter-prometheus = "=0.18.3"
 
+# Ordinary nodes reuse the pinned runtime through Cargo; production links it independently.
+kontor-consensus-first = { path = "../../protocol-bundles/consensus-first" }
+
 # Malachite BFT consensus
 malachitebft-app-channel = { workspace = true }
-malachitebft-app = { version = "=0.8.2", package = "arc-malachitebft-app" }
-malachitebft-core-types = { version = "=0.8.2", package = "arc-malachitebft-core-types", features = ["serde"] }
-malachitebft-engine = { version = "=0.8.2", package = "arc-malachitebft-engine" }
-malachitebft-config = { version = "=0.8.2", package = "arc-malachitebft-config" }
-malachitebft-signing = { version = "=0.8.2", package = "arc-malachitebft-signing" }
-malachitebft-signing-ed25519 = { version = "=0.8.2", package = "arc-malachitebft-signing-ed25519", features = ["rand", "serde"] }
-malachitebft-codec = { version = "=0.8.2", package = "arc-malachitebft-codec" }
-malachitebft-core-consensus = { version = "=0.8.2", package = "arc-malachitebft-core-consensus" }
-malachitebft-proto = { version = "=0.8.2", package = "arc-malachitebft-proto" }
-malachitebft-sync = { version = "=0.8.2", package = "arc-malachitebft-sync" }
+malachitebft-app = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", package = "arc-malachitebft-app" }
+malachitebft-core-types = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", package = "arc-malachitebft-core-types", features = ["serde"] }
+malachitebft-engine = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", package = "arc-malachitebft-engine" }
+malachitebft-config = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", package = "arc-malachitebft-config" }
+malachitebft-signing = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", package = "arc-malachitebft-signing" }
+malachitebft-signing-ed25519 = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", package = "arc-malachitebft-signing-ed25519", features = ["rand", "serde"] }
+malachitebft-codec = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", package = "arc-malachitebft-codec" }
+malachitebft-core-consensus = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", package = "arc-malachitebft-core-consensus" }
+malachitebft-proto = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", package = "arc-malachitebft-proto" }
+malachitebft-sync = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", package = "arc-malachitebft-sync" }
 
 async-trait = { workspace = true }
 bytes = { workspace = true }

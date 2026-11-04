@@ -25,6 +25,7 @@ use super::mempool::MempoolPreparation;
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Address, Height, ProposalData, Value};
+use crate::database::certified_history::proposals;
 use crate::database::queries::rollback_to_height;
 use crate::protocol::coordinator::linked::{PreparedTransaction, TransactionRecognizer};
 use crate::protocol::coordinator::selection::{
@@ -57,7 +58,7 @@ async fn fixture() -> Result<(Reactor<RuntimeExecutor>, TempDir)> {
     let height = Height::new(1);
     let round = Round::new(0);
     let proof = certified_fixture::certificate(&key, &value, height, round);
-    certified_fixture::proposal(&mut trial, value, height, round);
+    certified_fixture::proposal(&mut trial, value, height, round).await?;
     let (reply, persisted) = oneshot::channel();
     trial
         .consensus
@@ -88,6 +89,8 @@ async fn pending_recognition_keeps_blocks_and_requests_live_with_channel_backpre
 {
     let (mut trial, _directory) = fixture().await?;
     let anchor_hash = trial.execution.last_hash.unwrap();
+    trial.consensus.current_round = Round::new(0);
+    trial.consensus.current_proposer = Some(trial.consensus.address);
     let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
     let mut raw = genesis_block(Network::Regtest).txdata.remove(0);
     raw.input[0].previous_output = OutPoint::new(raw.compute_txid(), 0);
@@ -156,6 +159,8 @@ async fn pending_recognition_keeps_blocks_and_requests_live_with_channel_backpre
 async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Result<()> {
     let (mut trial, _directory) = fixture().await?;
     let anchor_hash = trial.execution.last_hash.unwrap();
+    trial.consensus.current_round = Round::new(0);
+    trial.consensus.current_proposer = Some(trial.consensus.address);
     let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
     let old = genesis_block(Network::Regtest).txdata.remove(0);
     let mut current = old.clone();
@@ -212,6 +217,8 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
 async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Result<()> {
     let (mut trial, _directory) = fixture().await?;
     let anchor_hash = trial.execution.last_hash.unwrap();
+    trial.consensus.current_round = Round::new(0);
+    trial.consensus.current_proposer = Some(trial.consensus.address);
     let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
     let raw = genesis_block(Network::Regtest).txdata.remove(0);
     trial.consensus.mempool.insert(recognized(raw.clone()));
@@ -263,7 +270,17 @@ async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Resu
             )
             .await?;
         ensure!(receive.await?.is_some() == accepted);
-        ensure!(trial.consensus.undecided.contains_key(&Height::new(2)) == accepted);
+        ensure!(
+            proposals::normal(
+                &trial.db_conn(),
+                Height::new(2),
+                Round::new(0),
+                trial.consensus.protocol_context
+            )
+            .await?
+            .is_some()
+                == accepted
+        );
     }
     Ok(())
 }
@@ -272,6 +289,8 @@ async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Resu
 async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()> {
     let (mut trial, _directory) = fixture().await?;
     let anchor_hash = trial.execution.last_hash.unwrap();
+    trial.consensus.current_round = Round::new(0);
+    trial.consensus.current_proposer = Some(trial.consensus.address);
     let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
     let raw = genesis_block(Network::Regtest).txdata.remove(0);
     trial.consensus.mempool.insert(recognized(raw.clone()));
@@ -309,6 +328,8 @@ async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()
 async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -> Result<()> {
     let (mut trial, _directory) = fixture().await?;
     let anchor_hash = trial.execution.last_hash.unwrap();
+    trial.consensus.current_round = Round::new(0);
+    trial.consensus.current_proposer = Some(trial.consensus.address);
     let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
     let raw = genesis_block(Network::Regtest).txdata.remove(0);
     let mut replacement = raw.clone();
@@ -423,5 +444,75 @@ async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -
             .await
             .is_err()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn competing_validation_completions_preserve_first_accepted_slot() -> Result<()> {
+    let (mut trial, _directory) = fixture().await?;
+    let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
+    let anchor_hash = trial.execution.last_hash.unwrap();
+    trial.consensus.current_round = Round::new(0);
+    trial.consensus.current_proposer = Some(trial.consensus.address);
+    let selection = trial.preparation_selection().await?;
+    let mut first_id = None;
+    for attempt in 0..2 {
+        let mut raw = genesis_block(Network::Regtest).txdata.remove(0);
+        raw.output[0].script_pubkey = if attempt == 0 {
+            raw.output[0].script_pubkey.clone()
+        } else {
+            Default::default()
+        };
+        let value = Value::new_batch_raw(
+            trial.consensus.protocol_context,
+            1,
+            anchor_hash,
+            vec![raw.clone()],
+        )?;
+        let id = value.id();
+        let (reply, received) = oneshot::channel();
+        trial
+            .apply_io_verdicts(
+                IoApply::ValidateProposal {
+                    value,
+                    selection: selection.clone(),
+                    height: Height::new(2),
+                    round: Round::new(0),
+                    proposer: trial.consensus.address,
+                    anchor_height: 1,
+                    anchor_hash,
+                    parsed: vec![recognized(raw.clone()).parsed.unwrap()],
+                    reply,
+                },
+                Ok(vec![(raw, TxPolicy::Accepted)]),
+            )
+            .await?;
+        assert_eq!(received.await?.is_some(), attempt == 0);
+        if attempt == 0 {
+            first_id = Some(id);
+        }
+        let retained = proposals::normal(
+            &trial.db_conn(),
+            Height::new(2),
+            Round::new(0),
+            trial.consensus.protocol_context,
+        )
+        .await?
+        .unwrap();
+        assert_eq!(Some(retained.value.id()), first_id);
+        if attempt == 1 {
+            assert_ne!(Some(id), first_id);
+            assert!(
+                proposals::exact(
+                    &trial.db_conn(),
+                    Height::new(2),
+                    id,
+                    trial.consensus.protocol_context
+                )
+                .await?
+                .is_none()
+            );
+        }
+    }
     Ok(())
 }

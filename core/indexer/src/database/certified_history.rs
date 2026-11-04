@@ -21,6 +21,7 @@ pub(crate) mod control;
 pub(crate) mod eras;
 pub(crate) mod finality;
 mod proof_read;
+pub(crate) mod proposals;
 pub(crate) mod registrations;
 pub(crate) mod replay;
 pub(crate) mod replay_input;
@@ -532,6 +533,7 @@ pub(crate) async fn append(conn: &Connection, certified: &AuthenticatedDecision)
         tx.execute("UPDATE certified_history_state SET authenticated_height = ?1, authenticated_id = ?2 WHERE singleton = 1",
             params![decision.height.to_be_bytes().to_vec(), decision.id()?.to_vec()]).await?;
     }
+    proposals::retire(&tx, decision.height).await?;
     tx.commit().await?;
     Ok(())
 }

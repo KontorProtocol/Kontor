@@ -64,12 +64,17 @@ fn build_protos() {
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(kontor_observer)");
     println!("cargo:rustc-check-cfg=cfg(kontor_managed)");
+    println!("cargo:rustc-check-cfg=cfg(kontor_consensus_runtime)");
     println!("cargo:rustc-check-cfg=cfg(kontor_retained)");
     println!("cargo:rustc-check-cfg=cfg(kontor_linked)");
     println!("cargo:rustc-check-cfg=cfg(kontor_node)");
     if env::var("CARGO_PKG_NAME").as_deref() == Ok("kontor-node") {
         println!("cargo:rustc-cfg=kontor_node");
         println!("cargo:rustc-cfg=kontor_linked");
+    } else {
+        // Cargo supplies the runtime directly. The production wrapper enables
+        // the same startup code only when it supplies the linked runtime.
+        println!("cargo:rustc-cfg=kontor_consensus_runtime");
     }
     // Explicit protobuf inputs disable Cargo's default package scan. Track Git
     // separately, including linked worktrees, so commits refresh built metadata.

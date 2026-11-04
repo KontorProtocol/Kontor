@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::runtime::GenesisParameters;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::hashes::Hash;
@@ -31,6 +31,7 @@ use crate::bitcoin_follower::block::BlockInput;
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, Value, Vote};
 use crate::database::Writer;
+use crate::database::certified_history::proposals;
 use crate::runtime::ownership::OwnerService;
 use crate::stopper::Shutdown;
 
@@ -71,7 +72,7 @@ pub(super) async fn reactor_with_consensus(
             validator_start: ValidatorStart::Bootstrap,
             discovery: Default::default(),
         },
-        #[cfg(kontor_managed)]
+        #[cfg(kontor_consensus_runtime)]
         None,
         &session,
         &service,
@@ -170,28 +171,26 @@ pub(super) fn certificate(
     }
 }
 
-pub(super) fn proposal(
+pub(super) async fn proposal(
     reactor: &mut Reactor<RuntimeExecutor>,
     value: Value,
     height: Height,
     round: Round,
-) {
-    reactor
-        .consensus
-        .undecided
-        .entry(height)
-        .or_default()
-        .insert(
-            round,
-            ProposedValue {
-                height,
-                round,
-                valid_round: Round::Nil,
-                proposer: reactor.consensus.address,
-                value,
-                validity: Validity::Valid,
-            },
-        );
+) -> Result<()> {
+    let proposal = ProposedValue {
+        height,
+        round,
+        valid_round: Round::Nil,
+        proposer: reactor.consensus.address,
+        value,
+        validity: Validity::Valid,
+    };
+    ensure!(
+        proposals::accept_normal(&reactor.db_conn(), &proposal)
+            .await?
+            .accepted()
+    );
+    Ok(())
 }
 
 pub(super) fn transaction(key: &Keypair, instructions: Insts, nonce: u32) -> Result<Transaction> {

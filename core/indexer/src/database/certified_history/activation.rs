@@ -6,7 +6,7 @@ use super::{control, fixed, protocol};
 use crate::database::canonical_history::{self, HistoryState, MigrationReceipt};
 use crate::database::queries::{max_block_height, select_block_at_height};
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
-use crate::protocol::coordinator::control::{ControlState, validate_target};
+use crate::protocol::coordinator::control::{ControlState, PendingPlan, validate_target};
 use crate::protocol::coordinator::manifest::ProtocolManifest;
 use crate::protocol::identity::{ExecutionIdentity, ProtocolId};
 
@@ -63,11 +63,17 @@ impl CanonicalActivation {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DueActivation {
+    state: ControlState,
+    pub(crate) plan: PendingPlan,
+}
+
 pub(crate) async fn pending(
     conn: &Connection,
     height: u64,
     hash: BlockHash,
-) -> Result<Option<ControlState>> {
+) -> Result<Option<DueActivation>> {
     ensure!(
         max_block_height(conn).await? == Some(height)
             && select_block_at_height(conn, height)
@@ -107,7 +113,10 @@ pub(crate) async fn pending(
             && application.chain == state.context.chain,
         "activation must follow its block lifecycle before anchored batches"
     );
-    Ok(Some(state))
+    Ok(Some(DueActivation {
+        plan: plan.clone(),
+        state,
+    }))
 }
 
 async fn activation(conn: &Connection, row: &Row) -> Result<CanonicalActivation> {

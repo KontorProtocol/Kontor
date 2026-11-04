@@ -127,6 +127,8 @@ fn prepare(compiler: &Path, arguments: &mut Vec<OsString>, spec: &Spec) -> Resul
             "kontor_observer".into(),
             "--cfg".into(),
             "kontor_managed".into(),
+            "--cfg".into(),
+            "kontor_consensus_runtime".into(),
         ]);
     }
     for graph in &spec.graphs {
@@ -476,6 +478,10 @@ mod tests {
             );
             assert_eq!(
                 args.contains(&"kontor_managed".into()),
+                link_set == "managed-node"
+            );
+            assert_eq!(
+                args.contains(&"kontor_consensus_runtime".into()),
                 link_set == "managed-node"
             );
             assert_eq!(

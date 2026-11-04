@@ -11,22 +11,22 @@ pub enum ValidatorStart {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-#[cfg(any(kontor_managed, test))]
+#[cfg(any(kontor_consensus_runtime, test))]
 pub(super) struct RecoveryState {
     pub retained_signer: bool,
     pub highest_signed_height: Option<u64>,
     pub authorization_height: Option<u64>,
-    pub wal_height: Option<u64>,
+    pub wal_present: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(any(kontor_managed, test))]
+#[cfg(any(kontor_consensus_runtime, test))]
 pub(super) enum StartRole {
     Validator,
     Follower { promotion_floor: Option<u64> },
 }
 
-#[cfg(any(kontor_managed, test))]
+#[cfg(any(kontor_consensus_runtime, test))]
 impl ValidatorStart {
     // These are summaries of validated durable records, not peer-advertised tips.
     pub(super) fn select(
@@ -41,16 +41,15 @@ impl ValidatorStart {
         if !retained.retained_signer
             && (retained.highest_signed_height.is_some()
                 || retained.authorization_height.is_some()
-                || retained.wal_height.is_some_and(|height| height > 0))
+                || retained.wal_present)
         {
             return Err("validator WAL or signing history exists without its retained signer");
         }
         let signed = retained.highest_signed_height.unwrap_or(0);
         let authorized = retained.authorization_height.unwrap_or(0);
-        let wal = retained.wal_height.unwrap_or(0);
         match self {
             Self::Bootstrap => {
-                if closed_height != 0 || retained.retained_signer || wal != 0 {
+                if closed_height != 0 || retained.retained_signer || retained.wal_present {
                     return Err(
                         "bootstrap requires initial genesis without retained validator state; use resume or join",
                     );
@@ -66,14 +65,14 @@ impl ValidatorStart {
                         "resume requires retained validator state; explicitly bootstrap genesis or join verified history",
                     );
                 }
-                if signed > next || authorized > next || wal > next {
+                if signed > next || authorized > next {
                     return Err(
                         "validator state is ahead of completed history; join to reconstruct before signing",
                     );
                 }
                 // Recreating an unfinished signed WAL loses round/lock state even
                 // when the signer still refuses conflicting individual signatures.
-                if signed == next && retained.wal_height != Some(next) {
+                if signed == next && !retained.wal_present {
                     return Err(
                         "unfinished signed height lacks its WAL; join through that height before signing",
                     );
@@ -92,7 +91,6 @@ impl ValidatorStart {
                 let floor = minimum_closed_height
                     .get()
                     .max(signed)
-                    .max(wal)
                     .max(authorized.saturating_sub(1));
                 Ok(if closed_height >= floor && member {
                     StartRole::Validator
@@ -111,12 +109,12 @@ mod tests {
     use super::{RecoveryState, StartRole, ValidatorStart};
     use std::num::NonZeroU64;
 
-    fn retained(signed: Option<u64>, authorization: u64, wal: Option<u64>) -> RecoveryState {
+    fn retained(signed: Option<u64>, authorization: u64, wal_present: bool) -> RecoveryState {
         RecoveryState {
             retained_signer: true,
             highest_signed_height: signed,
             authorization_height: Some(authorization),
-            wal_height: wal,
+            wal_present,
         }
     }
 
@@ -138,7 +136,7 @@ mod tests {
         assert!(ValidatorStart::Bootstrap.select(1, true, fresh).is_err());
         assert!(
             ValidatorStart::Bootstrap
-                .select(0, true, retained(None, 1, None))
+                .select(0, true, retained(None, 1, false))
                 .is_err()
         );
     }
@@ -147,7 +145,7 @@ mod tests {
     fn all_validators_can_resume_the_same_unfinished_height() {
         for signed in [None, Some(7)] {
             assert_eq!(
-                ValidatorStart::Resume.select(6, true, retained(signed, 7, Some(7))),
+                ValidatorStart::Resume.select(6, true, retained(signed, 7, true)),
                 Ok(StartRole::Validator)
             );
         }
@@ -156,43 +154,38 @@ mod tests {
     #[test]
     fn authorization_before_wal_crash_does_not_require_a_new_decision() {
         assert_eq!(
-            ValidatorStart::Resume.select(6, true, retained(Some(6), 7, None)),
+            ValidatorStart::Resume.select(6, true, retained(Some(6), 7, false)),
             Ok(StartRole::Validator)
         );
         assert_eq!(
-            ValidatorStart::Resume.select(0, true, retained(None, 1, None)),
+            ValidatorStart::Resume.select(0, true, retained(None, 1, false)),
             Ok(StartRole::Validator)
         );
     }
 
     #[test]
-    fn signed_height_requires_matching_wal_until_closed() {
-        for wal in [None, Some(5), Some(6)] {
-            assert!(
-                ValidatorStart::Resume
-                    .select(6, true, retained(Some(7), 7, wal))
-                    .is_err()
-            );
-            assert_eq!(
-                join(1).select(6, true, retained(Some(7), 7, wal)),
-                Ok(StartRole::Follower {
-                    promotion_floor: Some(7)
-                })
-            );
-            assert_eq!(
-                join(1).select(7, true, retained(Some(7), 7, wal)),
-                Ok(StartRole::Validator)
-            );
-        }
+    fn signed_height_requires_wal_presence_until_closed() {
+        let wal = false;
+        assert!(
+            ValidatorStart::Resume
+                .select(6, true, retained(Some(7), 7, wal))
+                .is_err()
+        );
+        assert_eq!(
+            join(1).select(6, true, retained(Some(7), 7, wal)),
+            Ok(StartRole::Follower {
+                promotion_floor: Some(7)
+            })
+        );
+        assert_eq!(
+            join(1).select(7, true, retained(Some(7), 7, wal)),
+            Ok(StartRole::Validator)
+        );
     }
 
     #[test]
     fn ahead_state_never_resets_backwards() {
-        for state in [
-            retained(Some(8), 8, Some(8)),
-            retained(None, 9, None),
-            retained(None, 7, Some(8)),
-        ] {
+        for state in [retained(Some(8), 8, true), retained(None, 9, false)] {
             assert!(ValidatorStart::Resume.select(6, true, state).is_err());
             assert_eq!(
                 join(1).select(7, true, state),
@@ -206,7 +199,7 @@ mod tests {
 
     #[test]
     fn join_requires_both_verified_progress_and_next_committee_membership() {
-        let state = retained(Some(5), 7, Some(8));
+        let state = retained(Some(5), 7, true);
         assert_eq!(
             join(9).select(8, true, state),
             Ok(StartRole::Follower {
@@ -230,7 +223,7 @@ mod tests {
 
     #[test]
     fn completed_history_allows_forward_wal_reset_but_never_height_overflow() {
-        let state = retained(Some(5), 5, Some(5));
+        let state = retained(Some(5), 5, true);
         assert_eq!(
             ValidatorStart::Resume.select(8, true, state),
             Ok(StartRole::Validator)
@@ -246,9 +239,10 @@ mod tests {
     #[test]
     fn absent_signer_with_validator_wal_is_not_fresh_state() {
         let state = RecoveryState {
-            wal_height: Some(3),
+            wal_present: true,
             ..RecoveryState::default()
         };
         assert!(join(1).select(4, true, state).is_err());
+        assert!(ValidatorStart::Bootstrap.select(0, true, state).is_err());
     }
 }

@@ -94,6 +94,7 @@ impl<E: Executor> ExecutionContext<E> {
     }
 
     pub(super) async fn select_session(&mut self, selection: &ExecutionSelection) -> Result<()> {
+        selection.ensure_live()?;
         ensure!(
             self.session.conn.is_autocommit()
                 && !self.session.canonical_busy.load(Ordering::SeqCst),

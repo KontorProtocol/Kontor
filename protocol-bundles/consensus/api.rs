@@ -1,5 +1,5 @@
-//! Same-compiler, in-process facade. Each independently linked bundle owns its
-//! own types; node adapters translate explicitly rather than sharing dependencies.
+//! Standard-library, same-compiler facade of the single pinned consensus runtime.
+//! Malachite types remain local to each independently compiled dependency graph.
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;

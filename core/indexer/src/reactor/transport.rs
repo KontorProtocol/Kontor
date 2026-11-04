@@ -1,31 +1,51 @@
 use std::time::Duration;
 
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use anyhow::anyhow;
 use anyhow::{Context, Result};
 use malachitebft_app_channel::app::streaming::StreamMessage;
+#[cfg(any(
+    test,
+    feature = "testing",
+    feature = "protocol-qualification",
+    not(kontor_consensus_runtime)
+))]
 use malachitebft_app_channel::{Channels, EngineHandle, NetworkMsg, NetworkRequest};
 use tokio::time::timeout;
 
 use super::message::Message;
 use super::status::EngineAuthority;
-use crate::consensus::signing::{Ed25519Provider, Signature};
-use crate::consensus::{Ctx, ProposalPart};
+#[cfg(any(
+    test,
+    feature = "testing",
+    feature = "protocol-qualification",
+    not(kontor_consensus_runtime)
+))]
+use crate::consensus::Ctx;
+use crate::consensus::ProposalPart;
+#[cfg(any(
+    test,
+    feature = "testing",
+    feature = "protocol-qualification",
+    not(kontor_consensus_runtime)
+))]
+use crate::consensus::signing::Ed25519Provider;
+use crate::consensus::signing::Signature;
 use crate::protocol::coordinator::certified_decision::CommitteeRecord;
 
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use crate::consensus::codec::ProtobufCodec;
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use crate::protocol::coordinator::durable_signer::DurableSigner;
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use crate::protocol::coordinator::managed::reactor::ReactorEngine;
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use crate::protocol::coordinator::managed::types::{ProposalPartBytes, PublishError};
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use malachitebft_codec::Codec;
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use std::sync::Arc;
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use tokio::time::sleep;
 
 pub(super) struct Engine {
@@ -33,15 +53,21 @@ pub(super) struct Engine {
 }
 
 enum Backend {
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     Stopped,
+    #[cfg(any(
+        test,
+        feature = "testing",
+        feature = "protocol-qualification",
+        not(kontor_consensus_runtime)
+    ))]
     Legacy {
         channels: Channels<Ctx>,
         handle: EngineHandle,
         signer: Ed25519Provider,
         consensus_enabled: bool,
     },
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     Managed {
         engine: ReactorEngine,
         signer: Option<Arc<DurableSigner>>,
@@ -51,8 +77,14 @@ enum Backend {
 impl Engine {
     pub(super) fn authority(&self) -> EngineAuthority {
         match &self.backend {
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Stopped => EngineAuthority::Stopped,
+            #[cfg(any(
+                test,
+                feature = "testing",
+                feature = "protocol-qualification",
+                not(kontor_consensus_runtime)
+            ))]
             Backend::Legacy {
                 consensus_enabled, ..
             } => {
@@ -62,7 +94,7 @@ impl Engine {
                     EngineAuthority::Follower
                 }
             }
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Managed { signer, .. } => {
                 if signer.is_some() {
                     EngineAuthority::Validator
@@ -73,6 +105,12 @@ impl Engine {
         }
     }
 
+    #[cfg(any(
+        test,
+        feature = "testing",
+        feature = "protocol-qualification",
+        not(kontor_consensus_runtime)
+    ))]
     pub(super) fn legacy(
         channels: Channels<Ctx>,
         handle: EngineHandle,
@@ -89,7 +127,7 @@ impl Engine {
         }
     }
 
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     pub(super) fn managed(engine: ReactorEngine) -> Self {
         let signer = engine.signer();
         Self {
@@ -99,24 +137,36 @@ impl Engine {
 
     pub(super) async fn next(&mut self) -> Result<Option<Message>> {
         match &mut self.backend {
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Stopped => Ok(None),
+            #[cfg(any(
+                test,
+                feature = "testing",
+                feature = "protocol-qualification",
+                not(kontor_consensus_runtime)
+            ))]
             Backend::Legacy { channels, .. } => Ok(channels.consensus.recv().await.map(Into::into)),
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Managed { engine, .. } => Ok(engine.next().await?),
         }
     }
 
     pub(super) async fn publish(&mut self, part: StreamMessage<ProposalPart>) -> Result<()> {
         match &mut self.backend {
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Stopped => Err(anyhow!("consensus engine is stopped")),
+            #[cfg(any(
+                test,
+                feature = "testing",
+                feature = "protocol-qualification",
+                not(kontor_consensus_runtime)
+            ))]
             Backend::Legacy { channels, .. } => channels
                 .network
                 .send(NetworkMsg::PublishProposalPart(part))
                 .await
                 .context("failed to publish proposal part"),
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Managed { engine, .. } => {
                 let mut part = ProposalPartBytes(ProtobufCodec.encode(&part)?.to_vec());
                 loop {
@@ -142,14 +192,20 @@ impl Engine {
     pub(super) async fn listen_address(&mut self) -> Result<Option<String>> {
         timeout(Duration::from_secs(5), async {
             match &mut self.backend {
-                #[cfg(kontor_managed)]
+                #[cfg(kontor_consensus_runtime)]
                 Backend::Stopped => Ok(None),
+                #[cfg(any(
+                    test,
+                    feature = "testing",
+                    feature = "protocol-qualification",
+                    not(kontor_consensus_runtime)
+                ))]
                 Backend::Legacy { channels, .. } => {
                     Ok(NetworkRequest::dump_state(&channels.net_requests)
                         .await?
                         .map(|dump| dump.local_node.listen_addr.to_string()))
                 }
-                #[cfg(kontor_managed)]
+                #[cfg(kontor_consensus_runtime)]
                 Backend::Managed { engine, .. } => {
                     while !engine.request_listen_address().await? {
                         sleep(Duration::from_millis(2)).await;
@@ -175,13 +231,19 @@ impl Engine {
         digest: [u8; 32],
     ) -> Result<Signature> {
         match &mut self.backend {
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Stopped => Err(anyhow!("consensus engine is stopped")),
+            #[cfg(any(
+                test,
+                feature = "testing",
+                feature = "protocol-qualification",
+                not(kontor_consensus_runtime)
+            ))]
             Backend::Legacy { signer, .. } => {
                 let _ = (height, round, descriptor);
                 Ok(signer.sign(&digest))
             }
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Managed { signer, .. } => {
                 let signer = signer.clone().context("follower cannot sign proposals")?;
                 let bytes = tokio::task::spawn_blocking(move || {
@@ -200,9 +262,9 @@ impl Engine {
         completed_closure: [u8; 32],
     ) -> Result<()> {
         match &self.backend {
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Stopped => Err(anyhow!("consensus engine is stopped")),
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Managed {
                 signer: Some(signer),
                 ..
@@ -224,8 +286,14 @@ impl Engine {
 
     pub(super) async fn stop(&mut self, deadline: Duration) -> Result<bool> {
         match &mut self.backend {
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Stopped => Ok(true),
+            #[cfg(any(
+                test,
+                feature = "testing",
+                feature = "protocol-qualification",
+                not(kontor_consensus_runtime)
+            ))]
             Backend::Legacy { handle, .. } => {
                 handle.actor.stop(Some("Reactor shutting down".into()));
                 match timeout(deadline, &mut handle.handle).await {
@@ -236,7 +304,7 @@ impl Engine {
                     Err(_) => Ok(false),
                 }
             }
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Managed { engine, .. } => {
                 engine.retire();
                 match timeout(deadline, async {
@@ -264,8 +332,14 @@ impl Engine {
     #[cfg(any(test, feature = "protocol-qualification"))]
     pub(super) fn legacy_handle(&self) -> &EngineHandle {
         match &self.backend {
+            #[cfg(any(
+                test,
+                feature = "testing",
+                feature = "protocol-qualification",
+                not(kontor_consensus_runtime)
+            ))]
             Backend::Legacy { handle, .. } => handle,
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             _ => panic!("legacy fixture used with managed engine"),
         }
     }
@@ -273,8 +347,14 @@ impl Engine {
     #[cfg(test)]
     pub(super) fn legacy_handle_mut(&mut self) -> &mut EngineHandle {
         match &mut self.backend {
+            #[cfg(any(
+                test,
+                feature = "testing",
+                feature = "protocol-qualification",
+                not(kontor_consensus_runtime)
+            ))]
             Backend::Legacy { handle, .. } => handle,
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             _ => panic!("legacy fixture used with managed engine"),
         }
     }
@@ -282,8 +362,14 @@ impl Engine {
     #[cfg(test)]
     pub(super) fn legacy_channels_mut(&mut self) -> &mut Channels<Ctx> {
         match &mut self.backend {
+            #[cfg(any(
+                test,
+                feature = "testing",
+                feature = "protocol-qualification",
+                not(kontor_consensus_runtime)
+            ))]
             Backend::Legacy { channels, .. } => channels,
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             _ => panic!("legacy fixture used with managed engine"),
         }
     }
@@ -293,10 +379,16 @@ impl Drop for Engine {
     fn drop(&mut self) {
         // Construction can fail before the reactor gets a chance to run its shutdown path.
         match &mut self.backend {
+            #[cfg(any(
+                test,
+                feature = "testing",
+                feature = "protocol-qualification",
+                not(kontor_consensus_runtime)
+            ))]
             Backend::Legacy { handle, .. } => handle.actor.stop(None),
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Stopped => {}
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             Backend::Managed { engine, .. } => engine.retire(),
         }
     }

@@ -15,7 +15,7 @@ use futures_util::{FutureExt, future};
 use indexer::build_record;
 use indexer::config::GenesisConfig;
 use indexer::confirmation_backfill::{self, ConfirmationBackfillArgs};
-#[cfg(not(kontor_managed))]
+#[cfg(not(kontor_consensus_runtime))]
 use indexer::database;
 use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
@@ -179,7 +179,7 @@ async fn run_regtest() -> Result<()> {
     /// funded (1M sats) and pre-issued native tokens, so SDK tests can
     /// pay gas + transfer/sell without further setup. Bump this when
     /// adding a regtest file that needs its own slot.
-    const IDENTITY_COUNT: usize = 8;
+    const IDENTITY_COUNT: usize = 9;
 
     let kontor_bin = std::env::current_exe()?;
     let mut cluster = reg_tester::RegTesterCluster::setup_with(
@@ -365,7 +365,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         },
     };
 
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     let (coordinator, reader, writer) = reactor::engine::NodeCoordinator::open_database(
         &engine_config,
         filename,
@@ -374,7 +374,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         &genesis,
     )
     .await?;
-    #[cfg(not(kontor_managed))]
+    #[cfg(not(kontor_consensus_runtime))]
     let (reader, writer) = database::open_node_database_for_genesis(
         &config.data_dir,
         filename,
@@ -467,7 +467,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         Some(simulate_rx),
         Some(upgrade_rx),
         engine_config,
-        #[cfg(kontor_managed)]
+        #[cfg(kontor_consensus_runtime)]
         coordinator,
         bitcoin.clone(),
         genesis,

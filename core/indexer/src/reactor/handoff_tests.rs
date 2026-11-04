@@ -28,7 +28,7 @@ use crate::consensus::{
     Height, ProposalData, ProposalFin, ProposalInit, ProposalPart, ProposalParts, Validator,
     ValidatorSet, Value,
 };
-use crate::database::certified_history::{closure, completion, registrations};
+use crate::database::certified_history::{closure, completion, proposals, registrations};
 use crate::database::queries::select_block_latest;
 use crate::database::{Writer, canonical_history, certified_history};
 use crate::protocol::coordinator::certified_input::EraContext;
@@ -55,7 +55,7 @@ async fn closed_height_rejects_late_round_and_proposal_requests() -> Result<()> 
         certified_fixture::empty_block(1).exact_input(reactor.consensus.protocol_context)?,
     )?;
     let proof = certified_fixture::certificate(&key, &value, height, round);
-    certified_fixture::proposal(&mut reactor, value, height, round);
+    certified_fixture::proposal(&mut reactor, value, height, round).await?;
     let (reply, ack) = oneshot::channel();
     reactor
         .consensus
@@ -149,7 +149,7 @@ async fn certified_a_b_a_replacement_preserves_history_and_restores_execution() 
         let height = Height::new(index as u64 + 1);
         let value = Value::from_input(block.exact_input(reactor.consensus.protocol_context)?)?;
         let proof = certified_fixture::certificate(&key, &value, height, Round::new(0));
-        certified_fixture::proposal(&mut reactor, value, height, Round::new(0));
+        certified_fixture::proposal(&mut reactor, value, height, Round::new(0)).await?;
         let (reply, received) = oneshot::channel();
         reactor
             .consensus
@@ -265,31 +265,29 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
         let round = Round::new(0);
         let value = Value::from_input(block.exact_input(reactor.consensus.protocol_context)?)?;
         let certificate = certified_fixture::certificate(&key, &value, height, round);
-        let (acknowledge, mut ack) = oneshot::channel();
-        if !deferred {
-            certified_fixture::proposal(&mut reactor, value.clone(), height, round);
-        }
-        reactor
-            .consensus
-            .receive_decision(&reactor.db_conn(), certificate.clone(), acknowledge)
-            .await?;
         if deferred {
-            assert!(matches!(
-                ack.try_recv(),
-                Err(oneshot::error::TryRecvError::Empty)
-            ));
+            let (acknowledge, ack) = oneshot::channel();
+            assert!(
+                reactor
+                    .consensus
+                    .receive_decision(&reactor.db_conn(), certificate.clone(), acknowledge)
+                    .await
+                    .is_err()
+            );
+            assert!(ack.await.is_err());
             assert_eq!(
                 certified_history::frontier(&reactor.db_conn())
                     .await?
                     .authenticated_height,
                 height.as_u64() - 1
             );
-            certified_fixture::proposal(&mut reactor, value, height, round);
-            reactor
-                .consensus
-                .try_acknowledge_decision(&reactor.db_conn())
-                .await?;
         }
+        certified_fixture::proposal(&mut reactor, value, height, round).await?;
+        let (acknowledge, ack) = oneshot::channel();
+        reactor
+            .consensus
+            .receive_decision(&reactor.db_conn(), certificate.clone(), acknowledge)
+            .await?;
         ack.await?;
         if before_finalized {
             reactor.consensus.current_round = round;
@@ -545,11 +543,14 @@ async fn check_early_proposal(
     }
     assert_eq!(reactor.consensus.early_proposals.len(), 1);
     assert!(
-        !reactor
-            .consensus
-            .undecided
-            .get(&height)
-            .is_some_and(|rounds| rounds.contains_key(&round))
+        proposals::normal(
+            &reactor.db_conn(),
+            height,
+            round,
+            reactor.consensus.protocol_context
+        )
+        .await?
+        .is_none()
     );
     let (reply_value, received) = oneshot::channel();
     reactor

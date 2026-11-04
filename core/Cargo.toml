@@ -88,9 +88,10 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
 ts-rs = { version = "=12.0.1", features = ["format"] }
 
 # Malachite BFT consensus
-malachitebft-app-channel = { version = "=0.8.2", package = "arc-malachitebft-app-channel" }
+malachitebft-app-channel = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", package = "arc-malachitebft-app-channel" }
 
 [patch.crates-io]
+if-watch = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=3.2.2" }
 wasmtime = { git = "https://github.com/wilfreddenton/wasmtime", rev = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7", version = "=51.0.0-kontor.2" }
 psm = { path = "vendor/psm" }
 wit-bindgen = { path = "vendor/wit-bindgen" }
@@ -98,8 +99,6 @@ wit-bindgen = { path = "vendor/wit-bindgen" }
 blst = { path = "vendor/blst" }
 ring = { path = "vendor/ring" }
 secp256k1-sys = { path = "vendor/secp256k1-sys" }
-# Preserve resolved /tcp/0 listen addresses until upstream includes the fix.
-arc-malachitebft-network = { path = "vendor/arc-malachitebft-network" }
 # Use ZeroMQ 4.3.5's alignment fix until zmq-sys releases its zeromq-src 0.3 update.
 zmq-sys = { git = "https://github.com/erickt/rust-zmq", rev = "d96de8f5e964e9096e1575a38cde5472c53bde6e" }
 

@@ -24,6 +24,23 @@ CREATE TABLE IF NOT EXISTS certified_inputs (
     body BLOB NOT NULL CHECK (length(body) <= 4186112)
 );
 
+CREATE TABLE IF NOT EXISTS consensus_proposal_inputs (
+    height BLOB NOT NULL CHECK (length(height) = 8),
+    value_id BLOB NOT NULL CHECK (length(value_id) = 32),
+    descriptor BLOB NOT NULL CHECK (length(descriptor) <= 1024),
+    body BLOB NOT NULL CHECK (length(body) <= 4186112),
+    PRIMARY KEY (height, value_id)
+);
+
+CREATE TABLE IF NOT EXISTS consensus_proposal_slots (
+    height BLOB NOT NULL CHECK (length(height) = 8),
+    round INTEGER NOT NULL CHECK (round BETWEEN 0 AND 4294967295),
+    proposer BLOB NOT NULL CHECK (length(proposer) = 20),
+    value_id BLOB NOT NULL CHECK (length(value_id) = 32),
+    PRIMARY KEY (height, round),
+    FOREIGN KEY (height, value_id) REFERENCES consensus_proposal_inputs(height, value_id)
+);
+
 CREATE TABLE IF NOT EXISTS historical_committees (
     height BLOB PRIMARY KEY CHECK (length(height) = 8),
     committee_id BLOB NOT NULL UNIQUE CHECK (length(committee_id) = 32),

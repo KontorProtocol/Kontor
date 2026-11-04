@@ -78,17 +78,17 @@ blst = { "version" = "=0.3.17" }
 bls-crypto = { "path" = "../../core/bls-crypto" }
 metrics = "=0.24.6"
 metrics-exporter-prometheus = "=0.18.3"
-malachitebft-app-channel = { "version" = "=0.8.2", "package" = "arc-malachitebft-app-channel" }
-malachitebft-app = { "version" = "=0.8.2", "package" = "arc-malachitebft-app" }
-malachitebft-core-types = { "version" = "=0.8.2", "package" = "arc-malachitebft-core-types", "features" = ["serde"] }
-malachitebft-engine = { "version" = "=0.8.2", "package" = "arc-malachitebft-engine" }
-malachitebft-config = { "version" = "=0.8.2", "package" = "arc-malachitebft-config" }
-malachitebft-signing = { "version" = "=0.8.2", "package" = "arc-malachitebft-signing" }
-malachitebft-signing-ed25519 = { "version" = "=0.8.2", "package" = "arc-malachitebft-signing-ed25519", "features" = ["rand", "serde"] }
-malachitebft-codec = { "version" = "=0.8.2", "package" = "arc-malachitebft-codec" }
-malachitebft-core-consensus = { "version" = "=0.8.2", "package" = "arc-malachitebft-core-consensus" }
-malachitebft-proto = { "version" = "=0.8.2", "package" = "arc-malachitebft-proto" }
-malachitebft-sync = { "version" = "=0.8.2", "package" = "arc-malachitebft-sync" }
+malachitebft-app-channel = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-app-channel" }
+malachitebft-app = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-app" }
+malachitebft-core-types = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-core-types", "features" = ["serde"] }
+malachitebft-engine = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-engine" }
+malachitebft-config = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-config" }
+malachitebft-signing = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-signing" }
+malachitebft-signing-ed25519 = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-signing-ed25519", "features" = ["rand", "serde"] }
+malachitebft-codec = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-codec" }
+malachitebft-core-consensus = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-core-consensus" }
+malachitebft-proto = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-proto" }
+malachitebft-sync = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-sync" }
 async-trait = { "version" = "=0.1.92" }
 bytes = { "version" = "=1.12.1" }
 prost = { "version" = "=0.13.5" }
@@ -100,12 +100,12 @@ prost-build = "0.13.5"
 protox = "0.8.0"
 
 [patch."crates-io"]
+if-watch = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=3.2.2" }
 psm = { path = "../../core/vendor/psm" }
 wit-bindgen = { path = "../../core/vendor/wit-bindgen" }
 "blst" = { "path" = "../../core/vendor/blst" }
 "ring" = { "path" = "../../core/vendor/ring" }
 "secp256k1-sys" = { "path" = "../../core/vendor/secp256k1-sys" }
-"arc-malachitebft-network" = { "path" = "../../core/vendor/arc-malachitebft-network" }
 "zmq-sys" = { "git" = "https://github.com/erickt/rust-zmq", "rev" = "d96de8f5e964e9096e1575a38cde5472c53bde6e" }
 
 [profile.dev]

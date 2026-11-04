@@ -1,41 +1,14 @@
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
-use super::adapter::{RuntimeEngine, runtime};
+pub(crate) use kontor_consensus_first::api::{
+    Bootstrap, Discovery, EngineConfig as Configuration, PeerSelection,
+};
+
+use super::adapter::RuntimeEngine;
 use super::types::EngineError;
 use crate::protocol::coordinator::durable_signer::{
     DurableSigner, SigningError, SigningRequest, VoteStep,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Runtime;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Bootstrap {
-    Kademlia,
-    Full,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PeerSelection {
-    Kademlia,
-    Random,
-}
-
-pub(crate) struct Configuration {
-    pub(crate) generation: u64,
-    pub(crate) channel_capacity: usize,
-    pub(crate) moniker: String,
-    pub(crate) network_key: [u8; 32],
-    pub(crate) listen_address: String,
-    pub(crate) persistent_peers: Vec<String>,
-    pub(crate) wal_path: PathBuf,
-    pub(crate) discovery_enabled: bool,
-    pub(crate) bootstrap: Bootstrap,
-    pub(crate) peer_selection: PeerSelection,
-    pub(crate) readiness_timeout: Duration,
-}
 
 mod runtime_startup {
     use std::sync::Arc;
@@ -44,10 +17,7 @@ mod runtime_startup {
     use kontor_consensus_first::api;
     use kontor_consensus_first::authority_api as authority;
 
-    use super::{
-        Bootstrap, Configuration, DurableSigner, PeerSelection, SigningError, SigningRequest,
-        VoteStep,
-    };
+    use super::{Configuration, DurableSigner, SigningError, SigningRequest, VoteStep};
 
     struct Signer(Arc<DurableSigner>);
 
@@ -141,27 +111,6 @@ mod runtime_startup {
         input: Configuration,
         signer: Option<Arc<DurableSigner>>,
     ) -> Result<Engine, api::EngineError> {
-        let config = api::EngineConfig {
-            generation: input.generation,
-            channel_capacity: input.channel_capacity,
-            moniker: input.moniker,
-            network_key: input.network_key,
-            listen_address: input.listen_address,
-            persistent_peers: input.persistent_peers,
-            wal_path: input.wal_path,
-            discovery: api::Discovery {
-                enabled: input.discovery_enabled,
-                bootstrap: match input.bootstrap {
-                    Bootstrap::Kademlia => api::Bootstrap::Kademlia,
-                    Bootstrap::Full => api::Bootstrap::Full,
-                },
-                selection: match input.peer_selection {
-                    PeerSelection::Kademlia => api::PeerSelection::Kademlia,
-                    PeerSelection::Random => api::PeerSelection::Random,
-                },
-            },
-            readiness_timeout: input.readiness_timeout,
-        };
         let authority = match signer {
             Some(signer) => authority::Authority::Validator {
                 public_key: signer.public_key(),
@@ -169,29 +118,26 @@ mod runtime_startup {
             },
             None => authority::Authority::Follower,
         };
-        kontor_consensus_first::start(config, authority)
+        kontor_consensus_first::start(input, authority)
     }
 }
 
-impl Runtime {
-    pub(crate) fn network_peer_id(self, key: &[u8; 32]) -> Result<Vec<u8>, EngineError> {
-        kontor_consensus_first::network_peer_id(key).map_err(runtime::error)
-    }
-    pub(crate) fn start(
-        self,
-        config: Configuration,
-        signer: Option<Arc<DurableSigner>>,
-    ) -> Result<RuntimeEngine, EngineError> {
-        runtime_startup::start(config, signer)
-            .map(RuntimeEngine)
-            .map_err(runtime::error)
-    }
+#[cfg(test)]
+pub(crate) fn network_peer_id(key: &[u8; 32]) -> Result<Vec<u8>, EngineError> {
+    kontor_consensus_first::network_peer_id(key)
+}
+
+pub(crate) fn start(
+    config: Configuration,
+    signer: Option<Arc<DurableSigner>>,
+) -> Result<RuntimeEngine, EngineError> {
+    runtime_startup::start(config, signer).map(RuntimeEngine)
 }
 
 #[cfg(test)]
 mod tests {
     use std::thread;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use malachitebft_signing_ed25519::PrivateKey;
     use tempfile::TempDir;
@@ -206,9 +152,9 @@ mod tests {
         let directory = TempDir::new().unwrap();
         let signer_path = directory.path().join("signer");
         let key = PrivateKey::from([11; 32]);
-        for (bundle, generation) in [(Runtime, 1), (Runtime, 2)] {
+        for generation in [1, 2] {
             let network_key = [7; 32];
-            let peer_id = bundle.network_peer_id(&network_key).unwrap();
+            let peer_id = network_peer_id(&network_key).unwrap();
             let signer = Arc::new(
                 DurableSigner::open(
                     &signer_path,
@@ -229,12 +175,14 @@ mod tests {
                 listen_address: "/ip4/127.0.0.1/tcp/0".into(),
                 persistent_peers: vec![],
                 wal_path: directory.path().join(format!("era-{generation}.wal")),
-                discovery_enabled: false,
-                bootstrap: Bootstrap::Full,
-                peer_selection: PeerSelection::Random,
+                discovery: Discovery {
+                    enabled: false,
+                    bootstrap: Bootstrap::Full,
+                    selection: PeerSelection::Random,
+                },
                 readiness_timeout: Duration::from_secs(10),
             };
-            let mut engine = bundle.start(config, Some(signer.clone())).unwrap();
+            let mut engine = start(config, Some(signer.clone())).unwrap();
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 match engine.poll().unwrap() {
@@ -261,7 +209,7 @@ mod tests {
                     SignerIdentity {
                         context: test_fixtures::context(),
                         generation,
-                        network_peer_id: bundle.network_peer_id(&network_key).unwrap(),
+                        network_peer_id: network_peer_id(&network_key).unwrap(),
                     },
                     key.clone(),
                 ),

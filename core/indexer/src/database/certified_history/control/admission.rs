@@ -9,9 +9,10 @@ use crate::database::certified_history::{
 };
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
 use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
+use crate::protocol::coordinator::certified_decision::CommitteeRecord;
 use crate::protocol::coordinator::certified_input::{Command, EraContext, ExactInput};
 use crate::protocol::coordinator::control::{
-    AcceptedControl, AuthenticatedReference, ControlState,
+    AcceptedControl, AuthenticatedReference, ControlState, UpgradeControl,
 };
 use crate::protocol::identity::ExecutionIdentity;
 
@@ -44,14 +45,55 @@ pub(crate) async fn state(conn: &Connection, context: EraContext) -> Result<Cont
     Ok(state)
 }
 
-// Both proposal admission and owned application use authenticated positions.
-// Neither a caller's local Bitcoin tip nor an envelope's anchor sets the clock.
+struct Admission {
+    state: ControlState,
+    authority: CommitteeRecord,
+    reference: AuthenticatedReference,
+    bitcoin_height: u64,
+    reference_floor: u64,
+}
+
+pub(crate) async fn validate_proposal(
+    conn: &Connection,
+    input: &ExactInput,
+    inclusion: u64,
+    at: Position,
+) -> Result<()> {
+    let (envelope, admission) = admission(conn, input, inclusion, at).await?;
+    envelope.action.validate_proposal(
+        &admission.state,
+        &admission.authority,
+        admission.reference,
+        admission.bitcoin_height,
+        admission.reference_floor,
+    )?;
+    Ok(())
+}
+
 pub(crate) async fn verify(
     conn: &Connection,
     input: &ExactInput,
     inclusion: u64,
     at: Position,
 ) -> Result<AcceptedControl> {
+    let (envelope, admission) = admission(conn, input, inclusion, at).await?;
+    Ok(envelope.verify(
+        &admission.state,
+        &admission.authority,
+        admission.reference,
+        admission.bitcoin_height,
+        admission.reference_floor,
+    )?)
+}
+
+// Preparation and signed admission both use authenticated positions. Neither
+// a caller's local Bitcoin tip nor an envelope's anchor sets the clock.
+async fn admission(
+    conn: &Connection,
+    input: &ExactInput,
+    inclusion: u64,
+    at: Position,
+) -> Result<(UpgradeControl, Admission)> {
     let Command::Control {
         anchor_height,
         anchor_hash,
@@ -96,17 +138,20 @@ pub(crate) async fn verify(
     );
     let state = state(conn, context).await?;
     let authority = committee(conn, inclusion).await?;
-    Ok(envelope.verify(
-        &state,
-        &authority,
-        AuthenticatedReference {
-            height: reference,
-            decision: closed.decision,
-            bitcoin_height: closed.bitcoin_height,
+    Ok((
+        envelope,
+        Admission {
+            state,
+            authority,
+            reference: AuthenticatedReference {
+                height: reference,
+                decision: closed.decision,
+                bitcoin_height: closed.bitcoin_height,
+            },
+            bitcoin_height: tip.0,
+            reference_floor: reference_floor(conn, at).await?,
         },
-        tip.0,
-        reference_floor(conn, at).await?,
-    )?)
+    ))
 }
 
 pub(crate) async fn apply(conn: &Connection, height: u64, decision: u64) -> Result<StageOutcome> {

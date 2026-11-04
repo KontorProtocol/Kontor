@@ -4,12 +4,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, ensure};
 use bitcoin::Network;
-use kontor_consensus_first::{WalInspection, WalResumeContext, inspect_protected_wal};
 use libsql::Connection;
 use malachitebft_app_channel::app::config::{BootstrapProtocol, Selector};
 
 use super::validator_start::{RecoveryState, StartRole};
 use super::{EngineConfig, EngineOutput};
+#[cfg(kontor_managed)]
 use crate::build_record;
 use crate::consensus::Address;
 use crate::consensus::signing::PrivateKey;
@@ -23,7 +23,7 @@ use crate::protocol::coordinator::durable_signer::{
 use crate::protocol::coordinator::managed::control::EngineSlot;
 use crate::protocol::coordinator::managed::reactor::ReactorEngine;
 use crate::protocol::coordinator::managed::startup::{
-    Bootstrap, Configuration, PeerSelection, Runtime,
+    Bootstrap, Configuration, Discovery, PeerSelection,
 };
 use crate::protocol::coordinator::registry;
 use crate::protocol::identity::domain_digest;
@@ -66,6 +66,7 @@ impl NodeCoordinator {
         starting_block_height: u64,
         genesis: &GenesisParameters,
     ) -> Result<(Arc<Self>, Reader, Writer)> {
+        #[cfg(kontor_managed)]
         build_record::verify()?;
         let baseline = admit_node_database(
             &config.data_dir,
@@ -130,28 +131,17 @@ impl NodeCoordinator {
         let role = if let Some(validator) = self.validator {
             let owner = Arc::clone(&self.owner);
             let wal_path = self.directory.join("consensus-validator.wal");
-            let wal_resume = WalResumeContext {
-                height: height.as_u64(),
-                chain: context.chain.0,
-                era: context.era,
-                protocol: context.protocol.0,
-                codec: context.codec,
-            };
-            let (signer, wal) = tokio::task::spawn_blocking(move || -> Result<_> {
+            let (signer, wal_present) = tokio::task::spawn_blocking(move || -> Result<_> {
                 Ok((
                     owner.inspect_signer_recovery(validator)?,
-                    inspect_protected_wal(&wal_path, wal_resume)?,
+                    wal_path.try_exists()?,
                 ))
             })
             .await
             .context("validator recovery inspection task failed")??;
-            let wal_height = match wal {
-                WalInspection::Missing => None,
-                WalInspection::Present { height, .. } => Some(height),
-            };
             let retained = match signer {
                 SignerRecovery::Absent => RecoveryState {
-                    wal_height,
+                    wal_present,
                     ..RecoveryState::default()
                 },
                 SignerRecovery::Retained(state) => {
@@ -184,7 +174,7 @@ impl NodeCoordinator {
                         retained_signer: true,
                         highest_signed_height: state.highest_signed_height,
                         authorization_height: state.latest_authorization.map(|value| value.height),
-                        wal_height,
+                        wal_present,
                     }
                 }
             };
@@ -237,24 +227,21 @@ impl NodeCoordinator {
             } else {
                 "consensus-catchup.wal"
             }),
-            discovery_enabled: config.discovery.enabled,
-            bootstrap: match config.discovery.bootstrap_protocol {
-                BootstrapProtocol::Kademlia => Bootstrap::Kademlia,
-                BootstrapProtocol::Full => Bootstrap::Full,
-            },
-            peer_selection: match config.discovery.selector {
-                Selector::Kademlia => PeerSelection::Kademlia,
-                Selector::Random => PeerSelection::Random,
+            discovery: Discovery {
+                enabled: config.discovery.enabled,
+                bootstrap: match config.discovery.bootstrap_protocol {
+                    BootstrapProtocol::Kademlia => Bootstrap::Kademlia,
+                    BootstrapProtocol::Full => Bootstrap::Full,
+                },
+                selection: match config.discovery.selector {
+                    Selector::Kademlia => PeerSelection::Kademlia,
+                    Selector::Random => PeerSelection::Random,
+                },
             },
             readiness_timeout: Duration::from_secs(30),
         };
-        let engine = ReactorEngine::start_owned(
-            &self.slot,
-            Runtime,
-            input,
-            prepared.signer,
-            prepared.ownership,
-        )?;
+        let engine =
+            ReactorEngine::start_owned(&self.slot, input, prepared.signer, prepared.ownership)?;
         Ok(EngineOutput {
             engine: Engine::managed(engine),
             promotion_floor,

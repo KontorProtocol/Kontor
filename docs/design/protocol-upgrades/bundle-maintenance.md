@@ -479,7 +479,12 @@ Installation checks the copied bytes against the audited executable hash before
 atomically replacing the destination. It does not strip or otherwise transform
 the binary. `node-build.json` records the installed path and hash. A plain
 `cargo build` in the core workspace remains an in-tree development/test build;
-it does not establish retained dependency isolation.
+it does not establish retained dependency isolation. It does use the same pinned
+Malachite fork and shared node coordinator for ownership, durable signing, WAL
+recovery, and follower promotion. Its Cargo graph depends on the runtime facade;
+the production node graph keeps that runtime independently linked. Raw engine
+startup is restricted to test and diagnostic configurations. The ordinary build's
+unsupported-upgrade guard remains in place.
 
 The Docker `builder` stage invokes the same Rust bundle builder and installs that
 audited output into the runtime image. Its `cacher` stage fetches the locked

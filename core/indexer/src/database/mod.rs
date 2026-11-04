@@ -21,7 +21,7 @@ pub(crate) mod storage_session_v1;
 pub mod types;
 pub mod writer;
 
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 pub(crate) use genesis::admit_node_database;
 pub use genesis::open_node_database;
 pub use genesis::open_node_database_for_genesis;

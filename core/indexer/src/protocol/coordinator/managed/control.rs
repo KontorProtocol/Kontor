@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Instant, sleep};
 
 use super::adapter::RuntimeEngine;
-use super::startup::{Configuration, Runtime};
+use super::startup::{self, Configuration};
 use super::types::{
     Delivery, EngineError, EnginePoll, EngineState, Event, ProposalPartBytes, PublishError,
     ReplyToken, Response,
@@ -61,7 +61,6 @@ impl EngineSlot {
     #[cfg(test)]
     pub(crate) fn start(
         &self,
-        bundle: Runtime,
         config: Configuration,
         signer: Option<Arc<DurableSigner>>,
     ) -> Result<Control, EngineError> {
@@ -75,13 +74,12 @@ impl EngineSlot {
             readiness_timeout,
             signer,
             None,
-            move || bundle.start(config, authority),
+            move || startup::start(config, authority),
         )
     }
 
     pub(crate) fn start_owned(
         &self,
-        bundle: Runtime,
         config: Configuration,
         signer: Option<Arc<DurableSigner>>,
         ownership: OwnedGeneration,
@@ -103,7 +101,7 @@ impl EngineSlot {
             config.readiness_timeout,
             signer,
             Some(ownership),
-            move || bundle.start(config, authority),
+            move || startup::start(config, authority),
         )
     }
 
@@ -255,6 +253,7 @@ impl Control {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn respond(
         &self,
         token: ReplyToken,
@@ -315,6 +314,7 @@ impl Control {
         self.status().failure.unwrap_or(EngineError::Stopping)
     }
 
+    #[cfg(test)]
     pub(crate) fn has_joined(&self) -> bool {
         self.terminal.is_some()
     }
@@ -410,12 +410,12 @@ where
         failure: failure.clone(),
     });
     reject_pending(&mut commands);
-    if let Some(signer) = &signer {
-        if let Err(error) = signer.fence_generation(generation) {
-            failure = Some(EngineError::Failed(format!(
-                "signing revocation failed: {error}"
-            )));
-        }
+    if let Some(signer) = &signer
+        && let Err(error) = signer.fence_generation(generation)
+    {
+        failure = Some(EngineError::Failed(format!(
+            "signing revocation failed: {error}"
+        )));
     }
     status.send_replace(Status {
         state: EngineState::Stopping,
@@ -505,10 +505,10 @@ fn drive(
                 return Err(error);
             }
         }
-        if pending.is_none() {
-            if let EnginePoll::Event(event) = engine.poll()? {
-                pending = Some(event);
-            }
+        if pending.is_none()
+            && let EnginePoll::Event(event) = engine.poll()?
+        {
+            pending = Some(event);
         }
         if let Some(event) = pending.take() {
             match events.try_send(event) {

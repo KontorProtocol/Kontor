@@ -11,7 +11,7 @@ use tokio::time::{interval, sleep, timeout};
 
 use super::certified_fixture;
 use super::engine::EngineConfig;
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use super::engine::NodeCoordinator;
 use super::executor::NoopExecutor;
 use super::mempool_fee_index::MempoolFeeIndex;
@@ -55,7 +55,7 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
         validator_start: ValidatorStart::Bootstrap,
         discovery: Default::default(),
     };
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     let coordinator = {
         let (coordinator, _, _) =
             NodeCoordinator::open_database(&engine_config, &name, Network::Regtest, 1, &genesis)
@@ -74,7 +74,7 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
         None,
         None,
         engine_config,
-        #[cfg(kontor_managed)]
+        #[cfg(kontor_consensus_runtime)]
         coordinator,
         Client::new("".to_string(), "".to_string(), "".to_string())?,
         genesis.clone(),
@@ -217,7 +217,7 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
             validator_start: ValidatorStart::Bootstrap,
             discovery: Default::default(),
         },
-        #[cfg(kontor_managed)]
+        #[cfg(kontor_consensus_runtime)]
         None,
         &session,
         &owner,

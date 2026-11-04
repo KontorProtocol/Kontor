@@ -43,7 +43,7 @@ pub mod status;
 #[cfg(test)]
 mod storage_penalty_tests;
 mod transport;
-#[cfg(all(test, kontor_managed))]
+#[cfg(all(test, kontor_consensus_runtime))]
 mod transport_tests;
 pub mod types;
 #[cfg(test)]
@@ -54,11 +54,11 @@ mod upgrades;
 #[cfg(test)]
 mod workload_tests;
 
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use self::engine::NodeCoordinator;
 use std::collections::VecDeque;
 use std::future::Future;
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -157,9 +157,9 @@ pub struct PruneConfig {
 }
 
 pub(crate) struct Reactor<E: Executor> {
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     coordinator: Option<Arc<NodeCoordinator>>,
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     engine_config: Option<engine::EngineConfig>,
     execution: ExecutionContext<E>,
     node_label: String,
@@ -177,16 +177,9 @@ pub(crate) struct Reactor<E: Executor> {
     /// `Listening` (see `handle_consensus_msg`'s `ConsensusReady` arm).
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     runtime_status: Option<tokio::sync::watch::Sender<Option<RuntimeStatus>>>,
-    /// Consensus I/O in flight — bitcoind validation running off the loop, ALL
-    /// raced together as one arm of the root `select!` (`select_all`), so a
-    /// stalled job cannot park another. Small, not a fixed size: at most one
-    /// BUILD job (the `pending_proposal` is single, and `try_fulfill` refuses a
-    /// second build while one is in flight), plus one VALIDATE job per in-flight
-    /// proposal round — the `undecided` guard admits one per (height, round), and
-    /// a fresh round at the same height can arrive before the previous round's
-    /// job has applied. Bounded in practice by concurrent rounds, which the
-    /// round-timeout machinery keeps to a handful. A `VecDeque` for cheap
-    /// removal-by-index after `select_all`. See `batches::IoJob`.
+    /// Validation runs outside the reactor loop. Results are checked against the
+    /// current selection and round before durable proposal admission; a stale
+    /// completion must not overwrite an accepted proposal.
     io_jobs: VecDeque<batches::IoJob>,
     /// Verdicts that outlived their proposal, banked for the next one — see
     /// `batches::ValidatedCandidates`.
@@ -301,9 +294,9 @@ impl<E: Executor> Reactor<E> {
             .map(|i| format!("node_{i}"))
             .unwrap_or_else(|| "follower".to_string());
         Self {
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             coordinator: None,
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             engine_config: None,
             execution,
             node_label,
@@ -652,7 +645,6 @@ impl<E: Executor> Reactor<E> {
                     let consensus_result = self.handle_consensus_msg(msg)
                         .await
                         .context("handle_consensus_msg failed")?;
-                    self.consensus.try_acknowledge_decision(&self.db_conn()).await?;
                     if let consensus_state::ConsensusResult::BatchProcessed { txids } = &consensus_result
                         && let Some(tx) = &self.event_tx
                         && tx
@@ -704,7 +696,6 @@ impl<E: Executor> Reactor<E> {
                     self.apply_io_verdicts(job.apply, verdicts)
                         .await
                         .context("apply_io_verdicts failed")?;
-                    self.consensus.try_acknowledge_decision(&self.db_conn()).await?;
                     self.advance().await.context("advance failed after proposal input became available")?;
                 }
                 _ = fee_publish_ticker.tick() => {
@@ -964,7 +955,7 @@ pub(crate) async fn start_consensus(
 
 async fn start_linked_consensus(
     engine_config: engine::EngineConfig,
-    #[cfg(kontor_managed)] coordinator: Option<&NodeCoordinator>,
+    #[cfg(kontor_consensus_runtime)] coordinator: Option<&NodeCoordinator>,
     session: &LinkedSession,
     _service: &OwnerService,
     _network: Network,
@@ -974,7 +965,7 @@ async fn start_linked_consensus(
     mempool_fee_index: mempool_fee_index::MempoolFeeIndex,
 ) -> Result<consensus_state::ConsensusState> {
     let (_, _, validator_set) = consensus_state::certified_startup(&session.conn).await?;
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     let output = match coordinator {
         Some(coordinator) => coordinator.start(&engine_config, &session.conn).await?,
         #[cfg(any(test, feature = "protocol-qualification"))]
@@ -982,7 +973,7 @@ async fn start_linked_consensus(
         #[cfg(not(any(test, feature = "protocol-qualification")))]
         None => bail!("managed consensus requires node ownership before database startup"),
     };
-    #[cfg(not(kontor_managed))]
+    #[cfg(not(kontor_consensus_runtime))]
     let output = { engine::start(engine_config).await?.into() };
     consensus_from_engine(
         output,
@@ -1049,7 +1040,7 @@ pub fn run(
     simulate_rx: Option<Receiver<Simulation>>,
     upgrade_rx: Option<Receiver<UpgradeSubmission>>,
     engine_config: engine::EngineConfig,
-    #[cfg(kontor_managed)] coordinator: Arc<NodeCoordinator>,
+    #[cfg(kontor_consensus_runtime)] coordinator: Arc<NodeCoordinator>,
     bitcoin_client: Client,
     genesis: GenesisParameters,
     observation_channels: Option<consensus_state::ObservationChannels>,
@@ -1168,7 +1159,7 @@ pub fn run(
                 let initial_mempool = execution.executor.parse_mempool(&execution.recognizer,
                     &selection, initial_raw_txs).await?;
                 let mut consensus = start_linked_consensus(engine_config.clone(),
-                    #[cfg(kontor_managed)] Some(&coordinator), &execution.session,
+                    #[cfg(kontor_consensus_runtime)] Some(&coordinator), &execution.session,
                     &owner_service, network, observation_channels, timeouts, execution.last_height,
                     fee_index).await.context("start_consensus failed")?;
                 consensus.mempool.replace(initial_mempool);
@@ -1176,7 +1167,7 @@ pub fn run(
                     shutdown.clone(), ready_tx, event_tx, simulate_rx, consensus, consensus_listen_addr);
                 reactor.upgrade_rx = upgrade_rx;
                 reactor.runtime_status = Some(runtime_status);
-                #[cfg(kontor_managed)]
+                #[cfg(kontor_consensus_runtime)]
                 {
                     reactor.coordinator = Some(coordinator);
                     reactor.engine_config = Some(engine_config);
@@ -1195,3 +1186,6 @@ pub fn run(
         }
     })
 }
+
+#[cfg(test)]
+mod proposal_recovery_tests;

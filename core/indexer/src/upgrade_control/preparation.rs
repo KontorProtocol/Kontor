@@ -129,7 +129,7 @@ pub(crate) async fn prepare(conn: &Connection, request: PrepareUpgrade) -> Resul
         approvals: Vec::new(),
     };
     let input = ExactInput::control(context, bitcoin_height, bitcoin_hash, &envelope)?;
-    match control::admission::verify(
+    match control::admission::validate_proposal(
         conn,
         &input,
         inclusion,
@@ -140,19 +140,11 @@ pub(crate) async fn prepare(conn: &Connection, request: PrepareUpgrade) -> Resul
     )
     .await
     {
-        // The existing verifier checks state, reference and operation before
-        // quorum. Empty approvals must fail only that final check. Preparation
-        // never grants authority and does not write or enqueue the action.
-        Err(error)
-            if matches!(
-                error.downcast_ref::<ControlError>(),
-                Some(ControlError::Threshold)
-            ) => {}
         Err(error) if error.is::<ControlError>() || error.is::<control::admission::Rejected>() => {
             return Err(invalid(error.to_string()));
         }
         Err(error) => return Err(error),
-        Ok(_) => anyhow::bail!("unsigned upgrade unexpectedly passed admission"),
+        Ok(()) => {}
     }
     Ok(PreparedUpgrade {
         action_id: hex::encode(envelope.action.id()?),

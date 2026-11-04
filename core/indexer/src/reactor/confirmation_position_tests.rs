@@ -122,7 +122,7 @@ async fn start_decision(
         Height::new(height),
         round,
     );
-    certified_fixture::proposal(reactor, value, Height::new(height), round);
+    certified_fixture::proposal(reactor, value, Height::new(height), round).await?;
     let (reply, received) = oneshot::channel();
     reactor
         .consensus

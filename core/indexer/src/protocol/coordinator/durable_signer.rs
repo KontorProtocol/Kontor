@@ -14,7 +14,7 @@ use crate::protocol::coordinator::certified_input::{Descriptor, EraContext};
 
 use self::store::{EntryRole, Store, ValidatedRequest};
 pub(crate) use self::store::{HeightAuthorization, RetainedSignerRecovery};
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 pub(crate) use ownership::GenerationOwner;
 pub(crate) use ownership::OwnedGeneration;
 
