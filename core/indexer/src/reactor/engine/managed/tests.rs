@@ -48,7 +48,10 @@ async fn admission_precedes_authority_and_exclusive_ownership_precedes_writer() 
     let conn = writer.connection();
     let chain = configured_chain(Network::Regtest, 1, &envelope(&genesis))?;
     certified_history::initialize(&conn).await?;
-    certified_history::begin_baseline(&conn, &Baseline::current(chain)?, 1).await?;
+    let mut baseline = Baseline::for_node(chain)?;
+    baseline.manifest.consensus = [42; 32];
+    baseline.context.protocol = baseline.manifest.id()?;
+    certified_history::begin_baseline(&conn, &baseline, 1).await?;
     let before = certified_history::frontier(&conn).await?;
     let mut config = config;
     config.data_dir = unsupported.path().to_path_buf();

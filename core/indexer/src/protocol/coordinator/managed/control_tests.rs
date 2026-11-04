@@ -64,7 +64,7 @@ async fn ready(control: &mut Control) -> ReplyToken {
 }
 
 #[tokio::test]
-async fn control_thread_drives_real_bundles_and_releases_slot_only_after_join() {
+async fn control_thread_drives_generations_and_releases_slot_only_after_join() {
     let directory = TempDir::new().unwrap();
     let slot = EngineSlot::default();
     let owner = GenerationOwner::open(
@@ -72,23 +72,23 @@ async fn control_thread_drives_real_bundles_and_releases_slot_only_after_join() 
         test_fixtures::context().chain,
     )
     .unwrap();
-    for (bundle, generation) in [(Runtime, 1), (Runtime, 2)] {
+    for generation in [1, 2] {
         let ownership = owner.reserve(None).unwrap();
         assert_eq!(ownership.generation(), generation);
         let mut wrong = config(&directory, generation + 1);
         wrong.network_key = ownership.network_key();
         assert!(matches!(
-            slot.start_owned(bundle, wrong, None, ownership.clone()),
+            slot.start_owned(wrong, None, ownership.clone()),
             Err(EngineError::InvalidConfiguration(_))
         ));
         let wrong_network = config(&directory, generation);
         assert!(matches!(
-            slot.start_owned(bundle, wrong_network, None, ownership.clone()),
+            slot.start_owned(wrong_network, None, ownership.clone()),
             Err(EngineError::InvalidConfiguration(_))
         ));
         let mut input = config(&directory, generation);
         input.network_key = ownership.network_key();
-        let mut control = slot.start_owned(bundle, input, None, ownership).unwrap();
+        let mut control = slot.start_owned(input, None, ownership).unwrap();
         assert!(owner.reserve(None).is_err());
         let token = ready(&mut control).await;
         assert_eq!(
@@ -119,7 +119,7 @@ async fn control_thread_drives_real_bundles_and_releases_slot_only_after_join() 
         .unwrap();
         assert!(address.starts_with("/ip4/127.0.0.1/tcp/"));
         assert!(
-            slot.start(bundle, config(&directory, generation + 1), None)
+            slot.start(config(&directory, generation + 1), None)
                 .is_err()
         );
         control.request_stop();
@@ -188,7 +188,7 @@ async fn blocked_control_thread_does_not_block_node_revocation_or_allow_competin
             Some(signer.clone()),
             Some(ownership),
             move || {
-                let engine = Runtime.start(input, Some(authority))?;
+                let engine = startup::start(input, Some(authority))?;
                 let _ = entered.send(());
                 gate.recv_timeout(Duration::from_secs(10))
                     .expect("test releases blocked control thread");
@@ -214,7 +214,7 @@ async fn blocked_control_thread_does_not_block_node_revocation_or_allow_competin
     );
     assert!(!control.has_joined());
     assert!(owner.reserve(None).is_err());
-    assert!(slot.start(Runtime, config(&directory, 2), None).is_err());
+    assert!(slot.start(config(&directory, 2), None).is_err());
     release.send(()).unwrap();
     assert!(control.wait_stopped(Duration::from_secs(10)).await.unwrap());
     assert!(control.has_joined());
@@ -222,9 +222,7 @@ async fn blocked_control_thread_does_not_block_node_revocation_or_allow_competin
     assert_eq!(next_ownership.generation(), 2);
     let mut input = config(&directory, 2);
     input.network_key = next_ownership.network_key();
-    let mut next = slot
-        .start_owned(Runtime, input, None, next_ownership)
-        .unwrap();
+    let mut next = slot.start_owned(input, None, next_ownership).unwrap();
     ready(&mut next).await;
     next.request_stop();
     assert!(next.wait_stopped(Duration::from_secs(10)).await.unwrap());
@@ -236,7 +234,7 @@ async fn failed_start_and_abandoned_handle_do_not_release_slot() {
     let slot = EngineSlot::default();
     let mut input = config(&directory, 1);
     input.listen_address = "invalid".into();
-    let mut control = slot.start(Runtime, input, None).unwrap();
+    let mut control = slot.start(input, None).unwrap();
     assert!(
         timeout(Duration::from_secs(5), control.events.recv())
             .await
@@ -248,10 +246,10 @@ async fn failed_start_and_abandoned_handle_do_not_release_slot() {
         Err(EngineError::InvalidConfiguration(_))
     ));
     assert!(control.has_joined());
-    assert!(slot.start(Runtime, config(&directory, 2), None).is_err());
+    assert!(slot.start(config(&directory, 2), None).is_err());
 
     let slot = EngineSlot::default();
-    let mut control = slot.start(Runtime, config(&directory, 3), None).unwrap();
+    let mut control = slot.start(config(&directory, 3), None).unwrap();
     ready(&mut control).await;
     let mut status = control.subscribe();
     drop(control);
@@ -262,7 +260,7 @@ async fn failed_start_and_abandoned_handle_do_not_release_slot() {
     })
     .await
     .unwrap();
-    assert!(slot.start(Runtime, config(&directory, 4), None).is_err());
+    assert!(slot.start(config(&directory, 4), None).is_err());
 }
 
 #[tokio::test]
@@ -271,7 +269,7 @@ async fn unacknowledged_ready_expires_and_stopped_publication_returns_buffer() {
     let slot = EngineSlot::default();
     let mut input = config(&directory, 1);
     input.readiness_timeout = Duration::from_secs(1);
-    let mut control = slot.start(Runtime, input, None).unwrap();
+    let mut control = slot.start(input, None).unwrap();
     ready(&mut control).await;
     let mut status = control.subscribe();
     timeout(Duration::from_secs(5), async {
@@ -313,7 +311,7 @@ async fn dropped_follower_handle_keeps_os_ownership_until_blocked_worker_finishe
             None,
             Some(ownership),
             move || {
-                let engine = Runtime.start(input, None)?;
+                let engine = startup::start(input, None)?;
                 let _ = entered.send(());
                 gate.recv_timeout(Duration::from_secs(10))
                     .expect("test releases worker");
@@ -340,5 +338,5 @@ async fn dropped_follower_handle_keeps_os_ownership_until_blocked_worker_finishe
     .await
     .unwrap();
     assert_eq!(reopened.reserve(None).unwrap().generation(), 2);
-    assert!(slot.start(Runtime, config(&directory, 2), None).is_err());
+    assert!(slot.start(config(&directory, 2), None).is_err());
 }

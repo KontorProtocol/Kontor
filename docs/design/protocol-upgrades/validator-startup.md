@@ -7,6 +7,18 @@ Protocol activation changes the selected executor and per-height signing
 authorization while keeping the same Malachite runtime running. Joining as a
 validator is a separate lifecycle transition.
 
+Both ordinary `cargo build` nodes and independently linked production nodes use
+this coordinator and the same pinned Malachite fork. The build distinction is
+executor assembly: ordinary builds run the current in-tree executor, while
+`tools/kontor` preserves independently linked historical executors and verifies
+their build provenance. Their protocol identities and supported histories can
+therefore differ even though their startup protections are shared.
+
+Ordinary development nodes now use an owner-managed network key and the protected
+files described below, replacing their former validator-derived network identity
+and `consensus.wal`. Old development directories may fail admission and need an
+intentional fresh regtest setup. Startup does not convert or delete old state.
+
 ## Starting a validator
 
 Use `--consensus-mode validator` with the configured validator key and genesis.

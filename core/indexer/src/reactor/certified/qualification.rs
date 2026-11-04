@@ -135,7 +135,7 @@ pub(crate) async fn run(
             validator_start: ValidatorStart::Resume,
             discovery: Default::default(),
         },
-        #[cfg(kontor_managed)]
+        #[cfg(kontor_consensus_runtime)]
         None,
         &execution.session,
         service,

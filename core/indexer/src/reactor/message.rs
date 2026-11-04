@@ -1,16 +1,16 @@
 use malachitebft_app_channel::AppMsg;
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use malachitebft_engine::host::Next;
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use tokio::sync::oneshot;
 
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use crate::consensus::CommitCertificate;
 use crate::consensus::Ctx;
 
 pub(crate) enum Message {
     Application(AppMsg<Ctx>),
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     Finalized {
         certificate: CommitCertificate<Ctx>,
         evidence: String,

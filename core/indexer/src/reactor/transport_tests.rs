@@ -23,7 +23,7 @@ use crate::protocol::coordinator::durable_signer::{DurableSigner, GenerationOwne
 use crate::protocol::coordinator::managed::control::EngineSlot;
 use crate::protocol::coordinator::managed::reactor::ReactorEngine;
 use crate::protocol::coordinator::managed::startup::{
-    Bootstrap, Configuration, PeerSelection, Runtime,
+    self, Bootstrap, Configuration, PeerSelection,
 };
 
 #[tokio::test]
@@ -37,14 +37,14 @@ async fn managed_transport_signs_publishes_and_decides_across_generations() -> R
         &directory.path().join("authority"),
         test_fixtures::context().chain,
     )?;
-    for (bundle, generation) in [(Runtime, 1), (Runtime, 2)] {
+    for generation in [1, 2] {
         let ownership = owner.reserve(Some(*key.public_key().as_bytes()))?;
         ensure!(ownership.generation() == generation);
         let peer = Keypair::ed25519_from_bytes(ownership.network_key())?
             .public()
             .to_peer_id()
             .to_bytes();
-        ensure!(Runtime.network_peer_id(&ownership.network_key())? == peer);
+        ensure!(startup::network_peer_id(&ownership.network_key())? == peer);
         let config = Configuration {
             generation,
             channel_capacity: 16,
@@ -80,8 +80,7 @@ async fn managed_transport_signs_publishes_and_decides_across_generations() -> R
             },
             [9; 32],
         )?;
-        let managed =
-            ReactorEngine::start_owned(&slot, bundle, config, Some(signer.clone()), ownership)?;
+        let managed = ReactorEngine::start_owned(&slot, config, Some(signer.clone()), ownership)?;
         let mut engine = Engine::managed(managed);
         drop(signer);
         let height = Height::new(generation);

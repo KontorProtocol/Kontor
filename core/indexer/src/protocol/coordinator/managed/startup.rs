@@ -2,14 +2,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::adapter::{RuntimeEngine, runtime};
+use super::adapter::RuntimeEngine;
 use super::types::EngineError;
 use crate::protocol::coordinator::durable_signer::{
     DurableSigner, SigningError, SigningRequest, VoteStep,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Runtime;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Bootstrap {
@@ -173,19 +170,16 @@ mod runtime_startup {
     }
 }
 
-impl Runtime {
-    pub(crate) fn network_peer_id(self, key: &[u8; 32]) -> Result<Vec<u8>, EngineError> {
-        kontor_consensus_first::network_peer_id(key).map_err(runtime::error)
-    }
-    pub(crate) fn start(
-        self,
-        config: Configuration,
-        signer: Option<Arc<DurableSigner>>,
-    ) -> Result<RuntimeEngine, EngineError> {
-        runtime_startup::start(config, signer)
-            .map(RuntimeEngine)
-            .map_err(runtime::error)
-    }
+#[cfg(test)]
+pub(crate) fn network_peer_id(key: &[u8; 32]) -> Result<Vec<u8>, EngineError> {
+    kontor_consensus_first::network_peer_id(key)
+}
+
+pub(crate) fn start(
+    config: Configuration,
+    signer: Option<Arc<DurableSigner>>,
+) -> Result<RuntimeEngine, EngineError> {
+    runtime_startup::start(config, signer).map(RuntimeEngine)
 }
 
 #[cfg(test)]
@@ -206,9 +200,9 @@ mod tests {
         let directory = TempDir::new().unwrap();
         let signer_path = directory.path().join("signer");
         let key = PrivateKey::from([11; 32]);
-        for (bundle, generation) in [(Runtime, 1), (Runtime, 2)] {
+        for generation in [1, 2] {
             let network_key = [7; 32];
-            let peer_id = bundle.network_peer_id(&network_key).unwrap();
+            let peer_id = network_peer_id(&network_key).unwrap();
             let signer = Arc::new(
                 DurableSigner::open(
                     &signer_path,
@@ -234,7 +228,7 @@ mod tests {
                 peer_selection: PeerSelection::Random,
                 readiness_timeout: Duration::from_secs(10),
             };
-            let mut engine = bundle.start(config, Some(signer.clone())).unwrap();
+            let mut engine = start(config, Some(signer.clone())).unwrap();
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 match engine.poll().unwrap() {
@@ -261,7 +255,7 @@ mod tests {
                     SignerIdentity {
                         context: test_fixtures::context(),
                         generation,
-                        network_peer_id: bundle.network_peer_id(&network_key).unwrap(),
+                        network_peer_id: network_peer_id(&network_key).unwrap(),
                     },
                     key.clone(),
                 ),

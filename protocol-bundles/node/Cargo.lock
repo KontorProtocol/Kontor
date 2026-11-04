@@ -194,9 +194,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-app"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c385aba8bffa339d7935bcb8dd038529f0f69917fb220a51a2987695116b55f"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-codec",
  "arc-malachitebft-config",
@@ -223,9 +222,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-app-channel"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a88aaf4f127482606abd2fedf4cacbfcb42481d7e15166e1dba26e8d0aca19b"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-app",
  "arc-malachitebft-config",
@@ -234,6 +232,7 @@ dependencies = [
  "bytes",
  "derive-where",
  "eyre",
+ "futures",
  "ractor",
  "thiserror 2.0.21",
  "tokio",
@@ -242,18 +241,16 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-codec"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4d0542356d9ac0f861ddde9b715491c4560be7912f42c73257a6a7b3bba3e91"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "bytes",
 ]
 
 [[package]]
 name = "arc-malachitebft-config"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2d742e35428030ef2646688fbddf51aade0fd3b98eb8076a7e957378b72a6c8"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "bytesize",
  "humantime-serde",
@@ -265,9 +262,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-core-consensus"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35bfd5d35354fbf069518ec98483ea4ffbc00e81d74e360d9b4947b99e00d8fb"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-core-driver",
  "arc-malachitebft-core-types",
@@ -286,9 +282,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-core-driver"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46c6ddec3483ab71e2b61684b20c132be6c40c97d7a3465af08ca8650fcd2b06"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-core-state-machine",
  "arc-malachitebft-core-types",
@@ -300,9 +295,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-core-state-machine"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "925ea33f63b038aee31fa9a29aa13eb1c674b64ee5f94e8e30ec69c474e2ac56"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-core-types",
  "derive-where",
@@ -311,9 +305,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-core-types"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de1474eca9d9e6196c48addf9db1bebee230d4509115a80769489b2738266aca"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-peer",
  "async-trait",
@@ -325,9 +318,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-core-votekeeper"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dc044fdb0880713c2951c277cb2a8ebf538ead8b95cd7657455480dcd97f75c"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-core-types",
  "derive-where",
@@ -337,9 +329,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-discovery"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76af0f23eb9032fb8266fed79728be3f9275429b919a1ad3ac350dba64ea633c"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-metrics",
  "either",
@@ -353,9 +344,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-engine"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b014e386a2d655581952076715fff458a9ff72014e3cac1b070e0d5e675ca992"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-codec",
  "arc-malachitebft-config",
@@ -387,9 +377,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-metrics"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f778b4505d0549b363f7b12ed0687ee2f57ded76848bb67aade8b143f92e9084"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-core-state-machine",
  "prometheus-client",
@@ -397,7 +386,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-network"
-version = "0.8.2"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-discovery",
  "arc-malachitebft-metrics",
@@ -424,9 +414,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-peer"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c23b69d7b272b4dba7ec742856d473afa61e4d4dfbab679cf5b4d0330881286b"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "bs58",
  "multihash",
@@ -435,9 +424,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-proto"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b38a103264b2e48d0bc8ca4e6dbebf48baf14a9caa4d1de659e7a7555edc922e"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "prost 0.13.5",
  "prost-types",
@@ -446,9 +434,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-signing"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22751f3ab8f3d73d60290d7224acd9667933969752905556b8908124d06a6306"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-core-types",
  "async-trait",
@@ -457,9 +444,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-signing-ed25519"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ceb977b74a277052ca0bcd904625dd26e24becdf7de68e57a59045e8dbcef5dc"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-core-types",
  "base64 0.22.1",
@@ -471,9 +457,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-sync"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d118b81253717e7b93432b87fa607ece630418368e02846970e565147d771cb1"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "arc-malachitebft-core-types",
  "arc-malachitebft-metrics",
@@ -495,9 +480,8 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-wal"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d210d7fb417651f90d752d53d27b2932419718f589228a38f6aadba2e985ada6"
+version = "0.9.0-kontor.1"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "advisory-lock",
  "bytes",
@@ -3238,8 +3222,7 @@ dependencies = [
 [[package]]
 name = "if-watch"
 version = "3.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71c02a5161c313f0cbdbadc511611893584a10a7b6153cb554bdf83ddce99ec2"
+source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 dependencies = [
  "async-io",
  "core-foundation 0.9.4",

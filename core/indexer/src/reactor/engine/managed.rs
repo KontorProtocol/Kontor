@@ -10,6 +10,7 @@ use malachitebft_app_channel::app::config::{BootstrapProtocol, Selector};
 
 use super::validator_start::{RecoveryState, StartRole};
 use super::{EngineConfig, EngineOutput};
+#[cfg(kontor_managed)]
 use crate::build_record;
 use crate::consensus::Address;
 use crate::consensus::signing::PrivateKey;
@@ -22,9 +23,7 @@ use crate::protocol::coordinator::durable_signer::{
 };
 use crate::protocol::coordinator::managed::control::EngineSlot;
 use crate::protocol::coordinator::managed::reactor::ReactorEngine;
-use crate::protocol::coordinator::managed::startup::{
-    Bootstrap, Configuration, PeerSelection, Runtime,
-};
+use crate::protocol::coordinator::managed::startup::{Bootstrap, Configuration, PeerSelection};
 use crate::protocol::coordinator::registry;
 use crate::protocol::identity::domain_digest;
 use crate::reactor::consensus_state::certified_startup;
@@ -66,6 +65,7 @@ impl NodeCoordinator {
         starting_block_height: u64,
         genesis: &GenesisParameters,
     ) -> Result<(Arc<Self>, Reader, Writer)> {
+        #[cfg(kontor_managed)]
         build_record::verify()?;
         let baseline = admit_node_database(
             &config.data_dir,
@@ -248,13 +248,8 @@ impl NodeCoordinator {
             },
             readiness_timeout: Duration::from_secs(30),
         };
-        let engine = ReactorEngine::start_owned(
-            &self.slot,
-            Runtime,
-            input,
-            prepared.signer,
-            prepared.ownership,
-        )?;
+        let engine =
+            ReactorEngine::start_owned(&self.slot, input, prepared.signer, prepared.ownership)?;
         Ok(EngineOutput {
             engine: Engine::managed(engine),
             promotion_floor,

@@ -130,6 +130,32 @@ jobs:
         run: |
           tools/kontor qualify-node --profile "${{ matrix.profile }}" --output target/protocol-evidence
           test -f target/protocol-evidence/aarch64-apple-darwin/${{ matrix.profile }}/executors/managed-node/node-execution.json
+      # Reuse one qualified executable, without another build or matrix lane.
+      - name: Select SDK Node version
+        if: runner.os == 'macOS' && matrix.profile == 'release'
+        id: sdk-node
+        run: echo "version=$(jq -r .node.version tools/build.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v7
+        if: runner.os == 'macOS' && matrix.profile == 'release'
+        with:
+          node-version: ${{ steps.sdk-node.outputs.version }}
+      - name: Download Bitcoin for linked SDK smoke
+        if: runner.os == 'macOS' && matrix.profile == 'release'
+        run: |
+          curl --fail -L -o bitcoin.zip "https://github.com/KontorProtocol/Kontor/releases/download/bitcoin-v31.1/bitcoin-${{ runner.os }}-${{ runner.arch }}.zip"
+          unzip bitcoin.zip -d bitcoin-bin
+          chmod +x bitcoin-bin/*
+          echo "${{ github.workspace }}/bitcoin-bin" >> "$GITHUB_PATH"
+      - name: Linked SDK regtest smoke
+        if: runner.os == 'macOS' && matrix.profile == 'release'
+        timeout-minutes: 8
+        working-directory: sdk
+        run: |
+          export KONTOR_BIN="$(jq -er .executable ../target/protocol-evidence/aarch64-apple-darwin/release/executors/managed-node/node/build-inputs.json)"
+          test -x "$KONTOR_BIN"
+          npm ci
+          npm run build
+          npx vitest run --config vitest.regtest.config.ts test/protocol.regtest.test.ts
       - name: Normalize container cache ownership
         if: always() && runner.os == 'Linux'
         run: sudo chown -R "$(id -u):$(id -g)" target/protocol-evidence

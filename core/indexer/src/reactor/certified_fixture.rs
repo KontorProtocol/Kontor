@@ -71,7 +71,7 @@ pub(super) async fn reactor_with_consensus(
             validator_start: ValidatorStart::Bootstrap,
             discovery: Default::default(),
         },
-        #[cfg(kontor_managed)]
+        #[cfg(kontor_consensus_runtime)]
         None,
         &session,
         &service,

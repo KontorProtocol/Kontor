@@ -11,7 +11,7 @@ pub enum ValidatorStart {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-#[cfg(any(kontor_managed, test))]
+#[cfg(any(kontor_consensus_runtime, test))]
 pub(super) struct RecoveryState {
     pub retained_signer: bool,
     pub highest_signed_height: Option<u64>,
@@ -20,13 +20,13 @@ pub(super) struct RecoveryState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(any(kontor_managed, test))]
+#[cfg(any(kontor_consensus_runtime, test))]
 pub(super) enum StartRole {
     Validator,
     Follower { promotion_floor: Option<u64> },
 }
 
-#[cfg(any(kontor_managed, test))]
+#[cfg(any(kontor_consensus_runtime, test))]
 impl ValidatorStart {
     // These are summaries of validated durable records, not peer-advertised tips.
     pub(super) fn select(

@@ -266,7 +266,10 @@ fn adapter_runner_binds_sources_logs_and_named_test_results() -> Result<()> {
     fs::write(source, original)?;
     fs::write(
         directory.join("test.log"),
-        "test result: ok. 4 passed; 0 failed; 0 ignored;",
+        &format!(
+            "test result: ok. {} passed; 0 failed; 0 ignored;",
+            ADAPTER_TESTS.len()
+        ),
     )?;
     changed = binding.clone();
     changed["test_log_sha256"] = json!(sha256(&directory.join("test.log"))?);

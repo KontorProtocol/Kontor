@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use std::time::Duration;
 use std::time::Instant;
 
@@ -1420,12 +1420,12 @@ impl<E: Executor> Reactor<E> {
         self.maybe_prune_state().await;
         // Durable completion survives cancellation of this particular engine callback.
         let _ = reply.send(next);
-        #[cfg(kontor_managed)]
+        #[cfg(kontor_consensus_runtime)]
         self.promote_joined_validator(height.as_u64()).await?;
         Ok(())
     }
 
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     async fn promote_joined_validator(&mut self, closed_height: u64) -> Result<()> {
         let Some(floor) = self.consensus.promotion_floor else {
             return Ok(());

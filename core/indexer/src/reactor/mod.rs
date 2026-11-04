@@ -43,7 +43,7 @@ pub mod status;
 #[cfg(test)]
 mod storage_penalty_tests;
 mod transport;
-#[cfg(all(test, kontor_managed))]
+#[cfg(all(test, kontor_consensus_runtime))]
 mod transport_tests;
 pub mod types;
 #[cfg(test)]
@@ -54,11 +54,11 @@ mod upgrades;
 #[cfg(test)]
 mod workload_tests;
 
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use self::engine::NodeCoordinator;
 use std::collections::VecDeque;
 use std::future::Future;
-#[cfg(kontor_managed)]
+#[cfg(kontor_consensus_runtime)]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -157,9 +157,9 @@ pub struct PruneConfig {
 }
 
 pub(crate) struct Reactor<E: Executor> {
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     coordinator: Option<Arc<NodeCoordinator>>,
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     engine_config: Option<engine::EngineConfig>,
     execution: ExecutionContext<E>,
     node_label: String,
@@ -301,9 +301,9 @@ impl<E: Executor> Reactor<E> {
             .map(|i| format!("node_{i}"))
             .unwrap_or_else(|| "follower".to_string());
         Self {
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             coordinator: None,
-            #[cfg(kontor_managed)]
+            #[cfg(kontor_consensus_runtime)]
             engine_config: None,
             execution,
             node_label,
@@ -964,7 +964,7 @@ pub(crate) async fn start_consensus(
 
 async fn start_linked_consensus(
     engine_config: engine::EngineConfig,
-    #[cfg(kontor_managed)] coordinator: Option<&NodeCoordinator>,
+    #[cfg(kontor_consensus_runtime)] coordinator: Option<&NodeCoordinator>,
     session: &LinkedSession,
     _service: &OwnerService,
     _network: Network,
@@ -974,7 +974,7 @@ async fn start_linked_consensus(
     mempool_fee_index: mempool_fee_index::MempoolFeeIndex,
 ) -> Result<consensus_state::ConsensusState> {
     let (_, _, validator_set) = consensus_state::certified_startup(&session.conn).await?;
-    #[cfg(kontor_managed)]
+    #[cfg(kontor_consensus_runtime)]
     let output = match coordinator {
         Some(coordinator) => coordinator.start(&engine_config, &session.conn).await?,
         #[cfg(any(test, feature = "protocol-qualification"))]
@@ -982,7 +982,7 @@ async fn start_linked_consensus(
         #[cfg(not(any(test, feature = "protocol-qualification")))]
         None => bail!("managed consensus requires node ownership before database startup"),
     };
-    #[cfg(not(kontor_managed))]
+    #[cfg(not(kontor_consensus_runtime))]
     let output = { engine::start(engine_config).await?.into() };
     consensus_from_engine(
         output,
@@ -1049,7 +1049,7 @@ pub fn run(
     simulate_rx: Option<Receiver<Simulation>>,
     upgrade_rx: Option<Receiver<UpgradeSubmission>>,
     engine_config: engine::EngineConfig,
-    #[cfg(kontor_managed)] coordinator: Arc<NodeCoordinator>,
+    #[cfg(kontor_consensus_runtime)] coordinator: Arc<NodeCoordinator>,
     bitcoin_client: Client,
     genesis: GenesisParameters,
     observation_channels: Option<consensus_state::ObservationChannels>,
@@ -1168,7 +1168,7 @@ pub fn run(
                 let initial_mempool = execution.executor.parse_mempool(&execution.recognizer,
                     &selection, initial_raw_txs).await?;
                 let mut consensus = start_linked_consensus(engine_config.clone(),
-                    #[cfg(kontor_managed)] Some(&coordinator), &execution.session,
+                    #[cfg(kontor_consensus_runtime)] Some(&coordinator), &execution.session,
                     &owner_service, network, observation_channels, timeouts, execution.last_height,
                     fee_index).await.context("start_consensus failed")?;
                 consensus.mempool.replace(initial_mempool);
@@ -1176,7 +1176,7 @@ pub fn run(
                     shutdown.clone(), ready_tx, event_tx, simulate_rx, consensus, consensus_listen_addr);
                 reactor.upgrade_rx = upgrade_rx;
                 reactor.runtime_status = Some(runtime_status);
-                #[cfg(kontor_managed)]
+                #[cfg(kontor_consensus_runtime)]
                 {
                     reactor.coordinator = Some(coordinator);
                     reactor.engine_config = Some(engine_config);
