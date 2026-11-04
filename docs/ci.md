@@ -122,6 +122,41 @@ There is no scheduled cache-warming matrix. Missing platform caches populate
 during the next necessary main run. Fresh-build/reproducibility and native
 crypto controls retain their existing behavior.
 
+## Production images
+
+The **Production images** workflow publishes `kontorprotocol/kontor` only on
+`v*` tag pushes or manual dispatch. Main pushes and PRs do not publish images.
+Select a reviewed ref in GitHub's **Run workflow** menu, or run:
+
+```sh
+gh workflow run docker-image.yml --ref main
+```
+
+Both Linux architectures build natively in parallel, with 90 minutes allowed
+per build. The manifest is published only after both builds succeed. Every
+publication retains the `sha-<short-sha>` tag used by deployments. Valid semantic
+version tag pushes also publish the version without its `v` prefix; only stable
+releases update `latest`. Prereleases and manual builds do not update `latest`.
+Deployments should continue pinning the selected image digest.
+`latest` follows the most recently published stable tag, even if that tag is
+for an older release line. Rebuilding the same commit can also move its
+`sha-<short-sha>` tag to a different digest; the tag is not an immutable pin.
+
+This workflow is publication, not an additional test gate: select a revision
+whose relevant CI checks have passed before tagging or dispatching. Ordinary
+tests and linked-node qualification still check their selected production
+inputs. Dockerfile, Docker context, build-tool, dependency and linked-node
+changes retain qualification coverage. That coverage does not guarantee the
+final runtime image or registry publication succeeds, and qualification enables
+additional node features. Image publication remains the check of the exact
+production Docker build.
+
+The redundant dependency-fetch prejob and full production registry-cache
+exports are removed. Occasional release builds may be cold. Custom prebuilt
+cache images and sharing outputs between production and qualification builds
+are deferred. Cache work prioritizes routine tests and protocol qualification;
+there is no extra scheduled or exploratory image build.
+
 ## Validation and rollout
 
 Validate selectors and matrix construction locally with the standalone tooling
@@ -135,11 +170,8 @@ PR matrices or repeated manual dispatches to benchmark the cache implementation.
 Observe the first necessary main runs and subsequent relevant PRs instead.
 
 Superseded PR runs are canceled across CI, bundles, mobile, native crypto,
-diagnostics and Docker cache checks. Main publication is not canceled. Relevant
-Rust or Docker changes select main image publication; documentation-only and
-tooling-only changes no longer rebuild and publish images. Relevant
-main validation is retained: the existing selectors do not have trustworthy
-evidence that a successful PR run tested the exact merged inputs. Removing that
+diagnostics and Docker cache checks. Relevant main validation is retained:
+the existing selectors do not have trustworthy evidence that a successful PR run tested the exact merged inputs. Removing that
 validation without such evidence would leave direct pushes and changed merge
 inputs unchecked. No new cross-run evidence service is introduced here.
 

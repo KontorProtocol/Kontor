@@ -63,10 +63,7 @@ fn actual_required_check_gate_rejects_failed_cancelled_missing_or_unselected_suc
     let gate = workflow
         .split("  required-checks:\n")
         .nth(1)
-        .context("required checks job")?
-        .split("  docker-cache-deps:")
-        .next()
-        .unwrap();
+        .context("required checks job")?;
     assert!(gate.contains("    if: always()\n"));
     let expression = gate
         .split("jq -e '")
@@ -138,18 +135,28 @@ fn actual_required_check_gate_rejects_failed_cancelled_missing_or_unselected_suc
 }
 
 #[test]
-fn main_image_publication_requires_relevant_changes_and_successful_cache_build() -> Result<()> {
+fn image_publication_is_explicit_and_requires_both_architectures() -> Result<()> {
     let workflow = fs::read_to_string(repository().join(".github/workflows/ci.yml"))?;
-    let cache = workflow
-        .split("  docker-cache-deps:\n")
+    assert!(!workflow.contains("docker/build-push-action"));
+    let publication = fs::read_to_string(repository().join(".github/workflows/docker-image.yml"))?;
+    assert!(publication.contains("    tags: ['v*']\n  workflow_dispatch:"));
+    assert!(!publication.contains("  pull_request:"));
+    assert!(!publication.contains("    branches:"));
+    assert!(publication.contains("    timeout-minutes: 90\n"));
+    assert!(publication.contains("            platform: linux/amd64\n"));
+    assert!(publication.contains("            platform: linux/arm64\n"));
+    let manifest = publication
+        .split("  docker-manifest:\n")
         .nth(1)
-        .context("image cache")?
-        .split("  docker-build:")
-        .next()
-        .unwrap();
-    assert!(cache.contains("    needs: scope\n"));
-    assert!(cache.contains("    if: github.ref == 'refs/heads/main' && (needs.scope.outputs.rust == 'true' || needs.scope.outputs.docker_cache == 'true')\n"));
-    assert!(workflow.contains("    needs: docker-cache-deps\n"));
+        .context("manifest job")?;
+    assert!(manifest.contains("    needs: docker-build\n"));
+    assert!(!manifest.contains("if: always()"));
+    assert!(manifest.contains("type=sha,prefix=sha-"));
+    assert!(
+        manifest
+            .contains("type=semver,pattern={{version}},enable=${{ github.event_name == 'push' }}")
+    );
+    assert!(!manifest.contains("type=raw,value=latest"));
     let docker = fs::read_to_string(repository().join(".github/workflows/docker-cache.yml"))?;
     assert!(docker.contains("  pull_request:\n  workflow_dispatch:"));
     Ok(())

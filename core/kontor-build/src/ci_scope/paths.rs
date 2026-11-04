@@ -170,6 +170,7 @@ pub(super) fn tooling_only(path: &str) -> bool {
         || path.starts_with("core/kontor-build/src/node_evidence/comparison/")
         || path.starts_with(".github/actions/setup-kontor-tools/")
         || path == ".github/workflows/ci-diagnostics.yml"
+        || path == ".github/workflows/docker-image.yml"
 }
 
 fn module(path: &str, stem: &str) -> bool {
