@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context, Result, ensure};
 use bitcoin::Network;
@@ -15,7 +15,8 @@ use wasmtime::Engine;
 #[cfg(not(kontor_node))]
 use super::{ComponentCache, Linkers, Runtime};
 
-use super::ownership::adapter::{ExecutorSession, SessionFactory};
+use super::ownership::adapter::{ExecutorSession, HostFailure, SessionFactory};
+use super::ownership::read_snapshot::{ReadSnapshot, SessionConnection};
 use crate::{
     database::connection::new_read_only_connection,
     protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion},
@@ -70,6 +71,12 @@ impl LinkedSession {
     }
 }
 
+pub(crate) struct ReadPoolItem {
+    pub(crate) conn: Connection,
+    pub(crate) session: Option<LinkedSession>,
+    pub(crate) snapshot: Arc<ReadSnapshot>,
+}
+
 pub(crate) struct LinkedManager {
     data_dir: PathBuf,
     filename: String,
@@ -87,71 +94,73 @@ impl LinkedManager {
 
     pub(crate) async fn select(
         &self,
-        session: &mut LinkedSession,
+        item: &mut ReadPoolItem,
         selection: &ExecutionSelection,
         network: Network,
     ) -> Result<()> {
         ensure!(
-            session.conn.is_autocommit() && !session.canonical_busy.load(Ordering::SeqCst),
-            "read executor selection requires an idle session"
+            !item.conn.is_autocommit() && item.snapshot.selection()? == *selection,
+            "read executor selection requires its owned snapshot"
         );
-        if selection.canonical_execution().is_some_and(|definition| {
-            session.executor.execution_definition.as_ref().ok() != Some(&definition)
-        }) {
-            let executor = (self.factory)(session.conn.clone()).await?;
+        let replace = item.session.as_ref().is_none_or(|session| {
+            selection.canonical_execution().is_some_and(|definition| {
+                session.executor.execution_definition.as_ref().ok() != Some(&definition)
+            })
+        });
+        if replace {
+            if let Some(session) = &item.session {
+                (session.executor.recycle)(session.executor.owner.clone())
+                    .await
+                    .map_err(HostFailure::from)?;
+            }
+            let executor = (self.factory)(SessionConnection {
+                conn: item.conn.clone(),
+                read: Some(item.snapshot.clone()),
+            })
+            .await?;
             selection.execution_identity(executor.execution_definition?)?;
             selection.ensure_runtime(network, executor.origin)?;
-            let mut replacement = LinkedSession::new(session.conn.clone(), executor);
-            replacement.canonical_busy = session.canonical_busy.clone();
-            *session = replacement;
+            item.session = Some(LinkedSession::new(item.conn.clone(), executor));
         }
+        let session = item.session.as_ref().expect("selected read executor");
         selection.execution_identity(session.executor.execution_definition?)?;
         selection.ensure_runtime(network, session.origin())
     }
 }
 
 impl managed::Manager for LinkedManager {
-    type Type = LinkedSession;
+    type Type = ReadPoolItem;
     type Error = RuntimeError;
 
     async fn create(&self) -> Result<Self::Type, Self::Error> {
         let conn = new_read_only_connection(&self.data_dir, &self.filename)
             .await
             .map_err(|error| RuntimeError::DatabaseConnection(error.to_string()))?;
-        let factory = self.factory.clone();
-        let construction_conn = conn.clone();
-        // Retain the physical connection in the task if the pool cancels create.
-        let construction = tokio::spawn(async move { factory(construction_conn).await });
-        let executor = construction
-            .await
-            .map_err(|error| RuntimeError::CreationFailed(error.to_string()))?
-            .map_err(|error| RuntimeError::CreationFailed(error.to_string()))?;
-        Ok(LinkedSession::new(conn, executor))
+        Ok(ReadPoolItem {
+            conn,
+            session: None,
+            snapshot: Arc::default(),
+        })
     }
 
     async fn recycle(
         &self,
         obj: &mut Self::Type,
-        _metrics: &deadpool::managed::Metrics,
+        _metrics: &managed::Metrics,
     ) -> RecycleResult<Self::Error> {
-        if obj.canonical_busy.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(RecycleError::Message(
-                "linked session still has a canonical root".into(),
-            ));
+        if !obj.conn.is_autocommit() || !obj.snapshot.is_idle() {
+            return Err(RecycleError::Message("reader still owns a snapshot".into()));
         }
-        (obj.executor.recycle)(obj.executor.owner.clone())
-            .await
-            .map_err(|error| {
-                RecycleError::Message(format!("linked executor recycle failed: {error:?}").into())
-            })?;
-        let _ = obj.conn.execute("ROLLBACK", ()).await;
-        if obj.conn.is_autocommit() {
-            Ok(())
-        } else {
-            Err(RecycleError::Message(
-                "linked pooled connection is still in a transaction".into(),
-            ))
+        if let Some(session) = &obj.session {
+            (session.executor.recycle)(session.executor.owner.clone())
+                .await
+                .map_err(|error| {
+                    RecycleError::Message(
+                        format!("linked executor recycle failed: {error:?}").into(),
+                    )
+                })?;
         }
+        Ok(())
     }
 }
 

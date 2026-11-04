@@ -243,7 +243,7 @@ pub(super) async fn qualify_graph(
     fs::copy(seed.join("seed.db"), dir.path().join("migration.db"))?;
     let conn = new_connection(dir.path(), "migration.db").await?;
     let qualified = qualification_factory(name)?;
-    let session = LinkedSession::new(conn.clone(), qualified(conn.clone()).await?);
+    let session = LinkedSession::new(conn.clone(), qualified(conn.clone().into()).await?);
     let mut request = prepare(&session).await?;
     let service = OwnerService::new();
     let result = async {
@@ -251,7 +251,7 @@ pub(super) async fn qualify_graph(
         let selected = select_legacy_p1(&conn, NETWORK, ApplicationPosition::Migration {
             anchor_height: 1, anchor_hash: request.anchor_hash,
         }).await?;
-        let production = LinkedSession::new(conn.clone(), production(conn.clone()).await?);
+        let production = LinkedSession::new(conn.clone(), production(conn.clone().into()).await?);
         let error = apply(&service, &production, &selected, NETWORK, &request).await.unwrap_err();
         ensure!(error.downcast_ref::<MigrationRejected>() == Some(&MigrationRejected::UnknownDefinition), "production accepted a test migration");
         ensure!(comparable_state(&conn, &request, 2).await? == before, "production rejection changed state");

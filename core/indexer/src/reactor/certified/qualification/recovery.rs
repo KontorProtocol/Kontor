@@ -29,7 +29,7 @@ async fn open(
     context: EraContext,
 ) -> Result<ExecutionContext<RuntimeExecutor>> {
     let conn = new_connection(path, "callbacks.db").await?;
-    let session = LinkedSession::new(conn.clone(), factory(conn).await?);
+    let session = LinkedSession::new(conn.clone(), factory(conn.into()).await?);
     let client = Client::new("http://127.0.0.1:1".into(), String::new(), String::new())?;
     Ok(ExecutionContext::new(
         RuntimeExecutor::new(client),

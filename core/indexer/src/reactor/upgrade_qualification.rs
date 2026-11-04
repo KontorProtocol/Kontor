@@ -1,5 +1,6 @@
 use crate::reactor::engine::ValidatorStart;
 use std::fs;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) mod authorization;
@@ -24,7 +25,7 @@ use indexer_types::BlockRow;
 use libsql::Connection;
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::{sleep, timeout};
 
 use super::engine::{EngineConfig, NodeCoordinator};
@@ -45,12 +46,13 @@ use crate::protocol::coordinator::baseline::Baseline;
 use crate::protocol::coordinator::control::{ControlState, PendingPlan};
 use crate::protocol::coordinator::genesis::envelope;
 use crate::protocol::coordinator::linked::{
-    canonical_session, execute_view, initialize, read_only_factory,
+    canonical_session, execute_view, initialize, read_only_factory, read_snapshot,
 };
 use crate::protocol::coordinator::manifest::ProtocolManifest;
 use crate::protocol::coordinator::{bootstrap, successor};
 use crate::protocol::identity::{ExecutionIdentity, PlanId, ProtocolId};
 use crate::runtime::ownership::OwnerService;
+use crate::runtime::ownership::adapter::HostFailure;
 use crate::runtime::pool::new_linked;
 use crate::runtime::{Decimal, GenesisParameters, GenesisValidator};
 use crate::stopper::Shutdown;
@@ -349,9 +351,36 @@ pub(crate) async fn run() -> Result<Value> {
                 let original_address = addresses.borrow().clone().context("listener")?;
                 let block = genesis_block(NETWORK);
                 let first_hash = block.block_hash();
-                block_tx.send(BlockEvent::BlockInsert { target_height: 1,
-                    block: BlockInput::from_bitcoin(1, first_hash, block.clone()) }).await?;
-                wait_closed(&observer, target, 1).await?;
+                let pinned = Arc::new(Notify::new());
+                let resume = Arc::new(Notify::new());
+                let ready = pinned.clone();
+                let release = resume.clone();
+                let old_token = token.clone();
+                let old_protocol = baseline.context.protocol;
+                let old_executor = baseline.manifest.executor;
+                let held = read_snapshot(&service, pool.get().await?, NETWORK,
+                    move |conn, executor, selection| async move {
+                        ensure!(selection.protocol_id() == Some(old_protocol));
+                        ensure!(executor.execution_definition? == old_executor);
+                        let snapshot = canonical_history::state(&conn).await?;
+                        ready.notify_one();
+                        release.notified().await;
+                        ensure!(canonical_history::state(&conn).await? == snapshot,
+                            "pinned read advanced to the activated state");
+                        (executor.operations.view)(executor.owner, selection.envelope(),
+                            old_token, "positive-balance-count()".into())
+                            .await.map_err(HostFailure::from).map_err(Error::from)
+                    });
+                let activate = async {
+                    pinned.notified().await;
+                    block_tx.send(BlockEvent::BlockInsert { target_height: 1,
+                        block: BlockInput::from_bitcoin(1, first_hash, block.clone()) }).await?;
+                    wait_closed(&observer, target, 1).await?;
+                    resume.notify_one();
+                    Ok::<_, Error>(())
+                };
+                let (held, ()) = tokio::try_join!(held, activate)?;
+                ensure!(held == before, "pinned P1 view changed during P2 activation");
                 let after = execute_view(&service, pool.get().await?, NETWORK,
                     token, "positive-balance-count()".into()).await?;
                 ensure!(after.as_ref().is_ok_and(|value| value.parse::<u64>().is_ok_and(|count| count > 0)),

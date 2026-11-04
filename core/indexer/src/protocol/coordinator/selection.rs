@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail, ensure};
 use bitcoin::{BlockHash, Network, hashes::Hash};
 use libsql::Connection;
 
+use super::manifest::ProtocolManifest;
 use super::registry;
 use crate::database::canonical_history::{self, ApplicationCursor, HistoryState};
 use crate::database::certified_history::{self, Status, activation, eras, protocol};
@@ -203,10 +204,6 @@ impl ExecutionSelection {
         matches!(self.position, ApplicationPosition::Migration { .. })
     }
 
-    pub(crate) fn is_public_view(&self) -> bool {
-        matches!(self.position, ApplicationPosition::View)
-    }
-
     pub(crate) fn ensure_canonical_root(&self, simulation: bool) -> Result<()> {
         let valid = matches!(
             (&self.position, simulation),
@@ -240,6 +237,7 @@ impl ExecutionSelection {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn verify_view(
         &self,
         conn: &Connection,
@@ -448,6 +446,45 @@ pub(crate) async fn select_canonical(
     network: Network,
     position: ApplicationPosition,
 ) -> Result<ExecutionSelection> {
+    select_canonical_inner(conn, network, position, true).await
+}
+
+pub(crate) async fn select_view_in_snapshot(
+    conn: &Connection,
+    network: Network,
+) -> Result<ExecutionSelection> {
+    ensure!(
+        !conn.is_autocommit(),
+        "view admission requires a read snapshot"
+    );
+    #[cfg(not(kontor_managed))]
+    if conn
+        .query(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'certified_history_state'",
+            (),
+        )
+        .await?
+        .next()
+        .await?
+        .is_none()
+    {
+        return select_legacy_p1(conn, network, ApplicationPosition::View).await;
+    }
+    if certified_history::readiness(conn).await? == Status::Ready {
+        return select_canonical_inner(conn, network, ApplicationPosition::View, false).await;
+    }
+    #[cfg(kontor_managed)]
+    bail!("managed executor selection requires ready certified history");
+    #[cfg(not(kontor_managed))]
+    select_legacy_p1(conn, network, ApplicationPosition::View).await
+}
+
+async fn select_canonical_inner(
+    conn: &Connection,
+    network: Network,
+    position: ApplicationPosition,
+    recheck: bool,
+) -> Result<ExecutionSelection> {
     let mut selected = select_legacy_p1(conn, network, position.clone()).await?;
     let HistoryState::Ready(cursor) = canonical_history::state(conn).await? else {
         bail!("canonical executor selection requires authentic genesis");
@@ -468,7 +505,7 @@ pub(crate) async fn select_canonical(
                 .context("migration selection lost its plan")?
                 .manifest
         }
-        _ => protocol(conn, eras::selected_protocol(conn).await?).await?,
+        _ => active_protocol(conn).await?,
     };
     ensure!(
         manifest.chain == cursor.chain,
@@ -478,14 +515,16 @@ pub(crate) async fn select_canonical(
     // Preparation may read without a pinned transaction. Bracket the immutable
     // manifest lookup with lineage and receipt-generation checks, then recheck
     // the full selection inside the owned root before executing anything.
-    ensure!(
-        canonical_history::state(conn).await? == HistoryState::Ready(cursor)
-            && select_legacy_p1(conn, network, selected.position.clone())
-                .await?
-                .base
-                == selected.base,
-        "canonical executor selection changed during admission"
-    );
+    if recheck {
+        ensure!(
+            canonical_history::state(conn).await? == HistoryState::Ready(cursor)
+                && select_legacy_p1(conn, network, selected.position.clone())
+                    .await?
+                    .base
+                    == selected.base,
+            "canonical executor selection changed during admission"
+        );
+    }
     selected.version = installed.executor;
     selected.canonical = Some(CanonicalBinding {
         cursor,
@@ -493,6 +532,10 @@ pub(crate) async fn select_canonical(
         execution: manifest.executor,
     });
     Ok(selected)
+}
+
+async fn active_protocol(conn: &Connection) -> Result<ProtocolManifest> {
+    protocol(conn, eras::selected_protocol(conn).await?).await
 }
 
 #[cfg(test)]

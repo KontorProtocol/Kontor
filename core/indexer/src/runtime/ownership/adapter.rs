@@ -3,8 +3,8 @@ use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
+use super::read_snapshot::SessionConnection;
 use anyhow::Result;
-use libsql::Connection;
 
 use crate::protocol::canonical_codec::CodecError;
 use crate::protocol::coordinator::selection::{ExecutionSelection, ExecutorVersion};
@@ -42,7 +42,7 @@ impl From<HostError> for HostFailure {
     }
 }
 pub(crate) type SessionFuture = Pin<Box<dyn Future<Output = Result<ExecutorSession>> + Send>>;
-pub(crate) type SessionFactory = Arc<dyn Fn(Connection) -> SessionFuture + Send + Sync>;
+pub(crate) type SessionFactory = Arc<dyn Fn(SessionConnection) -> SessionFuture + Send + Sync>;
 pub(crate) type RootHookFactory = Arc<
     dyn Fn(ExecutionSelection, OwnerAdapter) -> std::result::Result<RootHooks, HostError>
         + Send

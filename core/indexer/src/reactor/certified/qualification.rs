@@ -96,7 +96,7 @@ pub(crate) async fn run(
             .build(),
     )
     .await?;
-    let session = LinkedSession::new(conn.clone(), factory(conn.clone()).await?);
+    let session = LinkedSession::new(conn.clone(), factory(conn.clone().into()).await?);
     initialize(service, &session, network, 100, genesis).await?;
     bootstrap::complete(service, &session, network, &baseline).await?;
     let client = Client::new("http://127.0.0.1:1".into(), String::new(), String::new())?;
@@ -1106,7 +1106,7 @@ async fn reopen_execution(
     drop(recognizer);
     drop(session);
     let conn = new_connection(path, "callbacks.db").await?;
-    let session = LinkedSession::new(conn.clone(), factory(conn).await?);
+    let session = LinkedSession::new(conn.clone(), factory(conn.into()).await?);
     Ok(ExecutionContext::new(
         executor,
         session,

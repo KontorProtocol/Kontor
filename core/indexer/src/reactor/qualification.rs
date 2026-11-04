@@ -110,7 +110,7 @@ async fn scenario(
     let dir = TempDir::new()?;
     fs::copy(path.join("seed.db"), dir.path().join("replay.db"))?;
     let conn = new_connection(dir.path(), "replay.db").await?;
-    let session = LinkedSession::new(conn.clone(), factory(conn.clone()).await?);
+    let session = LinkedSession::new(conn.clone(), factory(conn.clone().into()).await?);
     let raw: Transaction = deserialize(&fs::read(path.join("transaction.bin"))?)?;
     ensure!(canonical_history::state(&conn).await? == HistoryState::Unavailable);
     let client = Client::new("http://127.0.0.1:1".into(), String::new(), String::new())?;

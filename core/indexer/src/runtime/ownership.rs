@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::future::Future;
 #[cfg(not(kontor_node))]
 use std::ops::{Deref, DerefMut};
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 #[cfg(test)]
@@ -11,6 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, ensure};
+#[cfg(not(kontor_node))]
 use deadpool::managed::Object;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
@@ -22,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 use wasmtime::component::Val;
 
+use self::read_snapshot::AdmittedRead;
 #[cfg(not(kontor_node))]
 use super::Runtime;
 #[cfg(test)]
@@ -32,9 +35,9 @@ use super::call::GuestCompletion;
 use super::invocation::InvocationBudget;
 #[cfg(test)]
 use super::invocation::InvocationStore;
+use super::pool::LinkedSession;
 #[cfg(not(kontor_node))]
 use super::pool::Manager;
-use super::pool::{LinkedManager, LinkedSession};
 #[cfg(test)]
 use super::storage::BlockingGate;
 use crate::database::migration_input::MigrationInput;
@@ -45,6 +48,7 @@ pub(crate) mod adapter;
 mod admission;
 mod blocking;
 mod leases;
+pub(crate) mod read_snapshot;
 mod sessions;
 mod settlement;
 
@@ -198,7 +202,7 @@ enum RootAuthority {
     Pooled(Object<Manager>),
     #[cfg(not(kontor_node))]
     Stateful(Runtime),
-    LinkedPooled(Object<LinkedManager>),
+    LinkedPooled(AdmittedRead),
     LinkedStateful(LinkedSession),
 }
 
@@ -356,7 +360,7 @@ impl RootKeeper {
             .try_lock()
             .expect("new root authority is uncontended");
         let session = match authority.as_ref().expect("root authority retained") {
-            RootAuthority::LinkedPooled(object) => &**object,
+            RootAuthority::LinkedPooled(object) => object.session(),
             RootAuthority::LinkedStateful(session) => session,
             #[cfg(not(kontor_node))]
             RootAuthority::Pooled(_) | RootAuthority::Stateful(_) => {
@@ -380,7 +384,7 @@ impl RootKeeper {
     async fn linked_parts(&self) -> Result<(SharedOwner, RootHooks)> {
         let authority = self.authority.lock().await;
         let owner = match authority.as_ref().expect("root authority retained") {
-            RootAuthority::LinkedPooled(object) => object.executor.owner.clone(),
+            RootAuthority::LinkedPooled(object) => object.session().executor.owner.clone(),
             RootAuthority::LinkedStateful(session) => session.executor.owner.clone(),
             #[cfg(not(kontor_node))]
             RootAuthority::Pooled(_) | RootAuthority::Stateful(_) => {
@@ -414,7 +418,7 @@ impl Drop for RootKeeper {
                 RootAuthority::Pooled(object) => drop(Object::take(object)),
                 #[cfg(not(kontor_node))]
                 RootAuthority::Stateful(runtime) => drop(runtime),
-                RootAuthority::LinkedPooled(object) => drop(Object::take(object)),
+                RootAuthority::LinkedPooled(object) => object.discard(),
                 RootAuthority::LinkedStateful(session) => drop(session),
             }
         } else {
@@ -458,6 +462,7 @@ impl Default for OwnerRegistry {
 }
 
 type RootStart = Box<dyn FnOnce() -> BoxFuture<'static, ()> + Send>;
+pub(crate) type ReadStartPermit = mpsc::OwnedPermit<RootStart>;
 
 #[derive(Clone)]
 pub struct OwnerService {
@@ -1198,15 +1203,24 @@ impl OwnerService {
         Ok(handle)
     }
 
+    pub(crate) async fn reserve_read_start(&self) -> Result<ReadStartPermit> {
+        self.admission
+            .clone()
+            .reserve_owned()
+            .await
+            .context("operation-owner node admission closed")
+    }
+
     pub(crate) async fn start_linked_pooled_reserved(
         &self,
-        object: Object<LinkedManager>,
+        object: AdmittedRead,
         capacity: OwnedSemaphorePermit,
+        permit: ReadStartPermit,
         selection: ExecutionSelection,
         operation: LinkedOperation,
     ) -> Result<OwnedRootHandle<Payload>> {
         ensure!(
-            object.origin() == selection.version(),
+            object.session().origin() == selection.version(),
             "executor session does not match selection"
         );
         self.start_linked_root(
@@ -1215,6 +1229,7 @@ impl OwnerService {
             selection,
             operation,
             None,
+            Some(permit),
         )
         .await
     }
@@ -1251,6 +1266,7 @@ impl OwnerService {
             selection,
             operation,
             Some(ReturnTo::Linked(session.clone())),
+            None,
         )
         .await
     }
@@ -1262,15 +1278,15 @@ impl OwnerService {
         selection: ExecutionSelection,
         operation: LinkedOperation,
         return_to: Option<ReturnTo>,
+        reserved: Option<ReadStartPermit>,
     ) -> Result<OwnedRootHandle<Payload>>
     where
         F: FnOnce() -> RootAuthority,
     {
-        let permit = self
-            .admission
-            .reserve()
-            .await
-            .context("operation-owner node admission closed")?;
+        let permit = match reserved {
+            Some(permit) => permit,
+            None => self.reserve_read_start().await?,
+        };
         ensure!(!self.is_fatal(), "operation-owner service is unavailable");
         let mut roots = self.registry.roots.lock().await;
         let id = RootId(self.registry.next_root.fetch_add(1, Ordering::SeqCst));
@@ -1287,24 +1303,38 @@ impl OwnerService {
             keeper.caught_host_panic.clone(),
         );
         let adapter = OwnerAdapter::new(&keeper, context.clone());
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let installation = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             keeper.install_linked_hooks(selection, adapter.clone())
         })) {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
+            Ok(result) => result,
+            Err(_) => Err(anyhow!("linked root hook construction panicked")),
+        };
+        if let Err(error) = installation {
+            let mut authority = keeper.authority.lock().await;
+            if let Some(RootAuthority::LinkedPooled(read)) = authority.as_mut() {
+                match AssertUnwindSafe(read.rollback()).catch_unwind().await {
+                    Ok(Ok(())) => {}
+                    failure => {
+                        keeper.quarantine();
+                        let cleanup = match failure {
+                            Ok(Err(error)) => error,
+                            _ => anyhow!("read admission cleanup panicked"),
+                        };
+                        return Err(
+                            cleanup.context(format!("{error:#}; read admission cleanup failed"))
+                        );
+                    }
+                }
+                keeper.quiescent.store(true, Ordering::SeqCst);
+                drop(authority);
+                self.registry.roots.lock().await.remove(&id);
+            } else {
                 keeper.quarantine();
                 if let Some(session) = &return_to {
                     session.quarantine();
                 }
-                return Err(error);
             }
-            Err(_) => {
-                keeper.quarantine();
-                if let Some(session) = &return_to {
-                    session.quarantine();
-                }
-                return Err(anyhow!("linked root hook construction panicked"));
-            }
+            return Err(error);
         }
         let (result_sender, result) = oneshot::channel();
         let handle = OwnedRootHandle {

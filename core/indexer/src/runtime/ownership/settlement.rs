@@ -145,8 +145,12 @@ async fn restore_linked<T>(
     authority: &mut RootAuthority,
     result: Result<RootOutcome<T>>,
 ) -> Result<Result<T>> {
+    let snapshot = match &*authority {
+        RootAuthority::LinkedPooled(read) => Some(read.object().snapshot.clone()),
+        _ => None,
+    };
     let (session, stateful) = match authority {
-        RootAuthority::LinkedPooled(object) => (&mut **object, false),
+        RootAuthority::LinkedPooled(object) => (object.session_mut(), false),
         RootAuthority::LinkedStateful(session) => (session, true),
         #[cfg(not(kontor_node))]
         RootAuthority::Pooled(_) | RootAuthority::Stateful(_) => {
@@ -161,7 +165,8 @@ async fn restore_linked<T>(
         .context("linked root hooks missing")?;
     let owner = session.executor.owner.clone();
     let wants_commit = result.as_ref().is_ok_and(|outcome| outcome.commit);
-    let commit_authorized = wants_commit
+    let commit_authorized = stateful
+        && wants_commit
         && !keeper.caught_host_panic.load(Ordering::SeqCst)
         && !keeper.blocking.panicked()
         && keeper
@@ -173,7 +178,15 @@ async fn restore_linked<T>(
                 Ordering::SeqCst,
             )
             .is_ok();
-    if commit_authorized || !session.conn.is_autocommit() {
+    if snapshot.as_ref().is_some_and(|scope| !scope.claimed()) {
+        if !session.conn.is_autocommit() {
+            session
+                .conn
+                .execute("ROLLBACK", ())
+                .await
+                .context("unclaimed read snapshot rollback failed")?;
+        }
+    } else if commit_authorized || !session.conn.is_autocommit() {
         (hooks.settle)(owner.clone(), commit_authorized)
             .await
             .map_err(adapter::HostFailure::from)
@@ -193,6 +206,9 @@ async fn restore_linked<T>(
         session.conn.is_autocommit(),
         "linked root still has live SQL transaction"
     );
+    if let Some(snapshot) = snapshot {
+        snapshot.clear(&session.conn)?;
+    }
     keeper.quiescent.store(true, Ordering::SeqCst);
     if RootState::load(&keeper.state) == RootState::Closing {
         return Ok(Err(anyhow!(

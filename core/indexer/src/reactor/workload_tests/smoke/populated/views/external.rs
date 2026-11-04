@@ -25,7 +25,10 @@ use crate::api::Env;
 use crate::api::handlers::post_contract;
 use crate::api::result::Result as ApiResult;
 use crate::database::Reader;
+use crate::database::storage_contract::StorageContract;
 use crate::protocol::coordinator::linked::link_runtime;
+use crate::protocol::identity::DefinitionReference;
+use crate::protocol::v1::definition::REFERENCE;
 use crate::runtime::Runtime;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::{Manager, new_linked};
@@ -113,11 +116,15 @@ pub(super) async fn run<T>(
         let cache = retained_cache.clone();
         let telemetry = telemetry.clone();
         Box::pin(async move {
-            let mut runtime = Runtime::new_read_only(engine, linkers, cache, conn).await?;
+            let contract = StorageContract::resolve(&DefinitionReference::decode(REFERENCE)?)?;
+            let callbacks = conn.callbacks(contract);
+            let mut runtime =
+                Runtime::new_read_only(engine, linkers, cache, conn.conn.clone()).await?;
+            runtime.storage.host = callbacks.into();
             runtime.network = network;
             runtime.view_gas_limit = view_gas_limit;
             runtime.workload_telemetry = telemetry;
-            Ok(link_runtime(runtime, false))
+            Ok(conn.attach(link_runtime(runtime, false)))
         })
     });
     drop(template);

@@ -26,6 +26,7 @@ use crate::protocol::session::HostError;
 use crate::protocol::storage_callbacks::StorageCallbacks;
 use crate::protocol::storage_rows::CursorOwner;
 use crate::runtime::ownership::adapter::{HostFailure, SessionFactory};
+use crate::runtime::ownership::read_snapshot::AdmittedRead;
 use crate::runtime::ownership::{LinkedOperation, OwnerService};
 use crate::runtime::pool::{LinkedManager, new_linked};
 
@@ -215,7 +216,7 @@ pub(super) async fn qualify_export_panics() -> Result<Value> {
         session_export_panics,
         kontor_executor_first::execution_definition(),
     )?;
-    let session_error = factory(conn)
+    let session_error = factory(conn.into())
         .await
         .err()
         .context("session panic escaped the factory boundary")?;
@@ -231,6 +232,54 @@ pub(super) async fn qualify_export_panics() -> Result<Value> {
 
 pub(super) async fn qualify_graph(graph: &str, path: &Path, writer: &Connection) -> Result<Value> {
     let address = ("counter".into(), 3, 7);
+
+    let claimed = CallbackProbe::new();
+    let probe = claimed.clone();
+    let factory = factory_with_decorator(
+        graph,
+        Arc::new(move |mut callbacks| {
+            let begin = callbacks.10.0.clone();
+            let probe = probe.clone();
+            callbacks.10.0 = Arc::new(move || {
+                let begin = begin.clone();
+                let probe = probe.clone();
+                Box::pin(async move {
+                    begin().await?;
+                    if probe.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                        let _in_flight = CallbackInFlight(probe.dropped.clone());
+                        probe.entered.notify_one();
+                        // The physical snapshot is claimed, but the retained executor
+                        // has not yet returned from begin to push its logical marker.
+                        pending::<()>().await;
+                    }
+                    Ok(())
+                })
+            });
+            callbacks
+        }),
+    )?;
+    let claimed_pool = new_linked(path.to_path_buf(), "qualification.db".into(), factory, 1)?;
+    let object = claimed_pool.get().await?;
+    let id = Object::id(&object);
+    let service = OwnerService::new();
+    let caller = service.clone();
+    let contract = address.clone();
+    let task = tokio::spawn(async move {
+        execute_view(&caller, object, NETWORK, contract, "get()".into()).await
+    });
+    timeout(LIMIT, claimed.entered.notified()).await?;
+    task.abort();
+    ensure!(task.await.is_err_and(|error| error.is_cancelled()));
+    let reused = timeout(LIMIT, claimed_pool.get()).await??;
+    ensure!(Object::id(&reused) == id && reused.conn.is_autocommit());
+    ensure!(claimed.dropped.load(Ordering::SeqCst));
+    ensure!(
+        execute_view(&service, reused, NETWORK, address.clone(), "get()".into())
+            .await?
+            .is_ok()
+    );
+    ensure!(service.active_roots().await == 0);
+    service.shutdown();
 
     let pending_probe = CallbackProbe::new();
     let pending_pool = pool(path, graph, CallbackMode::Pending, pending_probe.clone())?;
@@ -421,7 +470,8 @@ pub(super) async fn qualify_graph(graph: &str, path: &Path, writer: &Connection)
     );
     service.shutdown();
 
-    Ok(json!({"pending_callback_cancelled": true, "faults": faults,
+    Ok(json!({"claimed_before_marker_cancelled": true,
+        "pending_callback_cancelled": true, "faults": faults,
         "held_guest_cursor_released": true}))
 }
 
@@ -442,7 +492,7 @@ pub(super) async fn qualify_node_capacity(service: &OwnerService) -> Result<Valu
     )?;
     let mut held = Vec::new();
     for pool in [&first, &second] {
-        let object = pool.get().await?;
+        let mut object = pool.get().await?;
         let entered = Arc::new(Notify::new());
         let observed = entered.notified();
         tokio::pin!(observed);
@@ -453,8 +503,15 @@ pub(super) async fn qualify_node_capacity(service: &OwnerService) -> Result<Valu
         // No guest operation runs, and the unversioned fixture has no authority.
         let selection =
             select_legacy_p1(&object.conn, NETWORK, ApplicationPosition::Committee).await?;
+        object.conn.execute("BEGIN", ()).await?;
+        object.snapshot.select(selection.clone())?;
+        pool.manager()
+            .select(&mut object, &selection, NETWORK)
+            .await?;
+        let object = AdmittedRead::new(object);
         held.push(tokio::spawn(async move {
             let capacity = call_service.reserve_root_capacity().await?;
+            let permit = call_service.reserve_read_start().await?;
             let operation: LinkedOperation = Box::new(move |_, _| {
                 Box::pin(async move {
                     started.notify_one();
@@ -462,7 +519,7 @@ pub(super) async fn qualify_node_capacity(service: &OwnerService) -> Result<Valu
                 })
             });
             let mut handle = call_service
-                .start_linked_pooled_reserved(object, capacity, selection, operation)
+                .start_linked_pooled_reserved(object, capacity, permit, selection, operation)
                 .await?;
             handle.result().await
         }));

@@ -112,7 +112,7 @@ impl<E: Executor> ExecutionContext<E> {
             Some(session) => session.clone(),
             None => {
                 let factory = session_factory_for_definition(self.network, definition, None)?;
-                let executor = factory(self.db_conn()).await?;
+                let executor = factory(self.db_conn().into()).await?;
                 let mut session = LinkedSession::new(self.db_conn(), executor);
                 // All cached executors use the same physical writer connection.
                 // A different definition must not create another admission gate.

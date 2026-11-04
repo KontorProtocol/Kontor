@@ -242,7 +242,7 @@ async fn rehearse(
     report.target_support.executor_registered = true;
     let service = OwnerService::new();
     let result = async {
-        let executor = factory(conn.clone()).await?;
+        let executor = factory(conn.clone().into()).await?;
         let session = LinkedSession::new(conn.clone(), executor);
         let anchor_hash = BlockHash::from_byte_array(closed.bitcoin_hash);
         let selection = select_legacy_p1(

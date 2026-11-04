@@ -152,7 +152,7 @@ pub(crate) async fn run(
         )
         .await?;
     }
-    let session = LinkedSession::new(conn.clone(), factory(conn.clone()).await?);
+    let session = LinkedSession::new(conn.clone(), factory(conn.clone().into()).await?);
     initialize(service, &session, network, 1, genesis).await?;
     let initial = records(&conn).await?;
     ensure!(

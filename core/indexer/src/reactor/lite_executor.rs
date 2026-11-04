@@ -71,7 +71,7 @@ impl LiteExecutor {
         let (baseline, initialize) =
             bootstrap::prepare(&writer.connection(), Network::Regtest, 1, &genesis).await?;
         let (height, hash) = prepare_executor_startup(1, &writer).await?;
-        let mut executor = factory(writer.connection()).await?;
+        let mut executor = factory(writer.connection().into()).await?;
         let maintenance = executor.operations.maintenance.clone();
         let pauses = mock_bitcoin.clone();
         executor.operations.maintenance = Arc::new(move |owner, selection| {

@@ -2933,7 +2933,14 @@ async fn linked_guest_runs_under_node_owner_and_returns_opaque_payload() -> Resu
     let pool = new_linked(dir.path().to_path_buf(), name, factory, 1)?;
     let service = OwnerService::new();
     let capacity = service.reserve_root_capacity().await?;
-    let object = pool.get().await?;
+    let mut object = pool.get().await?;
+    object.conn.execute("BEGIN", ()).await?;
+    object.snapshot.select(selection.clone())?;
+    pool.manager()
+        .select(&mut object, &selection, Network::Regtest)
+        .await?;
+    let object = AdmittedRead::new(object);
+    let permit = service.reserve_read_start().await?;
     let operation: LinkedOperation = Box::new(|_, adapter| {
         Box::pin(async move {
             let guest: GuestFactory =
@@ -2960,7 +2967,7 @@ async fn linked_guest_runs_under_node_owner_and_returns_opaque_payload() -> Resu
         })
     });
     let mut handle = service
-        .start_linked_pooled_reserved(object, capacity, selection, operation)
+        .start_linked_pooled_reserved(object, capacity, permit, selection, operation)
         .await?;
     let value = handle.result().await?;
     assert_eq!(

@@ -207,7 +207,7 @@ async fn exercise(
         )
         .await?;
     }
-    let session = LinkedSession::new(conn.clone(), canonical(conn.clone()).await?);
+    let session = LinkedSession::new(conn.clone(), canonical(conn.clone().into()).await?);
     initialize(service, &session, NETWORK, 1, genesis()).await?;
     let initialized = state(&conn).await?;
     ensure!(

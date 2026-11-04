@@ -164,6 +164,25 @@ pub(crate) async fn frontier(conn: &Connection) -> Result<Frontier> {
     Ok(result)
 }
 
+pub(crate) async fn readiness(conn: &Connection) -> Result<Status> {
+    let row = conn
+        .query(
+            "SELECT status FROM certified_history_state WHERE singleton = 1",
+            (),
+        )
+        .await?
+        .next()
+        .await?
+        .context("missing certified history state")?;
+    match row.get::<String>(0)?.as_str() {
+        "pending" => Ok(Status::Pending),
+        "initializing" => Ok(Status::Initializing),
+        "ready" => Ok(Status::Ready),
+        "unavailable" => Ok(Status::Unavailable),
+        _ => anyhow::bail!("invalid certified history status"),
+    }
+}
+
 #[cfg(test)]
 pub(crate) async fn begin_genesis(conn: &Connection, context: EraContext) -> Result<()> {
     reserve_genesis(conn, context, None, 1).await

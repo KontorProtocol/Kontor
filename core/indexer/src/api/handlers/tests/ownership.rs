@@ -160,8 +160,18 @@ async fn post_contract_matches_direct_view_and_reuses_pool_object() -> Result<()
 async fn post_contract_shutdown_waits_for_cold_decode_before_pool_release() -> Result<()> {
     let (env, _direct, _dir) = seeded_contract_env().await?;
     let gate = Arc::new(BlockingGate::default());
+    read_snapshot(
+        &env.owner_service,
+        env.runtime_pool.get().await?,
+        env.config.network,
+        |_, _, _| async { Ok(()) },
+    )
+    .await?;
     let object = env.runtime_pool.get().await?;
     let session = object
+        .session
+        .as_ref()
+        .unwrap()
         .executor
         .owner
         .clone()
