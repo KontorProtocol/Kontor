@@ -15,7 +15,7 @@ use crate::consensus::codec::ProtobufCodec;
 use crate::consensus::{
     Address, Ctx, Height, ProposalPart, ProposalParts, ReassemblySaturated, Value, ValueId,
 };
-use crate::database::certified_history::branch;
+use crate::database::certified_history::{branch, proposals};
 
 use super::Reactor;
 use super::consensus_state;
@@ -67,14 +67,15 @@ impl<E: Executor> Reactor<E> {
             self.consensus.pending_proposal = None;
         }
 
-        let proposals: Vec<_> = self
-            .consensus
-            .undecided
-            .get(&height)
-            .and_then(|rounds| rounds.get(&round))
-            .cloned()
-            .into_iter()
-            .collect();
+        let proposals: Vec<_> = proposals::normal(
+            &self.db_conn(),
+            height,
+            round,
+            self.consensus.protocol_context,
+        )
+        .await?
+        .into_iter()
+        .collect();
 
         let early = self.consensus.take_early_proposal(height, round, proposer);
         if let Some(parts) = early {
@@ -140,13 +141,7 @@ impl<E: Executor> Reactor<E> {
         {
             return reply_none(reply);
         }
-        if round == Round::Nil
-            || self
-                .consensus
-                .undecided
-                .get(&height)
-                .is_some_and(|rounds| rounds.contains_key(&round))
-        {
+        if round == Round::Nil || proposals::has_normal(&self.db_conn(), height, round).await? {
             return reply_none(reply);
         }
 
@@ -253,12 +248,14 @@ impl<E: Executor> Reactor<E> {
                 value,
                 validity: Validity::Valid,
             };
-            self.consensus
-                .undecided
-                .entry(height)
-                .or_default()
-                .insert(round, proposed.clone());
-            SyncedValueOutcome::Verdict(proposed)
+            if proposals::accept_synced(&self.db_conn(), height, &proposed.value)
+                .await?
+                .accepted()
+            {
+                SyncedValueOutcome::Verdict(proposed)
+            } else {
+                SyncedValueOutcome::LocalTransientError
+            }
         } else {
             SyncedValueOutcome::PeerFault
         };
@@ -276,19 +273,15 @@ impl<E: Executor> Reactor<E> {
         valid_round: Round,
         value_id: ValueId,
     ) -> Result<()> {
-        let lookup_round = if valid_round == Round::Nil {
-            round
-        } else {
-            valid_round
-        };
-        if let Some(proposal) = self
-            .consensus
-            .undecided
-            .get(&height)
-            .and_then(|rounds| rounds.get(&lookup_round))
-            && proposal.value.id() == value_id
+        if let Some(value) = proposals::exact(
+            &self.db_conn(),
+            height,
+            value_id,
+            self.consensus.protocol_context,
+        )
+        .await?
         {
-            let locally_proposed = LocallyProposedValue::new(height, round, proposal.value.clone());
+            let locally_proposed = LocallyProposedValue::new(height, round, value);
             self.send_proposal_parts(&locally_proposed, valid_round)
                 .await?;
         }

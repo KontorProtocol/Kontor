@@ -15,8 +15,6 @@ mod owner;
 // These modules borrow node sources, which are formatted in their own workspace.
 #[rustfmt::skip]
 mod protocol;
-mod recovery;
-pub use recovery::{WalInspection, WalResumeContext, inspect_protected_wal};
 mod replies;
 mod wire;
 

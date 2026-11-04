@@ -4146,7 +4146,6 @@ dependencies = [
  "arc-malachitebft-signing",
  "arc-malachitebft-signing-ed25519",
  "arc-malachitebft-sync",
- "arc-malachitebft-wal",
  "async-trait",
  "bitcoin",
  "bytes",
@@ -4157,7 +4156,6 @@ dependencies = [
  "serde",
  "sha2 0.11.1",
  "sha3 0.12.0",
- "tempfile",
  "thiserror 2.0.21",
  "tokio",
 ]

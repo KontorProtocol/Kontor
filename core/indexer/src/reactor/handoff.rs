@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::Result;
 
 use super::{Reactor, executor::Executor};
 use crate::protocol::coordinator::certified_input::EraContext;
@@ -9,10 +9,6 @@ impl<E: Executor> Reactor<E> {
         if self.execution.protocol_context == context {
             return Ok(());
         }
-        ensure!(
-            self.consensus.pending_decision.is_none(),
-            "protocol transition has an unfinished decision callback"
-        );
         // The completed height's Finalized callback has already been validated.
         // Retain future proposal streams and the live engine, but reparse raw
         // mempool inputs under the selected execution rules before opening C+1.
@@ -20,7 +16,6 @@ impl<E: Executor> Reactor<E> {
         self.validated_candidates = None;
         self.mempool_preparation = None;
         self.consensus.pending_proposal = None;
-        self.consensus.undecided.clear();
         self.consensus.mempool.candidates.clear();
         let selection = self
             .execution

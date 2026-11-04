@@ -1109,35 +1109,41 @@ checks before release. Changes to certificate semantics require a new rule
 definition and explicit protocol support. Historical executors retain their own
 immutable definitions and independently locked graphs.
 
-Startup policy agreed by lead and the existing independent reviewer in
-`SINGLE-MALACHITE-JOIN-1`:
+Startup policy from `SINGLE-MALACHITE-JOIN-1`, updated by the November 4
+WAL-ownership decision and independent implementation review:
 
 - Bootstrap is an explicit initial-genesis operation. Resume requires retained
   validator state and first completes any durable unfinished application closure.
   If D is the completed consensus height, resume N = D+1, including its existing
   rounds and exact signature retries. Do not require N to be certified first.
-- Preserve and replay a valid validator WAL at N. A WAL below N can reset forward
-  only when authenticated closure covers it. WAL or signer state ahead of N
-  requires reconstruction, never a backward reset. Missing/corrupt state cannot
-  silently create a fresh validator. A missing WAL before any signature at the
-  unfinished height is distinct from losing an unfinished signed WAL.
+- Malachite owns opening, replaying and repairing its WAL. Kontor does not read
+  its header or entries, copy it for inspection, or preflight its integrity.
+  Signer or authorization state ahead of N requires reconstruction. A missing
+  WAL before any signature at the unfinished height is distinct from losing an
+  unfinished signed WAL; retain the file-presence guard for the latter.
 - Join starts as a non-signing follower. Require a positive operator-supplied
   minimum closed consensus height and verified closure through the maximum of
-  that minimum, local consensus-signature height, protected WAL height and latest
+  that minimum, local consensus-signature height and latest
   authorization height minus one. The configured minimum is a lower-bound policy,
   not proof of the current network tip. Missing history or unavailable peers
   cannot authorize signing. Nonmembers remain followers.
 - Before promotion, fully stop/join the follower, recheck the durable boundary,
   reconcile protected state, authorize N and start the validator. Keep exclusive
-  node ownership throughout. Inspect a private copy of a protected WAL: the
-  pinned WAL library repairs partial tails when opening files. Reuse its sequence
-  and entry decoder APIs, without a new fork change or journal. WAL entries can
-  include remote messages, so they need not correspond one-for-one to local
-  signatures. Read-only follower mode never promotes.
+  node ownership throughout. Read-only follower mode never promotes.
+- Persist accepted application proposal bodies and normal round choices before
+  acceptance replies or local publication. Keep sync bodies separate from normal
+  slots. Commit certified decisions and proposal retirement atomically before
+  acknowledging Decided. Restore application inputs from this database, without
+  extracting them from the engine WAL. No fork change is required.
 
 Representative coverage includes all-validator restart at unfinished N,
-authorization-before-WAL interruption, stale database with ahead signer/WAL,
-missing/corrupt protected WAL, and promotion only after verified closure.
+authorization-before-WAL interruption, stale database with ahead signer state,
+missing unfinished WAL, durable proposal recovery, and promotion only after
+verified closure. Engine-owned incomplete append, interrupted WAL reset and
+corruption handling were traced statically, not newly fault-injected. The
+malicious-peer wrong-ID end-to-end case is deferred; application sync isolation
+is tested directly and the engine's expected-ID check is unchanged. Full-table
+recovery comparisons continue to include proposal staging.
 
 Use focused local checks and one consolidated independent review, then scoped
 final-candidate CI. Reuse prior research and valid unchanged evidence; do not

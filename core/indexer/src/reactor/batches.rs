@@ -21,7 +21,7 @@ use crate::consensus::finality_types::{
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, ProposalData, Value};
 #[cfg(feature = "protocol-qualification")]
 use crate::database::canonical_history::{self, HistoryState};
-use crate::database::certified_history::{self, branch, control, replay_input, work};
+use crate::database::certified_history::{self, branch, control, proposals, replay_input, work};
 use crate::database::queries::{
     delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids, insert_transaction,
     insert_unconfirmed_batch_tx, min_unfinalized_batch_height, select_block_at_height,
@@ -85,8 +85,8 @@ pub(super) enum IoApply {
         anchor_height: u64,
         anchor_hash: BlockHash,
     },
-    /// An incoming batch proposal: on apply, accept (file under `undecided`,
-    /// release the engine's reply with `Some`) or reject (`None`).
+    /// An incoming batch proposal: persist before replying with `Some`; reject
+    /// stale or conflicting completions with `None`.
     ValidateProposal {
         value: Value,
         selection: ExecutionSelection,
@@ -1021,12 +1021,10 @@ impl<E: Executor> Reactor<E> {
             value,
             validity: Validity::Valid,
         };
-        self.consensus
-            .undecided
-            .entry(height)
-            .or_default()
-            .insert(round, proposed.clone());
-        let _ = reply.send(Some(proposed));
+        let accepted = proposals::accept_normal(&self.db_conn(), &proposed)
+            .await?
+            .accepted();
+        let _ = reply.send(accepted.then_some(proposed));
         Ok(())
     }
 
@@ -1151,7 +1149,7 @@ impl<E: Executor> Reactor<E> {
         Ok(false)
     }
 
-    /// Answer the held GetValue with `value`: file it under `undecided`,
+    /// Answer the held GetValue with `value`: persist it before publication,
     /// stream the parts, release the engine's reply. No-op if nothing is held
     /// (the deadline or a competing path already answered).
     async fn fulfill_pending_with(&mut self, value: Value) -> Result<()> {
@@ -1172,11 +1170,13 @@ impl<E: Executor> Reactor<E> {
             value: value.clone(),
             validity: Validity::Valid,
         };
-        self.consensus
-            .undecided
-            .entry(pending.height)
-            .or_default()
-            .insert(pending.round, proposed);
+        if !proposals::accept_normal(&self.db_conn(), &proposed)
+            .await?
+            .accepted()
+        {
+            warn!(height = %pending.height, round = %pending.round, "Local proposal lost durable admission");
+            return Ok(());
+        }
         let proposal = LocallyProposedValue::new(pending.height, pending.round, value);
         self.send_proposal_parts(&proposal, Round::Nil).await?;
         let _ = pending.reply.send(proposal);
@@ -1295,7 +1295,10 @@ impl<E: Executor> Reactor<E> {
                 parsed,
                 reply,
             } => {
-                if value.descriptor().context != self.consensus.protocol_context
+                if height != self.consensus.current_height
+                    || round != self.consensus.current_round
+                    || self.consensus.current_proposer != Some(proposer)
+                    || value.descriptor().context != self.consensus.protocol_context
                     || !selection.can_reuse_preparation(&self.preparation_selection().await?)
                 {
                     let _ = reply.send(None);
@@ -1363,12 +1366,8 @@ impl<E: Executor> Reactor<E> {
                     value,
                     validity: Validity::Valid,
                 };
-                self.consensus
-                    .undecided
-                    .entry(height)
-                    .or_default()
-                    .insert(round, proposed.clone());
-                let _ = reply.send(Some(proposed));
+                let accepted = proposals::accept_normal(&conn, &proposed).await?.accepted();
+                let _ = reply.send(accepted.then_some(proposed));
                 Ok(())
             }
         }
@@ -1464,7 +1463,6 @@ impl<E: Executor> Reactor<E> {
         self.io_jobs.clear();
         self.validated_candidates = None;
         self.consensus.pending_proposal = None;
-        self.consensus.undecided.clear();
         self.consensus.early_proposals.clear();
         self.consensus.part_streams = Default::default();
         self.consensus.current_proposer = None;
@@ -1515,12 +1513,18 @@ impl<E: Executor> Reactor<E> {
         }
         info!(%height, %round, "Building value to propose");
 
-        if let Some(existing) = self
-            .consensus
-            .undecided
-            .get(&height)
-            .and_then(|rounds| rounds.get(&round))
+        if let Some(existing) = proposals::normal(
+            &self.db_conn(),
+            height,
+            round,
+            self.consensus.protocol_context,
+        )
+        .await?
         {
+            ensure!(
+                existing.proposer == self.consensus.address,
+                "stored local proposal has another proposer"
+            );
             let proposal =
                 LocallyProposedValue::new(existing.height, existing.round, existing.value.clone());
             self.send_proposal_parts(&proposal, Round::Nil).await?;
@@ -1557,7 +1561,6 @@ impl<E: Executor> Reactor<E> {
             .consensus
             .finalized_value(&self.db_conn(), &certificate)
             .await?;
-        self.consensus.undecided.remove(&certificate.height);
         if let Some(obs) = &self.consensus.observation {
             let _ = obs.decided_tx.try_send(DecidedBatch {
                 validator_index: self.consensus.validator_index,

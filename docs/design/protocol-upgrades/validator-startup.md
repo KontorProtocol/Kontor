@@ -33,8 +33,8 @@ Choose the startup policy deliberately:
   that unfinished height before they can resume it.
 - `--join-min-height C`: join through verified history, with a positive minimum
   completed **Kontor consensus height**, not a Bitcoin height. The effective
-  floor is the maximum of C, the highest locally signed consensus height, the
-  protected validator WAL height, and the last authorized height minus one.
+  floor is the maximum of C, the highest locally signed consensus height, and the last authorized height
+  minus one.
   Remain a non-signing follower until completed history reaches that floor and
   the key belongs to the next committee. Already verified local history may
   satisfy the floor without another network synchronization pass.
@@ -55,21 +55,28 @@ history. `consensus-validator.wal` retains the validator's consensus state.
 `consensus-catchup.wal` is separate because follower startup may reset its WAL.
 Do not delete protected validator files to clear a startup error.
 
-If the completed consensus height is 6, ordinary resume starts height 7. A valid
-WAL at 7 preserves its unfinished round state. A WAL below 7 can reset forward
-because certified closure covers that older height. A WAL or signing state ahead
-of 7 requires verified reconstruction instead of a backward reset. Missing the
-WAL after signing at 7 requires joining through closure 7 before signing at a new
-height. An interruption after authorizing 7 but before creating its WAL, with no
-signature at 7, does not require an additional decision.
+If the completed consensus height is 6, ordinary resume starts height 7.
+Malachite opens and replays its own WAL, including unfinished rounds. Kontor
+checks signer history and whether the validator WAL file exists, but never opens,
+copies, decodes, or validates its contents. Signing state or authorization ahead
+of the recoverable application boundary requires verified reconstruction. Missing
+the WAL after signing at 7 requires joining through closure 7 before signing at a
+new height. An interruption after authorizing 7 but before creating its WAL, with
+no signature at 7, does not require an additional decision.
 
-Inspection reads signer history without creating a signing capability or reserving
-a generation. WAL validation uses a private copy because the pinned WAL library
-repairs incomplete tails when opening a file. Corruption is reported without
-modifying the protected original. Entries with heights must match the WAL header.
-When resuming that height, proposal/value descriptors must also match its verified
-chain, protocol and era. These checks reject inconsistent restored files; they do
-not repair or support arbitrary combinations of database and validator backups.
+Kontor commits accepted proposal bodies and normal round choices to its database
+before replying to Malachite or publishing a local proposal. Sync bodies are
+stored by exact value ID separately from normal round choices. The engine checks
+a sync body's ID against its certificate after the application reply, so staged
+sync bodies are not themselves certified history. Decided verifies the proof,
+loads the exact input, and commits certified history and proposal retirement in
+one transaction before acknowledging the decision. Restart uses these durable
+application records instead of extracting application data from Malachite's WAL.
+
+Signer inspection does not create a signing capability or reserve a generation.
+WAL integrity, incomplete-tail repair, and replay belong to Malachite. Kontor does
+not add a corruption preflight or support arbitrary combinations of database and
+validator backups. Restore the database, signing state, and engine WAL together.
 
 Promotion first stops and fully joins the catch-up runtime while retaining the
 exclusive node owner. Startup then reinspects protected state and the completed

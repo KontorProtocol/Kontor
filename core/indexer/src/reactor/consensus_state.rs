@@ -13,8 +13,8 @@ use super::mempool_fee_index::MempoolFeeIndex;
 use super::transport::Engine;
 
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
+use malachitebft_app_channel::app::types::LocallyProposedValue;
 use malachitebft_app_channel::app::types::core::Round;
-use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
 use malachitebft_core_types::{HeightParams, LinearTimeouts};
 use malachitebft_engine::host::Next;
 
@@ -60,7 +60,6 @@ pub struct PendingProposal {
 /// All consensus-related state for the reactor.
 pub struct ConsensusState {
     pub(super) promotion_floor: Option<u64>,
-    pub(super) pending_decision: Option<super::certified::PendingDecision>,
     pub(crate) protocol_context: EraContext,
     pub address: Address,
     pub mempool: Mempool,
@@ -81,12 +80,6 @@ pub struct ConsensusState {
     // Reassembles received proposal-part streams so the whole proposal can be
     // authenticated (proposer + Fin signature) before any of it is trusted.
     pub part_streams: PartStreamsMap,
-    // Proposed values not yet decided, grouped by height then round. Grouping by
-    // height lets `handle_finalized` find the decided value by value_id within the
-    // height (the decided round can differ from the round we filed it under) and
-    // drop every losing-round proposal for a height in one step once it's decided.
-    pub undecided: BTreeMap<Height, BTreeMap<Round, ProposedValue<Ctx>>>,
-
     // Optional observation state, never authoritative for execution.
     pub unfinalized_batches: Vec<UnfinalizedBatch>,
 
@@ -376,7 +369,6 @@ impl ConsensusState {
 
         Ok(Self {
             promotion_floor: None,
-            pending_decision: None,
             protocol_context,
             address,
             mempool: Mempool::default(),
@@ -386,7 +378,6 @@ impl ConsensusState {
             round_started_at: Instant::now(),
             current_proposer: None,
             part_streams: PartStreamsMap::new(),
-            undecided: BTreeMap::new(),
             unfinalized_batches: Vec::new(),
             pending_blocks: BTreeMap::new(),
             current_validator_set,

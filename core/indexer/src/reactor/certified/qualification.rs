@@ -28,7 +28,9 @@ use crate::bitcoin_follower::event::BlockEvent;
 use crate::consensus::codec::encode_commit_certificate;
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, Value, Vote};
-use crate::database::certified_history::{self, closure, completion, finality, replay_input, work};
+use crate::database::certified_history::{
+    self, closure, completion, finality, proposals, replay_input, work,
+};
 use crate::database::connection::new_connection;
 use crate::database::queries::{
     PRUNE_WATERMARK_KEY, insert_batch, insert_block, select_block_at_height, set_meta_u64,
@@ -159,23 +161,27 @@ pub(crate) async fn run(
         ensure!(certified_history::branch::tip(&conn).await?.is_none());
         let value = Value::from_input(ExactInput::block(state.protocol_context, 100, serialize(&genesis_block(network)))?)?;
         let proof = certificate(&value, 0);
-        let (reply, mut ack) = oneshot::channel();
-        state.receive_decision(&conn, proof.clone(), reply).await?;
-        ensure!(matches!(ack.try_recv(), Err(TryRecvError::Empty)));
+        let (reply, ack) = oneshot::channel();
+        ensure!(state.receive_decision(&conn, proof.clone(), reply).await.is_err());
+        ensure!(ack.await.is_err());
         ensure!(certified_history::frontier(&conn).await?.authenticated_height == 0);
-        state.undecided.entry(Height::new(1)).or_default().insert(Round::new(0), ProposedValue {
+        ensure!(proposals::accept_normal(&conn, &ProposedValue {
             height: Height::new(1), round: Round::new(0), valid_round: Round::Nil,
             proposer: state.address, value: value.clone(), validity: Validity::Valid,
-        });
+        }).await?.accepted());
         conn.execute_batch("CREATE TRIGGER interrupt_decision BEFORE INSERT ON certified_decisions BEGIN SELECT RAISE(ABORT, 'injected persistence failure'); END").await?;
-        ensure!(state.try_acknowledge_decision(&conn).await.is_err());
-        ensure!(matches!(ack.try_recv(), Err(TryRecvError::Empty)));
+        let (reply, ack) = oneshot::channel();
+        ensure!(state.receive_decision(&conn, proof.clone(), reply).await.is_err());
+        ensure!(ack.await.is_err());
         ensure!(certified_history::frontier(&conn).await?.authenticated_height == 0);
         ensure!(conn.is_autocommit());
         ensure!(conn.query("SELECT 1 FROM certified_inputs", ()).await?.next().await?.is_none());
+        ensure!(proposals::exact(&conn, Height::new(1), value.id(), state.protocol_context).await?.is_some());
         conn.execute_batch("DROP TRIGGER interrupt_decision").await?;
-        state.try_acknowledge_decision(&conn).await?;
+        let (reply, ack) = oneshot::channel();
+        state.receive_decision(&conn, proof.clone(), reply).await?;
         ack.await?;
+        ensure!(proposals::normal(&conn, Height::new(1), Round::new(0), state.protocol_context).await?.is_none());
         let original = certified_history::load(&conn, 1).await?;
         conn.execute_batch("BEGIN IMMEDIATE").await?;
         conn.execute("UPDATE certified_decisions SET bitcoin_height = ?1 WHERE height = ?2",
@@ -188,7 +194,7 @@ pub(crate) async fn run(
         ensure!(state.current_height == Height::new(1));
         let original_proof = encode_commit_certificate(&proof)?.encode_to_vec();
         ensure!(original.proof() == original_proof);
-        state.undecided.clear();
+
         let later = certificate(&value, 1);
         ensure!(state.finalized_value(&conn, &later).await? == value);
         let augmentation = conn.query("SELECT proof_augmentation FROM certified_decisions", ()).await?.next().await?.context("augmentation row")?.get::<Vec<u8>>(0)?;
@@ -334,22 +340,21 @@ async fn accept_for_closure(
     height: u64,
 ) -> Result<()> {
     let proof = certificate_at(&value, height, 0);
-    reactor
-        .consensus
-        .undecided
-        .entry(Height::new(height))
-        .or_default()
-        .insert(
-            Round::new(0),
-            ProposedValue {
+    ensure!(
+        proposals::accept_normal(
+            &reactor.db_conn(),
+            &ProposedValue {
                 height: Height::new(height),
                 round: Round::new(0),
                 valid_round: Round::Nil,
                 proposer: reactor.consensus.address,
                 value,
                 validity: Validity::Valid,
-            },
-        );
+            }
+        )
+        .await?
+        .accepted()
+    );
     let (reply, ack) = oneshot::channel();
     reactor
         .consensus
@@ -555,22 +560,21 @@ async fn qualify_batches(
         )?;
         let proof = certificate_at(&value, height, 0);
         let proof_bytes = encode_commit_certificate(&proof)?.encode_to_vec();
-        reactor
-            .consensus
-            .undecided
-            .entry(Height::new(height))
-            .or_default()
-            .insert(
-                Round::new(0),
-                ProposedValue {
+        ensure!(
+            proposals::accept_normal(
+                &reactor.db_conn(),
+                &ProposedValue {
                     height: Height::new(height),
                     round: Round::new(0),
                     valid_round: Round::Nil,
                     proposer: reactor.consensus.address,
                     value,
                     validity: Validity::Valid,
-                },
-            );
+                }
+            )
+            .await?
+            .accepted()
+        );
         let (reply, ack) = oneshot::channel();
         reactor
             .consensus
@@ -917,22 +921,21 @@ async fn qualify_replacement(
         certificate: encode_commit_certificate(&proof)?.encode_to_vec(),
         execution_txs: None,
     };
-    reactor
-        .consensus
-        .undecided
-        .entry(Height::new(4))
-        .or_default()
-        .insert(
-            Round::new(0),
-            ProposedValue {
+    ensure!(
+        proposals::accept_normal(
+            &reactor.db_conn(),
+            &ProposedValue {
                 height: Height::new(4),
                 round: Round::new(0),
                 valid_round: Round::Nil,
                 proposer: reactor.consensus.address,
                 value: replacement_value,
                 validity: Validity::Valid,
-            },
-        );
+            }
+        )
+        .await?
+        .accepted()
+    );
     let (reply, ack) = oneshot::channel();
     reactor
         .consensus
@@ -1020,7 +1023,7 @@ async fn qualify_live_closure(reactor: &mut Reactor<RuntimeExecutor>) -> Result<
     )?)?;
     let proof = certificate_at(&value, 13, 0);
     accept_for_closure(reactor, value, 13).await?;
-    reactor.consensus.undecided.clear();
+
     let mut competing = block;
     competing.header.nonce += 1;
     let competing_value = Value::from_input(ExactInput::block(

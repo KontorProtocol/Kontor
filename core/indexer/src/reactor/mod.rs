@@ -177,16 +177,9 @@ pub(crate) struct Reactor<E: Executor> {
     /// `Listening` (see `handle_consensus_msg`'s `ConsensusReady` arm).
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     runtime_status: Option<tokio::sync::watch::Sender<Option<RuntimeStatus>>>,
-    /// Consensus I/O in flight — bitcoind validation running off the loop, ALL
-    /// raced together as one arm of the root `select!` (`select_all`), so a
-    /// stalled job cannot park another. Small, not a fixed size: at most one
-    /// BUILD job (the `pending_proposal` is single, and `try_fulfill` refuses a
-    /// second build while one is in flight), plus one VALIDATE job per in-flight
-    /// proposal round — the `undecided` guard admits one per (height, round), and
-    /// a fresh round at the same height can arrive before the previous round's
-    /// job has applied. Bounded in practice by concurrent rounds, which the
-    /// round-timeout machinery keeps to a handful. A `VecDeque` for cheap
-    /// removal-by-index after `select_all`. See `batches::IoJob`.
+    /// Validation runs outside the reactor loop. Results are checked against the
+    /// current selection and round before durable proposal admission; a stale
+    /// completion must not overwrite an accepted proposal.
     io_jobs: VecDeque<batches::IoJob>,
     /// Verdicts that outlived their proposal, banked for the next one — see
     /// `batches::ValidatedCandidates`.
@@ -652,7 +645,6 @@ impl<E: Executor> Reactor<E> {
                     let consensus_result = self.handle_consensus_msg(msg)
                         .await
                         .context("handle_consensus_msg failed")?;
-                    self.consensus.try_acknowledge_decision(&self.db_conn()).await?;
                     if let consensus_state::ConsensusResult::BatchProcessed { txids } = &consensus_result
                         && let Some(tx) = &self.event_tx
                         && tx
@@ -704,7 +696,6 @@ impl<E: Executor> Reactor<E> {
                     self.apply_io_verdicts(job.apply, verdicts)
                         .await
                         .context("apply_io_verdicts failed")?;
-                    self.consensus.try_acknowledge_decision(&self.db_conn()).await?;
                     self.advance().await.context("advance failed after proposal input became available")?;
                 }
                 _ = fee_publish_ticker.tick() => {
@@ -1195,3 +1186,6 @@ pub fn run(
         }
     })
 }
+
+#[cfg(test)]
+mod proposal_recovery_tests;
