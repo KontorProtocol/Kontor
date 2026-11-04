@@ -1,5 +1,5 @@
 import { expect, inject, test } from "vitest";
-import { Decimal, KontorSession, inMemoryFunding } from "@kontor/sdk";
+import { Decimal, KontorSession, LocalKey, inMemoryFunding } from "@kontor/sdk";
 import { connectRegtest } from "@kontor/sdk/regtest";
 import { Contract as Token } from "./__generated__/token.js";
 import "./regtest-context.js";
@@ -7,7 +7,10 @@ import "./regtest-context.js";
 test("protocol discovery, view and contextual simulation use the running node", async () => {
   const regtest = connectRegtest(inject("regtest"));
   const { signing, fundingUtxo } = regtest.accounts[8]!;
-  const recipient = regtest.accounts[1]!.signing.identity.holderRef;
+  const recipient = LocalKey.fromPrivateKey({
+    privateKey: "44".repeat(32),
+    chain: regtest.chain,
+  }).identity.holderRef;
   const session = new KontorSession({
     chain: regtest.chain,
     signing,
