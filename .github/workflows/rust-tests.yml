@@ -38,7 +38,8 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: |
-            ~/.cargo/registry
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: cargo-sources-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/Cargo.lock') }}
       - uses: actions/cache/restore@v6
@@ -46,7 +47,8 @@ jobs:
         with:
           path: |
             core/target
-          key: rust-tests-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.99.1-${{ matrix.profile }}-${{ hashFiles('core/Cargo.lock', 'core/**/Cargo.toml', 'core/**/build.rs', 'core/.cargo/**') }}-${{ github.sha }}
+          key: rust-tests-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.99.1-${{ matrix.profile }}-${{ hashFiles('core/Cargo.lock', 'core/**/Cargo.toml', 'core/**/build.rs', 'core/.cargo/**') }}
+          # Seed the new dependency cache from existing per-commit entries once.
           restore-keys: |
             rust-tests-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.99.1-${{ matrix.profile }}-${{ hashFiles('core/Cargo.lock', 'core/**/Cargo.toml', 'core/**/build.rs', 'core/.cargo/**') }}-
       - name: Install dependencies (Linux)
@@ -77,11 +79,12 @@ jobs:
           SCCACHE_GHA_ENABLED: 'true'
       - name: Bound compilation cache uploads
         id: budget
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && steps.compiled.outputs.cache-hit != 'true'
         env:
           MAX_CACHE_KIB: '10485760'
+          PRUNE_TEST_EXECUTABLES: 'true'
         run: tools/ci/cache-budget.sh core/target
-      - name: Save compiled inputs for subsequent PRs
+      - name: Seed compiled dependencies for subsequent PRs
         if: success() && github.ref == 'refs/heads/main' && steps.compiled.outputs.cache-hit != 'true' && steps.budget.outputs.save == 'true'
         uses: actions/cache/save@v6
         with:

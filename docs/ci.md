@@ -100,7 +100,15 @@ Tests are not sharded into additional processes or networks.
   outdated CLI.
 - Test compilation caches are separated by hosted image, architecture,
   compiler, profile and build configuration. Cargo validates freshness even
-  after an exact cache hit.
+  after an exact cache hit. Main seeds one cache per dependency/build
+  configuration, rather than uploading the whole target directory on every
+  commit. Old per-commit entries can seed the new key during migration.
+  These are dependency seeds, not promises of current workspace binaries:
+  Cargo still rebuilds changed sources, and sccache remains enabled for ordinary
+  tests. Test executables are removed before saving, while proc-macro libraries
+  are retained. Test source caches store registry archives and indexes, not
+  their extracted copies. Exact hosted-image identity stays in compiled-cache
+  keys to avoid assuming native toolchains are compatible across image updates.
 - Linked-node caches retain graph-specific target directories under the
   existing namespaces, never a unified executor/consensus target directory.
   Linux restores them into the directory mounted at `/evidence`, so the
@@ -121,6 +129,12 @@ Tests are not sharded into additional processes or networks.
 There is no scheduled cache-warming matrix. Missing platform caches populate
 during the next necessary main run. Fresh-build/reproducibility and native
 crypto controls retain their existing behavior.
+
+The repository currently has a 10 GiB GitHub cache allowance shared by all
+workflows. Per-upload limits do not reserve capacity for each matrix cell.
+We retain dev caches and existing sccache behavior while measuring reuse on
+necessary runs. Further linked-node cache pruning, broader restore keys and
+container timestamp changes are deferred pending size and freshness evidence.
 
 ## Production images
 

@@ -12,6 +12,11 @@ for path in "$@"; do
         # The final node link must regenerate compiler/linker audit records that
         # live outside target. Cached dependencies remain usable independently.
         find "$path" -type d -path '*/.fingerprint/kontor-node-*' -prune -exec rm -rf {} +
+        if [[ "${PRUNE_TEST_EXECUTABLES:-false}" == true ]]; then
+            # Keep proc-macro libraries; test programs are relinked from the
+            # current checkout and need not occupy the shared cache quota.
+            find "$path" -type f -path '*/deps/*' ! -path '*/build/*' -perm -u+x ! -name '*.so' ! -name '*.dylib' -delete
+        fi
         kib=$(du -sk "$path" | cut -f1)
         size=$((size + kib))
     fi
