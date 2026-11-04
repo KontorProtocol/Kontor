@@ -233,9 +233,9 @@ fn load(directory: &Path) -> Value {
 }
 fn fixture() -> TempDir {
     let root = tempdir().unwrap();
-    for (runner, cell, os, arch) in PLATFORMS {
+    for (cell, os, arch) in PLATFORMS {
         for profile in ["dev", "release"] {
-            let directory = root.path().join(format!("native-stack-{runner}-{profile}"));
+            let directory = root.path().join(format!("native-stack-{cell}-{profile}"));
             fs::create_dir(&directory).unwrap();
             let (mut chains, mut owned) = chains_fixture();
             for chain in chains
@@ -290,8 +290,8 @@ fn exact_profile_cells_sources_and_components_are_required() {
             .is_err()
         );
     }
-    for (runner, _, _, _) in PLATFORMS {
-        fs::remove_dir_all(root.path().join(format!("native-stack-{runner}-dev"))).unwrap();
+    for (cell, _, _) in PLATFORMS {
+        fs::remove_dir_all(root.path().join(format!("native-stack-{cell}-dev"))).unwrap();
     }
     assert_eq!(
         compare(
@@ -309,14 +309,14 @@ fn exact_profile_cells_sources_and_components_are_required() {
         3
     );
     assert!(check(root.path()).is_err());
-    fs::remove_dir_all(root.path().join("native-stack-macos-15-release")).unwrap();
+    fs::remove_dir_all(root.path().join("native-stack-macOS-ARM64-release")).unwrap();
     assert!(compare(root.path(), "success", None, None, None, "release").is_err());
 }
 
 #[test]
 fn matching_logs_do_not_hide_invalid_results_or_ownership() {
     let root = fixture();
-    let directory = root.path().join("native-stack-ubuntu-24.04-dev");
+    let directory = root.path().join("native-stack-Linux-X64-dev");
     let baseline = load(&directory);
     for (pointer, value) in [
         ("/schema_version", json!(6.0)),
@@ -366,7 +366,7 @@ fn matching_logs_do_not_hide_invalid_results_or_ownership() {
 #[test]
 fn cross_platform_and_complete_case_comparisons_remain_strict() {
     let root = fixture();
-    let directory = root.path().join("native-stack-ubuntu-24.04-dev");
+    let directory = root.path().join("native-stack-Linux-X64-dev");
     let baseline = load(&directory);
     for key in ["cases", "chains", "owned_chains"] {
         let mut changed = baseline.clone();
@@ -415,7 +415,7 @@ fn cross_platform_and_complete_case_comparisons_remain_strict() {
 #[test]
 fn raw_evidence_and_lifecycle_markers_cannot_be_substituted() {
     let root = fixture();
-    let directory = root.path().join("native-stack-ubuntu-24.04-dev");
+    let directory = root.path().join("native-stack-Linux-X64-dev");
     let baseline = load(&directory);
     for (name, raw, rehash) in [
         (
@@ -476,7 +476,7 @@ fn raw_evidence_and_lifecycle_markers_cannot_be_substituted() {
 fn archive_paths_cannot_escape_through_symlinks() {
     let root = fixture();
     let outside = tempdir().unwrap();
-    let directory = root.path().join("native-stack-ubuntu-24.04-dev");
+    let directory = root.path().join("native-stack-Linux-X64-dev");
     let report = load(&directory);
     let name = report["cases"][0]["observations"][0]["log"]
         .as_str()
@@ -534,8 +534,8 @@ fn command_binds_checkout_and_removes_stale_success_on_failure() {
         serde_json::from_slice::<Value>(&fs::read(&output_path).unwrap()).unwrap(),
         result
     );
-    for (runner, _, _, _) in PLATFORMS {
-        fs::remove_dir_all(evidence.path().join(format!("native-stack-{runner}-dev"))).unwrap();
+    for (cell, _, _) in PLATFORMS {
+        fs::remove_dir_all(evidence.path().join(format!("native-stack-{cell}-dev"))).unwrap();
     }
     assert!(
         compare_stack(&root, args("release"))

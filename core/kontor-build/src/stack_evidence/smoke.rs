@@ -30,17 +30,17 @@ pub const TESTS: &[&str] = &[
 ];
 pub const CELLS: &[(&str, &str, &str)] = &[
     (
-        "native-smoke-macos-15",
+        "native-smoke-macOS-ARM64",
         "macOS-ARM64/dev",
         "aarch64-apple-darwin",
     ),
     (
-        "native-smoke-ubuntu-24.04",
+        "native-smoke-Linux-X64",
         "Linux-X64/dev",
         "x86_64-unknown-linux-gnu",
     ),
     (
-        "native-smoke-ubuntu-24.04-arm",
+        "native-smoke-Linux-ARM64",
         "Linux-ARM64/dev",
         "aarch64-unknown-linux-gnu",
     ),

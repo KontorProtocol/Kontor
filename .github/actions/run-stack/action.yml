@@ -15,17 +15,18 @@ runs:
   steps:
   - name: Compile selected test targets
     env:
-      PROFILE: ${{ inputs.profile }}
+      # Dependencies track PROFILE; exporting it here invalidates later Cargo reuse.
+      STACK_PROFILE: ${{ inputs.profile }}
       WORKSPACE: ${{ inputs.workspace }}
     shell: bash
     run: |
-      evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$PROFILE"
+      evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$STACK_PROFILE"
       mkdir -p "$evidence"
       flags=()
-      if [[ "$PROFILE" == release ]]; then flags+=(--release); fi
+      if [[ "$STACK_PROFILE" == release ]]; then flags+=(--release); fi
       targets=(-p indexer --lib)
       if [[ "$WORKSPACE" == true ]]; then
-        test "$PROFILE" = release
+        test "$STACK_PROFILE" = release
         targets=(--workspace)
       fi
       cargo test --locked --manifest-path core/Cargo.toml "${targets[@]}" --no-run --message-format=json -j2 "${flags[@]}" > "$evidence/cargo.json"
@@ -63,12 +64,12 @@ runs:
   - name: Measure stack boundaries
     if: inputs.profile == 'release' || inputs.profiles == 'full'
     env:
-      PROFILE: ${{ inputs.profile }}
+      STACK_PROFILE: ${{ inputs.profile }}
     shell: bash
     run: |
       binary=$(cat target/native-stack-evidence/binary-path)
-      evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$PROFILE"
-      tools/kontor qualify-stack --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/$PROFILE" --output "$evidence" --chain-log "$evidence/chain-matrix.log" --owned-chain-log "$evidence/owned-chain-matrix.log" --ownership-log "$evidence/ownership-controls.log"
+      evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$STACK_PROFILE"
+      tools/kontor qualify-stack --binary "$binary" --cell "$RUNNER_OS-$RUNNER_ARCH/$STACK_PROFILE" --output "$evidence" --chain-log "$evidence/chain-matrix.log" --owned-chain-log "$evidence/owned-chain-matrix.log" --ownership-log "$evidence/ownership-controls.log"
   - name: Run bounded dev smoke
     if: inputs.profile == 'dev' && inputs.profiles == 'release'
     shell: bash

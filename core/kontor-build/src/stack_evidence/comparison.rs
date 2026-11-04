@@ -14,10 +14,10 @@ use crate::container::sha256;
 use crate::toolchain::output as command_output;
 use crate::write_json;
 
-const PLATFORMS: &[(&str, &str, &str, &str)] = &[
-    ("macos-15", "macOS-ARM64", "macos", "aarch64"),
-    ("ubuntu-24.04", "Linux-X64", "linux", "x86_64"),
-    ("ubuntu-24.04-arm", "Linux-ARM64", "linux", "aarch64"),
+const PLATFORMS: &[(&str, &str, &str)] = &[
+    ("macOS-ARM64", "macos", "aarch64"),
+    ("Linux-X64", "linux", "x86_64"),
+    ("Linux-ARM64", "linux", "aarch64"),
 ];
 const REPORT_FIELDS: &[&str] = &[
     "schema_version",
@@ -184,13 +184,13 @@ pub fn compare(
         "unknown qualification profile policy"
     );
     let mut expected = BTreeMap::new();
-    for (runner, cell, os, arch) in PLATFORMS {
+    for (cell, os, arch) in PLATFORMS {
         for profile in ["dev", "release"] {
             if profiles == "release" && profile == "dev" {
                 continue;
             }
             expected.insert(
-                format!("native-stack-{runner}-{profile}"),
+                format!("native-stack-{cell}-{profile}"),
                 (format!("{cell}/{profile}"), *os, *arch),
             );
         }
@@ -214,7 +214,8 @@ pub fn compare(
     }
     ensure!(
         found == expected.keys().cloned().collect(),
-        "cell keys differ"
+        "cell keys differ: expected {:?}, found {found:?}",
+        expected.keys().collect::<Vec<_>>()
     );
     let mut reports = BTreeMap::new();
     let mut cases = BTreeMap::new();
