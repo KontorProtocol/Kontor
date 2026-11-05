@@ -172,8 +172,11 @@ jobs:
         env:
           MAX_CACHE_KIB: '12582912'
         run: |
-          shopt -s globstar nullglob
-          tools/ci/cache-budget.sh target/protocol-evidence/**/target
+          targets=()
+          while IFS= read -r -d '' path; do
+            targets+=("$path")
+          done < <(find target/protocol-evidence -type d -name target -prune -print0)
+          tools/ci/cache-budget.sh "${targets[@]}"
       - name: Save isolated graph compilation
         if: success() && github.ref == 'refs/heads/main' && steps.graphs.outputs.cache-hit != 'true' && steps.budget.outputs.save == 'true'
         uses: actions/cache/save@v6
