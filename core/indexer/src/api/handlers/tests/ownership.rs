@@ -225,6 +225,15 @@ async fn fatal_owner_withdraws_http_readiness() -> Result<()> {
         ..InfoCore::default()
     });
     env.info_rx = info_rx;
+    env.bitcoin.set_chain_observation_for_test(
+        crate::bitcoin_client::observation::ChainObservation {
+            chain: bitcoin::Network::Regtest,
+            blocks: 1,
+            headers: 1,
+            initial_block_download: false,
+            observed_at: std::time::Instant::now(),
+        },
+    );
     let app = Router::new()
         .route("/healthz/ready", get(get_healthz_ready))
         .with_state(env.clone());
