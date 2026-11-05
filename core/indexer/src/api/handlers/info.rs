@@ -1,9 +1,9 @@
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use axum::Json;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
+use axum::{Json, response::IntoResponse};
 use indexer_types::{ConsensusMode, Info};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
@@ -142,6 +142,10 @@ pub struct Healthz {
     pub failed: bool,
     /// Highest indexed block, `null` until the first block lands.
     pub height: Option<u64>,
+    /// Last observed Bitcoin block count, unknown before the first successful poll.
+    pub bitcoin_height: Option<u64>,
+    /// Indexed within one block of a recent, non-IBD backend observation.
+    pub bitcoin_synced: bool,
 }
 
 /// `GET /healthz/live` — process liveness. Answers 200 whenever the API task
@@ -152,7 +156,8 @@ pub async fn get_healthz_live() -> &'static str {
 }
 
 /// `GET /healthz/ready` — should this pod be sent traffic: the reactor started,
-/// chain state exists, and we are not on our way out (#214).
+/// chain state is caught up to a recent Bitcoin observation, and we are not on
+/// our way out (#214). Probe reads are local and never send Bitcoin RPCs.
 ///
 /// `reactor_ready` is a latch: armed once at startup and never disarmed, so on
 /// its own it keeps reporting a node healthy long after its reactor has died.
@@ -165,12 +170,16 @@ pub async fn get_healthz_live() -> &'static str {
 /// requested shutdown too, because that is how a pod gets pulled from the
 /// endpoint list before it stops listening. Refusing in-flight traffic is a
 /// different question, answered by `failed` alone.
-pub async fn get_healthz_ready(State(env): State<Env>) -> (StatusCode, Json<Healthz>) {
+pub async fn get_healthz_ready(State(env): State<Env>) -> impl IntoResponse {
     let reactor_ready = env.reactor_ready.load(Ordering::Relaxed);
     let shutting_down = env.shutdown.is_cancelled();
     let failed = env.failed.load(Ordering::Relaxed) || env.owner_service.is_fatal();
     let height = env.info_rx.borrow().height;
-    let ready = reactor_ready && !shutting_down && !failed && height.is_some();
+    let bitcoin = env.bitcoin.chain_observation();
+    let bitcoin_synced = bitcoin
+        .as_ref()
+        .is_some_and(|tip| tip.is_synced(height, env.config.network, Instant::now()));
+    let ready = reactor_ready && !shutting_down && !failed && bitcoin_synced;
     let code = if ready {
         StatusCode::OK
     } else {
@@ -178,12 +187,15 @@ pub async fn get_healthz_ready(State(env): State<Env>) -> (StatusCode, Json<Heal
     };
     (
         code,
+        [(header::CACHE_CONTROL, "no-store")],
         Json(Healthz {
             ready,
             reactor_ready,
             shutting_down,
             failed,
             height,
+            bitcoin_height: bitcoin.as_ref().map(|tip| tip.blocks),
+            bitcoin_synced,
         }),
     )
 }

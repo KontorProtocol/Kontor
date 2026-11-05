@@ -32,6 +32,26 @@ Contains a variety of contracts used to test the indexer.
 
 ## Development
 
+### Health probes
+
+`GET /healthz/live` is process liveness. `GET /healthz/ready` returns 503 until
+the reactor is initialized and indexed state is within one block of a recent,
+non-IBD Bitcoin observation on the configured network. Observations expire after
+30 seconds; successful existing `getblockchaininfo` calls refresh them across
+client clones. Probes read local state and send no additional RPCs. The response
+includes `bitcoin_height` and `bitcoin_synced` and is marked `no-store`.
+
+Use readiness, not liveness, to withdraw traffic during startup/replay or
+shutdown. A failed readiness check must not restart a healthy replay. Public
+request draining and protocol/consensus behavior are unchanged. This compares
+local progress with the configured Bitcoin backend; it is not proof of external
+network freshness, checkpoint agreement or validator signing eligibility.
+
+For deployment, both Kubernetes readiness and load-balancer HTTP health checks
+must use `/healthz/ready`. Older pinned images do not implement this contract;
+do not change their probe path before a compatible image and isolated recovery
+rehearsal pass. This source change alone does not upgrade retained production.
+
 ### Install build dependencies:
 
 MacOS:
