@@ -2,10 +2,12 @@ use std::collections::HashMap;
 use std::env;
 #[cfg(target_os = "linux")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_os = "macos"))]
 use std::sync::mpsc::channel;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::{Arc, Barrier};
 use std::thread::ThreadId;
+#[cfg(not(target_os = "macos"))]
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -13,7 +15,9 @@ use anyhow::{Context, Result, bail, ensure};
 use hex::encode;
 #[cfg(target_os = "linux")]
 use kontor_build::stack_evidence::resource_report::ThreadObservation;
-use serde_json::{Value as JsonValue, from_str, json};
+#[cfg(target_os = "linux")]
+use serde_json::from_str;
+use serde_json::{Value as JsonValue, json};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use sha2::{Digest, Sha256};
 use tokio::runtime::Builder;
@@ -724,7 +728,7 @@ fn collect_blocking_observations(
             let thread_id = format!("{:?}", event.thread_id);
             ensure!(
                 observation["thread_id"].as_str() == Some(thread_id.as_str())
-                    && observation["os_thread_id"].as_i64() == Some(event.os_thread_id.into())
+                    && observation["os_thread_id"] == json!(event.os_thread_id)
                     && observation["thread_category"].as_str() == Some("blocking_pool")
                     && !worker_ids.contains(&event.thread_id),
                 "blocking stack measurement differs from event identity: {event:?}"
@@ -745,7 +749,7 @@ fn collect_blocking_observations(
         ensure!(
             thread_observations.iter().any(|observation| {
                 observation["thread_id"].as_str() == Some(thread_id.as_str())
-                    && observation["os_thread_id"].as_i64() == Some(event.os_thread_id.into())
+                    && observation["os_thread_id"] == json!(event.os_thread_id)
                     && observation["thread_category"].as_str() == Some("blocking_pool")
             }),
             "blocking event has no measured stack: {event:?}"
