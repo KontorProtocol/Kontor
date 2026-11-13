@@ -69,7 +69,6 @@ world root {
   export floor: func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
   export balances: func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
   export total-supply: func(ctx: borrow<view-context>) -> decimal;
-  export positive-balance-count: func(ctx: borrow<view-context>) -> u64;
   export dev-mint-enabled: func(ctx: borrow<view-context>) -> bool;
   export attach: func(ctx: borrow<proc-context>, vout: u32, amt: decimal) -> result<transfer, error>;
   export detach: func(ctx: borrow<proc-context>) -> result<transfer, error>;

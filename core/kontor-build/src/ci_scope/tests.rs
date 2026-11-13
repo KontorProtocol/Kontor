@@ -249,7 +249,7 @@ fn qualification_scopes_follow_separate_execution_boundaries() {
             true,
         ),
         (
-            "core/indexer/src/protocol/v2/token_migration.rs",
+            "core/indexer/src/protocol/v2/fixture_migration.rs",
             false,
             true,
         ),

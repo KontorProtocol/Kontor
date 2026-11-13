@@ -34,6 +34,8 @@ struct Spec {
     compiler: PathBuf,
     graphs: Vec<Graph>,
     link_set: Option<String>,
+    #[serde(default)]
+    features: Vec<String>,
     attestation: Option<Value>,
     linker_wrapper: Option<PathBuf>,
     linker_wrapper_sha256: Option<String>,
@@ -103,6 +105,7 @@ fn prepare(compiler: &Path, arguments: &mut Vec<OsString>, spec: &Spec) -> Resul
     if let Some(link_set) = spec.link_set.as_deref() {
         let expected = match link_set {
             "legacy-qualification" => vec![("executor", "first"), ("executor", "second")],
+            "production-node" => vec![("executor", "first"), ("consensus", "first")],
             "managed-node" => vec![
                 ("executor", "first"),
                 ("executor", "observer"),
@@ -121,15 +124,27 @@ fn prepare(compiler: &Path, arguments: &mut Vec<OsString>, spec: &Spec) -> Resul
             .all(|(role, _)| matches!(*role, "executor" | "consensus")),
         "unknown independent library role"
     );
-    if spec.link_set.as_deref() == Some("managed-node") {
+    if matches!(
+        spec.link_set.as_deref(),
+        Some("production-node" | "managed-node")
+    ) {
         arguments.extend([
-            "--cfg".into(),
-            "kontor_observer".into(),
             "--cfg".into(),
             "kontor_managed".into(),
             "--cfg".into(),
             "kontor_consensus_runtime".into(),
         ]);
+        let qualification = spec
+            .features
+            .iter()
+            .any(|feature| feature == "protocol-qualification");
+        ensure!(
+            qualification == (spec.link_set.as_deref() == Some("managed-node")),
+            "qualification feature differs from link set"
+        );
+        if qualification {
+            arguments.extend(["--cfg".into(), "kontor_observer".into()]);
+        }
     }
     for graph in &spec.graphs {
         ensure!(
@@ -166,7 +181,10 @@ fn prepare(compiler: &Path, arguments: &mut Vec<OsString>, spec: &Spec) -> Resul
 }
 
 fn attestation(arguments: &[OsString], spec: &Spec) -> Result<Option<(String, String)>> {
-    if spec.link_set.as_deref() != Some("managed-node") {
+    if !matches!(
+        spec.link_set.as_deref(),
+        Some("production-node" | "managed-node")
+    ) {
         return Ok(None);
     }
     let record = spec
@@ -178,9 +196,14 @@ fn attestation(arguments: &[OsString], spec: &Spec) -> Result<Option<(String, St
         .context("managed node requires its builder attestation")?;
     ensure!(
         record["schema"] == 1
-            && record["link_set"] == "managed-node"
-            && graphs.len() == 3
-            && spec.graphs.len() == 3,
+            && record["link_set"].as_str() == spec.link_set.as_deref()
+            && graphs.len()
+                == if spec.link_set.as_deref() == Some("managed-node") {
+                    3
+                } else {
+                    2
+                }
+            && spec.graphs.len() == graphs.len(),
         "managed node requires its builder attestation"
     );
     for (actual, library) in graphs.iter().zip(&spec.graphs) {
@@ -447,6 +470,10 @@ mod tests {
         let prototype = value["graphs"][0].clone();
         for (link_set, roles) in [
             (
+                "production-node",
+                vec![("executor", "first"), ("consensus", "first")],
+            ),
+            (
                 "managed-node",
                 vec![
                     ("executor", "first"),
@@ -460,6 +487,11 @@ mod tests {
             ),
         ] {
             value["link_set"] = json!(link_set);
+            value["features"] = if link_set == "managed-node" {
+                json!(["protocol-qualification"])
+            } else {
+                json!([])
+            };
             value["graphs"] = roles
                 .iter()
                 .map(|(role, graph)| {
@@ -478,15 +510,15 @@ mod tests {
             );
             assert_eq!(
                 args.contains(&"kontor_managed".into()),
-                link_set == "managed-node"
+                link_set != "legacy-qualification"
             );
             assert_eq!(
                 args.contains(&"kontor_consensus_runtime".into()),
-                link_set == "managed-node"
+                link_set != "legacy-qualification"
             );
             assert_eq!(
                 args.contains(&"kontor_observer".into()),
-                link_set != "legacy-qualification"
+                link_set == "managed-node"
             );
             for index in 0..roles.len() {
                 for mutation in ["missing", "role", "graph", "extra"] {

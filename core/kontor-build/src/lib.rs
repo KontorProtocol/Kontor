@@ -19,6 +19,7 @@ pub mod node_build;
 pub mod node_evidence;
 pub mod object_tools;
 mod outputs;
+pub mod prelaunch;
 pub mod provenance;
 pub mod recipes;
 pub mod shared_ownership;

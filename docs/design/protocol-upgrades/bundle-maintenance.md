@@ -1,12 +1,73 @@
 # Independently built protocol bundles
 
-The production `managed-node` build links independently locked historical
-executors into one executable. Validated canonical history selects the executor;
+The production `production-node` build links the prelaunch P1 executor and one
+consensus runtime into one executable. Validated canonical history selects the executor;
 installing a newer implementation does not activate it. One pinned Malachite
 runtime handles networking and consensus across activations. It is independently
 built for dependency ownership, but is not replaced on every protocol upgrade.
 See [validator startup](validator-startup.md) for role promotion and protected
 state, and [upgrade approvals](upgrade-approvals.md) for authorization and rehearsal.
+
+## Prelaunch maintenance
+
+Nothing has shipped to production. Current `core` sources and
+`protocol-bundles/executor-first` are authoritative P1 inputs, including ordinary
+Cargo builds and linked production builds. The unused `retained/p1` copy was
+removed; its complete archive remains at commit
+`16de5b2cfedbea49a6a5b43712156f15fc7a386a`. Freeze the actual P1
+source, dependencies, native artifacts and definition when preparing the launch.
+After launch, preserve released inputs and introduce successors instead of
+rewriting a released execution definition.
+
+The qualification-only P2 observer compiles the same current sources with an
+independent lock and native namespace. Its only application addition is the
+`upgrade-fixture` contract. The activation migration installs it at
+`(upgrade-fixture, activation Bitcoin height, u32::MAX)` and initializes its
+read-only version marker to `2`. That reserved transaction index cannot be
+produced by an ordinary bounded transaction list. The contract is absent in P1.
+Initialization, contract and signer records are part of the atomic migration;
+rollback removes them and reactivation reinstalls them. Repeated public `init`
+calls cannot change the marker. Existing native contracts, including token
+balances and schema, have identical behavior in both executors.
+
+Use this maintenance sequence after changing prelaunch P1:
+
+1. If native sources changed, run the existing pinned `tools/kontor build native`
+   build. If a common native binary changed, update its copy under
+   `core/indexer/src/protocol/v1/native`, its digest in `manifest.json`, and the
+   corresponding build/toolchain and source-provenance records. Encode
+   `provenance.bin` with the existing `BuildProvenance` postcard codec, update
+   metadata digests in the manifest, then update `NATIVE_GENESIS_ID` in `native.rs`
+   to that manifest's SHA-256. Provenance must identify the actual committed
+   source and pinned image used to build it. The native-input tests validate
+   these bindings. This metadata refresh is an explicit review step, not something
+   `sync-prelaunch` invents. Do not copy security-draft binaries blindly.
+2. Run `tools/kontor sync-prelaunch --write`. It derives the observer manifest and
+   lock from P1 and copies the qualification contract artifact. Without `--write`
+   it rejects drift. The normal builder unit tests also check the checked-in pair.
+3. Run `tools/kontor freeze-execution first --write`, then
+   `tools/kontor freeze-execution observer --write`. Refresh the standalone
+   `second` development reference when its shared source inputs changed.
+4. If coordinator inputs changed, run `tools/kontor freeze-consensus --write`.
+   Inspect changed inventories and identities, then run focused and linked tests.
+
+For local Cargo and bundle commands, use the parent directory's `local-build`
+helper and shared slots as described in `AGENTS.md`. No Python or parallel manual
+P1/P2 source edits are involved. The only dependency overlay is the pinned
+Wasmtime `.2` versus `.3` package/revision identity: these revisions have identical
+implementation sources, but the version suffix separates native exports. The
+generator rejects a changed pin pair until that overlay is reviewed again.
+
+`tools/kontor protocol-bundles --build-node` defaults to `production-node`, which
+links only P1. `--node-qualification` explicitly selects `managed-node`, adding
+the generated P2. Only that feature enables successor registration, discovery
+and activation. `tools/kontor qualify-node` selects it automatically. The SDK
+continues to target the unchanged launch transaction format. This prerequisite
+does not adopt the security draft's new transaction format or resolve its findings.
+
+Changing these unreleased identities can require explicit recreation of local
+development databases. Back up any needed data first. Nodes do not silently reset
+databases or support every intermediate development identity.
 
 ## Cleanup configuration inventory
 
@@ -15,8 +76,9 @@ configurations. This table does not create additional qualification jobs.
 
 | Configuration | Disposition | Minimum affected validation |
 | --- | --- | --- |
-| `managed-node`: retained P1, P2 observer and one pinned consensus runtime | Keep as the supported node composition. | `tools/kontor qualify-node` and `tools/kontor compare-node`, through the existing release workflow, after build/runtime changes stabilize. |
-| Retained P1 source and independent executor dependency graphs | Keep required execution inputs and identities; migrate support tooling separately. | Source-root inventory and execution-definition tests, followed by the managed-node validation above. |
+| `production-node`: current P1 and one pinned consensus runtime | Default production composition. | Builder and registry exclusion checks, followed by an audited production build. |
+| `managed-node`: matching current P1/P2 and one pinned consensus runtime | Explicit upgrade qualification only. | `tools/kontor qualify-node` and `tools/kontor compare-node`, through the existing release workflow, after changes stabilize. |
+| Former retained P1 copy | Removed because no build or test consumes it. Git preserves the archive; prelaunch production uses current P1. | Source-root inventory, definition and drift tests. |
 | Local runtime/test adapters | Keep intentional test coverage; remove only branches proven obsolete. | Focused ownership, cancellation, settlement and rollback tests when their code changes. |
 | `legacy-qualification` and retained K3 | Keep for the preserved pre-extraction, unversioned database replay oracle. Managed history must not be relabeled as this old baseline. This is a diagnostic configuration, not production database compatibility support. | Existing baseline replay, recipe and evidence checks when affected. |
 | Standalone proof graphs | Keep the independent VM/type, allocator/import ownership, signal/child-process and resource-lifecycle checks. These assertions are not all supplied by the managed-node harness. | Existing proof/interface/object controls when affected; no new automatic qualification. |
@@ -39,8 +101,9 @@ The historical execution ledger records why it was originally captured. Its
 self-preservation test was removed with it; mutation, substituted-inventory,
 relocation and path-containment checks remain.
 
-The P1 and K3 snapshots now omit 35 and 28 duplicate Python tooling files,
-respectively. Builds already use orchestration from the current checkout.
+The earlier cleanup removed 35 and 28 duplicate Python tooling files from the
+then-retained P1 and K3 snapshots, respectively. P1 has since been removed as
+described above. Builds already use orchestration from the current checkout.
 Historical Rust fixtures, semantic baselines, manifest vectors, Cargo inputs and
 execution-definition bytes remain intact. All four retained definitions were
 verified against fresh locked, offline Cargo metadata before and after pruning.
@@ -63,15 +126,15 @@ test vectors, licenses, dependency locks, feature selections and execution polic
 are preserved. Retained snapshot records include the preceding definitions and
 inventory hashes, with the complete preceding trees available at `3cec820f`.
 
-Current snapshot hashes are P1
+The removed P1 snapshot hash was
 `8302f1341414c82ce744f872357f4b919dca3925cac0b38dea68023687ca71d4`
-and K3 `d9d80e4af271ff122aea598778b2f36d0a2d170ffa86ff32a9f42a6328a01c09`.
-The supported managed-node execution IDs are P1
+and the retained K3 snapshot hash is `d9d80e4af271ff122aea598778b2f36d0a2d170ffa86ff32a9f42a6328a01c09`.
+The archived pre-prerequisite managed-node execution IDs were P1
 `56fd93c0af8d716649aafd779038f1bc1dd5d47f9baeea08b5cd400528d362d2`
 and P2 `82ca1297a6864bfa962f9cc4fbcd823fe98b18b5086f6ae3d12818e332e618cb`.
-Current development references also incorporate previously stale source hashes:
+Those development references also incorporated previously stale source hashes:
 P2's stack-test cleanup and the first/second development graphs' existing V2
-sources. The retained P1/K3 graphs preserve their historical execution sources.
+sources. Git preserves the former P1 tree; the retained K3 graphs preserve their historical execution sources.
 
 Historical ledger entries retain their original hashes. New executor source
 freezes copy required fixture assets individually instead of preserving old build
@@ -104,7 +167,8 @@ Rust tooling sources; executor definitions remain separate.
 Individual retained inventories can now be verified by the Rust build CLI:
 
 ```sh
-RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor verify-snapshot protocol-bundles/retained/p1 --sha256 8302f1341414c82ce744f872357f4b919dca3925cac0b38dea68023687ca71d4
+tools/kontor verify-snapshot protocol-bundles/retained/k3 \
+  --sha256 d9d80e4af271ff122aea598778b2f36d0a2d170ffa86ff32a9f42a6328a01c09
 ```
 
 The command prints the authenticated inventory as JSON and fails on changed,
@@ -221,7 +285,7 @@ CCACHE_DISABLE=1 tools/kontor qualify-node --profile release --output target/pro
 ```
 
 Omit `--offline` only when dependencies need fetching. The default managed link
-set contains retained P1, the deliberately different P2 observer executor and one
+set contains current P1, the matching P2 observer plus its qualification contract, and one
 pinned consensus runtime. It is distinct from the standalone proof command below.
 Keep one Cargo operation at a time and the builder's two-job limit.
 The Rust runner preserves raw stdout/stderr, removes stale successful execution
@@ -619,8 +683,8 @@ remain separate build evidence. A stale reference fails the build; a build does
 not regenerate it. The retained crate embeds its own reference directly, without
 depending on a build-script environment variable.
 
-For a deliberately changed, unreleased P2 definition, run
-`tools/kontor freeze-execution observer --write`
+For a changed prelaunch P1, first follow the regeneration sequence above, including
+`tools/kontor freeze-execution first --write` and `tools/kontor freeze-execution observer --write`
 under the pinned toolchain, inspect the changed inputs and ID, then
 qualify the resulting executors. Omitting `--write` only verifies the reference.
 The Rust generator resolves locked, unfiltered Cargo metadata offline.
@@ -630,7 +694,7 @@ semantic exclusions, inherited package properties and build policy are unchanged
 Never overwrite a released definition to silence a mismatch. Preserve its
 source graph and add the new definition separately. Compatibility qualification
 of a new compiler/platform artifact is distinct from changing execution rules.
-Preserve the frozen P1 source and reference. Coordinator source changes may also
+Preserve released sources and historical fixtures. Coordinator source changes may also
 require `tools/kontor freeze-consensus --write`; inspect the
 changed source inventory instead of regenerating references automatically in CI.
 This Rust command resolves locked, unfiltered node and consensus Cargo metadata
@@ -712,10 +776,10 @@ protocol cannot change after the response.
 
 ### Managed P1/P2 qualification
 
-The managed node contains deliberately different P1 and P2 behavior. Its
-qualification runner checks retained P1 against the preserved historical oracle,
+The qualification node contains matching P1 and P2 common behavior plus P2's
+additional fixture contract. Its runner checks P1 against the historical oracle,
 then runs the actual multi-validator transition fixture in the same audited
-binary. It does not require P2 to reproduce P1's old semantics. Legacy retained
+binary. Common native behavior must remain equal. Legacy retained
 link sets continue their two-graph equality comparison.
 
 `node-execution.json` records the linked graphs; `semantic_baseline.graphs`
@@ -726,11 +790,11 @@ native artifact/definition bindings, and agreement across the explicitly require
 platform/profile cells. Transition evidence covers its stated seeded-schedule
 scope; it is not a substitute for authorization, crash-recovery or cold-sync tests.
 
-`qualify-protocol-transition --recovery` exercises the real P2 token migration
+`qualify-protocol-transition --recovery` exercises the real P2 contract-installation migration
 through the production closure driver, starting from a seeded accepted schedule.
 It checks rollback after an injected activation-persistence failure, fresh-session
 recovery before and after migration commit, equality of every persistent table
-with uninterrupted execution, invalid migration input across reopening, and C+1
+with uninterrupted execution, a conflicting reserved contract across reopening, and C+1
 admission only after closure publication. It does not start consensus engines or
 simulate abrupt process termination. The command is separate from `--cluster`;
 both options cannot be selected together.

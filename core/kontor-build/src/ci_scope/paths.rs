@@ -92,7 +92,7 @@ const BUNDLE_FILES: &[&str] = &[
     "core/indexer/src/protocol/v1/migration.rs",
     "core/indexer/src/protocol/v1/migration_definition.rs",
     "core/indexer/src/protocol/v2/mod.rs",
-    "core/indexer/src/protocol/v2/token_migration.rs",
+    "core/indexer/src/protocol/v2/fixture_migration.rs",
     "core/indexer/src/protocol/v2/migration_definition.rs",
     "core/indexer/src/reactor/mod.rs",
     "core/indexer/src/reactor/upgrade_qualification.rs",

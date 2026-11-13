@@ -1,0 +1,9 @@
+package root:component;
+
+world root {
+  include kontor:built-in/built-in;
+  use kontor:built-in/context.{view-context, proc-context, contract};
+
+  export init: func(ctx: borrow<proc-context>) -> contract;
+  export version: func(ctx: borrow<view-context>) -> u64;
+}

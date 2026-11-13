@@ -19,7 +19,7 @@ indexer-types = { path = "../../core/indexer-types" }
 wit-validator = { path = "../../core/wit-validator" }
 anyhow = { version = "=1.0.104", default-features = false }
 tokio = { version = "=1.53.3", features = ["full"] }
-wasmtime = { git = "https://github.com/wilfreddenton/wasmtime", rev = "0dbc68b31c0bcf1a05c93122f1939fb8784e4e48", version = "=51.0.0-kontor.3", default-features = false, features = ["addr2line", "anyhow", "async", "backtrace", "component-model", "component-model-async", "cranelift", "gc-copying", "gc-drc", "gc-null", "pooling-allocator", "pulley", "runtime", "std", "threads", "wat", "wave", "wit-parser"] }
+wasmtime = { git = "https://github.com/wilfreddenton/wasmtime", rev = "0dbc68b31c0bcf1a05c93122f1939fb8784e4e48", version = "=51.0.0-kontor.3", default-features = false, features = ["anyhow", "async", "backtrace", "component-model", "component-model-async", "cranelift", "gc-copying", "gc-drc", "gc-null", "pooling-allocator", "pulley", "runtime", "std", "threads", "wat", "wave", "wit-parser"] }
 wasm-wave = { version = "=0.262.0", default-features = false }
 wit-component = { version = "=0.262.0" }
 wasmparser = { version = "=0.262.0", default-features = false, features = ["std", "component-model"] }

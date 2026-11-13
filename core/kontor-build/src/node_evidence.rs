@@ -281,7 +281,8 @@ fn startup(observations: &Value, link_set: Option<&str>) -> Result<()> {
 }
 fn baseline_graphs(link_set: Option<&str>) -> Result<Vec<String>> {
     let graphs = executor_graphs(link_set)?;
-    // P2 deliberately changes semantics; only retained P1 belongs to the old oracle.
+    // The separate transition suite exercises the successor after its installation
+    // migration. The genesis oracle runs against the selected P1 baseline.
     Ok(if link_set == Some("managed-node") {
         vec!["first".into()]
     } else {

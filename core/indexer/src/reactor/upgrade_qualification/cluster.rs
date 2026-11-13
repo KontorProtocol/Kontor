@@ -383,13 +383,13 @@ pub(crate) async fn run() -> Result<Value> {
         let c2 = wait_all(&mut nodes, 2, next.block_hash(), target).await?;
         let p2_preview = check_client_context(&nodes[0], 2, next.block_hash(), target).await?;
         for node in &nodes {
-            ensure!(node.view().await? == json!({"Ok":"1"}), "P2 migration count differs");
+            ensure!(node.view().await? == json!({"Ok":"2"}), "P2 fixture initialization differs");
         }
         let upgraded_provenance = nodes[0].provenance("token").await?;
         ensure!(upgraded_provenance.entries == original_provenance.entries);
-        ensure!(upgraded_provenance.effective_artifact.source == ContractArtifactSource::ProtocolNative);
+        ensure!(upgraded_provenance.effective_artifact.source == ContractArtifactSource::Publication);
         ensure!(upgraded_provenance.effective_artifact.published_sha256 == original_provenance.effective_artifact.sha256);
-        ensure!(upgraded_provenance.effective_artifact.sha256 != original_provenance.effective_artifact.sha256);
+        ensure!(upgraded_provenance.effective_artifact.sha256 == original_provenance.effective_artifact.sha256);
         ensure!(upgraded_provenance.effective_artifact.execution_definition != original_provenance.effective_artifact.execution_definition);
         ensure!(upgraded_provenance.effective_artifact.protocol_id == Some(hex::encode(target.0)));
         let unaffected = nodes[0].provenance("staking").await?;
@@ -449,7 +449,7 @@ pub(crate) async fn run() -> Result<Value> {
             ensure!(state(&node.observer).await? == expected_state);
             ensure!(eras::at(&node.observer, c5).await? == Some(expected_era.clone()));
             ensure!(activation::current(&node.observer).await? == Some(reapplied.clone()));
-            ensure!(node.view().await? == json!({"Ok":"1"}), "reapplied migration count differs");
+            ensure!(node.view().await? == json!({"Ok":"2"}), "reapplied fixture initialization differs");
             ensure!(node.addresses.borrow().as_ref() == Some(&node.listener));
             ensure!(node.provenance("token").await? == upgraded_provenance, "reapplied provenance differs");
             for (index, id) in retained.iter().enumerate() {

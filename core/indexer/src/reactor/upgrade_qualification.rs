@@ -7,6 +7,7 @@ pub(crate) mod authorization;
 mod catchup;
 pub(crate) mod cluster;
 mod committee;
+mod common_contracts;
 mod confirmation;
 pub(crate) mod crash;
 mod fixture;
@@ -16,7 +17,6 @@ mod replay;
 mod services;
 mod successive;
 mod support;
-mod token_count;
 mod unsupported;
 
 use anyhow::{Context, Error, Result, anyhow, ensure};
@@ -28,6 +28,7 @@ use tempfile::TempDir;
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::{sleep, timeout};
 
+use self::fixture::{fixture_view, native_fixture_address};
 use super::engine::{EngineConfig, NodeCoordinator};
 use super::execution::ExecutionContext;
 use super::executor::RuntimeExecutor;
@@ -46,7 +47,7 @@ use crate::protocol::coordinator::baseline::Baseline;
 use crate::protocol::coordinator::control::{ControlState, PendingPlan};
 use crate::protocol::coordinator::genesis::envelope;
 use crate::protocol::coordinator::linked::{
-    canonical_session, execute_view, initialize, read_only_factory, read_snapshot,
+    canonical_session, initialize, read_only_factory, read_snapshot,
 };
 use crate::protocol::coordinator::manifest::ProtocolManifest;
 use crate::protocol::coordinator::{bootstrap, successor};
@@ -221,14 +222,7 @@ async fn restart(
                 completion::completed(&observer, frontier.closed_height).await? == completed,
                 "restart changed a completed closure"
             );
-            let view = execute_view(
-                &service,
-                pool.get().await?,
-                NETWORK,
-                ("token".into(), 0, 0),
-                "positive-balance-count()".into(),
-            )
-            .await?;
+            let view = fixture_view(&service, pool.get().await?).await?;
             ensure!(
                 view.as_ref().is_ok_and(|value| value == expected_view),
                 "restart did not select the persisted P2 state: {view:?}"
@@ -321,10 +315,8 @@ pub(crate) async fn run() -> Result<Value> {
             directory.path().to_path_buf(), DATABASE.into(),
             read_only_factory(NETWORK, 1_000_000)?, 1,
         )?;
-        let token = ("token".into(), 0, 0);
-        let before = execute_view(&service, pool.get().await?, NETWORK,
-            token.clone(), "positive-balance-count()".into()).await?;
-        ensure!(before.is_err(), "P1 unexpectedly exposes the P2 token interface");
+        let before = fixture_view(&service, pool.get().await?).await?;
+        ensure!(before.is_err(), "P1 unexpectedly exposes the P2 qualification contract");
         let consensus = start_linked_consensus(config.clone(), Some(&coordinator),
             &session, &service, NETWORK, None, None, 0, MempoolFeeIndex::new(None)).await?;
         let generation_journal = directory.path().join("consensus-authority/generations.log");
@@ -355,7 +347,6 @@ pub(crate) async fn run() -> Result<Value> {
                 let resume = Arc::new(Notify::new());
                 let ready = pinned.clone();
                 let release = resume.clone();
-                let old_token = token.clone();
                 let old_protocol = baseline.context.protocol;
                 let old_executor = baseline.manifest.executor;
                 let held = read_snapshot(&service, pool.get().await?, NETWORK,
@@ -368,7 +359,7 @@ pub(crate) async fn run() -> Result<Value> {
                         ensure!(canonical_history::state(&conn).await? == snapshot,
                             "pinned read advanced to the activated state");
                         (executor.operations.view)(executor.owner, selection.envelope(),
-                            old_token, "positive-balance-count()".into())
+                            native_fixture_address(&conn).await?, "version()".into())
                             .await.map_err(HostFailure::from).map_err(Error::from)
                     });
                 let activate = async {
@@ -381,10 +372,9 @@ pub(crate) async fn run() -> Result<Value> {
                 };
                 let (held, ()) = tokio::try_join!(held, activate)?;
                 ensure!(held == before, "pinned P1 view changed during P2 activation");
-                let after = execute_view(&service, pool.get().await?, NETWORK,
-                    token, "positive-balance-count()".into()).await?;
-                ensure!(after.as_ref().is_ok_and(|value| value.parse::<u64>().is_ok_and(|count| count > 0)),
-                    "P2 did not expose the migrated balance count: {after:?}");
+                let after = fixture_view(&service, pool.get().await?).await?;
+                ensure!(after.as_ref().is_ok_and(|value| value == "2"),
+                    "P2 did not expose the initialized qualification contract: {after:?}");
                 let mut second = block;
                 second.header.prev_blockhash = first_hash;
                 second.header.nonce = second.header.nonce.wrapping_add(1);

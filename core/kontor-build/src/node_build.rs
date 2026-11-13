@@ -43,7 +43,7 @@ fn selected_graphs(
     graphs: &[Value],
     consensus: &[Value],
 ) -> Result<(Graphs, Graphs)> {
-    let managed = link_set == "managed-node";
+    let managed = matches!(link_set, "production-node" | "managed-node");
     ensure!(
         managed != consensus.is_empty(),
         "managed node requires the pinned consensus runtime graph"
@@ -151,7 +151,10 @@ fn link_spec(
     let mut spec = json!({"compiler":compiler,"features":features,"link_set":options.link_set,"source_inputs_sha256":source_hash,
         "lock_sha256":lock_hash,"root_objects":directory.join("root-objects.json"),"graphs":libraries,"linker_wrapper":linker,
         "linker_wrapper_sha256":sha256(linker)?,"linker_record":directory.join("linker-record.json")});
-    if options.link_set == "managed-node" {
+    if matches!(
+        options.link_set.as_str(),
+        "production-node" | "managed-node"
+    ) {
         let mut attestations = Vec::new();
         for (index, library) in libraries.iter().enumerate() {
             let mut entry = json!({"role":library["role"],"graph":library["graph"],"facade_sha256":library["facade_sha256"],"build_inputs_sha256":library["build_inputs_sha256"]});
@@ -240,7 +243,14 @@ pub fn run(request: Request) -> Result<Value> {
         "invalid node build profile or job count"
     );
     let (recipes, engines) = selected_graphs(&options.link_set, &graphs, &consensus)?;
-    let managed = options.link_set == "managed-node";
+    let managed = matches!(
+        options.link_set.as_str(),
+        "production-node" | "managed-node"
+    );
+    ensure!(
+        !managed || options.node_qualification == (options.link_set == "managed-node"),
+        "production and qualification link sets must match the node feature configuration"
+    );
     let manifest = root.join("protocol-bundles/node/Cargo.toml");
     let recipe: Value = toml::from_str(&fs::read_to_string(&manifest)?)?;
     ensure!(

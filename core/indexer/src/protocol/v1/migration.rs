@@ -4,6 +4,7 @@ use std::fmt;
 use super::storage_session;
 use crate::protocol::migration_input::{INPUT_CHUNK_BYTES, InputCallbacks, InputRow};
 use crate::protocol::migration_work::{MigrationMeter, MigrationWork};
+use crate::protocol::storage_contracts::ContractCallbacks;
 use crate::protocol::storage_footprint::FootprintCallbacks;
 use crate::protocol::storage_point::PointCallbacks;
 use crate::protocol::storage_session::SessionCallbacks;
@@ -50,6 +51,7 @@ pub(crate) struct MigrationContext {
     write: WriteState,
     footprint: FootprintCallbacks,
     session: SessionCallbacks,
+    contracts: ContractCallbacks,
     stack: Stack<u64>,
     counter: Counter,
     owner: BundleOwner,
@@ -80,6 +82,7 @@ impl MigrationContext {
             write: storage.host.state.0.clone(),
             footprint: storage.host.footprint.clone(),
             session: storage.host.session.clone(),
+            contracts: storage.host.contracts.clone(),
             stack: storage.savepoint_stack.clone(),
             counter: storage.savepoint_counter.clone(),
             owner,
@@ -119,6 +122,45 @@ impl MigrationContext {
             computation_steps: count,
             ..MigrationWork::default()
         })
+    }
+
+    pub(crate) async fn install_contract(&mut self, name: &str, bytes: &[u8]) -> Result<u64> {
+        let name_bytes = name.len() as u64;
+        self.charge(MigrationWork {
+            computation_steps: bytes.len() as u64,
+            read_operations: 1,
+            read_bytes: name_bytes + 12,
+            ..MigrationWork::default()
+        })?;
+        // Migration rows share the activation block's storage height. Reserve
+        // an index outside any bounded Bitcoin block/batch transaction list,
+        // rather than colliding with an ordinary publication at index zero.
+        let address = (name.to_owned(), self.height, u32::MAX);
+        let found = self.contracts.2(address).await;
+        if self.host(found)?.is_some() {
+            return self.fail(MigrationFailure::InvalidOperation(
+                "migration contract already exists",
+            ));
+        }
+        // Charge the signer and contract writes before either becomes visible.
+        // Both use the existing outer unit and height-based rollback cascades.
+        self.charge(MigrationWork {
+            write_operations: 2,
+            write_bytes: bytes.len() as u64 + name_bytes + 32,
+            ..MigrationWork::default()
+        })?;
+        let signer = self.contracts.0(self.height).await;
+        let signer = self.host(signer)?;
+        let inserted = self.contracts.1((
+            name.to_owned(),
+            self.height,
+            u32::MAX,
+            bytes.len() as u64,
+            bytes.to_vec(),
+            Some(signer),
+        ))
+        .await;
+        self.host(inserted)
     }
 
     pub(crate) async fn input_point(

@@ -54,10 +54,6 @@ pub fn p2_factory() -> Result<Factory, HostError> {
     make_factory(false, ExecutorVersion::P2)
 }
 
-pub fn p2_native_artifact_hash(contract_id: u64) -> Option<[u8; 32]> {
-    protocol::v2::native::artifact_hash(contract_id)
-}
-
 pub fn registration_observer(owner: SharedOwner) -> Result<RegistrationCall, HostError> {
     let session = owner.downcast::<BundleSession>().map_err(|_| {
         (
