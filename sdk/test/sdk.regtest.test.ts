@@ -42,6 +42,7 @@ import {
   LocalKey,
   Offer,
   SubmissionError,
+  HttpTransport,
   inMemoryFunding,
   type Utxo,
 } from "@kontor/sdk";
@@ -368,23 +369,30 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     const session = new KontorSession({
       chain,
       signing,
-      funding: inMemoryFunding([fundingUtxo]),
-      fetch: async (url, init) => {
-        const response = await fetch(url, init);
-        if (String(url).endsWith("/transactions/reconcile"))
-          reconcileRequests++;
-        if (String(url).endsWith("/transactions/broadcast")) {
-          relayRequests++;
-          if (!lostResponse) {
-            expect((await response.clone().json()).result.outcome).toBe(
-              "accepted",
-            );
-            lostResponse = true;
-            throw new Error("injected lost response after Bitcoin acceptance");
-          }
-        }
-        return response;
-      },
+      transport: (options) =>
+        new HttpTransport({
+          ...options,
+          feeRate: options.feeRate ?? undefined,
+          funding: inMemoryFunding([fundingUtxo]),
+          fetch: async (url, init) => {
+            const response = await fetch(url, init);
+            if (String(url).endsWith("/transactions/reconcile"))
+              reconcileRequests++;
+            if (String(url).endsWith("/transactions/broadcast")) {
+              relayRequests++;
+              if (!lostResponse) {
+                expect((await response.clone().json()).result.outcome).toBe(
+                  "accepted",
+                );
+                lostResponse = true;
+                throw new Error(
+                  "injected lost response after Bitcoin acceptance",
+                );
+              }
+            }
+            return response;
+          },
+        }),
     });
     try {
       await session.ready();
