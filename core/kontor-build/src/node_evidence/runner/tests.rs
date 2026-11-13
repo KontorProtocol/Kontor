@@ -1,4 +1,4 @@
-use super::super::tests::{certified_sample, observations, root};
+use super::super::tests::{certified_sample, observations_for, root};
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 use tempfile::{TempDir, tempdir};
@@ -20,7 +20,10 @@ pub(crate) fn sample(link: Option<&str>) -> Result<Value> {
     let graphs = executor_graphs(link)?;
     let names: Vec<_> = graphs.keys().map(String::as_str).collect();
     let baseline = baseline_graphs(link)?;
-    let mut value = observations(&baseline.iter().map(String::as_str).collect::<Vec<_>>());
+    let mut value = observations_for(
+        &baseline.iter().map(String::as_str).collect::<Vec<_>>(),
+        link,
+    );
     value["schema"] = json!(1);
     value["cases"] = json!(CASES);
     value["storage_contracts"] = json!({"rejected_before_construction":names.iter().flat_map(|graph| ["missing","unknown","changed","multiple"].map(|mutation|format!("{graph}:{mutation}"))).collect::<Vec<_>>()});

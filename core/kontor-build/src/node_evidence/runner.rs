@@ -276,7 +276,8 @@ pub fn execute(
     storage(&observations, link_set)?;
     certified(&observations, link_set, root)?;
     startup(&observations, link_set)?;
-    let semantic_baseline = semantics::verify(&observations, root, &baseline_graphs(link_set)?)?;
+    let semantic_baseline =
+        semantics::verify(&observations, root, &baseline_graphs(link_set)?, link_set)?;
     let mut evidence = json!({"schema":1, "target":field(&report,"target")?, "profile":field(&report,"profile")?,
         "link_set":link_set, "node_build_sha256":report_hash, "executable_sha256":binary_hash,
         "stdout_sha256":logs["stdout_sha256"], "stderr_sha256":logs["stderr_sha256"],

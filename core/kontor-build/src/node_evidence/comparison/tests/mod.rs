@@ -231,7 +231,7 @@ fn rehashed_observation_case_and_compiler_changes_reject() -> Result<()> {
         })?;
         bind(directory)?;
     }
-    rejects(&archive, "historical semantic comparison differs");
+    rejects(&archive, "semantic comparison differs");
     Ok(())
 }
 

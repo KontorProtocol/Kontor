@@ -253,7 +253,7 @@ impl Archive {
             directory.join("node-execution.stderr.log"),
             "synthetic execution log",
         )?;
-        let mut execution = json!({"schema":1,"matching_observations":true,"target":target,"profile":profile,"link_set":self.link,"executable_sha256":node["executable_sha256"],"cases":observations["cases"],"graphs":recipes.keys().collect::<Vec<_>>(),"semantic_baseline":semantics::verify(&observations,&root,&baseline_graphs(self.link)?)?});
+        let mut execution = json!({"schema":1,"matching_observations":true,"target":target,"profile":profile,"link_set":self.link,"executable_sha256":node["executable_sha256"],"cases":observations["cases"],"graphs":recipes.keys().collect::<Vec<_>>(),"semantic_baseline":semantics::verify(&observations,&root,&baseline_graphs(self.link)?,self.link)?});
         if self.link == Some("managed-node") {
             for name in ["transition", "recovery", "authorization", "join"] {
                 fs::copy(
