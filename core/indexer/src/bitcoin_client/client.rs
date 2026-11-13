@@ -6,6 +6,8 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use reqwest::{Client as HttpClient, ClientBuilder, header::HeaderMap};
 use serde::Deserialize;
 use serde_json::Value;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::bitcoin_client::types::{
     Acceptance, CreateWalletResult, GetMempoolInfoResult, GetNetworkInfoResult,
@@ -14,6 +16,7 @@ use crate::bitcoin_client::types::{
 };
 use crate::config::{Config, RegtestConfig};
 
+use super::observation::ChainObservation;
 use super::types::{RawTransactionInput, SignRawTransactionResult, UnspentOutput};
 use super::{
     error::{BitcoinRpcErrorResponse, Error},
@@ -35,6 +38,7 @@ pub struct Client {
     client: HttpClient,
     url: String,
     tx_cache: TxCache,
+    chain_observation: Arc<Mutex<Option<ChainObservation>>>,
 }
 
 const JSONRPC: &str = "2.0";
@@ -86,6 +90,7 @@ impl Client {
             client,
             url,
             tx_cache: new_tx_cache(),
+            chain_observation: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -99,6 +104,17 @@ impl Client {
 
     pub fn tx_cache(&self) -> &TxCache {
         &self.tx_cache
+    }
+
+    /// Last successful observation shared with the follower's client clones.
+    /// Reading readiness never sends an RPC or changes the follower's behavior.
+    pub(crate) fn chain_observation(&self) -> Option<ChainObservation> {
+        self.chain_observation.lock().ok()?.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_chain_observation_for_test(&self, observation: ChainObservation) {
+        *self.chain_observation.lock().unwrap() = Some(observation);
     }
 
     fn handle_response<T>(response: Response) -> Result<T, Error>
@@ -208,7 +224,22 @@ impl Client {
     }
 
     pub async fn get_blockchain_info(&self) -> Result<GetBlockchainInfoResult, Error> {
-        self.call("getblockchaininfo", vec![]).await
+        let observed_at = Instant::now();
+        let info: GetBlockchainInfoResult = self.call("getblockchaininfo", vec![]).await?;
+        if let Ok(mut observation) = self.chain_observation.lock()
+            && observation
+                .as_ref()
+                .is_none_or(|last| last.observed_at <= observed_at)
+        {
+            *observation = Some(ChainObservation {
+                chain: info.chain,
+                blocks: info.blocks,
+                headers: info.headers,
+                initial_block_download: info.initial_block_download,
+                observed_at,
+            });
+        }
+        Ok(info)
     }
 
     pub async fn get_block_hash(&self, height: u64) -> Result<BlockHash, Error> {

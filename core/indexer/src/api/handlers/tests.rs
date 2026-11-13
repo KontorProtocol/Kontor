@@ -18,6 +18,7 @@ use tempfile::TempDir;
 
 mod confirmation;
 mod ownership;
+mod readiness;
 mod simulation;
 
 /// Envelope used by every JSON success response from the indexer API

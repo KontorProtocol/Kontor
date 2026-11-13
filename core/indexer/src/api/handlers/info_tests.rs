@@ -230,9 +230,8 @@ async fn info_publisher_republishes_on_event() -> Result<()> {
     Ok(())
 }
 
-/// `/healthz/ready` mirrors the `require_available` predicate exactly — 503
-/// until the reactor latch is set AND chain state exists, 200 after — while
-/// `/healthz/live` answers 200 whenever the API serves at all (#214).
+/// Readiness requires the reactor, indexed state, and a recent Bitcoin tip;
+/// liveness answers 200 whenever the API serves at all (#214).
 #[tokio::test]
 async fn healthz_ready_tracks_availability() -> Result<()> {
     use super::{get_healthz_live, get_healthz_ready};
@@ -241,6 +240,15 @@ async fn healthz_ready_tracks_availability() -> Result<()> {
     let (mut env, _conn, _dir) = new_test_env().await?;
     let (info_tx, info_rx) = watch::channel(InfoCore::default());
     env.info_rx = info_rx;
+    env.bitcoin.set_chain_observation_for_test(
+        crate::bitcoin_client::observation::ChainObservation {
+            chain: env.config.network,
+            blocks: 1,
+            headers: 1,
+            initial_block_download: false,
+            observed_at: Instant::now(),
+        },
+    );
     let reactor_ready = env.reactor_ready.clone();
     reactor_ready.store(false, Ordering::Relaxed);
     let shutdown = Shutdown::new();
