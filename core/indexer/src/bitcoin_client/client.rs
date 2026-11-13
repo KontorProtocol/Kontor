@@ -113,7 +113,7 @@ impl Client {
         self.chain_observation.lock().ok()?.clone()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "protocol-qualification"))]
     pub(crate) fn set_chain_observation_for_test(&self, observation: ChainObservation) {
         *self.chain_observation.lock().unwrap() = Some(observation);
     }
