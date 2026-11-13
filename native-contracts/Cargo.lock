@@ -507,6 +507,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
+name = "upgrade-fixture"
+version = "0.1.0"
+dependencies = [
+ "built-in-types",
+ "stdlib",
+]
+
+[[package]]
 name = "wasm-encoder"
 version = "0.262.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

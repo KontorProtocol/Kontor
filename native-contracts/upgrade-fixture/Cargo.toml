@@ -1,0 +1,15 @@
+[package]
+name = "upgrade-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+stdlib = { workspace = true }
+built-in-types = { workspace = true }
+
+[lib]
+crate-type = ["cdylib"]

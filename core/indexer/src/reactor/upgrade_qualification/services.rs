@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 
+use super::fixture::native_fixture_address;
 use super::{DATABASE, NETWORK};
 use crate::api::handlers::NodeStatus;
 use crate::api::{DaemonEnv, Env, router};
@@ -51,6 +52,7 @@ pub(super) struct Connections {
 }
 
 pub(super) struct Services {
+    reader: Reader,
     bitcoin: MockBitcoinRpc,
     http: HttpClient,
     address: SocketAddr,
@@ -151,8 +153,12 @@ impl Services {
             .await
             .context("qualification HTTP server")
         });
-        let publisher_task =
-            run_info_publisher(shutdown.signal(), events.subscribe(), reader, info_tx);
+        let publisher_task = run_info_publisher(
+            shutdown.signal(),
+            events.subscribe(),
+            reader.clone(),
+            info_tx,
+        );
         let events_task = events.run(shutdown.signal(), event_rx);
         let (blocks, mempool, follower) = bitcoin_follower::run(
             bitcoin.clone(),
@@ -187,6 +193,7 @@ impl Services {
             Self {
                 bitcoin,
                 http,
+                reader,
                 address,
                 ready,
                 reactor_ready,
@@ -245,10 +252,15 @@ impl Services {
     }
 
     pub(super) async fn view(&self) -> Result<ViewResult> {
+        let (name, height, index) =
+            native_fixture_address(&*self.reader.connection().await?).await?;
         Ok(self
             .http
-            .post(format!("http://{}/api/contracts/token_0_0", self.address))
-            .json(&json!({"expr": "positive-balance-count()"}))
+            .post(format!(
+                "http://{}/api/contracts/{name}_{height}_{index}",
+                self.address
+            ))
+            .json(&json!({"expr": "version()"}))
             .send()
             .await?
             .error_for_status()?

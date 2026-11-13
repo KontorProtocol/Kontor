@@ -53,8 +53,8 @@ pub struct ProtocolBundlesArgs {
     /// Output directory, relative to the checkout root unless absolute.
     #[arg(long)]
     pub output: Option<PathBuf>,
-    /// Retained executor configuration; node and executor builds default to managed-node.
-    #[arg(long, value_parser = ["legacy-qualification", "managed-node"])]
+    /// Executor configuration; qualification explicitly enables the demonstration successor.
+    #[arg(long, value_parser = ["legacy-qualification", "production-node", "managed-node"])]
     pub link_set: Option<String>,
     /// Maximum concurrent compiler jobs across sequential graph builds.
     #[arg(short = 'j', long, default_value_t = 2, value_parser = clap::value_parser!(u32).range(1..=2))]
@@ -99,16 +99,27 @@ fn mode(args: &ProtocolBundlesArgs) -> Result<(Mode, Option<String>)> {
         "--link-set requires --build-executors or --build-node"
     );
     let link_set = if matches!(mode, Mode::Node | Mode::Executors) {
-        Some(
-            args.link_set
-                .clone()
-                .unwrap_or_else(|| "managed-node".into()),
-        )
+        Some(args.link_set.clone().unwrap_or_else(|| {
+            if args.node_qualification {
+                "managed-node"
+            } else {
+                "production-node"
+            }
+            .into()
+        }))
     } else {
         None
     };
     if let Some(link_set) = &link_set {
         executor_graphs(Some(link_set))?;
+        ensure!(
+            mode != Mode::Node || (link_set != "managed-node" || args.node_qualification),
+            "the demonstration successor requires --node-qualification"
+        );
+        ensure!(
+            link_set != "production-node" || !args.node_qualification,
+            "production-node excludes qualification executors; use managed-node"
+        );
     }
     Ok((mode, link_set))
 }
@@ -320,7 +331,11 @@ pub fn protocol_bundles(args: ProtocolBundlesArgs) -> Result<()> {
     };
     let engines = consensus_graphs();
     let consensus_output = base.join(&target).join(&args.profile).join("consensus");
-    let consensus = if mode == Mode::Node && link_set.as_deref() == Some("managed-node") {
+    let consensus = if mode == Mode::Node
+        && matches!(
+            link_set.as_deref(),
+            Some("production-node" | "managed-node")
+        ) {
         fs::create_dir_all(&consensus_output)?;
         verify_reservations(root, &engines)?;
         compile_graphs(

@@ -27,6 +27,7 @@ use kontor_build::node_evidence::{
     QualifyNodeArgs, Request as NodeEvidenceRequest, qualify_node, run as node_evidence,
 };
 use kontor_build::object_tools::{Request as ObjectRequest, run as inspect_object};
+use kontor_build::prelaunch::{PrelaunchArgs, sync_prelaunch};
 use kontor_build::provenance::{Request as ProvenanceRequest, run as provenance};
 use kontor_build::recipes::{Request as RecipeRequest, run as recipes};
 use kontor_build::shared_ownership::{Request as SharedRequest, run as audit_shared};
@@ -96,6 +97,8 @@ enum Command {
     VerifySnapshot(VerifySnapshotArgs),
     /// Preserve executor inputs from an exact commit without redefining them.
     FreezeSources(FreezeSourcesArgs),
+    /// Regenerate or check the prelaunch P2 graph from P1 with its identity overlay.
+    SyncPrelaunch(PrelaunchArgs),
     /// Check that native helper dependencies match the core lockfile.
     CheckNativeHelperLock,
     /// Preserve command output and macOS crash reports for CI diagnostics.
@@ -152,6 +155,10 @@ fn repository_root() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::SyncPrelaunch(args) => {
+            println!("{}", sync_prelaunch(&repository_root()?, args)?);
+            Ok(())
+        }
         Command::NativeCryptoVendor(args) => {
             print!("{}", verify_vendor(&repository_root()?, args)?);
             Ok(())

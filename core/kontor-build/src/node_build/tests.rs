@@ -24,6 +24,9 @@ fn node_graph_selection_requires_exact_roles_order_and_membership() -> Result<()
     let graphs = vec![json!({"graph":"first"}), json!({"graph":"observer"})];
     let consensus = vec![json!({"graph":"first"})];
     selected_graphs("managed-node", &graphs, &consensus)?;
+    selected_graphs("production-node", &graphs[..1], &consensus)?;
+    assert!(selected_graphs("production-node", &graphs, &consensus).is_err());
+    assert!(selected_graphs("production-node", &graphs[..1], &[]).is_err());
     let legacy = vec![json!({"graph":"first"}), json!({"graph":"second"})];
     selected_graphs("legacy-qualification", &legacy, &[])?;
     assert!(selected_graphs("k4-node", &graphs, &[]).is_err());

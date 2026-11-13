@@ -14,7 +14,6 @@ use crate::symbol_audit::suffix;
 pub const MALACHITE_REVISION: &str = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09";
 pub const MALACHITE_VERSION: &str = "0.9.0-kontor.1";
 const K3_SNAPSHOT: &str = "d9d80e4af271ff122aea598778b2f36d0a2d170ffa86ff32a9f42a6328a01c09";
-const P1_SNAPSHOT: &str = "8302f1341414c82ce744f872357f4b919dca3925cac0b38dea68023687ca71d4";
 const HISTORICAL: &[(&str, &str, &str)] = &[
     (
         "first",
@@ -120,10 +119,7 @@ fn retained_executors() -> Graphs {
         .collect()
 }
 fn p1() -> Graph {
-    let mut graph = current_executors().remove("first").unwrap();
-    graph.source_root = "protocol-bundles/retained/p1".into();
-    graph.source_snapshot = Some(P1_SNAPSHOT.into());
-    graph
+    current_executors().remove("first").unwrap()
 }
 fn observer() -> Graph {
     let mut graph = current_executors().remove("second").unwrap();
@@ -134,6 +130,7 @@ pub fn executor_graphs(link_set: Option<&str>) -> Result<Graphs> {
     Ok(match link_set {
         None => current_executors(),
         Some("legacy-qualification") => retained_executors(),
+        Some("production-node") => BTreeMap::from([("first".into(), p1())]),
         Some("managed-node") => {
             BTreeMap::from([("first".into(), p1()), ("observer".into(), observer())])
         }
@@ -158,7 +155,7 @@ pub fn consensus_graphs() -> Graphs {
     )])
 }
 fn catalog() -> Result<Value> {
-    let links: BTreeMap<_, _> = ["legacy-qualification", "managed-node"]
+    let links: BTreeMap<_, _> = ["legacy-qualification", "production-node", "managed-node"]
         .into_iter()
         .map(|name| Ok((name, executor_graphs(Some(name))?)))
         .collect::<Result<_>>()?;

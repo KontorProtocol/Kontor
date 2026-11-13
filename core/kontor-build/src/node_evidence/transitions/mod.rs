@@ -11,9 +11,10 @@ use crate::recipes::executor_graphs;
 
 mod constants;
 use constants::{
-    AUTHORIZATION_FLAGS, BUILD_RECORD_FLAGS, CONFIRMATION_FLAGS, CRASH_FLAGS, CRASH_STAGES,
-    EMPTY_SUCCESSOR_FLAGS, JOIN_FLAGS, RECOVERY_FLAGS, REPLACEMENT_FLAGS, REPLAY_FLAGS,
-    STATE_TABLES, SUPPORT_FLAGS, TOKEN_COUNT_FLAGS, TRANSITION_FLAGS, UNSUPPORTED_FLAGS,
+    AUTHORIZATION_FLAGS, BUILD_RECORD_FLAGS, COMMON_CONTRACT_FLAGS, CONFIRMATION_FLAGS,
+    CRASH_FLAGS, CRASH_STAGES, EMPTY_SUCCESSOR_FLAGS, JOIN_FLAGS, RECOVERY_FLAGS,
+    REPLACEMENT_FLAGS, REPLAY_FLAGS, STATE_TABLES, SUPPORT_FLAGS, TRANSITION_FLAGS,
+    UNSUPPORTED_FLAGS,
 };
 
 fn section(
@@ -262,7 +263,7 @@ pub fn transition(value: &Value, root: &Path, semantic_only: bool) -> Result<Val
     )?;
     for (label, graph, protocol, version, source) in [
         ("publication", "first", first, "v1", "publication"),
-        ("upgraded", "observer", second, "v2", "protocol_native"),
+        ("upgraded", "observer", second, "v1", "publication"),
     ] {
         let recipe = &recipes[graph];
         let graph_root = root.join(&recipe.source_root);
@@ -333,7 +334,7 @@ pub fn recovery(value: &Value) -> Result<Value> {
         &[
             "scope",
             "finality_replay",
-            "token_count",
+            "common_contracts",
             "empty_successor",
             "successor_support",
             "unsupported_cancel",
@@ -405,14 +406,14 @@ pub fn recovery(value: &Value) -> Result<Value> {
         "empty successor authority gate evidence missing or incomplete",
     )?;
     section(
-        &value["token_count"],
-        TOKEN_COUNT_FLAGS,
+        &value["common_contracts"],
+        COMMON_CONTRACT_FLAGS,
         &[
             ("checked_snapshots", json!(7)),
             ("closed_decisions", json!(7)),
         ],
         &[],
-        "managed token count mutation evidence missing or incomplete",
+        "managed common-contract and fixture evidence missing or incomplete",
     )?;
     let cases = value["finality_replay"]
         .as_array()

@@ -1,7 +1,9 @@
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 
-use crate::protocol::coordinator::{baseline::Baseline, successor};
+use crate::protocol::coordinator::baseline::Baseline;
+#[cfg(feature = "protocol-qualification")]
+use crate::protocol::coordinator::successor;
 use crate::protocol::identity::{ChainId, DefinitionReference, domain_digest};
 use crate::protocol_info::BuildProvenance;
 
@@ -43,7 +45,13 @@ fn verify_record(input: Option<&str>) -> Result<()> {
         serde_json::from_str(input.context("managed node lacks builder attestation")?)
             .context("invalid managed builder attestation")?;
     ensure!(
-        record.schema == 1 && record.link_set == "managed-node",
+        record.schema == 1
+            && record.link_set
+                == if cfg!(feature = "protocol-qualification") {
+                    "managed-node"
+                } else {
+                    "production-node"
+                },
         "unsupported builder attestation"
     );
     ensure!(
@@ -62,9 +70,11 @@ fn verify_record(input: Option<&str>) -> Result<()> {
         "invalid build input digest"
     );
     let first = Baseline::for_node(ChainId([0; 32]))?.manifest;
+    #[cfg(feature = "protocol-qualification")]
     let second = successor::manifest(ChainId([0; 32]))?;
     let expected = [
         ("executor", "first", first.executor.0, None),
+        #[cfg(feature = "protocol-qualification")]
         ("executor", "observer", second.executor.0, None),
         (
             "consensus",
@@ -90,11 +100,14 @@ fn verify_record(input: Option<&str>) -> Result<()> {
     }
     ensure!(
         DefinitionReference::decode(kontor_executor_first::execution_definition())?.id()?
-            == first.executor
-            && DefinitionReference::decode(kontor_executor_observer::execution_definition())?
-                .id()?
-                == second.executor,
+            == first.executor,
         "linked executor differs from installed registry"
+    );
+    #[cfg(feature = "protocol-qualification")]
+    ensure!(
+        DefinitionReference::decode(kontor_executor_observer::execution_definition())?.id()?
+            == second.executor,
+        "linked successor differs from installed registry"
     );
     Ok(())
 }

@@ -132,11 +132,12 @@
     "successor_total_power": 200,
     "supporting_successor_power": 100
   },
-  "token_count": {
+  "common_contracts": {
     "checked_snapshots": 7,
     "closed_decisions": 7,
     "failed_call_consistent": true,
-    "full_ledger_count_matches": true,
+    "fixture_initialized": true,
+    "common_token_schema_preserved": true,
     "gas_escrow_refunded": true,
     "migration_from_populated_p1": true,
     "paid_mint_transfer_burn": true,

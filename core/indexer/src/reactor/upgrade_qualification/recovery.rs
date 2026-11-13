@@ -4,7 +4,6 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use libsql::Connection;
 use serde_json::{Value as Json, json};
-use stdlib::KeyPath;
 use tempfile::TempDir;
 
 use super::DATABASE;
@@ -14,6 +13,7 @@ use crate::consensus::Height;
 use crate::database::certified_history::{self, activation, closure, completion, eras};
 use crate::protocol::coordinator::application_closure::WorkItem;
 use crate::protocol::coordinator::migration::{MigrationAttemptWork, MigrationRejected};
+use crate::protocol::v2::FIXTURE_NAME;
 use crate::protocol_qualification::snapshot::full_state;
 use crate::reactor::consensus_state::certified_startup;
 use crate::reactor::execution::{ExecutionContext, ExecutionStep};
@@ -37,14 +37,17 @@ async fn prepare_resume(execution: &mut ExecutionContext<RuntimeExecutor>) -> Re
     Ok(())
 }
 
-// This deliberately invalid input tests migration rejection. It is not a claim
-// that P1 can produce the reserved P2 field, or an operator repair procedure.
+// P1 cannot publish at the reserved migration index. A conflicting row must
+// reject the whole migration, including on recovery, rather than overwrite it.
 async fn rejected_input(path: &Path, service: &OwnerService) -> Result<()> {
     let mut execution = open(path, service).await?;
     prepare_resume(&mut execution).await?;
     let conn = execution.db_conn();
-    let key = KeyPath::new().push_interned(5);
-    conn.execute("INSERT INTO contract_state (contract_id,height,path,value,size,deleted) VALUES (1,1,?1,x'06',1,0)", [key.as_bytes()]).await?;
+    conn.execute(
+        "INSERT INTO contracts (name,height,tx_index,bytes,size) VALUES (?1,1,4294967295,x'',0)",
+        [FIXTURE_NAME],
+    )
+    .await?;
     let before = full_state(&conn).await?;
     for _ in 0..2 {
         let error = execution
@@ -77,7 +80,7 @@ pub(crate) async fn run() -> Result<Json> {
         let mut result = exercise(&service).await?;
         result["build_record"] = build_record::qualify()?;
         result["finality_replay"] = super::replay::run(&service).await?;
-        result["token_count"] = super::token_count::run(&service).await?;
+        result["common_contracts"] = super::common_contracts::run(&service).await?;
         result["empty_successor"] = super::committee::run(&service).await?;
         result["successor_support"] = Box::pin(super::support::run(&service)).await?;
         result["unsupported_cancel"] = super::unsupported::run(&service).await?;

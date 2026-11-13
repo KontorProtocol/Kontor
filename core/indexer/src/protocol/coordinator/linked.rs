@@ -14,9 +14,9 @@ use indexer_types::Transaction;
 use kontor_executor_first::registration_observer as first_registration_observer;
 #[cfg(kontor_linked)]
 use kontor_executor_first::{execution_definition as first_definition, factory as first_factory};
-#[cfg(kontor_managed)]
+#[cfg(all(kontor_managed, feature = "protocol-qualification"))]
 use kontor_executor_observer::p2_factory;
-#[cfg(kontor_managed)]
+#[cfg(all(kontor_managed, feature = "protocol-qualification"))]
 use kontor_executor_observer::{
     execution_definition as observer_definition, registration_observer,
 };
@@ -229,7 +229,7 @@ pub(crate) fn session_factory_for_definition(
     #[cfg(kontor_linked)]
     {
         let first_id = DefinitionReference::decode(first_definition())?.id()?;
-        #[cfg(kontor_managed)]
+        #[cfg(all(kontor_managed, feature = "protocol-qualification"))]
         {
             let observer_id = DefinitionReference::decode(observer_definition())?.id()?;
             if first_id == observer_id {
@@ -266,7 +266,7 @@ pub(crate) fn session_factory_for_definition(
     Err(UnavailableExecutionDefinition(definition).into())
 }
 
-#[cfg(kontor_managed)]
+#[cfg(all(kontor_managed, feature = "protocol-qualification"))]
 pub(crate) fn with_registration_observer(factory: SessionFactory) -> SessionFactory {
     with_registration_export(factory, registration_observer)
 }

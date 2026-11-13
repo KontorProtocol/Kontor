@@ -1,5 +1,5 @@
 [workspace]
-members = ["token", "filestorage", "staking", "system", "nft"]
+members = ["token", "filestorage", "staking", "system", "nft", "upgrade-fixture"]
 resolver = "2"
 
 [profile.release]

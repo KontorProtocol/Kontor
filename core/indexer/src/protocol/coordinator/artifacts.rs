@@ -8,34 +8,9 @@ use indexer_types::{
 use sha2::{Digest, Sha256};
 
 use super::linked::read_snapshot;
-use super::selection::ExecutorVersion;
 use crate::database::queries;
-#[cfg(all(not(kontor_node), not(kontor_managed)))]
-use crate::protocol::v2::native as p2_native;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::pool::LinkedManager;
-
-fn native_hash(version: ExecutorVersion, contract_id: u64) -> Result<Option<[u8; 32]>> {
-    match version {
-        ExecutorVersion::LegacyP1 => Ok(None),
-        ExecutorVersion::P2 => {
-            #[cfg(kontor_managed)]
-            {
-                Ok(kontor_executor_observer::p2_native_artifact_hash(
-                    contract_id,
-                ))
-            }
-            #[cfg(all(not(kontor_node), not(kontor_managed)))]
-            {
-                Ok(p2_native::artifact_hash(contract_id))
-            }
-            #[cfg(all(kontor_node, not(kontor_managed)))]
-            {
-                anyhow::bail!("P2 artifact mapping is not installed")
-            }
-        }
-    }
-}
 
 pub(crate) async fn contract_provenance(
     service: &OwnerService,
@@ -55,12 +30,6 @@ pub(crate) async fn contract_provenance(
                 .await?
                 .context("contract disappeared from pinned snapshot")?;
             let published_hash: [u8; 32] = Sha256::digest(published).into();
-            let replacement = native_hash(selection.version(), id)?;
-            let source = if replacement.is_some() {
-                ContractArtifactSource::ProtocolNative
-            } else {
-                ContractArtifactSource::Publication
-            };
             let mut entries = Vec::new();
             for row in queries::get_contract_provenance_log(&conn, id).await? {
                 entries.push(ProvenanceEntry {
@@ -73,9 +42,9 @@ pub(crate) async fn contract_provenance(
             Ok(Some(ContractProvenanceResponse {
                 entries,
                 effective_artifact: EffectiveContractArtifact {
-                    sha256: hex::encode(replacement.unwrap_or(published_hash)),
+                    sha256: hex::encode(published_hash),
                     published_sha256: hex::encode(published_hash),
-                    source,
+                    source: ContractArtifactSource::Publication,
                     protocol_id: selection.protocol_id().map(|id| hex::encode(id.0)),
                     execution_definition: hex::encode(executor.execution_definition?.0),
                 },

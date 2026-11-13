@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use bitcoin::{BlockHash, blockdata::constants::genesis_block, consensus::serialize, hashes::Hash};
+use deadpool::managed::Object;
 use indexer_types::BlockRow;
 use libsql::Connection;
 use malachitebft_core_types::{CommitSignature, NilOrVal, Round};
@@ -18,14 +19,58 @@ use crate::database::queries::insert_block;
 use crate::protocol::coordinator::certified_decision::{AuthenticatedDecision, Decision};
 use crate::protocol::coordinator::certified_input::ExactInput;
 use crate::protocol::coordinator::genesis::envelope;
-use crate::protocol::coordinator::linked::{canonical_session, initialize};
+use crate::protocol::coordinator::linked::{canonical_session, initialize, read_snapshot};
 use crate::protocol::coordinator::{bootstrap, successor};
 use crate::protocol::identity::{ExecutionDefinitionId, ProtocolId};
+use crate::protocol::operations::{AddressEnvelope, ViewOutcome};
+use crate::protocol::v2::FIXTURE_NAME;
 use crate::reactor::PruneConfig;
 use crate::reactor::execution::ExecutionContext;
 use crate::reactor::executor::RuntimeExecutor;
 use crate::runtime::ownership::OwnerService;
+use crate::runtime::ownership::adapter::HostFailure;
+use crate::runtime::pool::LinkedManager;
 use crate::runtime::{Decimal, GenesisParameters, GenesisValidator};
+
+pub(super) async fn native_fixture_address(conn: &Connection) -> Result<AddressEnvelope> {
+    let mut rows = conn.query(
+        "SELECT height, tx_index FROM contracts WHERE name = ? AND tx_index = 4294967295 ORDER BY height DESC LIMIT 2",
+        [FIXTURE_NAME],
+    ).await?;
+    let address = match rows.next().await? {
+        Some(row) => (FIXTURE_NAME.into(), row.get(0)?, row.get(1)?),
+        None => (FIXTURE_NAME.into(), 0, 0),
+    };
+    ensure!(
+        rows.next().await?.is_none(),
+        "qualification fixture was installed twice"
+    );
+    Ok(address)
+}
+
+pub(super) async fn fixture_view(
+    service: &OwnerService,
+    object: Object<LinkedManager>,
+) -> Result<ViewOutcome> {
+    read_snapshot(
+        service,
+        object,
+        NETWORK,
+        |conn, executor, selection| async move {
+            let address = native_fixture_address(&conn).await?;
+            (executor.operations.view)(
+                executor.owner,
+                selection.envelope(),
+                address,
+                "version()".into(),
+            )
+            .await
+            .map_err(HostFailure::from)
+            .map_err(Into::into)
+        },
+    )
+    .await
+}
 
 pub(super) async fn seed(
     path: &Path,

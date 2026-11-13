@@ -11,7 +11,7 @@ use crate::database::certified_history::{self, Status, eras};
 use crate::protocol::coordinator::baseline::Baseline;
 use crate::protocol::coordinator::manifest::ProtocolManifest;
 use crate::protocol::coordinator::registry::{self, UnavailableProtocol};
-#[cfg(kontor_managed)]
+#[cfg(all(kontor_managed, feature = "protocol-qualification"))]
 use crate::protocol::coordinator::successor;
 
 /// Local execution provenance, not a certified state root or inclusion promise.
@@ -214,7 +214,7 @@ pub(crate) async fn snapshot(conn: &Connection) -> Result<ProtocolSnapshot> {
         .push(ProtocolDescriptor::from_manifest(
             &Baseline::for_node(cursor.chain)?.manifest,
         )?);
-    #[cfg(kontor_managed)]
+    #[cfg(all(kontor_managed, feature = "protocol-qualification"))]
     result
         .installed_protocols
         .push(ProtocolDescriptor::from_manifest(&successor::manifest(

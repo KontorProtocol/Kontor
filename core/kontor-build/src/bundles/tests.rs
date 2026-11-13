@@ -21,18 +21,32 @@ fn modes_preserve_defaults_and_reject_invalid_combinations() -> Result<()> {
     );
     assert_eq!(
         mode(&arguments(&["--build-node"]))?,
-        (Mode::Node, Some("managed-node".into()))
+        (Mode::Node, Some("production-node".into()))
     );
     assert_eq!(
         mode(&arguments(&["--build-executors"]))?,
-        (Mode::Executors, Some("managed-node".into()))
+        (Mode::Executors, Some("production-node".into()))
     );
-    for set in ["legacy-qualification", "managed-node"] {
+    for set in ["legacy-qualification", "production-node"] {
         assert_eq!(
             mode(&arguments(&["--build-node", "--link-set", set]))?,
             (Mode::Node, Some(set.into()))
         );
     }
+    assert_eq!(
+        mode(&arguments(&["--build-node", "--node-qualification"]))?,
+        (Mode::Node, Some("managed-node".into()))
+    );
+    assert!(mode(&arguments(&["--build-node", "--link-set", "managed-node"])).is_err());
+    assert!(
+        mode(&arguments(&[
+            "--build-node",
+            "--node-qualification",
+            "--link-set",
+            "production-node"
+        ]))
+        .is_err()
+    );
     for args in [
         vec!["--build-executors", "--build-node"],
         vec!["--build-consensus", "--build-node"],

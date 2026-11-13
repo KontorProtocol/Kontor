@@ -31,10 +31,11 @@ fn copy_manifests(root: &Path) -> Result<()> {
 }
 
 #[test]
-fn link_sets_keep_retained_and_live_sources_separate() -> Result<()> {
+fn prelaunch_executors_share_sources_without_changing_historical_fixtures() -> Result<()> {
     let managed = executor_graphs(Some("managed-node"))?;
     let legacy = executor_graphs(Some("legacy-qualification"))?;
-    assert_eq!(managed["first"].source_root, "protocol-bundles/retained/p1");
+    assert_eq!(managed["first"].source_root, ".");
+    assert_eq!(managed["first"].source_snapshot, None);
     assert_eq!(managed["observer"].source_root, ".");
     assert_eq!(
         legacy["first"].source_snapshot.as_deref(),

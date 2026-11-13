@@ -8,12 +8,12 @@ use crate::protocol::operations::MigrationCall;
 use crate::protocol::v1::definition::execution_definition;
 use crate::protocol::v1::migration::{MigrationContext, MigrationFailure};
 use crate::protocol::v1::migration_definition;
-use crate::protocol::v2::{migration_definition as p2_migration, token_migration};
+use crate::protocol::v2::{fixture_migration, migration_definition as p2_migration};
 
 enum Routine {
     Noop,
     Qualification,
-    TokenCount,
+    InstallFixture,
 }
 
 impl BundleSession {
@@ -50,8 +50,10 @@ impl BundleSession {
                     ExecutorVersion::P2 if definition == p2_migration::preserve(execution) => {
                         Routine::Noop
                     }
-                    ExecutorVersion::P2 if definition == p2_migration::token_count(execution) => {
-                        Routine::TokenCount
+                    ExecutorVersion::P2
+                        if definition == p2_migration::install_fixture(execution) =>
+                    {
+                        Routine::InstallFixture
                     }
                     ExecutorVersion::LegacyP1
                         if definition == migration_definition::noop(execution) =>
@@ -85,7 +87,7 @@ impl BundleSession {
                     let outcome = match routine {
                         Routine::Noop => Ok(()),
                         Routine::Qualification => qualification_rewrite(&mut context).await,
-                        Routine::TokenCount => token_migration::backfill(&mut context).await,
+                        Routine::InstallFixture => fixture_migration::install(&mut context).await,
                     };
                     used = context.used();
                     outcome.and_then(|()| context.finish())

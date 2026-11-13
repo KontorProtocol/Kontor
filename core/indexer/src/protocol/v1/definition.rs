@@ -8,16 +8,15 @@ pub(crate) const REFERENCE: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/definition.bin"));
 #[cfg(all(not(kontor_retained), not(kontor_managed), not(kontor_linked)))]
 pub(crate) const REFERENCE: &[u8] =
-    include_bytes!("../../../../../protocol-bundles/executor-observer/definition.bin");
+    include_bytes!("../../../../../protocol-bundles/executor-first/definition.bin");
 #[cfg(all(not(kontor_retained), not(kontor_managed), kontor_linked))]
 pub(crate) const REFERENCE: &[u8] = include_bytes!(
     "../../../../../protocol-bundles/retained/k3/protocol-bundles/executor-first/definition.bin"
 );
 
 #[cfg(all(not(kontor_retained), kontor_managed))]
-pub(crate) const REFERENCE: &[u8] = include_bytes!(
-    "../../../../../protocol-bundles/retained/p1/protocol-bundles/executor-first/definition.bin"
-);
+pub(crate) const REFERENCE: &[u8] =
+    include_bytes!("../../../../../protocol-bundles/executor-first/definition.bin");
 
 pub(crate) fn execution_definition() -> Result<ExecutionDefinitionId, CodecError> {
     static ID: OnceLock<Result<ExecutionDefinitionId, CodecError>> = OnceLock::new();

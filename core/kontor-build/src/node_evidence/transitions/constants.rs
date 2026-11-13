@@ -67,9 +67,10 @@ pub(super) const EMPTY_SUCCESSOR_FLAGS: &[&str] = &[
     "reopen_preserves_gate",
     "retained_certificate_unchanged",
 ];
-pub(super) const TOKEN_COUNT_FLAGS: &[&str] = &[
+pub(super) const COMMON_CONTRACT_FLAGS: &[&str] = &[
     "failed_call_consistent",
-    "full_ledger_count_matches",
+    "fixture_initialized",
+    "common_token_schema_preserved",
     "gas_escrow_refunded",
     "migration_from_populated_p1",
     "paid_mint_transfer_burn",

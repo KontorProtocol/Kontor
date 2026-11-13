@@ -2,12 +2,12 @@ use anyhow::{Result, bail};
 
 use super::baseline::Baseline;
 use super::manifest::ProtocolManifest;
-#[cfg(kontor_managed)]
+#[cfg(all(kontor_managed, feature = "protocol-qualification"))]
 use super::successor;
 use crate::protocol::execution::ExecutorVersion;
 use crate::protocol::identity::{MigrationDefinition, ProtocolId};
 use crate::protocol::v1::migration_definition;
-#[cfg(kontor_managed)]
+#[cfg(all(kontor_managed, feature = "protocol-qualification"))]
 use crate::protocol::v2::migration_definition as p2_migration;
 
 pub(crate) struct InstalledProtocol {
@@ -29,11 +29,11 @@ pub(crate) fn resolve(manifest: &ProtocolManifest) -> Result<InstalledProtocol> 
             migration: migration_definition::noop(first.manifest.executor),
         });
     }
-    #[cfg(kontor_managed)]
+    #[cfg(all(kontor_managed, feature = "protocol-qualification"))]
     if manifest == &successor::manifest(manifest.chain)? {
         return Ok(InstalledProtocol {
             executor: ExecutorVersion::P2,
-            migration: p2_migration::token_count(manifest.executor),
+            migration: p2_migration::install_fixture(manifest.executor),
         });
     }
     #[cfg(all(kontor_managed, feature = "protocol-qualification"))]

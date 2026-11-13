@@ -139,7 +139,7 @@ fn transition_binds_native_artifacts_and_rollback_contexts() {
     for (pointer,wrong) in [
         ("/second_protocol",original["first_protocol"].clone()),
         ("/native_provenance/upgraded/effective_artifact/execution_definition",original["native_provenance"]["publication"]["effective_artifact"]["execution_definition"].clone()),
-        ("/native_provenance/upgraded/effective_artifact/sha256",original["native_provenance"]["publication"]["effective_artifact"]["sha256"].clone()),
+        ("/native_provenance/upgraded/effective_artifact/sha256",json!("00".repeat(32))),
         ("/native_provenance/upgraded/entries",json!([])),
         ("/client_contexts/1/execution_definition",json!("ff".repeat(32))),
         ("/client_contexts/1/protocol_id",json!("ff".repeat(32))),
@@ -182,7 +182,7 @@ fn recovery_requires_distinct_crashes_replays_support_and_replacement() {
         ("/successor_support/scope", json!("live mixed binaries")),
         ("/successor_support/supporting_successor_power", json!(200)),
         ("/empty_successor/closed_decisions", json!(14)),
-        ("/token_count/checked_snapshots", json!(6)),
+        ("/common_contracts/checked_snapshots", json!(6)),
         ("/finality_replay/1/scenario", json!("SurvivingSchedule")),
         ("/finality_replay/0/closed_decisions", json!(7)),
         ("/finality_replay/0/confirmation/closed_decisions", json!(4)),
