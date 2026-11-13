@@ -51,6 +51,11 @@ Use this maintenance sequence after changing prelaunch P1:
 4. If coordinator inputs changed, run `tools/kontor freeze-consensus --write`.
    Inspect changed inventories and identities, then run focused and linked tests.
 
+The temporary Gossipsub PRUNE backport, its exact source provenance, audit
+exception and removal steps are recorded in
+`core/vendor/libp2p-gossipsub/KONTOR-PATCH.md`. Keep the active network graph
+patches and lockfiles aligned until the selected upstream crate contains the fix.
+
 For local Cargo and bundle commands, use the parent directory's `local-build`
 helper and shared slots as described in `AGENTS.md`. No Python or parallel manual
 P1/P2 source edits are involved. The only dependency overlay is the pinned

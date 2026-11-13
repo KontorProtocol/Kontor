@@ -80,6 +80,16 @@ ignore = [
     # or when a compatible upstream backport becomes available.
     "RUSTSEC-2026-0387",
 
+    # libp2p-gossipsub remains version 0.49.5 because Malachite selects libp2p
+    # 0.56. Its PRUNE unknown-topic backoff fix is backported in
+    # core/vendor/libp2p-gossipsub and selected by every active network graph.
+    # cargo-audit matches the version rather than inspecting patched local code.
+    # This exception is conditional on that source patch, not acceptance of
+    # the registry crate. Remove it with the vendor patch once the selected
+    # Malachite graph resolves a verified fixed upstream release.
+    # See core/vendor/libp2p-gossipsub/KONTOR-PATCH.md and upstream PR 6707.
+    "RUSTSEC-2026-0534",
+
     # zstd 0.13.3 / zstd-safe 7.3.0 via wasmtime-internal-cache at our pinned
     # Wasmtime fork revision. Its zstd ^0.13 requirement excludes the patched
     # zstd >=0.14.3 / zstd-safe >=8.2.0 chain. Updating the fork is deferred.
