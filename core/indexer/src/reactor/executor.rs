@@ -75,11 +75,20 @@ pub(crate) trait Executor: Sync {
         selection: &ExecutionSelection,
         raw: &BitcoinTransaction,
     ) -> Result<Option<PreparedTransaction>> {
-        recognizer
+        let mut prepared = recognizer
             .recognize(selection, serialize(raw))?
             .map_err(|error| {
                 anyhow::anyhow!("serialized Bitcoin transaction failed to decode: {error}")
-            })
+            })?;
+        if let Some(prepared) = &mut prepared {
+            prepared.raw_outpoints = raw
+                .input
+                .iter()
+                .map(|input| input.previous_output)
+                .collect();
+            prepared.wtxid = Some(raw.compute_wtxid());
+        }
+        Ok(prepared)
     }
 
     fn prepare_simulation(

@@ -48,6 +48,17 @@ CREATE TABLE IF NOT EXISTS transactions (
   FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
 );
 
+-- A transaction's Bitcoin inputs remain reserved for exactly its execution
+-- lifetime. The FK removes the reservation with every canonical rollback.
+CREATE TABLE IF NOT EXISTS executed_outpoints (
+  prev_txid BLOB NOT NULL CHECK (length(prev_txid) = 32),
+  prev_vout INTEGER NOT NULL,
+  tx_id INTEGER NOT NULL REFERENCES transactions (id) ON DELETE CASCADE,
+  wtxid BLOB NOT NULL CHECK (length(wtxid) = 32),
+  PRIMARY KEY (prev_txid, prev_vout)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_executed_outpoints_tx_id ON executed_outpoints (tx_id);
+
 -- Observational execution totals follow the transaction's execution lifetime,
 -- including optimistic execution. Confirmation does not execute or count it again.
 CREATE TABLE IF NOT EXISTS transaction_execution_usage (

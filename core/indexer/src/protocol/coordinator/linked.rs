@@ -4,7 +4,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Error, Result, anyhow, ensure};
-use bitcoin::{BlockHash, Network, Txid, hashes::Hash};
+#[cfg(any(test, feature = "protocol-qualification"))]
+use bitcoin::Transaction as BitcoinTransaction;
+#[cfg(any(test, feature = "protocol-qualification"))]
+use bitcoin::consensus::deserialize;
+use bitcoin::{BlockHash, Network, OutPoint, Txid, Wtxid, hashes::Hash};
 use deadpool::managed::{Object, Pool};
 use futures_util::FutureExt;
 use indexer_types::Block;
@@ -37,7 +41,9 @@ use super::selection::{
 #[cfg(any(test, feature = "protocol-qualification"))]
 use crate::consensus::ValidatorSet;
 use crate::database::canonical_history::{self, HistoryState};
-use crate::database::queries::{insert_block_execution_usage, insert_transaction_execution_usage};
+use crate::database::queries::{
+    insert_block_execution_usage, insert_transaction_execution_usage, reserve_transaction_outpoints,
+};
 use crate::database::storage_contract::StorageContract;
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
 use crate::protocol::canonical_codec::CodecError;
@@ -667,6 +673,8 @@ pub(crate) struct PreparedTransaction {
     pub(crate) index: u32,
     pub(crate) batchable: bool,
     pub(crate) inputs: Vec<(u32, u64)>,
+    pub(crate) raw_outpoints: Vec<OutPoint>,
+    pub(crate) wtxid: Option<Wtxid>,
 }
 
 #[derive(Clone)]
@@ -706,6 +714,8 @@ impl TransactionRecognizer {
                     index: 0,
                     batchable,
                     inputs,
+                    raw_outpoints: Vec::new(),
+                    wtxid: None,
                 })
             }))
     }
@@ -716,6 +726,7 @@ pub(crate) struct PreparedBlock {
     pub(crate) hash: BlockHash,
     pub(crate) prev_hash: BlockHash,
     pub(crate) input: Option<CanonicalInput>,
+    pub(crate) wtxids: Option<Vec<Wtxid>>,
     pub(crate) transactions: Vec<PreparedTransaction>,
 }
 
@@ -760,6 +771,8 @@ impl PreparedTransaction {
             index,
             batchable,
             inputs,
+            raw_outpoints: Vec::new(),
+            wtxid: None,
         }
     }
 }
@@ -771,12 +784,22 @@ pub(crate) fn recognize_transaction(
     network: Network,
     raw: Vec<u8>,
 ) -> Result<Result<Option<PreparedTransaction>, String>> {
-    TransactionRecognizer::new(
+    let original: BitcoinTransaction = deserialize(&raw)?;
+    let mut recognized = TransactionRecognizer::new(
         executor.origin,
         network,
         executor.operations.recognize.clone(),
     )
-    .recognize(selection, raw)
+    .recognize(selection, raw)?;
+    if let Ok(Some(prepared)) = &mut recognized {
+        prepared.raw_outpoints = original
+            .input
+            .iter()
+            .map(|input| input.previous_output)
+            .collect();
+        prepared.wtxid = Some(original.compute_wtxid());
+    }
+    Ok(recognized)
 }
 
 pub(crate) async fn execute_transaction(
@@ -789,6 +812,14 @@ pub(crate) async fn execute_transaction(
 ) -> Result<Vec<Vec<Option<String>>>> {
     selection.ensure_runtime(network, session.origin())?;
     selection.execution_height(network)?;
+    ensure!(
+        transaction.wtxid.is_some() || cfg!(test),
+        "raw Bitcoin authorization metadata unavailable"
+    );
+    if let Some(wtxid) = transaction.wtxid {
+        reserve_transaction_outpoints(&session.conn, &transaction.raw_outpoints, wtxid, tx_id)
+            .await?;
+    }
     let ((user_fuel, system_fuel, deposit_fuel), failures) =
         (session.executor.operations.transaction)(
             session.executor.owner.clone(),
