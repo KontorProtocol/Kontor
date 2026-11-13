@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use libsql::{Connection, params};
 
-use super::{finality, fixed, replay_input};
+use super::{finality, fixed, reconcile, replay_input};
 use crate::protocol::coordinator::application_closure::WorkItem;
 use crate::protocol::coordinator::closure_work::{
     WorkCursor, WorkOrigin, decode_item, item_bytes, item_digest, plan_id,
@@ -153,7 +153,11 @@ pub(crate) async fn append(
 
 pub(crate) async fn verify(conn: &Connection, draft: Draft) -> Result<()> {
     if let Some(verdict) = draft.verdict {
-        finality::verify(conn, draft.origin, verdict).await?;
+        if reconcile::has_plan(conn, draft.origin).await? {
+            reconcile::verify(conn, draft.origin, verdict).await?;
+        } else {
+            finality::verify(conn, draft.origin, verdict).await?;
+        }
     }
     let mut rows = conn.query("SELECT ordinal, item, previous, digest FROM closure_work_items WHERE plan_key = ?1 ORDER BY ordinal",
         [draft.origin.key()?.to_vec()]).await?;
@@ -194,7 +198,11 @@ pub(super) async fn bind_verdict(
         draft == expected && draft.published.is_none() && draft.verdict.is_none(),
         "verdict draft changed or was sealed"
     );
-    finality::verify(conn, draft.origin, verdict).await?;
+    if reconcile::has_plan(conn, draft.origin).await? {
+        reconcile::verify(conn, draft.origin, verdict).await?;
+    } else {
+        finality::verify(conn, draft.origin, verdict).await?;
+    }
     conn.execute(
         "UPDATE closure_work_plans SET verdict = ?2 WHERE plan_key = ?1",
         params![draft.origin.key()?.to_vec(), verdict.to_vec()],
@@ -213,7 +221,9 @@ pub(crate) async fn publish(conn: &Connection, expected: Draft) -> Result<WorkCu
     verify(conn, draft).await?;
     if draft.published.is_none() {
         if let Some(verdict) = draft.verdict {
-            finality::publish_seeds(conn, draft.origin, verdict).await?;
+            if !reconcile::has_plan(conn, draft.origin).await? {
+                finality::publish_seeds(conn, draft.origin, verdict).await?;
+            }
         }
         let id = plan_id(draft.origin, draft.count, draft.digest, draft.verdict)?;
         conn.execute(

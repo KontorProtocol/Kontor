@@ -4909,12 +4909,9 @@ async fn exclusions_are_recorded_per_decision_and_never_inferred() -> Result<()>
 }
 
 /// The read re-verifies every recorded row against the chain, so a stale exclusion
-/// cannot outlive the fact that produced it. The `batch_height` qualifier is the
-/// load-bearing part: a confirmation attributable to ANOTHER batch's execution must
-/// not un-exclude here, or both heights execute the tx and the plain INSERT in
-/// `insert_transaction` hits `transactions.txid UNIQUE` — #515's collision by a new
-/// route. A confirmation via the BLOCK path (`batch_height IS NULL`) must un-exclude:
-/// that is the reorg-healing case, and a peer syncing from genesis agrees.
+/// cannot outlive the fact that produced it. A txid-only confirmation row is
+/// insufficient: exact retained witness and executed marker evidence are also
+/// required before healing. Another batch's execution never heals the old row.
 #[tokio::test]
 async fn a_recorded_exclusion_is_reverified_against_the_chain() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
@@ -4951,13 +4948,16 @@ async fn a_recorded_exclusion_is_reverified_against_the_chain() -> Result<()> {
     .await?;
     assert!(applies(conn.clone()).await, "confirmed past the deadline");
 
-    // Confirmed at or below it, via the BLOCK path — the exclusion no longer holds.
+    // Even a by-deadline BLOCK row cannot authenticate a witness on its own.
     conn.execute(
         "UPDATE transactions SET confirmed_height = 105 WHERE txid = ?",
         libsql::params![t.clone()],
     )
     .await?;
-    assert!(!applies(conn.clone()).await, "confirmed by the deadline");
+    assert!(
+        applies(conn.clone()).await,
+        "txid-only confirmation cannot heal"
+    );
 
     // Same confirmation, but attributable to a DIFFERENT batch's execution: the
     // exclusion must stand, or this txid executes at both heights.

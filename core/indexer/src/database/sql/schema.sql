@@ -345,6 +345,8 @@ CREATE TABLE IF NOT EXISTS excluded_batch_txids (
   deadline INTEGER NOT NULL,
   PRIMARY KEY (batch_height, txid)
 ) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_excluded_batch_txids_txid_deadline
+  ON excluded_batch_txids(txid, deadline);
 
 -- Node-local operational state (NOT consensus state): a singleton key/value store.
 -- Deliberately has NO foreign key to blocks (a reorg must not cascade-delete or roll

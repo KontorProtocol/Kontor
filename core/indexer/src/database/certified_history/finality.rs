@@ -301,7 +301,8 @@ async fn build_one(
         };
         WorkItem::Replay {
             decision,
-            input: replay_input::insert(conn, &input).await?,
+            input: replay_input::insert(conn, &input, replay_input::PlanningCause::Finality)
+                .await?,
         }
     };
     let draft = work::for_origin(conn, origin).await?;

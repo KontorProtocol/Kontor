@@ -158,7 +158,9 @@ pub(crate) async fn select_stage(
         WorkItem::Rollback { height } => ApplicationPosition::Maintenance {
             rollback_height: Some(height),
         },
-        WorkItem::Finality | WorkItem::Observe => ApplicationPosition::Committee,
+        WorkItem::Finality | WorkItem::Observe | WorkItem::Reconcile => {
+            ApplicationPosition::Committee
+        }
         WorkItem::Activate { decision } => {
             let input = load_verified_input(conn, decision).await?;
             let Command::Block { height, hash, .. } = input.decision().descriptor.command else {

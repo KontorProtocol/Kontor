@@ -4,7 +4,7 @@ use libsql::{Connection, TransactionBehavior, params};
 
 use super::{
     Status, activation, control, durable_writer, fixed, frontier, load_verified_input, protocol,
-    registrations, replay_input, work,
+    reconcile, registrations, replay_input, work,
 };
 use crate::database::canonical_history::{self, HistoryState};
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
@@ -17,6 +17,7 @@ use crate::protocol::coordinator::closure_work::{WorkCursor, WorkOrigin, item_di
 use crate::protocol::coordinator::registration_history::{
     ObservationPosition, RegistrationSnapshot,
 };
+use crate::protocol::identity::domain_digest;
 use crate::protocol::identity::{ChainId, ExecutionIdentity};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,10 +115,18 @@ pub(crate) async fn stage(conn: &Connection, height: u64, index: u64) -> Result<
 
 impl Progress {
     pub(crate) fn work_origin(&self) -> Result<WorkOrigin> {
+        let previous = if self.stage == 0
+            && self.plan.reconciliation.is_some()
+            && self.next.is_some_and(|next| next.0 == WorkItem::Reconcile)
+        {
+            domain_digest(b"kontor/reconcile-work-origin/v1", &self.plan.id()?)
+        } else {
+            self.head
+        };
         Ok(WorkOrigin {
             height: self.plan.height,
             closure: self.plan.id()?,
-            previous: self.head,
+            previous,
             input: self.position,
         })
     }
@@ -168,7 +177,8 @@ async fn advance(conn: &Connection, previous: &Progress, record: &StageRecord) -
     );
     if record.remaining != ordinary_next {
         ensure!(
-            record.action == WorkItem::Finality && ordinary_next.is_empty(),
+            matches!(record.action, WorkItem::Finality | WorkItem::Reconcile)
+                && ordinary_next.is_empty(),
             "ordinary stage changed work plan or finality discarded pending work"
         );
         let replacement = work::published(conn, record.remaining.plan).await?;
@@ -269,20 +279,33 @@ pub(crate) async fn begin(conn: &Connection, height: u64) -> Result<Progress> {
                 && previous.position.lineage == position.lineage,
             "untracked canonical work preceded closure"
         );
+        let replacement_rollback = match decision.descriptor.command {
+            Command::Block { height, .. } if height <= position.storage_height => Some(
+                height
+                    .checked_sub(1)
+                    .context("cannot replace native genesis")?,
+            ),
+            _ => None,
+        };
+        let conflict = if matches!(decision.descriptor.command, Command::Block { .. }) {
+            reconcile::discover(
+                &tx,
+                height,
+                replacement_rollback,
+                &certified.input().transactions()?,
+            )
+            .await?
+        } else {
+            None
+        };
         let plan = ClosurePlan {
             context,
             height,
             decision: decision.id()?,
             previous_closure: state.closure_id.context("missing preceding closure")?,
             input: position,
-            replacement_rollback: match decision.descriptor.command {
-                Command::Block { height, .. } if height <= position.storage_height => Some(
-                    height
-                        .checked_sub(1)
-                        .context("cannot replace native genesis")?,
-                ),
-                _ => None,
-            },
+            replacement_rollback,
+            reconciliation: conflict.as_ref().map(|(summary, _)| *summary),
         };
         tx.execute(
             "INSERT INTO closure_plans (height, plan_id, record) VALUES (?1, ?2, ?3)",
@@ -293,6 +316,10 @@ pub(crate) async fn begin(conn: &Connection, height: u64) -> Result<Progress> {
             ],
         )
         .await?;
+        if let Some((summary, seeds)) = &conflict {
+            reconcile::persist(&tx, height, seeds).await?;
+            reconcile::verify_plan(&tx, height, *summary).await?;
+        }
         let draft = work::begin(&tx, initial_origin(&plan)?).await?;
         let draft = work::append(&tx, draft, &plan.initial_work()).await?;
         work::publish(&tx, draft).await?;
@@ -611,6 +638,9 @@ pub(crate) async fn commit_stage(
 // head and its predecessor, avoiding quadratic scans during a long replay.
 pub(crate) async fn recover(conn: &Connection, height: u64) -> Result<Progress> {
     let mut progress = initial_progress(conn, plan(conn, height).await?).await?;
+    if let Some(reconciliation) = progress.plan.reconciliation {
+        reconcile::verify_plan(conn, height, reconciliation).await?;
+    }
     work::verify(conn, work::published(conn, progress.remaining.plan).await?).await?;
     let certified = load_verified_input(conn, height).await?;
     ensure!(

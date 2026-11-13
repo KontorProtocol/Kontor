@@ -702,13 +702,27 @@ async fn qualify_batches(
                     let draft = work::begin(&conn, origin).await?;
                     let mut bad = frozen.clone();
                     bad.interval_since = 2;
-                    ensure!(replay_input::insert(&conn, &bad).await.is_err());
+                    ensure!(
+                        replay_input::insert(&conn, &bad, replay_input::PlanningCause::Finality)
+                            .await
+                            .is_err()
+                    );
                     bad = frozen.clone();
                     bad.exclusions.direct = vec![[44; 32]];
                     bad.exclusions.effective = bad.exclusions.direct.clone();
-                    ensure!(replay_input::insert(&conn, &bad).await.is_err());
-                    let input = replay_input::insert(&conn, &frozen).await?;
-                    ensure!(replay_input::insert(&conn, &frozen).await? == input);
+                    ensure!(
+                        replay_input::insert(&conn, &bad, replay_input::PlanningCause::Finality)
+                            .await
+                            .is_err()
+                    );
+                    let input =
+                        replay_input::insert(&conn, &frozen, replay_input::PlanningCause::Finality)
+                            .await?;
+                    ensure!(
+                        replay_input::insert(&conn, &frozen, replay_input::PlanningCause::Finality)
+                            .await?
+                            == input
+                    );
                     let mut wrong_origin = origin;
                     wrong_origin.previous = [71; 32];
                     ensure!(
@@ -717,7 +731,9 @@ async fn qualify_batches(
                             .is_err()
                     );
                     ensure!(replay_input::get(&conn, input, origin, 2).await.is_err());
-                    let empty_input = replay_input::insert(&conn, &empty).await?;
+                    let empty_input =
+                        replay_input::insert(&conn, &empty, replay_input::PlanningCause::Finality)
+                            .await?;
                     let draft = work::append(
                         &conn,
                         draft,
@@ -748,7 +764,11 @@ async fn qualify_batches(
                     )
                     .await?;
                     let cursor = work::publish(&conn, draft).await?;
-                    ensure!(replay_input::insert(&conn, &frozen).await.is_err());
+                    ensure!(
+                        replay_input::insert(&conn, &frozen, replay_input::PlanningCause::Finality)
+                            .await
+                            .is_err()
+                    );
                     Ok(((), StageOutcome::FinalityEvaluated, cursor))
                 }
                 .await;

@@ -6,8 +6,8 @@ use bitcoin::secp256k1::{Message, Secp256k1, VerifyOnly, XOnlyPublicKey};
 use bitcoin::sighash::{Prevouts, SighashCache};
 use bitcoin::taproot::{ControlBlock, LeafVersion, Signature, TapNodeHash};
 use bitcoin::{
-    Amount, Network, ScriptBuf, TapLeafHash, TapSighashType, Transaction as BitcoinTransaction,
-    TxOut,
+    Amount, Network, Script, ScriptBuf, TapLeafHash, TapSighashType,
+    Transaction as BitcoinTransaction, TxOut,
 };
 use indexer_types::{Input, InstKind, Insts, deserialize};
 
@@ -100,7 +100,7 @@ pub(crate) fn parse_authorized_input(
     })
 }
 
-fn parse_leaf(script: &bitcoin::Script, network: Network) -> Option<(XOnlyPublicKey, u64, Insts)> {
+fn parse_leaf(script: &Script, network: Network) -> Option<(XOnlyPublicKey, u64, Insts)> {
     let mut instructions = script.instructions();
     let Some(Ok(Instruction::PushBytes(key))) = instructions.next() else {
         return None;
