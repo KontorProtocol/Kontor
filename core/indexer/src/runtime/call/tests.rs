@@ -39,6 +39,7 @@ mod p1_transaction_publication;
 mod preparation_fees;
 mod results;
 mod sequential_chains;
+mod token_transfer;
 mod wave_costs;
 
 async fn funded(runtime: &mut Runtime) -> Result<Signer> {
