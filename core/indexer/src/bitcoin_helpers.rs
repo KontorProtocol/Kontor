@@ -115,6 +115,44 @@ pub fn sign_script_spend_with_sighash(
     Ok(())
 }
 
+#[cfg(feature = "protocol-qualification")]
+pub fn sign_qualification_script_spend(
+    secp: &Secp256k1<All>,
+    taproot_spend_info: &TaprootSpendInfo,
+    tap_script: &ScriptBuf,
+    script_spend_tx: &mut BitcoinTransaction,
+    prevouts: &[TxOut],
+    keypair: &Keypair,
+    input_index: usize,
+    sighash_type: TapSighashType,
+) -> Result<()> {
+    let control_block = taproot_spend_info
+        .control_block(&(tap_script.clone(), LeafVersion::TapScript))
+        .expect("Failed to create control block");
+    let mut sighasher = SighashCache::new(script_spend_tx.clone());
+    let sighash = sighasher
+        .taproot_script_spend_signature_hash(
+            input_index,
+            &Prevouts::All(prevouts),
+            TapLeafHash::from_script(tap_script, LeafVersion::TapScript),
+            sighash_type,
+        )
+        .expect("Failed to create sighash");
+    let msg = Message::from_digest(sighash.to_byte_array());
+    // The semantic oracle compares exact witness bytes across independent runs.
+    let signature = secp.sign_schnorr_no_aux_rand(&msg, keypair);
+    let signature = TaprootSignature {
+        signature,
+        sighash_type,
+    };
+    let mut witness = Witness::new();
+    witness.push(signature.to_vec());
+    witness.push(tap_script.as_bytes());
+    witness.push(control_block.serialize());
+    script_spend_tx.input[input_index].witness = witness;
+    Ok(())
+}
+
 pub fn new_mock_block_hash(i: u32) -> BlockHash {
     let mut bytes = [0u8; 32];
     let i_bytes = i.to_le_bytes();

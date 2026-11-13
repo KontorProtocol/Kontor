@@ -14,7 +14,7 @@ use bitcoin::{
 };
 use indexer_types::{Inst, InstKind, Insts, serialize};
 
-use crate::bitcoin_helpers::sign_script_spend_with_sighash;
+use crate::bitcoin_helpers::sign_qualification_script_spend;
 
 pub(crate) fn issuance_transaction() -> Result<Transaction> {
     issuance_transaction_at(OutPoint::null())
@@ -80,7 +80,7 @@ pub(crate) fn raw_transaction_at_with_lock_time(
             script_pubkey: ScriptBuf::new(),
         }],
     };
-    sign_script_spend_with_sighash(
+    sign_qualification_script_spend(
         &secp,
         &spend,
         &script,
@@ -91,4 +91,35 @@ pub(crate) fn raw_transaction_at_with_lock_time(
         TapSighashType::AllPlusAnyoneCanPay,
     )?;
     Ok(transaction)
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::{Context, Result};
+    use bitcoin::consensus::serialize as serialize_bitcoin;
+    use bitcoin::{Network, OutPoint};
+
+    use super::issuance_transaction_at;
+    use crate::protocol::v1::transactions::filter_map_for_network;
+
+    #[test]
+    fn certified_fixture_witness_is_stable_and_bound_to_outpoint() -> Result<()> {
+        let parent = issuance_transaction_at(OutPoint::null())?;
+        let repeated = issuance_transaction_at(OutPoint::null())?;
+        assert_eq!(serialize_bitcoin(&parent), serialize_bitcoin(&repeated));
+        assert_eq!(parent.compute_wtxid(), repeated.compute_wtxid());
+        let child_outpoint = OutPoint {
+            txid: parent.compute_txid(),
+            vout: 0,
+        };
+        let child = issuance_transaction_at(child_outpoint)?;
+        assert_ne!(child.compute_txid(), parent.compute_txid());
+        for tx in [parent, child] {
+            let recognized = filter_map_for_network((0, tx), Network::Regtest)
+                .context("signed certified transaction was not recognized")?;
+            assert_eq!(recognized.inputs.len(), 1);
+            assert_eq!(recognized.inputs[0].insts.ops.len(), 1);
+        }
+        Ok(())
+    }
 }

@@ -321,8 +321,8 @@ pub(crate) async fn run(
     let stopped = engine
         .stop_and_wait(None, Some(Duration::from_secs(5)))
         .await;
-    stopped.context("qualification engine shutdown")?;
     let (evidence, reactor) = result?;
+    stopped.context("qualification engine shutdown")?;
     qualify_engine_free_recovery(reactor.execution, &factory, dir.path()).await?;
     #[cfg(all(kontor_managed, not(test)))]
     let evidence = {

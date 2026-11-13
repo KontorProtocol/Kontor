@@ -21,7 +21,7 @@ use indexer_types::{
 use libsql::{Connection, Value as SqlValue};
 use sha2::{Digest, Sha256};
 
-use crate::bitcoin_helpers::sign_script_spend_with_sighash;
+use crate::bitcoin_helpers::sign_qualification_script_spend;
 use crate::consensus::signing::PrivateKey;
 
 pub(super) const NETWORK: Network = Network::Regtest;
@@ -148,7 +148,7 @@ pub(super) fn transaction() -> Result<Transaction> {
             script_pubkey: ScriptBuf::new(),
         }],
     };
-    sign_script_spend_with_sighash(
+    sign_qualification_script_spend(
         &secp,
         &spend,
         &script,
@@ -170,6 +170,29 @@ pub(super) fn genesis() -> GenesisInput {
             PrivateKey::from([7; 32]).public_key().as_bytes().to_vec(),
         )],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::{Context, Result};
+    use bitcoin::consensus::serialize as serialize_bitcoin;
+
+    use super::{NETWORK, OP_COUNT, transaction};
+    use crate::protocol::v1::transactions::filter_map_for_network;
+
+    #[test]
+    fn launch_fixture_witness_is_stable_and_recognized() -> Result<()> {
+        let first = transaction()?;
+        let second = transaction()?;
+        assert_eq!(serialize_bitcoin(&first), serialize_bitcoin(&second));
+        assert_eq!(first.compute_txid(), second.compute_txid());
+        assert_eq!(first.compute_wtxid(), second.compute_wtxid());
+        let recognized = filter_map_for_network((0, first), NETWORK)
+            .context("signed qualification transaction was not recognized")?;
+        assert_eq!(recognized.inputs.len(), 1);
+        assert_eq!(recognized.inputs[0].insts.ops.len(), OP_COUNT);
+        Ok(())
+    }
 }
 
 // Hash typed, length-delimited values rather than database file bytes, which
