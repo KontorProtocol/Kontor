@@ -49,6 +49,7 @@ pub async fn post_compose_reveal(
     if reveal.sat_per_vbyte.is_none() {
         reveal.sat_per_vbyte = Some(default_sat_per_vbyte(&env));
     }
-    let outputs = compose_reveal(reveal).map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    let outputs = compose_reveal(reveal, env.config.network)
+        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
     Ok(outputs.into())
 }

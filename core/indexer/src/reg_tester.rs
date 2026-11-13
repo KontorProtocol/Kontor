@@ -595,6 +595,7 @@ impl RegTesterInner {
             participants: vec![indexer_types::RevealParticipant {
                 x_only_public_key: ident.x_only_public_key().to_string(),
                 commit_insts: insts,
+                sighash_type: None,
                 output: Some(indexer_types::RevealOutput::Change {
                     script_pubkey: hex::encode(ident.address.script_pubkey().as_bytes()),
                 }),

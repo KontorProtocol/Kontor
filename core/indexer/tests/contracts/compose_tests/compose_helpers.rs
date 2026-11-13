@@ -2,7 +2,7 @@ use anyhow::Result;
 use bitcoin::absolute::LockTime;
 use bitcoin::script::Instruction;
 use bitcoin::transaction::{Transaction, TxIn, TxOut, Version};
-use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, Txid};
+use bitcoin::{Amount, FeeRate, Network, OutPoint, ScriptBuf, Txid};
 use indexer::api::compose::{
     build_tap_script_and_script_address, estimate_participant_commit_fees, select_utxos_for_commit,
 };
@@ -35,7 +35,7 @@ use tracing::info;
 //     has_chained: bool,
 // ) -> RevealFeeEstimateInput {
 //     let (tap_script, _, _, control_block) =
-//         build_tap_script_and_script_address(xonly, data).expect("build tapscript");
+//         build_tap_script_and_script_address(xonly, data, 1000, Network::Regtest).expect("build tapscript");
 //     RevealFeeEstimateInput {
 //         tap_script,
 //         control_block_bytes: control_block.serialize(),
@@ -407,7 +407,7 @@ pub async fn test_build_tap_script_and_script_address_empty_data_errs(
     let identity = reg_tester.identity().await?;
     let keypair = identity.keypair;
     let (xonly, _parity) = keypair.x_only_public_key();
-    let res = build_tap_script_and_script_address(xonly, vec![]);
+    let res = build_tap_script_and_script_address(xonly, vec![], 1000, Network::Regtest);
     assert!(res.is_err());
     Ok(())
 }
@@ -422,7 +422,8 @@ pub async fn test_build_tap_script_and_script_address_multi_push_and_structure(
     // 600 bytes ensures > 520, triggering multiple pushes
     let data = vec![7u8; 600];
     let (tap_script, script_addr, control_block) =
-        build_tap_script_and_script_address(xonly, data.clone()).expect("build tapscript");
+        build_tap_script_and_script_address(xonly, data.clone(), 1000, Network::Regtest)
+            .expect("build tapscript");
     // Control block should have been returned and be valid
     assert!(
         !control_block.serialize().is_empty(),
@@ -477,7 +478,8 @@ pub async fn test_build_tap_script_chunk_boundaries_push_count(
     for &len in &[520usize, 521usize, 1040usize, 1041usize] {
         let data = vec![0xABu8; len];
         let (tap_script, _addr, _control_block) =
-            build_tap_script_and_script_address(xonly, data.clone()).expect("build tapscript");
+            build_tap_script_and_script_address(xonly, data.clone(), 1000, Network::Regtest)
+                .expect("build tapscript");
         let instr = tap_script
             .instructions()
             .collect::<Result<Vec<_>, _>>()
@@ -504,7 +506,8 @@ pub async fn test_build_tap_script_address_type_is_p2tr(reg_tester: &mut RegTest
     let (xonly, _parity) = keypair.x_only_public_key();
     let data = b"abc".to_vec();
     let (_tap, addr, _control_block) =
-        build_tap_script_and_script_address(xonly, data).expect("build tapscript");
+        build_tap_script_and_script_address(xonly, data, 1000, Network::Regtest)
+            .expect("build tapscript");
     assert_eq!(addr.address_type(), Some(bitcoin::AddressType::P2tr));
     Ok(())
 }
@@ -519,7 +522,8 @@ pub async fn test_compose_reveal_op_return_size_validation(
     let (xonly, _parity) = keypair.x_only_public_key();
     let commit_data = b"data".to_vec();
     let (_, script_addr, _) =
-        build_tap_script_and_script_address(xonly, commit_data).expect("build");
+        build_tap_script_and_script_address(xonly, commit_data, 1000, Network::Regtest)
+            .expect("build");
     let commit_outpoint = OutPoint {
         txid: Txid::from_str("0000000000000000000000000000000000000000000000000000000000000003")
             .unwrap(),

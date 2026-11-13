@@ -41,6 +41,7 @@ import type { BitcoinNetwork, Chain } from "./chains.js";
  *  absent: a default-sighash input gets no explicit `sighashType`. */
 const SCURE_SIGHASH: Record<Exclude<SighashKind, "default">, SigHash> = {
   all: SigHash.ALL,
+  "all-anyonecanpay": SigHash.ALL_ANYONECANPAY,
   "single-anyonecanpay": SigHash.SINGLE_ANYONECANPAY,
 };
 

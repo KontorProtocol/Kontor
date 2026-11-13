@@ -22,24 +22,31 @@
 
 import { hex } from "@scure/base";
 import {
+  SigHash,
   TaprootControlBlock,
   Transaction,
   p2tr,
   utils as btcUtils,
 } from "@scure/btc-signer";
+import { tapLeafHash } from "@scure/btc-signer/payment.js";
 
 import type { Signing } from "./signing.js";
-import type { Reveal, TapLeafScript } from "./bindings.js";
+import type { InstKind, Reveal, TapLeafScript } from "./bindings.js";
 import { toRevealOutputs, type ExtraOutput } from "./outputs.js";
 import type { BitcoinNetwork } from "./chains.js";
 import { SignerError } from "./errors.js";
 import type { BroadcastResult, Utxo, WireInsts } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
+import { signReveal } from "./transport/signing.js";
 
 /** P2TR dust floor — change below this is dropped into the fee. */
 const DUST_SATS = 330n;
 /** Default flat fee for the swap transaction, satoshis. */
 const DEFAULT_SWAP_FEE = 1000n;
+type SponsorFields = Extract<
+  InstKind,
+  { SponsorBound: unknown }
+>["SponsorBound"];
 
 /** Build an `OP_RETURN <payload>` scriptPubKey (payloads are well under
  *  the 75-byte single-byte-push limit). */
@@ -158,6 +165,7 @@ export class Offer {
           {
             x_only_public_key: identity.xOnlyPubKey,
             commit_insts: data.detachInsts,
+            sighash_type: null,
             output: { Change: { script_pubkey: sellerScriptPubKey } },
             commit_source: {
               Existing: {
@@ -179,7 +187,7 @@ export class Offer {
         })),
         extra_outputs: [],
       };
-      return transport.composeAndSign(reveal);
+      return transport.composeAndSign(reveal, fundingUtxos);
     });
     return result;
   }
@@ -345,9 +353,31 @@ export class IncomingOffer {
           {
             x_only_public_key: buyerXOnly,
             commit_insts: {
-              ops: [{ gas_limit: 50_000, kind: "Sponsor" }],
+              ops: [
+                {
+                  gas_limit: 50_000,
+                  kind: {
+                    SponsorBound: {
+                      target_input_index: 1,
+                      target_txid: Array(32).fill(
+                        0,
+                      ) as SponsorFields["target_txid"],
+                      target_vout_le: Array(4).fill(
+                        0,
+                      ) as SponsorFields["target_vout_le"],
+                      target_leaf_hash: Array(32).fill(
+                        0,
+                      ) as SponsorFields["target_leaf_hash"],
+                      max_total_gas_le: Array(8).fill(
+                        0,
+                      ) as SponsorFields["max_total_gas_le"],
+                    },
+                  },
+                },
+              ],
               aggregate: null,
             },
+            sighash_type: null,
             output: { Change: { script_pubkey: buyerScriptPubKey } },
             commit_source: {
               Build: {
@@ -359,6 +389,7 @@ export class IncomingOffer {
           {
             x_only_public_key: data.seller,
             commit_insts: data.detachInsts,
+            sighash_type: 0x83,
             output: {
               Fixed: {
                 script_pubkey: hex.encode(priceScript),
@@ -381,7 +412,7 @@ export class IncomingOffer {
         // Fixed); these append after them in the layout.
         extra_outputs: toRevealOutputs(opts?.extraOutputs, chain.network),
       };
-      const prepared = await transport.composeAndSign(reveal);
+      const prepared = await transport.composeAndSign(reveal, buyerUtxos);
       if (prepared.commitHexes.length !== 1) {
         throw new SignerError(
           `accept: expected 1 commit, got ${prepared.commitHexes.length}`,
@@ -421,14 +452,10 @@ export interface SellerDetachParams {
  * escrow input `single-anyonecanpay`. Returns the partially-signed PSBT
  * as hex.
  *
- * Input 1 / output 1 (not 0) because the swap reveal the buyer
- * assembles places its own Sponsor input at index 0; `SINGLE|ANYONECANPAY`
- * commits the seller's signature to *this* input's index, so the
- * escrow must be signed at the index it'll actually land at in the
- * final tx. The dummy at slot 0 is purely structural — `SINGLE|ANYONECANPAY`
- * doesn't hash other inputs/outputs, so the buyer can replace it with
- * anything (the real Sponsor commit input + paired change/etc.) without
- * invalidating the seller's signature.
+ * Input 1 / output 1 matches the buyer's swap layout, where the Sponsor
+ * occupies slot 0. `SINGLE|ANYONECANPAY` signs the seller's own outpoint
+ * and its corresponding output, so the buyer can replace the dummy slot
+ * without invalidating the seller's signature.
  */
 export async function buildSellerDetachPsbt(
   signing: Signing,
@@ -473,15 +500,29 @@ export async function buildSellerDetachPsbt(
     txid: reveal.id,
     index: 0,
     witnessUtxo: { script: escrow.script, amount: escrow.amount },
+    tapInternalKey: hex.decode(signing.identity.xOnlyPubKey),
     tapLeafScript: [[controlBlock, leafScript]],
+    sighashType: SigHash.SINGLE_ANYONECANPAY,
   });
   // Output 0 mirrors the dummy input — pure structural filler so output 1
   // sits at index 1 (where the seller's SACP signature commits to it).
   tx.addOutput({ script: opReturnScript(new Uint8Array([0])), amount: 0n });
   tx.addOutput({ script: sellerScript, amount: params.price });
 
-  const signed = await signing.psbt(tx.toPSBT(), {
-    inputs: [{ index: 1, sighash: "single-anyonecanpay" }],
+  const signed = await signReveal(signing, hex.encode(tx.toPSBT()));
+  const signature = signed.getInput(1).finalScriptWitness?.[0];
+  if (signature == null)
+    throw new SignerError("offer: seller detach was not signed");
+  tx.updateInput(1, {
+    tapScriptSig: [
+      [
+        {
+          pubKey: hex.decode(signing.identity.xOnlyPubKey),
+          leafHash: tapLeafHash(hex.decode(params.detachLeaf.script)),
+        },
+        signature,
+      ],
+    ],
   });
-  return hex.encode(signed);
+  return hex.encode(tx.toPSBT());
 }

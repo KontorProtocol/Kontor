@@ -49,10 +49,13 @@ export interface Chain {
     nativeToken?: { name: string; height: bigint; txIndex: bigint };
   };
   network: BitcoinNetwork;
+  /** Four Bitcoin network-magic bytes committed into each launch leaf. */
+  bitcoinNetworkMagic: string;
 }
 
 export const signet: Chain = {
   name: "signet",
+  bitcoinNetworkMagic: "0a03cf40",
   nativeCurrency: { name: "Kontor", symbol: "KOR", decimals: 18 },
   blockTime: 10 * 60 * 1_000,
   urls: {
@@ -97,6 +100,7 @@ export function regtestChain(endpoints: {
 }): Chain {
   return {
     name: "regtest",
+    bitcoinNetworkMagic: "fabfb5da",
     nativeCurrency: { name: "Kontor", symbol: "KOR", decimals: 18 },
     // `kontor regtest` auto-mines roughly every 10s.
     blockTime: 10_000,

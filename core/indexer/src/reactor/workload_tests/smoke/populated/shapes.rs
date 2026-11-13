@@ -214,6 +214,7 @@ impl ShapeSigners {
             .map(|(index, commit_insts)| RevealParticipant {
                 x_only_public_key: self.keys[index].x_only_public_key().0.to_string(),
                 commit_insts,
+                sighash_type: None,
                 output: None,
                 commit_source: CommitSource::build_resolved(
                     &address(&self.keys[index]),

@@ -112,7 +112,10 @@ test("psbt: signs a taproot key-path input", async () => {
   expect(reparsed.isFinal).toBe(true);
 });
 
-test("psbt: signs a chosen input under an explicit sighash", async () => {
+test.each([
+  ["all-anyonecanpay", 0x81],
+  ["single-anyonecanpay", 0x83],
+] as const)("psbt: signs a chosen input with %s", async (kind, flag) => {
   const acct = LocalKey.fromMnemonic({ mnemonic: MNEMONIC, chain: signet });
   const payment = p2tr(
     xOnlyBytes(acct.identity.xOnlyPubKey),
@@ -130,12 +133,11 @@ test("psbt: signs a chosen input under an explicit sighash", async () => {
   tx.addOutputAddress(acct.identity.address, 90_000n, signet.network);
 
   const signed = await acct.psbt(tx.toPSBT(), {
-    inputs: [{ index: 0, sighash: "single-anyonecanpay" }],
+    inputs: [{ index: 0, sighash: kind }],
   });
 
-  // Input 0 is pinned to SIGHASH_SINGLE | ANYONECANPAY (0x83) and signed.
   const reparsed = Transaction.fromPSBT(signed);
-  expect(reparsed.getInput(0).sighashType).toBe(0x83);
+  expect(reparsed.getInput(0).sighashType).toBe(flag);
   expect(reparsed.getInput(0).tapKeySig).toBeDefined();
 });
 

@@ -11,8 +11,7 @@ use crate::runtime::Runtime;
 
 use AggregateVerificationError::{Infrastructure, Rejected};
 
-/// Resolved signer_id → x_only_pubkey mapping returned by [`verify_aggregate`]
-/// so the block handler can look up signers without redundant registry calls.
+/// Cached signer_id → x_only_pubkey mapping used during read-only verification.
 pub type SignerMap = HashMap<u64, String>;
 
 /// Database failures must abort processing rather than become input rejections.
@@ -167,7 +166,7 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
             // Sponsor is a unilateral payer designation — by construction
             // it can have only one signer (the input it rides on) and is
             // not aggregatable across BLS co-signers.
-            InstKind::Sponsor => {
+            InstKind::Sponsor | InstKind::SponsorBound { .. } => {
                 return Err(anyhow!(
                     "aggregate path does not support Sponsor (not aggregatable)"
                 ));

@@ -33,7 +33,12 @@ import type { FundingSource } from "../funding.js";
 import type { Chain } from "../chains.js";
 import type { ContractAddress } from "../canonical/ContractAddress.js";
 import { ChainError, ContractError, TransportError } from "../errors.js";
-import { signCommit, signReveal } from "./signing.js";
+import {
+  signCommit,
+  signReveal,
+  verifyFinalizedTaprootTransaction,
+} from "./signing.js";
+import { validateComposeResponse } from "./compose-validation.js";
 import { toRevealOutputs, type ExtraOutput } from "../outputs.js";
 import type {
   BroadcastResult,
@@ -354,7 +359,10 @@ export class HttpTransport implements KontorTransport {
    * the same compose+sign primitive `submit` uses for the simple
    * single-Build case.
    */
-  async composeAndSign(reveal: Reveal): Promise<{
+  async composeAndSign(
+    reveal: Reveal,
+    fundingUtxos: Utxo[] | undefined,
+  ): Promise<{
     /** One finalized hex per Build participant's commit, in
      *  `composed.commits` order. Empty when every input is Existing /
      *  extra_input (no commits to broadcast). Today every commit is
@@ -369,6 +377,13 @@ export class HttpTransport implements KontorTransport {
   }> {
     const signing = this.requireSigning();
     const composed = await this.compose(reveal);
+    validateComposeResponse(
+      reveal,
+      composed,
+      this.opts.chain,
+      signing.identity.xOnlyPubKey,
+      fundingUtxos,
+    );
     const commitHexes = await Promise.all(
       composed.commits.map((c) => signCommit(signing, c.psbt_hex)),
     );
@@ -398,6 +413,7 @@ export class HttpTransport implements KontorTransport {
         {
           x_only_public_key: identity.xOnlyPubKey,
           commit_insts: insts,
+          sighash_type: null,
           // Change rides as the final extra_output (below), not a paired
           // output: rider outputs slot in front of it so Change stays
           // last. The indexer only silently drops sub-dust Change when
@@ -445,7 +461,7 @@ export class HttpTransport implements KontorTransport {
         utxos,
         opts?.extraOutputs,
       );
-      return this.composeAndSign(reveal);
+      return this.composeAndSign(reveal, utxos);
     });
     return result;
   }
@@ -477,36 +493,40 @@ export class HttpTransport implements KontorTransport {
     let revealHex: string;
     let composed: ComposeOutputs;
     let result: BroadcastResult;
+    let fundingDelta: { spent: Utxo[]; change: Utxo[] };
     try {
       const prepared = await prepare(taken);
       commitHexes = prepared.commitHexes;
       composed = prepared.composed;
+      verifyFinalizedTaprootTransaction(prepared.revealTx);
       revealHex = hex.encode(prepared.revealTx.extract());
+      fundingDelta = this.computeFundingDelta({
+        suppliedUtxos: taken,
+        composed,
+        commitHexes,
+        revealHex,
+      });
       result = await this.broadcast([...commitHexes, revealHex]);
     } catch (err) {
       funding.release(taken);
       throw err;
     }
-    funding.settle(
-      this.computeFundingDelta({ suppliedUtxos: taken, composed, commitHexes }),
-    );
+    funding.settle(fundingDelta);
     return { result, commitHexes, revealHex, composed };
   }
 
   /**
-   * Compute what a broadcast commit/reveal package spent and what change
-   * it created — fed to `FundingSource.settle`. The commit consumes a
-   * prefix of `suppliedUtxos` (length = `commitTx.inputsLength` — the
-   * indexer greedily picks from the head). Change is the reveal's
-   * dust-floor Change output (first, for consolidation) plus each commit's
-   * vout-1 change. Pure: no mutation.
+   * Compute the spent candidates and owned change from the exact finalized
+   * package. An output spent by a later package transaction is not retained
+   * as funding, even if its annotation calls it Change.
    */
   private computeFundingDelta(opts: {
     suppliedUtxos: Utxo[];
     composed: ComposeOutputs;
     commitHexes: string[];
+    revealHex: string;
   }): { spent: Utxo[]; change: Utxo[] } {
-    const { suppliedUtxos, commitHexes, composed } = opts;
+    const { suppliedUtxos, commitHexes, revealHex, composed } = opts;
     const ownScriptPubKey = hex.encode(
       p2tr(
         hex.decode(this.opts.identity.xOnlyPubKey),
@@ -515,51 +535,59 @@ export class HttpTransport implements KontorTransport {
       ).script,
     );
     const change: Utxo[] = [];
+    const rawTransactions = [...commitHexes, revealHex].map((rawHex) =>
+      Transaction.fromRaw(hex.decode(rawHex), {
+        disableScriptCheck: true,
+        allowUnknownOutputs: true,
+        allowUnknownInputs: true,
+      }),
+    );
+    const spentKeys = new Set<string>();
+    for (const tx of rawTransactions) {
+      for (let index = 0; index < tx.inputsLength; index++) {
+        const input = tx.getInput(index);
+        spentKeys.add(`${hex.encode(input.txid!)}:${input.index}`);
+      }
+    }
+    const addOwnChange = (tx: Transaction, outputIndex: number): void => {
+      const output = tx.getOutput(outputIndex);
+      if (
+        output.script == null ||
+        hex.encode(output.script) !== ownScriptPubKey ||
+        output.amount == null ||
+        spentKeys.has(`${tx.id}:${outputIndex}`)
+      )
+        return;
+      change.push({
+        txid: tx.id,
+        vout: outputIndex,
+        value: output.amount,
+        scriptPubKey: ownScriptPubKey,
+      });
+    };
 
-    // Reveal-change first — the dust-floor 330-sat output is what the
-    // indexer's greedy selector pulls in alongside the larger commit-change
-    // UTXO on the next submit, consolidating the dust naturally.
     const revealChangeIdx = composed.reveal.output_info.findIndex(
-      (info) => typeof info === "object" && "Change" in info,
+      (info) => typeof info === "object" && info != null && "Change" in info,
     );
     if (revealChangeIdx >= 0) {
-      const info = composed.reveal.output_info[revealChangeIdx]!;
-      if (typeof info === "object" && "Change" in info) {
-        change.push({
-          txid: composed.reveal.txid,
-          vout: revealChangeIdx,
-          value: BigInt(info.Change.value),
-          scriptPubKey: ownScriptPubKey,
-        });
+      addOwnChange(
+        rawTransactions[rawTransactions.length - 1]!,
+        revealChangeIdx,
+      );
+    }
+
+    for (const [index, meta] of composed.commits.entries()) {
+      if (meta.change_value != null) {
+        addOwnChange(rawTransactions[index]!, 1);
       }
     }
 
-    let consumed = 0;
-    if (commitHexes.length === 0) {
-      // No commits — `suppliedUtxos` went straight into the reveal as
-      // `extra_inputs`, every one consumed.
-      consumed = suppliedUtxos.length;
-    } else {
-      for (let i = 0; i < commitHexes.length; i++) {
-        const meta = composed.commits[i]!;
-        const commitTx = Transaction.fromRaw(hex.decode(commitHexes[i]!), {
-          disableScriptCheck: true,
-          allowUnknownOutputs: true,
-          allowUnknownInputs: true,
-        });
-        consumed += commitTx.inputsLength;
-        if (meta.change_value != null) {
-          change.push({
-            txid: meta.txid,
-            vout: 1,
-            value: BigInt(meta.change_value),
-            scriptPubKey: ownScriptPubKey,
-          });
-        }
-      }
-    }
-
-    return { spent: suppliedUtxos.slice(0, consumed), change };
+    return {
+      spent: suppliedUtxos.filter((utxo) =>
+        spentKeys.has(`${utxo.txid.toLowerCase()}:${utxo.vout}`),
+      ),
+      change,
+    };
   }
 
   /**
@@ -585,7 +613,7 @@ export class HttpTransport implements KontorTransport {
     const taken = await funding.take();
     try {
       const reveal = await this.buildSimpleReveal(insts, taken);
-      const { revealTx } = await this.composeAndSign(reveal);
+      const { revealTx } = await this.composeAndSign(reveal, taken);
       const ops = await this.postJson<InspectedOp[]>("/transactions/inspect", {
         hex: hex.encode(revealTx.extract()),
       });
@@ -630,7 +658,7 @@ export class HttpTransport implements KontorTransport {
     const taken = await funding.take();
     try {
       const reveal = await this.buildSimpleReveal(insts, taken);
-      const { revealTx } = await this.composeAndSign(reveal);
+      const { revealTx } = await this.composeAndSign(reveal, taken);
       return await this.postJson<T>(path, {
         hex: hex.encode(revealTx.extract()),
       });

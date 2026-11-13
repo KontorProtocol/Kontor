@@ -66,6 +66,10 @@ pub struct Reveal {
 pub struct RevealParticipant {
     pub x_only_public_key: String,
     pub commit_insts: Insts,
+    /// Defaults to ALL|ANYONECANPAY. An offline seller uses
+    /// SINGLE|ANYONECANPAY to bind its paired output.
+    #[ts(type = "number | null")]
+    pub sighash_type: Option<u8>,
     /// Optional. The common seller-offer pattern (chained envelope +
     /// change in extras) leaves this unset; the marketplace swap sets
     /// it to the SACP-paired output (Change for buyer, Fixed for seller).
@@ -1258,6 +1262,18 @@ pub enum InstKind {
     /// At most one `Sponsor` per input; multiple → invalid batch. Not
     /// aggregatable (rejected in BLS-aggregate inputs).
     Sponsor,
+    /// Buyer authority for the immediately following signed input. The
+    /// outpoint and leaf hash prevent a seller's SACP witness from being
+    /// paired with a different asset operation or gas obligation.
+    SponsorBound {
+        target_input_index: u32,
+        /// Consensus outpoint bytes. Fixed width keeps fee sizing stable
+        /// when compose fills a Build target after its commit.
+        target_txid: [u8; 32],
+        target_vout_le: [u8; 4],
+        target_leaf_hash: [u8; 32],
+        max_total_gas_le: [u8; 8],
+    },
 }
 
 impl Inst {

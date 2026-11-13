@@ -285,6 +285,7 @@ async fn checked_signed_instructions(
                 ops,
                 aggregate: None,
             },
+            sighash_type: None,
             output: Some(RevealOutput::Change {
                 script_pubkey: hex::encode(address.script_pubkey().as_bytes()),
             }),

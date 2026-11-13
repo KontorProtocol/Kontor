@@ -231,7 +231,10 @@ export interface KontorTransport {
    * `hex.encode(revealTx.extract())` immediately; mixed-signer
    * callers inject the foreign witness first.
    */
-  composeAndSign(reveal: Reveal): Promise<{
+  composeAndSign(
+    reveal: Reveal,
+    fundingUtxos: Utxo[] | undefined,
+  ): Promise<{
     commitHexes: string[];
     revealTx: Transaction;
     composed: ComposeOutputs;

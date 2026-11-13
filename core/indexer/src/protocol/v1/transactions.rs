@@ -1,15 +1,15 @@
 use bitcoin::consensus::encode::FromHexError;
+use bitcoin::consensus::serialize as serialize_bitcoin;
 use bitcoin::consensus::{Decodable, DecodeError};
+use bitcoin::hashes::Hash;
 use bitcoin::io::Cursor;
 use bitcoin::{
-    OutPoint, Transaction as BitcoinTransaction, XOnlyPublicKey,
-    opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
-    script::Instruction,
+    Network, OutPoint, TapSighashType, Transaction as BitcoinTransaction, secp256k1::Secp256k1,
+    sighash::SighashCache,
 };
-use indexer_types::{
-    Input, Inst, InstKind, Insts, Op, OpKind, OpMetadata, Payment, Transaction, deserialize,
-};
+use indexer_types::{Input, Inst, InstKind, Op, OpKind, OpMetadata, Payment, Transaction};
 
+use super::authorization::parse_authorized_input;
 use super::storage_identity::CORE_SIGNER_ID;
 
 pub(crate) fn decode_simulation(raw: &[u8]) -> Result<BitcoinTransaction, String> {
@@ -28,7 +28,7 @@ pub(crate) fn decode_simulation(raw: &[u8]) -> Result<BitcoinTransaction, String
     decoded.map_err(|error| FromHexError::Decode(error).to_string())
 }
 
-pub type TransactionFilterMap = fn((usize, BitcoinTransaction)) -> Option<Transaction>;
+pub type TransactionFilterMap = fn((usize, BitcoinTransaction), Network) -> Option<Transaction>;
 
 /// Origin-only OpMetadata fields supplied by the reactor. The `payment`
 /// part of `OpMetadata` is filled in by `materialize_op` from
@@ -71,7 +71,7 @@ pub fn materialize_op(
         // `pending_for_next` to drive the next input. The cross-input
         // `payment_override` (which would otherwise apply to this op) is
         // ignored here so the Sponsor's own commitment is preserved.
-        InstKind::Sponsor => (
+        InstKind::Sponsor | InstKind::SponsorBound { .. } => (
             Payment {
                 signer_id: base.signer_id,
                 gas_limit,
@@ -115,7 +115,9 @@ pub fn materialize_op(
                     bls_sig,
                 },
                 InstKind::Issuance => unreachable!("Issuance handled above"),
-                InstKind::Sponsor => unreachable!("Sponsor handled above"),
+                InstKind::Sponsor | InstKind::SponsorBound { .. } => {
+                    unreachable!("Sponsor handled above")
+                }
             };
             (payment, op_kind)
         }
@@ -267,63 +269,94 @@ impl TxWalker {
     }
 }
 
-pub fn filter_map((tx_index, tx): (usize, BitcoinTransaction)) -> Option<Transaction> {
-    let inputs =
-        tx.input
+pub fn filter_map_for_network(
+    (tx_index, tx): (usize, BitcoinTransaction),
+    network: Network,
+) -> Option<Transaction> {
+    let mut sighash_cache = SighashCache::new(&tx);
+    let secp = Secp256k1::verification_only();
+    let authorized = tx
+        .input
+        .iter()
+        .enumerate()
+        .map(|(input_index, _)| {
+            parse_authorized_input(&tx, &mut sighash_cache, &secp, input_index, network)
+        })
+        .collect::<Vec<_>>();
+    let mut keep = vec![false; authorized.len()];
+    for (index, candidate) in authorized.iter().enumerate() {
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        let sponsor_ops = candidate
+            .input
+            .insts
+            .ops
             .iter()
-            .enumerate()
-            .filter_map(|(input_index, input)| {
-                input.witness.taproot_leaf_script().and_then(|leaf| {
-                    let mut script_insts = leaf.script.instructions();
-                    if let Some(Ok(Instruction::PushBytes(key))) = script_insts.next()
-                    && let Some(Ok(Instruction::Op(OP_CHECKSIG))) = script_insts.next()
-                    // OP_FALSE
-                    && let Some(Ok(Instruction::PushBytes(nullish))) = script_insts.next()
-                    && nullish.is_empty()
-                    && script_insts.next() == Some(Ok(Instruction::Op(OP_IF)))
-                    && let Some(Ok(Instruction::PushBytes(kon))) = script_insts.next()
-                    && kon.as_bytes() == b"kon"
-                    // OP_0
-                    && let Some(Ok(Instruction::PushBytes(nullish))) = script_insts.next()
-                    && nullish.is_empty()
-                    && let Ok(signer) = XOnlyPublicKey::from_slice(key.as_bytes())
-                    {
-                        let mut data = Vec::new();
-                        let mut inst = script_insts.next();
-                        while let Some(Ok(Instruction::PushBytes(bs))) = inst {
-                            data.extend_from_slice(bs.as_bytes());
-                            inst = script_insts.next();
-                        }
-
-                        if inst == Some(Ok(Instruction::Op(OP_ENDIF)))
-                        && script_insts.next().is_none()
-                        && let Ok(insts) = deserialize::<Insts>(&data)
-                        && insts
-                            .aggregate
-                            .as_ref()
-                            .is_none_or(|agg| agg.signers.len() == insts.ops.len())
-                        // Provenance is a pure function of the op (no chain
-                        // state), so reject malformed provenance at decode time
-                        // rather than letting it reach execution.
-                        && insts.ops.iter().all(|inst| match &inst.kind {
-                            InstKind::Publish { provenance, .. }
-                            | InstKind::UpdateProvenance { provenance, .. } => {
-                                provenance.validate().is_ok()
-                            }
-                            _ => true,
-                        }) {
-                            return Some(Input {
-                                previous_output: input.previous_output,
-                                input_index: input_index as u32,
-                                x_only_pubkey: signer,
-                                insts,
-                            });
-                        }
-                    }
-                    None
-                })
-            })
+            .filter(|inst| matches!(inst.kind, InstKind::SponsorBound { .. }))
             .collect::<Vec<_>>();
+        if sponsor_ops.is_empty() {
+            if candidate.signature_mode == TapSighashType::AllPlusAnyoneCanPay {
+                keep[index] = true;
+            }
+            continue;
+        }
+        if sponsor_ops.len() != 1
+            || candidate.signature_mode != TapSighashType::AllPlusAnyoneCanPay
+            || candidate.input.insts.is_aggregate()
+        {
+            continue;
+        }
+        let InstKind::SponsorBound {
+            target_input_index,
+            target_txid,
+            target_vout_le,
+            target_leaf_hash,
+            max_total_gas_le,
+        } = &sponsor_ops[0].kind
+        else {
+            unreachable!("filtered SponsorBound")
+        };
+        let Some(target_index) = usize::try_from(*target_input_index).ok() else {
+            continue;
+        };
+        if target_index != index + 1 {
+            continue;
+        }
+        let Some(target) = authorized.get(target_index).and_then(Option::as_ref) else {
+            continue;
+        };
+        let target_point = serialize_bitcoin(&target.input.previous_output);
+        if target_point[..32] != target_txid[..]
+            || target_point[32..] != target_vout_le[..]
+            || target.leaf_hash.to_byte_array() != *target_leaf_hash
+            || target
+                .input
+                .insts
+                .ops
+                .iter()
+                .any(|inst| matches!(inst.kind, InstKind::Sponsor | InstKind::SponsorBound { .. }))
+        {
+            continue;
+        }
+        let Some(max_gas) = sponsor_ops[0]
+            .gas_limit
+            .checked_mul(target.input.insts.ops.len() as u64)
+        else {
+            continue;
+        };
+        if max_gas != u64::from_le_bytes(*max_total_gas_le) {
+            continue;
+        }
+        keep[index] = true;
+        keep[target_index] = true;
+    }
+    let inputs = authorized
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| keep[index].then_some(candidate).flatten())
+        .map(|candidate| candidate.input)
+        .collect::<Vec<_>>();
 
     if inputs.is_empty() {
         return None;
@@ -346,6 +379,11 @@ pub fn filter_map((tx_index, tx): (usize, BitcoinTransaction)) -> Option<Transac
         inputs,
         op_return_raw,
     })
+}
+
+#[cfg(test)]
+pub fn filter_map(indexed: (usize, BitcoinTransaction)) -> Option<Transaction> {
+    filter_map_for_network(indexed, Network::Regtest)
 }
 
 /// Check if a parsed transaction contains only batchable ops.
