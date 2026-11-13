@@ -678,38 +678,6 @@ async fn run_deadline_case(case: DeadlineCase) -> Result<()> {
         finish_decision(&mut reactor, batch_decision, next).await?;
         assert!(get_transaction_by_txid(&conn, &txid).await?.is_some());
 
-        if matches!(case, DeadlineCase::IneligibleAnchor) {
-            let replacement_anchor =
-                certified_fixture::block(1, certified_fixture::empty_block(1).prev_hash, 1, vec![]);
-            let mut parent = replacement_anchor.hash;
-            let value = ConsensusValue::from_input(
-                replacement_anchor.exact_input(reactor.consensus.protocol_context)?,
-            )?;
-            let (height, next) = start_decision(&mut reactor, value).await?;
-            finish_decision(&mut reactor, height, next).await?;
-            assert!(get_transaction_by_txid(&conn, &txid).await?.is_none());
-            for bitcoin_height in 2..=6 {
-                let block = certified_fixture::block(bitcoin_height, parent, 0, vec![]);
-                parent = block.hash;
-                let value = ConsensusValue::from_input(
-                    block.exact_input(reactor.consensus.protocol_context)?,
-                )?;
-                let (height, next) = start_decision(&mut reactor, value).await?;
-                finish_decision(&mut reactor, height, next).await?;
-            }
-            let block = certified_fixture::block(7, parent, 0, vec![victim]);
-            let value =
-                ConsensusValue::from_input(block.exact_input(reactor.consensus.protocol_context)?)?;
-            let (height, next) = start_decision(&mut reactor, value).await?;
-            finish_decision(&mut reactor, height, next).await?;
-            let executed = get_transaction_by_txid(&conn, &txid)
-                .await?
-                .context("eligible block execution missing")?;
-            assert_eq!(executed.batch_height, None);
-            assert_eq!(executed.confirmed_height, Some(7));
-            return Ok(());
-        }
-
         let mut parent = anchor;
         let mut deadline_parent = anchor;
         for bitcoin_height in 2..=7 {
@@ -734,6 +702,38 @@ async fn run_deadline_case(case: DeadlineCase) -> Result<()> {
             .await?
             .is_some();
         assert!(excluded);
+
+        if matches!(case, DeadlineCase::IneligibleAnchor) {
+            let replacement_anchor =
+                certified_fixture::block(1, certified_fixture::empty_block(1).prev_hash, 1, vec![]);
+            let mut replacement_parent = replacement_anchor.hash;
+            let value = ConsensusValue::from_input(
+                replacement_anchor.exact_input(reactor.consensus.protocol_context)?,
+            )?;
+            let (height, next) = start_decision(&mut reactor, value).await?;
+            finish_decision(&mut reactor, height, next).await?;
+            assert!(get_transaction_by_txid(&conn, &txid).await?.is_none());
+            for bitcoin_height in 2..=6 {
+                let block = certified_fixture::block(bitcoin_height, replacement_parent, 0, vec![]);
+                replacement_parent = block.hash;
+                let value = ConsensusValue::from_input(
+                    block.exact_input(reactor.consensus.protocol_context)?,
+                )?;
+                let (height, next) = start_decision(&mut reactor, value).await?;
+                finish_decision(&mut reactor, height, next).await?;
+            }
+            let block = certified_fixture::block(7, replacement_parent, 0, vec![victim]);
+            let value =
+                ConsensusValue::from_input(block.exact_input(reactor.consensus.protocol_context)?)?;
+            let (height, next) = start_decision(&mut reactor, value).await?;
+            finish_decision(&mut reactor, height, next).await?;
+            let executed = get_transaction_by_txid(&conn, &txid)
+                .await?
+                .context("eligible block execution missing")?;
+            assert_eq!(executed.batch_height, None);
+            assert_eq!(executed.confirmed_height, Some(7));
+            return Ok(());
+        }
 
         match case {
             DeadlineCase::ExactReorg => {

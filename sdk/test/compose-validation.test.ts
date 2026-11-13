@@ -472,3 +472,124 @@ test("marketplace Sponsor binds the seller's exact leaf, outpoint and gas ceilin
     validateComposeResponse(changed, response, signet, xOnly, supplied),
   ).toThrow("Compose response rejected");
 });
+
+test("Sponsor binds a separately built recipient even when its commit is returned later", () => {
+  const gasLimit = 50_000;
+  const placeholder = {
+    target_input_index: 1,
+    target_txid: Array(32).fill(0),
+    target_vout_le: Array(4).fill(0),
+    target_leaf_hash: Array(32).fill(0),
+    max_total_gas_le: Array(8).fill(0),
+  };
+  const sponsorInsts = {
+    ops: [{ gas_limit: gasLimit, kind: { SponsorBound: placeholder } }],
+    aggregate: null,
+  };
+  const request: Reveal = {
+    sat_per_vbyte: 10,
+    participants: [
+      {
+        x_only_public_key: xOnly,
+        commit_insts: sponsorInsts,
+        sighash_type: 0x81,
+        output: null,
+        commit_source: {
+          Build: {
+            address: identity.address,
+            funding: { Ids: [`${requested}:0`] },
+          },
+        },
+      },
+      {
+        x_only_public_key: xOnly,
+        commit_insts: insts,
+        sighash_type: 0x81,
+        output: null,
+        commit_source: {
+          Build: {
+            address: identity.address,
+            funding: { Ids: [`${other}:0`] },
+          },
+        },
+      },
+    ],
+    extra_inputs: [],
+    extra_outputs: [{ Change: { script_pubkey: hex.encode(own.script) } }],
+  };
+  const makeCommit = (fundingTxid: string, tapScript: Uint8Array) => {
+    const tx = new Transaction();
+    tx.addInput({
+      txid: fundingTxid,
+      index: 0,
+      witnessUtxo: { script: own.script, amount: 100_000n },
+      tapInternalKey: own.tapInternalKey,
+    });
+    tx.addOutput({ script: tapScript, amount: 90_000n });
+    tx.addOutput({ script: own.script, amount: 9000n });
+    return {
+      tx,
+      response: {
+        transaction: "dummy",
+        transaction_hex: hex.encode(tx.unsignedTx),
+        psbt_hex: hex.encode(tx.toPSBT()),
+        txid: tx.id,
+        change_value: 9000,
+      },
+    };
+  };
+  const targetTap = envelope(90_000n);
+  const targetCommit = makeCommit(other, targetTap.script);
+  const gas = new Uint8Array(8);
+  new DataView(gas.buffer).setBigUint64(0, BigInt(gasLimit), true);
+  const boundSponsorInsts = {
+    ops: [
+      {
+        gas_limit: gasLimit,
+        kind: {
+          SponsorBound: {
+            target_input_index: 1,
+            target_txid: Array.from(hex.decode(targetCommit.tx.id).reverse()),
+            target_vout_le: [0, 0, 0, 0],
+            target_leaf_hash: Array.from(targetTap.leaves![0]!.hash),
+            max_total_gas_le: Array.from(gas),
+          },
+        },
+      },
+    ],
+    aggregate: null,
+  };
+  const sponsorTap = envelope(90_000n, xOnly, boundSponsorInsts);
+  const sponsorCommit = makeCommit(requested, sponsorTap.script);
+  const child = new Transaction({ allowUnknownOutputs: true });
+  for (const item of [
+    { commit: sponsorCommit, tap: sponsorTap },
+    { commit: targetCommit, tap: targetTap },
+  ]) {
+    child.addInput({
+      txid: item.commit.tx.id,
+      index: 0,
+      witnessUtxo: { script: item.tap.script, amount: 90_000n },
+      tapInternalKey: own.tapInternalKey,
+      tapLeafScript: item.tap.tapLeafScript,
+      sighashType: 0x81,
+    });
+  }
+  child.addOutput({ script: own.script, amount: 178_000n });
+  const response = {
+    commits: [sponsorCommit.response, targetCommit.response],
+    reveal: {
+      transaction: "dummy",
+      transaction_hex: hex.encode(child.unsignedTx),
+      psbt_hex: hex.encode(child.toPSBT()),
+      txid: child.id,
+      output_info: [{ Change: { value: 178_000 } }],
+    },
+  };
+  const candidates = [supplied[0]!, { ...supplied[0]!, txid: other }];
+  validateComposeResponse(request, response, signet, xOnly, candidates);
+  response.commits.reverse();
+  expect(() =>
+    validateComposeResponse(request, response, signet, xOnly, candidates),
+  ).toThrow("commit 0 spends unexpected funding");
+});

@@ -154,6 +154,9 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
         .simulate();
       expect(sim.status).toBe("Ok");
       expect(sim.value?.amt.toString()).toBe("1");
+      expect(
+        (await token.balance(recipient.identity.holderRef))?.toString() ?? "0",
+      ).toBe("0");
 
       const rejected = await token
         .transfer(
@@ -169,6 +172,9 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
         functionName: "transfer",
         data: { kind: "message" },
       });
+      expect(
+        (await token.balance(recipient.identity.holderRef))?.toString() ?? "0",
+      ).toBe("0");
 
       // Submit 1 — spends the bootstrap UTXO.
       const first = await token.transfer(
