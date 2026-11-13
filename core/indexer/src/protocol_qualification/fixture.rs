@@ -1,16 +1,19 @@
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use bitcoin::absolute::LockTime;
 use bitcoin::opcodes::{
-    OP_0, OP_FALSE,
+    OP_FALSE,
     all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
 };
 use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
-use bitcoin::taproot::{LeafVersion, TaprootBuilder};
+use bitcoin::taproot::TaprootBuilder;
 use bitcoin::transaction::Version;
-use bitcoin::{Amount, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
+use bitcoin::{
+    Amount, Network, OutPoint, ScriptBuf, Sequence, TapSighashType, Transaction, TxIn, TxOut,
+    Witness,
+};
 use indexer_types::{
     BuildProvenance, CommitId, ContractAddress, Forge, Inst, InstKind, Insts, Platform, Source,
     serialize,
@@ -18,6 +21,7 @@ use indexer_types::{
 use libsql::{Connection, Value as SqlValue};
 use sha2::{Digest, Sha256};
 
+use crate::bitcoin_helpers::sign_script_spend_with_sighash;
 use crate::consensus::signing::PrivateKey;
 
 pub(super) const NETWORK: Network = Network::Regtest;
@@ -109,13 +113,15 @@ pub(super) fn transaction() -> Result<Transaction> {
     let secp = Secp256k1::new();
     let key = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[38; 32])?);
     let public = key.x_only_public_key().0;
+    let amount = 1_000_000u64;
     let mut script = Builder::new()
         .push_slice(public.serialize())
         .push_opcode(OP_CHECKSIG)
         .push_opcode(OP_FALSE)
         .push_opcode(OP_IF)
-        .push_slice(b"kon")
-        .push_opcode(OP_0);
+        .push_slice(b"kon2")
+        .push_slice(amount.to_be_bytes())
+        .push_slice(NETWORK.magic().to_bytes());
     for chunk in serialize(&instructions)?.chunks(520) {
         script = script.push_slice(PushBytesBuf::try_from(chunk.to_vec())?);
     }
@@ -124,28 +130,35 @@ pub(super) fn transaction() -> Result<Transaction> {
         .add_leaf(0, script.clone())?
         .finalize(&secp, public)
         .map_err(|_| anyhow!("qualification taproot leaf failed to finalize"))?;
-    let control = spend
-        .control_block(&(script.clone(), LeafVersion::TapScript))
-        .context("missing fixture leaf")?;
-    let mut witness = Witness::new();
-    // Bitcoin signature acceptance belongs to ingestion, outside this execution check.
-    witness.push([0u8; 64]);
-    witness.push(script.as_bytes());
-    witness.push(control.serialize());
-    Ok(Transaction {
+    let prevout = TxOut {
+        value: Amount::from_sat(amount),
+        script_pubkey: ScriptBuf::new_p2tr_tweaked(spend.output_key()),
+    };
+    let mut transaction = Transaction {
         version: Version(2),
         lock_time: LockTime::ZERO,
         input: vec![TxIn {
             previous_output: OutPoint::null(),
             script_sig: ScriptBuf::new(),
             sequence: Sequence::MAX,
-            witness,
+            witness: Witness::new(),
         }],
         output: vec![TxOut {
             value: Amount::ZERO,
             script_pubkey: ScriptBuf::new(),
         }],
-    })
+    };
+    sign_script_spend_with_sighash(
+        &secp,
+        &spend,
+        &script,
+        &mut transaction,
+        &[prevout],
+        &key,
+        0,
+        TapSighashType::AllPlusAnyoneCanPay,
+    )?;
+    Ok(transaction)
 }
 
 pub(super) fn genesis() -> GenesisInput {

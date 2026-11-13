@@ -110,7 +110,7 @@ fn inscription_input(payload: Vec<u8>) -> Result<TxIn> {
         .control_block(&(script.clone(), LeafVersion::TapScript))
         .expect("fixture leaf exists");
     let mut input = transaction().input.remove(0);
-    // This fixture exercises recognition, not Bitcoin signature validity.
+    // This fixture checks raw witness forwarding before any recognition or signature check.
     input.witness.push([0u8; 64]);
     input.witness.push(script.as_bytes());
     input.witness.push(control.serialize());

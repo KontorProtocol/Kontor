@@ -1,8 +1,9 @@
 use anyhow::Result;
-use bitcoin::TxOut;
 use bitcoin::consensus::encode::serialize as serialize_tx;
+use bitcoin::hashes::Hash;
 use bitcoin::key::Secp256k1;
-use bitcoin::taproot::TaprootBuilder;
+use bitcoin::taproot::{LeafVersion, TaprootBuilder};
+use bitcoin::{OutPoint as BitcoinOutPoint, TapLeafHash, TapSighashType, TxOut};
 use indexer::database::types::OpResultId;
 use indexer::test_utils;
 use indexer::{bitcoin_client::client::RegtestRpc, runtime};
@@ -118,7 +119,7 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
         .finalize(&secp, seller_internal_key)
         .map_err(|e| anyhow::anyhow!("seller attach finalize: {e:?}"))?;
 
-    test_utils::sign_script_spend(
+    test_utils::sign_script_spend_with_sighash(
         &secp,
         &seller_attach_tap_info,
         &seller_attach_leaf,
@@ -126,6 +127,7 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
         &[seller_commit_tx.output[0].clone()],
         &seller_keypair,
         0,
+        TapSighashType::AllPlusAnyoneCanPay,
     )?;
 
     let seller_commit_tx_hex = hex::encode(serialize_tx(&seller_commit_tx));
@@ -172,9 +174,21 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
     let (buyer_funding_outpoint, buyer_funding_utxo) = buyer_identity.next_funding_utxo.clone();
     let (buyer_internal_key, _) = buyer_keypair.x_only_public_key();
 
+    let seller_escrow_outpoint = BitcoinOutPoint {
+        txid: seller_attach_reveal_tx.compute_txid(),
+        vout: 0,
+    };
+    let target_point = serialize_tx(&seller_escrow_outpoint);
     let sponsor_inst = Inst {
         gas_limit: 50_000,
-        kind: InstKind::Sponsor,
+        kind: InstKind::SponsorBound {
+            target_input_index: 1,
+            target_txid: target_point[..32].try_into()?,
+            target_vout_le: target_point[32..].try_into()?,
+            target_leaf_hash: TapLeafHash::from_script(&seller_detach_leaf, LeafVersion::TapScript)
+                .to_byte_array(),
+            max_total_gas_le: 50_000u64.to_le_bytes(),
+        },
     };
 
     let buyer_reveal = Reveal::builder()
@@ -188,6 +202,14 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
                     [buyer_funding_outpoint],
                 ))
                 .output(RevealOutput::change(&buyer_address.script_pubkey()))
+                .build(),
+            RevealParticipant::builder()
+                .x_only_public_key(seller_internal_key.to_string())
+                .commit_insts(Insts::single(detach_inst.clone()))
+                .commit_source(CommitSource::existing(
+                    seller_escrow_outpoint,
+                    seller_attach_reveal_tx.output[0].clone(),
+                ))
                 .build(),
         ])
         .build();
@@ -255,10 +277,7 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
                 .x_only_public_key(seller_internal_key.to_string())
                 .commit_insts(Insts::single(detach_inst.clone()))
                 .commit_source(CommitSource::existing(
-                    bitcoin::OutPoint {
-                        txid: seller_attach_reveal_tx.compute_txid(),
-                        vout: 0,
-                    },
+                    seller_escrow_outpoint,
                     seller_attach_reveal_tx.output[0].clone(),
                 ))
                 .build(),
@@ -279,7 +298,7 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("buyer sponsor taproot: {e}"))?
         .finalize(&secp, buyer_internal_key)
         .map_err(|e| anyhow::anyhow!("buyer sponsor finalize: {e:?}"))?;
-    test_utils::sign_script_spend(
+    test_utils::sign_script_spend_with_sighash(
         &secp,
         &buyer_sponsor_tap_info,
         &buyer_sponsor_leaf,
@@ -287,6 +306,7 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
         &swap_prevouts,
         &buyer_keypair,
         0,
+        TapSighashType::AllPlusAnyoneCanPay,
     )?;
 
     // Sign input 1 with the seller keypair (chained detach leaf).
@@ -295,7 +315,7 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("seller detach taproot: {e}"))?
         .finalize(&secp, seller_internal_key)
         .map_err(|e| anyhow::anyhow!("seller detach finalize: {e:?}"))?;
-    test_utils::sign_script_spend(
+    test_utils::sign_script_spend_with_sighash(
         &secp,
         &seller_detach_tap_info,
         &seller_detach_leaf,
@@ -303,6 +323,7 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
         &swap_prevouts,
         &seller_keypair,
         1,
+        TapSighashType::AllPlusAnyoneCanPay,
     )?;
 
     let swap_tx_hex = hex::encode(serialize_tx(&swap_tx));

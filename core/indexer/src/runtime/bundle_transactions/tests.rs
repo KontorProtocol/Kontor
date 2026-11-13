@@ -1,16 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use bitcoin::absolute::LockTime;
 use bitcoin::consensus::serialize as bitcoin_bytes;
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
-use bitcoin::taproot::{LeafVersion, TaprootBuilder};
-use bitcoin::transaction::Version;
 use bitcoin::{
-    Amount, Network, OutPoint, ScriptBuf, Sequence, Transaction as BitcoinTransaction, TxIn, TxOut,
-    Witness, XOnlyPublicKey,
+    Amount, Network, OutPoint, ScriptBuf, Transaction as BitcoinTransaction, TxOut, Witness,
 };
-use indexer_types::{BlockRow, Inst, InstKind, Insts, TransactionRow, serialize};
+use indexer_types::{BlockRow, Inst, InstKind, Insts, TransactionRow};
 use libsql::{AuthAction, AuthContext, Authorization, Connection, Value};
 use stdlib::to_wave_expr;
 
@@ -28,11 +24,10 @@ use crate::runtime::token::{address as token_address, api as token};
 use crate::runtime::wit::{Signer, kontor::built_in::context::HolderRef};
 use crate::runtime::{Decimal, TransactionContext};
 use crate::test_utils::{
-    PublicKey as TestPublicKey, build_inscription, new_mock_block_hash, new_mock_transaction,
-    test_runtime_with_genesis,
+    new_mock_block_hash, new_mock_transaction, signed_launch_transaction, test_runtime_with_genesis,
 };
 
-fn raw_transaction(public: XOnlyPublicKey) -> Result<BitcoinTransaction> {
+fn raw_transaction(key: &Keypair) -> Result<BitcoinTransaction> {
     let insts = Insts::direct(
         [
             format!("mint({})", to_wave_expr(Decimal::from("1"))),
@@ -48,32 +43,18 @@ fn raw_transaction(public: XOnlyPublicKey) -> Result<BitcoinTransaction> {
         })
         .collect(),
     );
-    let script = build_inscription(serialize(&insts)?, TestPublicKey::Taproot(&public))?;
-    let spend = TaprootBuilder::new()
-        .add_leaf(0, script.clone())?
-        .finalize(&Secp256k1::new(), public)
-        .map_err(|_| anyhow!("taproot finalize failed"))?;
-    let control = spend
-        .control_block(&(script.clone(), LeafVersion::TapScript))
-        .unwrap();
-    let mut witness = Witness::new();
-    witness.push([0u8; 64]);
-    witness.push(script.as_bytes());
-    witness.push(control.serialize());
-    Ok(BitcoinTransaction {
-        version: Version(2),
-        lock_time: LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint::null(),
-            script_sig: ScriptBuf::new(),
-            sequence: Sequence::MAX,
-            witness,
-        }],
-        output: vec![TxOut {
+    signed_launch_transaction(
+        key,
+        insts,
+        OutPoint {
+            txid: new_mock_transaction(41).txid,
+            vout: 0,
+        },
+        TxOut {
             value: Amount::ZERO,
             script_pubkey: ScriptBuf::new(),
-        }],
-    })
+        },
+    )
 }
 
 async fn snapshot(conn: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
@@ -136,7 +117,7 @@ async fn recognized_transaction_preserves_execution_and_simulation() -> Result<(
     )
     .await??;
     let conn = runtime.storage.conn.clone();
-    let raw = raw_transaction(public)?;
+    let raw = raw_transaction(&key)?;
     let bytes = bitcoin_bytes(&raw);
     let parsed = transactions::filter_map((7, raw.clone())).unwrap();
     let before = snapshot(&conn).await?;
@@ -373,7 +354,7 @@ async fn simulation_restores_context_after_infrastructure_failure() -> Result<()
         &session.executor,
         &selection,
         Network::Regtest,
-        bitcoin_bytes(&raw_transaction(public)?),
+        bitcoin_bytes(&raw_transaction(&key)?),
     )?
     .map_err(|e| anyhow!(e))?
     .unwrap();

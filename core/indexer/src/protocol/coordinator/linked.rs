@@ -784,7 +784,7 @@ pub(crate) fn recognize_transaction(
     network: Network,
     raw: Vec<u8>,
 ) -> Result<Result<Option<PreparedTransaction>, String>> {
-    let original: BitcoinTransaction = deserialize(&raw)?;
+    let original = deserialize::<BitcoinTransaction>(&raw);
     let mut recognized = TransactionRecognizer::new(
         executor.origin,
         network,
@@ -792,6 +792,8 @@ pub(crate) fn recognize_transaction(
     )
     .recognize(selection, raw)?;
     if let Ok(Some(prepared)) = &mut recognized {
+        // Malformed input belongs to the recognizer's inner rejection result.
+        let original = original?;
         prepared.raw_outpoints = original
             .input
             .iter()

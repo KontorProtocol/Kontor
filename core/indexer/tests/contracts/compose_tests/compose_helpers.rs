@@ -1,12 +1,16 @@
 use anyhow::Result;
 use bitcoin::absolute::LockTime;
+use bitcoin::opcodes::OP_FALSE;
+use bitcoin::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
 use bitcoin::script::Instruction;
 use bitcoin::transaction::{Transaction, TxIn, TxOut, Version};
 use bitcoin::{Amount, FeeRate, Network, OutPoint, ScriptBuf, Txid};
 use indexer::api::compose::{
     build_tap_script_and_script_address, estimate_participant_commit_fees, select_utxos_for_commit,
 };
-use indexer_types::{CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant};
+use indexer_types::{
+    CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant, serialize,
+};
 use std::str::FromStr;
 use testlib::{RegTester, sample_provenance};
 use tracing::info;
@@ -438,9 +442,7 @@ pub async fn test_build_tap_script_and_script_address_multi_push_and_structure(
         .collect::<Result<Vec<_>, _>>()
         .expect("parse script");
 
-    // Expected prefix: push pubkey (32B), OP_CHECKSIG, OP_FALSE (or empty push), OP_IF, push "kon", OP_0 (or empty push)
-    use bitcoin::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
-    use bitcoin::opcodes::{OP_0, OP_FALSE};
+    // The amount and network are committed in the leaf before the data chunks.
     assert!(matches!(instructions[0], Instruction::PushBytes(_)));
     assert!(matches!(instructions[1], Instruction::Op(op) if op == OP_CHECKSIG));
     assert!(
@@ -448,15 +450,17 @@ pub async fn test_build_tap_script_and_script_address_multi_push_and_structure(
             || matches!(instructions[2], Instruction::PushBytes(pb) if pb.as_bytes().is_empty())
     );
     assert!(matches!(instructions[3], Instruction::Op(op) if op == OP_IF));
-    assert!(matches!(instructions[4], Instruction::PushBytes(pb) if pb.as_bytes() == b"kon"));
+    assert!(matches!(instructions[4], Instruction::PushBytes(pb) if pb.as_bytes() == b"kon2"));
     assert!(
-        matches!(instructions[5], Instruction::Op(op) if op == OP_0)
-            || matches!(instructions[5], Instruction::PushBytes(pb) if pb.as_bytes().is_empty())
+        matches!(instructions[5], Instruction::PushBytes(pb) if pb.as_bytes() == 1000u64.to_be_bytes())
+    );
+    assert!(
+        matches!(instructions[6], Instruction::PushBytes(pb) if pb.as_bytes() == Network::Regtest.magic().to_bytes())
     );
 
     // The data is pushed in one or more chunks, then OP_ENDIF
     let mut pushed: Vec<u8> = Vec::new();
-    for inst in &instructions[6..instructions.len() - 1] {
+    for inst in &instructions[7..instructions.len() - 1] {
         match inst {
             Instruction::PushBytes(pb) => pushed.extend_from_slice(pb.as_bytes()),
             _ => panic!("unexpected instruction in data pushes"),
@@ -484,9 +488,9 @@ pub async fn test_build_tap_script_chunk_boundaries_push_count(
             .instructions()
             .collect::<Result<Vec<_>, _>>()
             .expect("parse");
-        // Count pushes after header (6 ops) and before final OP_ENDIF
+        // Count data pushes after the launch header and before OP_ENDIF.
         let mut push_count = 0usize;
-        for ins in &instr[6..instr.len() - 1] {
+        for ins in &instr[7..instr.len() - 1] {
             if let Instruction::PushBytes(_) = ins {
                 push_count += 1;
             } else {
@@ -520,10 +524,21 @@ pub async fn test_compose_reveal_op_return_size_validation(
     let seller_address = identity.address.clone();
     let keypair = identity.keypair;
     let (xonly, _parity) = keypair.x_only_public_key();
-    let commit_data = b"data".to_vec();
-    let (_, script_addr, _) =
-        build_tap_script_and_script_address(xonly, commit_data, 1000, Network::Regtest)
-            .expect("build");
+    let commit_insts = Insts::single(Inst {
+        gas_limit: 50_000,
+        kind: InstKind::Publish {
+            name: "op-return-size".to_string(),
+            bytes: b"data".to_vec(),
+            provenance: sample_provenance(),
+        },
+    });
+    let (_, script_addr, _) = build_tap_script_and_script_address(
+        xonly,
+        serialize(&commit_insts)?,
+        10_000,
+        Network::Regtest,
+    )
+    .expect("build");
     let commit_outpoint = OutPoint {
         txid: Txid::from_str("0000000000000000000000000000000000000000000000000000000000000003")
             .unwrap(),
@@ -540,14 +555,7 @@ pub async fn test_compose_reveal_op_return_size_validation(
             .participants(vec![
                 RevealParticipant::builder()
                     .x_only_public_key(xonly.to_string())
-                    .commit_insts(Insts::single(Inst {
-                        gas_limit: 50_000,
-                        kind: InstKind::Publish {
-                            name: "op-return-size".to_string(),
-                            bytes: b"data".to_vec(),
-                            provenance: sample_provenance(),
-                        },
-                    }))
+                    .commit_insts(commit_insts.clone())
                     .commit_source(CommitSource::existing(
                         commit_outpoint,
                         commit_prevout.clone(),

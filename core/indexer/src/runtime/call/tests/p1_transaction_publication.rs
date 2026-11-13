@@ -5,8 +5,11 @@ use bitcoin::consensus::encode::{deserialize, serialize as serialize_bitcoin};
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::transaction::Version;
-use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
-use indexer_types::{Inst, InstKind, Insts, TransactionRow, serialize};
+use bitcoin::{
+    Amount, Network, OutPoint, ScriptBuf, Sequence, TapSighashType, Transaction, TxIn, TxOut,
+    Witness,
+};
+use indexer_types::{Inst, InstKind, Insts, TransactionRow};
 use libsql::params;
 
 use super::balance;
@@ -20,7 +23,7 @@ use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{ContractAddress, Decimal, native_provenance};
 use crate::test_utils::{
-    PublicKey, build_inscription, new_mock_transaction, sign_script_spend, test_runtime,
+    launch_tap_script, new_mock_transaction, sign_script_spend_with_sighash, test_runtime,
 };
 
 fn publish(name: &str, bytes: &[u8]) -> Result<Inst> {
@@ -57,12 +60,14 @@ fn signed_transaction(
     };
     for (index, (key, ops)) in keys.iter().zip(inputs).enumerate() {
         let xonly = key.x_only_public_key().0;
-        let script = build_inscription(
-            serialize(&Insts {
+        let script = launch_tap_script(
+            xonly,
+            &Insts {
                 ops,
                 aggregate: None,
-            })?,
-            PublicKey::Taproot(&xonly),
+            },
+            1_000_000,
+            Network::Regtest,
         )?;
         let spend = TaprootBuilder::new()
             .add_leaf(0, script.clone())?
@@ -85,7 +90,7 @@ fn signed_transaction(
         spends.push(spend);
     }
     for (index, key) in keys.iter().enumerate() {
-        sign_script_spend(
+        sign_script_spend_with_sighash(
             &secp,
             &spends[index],
             &scripts[index],
@@ -93,6 +98,7 @@ fn signed_transaction(
             &prevouts,
             key,
             index,
+            TapSighashType::AllPlusAnyoneCanPay,
         )?;
     }
     Ok(deserialize(&serialize_bitcoin(&tx))?)

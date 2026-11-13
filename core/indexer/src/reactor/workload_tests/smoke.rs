@@ -9,7 +9,8 @@ use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::key::{Keypair, Secp256k1};
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::{
-    Address, Block as BitcoinBlock, BlockHash, Network, OutPoint, Psbt, Transaction, TxOut,
+    Address, Block as BitcoinBlock, BlockHash, Network, OutPoint, Psbt, TapSighashType,
+    Transaction, TxOut,
 };
 use indexer_types::{
     Block, BuildProvenance, CommitId, CommitSource, ContractAddress, Forge, Inst, InstKind, Insts,
@@ -53,7 +54,7 @@ use crate::runtime::{
     TransactionContext, from_wave_expr,
 };
 use crate::stopper::Shutdown;
-use crate::test_utils::{participant_tap_script, sign_key_spend, sign_script_spend};
+use crate::test_utils::{participant_tap_script, sign_key_spend, sign_script_spend_with_sighash};
 
 mod accounting;
 mod capture;
@@ -305,7 +306,7 @@ async fn checked_signed_instructions(
         .add_leaf(0, script.clone())?
         .finalize(&secp, public_key)
         .map_err(|e| anyhow!("taproot finalize: {e:?}"))?;
-    sign_script_spend(
+    sign_script_spend_with_sighash(
         &secp,
         &spend,
         &script,
@@ -313,6 +314,7 @@ async fn checked_signed_instructions(
         &[commit.output[0].clone()],
         key,
         0,
+        TapSighashType::AllPlusAnyoneCanPay,
     )?;
     let raw = [
         hex::encode(serialize(&commit)),

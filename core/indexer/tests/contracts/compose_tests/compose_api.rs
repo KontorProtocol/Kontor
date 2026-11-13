@@ -1,9 +1,9 @@
 use anyhow::{Result, anyhow};
+use bitcoin::opcodes::OP_FALSE;
 use bitcoin::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
-use bitcoin::opcodes::{OP_0, OP_FALSE};
 use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::taproot::TaprootBuilder;
-use bitcoin::{Address, KnownHrp, OutPoint, TapSighashType, TxOut};
+use bitcoin::{Address, KnownHrp, Network, OutPoint, TapSighashType, TxOut};
 use bitcoin::{consensus::encode::serialize as serialize_tx, key::Secp256k1};
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
@@ -68,8 +68,9 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
         .push_opcode(OP_CHECKSIG)
         .push_opcode(OP_FALSE)
         .push_opcode(OP_IF)
-        .push_slice(b"kon")
-        .push_opcode(OP_0)
+        .push_slice(b"kon2")
+        .push_slice(commit_transaction.output[0].value.to_sat().to_be_bytes())
+        .push_slice(Network::Regtest.magic().to_bytes())
         .push_slice(PushBytesBuf::try_from(derived_token_data)?)
         .push_opcode(OP_ENDIF)
         .into_script();
@@ -122,7 +123,7 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
 
     let reveal_previous_output = commit_transaction.output[0].clone();
 
-    test_utils::sign_script_spend(
+    test_utils::sign_script_spend_with_sighash(
         &secp,
         &taproot_spend_info,
         &tap_script,
@@ -130,6 +131,7 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
         &[reveal_previous_output],
         &keypair,
         0,
+        TapSighashType::AllPlusAnyoneCanPay,
     )?;
 
     let commit_tx_hex = hex::encode(serialize_tx(&commit_transaction));
@@ -218,8 +220,9 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         .push_opcode(OP_CHECKSIG)
         .push_opcode(OP_FALSE)
         .push_opcode(OP_IF)
-        .push_slice(b"kon")
-        .push_opcode(OP_0)
+        .push_slice(b"kon2")
+        .push_slice(commit_transaction.output[0].value.to_sat().to_be_bytes())
+        .push_slice(Network::Regtest.magic().to_bytes())
         .push_slice(PushBytesBuf::try_from(derived_token_data)?)
         .push_opcode(OP_ENDIF)
         .into_script();
@@ -275,8 +278,9 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         .push_opcode(OP_CHECKSIG)
         .push_opcode(OP_FALSE)
         .push_opcode(OP_IF)
-        .push_slice(b"kon")
-        .push_opcode(OP_0)
+        .push_slice(b"kon2")
+        .push_slice(600u64.to_be_bytes())
+        .push_slice(Network::Regtest.magic().to_bytes())
         .push_slice(PushBytesBuf::try_from(serialize(&Insts::single(
             derived_chained_instruction,
         ))?)?)
@@ -329,7 +333,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 
     let reveal_previous_outputs = [commit_transaction.output[0].clone()];
 
-    test_utils::sign_script_spend(
+    test_utils::sign_script_spend_with_sighash(
         &secp,
         &taproot_spend_info,
         &tap_script,
@@ -337,6 +341,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         &reveal_previous_outputs,
         &keypair,
         0,
+        TapSighashType::AllPlusAnyoneCanPay,
     )?;
 
     // Reveal only spends the script output now
@@ -615,7 +620,7 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
         .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
         .finalize(&secp, internal_key)
         .map_err(|e| anyhow!("Failed to finalize Taproot tree: {:?}", e))?;
-    test_utils::sign_script_spend(
+    test_utils::sign_script_spend_with_sighash(
         &secp,
         &taproot_spend_info,
         &tap_script,
@@ -623,6 +628,7 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
         &[commit_tx.output[0].clone()],
         &keypair,
         0,
+        TapSighashType::AllPlusAnyoneCanPay,
     )?;
 
     let commit_tx_hex = hex::encode(serialize_tx(&commit_tx));

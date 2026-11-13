@@ -1,8 +1,11 @@
 use anyhow::{Context, Result, anyhow, ensure};
 use bitcoin::consensus::serialize;
+use bitcoin::hashes::Hash;
 use bitcoin::key::{Keypair, Secp256k1};
-use bitcoin::taproot::TaprootBuilder;
-use bitcoin::{Address, Block, Network, OutPoint, Psbt, Transaction, TxOut};
+use bitcoin::taproot::{LeafVersion, TaprootBuilder};
+use bitcoin::{
+    Address, Block, Network, OutPoint, Psbt, TapLeafHash, TapSighashType, Transaction, TxOut,
+};
 use blst::min_sig::{AggregateSignature, SecretKey};
 use indexer_types::{
     AggregateInfo, AggregateSigner, CommitSource, Input, Inst, InstKind, Insts, Reveal,
@@ -29,7 +32,7 @@ use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{Decimal, Runtime};
 use crate::test_utils::bls_test::derive_test_key;
-use crate::test_utils::{participant_tap_script, sign_key_spend, sign_script_spend};
+use crate::test_utils::{participant_tap_script, sign_key_spend, sign_script_spend_with_sighash};
 
 pub(super) fn secondary_key() -> Result<Keypair> {
     derive_taproot_keypair_from_seed(&[113; 64], &taproot_derivation_path(Network::Regtest))
@@ -139,7 +142,13 @@ impl ShapeSigners {
             let second = ops.split_off(50);
             ops.push(Inst {
                 gas_limit: GAS_LIMIT,
-                kind: InstKind::Sponsor,
+                kind: InstKind::SponsorBound {
+                    target_input_index: 1,
+                    target_txid: [0; 32],
+                    target_vout_le: [0; 4],
+                    target_leaf_hash: [0; 32],
+                    max_total_gas_le: [0; 8],
+                },
             });
             return Ok(vec![Insts::direct(ops), Insts::direct(second)]);
         }
@@ -187,8 +196,39 @@ impl ShapeSigners {
         }])
     }
 
-    pub(super) fn check_inputs(&self, inputs: &[Input], ops: Vec<Inst>) -> Result<()> {
-        let expected = self.groups(ops)?;
+    pub(super) fn check_inputs(
+        &self,
+        inputs: &[Input],
+        raw: &Transaction,
+        ops: Vec<Inst>,
+    ) -> Result<()> {
+        let mut expected = self.groups(ops)?;
+        if !self.aggregate {
+            let target = raw.input.get(1).context("missing sponsored input")?;
+            let leaf = target
+                .witness
+                .taproot_leaf_script()
+                .context("missing sponsored leaf")?;
+            ensure!(leaf.version == LeafVersion::TapScript);
+            let point = serialize(&target.previous_output);
+            let total_gas = GAS_LIMIT
+                .checked_mul(u64::try_from(expected[1].ops.len())?)
+                .context("fixture Sponsor gas overflow")?;
+            let InstKind::SponsorBound {
+                target_txid,
+                target_vout_le,
+                target_leaf_hash,
+                max_total_gas_le,
+                ..
+            } = &mut expected[0].ops.last_mut().context("missing Sponsor")?.kind
+            else {
+                return Err(anyhow!("missing bound Sponsor"));
+            };
+            target_txid.copy_from_slice(&point[..32]);
+            target_vout_le.copy_from_slice(&point[32..]);
+            *target_leaf_hash = TapLeafHash::from_script(leaf.script, leaf.version).to_byte_array();
+            *max_total_gas_le = total_gas.to_le_bytes();
+        }
         ensure!(inputs.len() == expected.len());
         for (index, (input, expected)) in inputs.iter().zip(expected).enumerate() {
             ensure!(
@@ -270,7 +310,7 @@ impl ShapeSigners {
                 .add_leaf(0, script.clone())?
                 .finalize(&secp, self.keys[index].x_only_public_key().0)
                 .map_err(|e| anyhow!("taproot fixture: {e:?}"))?;
-            sign_script_spend(
+            sign_script_spend_with_sighash(
                 &secp,
                 &spend,
                 &script,
@@ -278,6 +318,7 @@ impl ShapeSigners {
                 &prevouts,
                 &self.keys[index],
                 index,
+                TapSighashType::AllPlusAnyoneCanPay,
             )?;
         }
         submit(client, &reveal).await?;
