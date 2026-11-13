@@ -35,7 +35,7 @@ const P2TR_OUTPUT_SIZE: usize = 34; // P2TR script pubkey size in bytes
 const PROTOCOL_TAG: &[u8; 4] = b"kon2";
 const MAX_MONEY_SATS: u64 = 2_100_000_000_000_000;
 
-pub fn compose_reveal(reveal: Reveal, network: bitcoin::Network) -> Result<RevealOutputs> {
+pub fn compose_reveal(reveal: Reveal, network: Network) -> Result<RevealOutputs> {
     validate_sponsor_structure(&reveal)?;
     if reveal.participants.is_empty() && reveal.extra_inputs.is_empty() {
         return Err(anyhow!("Reveal must have at least one input"));
@@ -413,7 +413,7 @@ fn validate_sponsor_structure(reveal: &Reveal) -> Result<()> {
 fn fill_build_sponsor(
     participants: &mut [RevealParticipant],
     index: usize,
-    network: bitcoin::Network,
+    network: Network,
 ) -> Result<()> {
     let target = participants
         .get(index + 1)
@@ -517,7 +517,7 @@ fn validate_sponsor_pairs(reveal: &Reveal, resolved: &[ResolvedParticipant]) -> 
 /// per-participant validation can't silently miss either path.
 fn participant_tap_data(
     p: &RevealParticipant,
-    network: bitcoin::Network,
+    network: Network,
 ) -> Result<(XOnlyPublicKey, ScriptBuf, ControlBlock)> {
     participant_sighash(p)?;
     let x_only_pk = XOnlyPublicKey::from_str(&p.x_only_public_key)
@@ -669,7 +669,7 @@ enum ResolvedOutputValue {
 fn plan_resolved_outputs(
     reveal: &Reveal,
     layout: &[LayoutSlot],
-    network: bitcoin::Network,
+    network: Network,
 ) -> Result<Vec<ResolvedOutputValue>> {
     let mut resolved_outputs = Vec::with_capacity(layout.len());
     for slot in layout {
@@ -758,7 +758,7 @@ fn push_resolved_output_to_dummy(dummy: &mut Transaction, output: &ResolvedOutpu
 /// block for tap-leaf participants; Schnorr sig for key-path extras).
 /// Used by both `compose_commit` (to size Build tap outputs) and
 /// `compose_reveal` (to compute the actual reveal fee).
-fn estimate_reveal_vbytes(reveal: &Reveal, network: bitcoin::Network) -> Result<u64> {
+fn estimate_reveal_vbytes(reveal: &Reveal, network: Network) -> Result<u64> {
     let mut dummy = Transaction {
         version: Version(2),
         lock_time: LockTime::ZERO,
@@ -839,7 +839,7 @@ fn empty_op_return_script() -> ScriptBuf {
 /// `reveal` to `compose_reveal` to build the reveal PSBT.
 pub async fn compose_commit(
     reveal: Reveal,
-    network: bitcoin::Network,
+    network: Network,
     bitcoin_client: &Client,
 ) -> Result<indexer_types::CommitOutputs> {
     validate_sponsor_structure(&reveal)?;
@@ -1121,7 +1121,7 @@ pub async fn compose_commit(
 /// resulting all-Existing Reveal.
 pub async fn compose(
     reveal: Reveal,
-    network: bitcoin::Network,
+    network: Network,
     bitcoin_client: &Client,
 ) -> Result<(Vec<indexer_types::CommitTx>, RevealOutputs)> {
     let has_build = reveal
@@ -1146,7 +1146,7 @@ pub fn build_tap_script_and_script_address(
     x_only_public_key: XOnlyPublicKey,
     data: Vec<u8>,
     amount: u64,
-    network: bitcoin::Network,
+    network: Network,
 ) -> Result<(ScriptBuf, Address, ControlBlock)> {
     if amount > MAX_MONEY_SATS {
         return Err(anyhow!("previous-output amount exceeds Bitcoin supply"));
@@ -1430,11 +1430,11 @@ async fn get_utxos(bitcoin_client: &Client, funding: &Funding) -> Result<Vec<(Ou
 mod tests {
     use super::{MAX_SCRIPT_BYTES, build_tap_script_and_script_address};
     use anyhow::Result;
-    use bitcoin::Network;
     use bitcoin::key::{Keypair, Secp256k1, XOnlyPublicKey, rand};
     use bitcoin::opcodes::all::OP_ENDIF;
     use bitcoin::script::Instruction;
-    use bitcoin::taproot::{LeafVersion, TaprootBuilder};
+    use bitcoin::taproot::{ControlBlock, LeafVersion, TaprootBuilder};
+    use bitcoin::{Network, ScriptBuf};
 
     fn generate_test_key() -> XOnlyPublicKey {
         let secp = Secp256k1::new();
@@ -1442,11 +1442,7 @@ mod tests {
         keypair.x_only_public_key().0
     }
 
-    fn verify_control_block(
-        key: XOnlyPublicKey,
-        script: &bitcoin::ScriptBuf,
-        control_block: &bitcoin::taproot::ControlBlock,
-    ) {
+    fn verify_control_block(key: XOnlyPublicKey, script: &ScriptBuf, control_block: &ControlBlock) {
         let secp = Secp256k1::new();
         let tap_info = TaprootBuilder::new()
             .add_leaf(0, script.clone())

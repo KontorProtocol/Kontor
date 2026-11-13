@@ -2,8 +2,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use bitcoin::absolute::LockTime;
+use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
-use bitcoin::{BlockHash, Transaction};
+use bitcoin::{Amount, BlockHash, OutPoint, ScriptBuf, Transaction, TxOut, Txid};
 use indexer_types::{Inst, InstKind, Insts};
 use libsql::{Connection, Value, params};
 use malachitebft_core_types::Round;
@@ -26,7 +27,7 @@ use crate::database::confirmation::get_confirmation_position;
 use crate::database::queries::get_transaction_by_txid;
 use crate::database::receipt_stream::{recovery_boundary, stream_state};
 use crate::runtime::{ContractAddress, Decimal, GenesisValidator, Runtime, from_wave_expr};
-use crate::test_utils::{signed_confirmation_call, test_genesis};
+use crate::test_utils::{signed_confirmation_call, signed_launch_transaction, test_genesis};
 
 #[cfg(feature = "protocol-qualification")]
 mod parity;
@@ -166,6 +167,7 @@ fn certified_confirmation_block(
     for index in 1..position {
         let mut unrelated = tx.clone();
         unrelated.input[0].witness.clear();
+        unrelated.input[0].previous_output.vout = index as u32;
         unrelated.lock_time = LockTime::from_consensus(index as u32);
         transactions.push(unrelated);
     }
@@ -341,4 +343,279 @@ async fn unbatched_raw_confirmation_position_differs_from_legacy_ordinal() -> Re
 #[tokio::test]
 async fn batched_confirmation_reorg_and_reconfirmation_preserve_execution_effects() -> Result<()> {
     run_case(true).await
+}
+
+async fn run_conflict_case(replace_conflict: bool) -> Result<()> {
+    let owner = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[72; 32])?);
+    let key = PrivateKey::from([17; 32]);
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: owner.x_only_public_key().0.to_string(),
+        ed25519_pubkey: key.public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }]);
+    let dir = TempDir::new()?;
+    let mut reactor = certified_fixture::reactor(dir.path(), &genesis, key, 1).await?;
+    let cleanup = StopEngine(reactor.consensus.engine.legacy_handle().actor.clone());
+    let conn = reactor.db_conn();
+    let result = async {
+        let first =
+            certified_fixture::block(1, certified_fixture::empty_block(1).prev_hash, 0, vec![]);
+        let anchor = first.hash;
+        let value =
+            ConsensusValue::from_input(first.exact_input(reactor.consensus.protocol_context)?)?;
+        let (height, next) = start_decision(&mut reactor, value).await?;
+        finish_decision(&mut reactor, height, next).await?;
+
+        let issuance = Insts::direct(vec![Inst {
+            gas_limit: 100_000,
+            kind: InstKind::Issuance,
+        }]);
+        let victim = certified_fixture::transaction(&owner, issuance.clone(), 0)?;
+        let second_victim = signed_launch_transaction(
+            &owner,
+            issuance.clone(),
+            OutPoint {
+                txid: Txid::from_byte_array([2; 32]),
+                vout: 0,
+            },
+            TxOut {
+                value: Amount::ZERO,
+                script_pubkey: ScriptBuf::new(),
+            },
+        )?;
+        let unrelated = certified_fixture::transaction(&owner, issuance.clone(), 1)?;
+        let mut replacement = signed_launch_transaction(
+            &owner,
+            issuance.clone(),
+            victim.input[0].previous_output,
+            TxOut {
+                value: Amount::from_sat(1),
+                script_pubkey: ScriptBuf::new(),
+            },
+        )?;
+        let second_replacement = signed_launch_transaction(
+            &owner,
+            issuance,
+            second_victim.input[0].previous_output,
+            TxOut {
+                value: Amount::from_sat(1),
+                script_pubkey: ScriptBuf::new(),
+            },
+        )?;
+        replacement.input.push(second_replacement.input[0].clone());
+        assert_ne!(victim.compute_txid(), replacement.compute_txid());
+        let victim_id = victim.compute_txid().to_string();
+        let second_victim_id = second_victim.compute_txid().to_string();
+        let unrelated_id = unrelated.compute_txid().to_string();
+        let replacement_id = replacement.compute_txid().to_string();
+        let value = ConsensusValue::new_batch_raw(
+            reactor.consensus.protocol_context,
+            1,
+            anchor,
+            vec![victim, second_victim, unrelated],
+        )?;
+        let (height, next) = start_decision(&mut reactor, value).await?;
+        finish_decision(&mut reactor, height, next).await?;
+        assert!(get_transaction_by_txid(&conn, &victim_id).await?.is_some());
+        assert!(
+            get_transaction_by_txid(&conn, &second_victim_id)
+                .await?
+                .is_some()
+        );
+        assert!(
+            get_transaction_by_txid(&conn, &unrelated_id)
+                .await?
+                .is_some()
+        );
+
+        let conflict = certified_fixture::block(2, anchor, 0, vec![replacement]);
+        let conflict_hash = conflict.hash;
+        let value =
+            ConsensusValue::from_input(conflict.exact_input(reactor.consensus.protocol_context)?)?;
+        let (height, next) = start_decision(&mut reactor, value).await?;
+        finish_decision(&mut reactor, height, next).await?;
+        assert!(get_transaction_by_txid(&conn, &victim_id).await?.is_none());
+        assert!(
+            get_transaction_by_txid(&conn, &second_victim_id)
+                .await?
+                .is_none()
+        );
+        assert!(
+            get_transaction_by_txid(&conn, &unrelated_id)
+                .await?
+                .is_some()
+        );
+        assert!(
+            get_transaction_by_txid(&conn, &replacement_id)
+                .await?
+                .is_some()
+        );
+
+        if replace_conflict {
+            let replacement_block = certified_fixture::block(2, anchor, 1, vec![]);
+            let value = ConsensusValue::from_input(
+                replacement_block.exact_input(reactor.consensus.protocol_context)?,
+            )?;
+            let (height, next) = start_decision(&mut reactor, value).await?;
+            finish_decision(&mut reactor, height, next).await?;
+            assert!(get_transaction_by_txid(&conn, &victim_id).await?.is_some());
+            assert!(
+                get_transaction_by_txid(&conn, &second_victim_id)
+                    .await?
+                    .is_some()
+            );
+            assert!(
+                get_transaction_by_txid(&conn, &unrelated_id)
+                    .await?
+                    .is_some()
+            );
+            assert!(
+                get_transaction_by_txid(&conn, &replacement_id)
+                    .await?
+                    .is_none()
+            );
+        } else {
+            let mut parent = conflict_hash;
+            for bitcoin_height in 3..=7 {
+                let block = certified_fixture::block(bitcoin_height, parent, 0, vec![]);
+                parent = block.hash;
+                let value = ConsensusValue::from_input(
+                    block.exact_input(reactor.consensus.protocol_context)?,
+                )?;
+                let (height, next) = start_decision(&mut reactor, value).await?;
+                finish_decision(&mut reactor, height, next).await?;
+            }
+            assert!(get_transaction_by_txid(&conn, &victim_id).await?.is_none());
+            assert!(
+                get_transaction_by_txid(&conn, &second_victim_id)
+                    .await?
+                    .is_none()
+            );
+            assert!(
+                get_transaction_by_txid(&conn, &unrelated_id)
+                    .await?
+                    .is_none()
+            );
+            assert!(
+                get_transaction_by_txid(&conn, &replacement_id)
+                    .await?
+                    .is_some()
+            );
+        }
+        Ok(())
+    }
+    .await;
+    cleanup.0.stop(None);
+    timeout(
+        Duration::from_secs(30),
+        &mut reactor.consensus.engine.legacy_handle_mut().handle,
+    )
+    .await??;
+    result
+}
+
+#[tokio::test]
+async fn conflict_exclusion_survives_unrelated_deadline_replay() -> Result<()> {
+    run_conflict_case(false).await
+}
+
+#[tokio::test]
+async fn conflict_exclusion_expires_when_proving_block_is_replaced() -> Result<()> {
+    run_conflict_case(true).await
+}
+
+#[tokio::test]
+async fn exact_deadline_inclusion_heals_and_reorg_restores_exclusion() -> Result<()> {
+    let owner = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[73; 32])?);
+    let key = PrivateKey::from([17; 32]);
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: owner.x_only_public_key().0.to_string(),
+        ed25519_pubkey: key.public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }]);
+    let dir = TempDir::new()?;
+    let mut reactor = certified_fixture::reactor(dir.path(), &genesis, key, 1).await?;
+    let cleanup = StopEngine(reactor.consensus.engine.legacy_handle().actor.clone());
+    let conn = reactor.db_conn();
+    let result = async {
+        let first =
+            certified_fixture::block(1, certified_fixture::empty_block(1).prev_hash, 0, vec![]);
+        let anchor = first.hash;
+        let value =
+            ConsensusValue::from_input(first.exact_input(reactor.consensus.protocol_context)?)?;
+        let (height, next) = start_decision(&mut reactor, value).await?;
+        finish_decision(&mut reactor, height, next).await?;
+
+        let victim = certified_fixture::transaction(
+            &owner,
+            Insts::direct(vec![Inst {
+                gas_limit: 100_000,
+                kind: InstKind::Issuance,
+            }]),
+            0,
+        )?;
+        let txid = victim.compute_txid().to_string();
+        let value = ConsensusValue::new_batch_raw(
+            reactor.consensus.protocol_context,
+            1,
+            anchor,
+            vec![victim.clone()],
+        )?;
+        let (batch_decision, next) = start_decision(&mut reactor, value).await?;
+        finish_decision(&mut reactor, batch_decision, next).await?;
+        assert!(get_transaction_by_txid(&conn, &txid).await?.is_some());
+
+        let mut parent = anchor;
+        let mut deadline_parent = anchor;
+        for bitcoin_height in 2..=7 {
+            if bitcoin_height == 7 {
+                deadline_parent = parent;
+            }
+            let block = certified_fixture::block(bitcoin_height, parent, 0, vec![]);
+            parent = block.hash;
+            let value =
+                ConsensusValue::from_input(block.exact_input(reactor.consensus.protocol_context)?)?;
+            let (height, next) = start_decision(&mut reactor, value).await?;
+            finish_decision(&mut reactor, height, next).await?;
+        }
+        assert!(get_transaction_by_txid(&conn, &txid).await?.is_none());
+        let excluded = conn
+            .query(
+                "SELECT 1 FROM excluded_batch_txids WHERE batch_height = ?1 AND txid = ?2",
+                params![batch_decision, txid.clone()],
+            )
+            .await?
+            .next()
+            .await?
+            .is_some();
+        assert!(excluded);
+
+        let exact = certified_fixture::block(7, deadline_parent, 1, vec![victim]);
+        let value =
+            ConsensusValue::from_input(exact.exact_input(reactor.consensus.protocol_context)?)?;
+        let (height, next) = start_decision(&mut reactor, value).await?;
+        finish_decision(&mut reactor, height, next).await?;
+        let healed = get_transaction_by_txid(&conn, &txid)
+            .await?
+            .context("exact inclusion did not restore the batch execution")?;
+        assert_eq!(healed.batch_height, Some(batch_decision));
+        assert_eq!(healed.confirmed_height, Some(7));
+
+        let replacement = certified_fixture::block(7, deadline_parent, 2, vec![]);
+        let value = ConsensusValue::from_input(
+            replacement.exact_input(reactor.consensus.protocol_context)?,
+        )?;
+        let (height, next) = start_decision(&mut reactor, value).await?;
+        finish_decision(&mut reactor, height, next).await?;
+        assert!(get_transaction_by_txid(&conn, &txid).await?.is_none());
+        Ok(())
+    }
+    .await;
+    cleanup.0.stop(None);
+    timeout(
+        Duration::from_secs(30),
+        &mut reactor.consensus.engine.legacy_handle_mut().handle,
+    )
+    .await??;
+    result
 }

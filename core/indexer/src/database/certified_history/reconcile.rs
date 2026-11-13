@@ -6,8 +6,8 @@ use bitcoin::{BlockHash, OutPoint, Transaction, Txid, Wtxid};
 use libsql::{Connection, TransactionBehavior, Value, params, params::Params};
 
 use super::{
-    branch, closure, durable_writer, fixed, frontier, load_verified_input, replay, replay_input,
-    work,
+    RetainedInput, branch, closure, durable_writer, fixed, frontier, load_verified_input, replay,
+    replay_input, work,
 };
 use crate::database::queries::outpoint_owners;
 use crate::protocol::canonical_application::DecisionExclusions;
@@ -19,6 +19,54 @@ use crate::protocol::coordinator::closure_work::WorkOrigin;
 use crate::protocol::coordinator::replay_input::ReplayInput;
 use crate::protocol::coordinator::v1::{FINALITY_WINDOW, deadline_for};
 use crate::protocol::identity::domain_digest;
+
+struct ProofIndex {
+    id: [u8; 32],
+    input: [u8; 32],
+    command: Command,
+    witnesses: HashSet<(Txid, Wtxid)>,
+    spends: HashSet<(Txid, Wtxid, OutPoint)>,
+    outpoint_witnesses: HashMap<OutPoint, HashSet<Wtxid>>,
+}
+
+impl ProofIndex {
+    fn new(retained: RetainedInput) -> Result<Self> {
+        let mut witnesses = HashSet::new();
+        let mut spends = HashSet::new();
+        let mut outpoint_witnesses = HashMap::new();
+        for transaction in retained.input().transactions()? {
+            let txid = transaction.compute_txid();
+            let wtxid = transaction.compute_wtxid();
+            witnesses.insert((txid, wtxid));
+            for input in transaction.input {
+                spends.insert((txid, wtxid, input.previous_output));
+                outpoint_witnesses
+                    .entry(input.previous_output)
+                    .or_insert_with(HashSet::new)
+                    .insert(wtxid);
+            }
+        }
+        Ok(Self {
+            id: retained.decision().id()?,
+            input: retained.input().descriptor().id()?,
+            command: retained.decision().descriptor.command.clone(),
+            witnesses,
+            spends,
+            outpoint_witnesses,
+        })
+    }
+}
+
+async fn proof_index<'a>(
+    conn: &Connection,
+    cache: &'a mut HashMap<u64, ProofIndex>,
+    decision: u64,
+) -> Result<&'a ProofIndex> {
+    if let std::collections::hash_map::Entry::Vacant(entry) = cache.entry(decision) {
+        entry.insert(ProofIndex::new(load_verified_input(conn, decision).await?)?);
+    }
+    Ok(cache.get(&decision).expect("indexed certified input"))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ConflictSeed {
@@ -95,45 +143,33 @@ impl ConflictSeed {
         ))
     }
 
-    async fn verify(self, conn: &Connection) -> Result<()> {
-        let a = load_verified_input(conn, self.a_decision).await?;
-        let b = load_verified_input(conn, self.b_decision).await?;
+    fn verify_with(self, a: &ProofIndex, b: &ProofIndex) -> Result<()> {
         ensure!(
-            a.decision().id()? == self.a_id
-                && a.input().descriptor().id()? == self.a_input
-                && b.decision().id()? == self.b_id
-                && b.input().descriptor().id()? == self.b_input,
+            a.id == self.a_id
+                && a.input == self.a_input
+                && b.id == self.b_id
+                && b.input == self.b_input,
             "conflict seed certified input differs"
         );
-        let Command::Batch { anchor_height, .. } = a.decision().descriptor.command else {
+        let Command::Batch { anchor_height, .. } = &a.command else {
             anyhow::bail!("conflict victim is not a batch");
         };
-        let Command::Block { height, hash, .. } = b.decision().descriptor.command else {
+        let Command::Block { height, hash, .. } = &b.command else {
             anyhow::bail!("conflict proof is not a block");
         };
         ensure!(
-            anchor_height == self.a_anchor && height == self.b_height && hash == self.b_hash,
+            *anchor_height == self.a_anchor && *height == self.b_height && *hash == self.b_hash,
             "conflict seed anchor differs"
         );
         ensure!(
-            a.input().transactions()?.iter().any(|tx| {
-                tx.compute_txid() == self.a_txid
-                    && tx.compute_wtxid() == self.a_wtxid
-                    && tx
-                        .input
-                        .iter()
-                        .any(|input| input.previous_output == self.outpoint)
-            }),
+            a.spends
+                .contains(&(self.a_txid, self.a_wtxid, self.outpoint)),
             "conflict victim witness or outpoint differs"
         );
         ensure!(
-            b.input().transactions()?.iter().any(|tx| {
-                tx.compute_wtxid() != self.a_wtxid
-                    && tx
-                        .input
-                        .iter()
-                        .any(|input| input.previous_output == self.outpoint)
-            }),
+            b.outpoint_witnesses
+                .get(&self.outpoint)
+                .is_some_and(|wtxids| wtxids.iter().any(|wtxid| *wtxid != self.a_wtxid)),
             "conflict proof does not spend the victim outpoint"
         );
         Ok(())
@@ -210,27 +246,25 @@ impl HealingSeed {
         Ok(domain_digest(b"kontor/closure-healing/v1", &self.encode()?))
     }
 
-    async fn verify(self, conn: &Connection) -> Result<()> {
-        let a = load_verified_input(conn, self.a_decision).await?;
-        let b = load_verified_input(conn, self.b_decision).await?;
+    async fn verify_with(self, conn: &Connection, a: &ProofIndex, b: &ProofIndex) -> Result<()> {
         ensure!(
-            a.decision().id()? == self.a_id
-                && a.input().descriptor().id()? == self.a_input
-                && b.decision().id()? == self.b_id
-                && b.input().descriptor().id()? == self.b_input,
+            a.id == self.a_id
+                && a.input == self.a_input
+                && b.id == self.b_id
+                && b.input == self.b_input,
             "healing seed certified input differs"
         );
-        let Command::Batch { anchor_height, .. } = a.decision().descriptor.command else {
+        let Command::Batch { anchor_height, .. } = &a.command else {
             anyhow::bail!("healing target is not a batch");
         };
-        let Command::Block { height, hash, .. } = b.decision().descriptor.command else {
+        let Command::Block { height, hash, .. } = &b.command else {
             anyhow::bail!("healing proof is not a block");
         };
         ensure!(
-            anchor_height == self.a_anchor
-                && height == self.b_height
-                && hash == self.b_hash
-                && self.deadline == deadline_for(anchor_height),
+            *anchor_height == self.a_anchor
+                && *height == self.b_height
+                && *hash == self.b_hash
+                && self.deadline == deadline_for(*anchor_height),
             "healing seed anchor or deadline differs"
         );
         let row = conn
@@ -247,11 +281,8 @@ impl HealingSeed {
             "healing seed deadline differs from recorded exclusion"
         );
         ensure!(
-            a.input().transactions()?.iter().any(|tx| {
-                tx.compute_txid() == self.a_txid && tx.compute_wtxid() == self.a_wtxid
-            }) && b.input().transactions()?.iter().any(|tx| {
-                tx.compute_txid() == self.a_txid && tx.compute_wtxid() == self.a_wtxid
-            }),
+            a.witnesses.contains(&(self.a_txid, self.a_wtxid))
+                && b.witnesses.contains(&(self.a_txid, self.a_wtxid)),
             "healing seed lacks exact retained witness inclusion"
         );
         Ok(())
@@ -345,10 +376,10 @@ impl ReconciliationSeed {
         }
     }
 
-    async fn verify(self, conn: &Connection) -> Result<()> {
+    async fn verify_with(self, conn: &Connection, a: &ProofIndex, b: &ProofIndex) -> Result<()> {
         match self {
-            Self::Conflict(seed) => seed.verify(conn).await,
-            Self::Healing(seed) => seed.verify(conn).await,
+            Self::Conflict(seed) => seed.verify_with(a, b),
+            Self::Healing(seed) => seed.verify_with(conn, a, b).await,
         }
     }
 }
@@ -381,9 +412,17 @@ pub(crate) async fn discover(
     let Command::Block { height, hash, .. } = retained_b.decision().descriptor.command else {
         return Ok(None);
     };
+    ensure!(
+        retained_b.input().transactions()? == raw,
+        "reconciliation input differs from retained certified block"
+    );
+    let b = ProofIndex::new(retained_b)?;
+    let mut a_cache = HashMap::new();
     let mut seeds = BTreeMap::new();
+    let mut victims = HashSet::new();
     let owners = outpoint_owners(conn, raw).await?;
     for transaction in raw {
+        let b_wtxid = transaction.compute_wtxid();
         for input in &transaction.input {
             let Some(owner) = owners.get(&input.previous_output) else {
                 continue;
@@ -391,7 +430,10 @@ pub(crate) async fn discover(
             let Some(a_decision) = owner.batch_height else {
                 continue;
             };
-            if owner.wtxid == transaction.compute_wtxid() {
+            if owner.wtxid == b_wtxid {
+                continue;
+            }
+            if !victims.insert((a_decision, owner.txid)) {
                 continue;
             }
             if replay::eligible(conn, decision, a_decision)
@@ -400,22 +442,22 @@ pub(crate) async fn discover(
             {
                 continue;
             }
-            let retained_a = load_verified_input(conn, a_decision).await?;
+            let a = proof_index(conn, &mut a_cache, a_decision).await?;
             let seed = ReconciliationSeed::Conflict(ConflictSeed {
                 a_decision,
-                a_id: retained_a.decision().id()?,
-                a_input: retained_a.input().descriptor().id()?,
+                a_id: a.id,
+                a_input: a.input,
                 a_txid: owner.txid,
                 a_wtxid: owner.wtxid,
                 a_anchor: owner.anchor_height,
                 b_decision: decision,
-                b_id: retained_b.decision().id()?,
-                b_input: retained_b.input().descriptor().id()?,
+                b_id: b.id,
+                b_input: b.input,
                 b_hash: hash,
                 b_height: height,
                 outpoint: input.previous_output,
             });
-            seed.verify(conn).await?;
+            seed.verify_with(conn, a, &b).await?;
             seeds.insert(seed.id()?, seed);
         }
     }
@@ -448,33 +490,32 @@ pub(crate) async fn discover(
             if selected.kind != CommandKind::Batch || selected.position.bitcoin_height > height {
                 continue;
             }
-            let retained_a = load_verified_input(conn, a_decision).await?;
-            if !retained_a.input().transactions()?.iter().any(|old| {
-                old.compute_txid() == txid && old.compute_wtxid() == transaction.compute_wtxid()
-            }) {
+            let a = proof_index(conn, &mut a_cache, a_decision).await?;
+            if !a.witnesses.contains(&(txid, transaction.compute_wtxid())) {
                 continue;
             }
             let seed = ReconciliationSeed::Healing(HealingSeed {
                 a_decision,
-                a_id: retained_a.decision().id()?,
-                a_input: retained_a.input().descriptor().id()?,
+                a_id: a.id,
+                a_input: a.input,
                 a_txid: txid,
                 a_wtxid: transaction.compute_wtxid(),
                 a_anchor: selected.position.bitcoin_height,
                 deadline,
                 b_decision: decision,
-                b_id: retained_b.decision().id()?,
-                b_input: retained_b.input().descriptor().id()?,
+                b_id: b.id,
+                b_input: b.input,
                 b_hash: hash,
                 b_height: height,
             });
-            seed.verify(conn).await?;
+            seed.verify_with(conn, a, &b).await?;
             seeds.insert(seed.id()?, seed);
         }
     }
 
     if replacement_rollback.is_some() {
         let floor = height.saturating_sub(FINALITY_WINDOW);
+        let mut proof_cache = HashMap::new();
         let mut rows = conn.query(
             "SELECT seed_id, kind, a_anchor, b_height, record FROM closure_reconcile_reasons WHERE b_height >= ?1 AND a_anchor >= ?2 ORDER BY seed_id",
             params![height.to_be_bytes().to_vec(), floor.to_be_bytes().to_vec()],
@@ -515,7 +556,18 @@ pub(crate) async fn discover(
             if matches!(seed, ReconciliationSeed::Conflict(_)) && !active
                 || matches!(seed, ReconciliationSeed::Healing(_)) && active
             {
-                seed.verify(conn).await?;
+                proof_index(conn, &mut proof_cache, seed.a_decision()).await?;
+                proof_index(conn, &mut proof_cache, seed.b_decision()).await?;
+                seed.verify_with(
+                    conn,
+                    proof_cache
+                        .get(&seed.a_decision())
+                        .context("indexed expired target")?,
+                    proof_cache
+                        .get(&seed.b_decision())
+                        .context("indexed expired proof")?,
+                )
+                .await?;
                 seeds.insert(id, seed);
             }
         }
@@ -577,8 +629,22 @@ pub(crate) async fn verify_plan(
                 && seed.b_height() == u64::from_be_bytes(fixed::<8>(row.get(6)?)?),
             "reconciliation seed index differs"
         );
-        seed.verify(conn).await?;
         seeds.insert(id, seed);
+    }
+    let mut proof_cache = HashMap::new();
+    for seed in seeds.values().copied() {
+        proof_index(conn, &mut proof_cache, seed.a_decision()).await?;
+        proof_index(conn, &mut proof_cache, seed.b_decision()).await?;
+        seed.verify_with(
+            conn,
+            proof_cache
+                .get(&seed.a_decision())
+                .context("indexed reconciliation target")?,
+            proof_cache
+                .get(&seed.b_decision())
+                .context("indexed reconciliation proof")?,
+        )
+        .await?;
     }
     ensure!(
         summary(&seeds, expected.from_height)? == expected,
@@ -946,19 +1012,12 @@ async fn capture_early_unavailable(
     Ok(())
 }
 
-async fn unavailable(conn: &Connection, origin: WorkOrigin, from: u64, txid: Txid) -> Result<bool> {
-    if conn
-        .query(
-            "SELECT 1 FROM closure_reconcile_unavailable WHERE plan_key = ?1 AND txid = ?2",
-            params![origin.key()?.to_vec(), txid.to_byte_array().to_vec()],
-        )
-        .await?
-        .next()
-        .await?
-        .is_some()
-    {
-        return Ok(true);
-    }
+pub(super) async fn prior_active_conflict(
+    conn: &Connection,
+    verdict: u64,
+    from: u64,
+    txid: Txid,
+) -> Result<bool> {
     let mut rows = conn.query(
         "SELECT seed_id, record FROM closure_reconcile_reasons WHERE kind = 0 AND a_txid = ?1 AND a_anchor < ?2",
         params![txid.to_byte_array().to_vec(), from.to_be_bytes().to_vec()],
@@ -975,10 +1034,10 @@ async fn unavailable(conn: &Connection, origin: WorkOrigin, from: u64, txid: Txi
             seed.id()? == id && seed.a_txid == txid && seed.a_anchor < from,
             "prior conflict index differs from seed"
         );
-        if replay::eligible(conn, origin.height, seed.a_decision)
+        if replay::eligible(conn, verdict, seed.a_decision)
             .await?
             .is_some_and(|selected| selected.id == seed.a_id)
-            && replay::eligible(conn, origin.height, seed.b_decision)
+            && replay::eligible(conn, verdict, seed.b_decision)
                 .await?
                 .is_some_and(|selected| selected.id == seed.b_id && selected.hash == seed.b_hash)
         {
@@ -988,7 +1047,23 @@ async fn unavailable(conn: &Connection, origin: WorkOrigin, from: u64, txid: Txi
     Ok(false)
 }
 
-async fn active_conflicts(
+async fn unavailable(conn: &Connection, origin: WorkOrigin, from: u64, txid: Txid) -> Result<bool> {
+    if conn
+        .query(
+            "SELECT 1 FROM closure_reconcile_unavailable WHERE plan_key = ?1 AND txid = ?2",
+            params![origin.key()?.to_vec(), txid.to_byte_array().to_vec()],
+        )
+        .await?
+        .next()
+        .await?
+        .is_some()
+    {
+        return Ok(true);
+    }
+    prior_active_conflict(conn, origin.height, from, txid).await
+}
+
+pub(super) async fn active_conflicts(
     conn: &Connection,
     verdict: u64,
     a_decision: u64,

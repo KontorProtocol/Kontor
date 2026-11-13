@@ -4,8 +4,8 @@ use bitcoin::{BlockHash, Txid, hashes::Hash};
 use libsql::{Connection, TransactionBehavior, params};
 
 use super::{
-    activation, branch, closure, durable_writer, fixed, frontier, load_verified_input, replay,
-    replay_input, work,
+    activation, branch, closure, durable_writer, fixed, frontier, load_verified_input, reconcile,
+    replay, replay_input, work,
 };
 use crate::protocol::canonical_application::DecisionExclusions;
 use crate::protocol::canonical_codec::{Decoder, Encoder};
@@ -229,16 +229,20 @@ async fn capture(
     Ok(())
 }
 
-async fn unavailable(conn: &Connection, key: [u8; 32], txid: Txid) -> Result<bool> {
-    Ok(conn
+async fn unavailable(conn: &Connection, origin: WorkOrigin, from: u64, txid: Txid) -> Result<bool> {
+    if conn
         .query(
             "SELECT 1 FROM closure_replay_unavailable WHERE plan_key = ?1 AND txid = ?2",
-            params![key.to_vec(), txid.to_byte_array().to_vec()],
+            params![origin.key()?.to_vec(), txid.to_byte_array().to_vec()],
         )
         .await?
         .next()
         .await?
-        .is_some())
+        .is_some()
+    {
+        return Ok(true);
+    }
+    reconcile::prior_active_conflict(conn, origin.height, from, txid).await
 }
 
 async fn build_one(
@@ -267,6 +271,11 @@ async fn build_one(
         while let Some(row) = rows.next().await? {
             direct.push(fixed::<32>(row.get(0)?)?);
         }
+        for txid in reconcile::active_conflicts(conn, origin.height, decision).await? {
+            direct.push(txid.to_byte_array());
+        }
+        direct.sort_unstable();
+        direct.dedup();
         let mut dropped_positions = Vec::new();
         let mut kept = Vec::new();
         for (position, transaction) in original.iter().enumerate() {
@@ -276,7 +285,7 @@ async fn build_one(
                 if drop {
                     break;
                 }
-                drop = unavailable(conn, key, input.previous_output.txid).await?;
+                drop = unavailable(conn, origin, from, input.previous_output.txid).await?;
             }
             if drop {
                 dropped_positions.push(position as u64);
