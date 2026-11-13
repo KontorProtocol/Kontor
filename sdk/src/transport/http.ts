@@ -507,6 +507,7 @@ export class HttpTransport implements KontorTransport {
         commitHexes,
         revealHex,
       });
+      lease.retain(fundingDelta.spent);
       const value = {
         result: { txid: prepared.revealTx.id },
         commitHexes,

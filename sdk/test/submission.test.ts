@@ -13,7 +13,7 @@ import { Attachment } from "../src/attach.js";
 import { Offer } from "../src/offer.js";
 import { ContractAddress } from "../src/canonical/ContractAddress.js";
 import { KontorSession } from "../src/session.js";
-import { inMemoryFunding } from "../src/funding.js";
+import { inMemoryFunding, queryFunding } from "../src/funding.js";
 import { HttpTransport } from "../src/transport/http.js";
 import {
   PendingSubmission,
@@ -377,4 +377,23 @@ test("an uncertain Attachment.offer preserves its verified seller PSBT without s
     compose.mockRestore();
     signing.mockRestore();
   }
+});
+
+test("uncertain query-backed publication retains only used inputs and cannot release a newer lease", async () => {
+  const input = coin("a"),
+    unused = coin("b");
+  const source = queryFunding(async () => [input, unused]);
+  const http = transport(source, () => {
+    throw new Error("lost response");
+  });
+  const tx = await signed(input, [9000n]);
+  await expect(
+    http.submitReveal(async () => prepared(tx)),
+  ).rejects.toBeInstanceOf(SubmissionError);
+  const second = await source.reserve();
+  expect(second.utxos).toEqual([unused]);
+  http.pendingSubmissions()[0]!.abandon();
+  await expect(source.reserve()).rejects.toThrow(/no unreserved/);
+  second.release();
+  expect((await source.reserve()).utxos).toEqual([unused]);
 });

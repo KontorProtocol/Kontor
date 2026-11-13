@@ -109,3 +109,44 @@ test("query funding filters retired inputs until omitted by the backend", async 
   snapshot = [a, b];
   expect((await source.reserve()).utxos).toEqual([a, b]);
 });
+
+test("narrowed in-memory leases preserve unused coins exactly once on release and settlement", async () => {
+  const a = utxo("a", 1000n),
+    b = utxo("b", 2000n),
+    change = utxo("c", 500n);
+  const source = inMemoryFunding([a, b]);
+  const first = await source.reserve();
+  first.retain([a]);
+  first.retain([a]);
+  expect(first.utxos).toEqual([a]);
+  expect(() => first.retain([a, b])).toThrow(/unreserved/);
+  await expect(source.reserve()).rejects.toThrow(/single-flight/);
+  first.release();
+  const second = await source.reserve();
+  expect(second.utxos).toEqual([a, b]);
+  second.retain([a]);
+  second.settle({ spent: [a], change: [change] });
+  const third = await source.reserve();
+  expect(third.utxos).toEqual([change, b]);
+  second.release();
+  await expect(source.reserve()).rejects.toThrow(/single-flight/);
+});
+
+test("query narrowing releases only unused keys, including release after preparation failure", async () => {
+  const a = utxo("a", 1000n),
+    b = utxo("b", 2000n);
+  const source = queryFunding(async () => [a, b]);
+  const first = await source.reserve();
+  first.retain([a]);
+  const second = await source.reserve();
+  expect(second.utxos).toEqual([b]);
+  expect(() => first.retain([b])).toThrow(/unreserved/);
+  first.release();
+  const third = await source.reserve();
+  expect(third.utxos).toEqual([a]);
+  first.release();
+  await expect(source.reserve()).rejects.toThrow(/no unreserved/);
+  second.release();
+  third.release();
+  expect((await source.reserve()).utxos).toEqual([a, b]);
+});

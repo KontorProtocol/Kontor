@@ -9,6 +9,8 @@ export interface FundingDelta {
 /** One reservation. Its terminal methods cannot affect a later reservation. */
 export interface FundingLease {
   readonly utxos: readonly Utxo[];
+  /** Before publication, release candidates absent from the exact signed package. */
+  retain(used: readonly Utxo[]): void;
   /** Only when this submission has not attempted publication. */
   release(): void;
   /** Retire spent/at-risk candidates and admit verified usable change. */
@@ -31,10 +33,11 @@ function dustFirst(utxos: Utxo[]): Utxo[] {
 
 function lease(
   candidates: Utxo[],
-  finish: (delta: FundingDelta) => void,
+  finish: (delta: FundingDelta, retained: readonly Utxo[]) => void,
+  releaseUnused: (unused: readonly Utxo[]) => void,
 ): FundingLease {
-  const owned = copy(candidates);
-  const keys = new Set(owned.map(keyOf));
+  let owned = copy(candidates);
+  let keys = new Set(owned.map(keyOf));
   if (keys.size !== owned.length)
     throw new ChainError("funding returned duplicate outpoints");
   let open = true;
@@ -42,11 +45,22 @@ function lease(
     if (!open) return;
     if (delta.spent.some((utxo) => !keys.has(keyOf(utxo))))
       throw new ChainError("funding settlement spends an unreserved outpoint");
-    finish({ spent: copy(delta.spent), change: copy(delta.change) });
+    finish({ spent: copy(delta.spent), change: copy(delta.change) }, owned);
     open = false;
   };
   return {
-    utxos: Object.freeze(owned.map((utxo) => Object.freeze({ ...utxo }))),
+    get utxos() {
+      return Object.freeze(owned.map((utxo) => Object.freeze({ ...utxo })));
+    },
+    retain(used) {
+      if (!open) throw new ChainError("funding lease is already settled");
+      const retainedKeys = new Set(used.map(keyOf));
+      if (used.some((utxo) => !keys.has(keyOf(utxo))))
+        throw new ChainError("cannot retain an unreserved outpoint");
+      releaseUnused(owned.filter((utxo) => !retainedKeys.has(keyOf(utxo))));
+      owned = owned.filter((utxo) => retainedKeys.has(keyOf(utxo)));
+      keys = retainedKeys;
+    },
     release: () => settle({ spent: [], change: [] }),
     settle,
   };
@@ -69,14 +83,21 @@ export function inMemoryFunding(initial: Utxo[]): FundingSource {
           { docsPath: "/sdk/funding" },
         );
       const taken = pool;
-      const reservation = lease(taken, ({ spent, change }) => {
-        const spentKeys = new Set(spent.map(keyOf));
-        pool = dustFirst([
-          ...taken.filter((utxo) => !spentKeys.has(keyOf(utxo))),
-          ...change,
-        ]);
-        reserved = false;
-      });
+      const reservation = lease(
+        taken,
+        ({ spent, change }, retained) => {
+          const spentKeys = new Set(spent.map(keyOf));
+          pool = dustFirst([
+            ...pool,
+            ...retained.filter((utxo) => !spentKeys.has(keyOf(utxo))),
+            ...change,
+          ]);
+          reserved = false;
+        },
+        (unused) => {
+          pool = dustFirst([...pool, ...unused]);
+        },
+      );
       reserved = true;
       pool = [];
       return reservation;
@@ -104,10 +125,16 @@ export function queryFunding(fetch: () => Promise<Utxo[]>): FundingSource {
         throw new ChainError(
           "queryFunding: no unreserved spendable UTXOs; recover unresolved submissions or refresh the wallet",
         );
-      const reservation = lease(taken, ({ spent }) => {
-        for (const utxo of spent) retired.add(keyOf(utxo));
-        for (const utxo of taken) reserved.delete(keyOf(utxo));
-      });
+      const reservation = lease(
+        taken,
+        ({ spent }, retained) => {
+          for (const utxo of spent) retired.add(keyOf(utxo));
+          for (const utxo of retained) reserved.delete(keyOf(utxo));
+        },
+        (unused) => {
+          for (const utxo of unused) reserved.delete(keyOf(utxo));
+        },
+      );
       // No await between filtering and reservation, even when queries overlap.
       for (const utxo of taken) reserved.add(keyOf(utxo));
       return reservation;

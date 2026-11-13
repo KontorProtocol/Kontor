@@ -250,9 +250,12 @@ Bitcoin acceptance does not mean Kontor execution success, confirmation or final
 
 Custom funding adapters now implement `reserve(): Promise<FundingLease>` instead
 of source-wide `take/settle/release`. Each lease owns copied candidates and its own
-idempotent `release()` and `settle({ spent, change })`. Release is only safe before
+monotonically narrowing `retain(used)` plus idempotent `release()` and
+`settle({ spent, change })`. After signing, the transport retains only inputs used
+by the package, releasing unused query-backed candidates before publication.
+During preparation the full offered snapshot is reserved. Release is only safe before
 publication; adapters must not let a stale lease modify a later reservation.
-`inMemoryFunding` remains single-flight and supports optimistic change chaining.
+`inMemoryFunding` remains single-flight even after narrowing and supports optimistic change chaining.
 `queryFunding(fetch)` preserves backend ordering but filters reserved and retired
 outpoints, including from overlapping queries. `fetch` must provide a complete,
 authoritative wallet snapshot. A retired outpoint is pruned when omitted by that
