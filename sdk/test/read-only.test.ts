@@ -4,8 +4,13 @@
  * is lazy), so these need no network: `view` is available, but any write
  * path throws a clear error.
  */
-import { test, expect } from "vitest";
-import { KontorSession, Identity, signet } from "@kontor/sdk";
+import { test, expect, vi } from "vitest";
+import {
+  KontorSession,
+  Identity,
+  signet,
+  type KontorTransport,
+} from "@kontor/sdk";
 
 const XONLY =
   "8c7fc6552af4384a13791e63bac79ff2bcfeedf143a88d6dc4b6080a8829cdc1";
@@ -82,4 +87,19 @@ test("KontorSession: requires either signing or identity", () => {
   expect(() => new KontorSession({ chain: signet } as never)).toThrow(
     /signing.*identity/i,
   );
+});
+
+test("closed session rejects observed submit before invoking its transport", async () => {
+  const identity = Identity.fromXOnly(XONLY, signet);
+  const submit = vi.fn();
+  const session = new KontorSession({
+    chain: signet,
+    signing: { identity, psbt: async () => new Uint8Array() },
+    transport: () => ({ submit }) as unknown as KontorTransport,
+  });
+  session.close();
+  await expect(session.issuance().submit()).rejects.toThrow(/closed/);
+  await expect(session.ready()).rejects.toThrow(/closed/);
+  expect(() => session.events()).toThrow(/closed/);
+  expect(submit).not.toHaveBeenCalled();
 });

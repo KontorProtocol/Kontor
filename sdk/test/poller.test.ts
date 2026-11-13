@@ -1,10 +1,266 @@
-import { test, expect, afterEach } from "vitest";
+import { test, expect, afterEach, vi } from "vitest";
 import { ResultsPoller } from "../src/poller.js";
 import { ReceiptStreamError } from "../src/errors.js";
+import { waitForTxOutcomes } from "../src/inst.js";
 
 const openPollers: ResultsPoller[] = [];
 afterEach(() => {
   for (const poller of openPollers.splice(0)) poller.stop();
+  vi.useRealTimers();
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+test("close cancels a pending bootstrap retry timer", async () => {
+  vi.useFakeTimers();
+  const fetcher = vi.fn(async () => {
+    throw new Error("offline");
+  });
+  const poller = new ResultsPoller({
+    baseUrl: "http://test",
+    fetch: fetcher as typeof fetch,
+  });
+  openPollers.push(poller);
+  const rejected = expect(poller.ready()).rejects.toThrow(/closed/);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(vi.getTimerCount()).toBe(1);
+  poller.stop();
+  await rejected;
+  expect(vi.getTimerCount()).toBe(0);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+test("close during bootstrap aborts without retrying or replacing the closed error", async () => {
+  vi.useFakeTimers();
+  const entered = deferred<void>();
+  const fetcher = vi.fn(
+    (_url: unknown, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener(
+          "abort",
+          () => reject(new Error("fetch aborted")),
+          { once: true },
+        );
+        entered.resolve();
+      }),
+  );
+  const poller = new ResultsPoller({
+    baseUrl: "http://test",
+    fetch: fetcher as typeof fetch,
+  });
+  openPollers.push(poller);
+  const ready = poller.ready();
+  const rejected = expect(ready).rejects.toThrow(/closed/);
+  await entered.promise;
+  poller.stop();
+  await rejected;
+  await vi.runAllTimersAsync();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(() => poller.start()).toThrow(/closed/);
+  expect(() => poller.events()).toThrow(/closed/);
+  await expect(poller.ready()).rejects.toThrow(/closed/);
+  poller.stop();
+});
+
+test("late bootstrap body after close cannot start receipt requests", async () => {
+  const entered = deferred<void>();
+  const body = deferred<unknown>();
+  const fetcher = vi.fn(
+    async () =>
+      ({
+        ok: true,
+        json: () => {
+          entered.resolve();
+          return body.promise;
+        },
+      }) as Response,
+  );
+  const poller = new ResultsPoller({
+    baseUrl: "http://test",
+    fetch: fetcher as typeof fetch,
+  });
+  openPollers.push(poller);
+  const ready = poller.ready();
+  const rejected = expect(ready).rejects.toThrow(/closed/);
+  await entered.promise;
+  poller.stop();
+  body.resolve({ result: { signature: "late" } });
+  await rejected;
+  await Promise.resolve();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+test.each(["long-poll", "page"])(
+  "close discards a late %s response",
+  async (pendingKind) => {
+    const entered = deferred<AbortSignal>();
+    const late = deferred<Response>();
+    const poller = new ResultsPoller({
+      baseUrl: "http://test/api",
+      fetch: (async (input, init) => {
+        const url = new URL(String(input));
+        const isStream = url.pathname.endsWith("receipt-stream");
+        const isPage = isStream && !url.searchParams.has("start");
+        if (
+          (pendingKind === "page" && isPage) ||
+          (pendingKind === "long-poll" && url.searchParams.has("wait"))
+        ) {
+          entered.resolve(init!.signal!);
+          return late.promise;
+        }
+        if (isStream)
+          return response(
+            url.searchParams.has("start")
+              ? { kind: "start", resume_token: token(0) }
+              : page([]),
+          );
+        return response({ signature: "initial" });
+      }) as typeof fetch,
+    });
+    openPollers.push(poller);
+    const events = poller.events();
+    const ready = poller.ready();
+    const handledReady = ready.catch(() => {});
+    const signal = await entered.promise;
+    const next = events.next();
+    poller.stop();
+    expect(signal.aborted).toBe(true);
+    late.resolve(
+      response(
+        pendingKind === "page"
+          ? page([row(1, "late", 1)])
+          : { signature: "late" },
+      ),
+    );
+    expect(await next).toEqual({ done: true, value: undefined });
+    await handledReady;
+    expect(await events.next()).toEqual({ done: true, value: undefined });
+  },
+);
+
+test("terminal failure drains completed groups before throwing; explicit close discards them", async () => {
+  for (const close of [false, true]) {
+    let pages = 0;
+    const poller = new ResultsPoller({
+      baseUrl: "http://test/api",
+      from: token(0),
+      fetch: (async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("receipt-stream")) {
+          return response(
+            pages++ === 0
+              ? page([row(1, "queued", 1)])
+              : { kind: "reset_required", reason: "missing_history" },
+          );
+        }
+        return response({ signature: "test" });
+      }) as typeof fetch,
+    });
+    openPollers.push(poller);
+    const events = poller.events();
+    await poller.ready();
+    if (close) {
+      poller.stop();
+      expect(await events.next()).toEqual({ done: true, value: undefined });
+    } else {
+      expect((await events.next()).value).toMatchObject({
+        kind: "tx",
+        txid: "queued",
+      });
+      await expect(events.next()).rejects.toMatchObject({
+        reason: "missing_history",
+      });
+      await expect(poller.ready()).rejects.toMatchObject({
+        reason: "missing_history",
+      });
+      expect(() => poller.start()).toThrow(ReceiptStreamError);
+    }
+  }
+});
+
+test("wait timeout closes its pending scan without disrupting another subscriber", async () => {
+  vi.useFakeTimers();
+  const entered = deferred<void>();
+  const longPoll = deferred<Response>();
+  let pages = 0;
+  const poller = new ResultsPoller({
+    baseUrl: "http://test/api",
+    from: token(0),
+    fetch: (async (input) => {
+      const url = new URL(String(input));
+      if (url.searchParams.has("wait")) {
+        entered.resolve();
+        return longPoll.promise;
+      }
+      if (url.pathname.endsWith("receipt-stream"))
+        return response(pages++ === 0 ? page([]) : page([row(1, "other", 1)]));
+      return response({ signature: "initial" });
+    }) as typeof fetch,
+  });
+  openPollers.push(poller);
+  const first = poller.events();
+  const other = poller.events();
+  await poller.ready();
+  await entered.promise;
+  const next = vi.spyOn(first, "next");
+  const wait = waitForTxOutcomes(first, "missing", { timeoutMs: 10 }).finally(
+    () => first.return!(),
+  );
+  const timedOut = expect(wait).rejects.toThrow(/not seen within 10ms/);
+  await vi.advanceTimersByTimeAsync(10);
+  await timedOut;
+  expect(await next.mock.results[0]!.value).toEqual({
+    done: true,
+    value: undefined,
+  });
+  await first.return!();
+  longPoll.resolve(response({ signature: "new" }));
+  expect((await other.next()).value).toMatchObject({
+    kind: "tx",
+    txid: "other",
+  });
+  poller.stop();
+});
+
+test("an abandoned bootstrap page does not advance a later subscriber", async () => {
+  const entered = deferred<void>();
+  const abandoned = deferred<Response>();
+  const from: string[] = [];
+  let pages = 0;
+  const poller = new ResultsPoller({
+    baseUrl: "http://test/api",
+    from: token(0),
+    fetch: (async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("receipt-stream")) {
+        from.push(url.searchParams.get("from")!);
+        if (pages++ === 0) {
+          entered.resolve();
+          return abandoned.promise;
+        }
+        return response(page([row(1, "retained", 1)]));
+      }
+      return response({ signature: "initial" });
+    }) as typeof fetch,
+  });
+  openPollers.push(poller);
+  const first = poller.events();
+  const ready = poller.ready();
+  await entered.promise;
+  await first.return!();
+  abandoned.resolve(response(page([row(1, "retained", 1)])));
+  await ready;
+  const second = poller.events();
+  expect((await second.next()).value).toMatchObject({ txid: "retained" });
+  expect(from.slice(0, 2)).toEqual([token(0), token(0)]);
+  poller.stop();
 });
 const token = (cursor: number, generation = 0) => `g${generation}c${cursor}`;
 const tokenCursor = (value: string | null) => Number(value?.split("c")[1] ?? 0);

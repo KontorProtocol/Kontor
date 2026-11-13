@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+`session.close()` now permanently closes receipt observation and cancels its
+requests and retry timers. Create a new session to resume events after close or
+terminal polling failure. `ready()`, `events()`, and observed submissions reject
+after close; stateless views and transaction metadata lookups remain available.
+Closing discards buffered events, while a polling failure drains complete buffered
+events before surfacing the error. Iterator cancellation now wakes pending waits.
+
 The launch format changes direct transaction signing to the amount- and
 network-bound `kon` TapScript leaf. Script-path signers must support
 `ALL|ANYONECANPAY` (0x81), and marketplace seller signatures use
