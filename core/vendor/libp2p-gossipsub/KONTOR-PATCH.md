@@ -26,18 +26,24 @@ manifest restores `quickcheck` only for running the focused regression.
 
 `core/.cargo/audit.toml` has an explicit 0534 exception because cargo-audit
 matches the retained 0.49.5 version, even when Cargo selects this patched
-local source. That exception records a source patch, not acceptance of the
-vulnerable registry package. The active networking workspaces patch this
-package to this directory; retained historical workspaces remain frozen.
+local source. The five current networking graphs (`core`, `node`,
+`consensus-first`, `pulley-first`, and `pulley-second`) select this directory.
+The reserved historical proof manifests and locks in `protocol-bundles/first`
+and `protocol-bundles/second` remain byte-exact and reference the unpatched
+registry crate. CI audits those archived locks using the same exception, but
+neither is selected by a current build recipe. The exception does not claim
+that archived code is remediated or shipped as a current network graph.
 
 ## Removal
 
 1. Confirm that the selected Malachite dependency graph resolves a verified
    upstream Gossipsub release containing the unknown-topic guard. A Malachite
    version change or new libp2p version number alone is insufficient.
-2. Remove this directory, its `[patch.crates-io]` entries from the seven
-   active networking manifests, and the 0534 exception from
-   `core/.cargo/audit.toml`. Update their lockfiles together.
+2. Remove this directory and its `[patch.crates-io]` entries from the five
+   current networking manifests. Update their lockfiles together. Give the
+   frozen first/second lockfile audits an explicit archive-only policy (or
+   replace those audits with their existing immutable-hash verification),
+   then remove the shared 0534 exception from `core/.cargo/audit.toml`.
 3. Refresh affected source inventories, managed consensus and node build
    identities. Keep retained historical sources and their evidence unchanged.
 4. Verify the selected crate in every active networking graph, retain or move

@@ -82,11 +82,13 @@ ignore = [
 
     # libp2p-gossipsub remains version 0.49.5 because Malachite selects libp2p
     # 0.56. Its PRUNE unknown-topic backoff fix is backported in
-    # core/vendor/libp2p-gossipsub and selected by every active network graph.
-    # cargo-audit matches the version rather than inspecting patched local code.
-    # This exception is conditional on that source patch, not acceptance of
-    # the registry crate. Remove it with the vendor patch once the selected
-    # Malachite graph resolves a verified fixed upstream release.
+    # core/vendor/libp2p-gossipsub and selected by the five current network
+    # graphs. cargo-audit matches the version rather than patched local code.
+    # The same audit policy also scans frozen first/second proof locks, which
+    # still name the unpatched registry crate but are not current build inputs.
+    # This exception is not a claim those archived inputs are remediated.
+    # Remove the shared exception when the active Malachite graph resolves a
+    # verified fixed release and historical audits have an archive-only policy.
     # See core/vendor/libp2p-gossipsub/KONTOR-PATCH.md and upstream PR 6707.
     "RUSTSEC-2026-0534",
 

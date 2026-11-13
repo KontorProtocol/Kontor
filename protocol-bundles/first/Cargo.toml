@@ -25,7 +25,6 @@ ring = "=0.17.14"
 secp256k1 = { version = "=0.29.1", features = ["recovery"] }
 
 [patch.crates-io]
-libp2p-gossipsub = { path = "../../core/vendor/libp2p-gossipsub" }
 blst = { path = "../../core/vendor/blst" }
 ring = { path = "../../core/vendor/ring" }
 secp256k1-sys = { path = "../../core/vendor/secp256k1-sys" }

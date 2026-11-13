@@ -55,6 +55,8 @@ The temporary Gossipsub PRUNE backport, its exact source provenance, audit
 exception and removal steps are recorded in
 `core/vendor/libp2p-gossipsub/KONTOR-PATCH.md`. Keep the active network graph
 patches and lockfiles aligned until the selected upstream crate contains the fix.
+The reserved historical `first` and `second` proof manifests and locks stay
+byte-exact; current proof builds select `pulley-first` and `pulley-second`.
 
 For local Cargo and bundle commands, use the parent directory's `local-build`
 helper and shared slots as described in `AGENTS.md`. No Python or parallel manual
