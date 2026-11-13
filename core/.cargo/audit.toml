@@ -58,6 +58,11 @@ ignore = [
     "RUSTSEC-2026-0511", # NSEC accepts incorrect NXDOMAIN response.
     "RUSTSEC-2026-0512", # Unrelated signed RRset accepted as answer.
     "RUSTSEC-2026-0514", # Resolver returns records failing DNSSEC validation.
+    # Distinct delegation NSEC/NSEC3 advisories in the same disabled validation
+    # path. Remove with the other DNSSEC exceptions after a patched graph upgrade.
+    "RUSTSEC-2026-0530", # Parent-side NSEC zone cut denial proof.
+    "RUSTSEC-2026-0531", # Child-side NSEC/NSEC3 accepted for parent DS proof.
+    "RUSTSEC-2026-0532", # Parent-side NSEC3 zone cut denial proof.
 
     # Accepted unresolved DoS risk, not an unreachable-code exception: malformed
     # DNS wire counts can allocate about 18 MB before decoding fails. Malachite
