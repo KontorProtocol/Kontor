@@ -678,6 +678,46 @@ mod tests {
     }
 
     #[test]
+    fn global_byte_rejection_does_not_apply_planned_peer_eviction() {
+        let mut map = PartStreamsMap::new();
+        for seed in 1..=4 {
+            assert!(
+                map.insert(peer(seed), maximal_messages(seed)[1].clone())
+                    .unwrap()
+                    .is_none()
+            );
+        }
+
+        let mut target = maximal_messages(9);
+        let target_id = StreamId::new(vec![9; 25_000].into());
+        for msg in &mut target {
+            msg.stream_id = target_id.clone();
+        }
+        assert!(map.insert(peer(1), target[0].clone()).unwrap().is_none());
+        assert_accounting(&map);
+
+        let before_streams: Vec<_> = map.streams.keys().cloned().collect();
+        let before_queues = map.peer_streams.clone();
+        let before_peer_bytes = map.peer_charged_bytes.clone();
+        let before_bytes = map.charged_bytes();
+
+        // The new part needs its sibling evicted to meet the publisher quota,
+        // but that still leaves too many bytes globally. Neither change may land.
+        assert_eq!(
+            map.insert(peer(1), target[1].clone()),
+            Err(ReassemblySaturated)
+        );
+        assert_eq!(
+            map.streams.keys().cloned().collect::<Vec<_>>(),
+            before_streams
+        );
+        assert_eq!(map.peer_streams, before_queues);
+        assert_eq!(map.peer_charged_bytes, before_peer_bytes);
+        assert_eq!(map.charged_bytes(), before_bytes);
+        assert_accounting(&map);
+    }
+
+    #[test]
     fn repeated_data_is_charged_once_per_sequence_and_discard_releases_it() {
         let mut map = PartStreamsMap::new();
         let p = peer(1);
