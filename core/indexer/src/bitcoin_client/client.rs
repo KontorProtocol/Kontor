@@ -1,5 +1,6 @@
 use base64::prelude::*;
 use bitcoin::Amount;
+use bitcoin::hashes::Hash;
 use bitcoin::{Block, BlockHash, Transaction, Txid, consensus::encode};
 use moka::future::Cache;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -383,18 +384,23 @@ impl Client {
 /// mempool and return its effective package fee rate.
 ///
 /// Wraps `testmempoolaccept` with two pieces of normalization:
-/// - `txn-already-in-mempool` / `txn-already-known` are reported by
-///   Bitcoin Core as rejections but are idempotent successes from a
-///   caller's perspective.
+/// - `txn-already-in-mempool` / `txn-already-known` are idempotent only
+///   when the held transaction has the proposed witness.
 /// - When those rejections fire, `testmempoolaccept` short-circuits
 ///   without populating `fees` / `vsize`. We fall back to
-///   `getmempoolentry` for authoritative fee data on the already-known
-///   path so the caller always gets a fee rate.
+///   `getmempoolentry` for authoritative fee data and held witness identity.
 pub async fn check_mempool_acceptance<C: BitcoinRpc>(
     client: &C,
     raw_hex: &str,
     txid: &Txid,
 ) -> Result<Acceptance, Error> {
+    let proposed: Transaction = encode::deserialize_hex(raw_hex)?;
+    let proposed_wtxid = Txid::from_byte_array(proposed.compute_wtxid().to_byte_array());
+    if proposed.compute_txid() != *txid {
+        return Err(Error::Unexpected(
+            "mempool acceptance txid does not match proposed transaction".to_string(),
+        ));
+    }
     let raw_txs = [raw_hex.to_string()];
     let results = client.test_mempool_accept(&raw_txs).await?;
     let Some(result) = results.into_iter().next() else {
@@ -402,6 +408,11 @@ pub async fn check_mempool_acceptance<C: BitcoinRpc>(
             "testmempoolaccept returned no result".to_string(),
         ));
     };
+    if result.txid != *txid || result.wtxid != proposed_wtxid {
+        return Err(Error::Unexpected(
+            "testmempoolaccept identified a different transaction".to_string(),
+        ));
+    }
 
     let already_known = matches!(
         result.reject_reason.as_deref(),
@@ -426,11 +437,14 @@ pub async fn check_mempool_acceptance<C: BitcoinRpc>(
     // testmempoolaccept path's behaviour and avoiding spurious
     // sub-1-sat/vB rejections at the threshold-1 boundary.
     match client.get_mempool_entry(txid).await? {
-        Some(entry) => Ok(Acceptance::Accepted {
+        Some(entry) if entry.wtxid == Some(proposed_wtxid) => Ok(Acceptance::Accepted {
             fee_rate_sat_per_vb: fee_rate_sat_per_vb(
                 entry.fees.ancestor.to_sat(),
                 entry.ancestorsize,
             ),
+        }),
+        Some(_) => Ok(Acceptance::Rejected {
+            reason: "mempool witness does not match proposed transaction".to_string(),
         }),
         None => Ok(Acceptance::Rejected {
             reason: "tx disappeared from mempool between calls".to_string(),

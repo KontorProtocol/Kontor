@@ -18,10 +18,11 @@ use crate::bitcoin_client::client::BitcoinRpc;
 /// Minimal default mempool entry used when the test doesn't explicitly seed
 /// fee info for a tx. Fee values are negligible — tests that care about fee
 /// estimation should use `set_mempool_entry` to provide real values.
-fn stub_entry() -> MempoolEntry {
+fn stub_entry(wtxid: Option<Txid>) -> MempoolEntry {
     MempoolEntry {
         vsize: 1,
         ancestorsize: 1,
+        wtxid,
         fees: MempoolEntryFees {
             base: bitcoin::Amount::from_sat(1),
             ancestor: bitcoin::Amount::from_sat(1),
@@ -202,8 +203,10 @@ impl BitcoinRpc for MockBitcoinRpc {
             return Ok(Some(entry));
         }
         let txs = self.mempool_txs.lock().unwrap();
-        if txs.iter().any(|tx| tx.compute_txid() == *txid) {
-            Ok(Some(stub_entry()))
+        if let Some(tx) = txs.iter().find(|tx| tx.compute_txid() == *txid) {
+            Ok(Some(stub_entry(Some(Txid::from_byte_array(
+                tx.compute_wtxid().to_byte_array(),
+            )))))
         } else {
             Ok(None)
         }
@@ -214,7 +217,11 @@ impl BitcoinRpc for MockBitcoinRpc {
         // caller didn't explicitly set.
         let mut out = self.mempool_entries.lock().unwrap().clone();
         for tx in self.mempool_txs.lock().unwrap().iter() {
-            out.entry(tx.compute_txid()).or_insert_with(stub_entry);
+            out.entry(tx.compute_txid()).or_insert_with(|| {
+                stub_entry(Some(Txid::from_byte_array(
+                    tx.compute_wtxid().to_byte_array(),
+                )))
+            });
         }
         Ok(out)
     }
@@ -272,7 +279,7 @@ impl BitcoinRpc for MockBitcoinRpc {
                 .cloned()
                 .unwrap_or_else(|| TestMempoolAcceptResult {
                     txid,
-                    wtxid: txid,
+                    wtxid: Txid::from_byte_array(raw.compute_wtxid().to_byte_array()),
                     allowed: true,
                     reject_reason: None,
                     vsize: Some(raw.vsize() as u64),
@@ -383,6 +390,7 @@ mod tests {
             MempoolEntry {
                 vsize: 250,
                 ancestorsize: 250,
+                wtxid: Some(txid),
                 fees: MempoolEntryFees {
                     base: Amount::from_sat(5_000),
                     ancestor: Amount::from_sat(5_000),
@@ -466,6 +474,119 @@ mod tests {
             Acceptance::Rejected {
                 reason: "min relay fee not met".to_string(),
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn already_known_requires_the_held_witness() {
+        let mock = MockBitcoinRpc::new(vec![]);
+        let mut tx = sample_tx(5);
+        tx.input[0].witness = Witness::from_slice(&[vec![1, 2, 3]]);
+        let txid = tx.compute_txid();
+        let wtxid = Txid::from_byte_array(tx.compute_wtxid().to_byte_array());
+        assert_ne!(txid, wtxid);
+        let raw_hex = encode::serialize_hex(&tx);
+        mock.set_test_mempool_accept_result(
+            txid,
+            TestMempoolAcceptResult {
+                txid,
+                wtxid,
+                allowed: false,
+                reject_reason: Some("txn-already-in-mempool".to_string()),
+                vsize: None,
+                fees: None,
+            },
+        );
+        let entry = MempoolEntry {
+            vsize: 100,
+            ancestorsize: 100,
+            wtxid: Some(wtxid),
+            fees: MempoolEntryFees {
+                base: Amount::from_sat(1000),
+                ancestor: Amount::from_sat(1000),
+            },
+            depends: vec![],
+        };
+        mock.set_mempool_entry(txid, entry.clone());
+        assert!(matches!(
+            check_mempool_acceptance(&mock, &raw_hex, &txid)
+                .await
+                .unwrap(),
+            Acceptance::Accepted { .. }
+        ));
+
+        mock.set_mempool_entry(
+            txid,
+            MempoolEntry {
+                wtxid: Some(txid),
+                ..entry.clone()
+            },
+        );
+        assert!(matches!(
+            check_mempool_acceptance(&mock, &raw_hex, &txid)
+                .await
+                .unwrap(),
+            Acceptance::Rejected { .. }
+        ));
+
+        mock.set_mempool_entry(
+            txid,
+            MempoolEntry {
+                wtxid: None,
+                ..entry
+            },
+        );
+        assert!(matches!(
+            check_mempool_acceptance(&mock, &raw_hex, &txid)
+                .await
+                .unwrap(),
+            Acceptance::Rejected { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn acceptance_rejects_mismatched_rpc_ids() {
+        let mock = MockBitcoinRpc::new(vec![]);
+        let mut tx = sample_tx(6);
+        tx.input[0].witness = Witness::from_slice(&[vec![4]]);
+        let txid = tx.compute_txid();
+        let wtxid = Txid::from_byte_array(tx.compute_wtxid().to_byte_array());
+        let raw_hex = encode::serialize_hex(&tx);
+        let result = TestMempoolAcceptResult {
+            txid,
+            wtxid: txid,
+            allowed: true,
+            reject_reason: None,
+            vsize: Some(100),
+            fees: Some(TestMempoolAcceptResultFees {
+                base: Amount::from_sat(1000),
+                effective_feerate_btc_per_kvb: None,
+            }),
+        };
+        mock.set_test_mempool_accept_result(txid, result.clone());
+        assert!(
+            check_mempool_acceptance(&mock, &raw_hex, &txid)
+                .await
+                .is_err()
+        );
+
+        mock.set_test_mempool_accept_result(
+            txid,
+            TestMempoolAcceptResult {
+                txid: Txid::from_byte_array([9; 32]),
+                wtxid,
+                ..result
+            },
+        );
+        assert!(
+            check_mempool_acceptance(&mock, &raw_hex, &txid)
+                .await
+                .is_err()
+        );
+        assert!(
+            check_mempool_acceptance(&mock, &raw_hex, &Txid::from_byte_array([8; 32]))
+                .await
+                .is_err()
         );
     }
 }
