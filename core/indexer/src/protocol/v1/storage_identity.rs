@@ -7,6 +7,7 @@ use crate::protocol::storage_identity::{CoreCallbacks, IdentityCallbacks, NonceC
 /// auto-increment assigns it id = 1. This constant pins that contract and is
 /// asserted by `create_core_signer`.
 pub const CORE_SIGNER_ID: u64 = 1;
+pub(crate) const MAX_NONCE_GAP: u64 = 10_000;
 
 #[derive(Debug, Error)]
 pub(crate) enum IdentityError {
@@ -80,7 +81,6 @@ pub(crate) async fn advance_nonce(
         .map_err(IdentityError::Infrastructure)?;
     let stored_nonce = stored
         .ok_or_else(|| IdentityError::InvalidData(format!("no nonce for signer_id {signer_id}")))?;
-    const MAX_NONCE_GAP: u64 = 10_000;
     if caller_nonce < stored_nonce {
         return Err(IdentityError::InvalidData(format!(
             "nonce too low for signer_id {signer_id}: got {caller_nonce}, expected >= {stored_nonce}"

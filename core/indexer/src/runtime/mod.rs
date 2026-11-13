@@ -1032,6 +1032,49 @@ impl Runtime {
             .identity_pubkey(identity.signer_id())
             .await
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+        let proof = Self::registration_proof(&x_only_pubkey, bls_pubkey, schnorr_sig, bls_sig)?;
+
+        self.storage
+            .write_identity_bls_key(identity.signer_id(), &proof.bls_pubkey)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn preflight_bls_registration(
+        &self,
+        existing_id: Option<u64>,
+        x_only_pubkey: &str,
+        bls_pubkey: &[u8],
+        schnorr_sig: &[u8],
+        bls_sig: &[u8],
+    ) -> Result<(), ExecutionError> {
+        if let Some(id) = existing_id {
+            if let Some(existing) = self
+                .storage
+                .identity_bls_key(id)
+                .await
+                .map_err(ExecutionError::NonDeterministic)?
+            {
+                if existing == bls_pubkey {
+                    return Ok(());
+                }
+                return Err(ExecutionError::Deterministic(anyhow!(
+                    "BLS pubkey already registered for signer"
+                )));
+            }
+        }
+        Self::registration_proof(x_only_pubkey, bls_pubkey, schnorr_sig, bls_sig)?;
+        Ok(())
+    }
+
+    fn registration_proof(
+        x_only_pubkey: &str,
+        bls_pubkey: &[u8],
+        schnorr_sig: &[u8],
+        bls_sig: &[u8],
+    ) -> Result<RegistrationProof, ExecutionError> {
         let x_only_pk = XOnlyPublicKey::from_str(&x_only_pubkey)
             .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
 
@@ -1056,13 +1099,7 @@ impl Runtime {
             bls_sig,
         };
         proof.verify().map_err(ExecutionError::Deterministic)?;
-
-        self.storage
-            .write_identity_bls_key(identity.signer_id(), &proof.bls_pubkey)
-            .await
-            .map_err(ExecutionError::NonDeterministic)?;
-
-        Ok(())
+        Ok(proof)
     }
 
     /// Host-side entry point used by macro-generated native-contract api
