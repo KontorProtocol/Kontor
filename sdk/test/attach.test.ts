@@ -73,6 +73,7 @@ function stubSession(): KontorSession {
     compose: fail,
     composeAndSign: fail,
     broadcast: fail,
+    pendingSubmissions: () => [],
     submitReveal: fail,
   };
   const session = new KontorSession({

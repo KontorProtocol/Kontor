@@ -199,3 +199,73 @@ deprecated export and is no longer emitted by the poller.
 Events remain observations, not finality promises. Confirmation changes do not
 emit the transaction again. Refresh confirmation metadata with
 `await session.transaction(txid)`, including after rollback signals.
+
+## Funding leases and uncertain publication
+
+A failed broadcast request does not mean nothing was sent. Bitcoin can accept a
+commit but reject its reveal, or accept both while the HTTP response is lost.
+`submit`, `submitReveal`, and marketplace operations now retain a funding lease
+when publication is uncertain and throw `SubmissionError` with a recovery handle.
+Preparation or signing failure before publication releases the lease immediately.
+
+```ts
+import { SubmissionError } from "@kontor/sdk";
+
+try {
+  await call.submit();
+} catch (error) {
+  if (!(error instanceof SubmissionError)) throw error;
+  const pending = error.recovery;
+  console.log(pending.transactions, pending.report);
+  // Read-only: succeeds only when every exact signed transaction is observed.
+  await pending.reconcile();
+  // Or explicitly retry the same bytes, without composing or signing again:
+  // await pending.retry();
+}
+```
+
+Both recovery methods reject with `SubmissionError` while the outcome remains
+partial or unknown. Concurrent retry/reconcile calls share the current operation;
+calling reconcile during a retry joins that retry, it does not cancel its relay.
+An accepted handle returns its saved result without relaying or settling again.
+`session.transport.pendingSubmissions()` provides the same handles if an error was
+wrapped or discarded. Entries remain there until accepted or explicitly abandoned.
+The signed hex, txid and wtxid are immutable. Reports distinguish a conflicting
+witness from an unobserved transaction. Neither is permission to reuse its inputs.
+
+`pending.abandon()` is an explicit conservative exit when recovery cannot finish.
+It retires all original inputs used anywhere in the signed package from this
+funding source, returns untouched candidates, and admits only positively observed
+owned change that no signed child spends. It refuses while retry/reconcile is
+running. Abandon does not cancel Bitcoin transactions or revoke signatures. Keep
+`pending.transactions` and `pending.value` for external wallet repair. Coins may
+need a wallet rescan or manual recovery; absence from a mempool is not proof they
+are safe to spend again. For `Attachment.offer`, the prepared result's `value`
+contains the `Offer`, including the signed seller detach PSBT, even if the attach
+broadcast response is lost. Retry never asks the seller to sign again.
+
+After recovery, use `session.transaction(revealTxid)` to look up execution and
+confirmation. A newly joined event iterator may miss an already emitted receipt.
+Bitcoin acceptance does not mean Kontor execution success, confirmation or finality.
+
+Custom funding adapters now implement `reserve(): Promise<FundingLease>` instead
+of source-wide `take/settle/release`. Each lease owns copied candidates and its own
+idempotent `release()` and `settle({ spent, change })`. Release is only safe before
+publication; adapters must not let a stale lease modify a later reservation.
+`inMemoryFunding` remains single-flight and supports optimistic change chaining.
+`queryFunding(fetch)` preserves backend ordering but filters reserved and retired
+outpoints, including from overlapping queries. `fetch` must provide a complete,
+authoritative wallet snapshot. A retired outpoint is pruned when omitted by that
+snapshot; active reservations are not. It does not cache optimistic change.
+
+Reservations, filters and recovery handles last only for the source/transport
+instance in this process. Share one source for a wallet's concurrent sessions.
+They do not coordinate independent applications or survive process termination.
+Persist signed recovery material if the application needs that capability.
+
+Custom transports must implement `pendingSubmissions()` and return the structured
+`BroadcastReport` from raw `broadcast()`. The HTTP broadcast and read-only reconcile
+routes accept the same ordered transaction hex array. Reconciliation uses fresh
+Bitcoin observations, including confirmed transactions when Bitcoin Core has
+`txindex=1`. Without an available index, an unlocatable confirmed transaction stays
+unknown. No compatibility fallback to the old `{ txid }` relay response is provided.

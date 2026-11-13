@@ -70,8 +70,14 @@ export type {
   SignPsbtOptions,
 } from "./signing.js";
 export { canSignSchnorr } from "./signing.js";
-export type { FundingSource } from "./funding.js";
+export type { FundingSource, FundingLease, FundingDelta } from "./funding.js";
 export { inMemoryFunding, queryFunding } from "./funding.js";
+export { SubmissionError, PendingSubmission } from "./transport/submission.js";
+export type {
+  BroadcastReport,
+  BroadcastObservation,
+  SignedTransaction,
+} from "./transport/submission.js";
 export { LocalKey } from "./local-key.js";
 export { BlsKey, blsDerivationPath } from "./bls.js";
 export type {

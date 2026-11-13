@@ -82,7 +82,7 @@ export interface KontorSessionOptions {
   /**
    * Where the default transport gets spendable UTXOs (and reports back
    * spent/change). Use `inMemoryFunding([utxo])` for optimistic chaining
-   * or `queryFunding(fetch)` for a stateless wallet/indexer source. Omit
+   * or `queryFunding(fetch)` for authoritative wallet snapshots. Omit
    * for read-only sessions (submit/inspect/simulate then throw). Ignored
    * when a custom `transport` is supplied — that factory owns funding.
    */

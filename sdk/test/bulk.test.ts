@@ -59,6 +59,7 @@ function mockSession(simulate: KontorTransport["simulate"]): KontorSession {
     compose: fail,
     composeReveal: fail,
     broadcast: fail,
+    pendingSubmissions: () => [],
   };
   const session = new KontorSession({
     chain: signet,

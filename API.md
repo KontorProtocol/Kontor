@@ -190,3 +190,40 @@ Upon connection, the client will be subscribed to indexer events (see `WsRespons
 Request: `WsRequest`
 
 Response: `WsResponse`
+
+## Relay and reconciliation
+
+`POST /api/transactions/broadcast` and `POST /api/transactions/reconcile` accept
+`{"transactions": ["<signed transaction hex>", "<signed child hex>"]}` in dependency
+order. The broadcast route observes the exact bytes first, skips already observed
+transactions, relays the remainder, then observes the full package again. The
+reconcile route only observes and never publishes. All transaction hex is parsed
+before any relay occurs. Malformed input returns HTTP 400.
+
+Both return the usual `result` envelope containing:
+
+```json
+{
+  "result": {
+    "outcome": "partial",
+    "transactions": [
+      { "txid": "...", "wtxid": "...", "status": "accepted", "reason": null },
+      { "txid": "...", "wtxid": "...", "status": "unknown", "reason": "not_observed: ..." }
+    ]
+  }
+}
+```
+
+Entries retain request order and bind both transaction and witness identity.
+Outcome is `accepted` when all exact transactions are observed, `partial` when
+some are, or `unknown` when none are. Partial/unknown outcomes are successful HTTP
+reports, not a claim that publication failed. A differing witness is reported as
+`unknown` with a `conflicting_witness` reason. A lost HTTP response is also uncertain.
+Callers must not free funding merely because a transaction is unobserved or a relay
+was rejected. These observations are not confirmation, Kontor execution receipts,
+or finality. Exact retry is safe to request, but may still be rejected by Bitcoin.
+
+Fresh lookup bypasses the node's transaction cache. Confirmed transaction lookup
+requires Bitcoin Core's `txindex=1`; an unavailable lookup stays unknown. This
+prelaunch change replaces the old broadcast `{ txid }` response. The SDK retains
+signed submission recovery and funding ownership across uncertain outcomes.

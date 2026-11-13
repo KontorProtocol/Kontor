@@ -59,6 +59,7 @@ function stubSession(): KontorSession {
     compose: fail,
     composeReveal: fail,
     broadcast: fail,
+    pendingSubmissions: () => [],
   };
   const session = new KontorSession({
     chain: signet,

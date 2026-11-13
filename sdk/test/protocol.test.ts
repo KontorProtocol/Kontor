@@ -93,7 +93,18 @@ test("contextual HTTP simulation releases funding on composition and response fa
   ];
   for (const failure of ["compose", "http", "json", "none"]) {
     const funding = inMemoryFunding(coins);
-    const settle = vi.spyOn(funding, "settle");
+    const reserve = funding.reserve.bind(funding);
+    const settle = vi.fn();
+    vi.spyOn(funding, "reserve").mockImplementation(async () => {
+      const lease = await reserve();
+      return {
+        ...lease,
+        settle: (delta) => {
+          settle(delta);
+          lease.settle(delta);
+        },
+      };
+    });
     const fetch = vi.fn(
       async (url: string | URL | Request, init?: RequestInit) => {
         expect(String(url)).toBe(
@@ -137,12 +148,12 @@ test("contextual HTTP simulation releases funding on composition and response fa
       }
       expect(fetch).toHaveBeenCalledTimes(failure === "compose" ? 0 : 1);
       expect(settle).not.toHaveBeenCalled();
-      const available = await funding.take();
+      const lease = await funding.reserve();
+      const available = lease.utxos;
       expect(available).toEqual(coins);
-      funding.release(available);
+      lease.release();
     } finally {
       compose.mockRestore();
-      settle.mockRestore();
     }
   }
 });
