@@ -1,5 +1,10 @@
 use super::*;
+use crate::bitcoin_client::error::Error as BitcoinError;
 use crate::bitcoin_client::mock::MockBitcoinRpc;
+use crate::bitcoin_client::types::{
+    GetBlockchainInfoResult, GetMempoolInfoResult, GetRawMempoolResult, MempoolEntry,
+    TestMempoolAcceptResult,
+};
 use crate::protocol::coordinator::certified_input::EraContext;
 use crate::protocol::coordinator::linked::PreparedTransaction;
 use crate::protocol::identity::{ChainId, ProtocolId};
@@ -8,9 +13,10 @@ use crate::test_utils::new_numbered_blockchain;
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::serialize;
 use bitcoin::hashes::Hash;
-use bitcoin::{Network, Witness};
+use bitcoin::{Block as BitcoinBlock, Network, Transaction as BitcoinTransaction, Txid, Witness};
 use indexer_types::{Block, Transaction};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn hash(n: u8) -> BlockHash {
     BlockHash::from_byte_array([n; 32])
@@ -275,10 +281,140 @@ fn deliver_blocks_reorg_mid_batch() {
     match deliver_blocks(&mut pending, &mut cache, 1, 4, 10) {
         DeliveryResult::Reorg { mismatch_height } => {
             assert_eq!(mismatch_height, 2);
-            // Block 1 should have been inserted into cache before reorg
-            assert!(cache.get(1).is_some());
+            assert!(
+                cache.get(1).is_none(),
+                "discarded prefix is not delivered history"
+            );
+            assert_eq!(cache.get(0), Some(&hash(0)));
         }
         DeliveryResult::Ok { .. } => panic!("expected reorg"),
+    }
+}
+
+#[test]
+fn mixed_batch_does_not_evict_delivered_history() {
+    let mut cache = BlockHashCache::new(1);
+    cache.insert(100, hash(100));
+    let mut pending = HashMap::from([
+        (101, make_block(101, hash(100)).into()),
+        (102, make_block(102, hash(101)).into()),
+        (103, make_block(103, hash(202)).into()),
+    ]);
+    assert!(matches!(
+        deliver_blocks(&mut pending, &mut cache, 101, 104, 103),
+        DeliveryResult::Reorg {
+            mismatch_height: 103
+        }
+    ));
+    assert_eq!(cache.get(100), Some(&hash(100)));
+    assert_eq!(cache.hashes.len(), 1);
+}
+
+#[derive(Clone)]
+struct MixedBranchRpc {
+    current: MockBitcoinRpc,
+    old: MockBitcoinRpc,
+    old_hash: BlockHash,
+    use_old_hash: Arc<AtomicBool>,
+}
+
+impl BitcoinRpc for MixedBranchRpc {
+    async fn get_blockchain_info(&self) -> Result<GetBlockchainInfoResult, BitcoinError> {
+        self.current.get_blockchain_info().await
+    }
+
+    async fn get_block_hash(&self, height: u64) -> Result<BlockHash, BitcoinError> {
+        if height == 102 && self.use_old_hash.swap(false, Ordering::SeqCst) {
+            Ok(self.old_hash)
+        } else {
+            self.current.get_block_hash(height).await
+        }
+    }
+
+    async fn get_block(&self, hash: &BlockHash) -> Result<BitcoinBlock, BitcoinError> {
+        if *hash == self.old_hash {
+            self.old.get_block(hash).await
+        } else {
+            self.current.get_block(hash).await
+        }
+    }
+
+    async fn get_raw_mempool(&self) -> Result<Vec<Txid>, BitcoinError> {
+        self.current.get_raw_mempool().await
+    }
+    async fn get_raw_mempool_sequence(&self) -> Result<GetRawMempoolResult, BitcoinError> {
+        self.current.get_raw_mempool_sequence().await
+    }
+    async fn get_mempool_entry(&self, txid: &Txid) -> Result<Option<MempoolEntry>, BitcoinError> {
+        self.current.get_mempool_entry(txid).await
+    }
+    async fn get_raw_mempool_verbose(&self) -> Result<HashMap<Txid, MempoolEntry>, BitcoinError> {
+        self.current.get_raw_mempool_verbose().await
+    }
+    async fn get_mempool_info(&self) -> Result<GetMempoolInfoResult, BitcoinError> {
+        self.current.get_mempool_info().await
+    }
+    async fn get_raw_transaction(&self, txid: &Txid) -> Result<BitcoinTransaction, BitcoinError> {
+        self.current.get_raw_transaction(txid).await
+    }
+    async fn get_raw_transactions(
+        &self,
+        txids: &[Txid],
+    ) -> Result<Vec<Result<BitcoinTransaction, BitcoinError>>, BitcoinError> {
+        self.current.get_raw_transactions(txids).await
+    }
+    async fn test_mempool_accept(
+        &self,
+        raw_txs: &[String],
+    ) -> Result<Vec<TestMempoolAcceptResult>, BitcoinError> {
+        self.current.test_mempool_accept(raw_txs).await
+    }
+    async fn send_raw_transaction(&self, raw_hex: &str) -> Result<String, BitcoinError> {
+        self.current.send_raw_transaction(raw_hex).await
+    }
+}
+
+#[tokio::test]
+async fn mixed_catchup_refetches_without_skipping_the_undelivered_prefix() {
+    let blocks = new_numbered_blockchain(103);
+    let mut current = blocks.clone();
+    current[101].hash = hash(202);
+    current[102].hash = hash(203);
+    current[102].prev_hash = hash(202);
+    // A non-empty seed can also lack the configured starting predecessor.
+    for seed in [
+        vec![(100, blocks[99].hash)],
+        vec![],
+        vec![(90, blocks[89].hash)],
+    ] {
+        let rpc = MixedBranchRpc {
+            current: MockBitcoinRpc::new(current.clone()),
+            old: MockBitcoinRpc::new(blocks.clone()),
+            old_hash: blocks[101].hash,
+            use_old_hash: Arc::new(AtomicBool::new(true)),
+        };
+        let (tx, mut rx) = mpsc::channel(1);
+        let handle = tokio::spawn(poll(
+            rpc,
+            tx,
+            101,
+            seed,
+            Arc::new(Notify::new()),
+            fast_config(),
+            3,
+        ));
+        for expected in &current[100..] {
+            let event = timeout(TEST_TIMEOUT, rx.recv()).await.unwrap().unwrap();
+            match event {
+                BlockEvent::BlockInsert { block, .. } => {
+                    assert_eq!(block.height, expected.height);
+                    assert_eq!(block.hash, expected.hash);
+                }
+                other => panic!("undelivered reorg must not emit {other:?}"),
+            }
+        }
+        handle.abort();
+        assert!(handle.await.unwrap_err().is_cancelled());
     }
 }
 

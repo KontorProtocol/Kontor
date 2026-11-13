@@ -135,13 +135,14 @@ fn deliver_blocks(
     tip: u64,
 ) -> DeliveryResult {
     let mut events = Vec::new();
+    let mut previous_hash = cache.get(next_height - 1).copied();
 
     for height in next_height..batch_end {
         let Some(block) = pending.remove(&height) else {
             break;
         };
 
-        if let Some(&expected_prev) = cache.get(height - 1)
+        if let Some(expected_prev) = previous_hash
             && block.prev_hash != expected_prev
         {
             warn!(
@@ -153,11 +154,19 @@ fn deliver_blocks(
             };
         }
 
-        cache.insert(height, block.hash);
+        previous_hash = Some(block.hash);
         events.push(BlockEvent::BlockInsert {
             target_height: tip,
             block,
         });
+    }
+
+    // A mixed-branch batch is discarded as a unit. Its tentative prefix must
+    // not become a fork-search anchor for events the consumer never received.
+    for event in &events {
+        if let BlockEvent::BlockInsert { block, .. } = event {
+            cache.insert(block.height, block.hash);
+        }
     }
 
     DeliveryResult::Ok {
@@ -213,6 +222,9 @@ pub async fn run<C: BitcoinRpc>(
     poll_notify: Arc<Notify>,
     config: PollerConfig,
 ) -> Result<()> {
+    if start_height == 0 {
+        bail!("Bitcoin poller start height must be positive");
+    }
     select! {
         _ = shutdown.cancelled() => {
             info!("Poller cancelled");
@@ -225,6 +237,7 @@ pub async fn run<C: BitcoinRpc>(
             known_hashes,
             poll_notify,
             config,
+            max_concurrent_fetches(),
         ) => result,
     }
 }
@@ -236,10 +249,10 @@ async fn poll<C: BitcoinRpc>(
     known_hashes: Vec<(u64, BlockHash)>,
     poll_notify: Arc<Notify>,
     config: PollerConfig,
+    concurrency: usize,
 ) -> Result<()> {
     let mut cache = BlockHashCache::new(HASH_CACHE_SIZE);
     let mut next_height = start_height;
-    let concurrency = max_concurrent_fetches();
 
     // Seed cache with consumer's known block hashes. This represents
     // the consumer's view of the chain — used to detect reorgs that
@@ -345,7 +358,17 @@ async fn poll<C: BitcoinRpc>(
                 }
             }
             DeliveryResult::Reorg { mismatch_height } => {
-                let fork_height = find_fork_point(&bitcoin, &cache, mismatch_height - 1).await?;
+                let delivered_tip = next_height - 1;
+                // Startup can have no predecessor in the seed. In that case
+                // only this undelivered batch diverged; refetch it from scratch.
+                if cache.get(delivered_tip).is_none() {
+                    continue;
+                }
+                let fork_height = find_fork_point(&bitcoin, &cache, delivered_tip).await?;
+                if fork_height == delivered_tip {
+                    info!(mismatch_height, "Refetching inconsistent undelivered batch");
+                    continue;
+                }
 
                 if !apply_rollback(&mut cache, &mut next_height, fork_height, &event_tx).await {
                     info!("Event channel closed, exiting");
