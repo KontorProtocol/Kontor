@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BinaryHeap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashSet, VecDeque};
 
 use malachitebft_app_channel::app::streaming::{Sequence, StreamId, StreamMessage};
 use malachitebft_app_channel::app::types::PeerId;
@@ -137,24 +137,21 @@ impl ProposalParts {
 // - MAX_PARTS_PER_STREAM caps a SINGLE stream: without it one (peer, stream_id)
 //   could buffer unbounded distinct-sequence parts (a `Fin` whose sequence never
 //   arrives) and grow without limit. A genuine stream needs four.
-// - MAX_BUFFERED_STREAMS caps the whole map. When full it refuses NEW streams
-//   rather than evicting, so a flood cannot displace a stream already being
-//   assembled — including the genuine proposal.
+// - MAX_BUFFERED_STREAMS caps the whole map. A per-publisher stream quota evicts
+//   that publisher's oldest incomplete stream before it can occupy every slot.
 // - MAX_REASSEMBLY_PAYLOAD_BYTES caps retained stream IDs, descriptor/body bytes,
 //   and a conservative fixed allowance for each part's framing and metadata.
 //   Value also retains parsed transactions, and decoding can allocate transient
 //   copies. The raw-payload budget does not include those allocations.
 //
-// Note: a tighter PER-PEER cap (so one flooder cannot occupy the whole map) needs
-// eviction of stale partials to be safe — a plain per-peer ceiling with no
-// eviction lets an honest peer's own stuck partials (a proposer that crashed
-// mid-stream) ratchet up and eventually block its proposals. Safe eviction keyed
-// to round/height is a separate change (an earlier "clear on StartedRound" attempt
-// dropped live parts and stalled consensus). Left as a follow-up; the global cap
-// already bounds memory.
+// Per-publisher eviction does not depend on round transitions: live parts may
+// still arrive after StartedRound, while an abandoned partial must not
+// permanently consume its publisher's admission quota.
 const MAX_PARTS_PER_STREAM: usize = 16;
 const MAX_BUFFERED_STREAMS: usize = 4096;
 const MAX_REASSEMBLY_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+const MAX_STREAMS_PER_PEER: usize = 64;
+const MAX_PEER_REASSEMBLY_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
 const PART_FRAMING_ALLOWANCE_BYTES: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,6 +160,8 @@ pub struct ReassemblySaturated;
 #[derive(Default)]
 pub struct PartStreamsMap {
     streams: BTreeMap<(PeerId, StreamId), StreamState>,
+    peer_streams: BTreeMap<PeerId, VecDeque<StreamId>>,
+    peer_charged_bytes: BTreeMap<PeerId, usize>,
     charged_bytes: usize,
 }
 
@@ -179,6 +178,8 @@ impl PartStreamsMap {
         peer_id: PeerId,
         msg: StreamMessage<ProposalPart>,
     ) -> Result<Option<ProposalParts>, ReassemblySaturated> {
+        // The handler supplies published_by when present, so relays share the
+        // publisher's quota rather than acquiring independent admission slots.
         let key = (peer_id, msg.stream_id.clone());
 
         if let Some(state) = self.streams.get(&key) {
@@ -188,8 +189,6 @@ impl PartStreamsMap {
             if state.seen_sequences.len() >= MAX_PARTS_PER_STREAM {
                 return Err(ReassemblySaturated);
             }
-        } else if self.streams.len() >= MAX_BUFFERED_STREAMS {
-            return Err(ReassemblySaturated);
         }
         if msg.is_fin() && msg.sequence >= MAX_PARTS_PER_STREAM as u64 {
             return Err(ReassemblySaturated);
@@ -207,16 +206,63 @@ impl PartStreamsMap {
             .checked_add(PART_FRAMING_ALLOWANCE_BYTES)
             .and_then(|size| size.checked_add(data_bytes))
             .ok_or(ReassemblySaturated)?;
+        if part_bytes > MAX_PEER_REASSEMBLY_PAYLOAD_BYTES {
+            return Err(ReassemblySaturated);
+        }
+
+        let is_new = !self.streams.contains_key(&key);
+        let mut peer_count = self.peer_streams.get(&peer_id).map_or(0, VecDeque::len);
+        let mut peer_bytes = self.peer_charged_bytes.get(&peer_id).copied().unwrap_or(0);
+        let mut evictions = Vec::new();
+        let mut queue = self.peer_streams.get(&peer_id).into_iter().flatten();
+        while (is_new && peer_count >= MAX_STREAMS_PER_PEER)
+            || peer_bytes
+                .checked_add(part_bytes)
+                .is_none_or(|total| total > MAX_PEER_REASSEMBLY_PAYLOAD_BYTES)
+        {
+            let victim = queue
+                .find(|stream_id| *stream_id != &key.1)
+                .ok_or(ReassemblySaturated)?;
+            let victim_key = (peer_id, victim.clone());
+            let state = self.streams.get(&victim_key).ok_or(ReassemblySaturated)?;
+            peer_bytes -= state.charged_bytes;
+            peer_count -= 1;
+            evictions.push(victim_key);
+        }
+        let released_bytes: usize = evictions
+            .iter()
+            .map(|victim| {
+                self.streams
+                    .get(victim)
+                    .expect("planned victim exists")
+                    .charged_bytes
+            })
+            .sum();
+        if self.streams.len() - evictions.len() + usize::from(is_new) > MAX_BUFFERED_STREAMS {
+            return Err(ReassemblySaturated);
+        }
         let next_bytes = self
             .charged_bytes
-            .checked_add(part_bytes)
+            .checked_sub(released_bytes)
+            .and_then(|total| total.checked_add(part_bytes))
             .filter(|total| *total <= MAX_REASSEMBLY_PAYLOAD_BYTES)
             .ok_or(ReassemblySaturated)?;
+
+        for victim in evictions {
+            self.remove(&victim);
+        }
+        if is_new {
+            self.peer_streams
+                .entry(peer_id)
+                .or_default()
+                .push_back(key.1.clone());
+        }
 
         let state = self.streams.entry(key.clone()).or_default();
         state.seen_sequences.insert(msg.sequence);
         state.charged_bytes += part_bytes;
         self.charged_bytes = next_bytes;
+        *self.peer_charged_bytes.entry(peer_id).or_default() += part_bytes;
 
         let result = state.insert(msg);
 
@@ -236,6 +282,18 @@ impl PartStreamsMap {
             return false;
         };
         self.charged_bytes -= state.charged_bytes;
+        if let Some(bytes) = self.peer_charged_bytes.get_mut(&key.0) {
+            *bytes -= state.charged_bytes;
+            if *bytes == 0 {
+                self.peer_charged_bytes.remove(&key.0);
+            }
+        }
+        if let Some(queue) = self.peer_streams.get_mut(&key.0) {
+            queue.retain(|stream_id| stream_id != &key.1);
+            if queue.is_empty() {
+                self.peer_streams.remove(&key.0);
+            }
+        }
         true
     }
 
@@ -265,6 +323,7 @@ mod tests {
     use malachitebft_app_channel::app::streaming::StreamContent;
     use malachitebft_app_channel::app::types::PeerId;
     use malachitebft_codec::Codec;
+    use std::collections::{BTreeMap, HashSet};
 
     use crate::consensus::codec::ProtobufCodec;
     use crate::consensus::signing::PrivateKey;
@@ -283,6 +342,30 @@ mod tests {
         let mut bytes = vec![0x12u8, 0x20];
         bytes.extend_from_slice(&[seed; 32]);
         PeerId::from_bytes(&bytes).expect("valid sha256 multihash peer id")
+    }
+
+    fn assert_accounting(map: &PartStreamsMap) {
+        let mut expected = BTreeMap::<PeerId, (usize, usize)>::new();
+        for ((peer_id, _), state) in &map.streams {
+            let entry = expected.entry(*peer_id).or_default();
+            entry.0 += 1;
+            entry.1 += state.charged_bytes;
+        }
+        assert_eq!(
+            map.charged_bytes,
+            expected.values().map(|(_, bytes)| bytes).sum::<usize>()
+        );
+        assert_eq!(map.peer_streams.len(), expected.len());
+        assert_eq!(map.peer_charged_bytes.len(), expected.len());
+        for (peer_id, (count, bytes)) in expected {
+            let queue = &map.peer_streams[&peer_id];
+            assert_eq!(queue.len(), count);
+            assert_eq!(queue.iter().collect::<HashSet<_>>().len(), count);
+            assert_eq!(map.peer_charged_bytes[&peer_id], bytes);
+            for stream_id in queue {
+                assert!(map.streams.contains_key(&(peer_id, stream_id.clone())));
+            }
+        }
     }
 
     /// The four stream messages `stream_proposal` emits: Init (seq 0), Data
@@ -452,28 +535,60 @@ mod tests {
     }
 
     #[test]
-    fn global_cap_refuses_new_streams_without_starving_an_in_progress_one() {
+    fn one_peer_cannot_fill_all_stream_slots_or_block_a_second_peer() {
         let mut map = PartStreamsMap::new();
         let p = peer(1);
 
-        // Fill the map with distinct never-completing partial streams.
+        // Older partials from the same peer are replaced at its quota.
         for i in 0..super::MAX_BUFFERED_STREAMS as u32 {
             assert!(map.insert(p, init_only(i)).unwrap().is_none());
         }
-        assert_eq!(map.len(), super::MAX_BUFFERED_STREAMS);
-
-        // A brand-new stream is refused while full — memory is bounded.
-        assert_eq!(map.insert(p, init_only(u32::MAX)), Err(ReassemblySaturated));
-        assert_eq!(map.len(), super::MAX_BUFFERED_STREAMS);
-
-        // ...but a stream already buffered still accepts more parts, so a flood
-        // cannot starve a proposal already being assembled.
-        assert!(map.insert(p, part_at(0, 1)).unwrap().is_none());
-        assert_eq!(
-            map.len(),
-            super::MAX_BUFFERED_STREAMS,
-            "adding a part to an existing stream must not grow the map"
+        assert_eq!(map.len(), super::MAX_STREAMS_PER_PEER);
+        assert!(map.insert(peer(2), init_only(u32::MAX)).unwrap().is_none());
+        assert_eq!(map.len(), super::MAX_STREAMS_PER_PEER + 1);
+        assert!(
+            map.insert(p, part_at(super::MAX_BUFFERED_STREAMS as u32 - 1, 1))
+                .unwrap()
+                .is_none()
         );
+        assert_accounting(&map);
+    }
+
+    #[test]
+    fn global_stream_cap_preserves_existing_streams_across_peers() {
+        let mut map = PartStreamsMap::new();
+        for seed in 1..=64 {
+            for stream_id in 0..super::MAX_STREAMS_PER_PEER as u32 {
+                assert!(
+                    map.insert(peer(seed), init_only(stream_id))
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
+        assert_eq!(map.len(), super::MAX_BUFFERED_STREAMS);
+        assert_eq!(map.insert(peer(65), init_only(0)), Err(ReassemblySaturated));
+        assert!(map.insert(peer(1), part_at(63, 1)).unwrap().is_none());
+        assert_eq!(map.len(), super::MAX_BUFFERED_STREAMS);
+        assert_accounting(&map);
+    }
+
+    #[test]
+    fn one_peer_cannot_fill_all_reassembly_bytes_or_block_a_second_peer() {
+        let mut map = PartStreamsMap::new();
+        let p = peer(1);
+        let streams: Vec<_> = (0..3).map(maximal_messages).collect();
+        for stream in &streams {
+            assert!(map.insert(p, stream[1].clone()).unwrap().is_none());
+        }
+        assert_eq!(map.len(), 2);
+        assert!(
+            !map.streams
+                .contains_key(&(p, streams[0][1].stream_id.clone()))
+        );
+        assert!(map.insert(peer(2), init_only(99)).unwrap().is_none());
+        assert_eq!(map.len(), 3);
+        assert_accounting(&map);
     }
 
     #[test]
@@ -495,7 +610,6 @@ mod tests {
     #[test]
     fn aggregate_payload_bound_preserves_completion_and_rejects_fifth_maximal_stream() {
         let mut map = PartStreamsMap::new();
-        let p = peer(1);
         let streams: Vec<_> = (0..5).map(maximal_messages).collect();
         let data_bytes = streams[0][1]
             .content
@@ -517,32 +631,50 @@ mod tests {
         assert!(charge * 4 <= MAX_REASSEMBLY_PAYLOAD_BYTES);
         assert!(charge * 5 > MAX_REASSEMBLY_PAYLOAD_BYTES);
 
-        for stream in &streams[..4] {
-            assert!(map.insert(p, stream[1].clone()).unwrap().is_none());
+        for (index, stream) in streams[..4].iter().enumerate() {
+            assert!(
+                map.insert(peer(index as u8 + 1), stream[1].clone())
+                    .unwrap()
+                    .is_none()
+            );
         }
         assert_eq!(map.charged_bytes(), charge * 4);
         assert_eq!(map.len(), 4);
         assert_eq!(
-            map.insert(p, streams[4][1].clone()),
+            map.insert(peer(5), streams[4][1].clone()),
             Err(ReassemblySaturated)
         );
         assert_eq!(map.charged_bytes(), charge * 4);
         assert_eq!(map.len(), 4, "refused new stream must leave no empty state");
-        assert!(map.insert(p, streams[0][1].clone()).unwrap().is_none());
+        assert!(
+            map.insert(peer(1), streams[0][1].clone())
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(map.charged_bytes(), charge * 4);
 
         for index in [2, 0] {
-            assert!(map.insert(p, streams[0][index].clone()).unwrap().is_none());
+            assert!(
+                map.insert(peer(1), streams[0][index].clone())
+                    .unwrap()
+                    .is_none()
+            );
         }
         let parts = map
-            .insert(p, streams[0][3].clone())
+            .insert(peer(1), streams[0][3].clone())
             .unwrap()
             .expect("maximal genuine proposal reassembles");
         assert_eq!(parts.data().unwrap().size_bytes(), data_bytes);
         assert_eq!(map.charged_bytes(), charge * 3);
         assert_eq!(map.len(), 3);
-        assert!(map.insert(p, streams[4][1].clone()).unwrap().is_none());
+        assert_accounting(&map);
+        assert!(
+            map.insert(peer(5), streams[4][1].clone())
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(map.charged_bytes(), charge * 4);
+        assert_accounting(&map);
     }
 
     #[test]
@@ -562,20 +694,19 @@ mod tests {
         assert!(map.insert(p, data.clone()).unwrap().is_none());
         assert_eq!(map.charged_bytes(), charge);
 
-        for sequence in 2..=4 {
-            data.sequence = sequence;
-            assert!(map.insert(p, data.clone()).unwrap().is_none());
-        }
-        assert_eq!(map.charged_bytes(), charge * 4);
-        data.sequence = 5;
+        data.sequence = 2;
+        assert!(map.insert(p, data.clone()).unwrap().is_none());
+        assert_eq!(map.charged_bytes(), charge * 2);
+        data.sequence = 3;
         assert_eq!(map.insert(p, data.clone()), Err(ReassemblySaturated));
-        assert_eq!(map.charged_bytes(), charge * 4);
+        assert_eq!(map.charged_bytes(), charge * 2);
         assert!(map.discard(p, &stream_id));
         assert!(!map.discard(p, &stream_id));
         assert_eq!(map.charged_bytes(), 0);
         assert_eq!(map.len(), 0);
         assert!(map.insert(p, data).unwrap().is_none());
         assert_eq!(map.charged_bytes(), charge);
+        assert_accounting(&map);
     }
 
     #[test]
@@ -583,25 +714,27 @@ mod tests {
         const ID_BYTES: usize = 1024 * 1024;
 
         let mut map = PartStreamsMap::new();
-        let p = peer(1);
         for seed in 0..15u8 {
             let mut msg = init_only(seed as u32);
             msg.stream_id = StreamId::new(vec![seed; ID_BYTES].into());
-            assert!(map.insert(p, msg).unwrap().is_none());
+            assert!(map.insert(peer(seed + 1), msg).unwrap().is_none());
         }
         let charge = ID_BYTES + PART_FRAMING_ALLOWANCE_BYTES;
         assert_eq!(map.charged_bytes(), 15 * charge);
         let mut refused = init_only(16);
         refused.stream_id = StreamId::new(vec![16; ID_BYTES].into());
-        assert_eq!(map.insert(p, refused.clone()), Err(ReassemblySaturated));
+        assert_eq!(
+            map.insert(peer(16), refused.clone()),
+            Err(ReassemblySaturated)
+        );
         assert_eq!(map.len(), 15);
         assert_eq!(map.charged_bytes(), 15 * charge);
 
         let mut first = init_only(0);
         first.stream_id = StreamId::new(vec![0; ID_BYTES].into());
-        assert!(map.discard(p, &first.stream_id));
+        assert!(map.discard(peer(1), &first.stream_id));
         assert_eq!(map.charged_bytes(), 14 * charge);
-        assert!(map.insert(p, refused).unwrap().is_none());
+        assert!(map.insert(peer(16), refused).unwrap().is_none());
         assert_eq!(map.charged_bytes(), 15 * charge);
     }
 
