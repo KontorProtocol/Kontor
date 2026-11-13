@@ -119,6 +119,7 @@ use libsql::Connection;
 use execution::ExecutionContext;
 use executor::Executor;
 use mempool::MempoolPreparation;
+use mempool_fee_index::FeeProjection;
 
 /// High-water mark on `consensus_state::pending_blocks`: the reactor stops
 /// draining `block_rx` once this many blocks are buffered ahead of consensus,
@@ -188,7 +189,7 @@ pub(crate) struct Reactor<E: Executor> {
     /// periodic tick starts one from a snapshot rather than projecting inline;
     /// its result is applied when this completes. `None` when idle — one at a
     /// time, so a slow projection never queues behind itself.
-    fee_recompute: Option<tokio::task::JoinHandle<Fees>>,
+    fee_recompute: Option<JoinHandle<FeeProjection>>,
     mempool_preparation: Option<MempoolPreparation>,
 }
 
@@ -566,8 +567,7 @@ impl<E: Executor> Reactor<E> {
                             self.mempool_preparation = Some(MempoolPreparation {
                                 result: self.execution.executor.parse_mempool(&self.execution.recognizer, &selection, transactions), selection,
                             });
-                            self.consensus.mempool_fee_index.replace(fees, mempool_min_fee_sat_per_vb);
-                            self.consensus.mempool_fee_index.recompute();
+                            self.consensus.mempool_fee_index.sync(fees, mempool_min_fee_sat_per_vb);
                             info!("MempoolSync: recognition started");
                             if self.consensus.pending_proposal.is_some() {
                                 debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
@@ -702,28 +702,25 @@ impl<E: Executor> Reactor<E> {
                     // Project OFF the loop: at mainnet mempool sizes the
                     // projection is tens to hundreds of ms, and running it inline
                     // here stalls every Malachite reply, block, and finality check
-                    // for that long every 2s. One job at a time — a mutation
-                    // arriving mid-projection re-sets `dirty` and the next tick
-                    // re-runs. The Sync arm and startup still recompute inline:
+                    // for that long every 2s. One job at a time; a mutation
+                    // arriving mid-projection leaves a newer revision pending.
+                    // The Sync arm and startup still recompute inline:
                     // they are infrequent and must establish the fresh threshold
                     // synchronously before the node reports available.
                     if self.fee_recompute.is_none()
-                        && self.consensus.mempool_fee_index.take_dirty()
+                        && let Some(input) = self.consensus.mempool_fee_index.snapshot_if_needed()
                     {
-                        let (entries, min) = self.consensus.mempool_fee_index.snapshot();
-                        self.fee_recompute = Some(tokio::task::spawn_blocking(move || {
-                            mempool_fee_index::project_fees(&entries, min)
-                        }));
+                        self.fee_recompute = Some(tokio::task::spawn_blocking(move || input.compute()));
                     }
                 }
                 result = fee_recompute => {
                     self.fee_recompute = None;
                     match result {
-                        Ok(fees) => self.consensus.mempool_fee_index.store_recomputed(fees),
+                        Ok(projection) => self.consensus.mempool_fee_index.apply_projection(projection),
                         // The blocking task panicked or was cancelled. It carries
                         // no state — the cached fees simply stay put and the next
                         // tick re-projects — so log and move on rather than exit.
-                        Err(e) => warn!(error = %e, "Fee projection task failed; keeping the last fees"),
+                        Err(e) => warn!(error = %e, "Fee projection task failed; keeping the last fees and retrying pending input on the next tick"),
                     }
                 }
             }
@@ -1102,7 +1099,7 @@ pub fn run(
                 // its startup snapshot — anything else here means a bug.
                 let mut mempool_rx = mempool_rx;
                 // The index owns the fee watch sender — every
-                // `recompute()` publishes automatically, so the call
+                // `sync()` publishes automatically, so the call
                 // sites in the reactor don't have to remember to.
                 let mut fee_index = mempool_fee_index::MempoolFeeIndex::new(fee_tx);
                 info!("Waiting for initial mempool sync before starting consensus");
@@ -1119,7 +1116,7 @@ pub fn run(
                                 fees,
                                 mempool_min_fee_sat_per_vb,
                             }) => {
-                                fee_index.replace(fees, mempool_min_fee_sat_per_vb);
+                                fee_index.sync(fees, mempool_min_fee_sat_per_vb);
                                 info!(
                                     "Initial mempool sync complete: {} raw txs, {} fee entries",
                                     transactions.len(),
@@ -1142,16 +1139,6 @@ pub fn run(
                         }
                     }
                 };
-
-                // Compute the first projection from the freshly-synced
-                // index, *before* anything signals readiness.
-                // `recompute()` populates the cache, clears the dirty
-                // flag, and publishes via the index's owned watch
-                // sender — establishing the invariant that by the time
-                // `available = true`, the watch channel carries real
-                // bitcoind-derived data (never the `Fees::floor(1)`
-                // placeholder).
-                fee_index.recompute();
 
                 let selection = execution.select_executor(ApplicationPosition::Preparation {
                     anchor_height: execution.last_height, anchor_hash: execution.last_hash,

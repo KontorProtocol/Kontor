@@ -33,16 +33,11 @@ pub struct MempoolFeeIndex {
     /// Bitcoin's dynamic mempool purge floor, in sat/vB. Any estimate
     /// below this would be rejected by `sendrawtransaction` anyway, so
     /// `optimize_median_fee` floors at this value for coherence with
-    /// Bitcoin Core. Updated together with `entries` via `replace`.
+    /// Bitcoin Core. Updated together with `entries` via `sync`.
     mempool_min_fee_sat_per_vb: u64,
-    /// Set by every mutating call; cleared by `recompute()`. Gates the
-    /// reactor's periodic publish so we skip work when nothing has
-    /// changed.
-    dirty: bool,
-    /// Most recent fee tier snapshot — written by `recompute()`, read by
-    /// consensus (`compute_fee_threshold`) and the API. Initial /
-    /// post-`replace` value is `Fees::floor(min_fee)` so readers never
-    /// see a value below the current floor.
+    input_revision: u64,
+    applied_revision: u64,
+    /// A projection may lag ordinary deltas, but never a completed full Sync.
     fees: Fees,
     /// Optional sink for the fee snapshot. When set, every `recompute()`
     /// publishes the new value here in addition to caching it locally.
@@ -52,12 +47,33 @@ pub struct MempoolFeeIndex {
     fee_tx: Option<watch::Sender<Fees>>,
 }
 
+pub struct FeeProjectionInput {
+    revision: u64,
+    entries: HashMap<Txid, MempoolEntry>,
+    min_fee: u64,
+}
+
+pub struct FeeProjection {
+    revision: u64,
+    fees: Fees,
+}
+
+impl FeeProjectionInput {
+    pub fn compute(self) -> FeeProjection {
+        FeeProjection {
+            revision: self.revision,
+            fees: project_fees(&self.entries, self.min_fee),
+        }
+    }
+}
+
 impl MempoolFeeIndex {
     pub fn new(fee_tx: Option<watch::Sender<Fees>>) -> Self {
         Self {
             entries: HashMap::new(),
             mempool_min_fee_sat_per_vb: 1,
-            dirty: false,
+            input_revision: 0,
+            applied_revision: 0,
             fees: Fees::floor(1),
             fee_tx,
         }
@@ -65,34 +81,31 @@ impl MempoolFeeIndex {
 
     pub fn insert(&mut self, txid: Txid, entry: MempoolEntry) {
         self.entries.insert(txid, entry);
-        self.dirty = true;
+        self.advance_revision();
     }
 
     pub fn remove(&mut self, txid: &Txid) {
         if self.entries.remove(txid).is_some() {
-            self.dirty = true;
+            self.advance_revision();
         }
     }
 
     /// Atomic full-snapshot replacement, paired with the dynamic
     /// mempool minimum fee from the same `getmempoolinfo` snapshot.
-    /// Always called together (from the listener's `MempoolEvent::Sync`
-    /// handler) so collapsing them removes a class of "min_fee got out
-    /// of sync with entries" bugs. Resets cached `fees` to the new
-    /// floor; the next tick recomputes real values.
-    pub fn replace(&mut self, entries: HashMap<Txid, MempoolEntry>, min_fee_sat_per_vb: u64) {
-        let new_min = min_fee_sat_per_vb.max(1);
+    /// Publishing before returning invalidates older off-loop results and keeps
+    /// the cached projection and watch channel aligned with the new floor.
+    pub fn sync(&mut self, entries: HashMap<Txid, MempoolEntry>, min_fee_sat_per_vb: u64) {
         self.entries = entries;
-        self.mempool_min_fee_sat_per_vb = new_min;
-        self.fees = Fees::floor(new_min);
-        self.dirty = true;
+        self.mempool_min_fee_sat_per_vb = min_fee_sat_per_vb.max(1);
+        self.advance_revision();
+        self.recompute();
     }
 
-    /// Returns whether the index has been mutated since the last call,
-    /// then clears the flag. Use from a periodic publisher to skip the
-    /// recompute when nothing has changed.
-    pub fn take_dirty(&mut self) -> bool {
-        std::mem::take(&mut self.dirty)
+    fn advance_revision(&mut self) {
+        self.input_revision = self
+            .input_revision
+            .checked_add(1)
+            .expect("fee revision exhausted");
     }
 
     pub fn len(&self) -> usize {
@@ -107,8 +120,7 @@ impl MempoolFeeIndex {
         self.mempool_min_fee_sat_per_vb
     }
 
-    /// Most recent fee tier snapshot. **Does not trigger a recompute** —
-    /// the reactor's tick is the only producer.
+    /// Most recent fee tier snapshot. Does not trigger a recompute.
     pub fn fees(&self) -> Fees {
         self.fees
     }
@@ -125,14 +137,12 @@ impl MempoolFeeIndex {
         self.fees.hour
     }
 
-    /// Recompute all three fee tiers from the current `entries`, cache
-    /// them in `fees`, publish via `fee_tx` if set, and return the new
-    /// snapshot. Always clears `dirty` — the next periodic tick will
-    /// skip until a new mutation arrives.
-    pub fn recompute(&mut self) -> Fees {
+    fn recompute(&mut self) -> Fees {
         let fees = project_fees(&self.entries, self.mempool_min_fee_sat_per_vb);
-        self.dirty = false;
-        self.store_recomputed(fees);
+        self.apply_projection(FeeProjection {
+            revision: self.input_revision,
+            fees,
+        });
         fees
     }
 
@@ -141,18 +151,24 @@ impl MempoolFeeIndex {
     /// memcpy; the projection it enables — a topological sort with a per-tx
     /// ancestor-set union — is the expensive part (tens to hundreds of ms at
     /// mainnet scale) and is what must not run inline on the consensus thread.
-    /// The caller clears `dirty` (via `take_dirty`) when it decides to start the
-    /// off-loop compute, so a mutation arriving DURING it re-sets the flag and
-    /// the next tick re-runs.
-    pub fn snapshot(&self) -> (HashMap<Txid, MempoolEntry>, u64) {
-        (self.entries.clone(), self.mempool_min_fee_sat_per_vb)
+    /// Taking a snapshot does not acknowledge progress: a failed task remains
+    /// eligible for retry without requiring another mempool mutation.
+    pub fn snapshot_if_needed(&self) -> Option<FeeProjectionInput> {
+        (self.input_revision > self.applied_revision).then(|| FeeProjectionInput {
+            revision: self.input_revision,
+            entries: self.entries.clone(),
+            min_fee: self.mempool_min_fee_sat_per_vb,
+        })
     }
 
-    /// Cache and publish fees computed off-loop from `snapshot`, exactly as
-    /// `recompute` would — but leaving `dirty` alone (the caller already
-    /// cleared it when it started the off-loop job).
-    pub fn store_recomputed(&mut self, fees: Fees) {
-        self.fees = fees;
+    pub fn apply_projection(&mut self, projection: FeeProjection) {
+        if projection.revision <= self.applied_revision {
+            return;
+        }
+        // Accept intermediate delta snapshots so a busy mempool cannot starve
+        // publication. A newer input revision still schedules the next compute.
+        self.applied_revision = projection.revision;
+        self.fees = projection.fees;
         if let Some(tx) = &self.fee_tx {
             // Errors only when all receivers are dropped — fine, the
             // reactor keeps running.
@@ -198,7 +214,7 @@ impl ProjectedBlock {
 
 /// Project the three fee tiers from a mempool snapshot. Pure — no `self`, no
 /// I/O — so it can run on a blocking thread. This is the expensive body of
-/// `recompute`, lifted out for [`MempoolFeeIndex::snapshot`].
+/// `recompute`, lifted out for [`MempoolFeeIndex::snapshot_if_needed`].
 pub fn project_fees(entries: &HashMap<Txid, MempoolEntry>, min: u64) -> Fees {
     let blocks = block_projection::project_blocks(entries, 4);
     let fastest = optimize_median_fee(blocks.first(), blocks.get(1), None, min);
@@ -301,7 +317,7 @@ mod tests {
     #[test]
     fn empty_mempool_returns_min_fee() {
         let mut idx = MempoolFeeIndex::new(None);
-        idx.replace(HashMap::new(), 5);
+        idx.sync(HashMap::new(), 5);
         let fastest = idx.recompute().fastest;
         assert_eq!(fastest, 5);
     }
@@ -309,7 +325,7 @@ mod tests {
     #[test]
     fn half_empty_block_returns_min_fee() {
         let mut idx = MempoolFeeIndex::new(None);
-        idx.replace(HashMap::new(), 3);
+        idx.sync(HashMap::new(), 3);
         // 100 txs of ~1000 vB each = 100k vB total (far below HALF_BLOCK).
         for n in 0..100u8 {
             idx.insert(txid(n), entry(10_000 /* 10 sat/vB × 1000 */, 1_000, vec![]));
@@ -418,37 +434,79 @@ mod tests {
     }
 
     #[test]
-    fn dirty_flag_tracks_mutations() {
-        // The reactor's periodic publish gates on `take_dirty()` —
-        // every mutation must mark the index dirty so the next tick
-        // picks up the change.
+    fn successful_projection_acknowledges_mutations() {
         let mut idx = MempoolFeeIndex::new(None);
-        assert!(!idx.take_dirty(), "fresh index is clean");
-        assert!(!idx.take_dirty(), "take_dirty clears the flag");
-
-        // insert always dirties.
+        assert!(idx.snapshot_if_needed().is_none());
         let id = txid(1);
         idx.insert(id, entry(100, 100, vec![]));
-        assert!(idx.take_dirty(), "insert must dirty");
-
-        // remove of a present entry dirties.
+        let input = idx.snapshot_if_needed().unwrap();
+        idx.apply_projection(input.compute());
+        assert!(idx.snapshot_if_needed().is_none());
         idx.remove(&id);
-        assert!(idx.take_dirty(), "remove of present entry must dirty");
-
-        // remove of a missing entry is a no-op.
+        let input = idx.snapshot_if_needed().unwrap();
+        idx.apply_projection(input.compute());
         idx.remove(&txid(99));
-        assert!(
-            !idx.take_dirty(),
-            "remove of missing entry should not dirty"
-        );
-
-        // replace always dirties.
-        idx.replace(HashMap::new(), 5);
-        assert!(idx.take_dirty(), "replace must dirty");
+        assert!(idx.snapshot_if_needed().is_none());
     }
 
     #[test]
-    fn replace_wipes_previous_state() {
+    fn sync_supersedes_in_flight_projection_in_either_completion_order() {
+        for complete_before_sync in [false, true] {
+            let (tx, mut rx) = watch::channel(Fees::floor(1));
+            let mut idx = MempoolFeeIndex::new(Some(tx));
+            idx.insert(txid(1), entry(20_000_000, 1_000_000, vec![]));
+            let projection = idx.snapshot_if_needed().unwrap().compute();
+            assert!(projection.fees.fastest > 5);
+            if complete_before_sync {
+                idx.apply_projection(projection);
+                idx.sync(HashMap::new(), 5);
+            } else {
+                idx.sync(HashMap::new(), 5);
+                assert_eq!(*rx.borrow_and_update(), Fees::floor(5));
+                idx.apply_projection(projection);
+                assert!(!rx.has_changed().unwrap(), "stale result must not publish");
+            }
+            assert_eq!(idx.fees(), Fees::floor(5));
+            assert_eq!(*rx.borrow(), idx.fees());
+            assert_eq!(idx.min_fee(), 5);
+            assert!(idx.snapshot_if_needed().is_none());
+        }
+    }
+
+    #[test]
+    fn continuous_deltas_publish_intermediate_results_without_losing_pending_work() {
+        let (tx, mut rx) = watch::channel(Fees::floor(1));
+        let mut idx = MempoolFeeIndex::new(Some(tx));
+        idx.insert(txid(1), entry(10_000_000, 1_000_000, vec![]));
+        for rate in 11..16 {
+            let input = idx.snapshot_if_needed().unwrap();
+            idx.insert(txid(1), entry(rate * 1_000_000, 1_000_000, vec![]));
+            idx.apply_projection(input.compute());
+            assert_eq!(idx.fastest_fee(), rate - 1);
+            assert!(rx.has_changed().unwrap());
+            assert_eq!(*rx.borrow_and_update(), idx.fees());
+            assert!(idx.snapshot_if_needed().is_some());
+        }
+        let input = idx.snapshot_if_needed().unwrap();
+        idx.apply_projection(input.compute());
+        assert_eq!(idx.fastest_fee(), 15);
+        assert!(idx.snapshot_if_needed().is_none());
+    }
+
+    #[test]
+    fn failed_computation_can_retry_without_another_mutation() {
+        let mut idx = MempoolFeeIndex::new(None);
+        idx.insert(txid(1), entry(10_000_000, 1_000_000, vec![]));
+        // A task that exits without a result must not acknowledge its input.
+        drop(idx.snapshot_if_needed().unwrap());
+        let retry = idx.snapshot_if_needed().unwrap();
+        idx.apply_projection(retry.compute());
+        assert_eq!(idx.fastest_fee(), 10);
+        assert!(idx.snapshot_if_needed().is_none());
+    }
+
+    #[test]
+    fn sync_wipes_previous_state_and_publishes_current_floor() {
         let mut idx = MempoolFeeIndex::new(None);
         idx.insert(txid(1), entry(100, 100, vec![]));
         idx.insert(txid(2), entry(200, 100, vec![]));
@@ -456,10 +514,9 @@ mod tests {
 
         let mut replacement = HashMap::new();
         replacement.insert(txid(3), entry(300, 100, vec![]));
-        idx.replace(replacement, 5);
+        idx.sync(replacement, 5);
         assert_eq!(idx.len(), 1);
         assert_eq!(idx.min_fee(), 5);
-        // `replace` resets the cached fee tiers to the new floor.
         assert_eq!(idx.fees().fastest, 5);
         assert_eq!(idx.fees().half_hour, 5);
         assert_eq!(idx.fees().hour, 5);
