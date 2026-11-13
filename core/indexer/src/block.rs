@@ -193,7 +193,32 @@ mod tests {
     }
 
     #[test]
-    fn filter_map_rejects_wrong_marker() {
+    fn filter_map_rejects_wrong_and_draft_markers() {
+        let xonly = random_xonly();
+        let payload = serialize(&Insts::single(Inst {
+            gas_limit: 10_000,
+            kind: InstKind::Issuance,
+        }))
+        .expect("serialize");
+        for marker in [b"kor".as_slice(), b"kon2".as_slice()] {
+            let tap_script = Builder::new()
+                .push_slice(xonly.serialize())
+                .push_opcode(OP_CHECKSIG)
+                .push_opcode(OP_FALSE)
+                .push_opcode(OP_IF)
+                .push_slice(PushBytesBuf::try_from(marker.to_vec()).expect("marker"))
+                .push_slice(TEST_AMOUNT.to_be_bytes())
+                .push_slice(Network::Regtest.magic().to_bytes())
+                .push_slice(PushBytesBuf::try_from(payload.clone()).expect("pushbytes"))
+                .push_opcode(OP_ENDIF)
+                .into_script();
+            let tx = tx_with_taproot_script_witness(tap_script, xonly, None);
+            assert!(filter_map((0, tx)).is_none());
+        }
+    }
+
+    #[test]
+    fn filter_map_rejects_old_layout_with_launch_marker() {
         let xonly = random_xonly();
         let payload = serialize(&Insts::single(Inst {
             gas_limit: 10_000,
@@ -205,13 +230,14 @@ mod tests {
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
-            .push_slice(b"kor2")
-            .push_slice(TEST_AMOUNT.to_be_bytes())
-            .push_slice(Network::Regtest.magic().to_bytes())
+            .push_slice(b"kon")
+            .push_opcode(OP_0)
             .push_slice(PushBytesBuf::try_from(payload).expect("pushbytes"))
             .push_opcode(OP_ENDIF)
             .into_script();
         let tx = tx_with_taproot_script_witness(tap_script, xonly, None);
+
+        // The marker alone cannot authorize the old leaf without amount and network.
         assert!(filter_map((0, tx)).is_none());
     }
 
@@ -228,7 +254,7 @@ mod tests {
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
-            .push_slice(b"kon2")
+            .push_slice(b"kon")
             .push_slice(TEST_AMOUNT.to_be_bytes())
             .push_slice(Network::Regtest.magic().to_bytes())
             .push_slice(PushBytesBuf::try_from(payload).expect("pushbytes"))
@@ -261,7 +287,7 @@ mod tests {
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
-            .push_slice(b"kon2")
+            .push_slice(b"kon")
             .push_slice(TEST_AMOUNT.to_be_bytes())
             .push_slice(Network::Regtest.magic().to_bytes())
             .push_slice(PushBytesBuf::try_from(p0.to_vec()).expect("pushbytes"))
@@ -300,7 +326,7 @@ mod tests {
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
-            .push_slice(b"kon2")
+            .push_slice(b"kon")
             .push_slice(TEST_AMOUNT.to_be_bytes())
             .push_slice(Network::Regtest.magic().to_bytes())
             .push_slice(PushBytesBuf::try_from(payload).expect("pushbytes"))
@@ -324,7 +350,7 @@ mod tests {
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
-            .push_slice(b"kon2")
+            .push_slice(b"kon")
             .push_slice(TEST_AMOUNT.to_be_bytes())
             .push_slice(Network::Regtest.magic().to_bytes())
             .push_slice(PushBytesBuf::try_from(payload).expect("pushbytes"))

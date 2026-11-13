@@ -62,7 +62,7 @@ generator rejects a changed pin pair until that overlay is reviewed again.
 links only P1. `--node-qualification` explicitly selects `managed-node`, adding
 the generated P2. Only that feature enables successor registration, discovery
 and activation. `tools/kontor qualify-node` selects it automatically. The SDK
-targets the `kon2` launch transaction format in both P1 and qualification P2.
+targets the `kon` launch transaction format in both P1 and qualification P2.
 Direct and aggregate publisher inputs require signed operation consent, and
 the SDK validates composed transactions before signing. Marketplace sellers use
 `SINGLE|ANYONECANPAY` with a bound Sponsor, while ordinary participants use

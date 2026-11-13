@@ -1,9 +1,9 @@
 # SDK changes
 
-## 0.3.0-rc.7
+## Unreleased
 
-This prerelease changes direct transaction signing to the amount- and
-network-bound `kon2` TapScript leaf. Script-path signers must support
+The launch format changes direct transaction signing to the amount- and
+network-bound `kon` TapScript leaf. Script-path signers must support
 `ALL|ANYONECANPAY` (0x81), and marketplace seller signatures use
 `SINGLE|ANYONECANPAY` (0x83) with a bound Sponsor. The SDK verifies composer
 responses and returned signatures before broadcast. Custom callers of
@@ -12,6 +12,8 @@ UTXOs when a Build participant uses funding `Ids`; Existing and fully Resolved
 requests may pass `undefined`. Wallet adapters must preserve the requested
 per-input sighash. Test a browser wallet's 0x81 and mixed-input support before
 using it for funded submissions.
+
+## 0.3.0-rc.7
 
 Protocol upgrades add `session.getProtocol()` and contextual simulation helpers
 that report the exact protocol and canonical execution context selected for the

@@ -32,7 +32,7 @@ const MAX_OP_RETURN_BYTES: usize = 80; // Standard policy
 const MIN_ENVELOPE_SATS: u64 = 330; // P2TR dust floor
 const MAX_UTXOS_PER_PARTICIPANT: usize = 64; // Hard cap per participant
 const P2TR_OUTPUT_SIZE: usize = 34; // P2TR script pubkey size in bytes
-const PROTOCOL_TAG: &[u8; 4] = b"kon2";
+const PROTOCOL_TAG: &[u8; 3] = b"kon";
 const MAX_MONEY_SATS: u64 = 2_100_000_000_000_000;
 
 pub fn compose_reveal(reveal: Reveal, network: Network) -> Result<RevealOutputs> {

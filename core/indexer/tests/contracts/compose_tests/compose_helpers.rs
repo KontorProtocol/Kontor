@@ -450,7 +450,7 @@ pub async fn test_build_tap_script_and_script_address_multi_push_and_structure(
             || matches!(instructions[2], Instruction::PushBytes(pb) if pb.as_bytes().is_empty())
     );
     assert!(matches!(instructions[3], Instruction::Op(op) if op == OP_IF));
-    assert!(matches!(instructions[4], Instruction::PushBytes(pb) if pb.as_bytes() == b"kon2"));
+    assert!(matches!(instructions[4], Instruction::PushBytes(pb) if pb.as_bytes() == b"kon"));
     assert!(
         matches!(instructions[5], Instruction::PushBytes(pb) if pb.as_bytes() == 1000u64.to_be_bytes())
     );

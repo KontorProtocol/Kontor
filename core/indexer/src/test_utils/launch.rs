@@ -25,7 +25,7 @@ pub fn launch_tap_script(
         .push_opcode(OP_CHECKSIG)
         .push_opcode(OP_FALSE)
         .push_opcode(OP_IF)
-        .push_slice(b"kon2")
+        .push_slice(b"kon")
         .push_slice(amount.to_be_bytes())
         .push_slice(network.magic().to_bytes());
     for chunk in serialize(instructions)?.chunks(520) {

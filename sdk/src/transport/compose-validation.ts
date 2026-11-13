@@ -20,7 +20,7 @@ import type { Utxo } from "../json-codec.js";
 
 const DUST_SATS = 330n;
 const DEFAULT_MAX_FEE_RATE = 100;
-const FORMAT_TAG = new Uint8Array([0x6b, 0x6f, 0x6e, 0x32]);
+const FORMAT_TAG = new Uint8Array([0x6b, 0x6f, 0x6e]);
 const MAX_MONEY_SATS = 2_100_000_000_000_000n;
 type SponsorFields = Extract<
   InstKind,
@@ -29,7 +29,7 @@ type SponsorFields = Extract<
 
 function amountBytes(amount: bigint): Uint8Array {
   if (amount < 0n || amount > MAX_MONEY_SATS)
-    reject("invalid format-2 previous-output amount");
+    reject("invalid launch previous-output amount");
   const bytes = new Uint8Array(8);
   let remaining = amount;
   for (let index = 7; index >= 0; index--) {

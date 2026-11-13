@@ -42,7 +42,7 @@ function scriptpathPsbt(account: LocalKey, sighashType: number): Uint8Array {
     "CHECKSIG",
     "OP_0",
     "IF",
-    new Uint8Array([0x6b, 0x6f, 0x6e, 0x32]),
+    new Uint8Array([0x6b, 0x6f, 0x6e]),
     new Uint8Array(8),
     hex.decode(signet.bitcoinNetworkMagic!),
     new Uint8Array([1]),

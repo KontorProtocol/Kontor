@@ -55,7 +55,7 @@ pub(crate) fn raw_transaction_at_with_lock_time(
         .push_opcode(OP_CHECKSIG)
         .push_opcode(OP_FALSE)
         .push_opcode(OP_IF)
-        .push_slice(b"kon2")
+        .push_slice(b"kon")
         .push_slice(amount.to_be_bytes())
         .push_slice(Network::Regtest.magic().to_bytes());
     for chunk in serialize(&instructions)?.chunks(520) {

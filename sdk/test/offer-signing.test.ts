@@ -28,7 +28,7 @@ function fixture() {
     "CHECKSIG",
     "OP_0",
     "IF",
-    new Uint8Array([0x6b, 0x6f, 0x6e, 0x32]),
+    new Uint8Array([0x6b, 0x6f, 0x6e]),
     amountBytes,
     hex.decode(signet.bitcoinNetworkMagic!),
     new Uint8Array([1]),

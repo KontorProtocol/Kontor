@@ -11,7 +11,7 @@ use bitcoin::{
 };
 use indexer_types::{Input, InstKind, Insts, deserialize};
 
-const FORMAT_TAG: &[u8] = b"kon2";
+const FORMAT_TAG: &[u8] = b"kon";
 const MAX_LEAF_BYTES: usize = 387 * 1024;
 const MAX_MONEY_SATS: u64 = 2_100_000_000_000_000;
 
