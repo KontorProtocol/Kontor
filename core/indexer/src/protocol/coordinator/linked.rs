@@ -3,7 +3,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Error, Result, anyhow, ensure};
+use anyhow::{Context, Error, Result, anyhow, ensure};
 #[cfg(any(test, feature = "protocol-qualification"))]
 use bitcoin::Transaction as BitcoinTransaction;
 #[cfg(any(test, feature = "protocol-qualification"))]
@@ -772,7 +772,7 @@ impl PreparedTransaction {
             batchable,
             inputs,
             raw_outpoints: Vec::new(),
-            wtxid: None,
+            wtxid: Some(Wtxid::all_zeros()),
         }
     }
 }
@@ -812,11 +812,10 @@ pub(crate) async fn execute_transaction(
 ) -> Result<Vec<Vec<Option<String>>>> {
     selection.ensure_runtime(network, session.origin())?;
     selection.execution_height(network)?;
-    ensure!(
-        transaction.wtxid.is_some() || cfg!(test),
-        "raw Bitcoin authorization metadata unavailable"
-    );
-    if let Some(wtxid) = transaction.wtxid {
+    if !selection.is_simulation() {
+        let wtxid = transaction
+            .wtxid
+            .context("raw Bitcoin authorization metadata unavailable")?;
         reserve_transaction_outpoints(&session.conn, &transaction.raw_outpoints, wtxid, tx_id)
             .await?;
     }

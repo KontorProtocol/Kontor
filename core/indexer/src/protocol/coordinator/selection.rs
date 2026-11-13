@@ -404,6 +404,10 @@ impl ExecutionSelection {
         Ok(selected_height)
     }
 
+    pub(crate) fn is_simulation(&self) -> bool {
+        matches!(self.position, ApplicationPosition::Simulation { .. })
+    }
+
     pub(crate) fn ensure_block_execution(
         &self,
         network: Network,
