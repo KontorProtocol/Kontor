@@ -749,15 +749,8 @@ impl Runtime {
                     remaining_fuel: fuel_limit,
                 });
             }
-            self.invoke_unsettled(
-                address,
-                Some(signer),
-                Some(payment),
-                "init()",
-                fuel_limit,
-                false,
-            )
-            .await
+            self.invoke_publication_init(address, signer, payment, contract_id, fuel_limit)
+                .await
         }
         .await;
         if outcome.as_ref().is_ok_and(|outcome| outcome.result.is_ok()) {
