@@ -82,7 +82,7 @@ pub(crate) fn records_result(contract_id: u64, function: &str) -> bool {
 // This identity covers only the initial native set, not the Bitcoin network,
 // validator committee or sigma-min configuration.
 pub(crate) const NATIVE_GENESIS_ID: &str =
-    "1770b1018bc787d97f1f93fbe058e516c0d9bb291d12c98840e9bd9f29af3e6f";
+    "e4161e93c25aad1e2198eb1905934f04de2af91ca4a40512d0e51b68f6287a3d";
 pub(crate) const NATIVE_PROVENANCE: &[u8] = include_bytes!("native/provenance.bin");
 const MANIFEST: &[u8] = include_bytes!("native/manifest.json");
 const METADATA: &[(&str, &[u8])] = &[
