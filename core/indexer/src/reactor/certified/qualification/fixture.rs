@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use bitcoin::absolute::LockTime;
+use bitcoin::hashes::Hash;
 use bitcoin::opcodes::{
     OP_FALSE,
     all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
@@ -9,7 +10,7 @@ use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::transaction::Version;
 use bitcoin::{
-    Amount, Network, OutPoint, ScriptBuf, Sequence, TapSighashType, Transaction, TxIn, TxOut,
+    Amount, Network, OutPoint, ScriptBuf, Sequence, TapSighashType, Transaction, TxIn, TxOut, Txid,
     Witness,
 };
 use indexer_types::{Inst, InstKind, Insts, serialize};
@@ -17,7 +18,10 @@ use indexer_types::{Inst, InstKind, Insts, serialize};
 use crate::bitcoin_helpers::sign_qualification_script_spend;
 
 pub(crate) fn issuance_transaction() -> Result<Transaction> {
-    issuance_transaction_at(OutPoint::null())
+    issuance_transaction_at(OutPoint {
+        txid: Txid::from_byte_array([91; 32]),
+        vout: 0,
+    })
 }
 
 pub(crate) fn issuance_transaction_at(previous_output: OutPoint) -> Result<Transaction> {
@@ -99,13 +103,13 @@ mod tests {
     use bitcoin::consensus::serialize as serialize_bitcoin;
     use bitcoin::{Network, OutPoint};
 
-    use super::issuance_transaction_at;
+    use super::{issuance_transaction, issuance_transaction_at};
     use crate::protocol::v1::transactions::filter_map_for_network;
 
     #[test]
     fn certified_fixture_witness_is_stable_and_bound_to_outpoint() -> Result<()> {
-        let parent = issuance_transaction_at(OutPoint::null())?;
-        let repeated = issuance_transaction_at(OutPoint::null())?;
+        let parent = issuance_transaction()?;
+        let repeated = issuance_transaction()?;
         assert_eq!(serialize_bitcoin(&parent), serialize_bitcoin(&repeated));
         assert_eq!(parent.compute_wtxid(), repeated.compute_wtxid());
         let child_outpoint = OutPoint {
