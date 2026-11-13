@@ -75,6 +75,12 @@ pub(crate) struct CallOutcome {
     pub remaining_fuel: u64,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InvocationPurpose {
+    Ordinary,
+    PublicationInit(u64),
+}
+
 fn invocation_limit_outcome(fuel_limit: u64) -> CallOutcome {
     CallOutcome {
         result: Err(ExecutionError::Deterministic(InvocationLimitReached.into())),
@@ -225,6 +231,48 @@ impl Runtime {
         fuel_limit: u64,
         nested: bool,
     ) -> Result<CallOutcome, ExecutionError> {
+        self.invoke_unsettled_with_purpose(
+            contract_address,
+            signer,
+            payment,
+            expr,
+            fuel_limit,
+            nested,
+            InvocationPurpose::Ordinary,
+        )
+        .await
+    }
+
+    pub(super) async fn invoke_publication_init(
+        &self,
+        contract_address: &ContractAddress,
+        signer: &Signer,
+        payment: &Payment,
+        inserted_contract_id: u64,
+        fuel_limit: u64,
+    ) -> Result<CallOutcome, ExecutionError> {
+        self.invoke_unsettled_with_purpose(
+            contract_address,
+            Some(signer),
+            Some(payment),
+            "init()",
+            fuel_limit,
+            false,
+            InvocationPurpose::PublicationInit(inserted_contract_id),
+        )
+        .await
+    }
+
+    async fn invoke_unsettled_with_purpose(
+        &self,
+        contract_address: &ContractAddress,
+        signer: Option<&Signer>,
+        payment: Option<&Payment>,
+        expr: &str,
+        fuel_limit: u64,
+        nested: bool,
+        purpose: InvocationPurpose,
+    ) -> Result<CallOutcome, ExecutionError> {
         if self.invocation_depth >= MAX_LIVE_INVOCATIONS {
             #[cfg(test)]
             self.record_resource_rejection(contract_address, "depth_gate_rejected");
@@ -264,7 +312,15 @@ impl Runtime {
         // and release the lease while the resource table is still alive.
         runtime.table = self.table.clone();
         let (result, mut store) = runtime
-            .invoke_in_store(store, contract_address, signer, payment, expr, nested)
+            .invoke_in_store(
+                store,
+                contract_address,
+                signer,
+                payment,
+                expr,
+                nested,
+                purpose,
+            )
             .await?;
         drop(runtime);
         record_fuel(&mut store)?;
@@ -282,10 +338,19 @@ impl Runtime {
         payment: Option<&Payment>,
         expr: &str,
         nested: bool,
+        purpose: InvocationPurpose,
     ) -> Result<(Result<String, ExecutionError>, InvocationStore), ExecutionError> {
         let starting_fuel = store.get_fuel().map_err(anyhow::Error::from)?;
         let prepared = self
-            .prepare_in_store(&mut store, contract_address, signer, payment, expr, nested)
+            .prepare_in_store(
+                &mut store,
+                contract_address,
+                signer,
+                payment,
+                expr,
+                nested,
+                purpose,
+            )
             .await;
         let prepared = match self.classify_guest_memory_result(prepared) {
             Ok(prepared) => prepared,
@@ -361,6 +426,7 @@ impl Runtime {
         payment: Option<&Payment>,
         expr: &str,
         nested: bool,
+        purpose: InvocationPurpose,
     ) -> Result<PreparedCall, ExecutionError> {
         Fuel::WaveInputBytes(expr.len() as u64)
             .consume_with_store(store)
@@ -378,6 +444,16 @@ impl Runtime {
             .ok_or_else(|| {
                 ExecutionError::Deterministic(anyhow!("Contract not found: {}", contract_address))
             })?;
+        let call =
+            UntypedFuncCall::parse(expr).map_err(|e| ExecutionError::Deterministic(e.into()))?;
+        if is_native_contract_id(contract_id)
+            && call.name() == "init"
+            && (purpose != InvocationPurpose::PublicationInit(contract_id) || nested)
+        {
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "native init is only available during first publication"
+            )));
+        }
         let component = self
             .load_component(contract_id)
             .await
@@ -413,8 +489,6 @@ impl Runtime {
         let fallback_name = "fallback";
         let fallback_expr;
 
-        let call =
-            UntypedFuncCall::parse(expr).map_err(|e| ExecutionError::Deterministic(e.into()))?;
         let (call, func) = if let Some(func) = instance.get_func(&mut store, call.name()) {
             (call, func)
         } else if let Some(func) = instance.get_func(&mut store, fallback_name) {

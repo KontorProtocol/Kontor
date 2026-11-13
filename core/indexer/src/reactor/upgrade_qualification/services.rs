@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Error, Result, anyhow, ensure};
 use bitcoin::{Block, BlockHash, blockdata::constants::genesis_block, hashes::Hash};
@@ -9,7 +9,7 @@ use indexer_types::{
     Block as IndexedBlock, ContractProvenanceResponse, Event, Fees, ResultResponse, ViewResult,
 };
 use metrics_exporter_prometheus::PrometheusBuilder;
-use reqwest::Client as HttpClient;
+use reqwest::{Client as HttpClient, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -21,8 +21,9 @@ use super::fixture::native_fixture_address;
 use super::{DATABASE, NETWORK};
 use crate::api::handlers::NodeStatus;
 use crate::api::{DaemonEnv, Env, router};
-use crate::bitcoin_client::Client;
 use crate::bitcoin_client::mock::MockBitcoinRpc;
+use crate::bitcoin_client::observation::ChainObservation;
+use crate::bitcoin_client::{BitcoinRpc, Client};
 use crate::bitcoin_follower;
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::config::Config;
@@ -54,6 +55,7 @@ pub(super) struct Connections {
 pub(super) struct Services {
     reader: Reader,
     bitcoin: MockBitcoinRpc,
+    client: Client,
     http: HttpClient,
     address: SocketAddr,
     tasks: Vec<(&'static str, JoinHandle<Result<()>>)>,
@@ -129,7 +131,7 @@ impl Services {
             shutdown: shutdown.signal(),
             reader: reader.clone(),
             event_subscriber: events.clone(),
-            bitcoin: client,
+            bitcoin: client.clone(),
             owner_service: service,
             simulate_tx,
             upgrade_tx,
@@ -192,6 +194,7 @@ impl Services {
         Ok((
             Self {
                 bitcoin,
+                client,
                 http,
                 reader,
                 address,
@@ -224,11 +227,28 @@ impl Services {
     pub(super) async fn ready(&mut self) -> Result<()> {
         ensure!(timeout(Duration::from_secs(30), &mut self.ready).await??);
         self.reactor_ready.store(true, Ordering::Relaxed);
-        self.http
+        // The fixture follower uses MockBitcoinRpc directly, while readiness reads
+        // the API Client's last observation. Mirror the current mock tip here.
+        let tip = self.bitcoin.get_blockchain_info().await?;
+        self.client
+            .set_chain_observation_for_test(ChainObservation {
+                chain: tip.chain,
+                blocks: tip.blocks,
+                headers: tip.headers,
+                initial_block_download: tip.initial_block_download,
+                observed_at: Instant::now(),
+            });
+        let response = self
+            .http
             .get(format!("http://{}/healthz/ready", self.address))
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
+        let status = response.status();
+        let body = response.text().await?;
+        ensure!(
+            status == StatusCode::OK,
+            "qualification readiness failed ({status}): {body}"
+        );
         Ok(())
     }
 

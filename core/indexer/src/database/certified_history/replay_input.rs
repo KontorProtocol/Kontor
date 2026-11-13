@@ -7,6 +7,12 @@ use crate::protocol::coordinator::application_closure::WorkItem;
 use crate::protocol::coordinator::closure_work::WorkOrigin;
 use crate::protocol::coordinator::replay_input::ReplayInput;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlanningCause {
+    Finality,
+    Reconcile,
+}
+
 async fn validate(conn: &Connection, input: &ReplayInput) -> Result<()> {
     let selected = replay::eligible(conn, input.origin.height, input.exclusions.consensus_height)
         .await?
@@ -22,17 +28,26 @@ async fn validate(conn: &Connection, input: &ReplayInput) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn insert(conn: &Connection, input: &ReplayInput) -> Result<[u8; 32]> {
+pub(crate) async fn insert(
+    conn: &Connection,
+    input: &ReplayInput,
+    cause: PlanningCause,
+) -> Result<[u8; 32]> {
     ensure!(!conn.is_autocommit(), "replay input requires transaction");
     let progress = closure::progress(conn, input.origin.height).await?;
     ensure!(
         progress.work_origin()? == input.origin
-            && progress
-                .next
-                .is_some_and(|next| next.0 == WorkItem::Finality)
+            && progress.next.is_some_and(|next| {
+                next.0
+                    == match cause {
+                        PlanningCause::Finality => WorkItem::Finality,
+                        PlanningCause::Reconcile => WorkItem::Reconcile,
+                    }
+            })
+            && (cause != PlanningCause::Reconcile || progress.plan.reconciliation.is_some())
             && closure::canonical_position(conn, progress.plan.context.chain).await?
                 == input.origin.input,
-        "replay input must be frozen at its verdict pre-state"
+        "replay input must be frozen at its planning pre-state"
     );
     let draft = work::for_origin(conn, input.origin).await?;
     ensure!(draft.cursor().is_err(), "replay plan is already published");

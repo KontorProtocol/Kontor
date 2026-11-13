@@ -1,4 +1,4 @@
-use super::semantics::{FIXTURES, verify};
+use super::semantics::{HISTORICAL_FIXTURE_COPY, LAUNCH_FIXTURES, verify};
 use super::*;
 use crate::container::sha256;
 use std::os::unix::fs::symlink;
@@ -10,14 +10,22 @@ pub(super) fn root() -> PathBuf {
         .canonicalize()
         .unwrap()
 }
-fn baseline() -> Value {
+fn baseline(link_set: Option<&str>) -> Value {
+    let source_root = if link_set == Some("legacy-qualification") {
+        root().join("protocol-bundles/retained/k3")
+    } else {
+        root()
+    };
     serde_json::from_slice(
-        &fs::read(root().join("tools/protocol-bundles/semantic-baseline.json")).unwrap(),
+        &fs::read(source_root.join("tools/protocol-bundles/semantic-baseline.json")).unwrap(),
     )
     .unwrap()
 }
 pub(super) fn observations(names: &[&str]) -> Value {
-    let baseline = baseline();
+    observations_for(names, None)
+}
+pub(super) fn observations_for(names: &[&str], link_set: Option<&str>) -> Value {
+    let baseline = baseline(link_set);
     let source = &baseline["observations"];
     let mut observation = source.as_object().unwrap().clone();
     observation.remove("recognition");
@@ -38,12 +46,26 @@ pub(super) fn observations(names: &[&str]) -> Value {
 fn names(values: &[&str]) -> Vec<String> {
     values.iter().map(|name| name.to_string()).collect()
 }
-fn copied_oracle() -> Result<TempDir> {
+fn copied_oracle(link_set: Option<&str>) -> Result<TempDir> {
     let temporary = tempdir()?;
-    for relative in FIXTURES.iter().copied().chain([
-        "tools/protocol-bundles/semantic-baseline.json",
-        "tools/protocol-bundles/semantic-baseline.log",
-    ]) {
+    let paths: Vec<&str> = if link_set == Some("legacy-qualification") {
+        vec![
+            HISTORICAL_FIXTURE_COPY,
+            "protocol-bundles/retained/k3/tools/protocol-bundles/historical_semantics.rs",
+            "protocol-bundles/retained/k3/tools/protocol-bundles/semantic-baseline.json",
+            "protocol-bundles/retained/k3/tools/protocol-bundles/semantic-baseline.log",
+        ]
+    } else {
+        LAUNCH_FIXTURES
+            .iter()
+            .copied()
+            .chain([
+                "tools/protocol-bundles/semantic-baseline.json",
+                "tools/protocol-bundles/semantic-baseline.log",
+            ])
+            .collect()
+    };
+    for relative in paths {
         let destination = temporary.path().join(relative);
         fs::create_dir_all(destination.parent().unwrap())?;
         fs::copy(root().join(relative), destination)?;
@@ -51,26 +73,32 @@ fn copied_oracle() -> Result<TempDir> {
     Ok(temporary)
 }
 #[test]
-fn historical_oracle_accepts_supported_graphs_and_rejects_shared_regressions() -> Result<()> {
-    for selected in [
-        vec!["first"],
-        vec!["first", "second"],
-        vec!["first", "observer"],
+fn selected_oracles_reject_shared_regressions() -> Result<()> {
+    for (link_set, selected) in [
+        (None, vec!["first", "second"]),
+        (Some("production-node"), vec!["first"]),
+        (Some("managed-node"), vec!["first"]),
+        (Some("legacy-qualification"), vec!["first", "second"]),
     ] {
-        let mut observations = observations(&selected);
-        let report = verify(&observations, &root(), &names(&selected))?;
+        let mut observations = observations_for(&selected, link_set);
+        let report = verify(&observations, &root(), &names(&selected), link_set)?;
         assert_eq!(report["graphs"], json!(selected));
+        let source_root = if link_set == Some("legacy-qualification") {
+            root().join("protocol-bundles/retained/k3")
+        } else {
+            root()
+        };
         assert_eq!(
             report["baseline_sha256"],
             json!(sha256(
-                &root().join("tools/protocol-bundles/semantic-baseline.json")
+                &source_root.join("tools/protocol-bundles/semantic-baseline.json")
             )?)
         );
         for executor in observations["executors"].as_array_mut().unwrap() {
             executor["observations"]["missing_function"]["Err"][1] = json!("same regression");
         }
         assert!(
-            verify(&observations, &root(), &names(&selected))
+            verify(&observations, &root(), &names(&selected), link_set)
                 .unwrap_err()
                 .to_string()
                 .contains("semantic comparison differs")
@@ -79,7 +107,7 @@ fn historical_oracle_accepts_supported_graphs_and_rejects_shared_regressions() -
     Ok(())
 }
 #[test]
-fn historical_comparison_requires_all_graphs_and_all_three_execution_modes() {
+fn semantic_comparison_requires_all_graphs_and_all_three_execution_modes() {
     let original = observations(&["first", "second"]);
     for mode in 0..7 {
         let mut value = original.clone();
@@ -108,19 +136,24 @@ fn historical_comparison_requires_all_graphs_and_all_three_execution_modes() {
             _ => value["executors"][0]["observations"]["transactions"]["executions"] = json!(null),
         }
         assert!(
-            verify(&value, &root(), &names(&["first", "second"])).is_err(),
+            verify(&value, &root(), &names(&["first", "second"]), None).is_err(),
             "mode {mode}"
         );
     }
-    assert!(verify(&original, &root(), &names(&["second", "first"])).is_err());
+    assert!(verify(&original, &root(), &names(&["second", "first"]), None).is_err());
 }
 #[test]
 fn oracle_binds_sources_log_schema_and_source_containment() -> Result<()> {
-    let temporary = copied_oracle()?;
+    let temporary = copied_oracle(Some("production-node"))?;
     let root = temporary.path();
     let observations = observations(&["first"]);
-    verify(&observations, root, &names(&["first"]))?;
-    for relative in FIXTURES
+    verify(
+        &observations,
+        root,
+        &names(&["first"]),
+        Some("production-node"),
+    )?;
+    for relative in LAUNCH_FIXTURES
         .iter()
         .copied()
         .chain(["tools/protocol-bundles/semantic-baseline.log"])
@@ -128,33 +161,129 @@ fn oracle_binds_sources_log_schema_and_source_containment() -> Result<()> {
         let path = root.join(relative);
         let original = fs::read(&path)?;
         fs::write(&path, b"changed")?;
-        assert!(verify(&observations, root, &names(&["first"])).is_err());
+        assert!(
+            verify(
+                &observations,
+                root,
+                &names(&["first"]),
+                Some("production-node")
+            )
+            .is_err()
+        );
         fs::write(path, original)?;
     }
     let path = root.join("tools/protocol-bundles/semantic-baseline.json");
     let original = fs::read(&path)?;
-    for schema in [json!(true), json!(1.0), json!(2)] {
+    for schema in [json!(true), json!(1.0), json!(1)] {
         let mut value: Value = serde_json::from_slice(&original)?;
         value["schema"] = schema;
         fs::write(&path, serde_json::to_vec(&value)?)?;
-        assert!(verify(&observations, root, &names(&["first"])).is_err());
+        assert!(
+            verify(
+                &observations,
+                root,
+                &names(&["first"]),
+                Some("production-node")
+            )
+            .is_err()
+        );
     }
     let mut value: Value = serde_json::from_slice(&original)?;
     value["provenance"]["fixture_sources"] = json!({});
     fs::write(&path, serde_json::to_vec(&value)?)?;
-    assert!(verify(&observations, root, &names(&["first"])).is_err());
-    fs::write(path, original)?;
-    let fixture = root.join(FIXTURES[0]);
+    assert!(
+        verify(
+            &observations,
+            root,
+            &names(&["first"]),
+            Some("production-node")
+        )
+        .is_err()
+    );
+    fs::write(&path, &original)?;
+    let log = root.join("tools/protocol-bundles/semantic-baseline.log");
+    let original_log = fs::read(&log)?;
+    let mut changed_capture: Value = serde_json::from_slice(&original_log)?;
+    changed_capture["executors"][0]["observations"]["missing_function"]["Err"][1] =
+        json!("altered capture");
+    fs::write(&log, serde_json::to_vec(&changed_capture)?)?;
+    let mut changed_baseline: Value = serde_json::from_slice(&original)?;
+    let altered_hash = sha256(&log)?;
+    changed_baseline["provenance"]["log_sha256"] = json!(altered_hash);
+    changed_baseline["provenance"]["stdout_sha256"] = json!(altered_hash);
+    fs::write(&path, serde_json::to_vec(&changed_baseline)?)?;
+    assert!(
+        verify(
+            &observations,
+            root,
+            &names(&["first"]),
+            Some("production-node")
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("launch capture projection differs")
+    );
+    fs::write(&log, original_log)?;
+    fs::write(&path, &original)?;
+    let mut changed_baseline: Value = serde_json::from_slice(&original)?;
+    changed_baseline["observations"]["missing_function"]["Err"][1] = json!("altered projection");
+    fs::write(&path, serde_json::to_vec(&changed_baseline)?)?;
+    assert!(
+        verify(
+            &observations,
+            root,
+            &names(&["first"]),
+            Some("production-node")
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("launch capture projection differs")
+    );
+    fs::write(&path, original)?;
+    let fixture = root.join(LAUNCH_FIXTURES[0]);
     let outside = tempdir()?;
     let target = outside.path().join("fixture");
     fs::rename(&fixture, &target)?;
     symlink(target, fixture)?;
     assert!(
-        verify(&observations, root, &names(&["first"]))
-            .unwrap_err()
-            .to_string()
-            .contains("fixture changed")
+        verify(
+            &observations,
+            root,
+            &names(&["first"]),
+            Some("production-node")
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("fixture changed")
     );
+    Ok(())
+}
+#[test]
+fn archived_oracle_requires_its_schema_sources_and_link_set() -> Result<()> {
+    let temporary = copied_oracle(Some("legacy-qualification"))?;
+    let root = temporary.path();
+    let selected = names(&["first", "second"]);
+    let observations = observations_for(&["first", "second"], Some("legacy-qualification"));
+    verify(&observations, root, &selected, Some("legacy-qualification"))?;
+    assert!(verify(&observations, root, &selected, None).is_err());
+    for relative in [
+        HISTORICAL_FIXTURE_COPY,
+        "protocol-bundles/retained/k3/tools/protocol-bundles/historical_semantics.rs",
+        "protocol-bundles/retained/k3/tools/protocol-bundles/semantic-baseline.log",
+    ] {
+        let path = root.join(relative);
+        let original = fs::read(&path)?;
+        fs::write(&path, b"changed")?;
+        assert!(verify(&observations, root, &selected, Some("legacy-qualification")).is_err());
+        fs::write(path, original)?;
+    }
+    let path =
+        root.join("protocol-bundles/retained/k3/tools/protocol-bundles/semantic-baseline.json");
+    let original = fs::read(&path)?;
+    let mut value: Value = serde_json::from_slice(&original)?;
+    value["schema"] = json!(2);
+    fs::write(&path, serde_json::to_vec(&value)?)?;
+    assert!(verify(&observations, root, &selected, Some("legacy-qualification")).is_err());
     Ok(())
 }
 pub(super) fn certified_sample() -> Result<Value> {

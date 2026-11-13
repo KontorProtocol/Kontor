@@ -3,8 +3,10 @@ use libsql::Connection;
 
 use crate::database::storage_inspection_v1::inspection_callbacks;
 use crate::protocol::v1::inspection;
+#[cfg(test)]
+pub use crate::protocol::v1::transactions::filter_map;
 pub use crate::protocol::v1::transactions::{
-    OpMetadataBase, TransactionFilterMap, TxWalker, filter_map, materialize_op,
+    OpMetadataBase, TransactionFilterMap, TxWalker, filter_map_for_network, materialize_op,
 };
 
 pub async fn inspect(conn: &Connection, tx: &Transaction) -> anyhow::Result<Vec<OpWithResult>> {
@@ -14,24 +16,39 @@ pub async fn inspect(conn: &Connection, tx: &Transaction) -> anyhow::Result<Vec<
 #[cfg(test)]
 mod tests {
     use bitcoin::absolute::LockTime;
-    use bitcoin::key::{Keypair, Secp256k1, rand};
+    use bitcoin::hashes::Hash;
+    use bitcoin::key::{Keypair, Secp256k1};
     use bitcoin::opcodes::all::{OP_ADD, OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN};
     use bitcoin::opcodes::{OP_0, OP_FALSE};
     use bitcoin::script::{Builder, PushBytesBuf};
+    use bitcoin::secp256k1::{Message, SecretKey};
+    use bitcoin::sighash::{Prevouts, SighashCache};
     use bitcoin::taproot::{LeafVersion, TaprootBuilder};
     use bitcoin::transaction::Version;
-    use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
+    use bitcoin::{
+        Amount, Network, OutPoint, ScriptBuf, Sequence, TapLeafHash, TapSighashType, Transaction,
+        TxIn, TxOut, Witness,
+    };
     use indexer_types::{
         AggregateInfo, AggregateSigner, ContractAddress, Inst, InstKind, Insts, SignerRef,
         serialize,
     };
 
     use super::filter_map;
-    use crate::test_utils::{PublicKey as TestPublicKey, build_inscription};
+    use crate::api::compose::build_tap_script_and_script_address;
+
+    const TEST_AMOUNT: u64 = 2000;
+
+    fn build_launch_inscription(payload: Vec<u8>, key: bitcoin::XOnlyPublicKey) -> ScriptBuf {
+        build_tap_script_and_script_address(key, payload, TEST_AMOUNT, Network::Regtest)
+            .expect("build launch script")
+            .0
+    }
 
     fn tx_with_taproot_script_witness(
         tap_script: ScriptBuf,
         internal_key: bitcoin::XOnlyPublicKey,
+        extra_output: Option<TxOut>,
     ) -> Transaction {
         let secp = Secp256k1::new();
         let spend_info = TaprootBuilder::new()
@@ -42,31 +59,59 @@ mod tests {
         let control_block = spend_info
             .control_block(&(tap_script.clone(), LeafVersion::TapScript))
             .expect("control_block");
-        let mut witness = Witness::new();
-        witness.push(vec![0u8; 64]);
-        witness.push(tap_script.as_bytes());
-        witness.push(control_block.serialize());
-        Transaction {
+        let prevout = TxOut {
+            value: Amount::from_sat(TEST_AMOUNT),
+            script_pubkey: ScriptBuf::new_p2tr_tweaked(spend_info.output_key()),
+        };
+        let mut outputs = vec![TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: ScriptBuf::new(),
+        }];
+        if let Some(output) = extra_output {
+            outputs.push(output);
+        }
+        let mut tx = Transaction {
             version: Version(2),
             lock_time: LockTime::ZERO,
             input: vec![TxIn {
                 previous_output: OutPoint::null(),
                 script_sig: ScriptBuf::new(),
                 sequence: Sequence::MAX,
-                witness,
+                witness: Witness::new(),
             }],
-            output: vec![TxOut {
-                value: Amount::from_sat(0),
-                script_pubkey: ScriptBuf::new(),
-            }],
-        }
+            output: outputs,
+        };
+        let digest = SighashCache::new(&tx)
+            .taproot_script_spend_signature_hash(
+                0,
+                &Prevouts::One(0, &prevout),
+                TapLeafHash::from_script(&tap_script, LeafVersion::TapScript),
+                TapSighashType::AllPlusAnyoneCanPay,
+            )
+            .expect("dummy sighash");
+        let secret = SecretKey::from_slice(&[7; 32]).expect("dummy signer");
+        let keypair = Keypair::from_secret_key(&secp, &secret);
+        let mut signature = secp
+            .sign_schnorr(&Message::from_digest(digest.to_byte_array()), &keypair)
+            .serialize()
+            .to_vec();
+        signature.push(TapSighashType::AllPlusAnyoneCanPay as u8);
+        tx.input[0].witness = Witness::from_slice(&[
+            signature,
+            tap_script.into_bytes(),
+            control_block.serialize(),
+        ]);
+        tx
     }
 
     fn random_xonly() -> bitcoin::XOnlyPublicKey {
         let secp = Secp256k1::new();
-        Keypair::new(&secp, &mut rand::thread_rng())
-            .x_only_public_key()
-            .0
+        Keypair::from_secret_key(
+            &secp,
+            &SecretKey::from_slice(&[7; 32]).expect("dummy signer"),
+        )
+        .x_only_public_key()
+        .0
     }
 
     #[test]
@@ -96,9 +141,8 @@ mod tests {
             }),
         };
         let payload = serialize(&insts).expect("serialize Insts");
-        let tap_script =
-            build_inscription(payload, TestPublicKey::Taproot(&xonly)).expect("build tap script");
-        let tx = tx_with_taproot_script_witness(tap_script, xonly);
+        let tap_script = build_launch_inscription(payload, xonly);
+        let tx = tx_with_taproot_script_witness(tap_script, xonly, None);
         let parsed = filter_map((0, tx)).expect("expected tx to be recognized as Kontor tx");
         assert_eq!(parsed.inputs.len(), 1);
         let input = &parsed.inputs[0];
@@ -114,10 +158,7 @@ mod tests {
             kind: InstKind::Issuance,
         }))
         .expect("serialize");
-        let tap_script =
-            build_inscription(payload, TestPublicKey::Taproot(&xonly)).expect("build tap script");
-        let mut tx = tx_with_taproot_script_witness(tap_script, xonly);
-
+        let tap_script = build_launch_inscription(payload, xonly);
         // OP_RETURN carrying two pushes: a marker then a 32-byte payload. The
         // capture must expose everything after the opcode, not just "kon".
         let op_return = Builder::new()
@@ -125,10 +166,14 @@ mod tests {
             .push_slice(b"kon")
             .push_slice([0xABu8; 32])
             .into_script();
-        tx.output.push(TxOut {
-            value: Amount::from_sat(0),
-            script_pubkey: op_return.clone(),
-        });
+        let tx = tx_with_taproot_script_witness(
+            tap_script,
+            xonly,
+            Some(TxOut {
+                value: Amount::from_sat(0),
+                script_pubkey: op_return.clone(),
+            }),
+        );
 
         let parsed = filter_map((0, tx)).expect("recognized Kontor tx");
         // The whole script after the single OP_RETURN opcode byte.
@@ -148,7 +193,32 @@ mod tests {
     }
 
     #[test]
-    fn filter_map_rejects_wrong_marker() {
+    fn filter_map_rejects_wrong_and_draft_markers() {
+        let xonly = random_xonly();
+        let payload = serialize(&Insts::single(Inst {
+            gas_limit: 10_000,
+            kind: InstKind::Issuance,
+        }))
+        .expect("serialize");
+        for marker in [b"kor".as_slice(), b"kon2".as_slice()] {
+            let tap_script = Builder::new()
+                .push_slice(xonly.serialize())
+                .push_opcode(OP_CHECKSIG)
+                .push_opcode(OP_FALSE)
+                .push_opcode(OP_IF)
+                .push_slice(PushBytesBuf::try_from(marker.to_vec()).expect("marker"))
+                .push_slice(TEST_AMOUNT.to_be_bytes())
+                .push_slice(Network::Regtest.magic().to_bytes())
+                .push_slice(PushBytesBuf::try_from(payload.clone()).expect("pushbytes"))
+                .push_opcode(OP_ENDIF)
+                .into_script();
+            let tx = tx_with_taproot_script_witness(tap_script, xonly, None);
+            assert!(filter_map((0, tx)).is_none());
+        }
+    }
+
+    #[test]
+    fn filter_map_rejects_old_layout_with_launch_marker() {
         let xonly = random_xonly();
         let payload = serialize(&Insts::single(Inst {
             gas_limit: 10_000,
@@ -160,12 +230,14 @@ mod tests {
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
-            .push_slice(b"kor")
+            .push_slice(b"kon")
             .push_opcode(OP_0)
             .push_slice(PushBytesBuf::try_from(payload).expect("pushbytes"))
             .push_opcode(OP_ENDIF)
             .into_script();
-        let tx = tx_with_taproot_script_witness(tap_script, xonly);
+        let tx = tx_with_taproot_script_witness(tap_script, xonly, None);
+
+        // The marker alone cannot authorize the old leaf without amount and network.
         assert!(filter_map((0, tx)).is_none());
     }
 
@@ -183,12 +255,13 @@ mod tests {
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
             .push_slice(b"kon")
-            .push_opcode(OP_0)
+            .push_slice(TEST_AMOUNT.to_be_bytes())
+            .push_slice(Network::Regtest.magic().to_bytes())
             .push_slice(PushBytesBuf::try_from(payload).expect("pushbytes"))
             .push_opcode(OP_ENDIF)
             .push_opcode(OP_0)
             .into_script();
-        let tx = tx_with_taproot_script_witness(tap_script, xonly);
+        let tx = tx_with_taproot_script_witness(tap_script, xonly, None);
         assert!(filter_map((0, tx)).is_none());
     }
 
@@ -215,12 +288,13 @@ mod tests {
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
             .push_slice(b"kon")
-            .push_opcode(OP_0)
+            .push_slice(TEST_AMOUNT.to_be_bytes())
+            .push_slice(Network::Regtest.magic().to_bytes())
             .push_slice(PushBytesBuf::try_from(p0.to_vec()).expect("pushbytes"))
             .push_slice(PushBytesBuf::try_from(p1.to_vec()).expect("pushbytes"))
             .push_opcode(OP_ENDIF)
             .into_script();
-        let tx = tx_with_taproot_script_witness(tap_script, xonly);
+        let tx = tx_with_taproot_script_witness(tap_script, xonly, None);
         let parsed = filter_map((0, tx)).expect("expected tx to be recognized");
         assert_eq!(parsed.inputs.len(), 1);
         let input = &parsed.inputs[0];
@@ -253,12 +327,13 @@ mod tests {
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
             .push_slice(b"kon")
-            .push_opcode(OP_0)
+            .push_slice(TEST_AMOUNT.to_be_bytes())
+            .push_slice(Network::Regtest.magic().to_bytes())
             .push_slice(PushBytesBuf::try_from(payload).expect("pushbytes"))
             .push_opcode(OP_ADD)
             .push_opcode(OP_ENDIF)
             .into_script();
-        let tx = tx_with_taproot_script_witness(tap_script, xonly);
+        let tx = tx_with_taproot_script_witness(tap_script, xonly, None);
         assert!(filter_map((0, tx)).is_none());
     }
 
@@ -276,11 +351,12 @@ mod tests {
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
             .push_slice(b"kon")
-            .push_opcode(OP_0)
+            .push_slice(TEST_AMOUNT.to_be_bytes())
+            .push_slice(Network::Regtest.magic().to_bytes())
             .push_slice(PushBytesBuf::try_from(payload).expect("pushbytes"))
             .push_opcode(OP_ENDIF)
             .into_script();
-        let tx = tx_with_taproot_script_witness(tap_script, internal_key);
+        let tx = tx_with_taproot_script_witness(tap_script, internal_key, None);
         assert!(filter_map((0, tx)).is_none());
     }
 

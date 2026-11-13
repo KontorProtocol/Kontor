@@ -20,7 +20,7 @@ use crate::database::queries::get_transaction_by_txid;
 use crate::protocol::coordinator::certified_input::ExactInput;
 use crate::protocol::v2::FIXTURE_NAME;
 use crate::protocol_qualification::snapshot::full_state;
-use crate::reactor::certified::qualification::fixture::raw_transaction;
+use crate::reactor::certified::qualification::fixture::raw_transaction_at;
 use crate::reactor::execution::ExecutionContext;
 use crate::reactor::executor::RuntimeExecutor;
 use crate::runtime::Decimal;
@@ -46,9 +46,7 @@ fn transaction(expressions: &[&str], issuance: bool, previous: OutPoint) -> Resu
             expr: (*expr).into(),
         },
     }));
-    let mut transaction = raw_transaction(Insts::direct(instructions))?;
-    transaction.input[0].previous_output = previous;
-    Ok(transaction)
+    raw_transaction_at(Insts::direct(instructions), previous)
 }
 
 async fn batch(

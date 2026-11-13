@@ -62,8 +62,18 @@ XCFRAMEWORK=$FRAMEWORK.xcframework
 # Locate the cdylib cargo emitted for a target (it lives at the profile
 # root, or under deps/ depending on cargo version).
 find_cdylib() { # $1 = triple, $2 = extension (so|dylib)
-  ls "../core/target/$1/mobile/$LIB.$2" \
-     "../core/target/$1/mobile/deps/$LIB.$2" 2>/dev/null | head -1
+  local root_path="../core/target/$1/mobile/$LIB.$2"
+  local deps_path="../core/target/$1/mobile/deps/$LIB.$2"
+  if [[ -f "$root_path" ]]; then
+    printf '%s\n' "$root_path"
+    return 0
+  fi
+  if [[ -f "$deps_path" ]]; then
+    printf '%s\n' "$deps_path"
+    return 0
+  fi
+  printf 'ERROR: cdylib for %s not found at %s or %s\n' "$1" "$root_path" "$deps_path" >&2
+  return 1
 }
 
 # Wrap a dylib (or fat dylib) in a minimal dynamic .framework bundle with an

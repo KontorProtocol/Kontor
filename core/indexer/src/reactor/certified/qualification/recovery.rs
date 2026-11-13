@@ -139,7 +139,10 @@ pub(super) async fn compare(
             ensure!(closure::progress(&conn, height).await? == committed);
         }
     }
-    ensure!(pages > 1 && rollbacks == 1 && replayed == 2 && failed_replay);
+    ensure!(
+        pages > 1 && rollbacks == 1 && replayed == 2 && failed_replay,
+        "recovery steps differed: pages={pages}, rollbacks={rollbacks}, replayed={replayed}, failed_replay={failed_replay}"
+    );
     ensure!(interrupted.recover(&Shutdown::new().signal()).await?);
     ensure!((interrupted.last_height, interrupted.last_hash) == expected_tip);
     ensure!(completion::completed(&conn, height).await? == expected_closure);

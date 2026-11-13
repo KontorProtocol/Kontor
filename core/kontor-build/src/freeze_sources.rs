@@ -19,6 +19,7 @@ use crate::snapshot::{normalized_link, verify_snapshot};
 const GRAPHS: &[&str] = &["executor-first", "executor-second"];
 const SUPPORT_TREES: &[&str] = &["protocol-bundles/proof", "tools/native-crypto/fixtures"];
 const SUPPORT_FILES: &[&str] = &[
+    "tools/protocol-bundles/historical-qualification-fixture.rs",
     "tools/protocol-bundles/historical_semantics.rs",
     "tools/protocol-bundles/semantic-baseline.json",
     "tools/protocol-bundles/semantic-baseline.log",

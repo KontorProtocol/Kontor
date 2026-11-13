@@ -893,7 +893,7 @@ async fn replay_steps(config: PopulationConfig, delivery: Delivery, steps: usize
                 );
             }
             if let Some(shape_signers) = &shape_signers {
-                shape_signers.check_inputs(&decoded.inputs, shape_instructions()?)?;
+                shape_signers.check_inputs(&decoded.inputs, reveal, shape_instructions()?)?;
             }
         }
         vec![BlockInput {

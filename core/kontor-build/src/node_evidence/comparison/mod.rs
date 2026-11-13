@@ -134,7 +134,7 @@ fn load_cell(path: &Path, root: &Path, link_set: Option<&str>) -> Result<(Cell, 
     );
     ensure!(
         execution["semantic_baseline"]
-            == semantics::verify(&observations, root, &baseline_graphs(link_set)?)?,
+            == semantics::verify(&observations, root, &baseline_graphs(link_set)?, link_set)?,
         "historical semantic comparison record differs"
     );
     for label in ["transition", "recovery", "authorization", "join"] {

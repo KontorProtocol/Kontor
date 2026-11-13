@@ -4,6 +4,8 @@ pub use crate::bitcoin_helpers::{
 };
 mod confirmation;
 pub use confirmation::signed_confirmation_call;
+mod launch;
+pub use launch::{launch_tap_script, signed_launch_transaction};
 #[cfg(test)]
 mod owned_runtime_tests;
 

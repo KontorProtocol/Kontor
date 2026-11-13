@@ -1,8 +1,8 @@
 use anyhow::Result;
-use bitcoin::TxOut;
 use bitcoin::consensus::encode::serialize as serialize_tx;
 use bitcoin::key::Secp256k1;
 use bitcoin::taproot::TaprootBuilder;
+use bitcoin::{TapSighashType, TxOut};
 use indexer::database::types::OpResultId;
 use indexer::test_utils;
 use indexer::{bitcoin_client::client::RegtestRpc, runtime};
@@ -108,7 +108,7 @@ async fn test_native_token_attach_contract() -> Result<()> {
         .finalize(&secp, internal_key)
         .map_err(|e| anyhow::anyhow!("Failed to finalize Taproot tree: {:?}", e))?;
 
-    test_utils::sign_script_spend(
+    test_utils::sign_script_spend_with_sighash(
         &secp,
         &taproot_spend_info,
         &tap_script,
@@ -116,6 +116,7 @@ async fn test_native_token_attach_contract() -> Result<()> {
         &[commit_transaction.output[0].clone()],
         &keypair,
         0,
+        TapSighashType::AllPlusAnyoneCanPay,
     )?;
 
     let commit_tx_hex = hex::encode(serialize_tx(&commit_transaction));
@@ -159,7 +160,7 @@ async fn test_native_token_attach_contract() -> Result<()> {
         .finalize(&secp, internal_key)
         .map_err(|e| anyhow::anyhow!("Failed to finalize Taproot tree: {:?}", e))?;
 
-    test_utils::sign_script_spend(
+    test_utils::sign_script_spend_with_sighash(
         &secp,
         &chained_taproot_spend_info,
         &chained_tap_script,
@@ -167,6 +168,7 @@ async fn test_native_token_attach_contract() -> Result<()> {
         &[reveal_transaction.output[0].clone()],
         &keypair,
         0,
+        TapSighashType::AllPlusAnyoneCanPay,
     )?;
 
     let detach_tx_hex = hex::encode(serialize_tx(&detach_transaction));

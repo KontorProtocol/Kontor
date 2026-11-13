@@ -4,7 +4,7 @@ use libsql::Connection;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::confirmation::{assert_paid_mint, finish_block};
+use super::confirmation::{assert_paid_mint, finish_block, transaction_at};
 use super::fixture::{append, open, snapshot};
 use crate::database::certified_history::{self, activation};
 use crate::database::queries::{get_transaction_by_txid, get_transaction_execution_usage};
@@ -37,11 +37,9 @@ pub(super) async fn run(
     ensure!(original_row.confirmed_height.is_none() && original_row.batch_height.is_some());
     assert_paid_mint(&conn, original_row.id).await?;
 
-    // The Bitcoin ingestion boundary supplies an already accepted replacement.
-    // This checks Kontor's execution/finality behavior, not Bitcoin mempool policy
-    // or script validation (the shared transaction fixture has a dummy signature).
-    let mut replacement = original.clone();
-    replacement.lock_time = LockTime::from_height(1)?;
+    // The fixture signs the hypothetical prevout but has no live Bitcoin UTXO.
+    // This tests canonical replacement and finality, not mempool policy.
+    let replacement = transaction_at(original.input[0].previous_output, LockTime::from_height(1)?)?;
     let replacement_txid = replacement.compute_txid().to_string();
     ensure!(replacement_txid != original_txid);
     ensure!(replacement.input[0].previous_output == original.input[0].previous_output);

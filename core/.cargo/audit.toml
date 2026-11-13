@@ -58,6 +58,11 @@ ignore = [
     "RUSTSEC-2026-0511", # NSEC accepts incorrect NXDOMAIN response.
     "RUSTSEC-2026-0512", # Unrelated signed RRset accepted as answer.
     "RUSTSEC-2026-0514", # Resolver returns records failing DNSSEC validation.
+    # Distinct delegation NSEC/NSEC3 advisories in the same disabled validation
+    # path. Remove with the other DNSSEC exceptions after a patched graph upgrade.
+    "RUSTSEC-2026-0530", # Parent-side NSEC zone cut denial proof.
+    "RUSTSEC-2026-0531", # Child-side NSEC/NSEC3 accepted for parent DS proof.
+    "RUSTSEC-2026-0532", # Parent-side NSEC3 zone cut denial proof.
 
     # Accepted unresolved DoS risk, not an unreachable-code exception: malformed
     # DNS wire counts can allocate about 18 MB before decoding fails. Malachite
@@ -74,6 +79,18 @@ ignore = [
     # Remove when Malachite supports libp2p 0.57+ with patched crypto dependencies,
     # or when a compatible upstream backport becomes available.
     "RUSTSEC-2026-0387",
+
+    # libp2p-gossipsub remains version 0.49.5 because Malachite selects libp2p
+    # 0.56. Its PRUNE unknown-topic backoff fix is backported in
+    # core/vendor/libp2p-gossipsub and selected by the five current network
+    # graphs. cargo-audit matches the version rather than patched local code.
+    # The same audit policy also scans frozen first/second proof locks, which
+    # still name the unpatched registry crate but are not current build inputs.
+    # This exception is not a claim those archived inputs are remediated.
+    # Remove the shared exception when the active Malachite graph resolves a
+    # verified fixed release and historical audits have an archive-only policy.
+    # See core/vendor/libp2p-gossipsub/KONTOR-PATCH.md and upstream PR 6707.
+    "RUSTSEC-2026-0534",
 
     # zstd 0.13.3 / zstd-safe 7.3.0 via wasmtime-internal-cache at our pinned
     # Wasmtime fork revision. Its zstd ^0.13 requirement excludes the patched

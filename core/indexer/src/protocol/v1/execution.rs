@@ -1,9 +1,9 @@
 use anyhow::Result;
 use bitcoin::Txid;
-use indexer_types::{Input, Op, OpKind, Transaction};
+use indexer_types::{Input, InstKind, Op, OpKind, Transaction};
 use tracing::warn;
 
-use super::storage_identity::IdentityError;
+use super::storage_identity::{IdentityError, MAX_NONCE_GAP};
 use super::transactions::TxWalker;
 use crate::bls::{AggregateVerificationError, verify_aggregate};
 use crate::protocol::v1::types::Identity;
@@ -194,31 +194,67 @@ async fn process_aggregate_input(
         .as_ref()
         .expect("aggregate must be present after successful verification");
 
-    // Resolve the publisher's signer_id once — payer for any op with
-    // `AggregateSigner.sponsored = true`. The publisher is the Bitcoin
-    // input's x_only_pubkey, ensured into the signers table.
-    let publisher_signer_id = {
-        let identity = runtime
-            .get_or_create_identity(&input.x_only_pubkey.to_string())
-            .await?;
-        identity.signer_id()
-    };
-
+    let mut publisher_signer_id = None;
     let mut errors: Vec<Option<anyhow::Error>> = Vec::with_capacity(n_ops);
-    for (op_index, ((inst, agg_signer), &signer_id)) in input
+    for (op_index, ((inst, agg_signer), verified)) in input
         .insts
         .ops
         .iter()
         .zip(agg.signers.iter())
-        .zip(resolved.signer_ids.iter())
+        .zip(resolved.signers.iter())
         .enumerate()
     {
-        if !resolved.signer_map.contains_key(&signer_id) {
-            warn!("signer_id {signer_id} not in signer_map after verification");
-            errors.push(Some(anyhow::anyhow!(
-                "signer_id {signer_id} not in signer_map after verification"
-            )));
-            continue;
+        let existing_id = match verified.existing_id {
+            Some(id) => Some(id),
+            None => runtime
+                .storage
+                .lookup_identity(&verified.x_only_pubkey)
+                .await
+                .map_err(|error| anyhow::anyhow!("aggregate signer lookup failed: {error}"))?,
+        };
+
+        if let InstKind::RegisterBlsKey {
+            bls_pubkey,
+            schnorr_sig,
+            bls_sig,
+        } = &inst.kind
+        {
+            match runtime
+                .preflight_bls_registration(
+                    existing_id,
+                    &verified.x_only_pubkey,
+                    bls_pubkey,
+                    schnorr_sig,
+                    bls_sig,
+                )
+                .await
+            {
+                Ok(()) => {}
+                Err(ExecutionError::Deterministic(error)) => {
+                    errors.push(Some(error));
+                    continue;
+                }
+                Err(ExecutionError::NonDeterministic(error)) => {
+                    return Err(error.context("registration preflight infrastructure failure"));
+                }
+            }
+        }
+
+        let signer_id = match existing_id {
+            Some(id) => id,
+            None => {
+                if agg_signer.nonce > MAX_NONCE_GAP {
+                    errors.push(Some(anyhow::anyhow!(
+                        "nonce too far ahead for new signer: got {}, expected <= {MAX_NONCE_GAP}",
+                        agg_signer.nonce
+                    )));
+                    continue;
+                }
+                runtime
+                    .get_or_create_identity(&verified.x_only_pubkey)
+                    .await?
+                    .signer_id()
+            }
         };
 
         runtime
@@ -236,9 +272,8 @@ async fn process_aggregate_input(
             )
             .await;
 
-        // Every aggregate op advances the signer's nonce. The variant restriction
-        // ("Call only") is enforced separately in validate_aggregate_shape; here
-        // we just consume the nonce the co-signer committed to in their BLS sig.
+        // Advance the nonce after registration preflight, so a rejected claim
+        // cannot charge or consume the claimed signer's authority.
         match runtime
             .storage
             .advance_nonce(signer_id, agg_signer.nonce, height)
@@ -257,20 +292,31 @@ async fn process_aggregate_input(
             }
         }
 
+        let publisher = match publisher_signer_id {
+            Some(id) => id,
+            None => {
+                let id = runtime
+                    .get_or_create_identity(&input.x_only_pubkey.to_string())
+                    .await?
+                    .signer_id();
+                publisher_signer_id = Some(id);
+                id
+            }
+        };
+
         // `walker.materialize` handles the precedence: cross-input
         // Sponsor (`walker.active`) wins over the aggregate's per-op
         // publisher offer, which it computes from `signer.sponsored` +
         // the publisher's signer_id we pass in. Capture is a no-op in
         // practice — BLS shape validation rejects Sponsor in aggregates.
-        let op =
-            match walker.materialize(input, op_index, signer_id, Some(publisher_signer_id), inst) {
-                Ok(op) => op,
-                Err(e) => {
-                    warn!("Rejected aggregate op for signer {signer_id}: {e:#}");
-                    errors.push(Some(e));
-                    continue;
-                }
-            };
+        let op = match walker.materialize(input, op_index, signer_id, Some(publisher), inst) {
+            Ok(op) => op,
+            Err(e) => {
+                warn!("Rejected aggregate op for signer {signer_id}: {e:#}");
+                errors.push(Some(e));
+                continue;
+            }
+        };
         errors.push(execute_op(runtime, &op).await?);
     }
     Ok(errors)

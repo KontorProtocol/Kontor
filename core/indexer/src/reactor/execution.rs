@@ -14,7 +14,7 @@ use super::executor::Executor;
 use crate::bitcoin_follower::block::BlockInput;
 use crate::consensus::{Height, Value};
 use crate::database::certified_history::{
-    self, Status, branch, closure, completion, control, finality, replay_input, work,
+    self, Status, branch, closure, completion, control, finality, reconcile, replay_input, work,
 };
 use crate::database::queries::{PRUNE_WATERMARK_KEY, get_meta_u64, select_block_latest};
 use crate::protocol::coordinator::activation_execution;
@@ -191,6 +191,23 @@ impl<E: Executor> ExecutionContext<E> {
             let selection = select_stage(&conn, self.network, action).await?;
             self.select_session(&selection).await?;
             let outcome: Result<ExecutionStep> = match action {
+                WorkItem::Reconcile => {
+                    if !reconcile::step(&conn, height).await? {
+                        return Ok(ExecutionStep::Planning);
+                    }
+                    let draft = work::for_origin(&conn, progress.work_origin()?).await?;
+                    let stage =
+                        begin_stage(&self.owner_service, &self.session, self.network, height)
+                            .await?
+                            .context("reconciliation stage disappeared")?;
+                    let result = async {
+                        let cursor = work::publish(&conn, draft).await?;
+                        Ok(((), StageOutcome::Reconciled, cursor))
+                    }
+                    .await;
+                    stage.finish(result).await?;
+                    Ok(ExecutionStep::Planning)
+                }
                 WorkItem::Activate { .. } => {
                     activation_execution::step(
                         &self.owner_service,

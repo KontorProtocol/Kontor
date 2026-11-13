@@ -266,6 +266,7 @@ mod tests {
         MempoolEntry {
             vsize,
             ancestorsize: vsize,
+            wtxid: None,
             fees: MempoolEntryFees {
                 base: Amount::from_sat(fee_sat),
                 ancestor: Amount::from_sat(fee_sat),
@@ -288,6 +289,7 @@ mod tests {
         MempoolEntry {
             vsize,
             ancestorsize: ancestor_size,
+            wtxid: None,
             fees: MempoolEntryFees {
                 base: Amount::from_sat(fee_sat),
                 ancestor: Amount::from_sat(ancestor_fees_sat),

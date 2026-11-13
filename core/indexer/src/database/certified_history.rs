@@ -22,6 +22,7 @@ pub(crate) mod eras;
 pub(crate) mod finality;
 mod proof_read;
 pub(crate) mod proposals;
+pub(crate) mod reconcile;
 pub(crate) mod registrations;
 pub(crate) mod replay;
 pub(crate) mod replay_input;

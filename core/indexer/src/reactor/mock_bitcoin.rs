@@ -109,6 +109,7 @@ impl MockBitcoin {
             let fee = MempoolEntry {
                 vsize: 1,
                 ancestorsize: 1,
+                wtxid: Some(Txid::from_byte_array(tx.compute_wtxid().to_byte_array())),
                 fees: MempoolEntryFees {
                     base: bitcoin::Amount::from_sat(1),
                     ancestor: bitcoin::Amount::from_sat(1),

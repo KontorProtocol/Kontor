@@ -15,7 +15,7 @@ members = [
 ]
 # Cargo Chef must preserve this build dependency's real API when cooking the
 # workspace skeleton used by vendored native build scripts.
-exclude = ["vendor/kontor-native-build", "kontor-build"]
+exclude = ["vendor/kontor-native-build", "vendor/libp2p-gossipsub", "kontor-build"]
 resolver = "2"
 
 [workspace.lints.clippy]
@@ -92,6 +92,8 @@ malachitebft-app-channel = { git = "https://github.com/KontorProtocol/malachite"
 
 [patch.crates-io]
 if-watch = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=3.2.2" }
+# Remove with the audit exception after the selected graph includes the upstream PRUNE fix.
+libp2p-gossipsub = { path = "vendor/libp2p-gossipsub" }
 wasmtime = { git = "https://github.com/wilfreddenton/wasmtime", rev = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7", version = "=51.0.0-kontor.2" }
 psm = { path = "vendor/psm" }
 wit-bindgen = { path = "vendor/wit-bindgen" }

@@ -63,6 +63,27 @@ fn recognize_mempool(
         .collect()
 }
 
+fn recognize_with_bitcoin_metadata(
+    recognizer: &TransactionRecognizer,
+    selection: &ExecutionSelection,
+    raw: &BitcoinTransaction,
+) -> Result<Option<PreparedTransaction>> {
+    let mut prepared = recognizer
+        .recognize(selection, serialize(raw))?
+        .map_err(|error| {
+            anyhow::anyhow!("serialized Bitcoin transaction failed to decode: {error}")
+        })?;
+    if let Some(prepared) = &mut prepared {
+        prepared.raw_outpoints = raw
+            .input
+            .iter()
+            .map(|input| input.previous_output)
+            .collect();
+        prepared.wtxid = Some(raw.compute_wtxid());
+    }
+    Ok(prepared)
+}
+
 /// Abstraction over transaction execution and state rollback.
 ///
 /// The consensus orchestration logic (`ConsensusState.process_decided_batch` and
@@ -75,11 +96,7 @@ pub(crate) trait Executor: Sync {
         selection: &ExecutionSelection,
         raw: &BitcoinTransaction,
     ) -> Result<Option<PreparedTransaction>> {
-        recognizer
-            .recognize(selection, serialize(raw))?
-            .map_err(|error| {
-                anyhow::anyhow!("serialized Bitcoin transaction failed to decode: {error}")
-            })
+        recognize_with_bitcoin_metadata(recognizer, selection, raw)
     }
 
     fn prepare_simulation(
@@ -427,13 +444,7 @@ impl Executor for RuntimeExecutor {
         let recognizer = recognizer.clone();
         let selection = selection.clone();
         tokio::task::spawn_blocking(move || {
-            block.prepare(|raw| {
-                recognizer
-                    .recognize(&selection, serialize(raw))?
-                    .map_err(|error| {
-                        anyhow::anyhow!("serialized Bitcoin transaction failed to decode: {error}")
-                    })
-            })
+            block.prepare(|raw| recognize_with_bitcoin_metadata(&recognizer, &selection, raw))
         })
         .await?
     }
@@ -449,13 +460,7 @@ impl Executor for RuntimeExecutor {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 recognize_mempool(transactions, |raw| {
-                    recognizer
-                        .recognize(&selection, serialize(raw))?
-                        .map_err(|error| {
-                            anyhow::anyhow!(
-                                "serialized Bitcoin transaction failed to decode: {error}"
-                            )
-                        })
+                    recognize_with_bitcoin_metadata(&recognizer, &selection, raw)
                 })
             })
             .await?

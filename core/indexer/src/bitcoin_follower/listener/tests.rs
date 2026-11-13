@@ -13,6 +13,7 @@ fn stub_entry() -> MempoolEntry {
     MempoolEntry {
         vsize: 1,
         ancestorsize: 1,
+        wtxid: None,
         fees: MempoolEntryFees {
             base: Amount::from_sat(1),
             ancestor: Amount::from_sat(1),

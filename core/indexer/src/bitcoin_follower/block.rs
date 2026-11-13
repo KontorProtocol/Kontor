@@ -126,6 +126,7 @@ impl BlockInput {
                     hash: self.hash,
                     prev_hash: self.prev_hash,
                     input: Some(input),
+                    wtxids: None,
                     transactions: transactions
                         .into_iter()
                         .map(PreparedTransaction::fixture)
@@ -134,6 +135,7 @@ impl BlockInput {
             }
         };
         let input = CanonicalInput::bitcoin(&raw)?;
+        let wtxids = raw.iter().map(BitcoinTransaction::compute_wtxid).collect();
         let transactions = raw
             .par_iter()
             .enumerate()
@@ -152,6 +154,7 @@ impl BlockInput {
             hash: self.hash,
             prev_hash: self.prev_hash,
             input: Some(input),
+            wtxids: Some(wtxids),
             transactions,
         })
     }

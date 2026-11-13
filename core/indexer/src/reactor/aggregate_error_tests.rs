@@ -374,3 +374,212 @@ async fn aggregate_rejections_preserve_positional_errors_and_text() -> Result<()
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn registration_proof_rejection_precedes_identity_nonce_and_payment() -> Result<()> {
+    for existing_victim in [false, true] {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let conn = runtime.get_storage_conn();
+        let secp = Secp256k1::new();
+        let publisher = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[41; 32])?);
+        let victim = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[42; 32])?);
+        let attacker = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[43; 32])?);
+        let publisher_key = publisher.x_only_public_key().0;
+        let victim_key = victim.x_only_public_key().0;
+        let publisher_identity = ensure_identity(&conn, &publisher_key.to_string(), 1).await?;
+        token::issue_to(
+            &mut runtime,
+            &Signer::Core(Box::new(Signer::Nobody)),
+            HolderRef::SignerId(publisher_identity.signer_id()),
+            Decimal::from("100"),
+        )
+        .await??;
+        if existing_victim {
+            let identity = ensure_identity(&conn, &victim_key.to_string(), 1).await?;
+            token::issue_to(
+                &mut runtime,
+                &Signer::Core(Box::new(Signer::Nobody)),
+                HolderRef::SignerId(identity.signer_id()),
+                Decimal::from("100"),
+            )
+            .await??;
+        }
+
+        let bls_key = derive_test_key(44);
+        let bad_proof = RegistrationProof::new(&attacker, &bls_key.to_bytes())?;
+        let inst = Inst {
+            gas_limit: 10_000,
+            kind: InstKind::RegisterBlsKey {
+                bls_pubkey: bad_proof.bls_pubkey.to_vec(),
+                schnorr_sig: bad_proof.schnorr_sig.to_vec(),
+                bls_sig: bad_proof.bls_sig.to_vec(),
+            },
+        };
+        let claim = SignerRef::XOnlyPubkey(victim_key);
+        let signature = bls_key.sign(
+            &inst.aggregate_signing_message(&claim, 0, true)?,
+            KONTOR_BLS_DST,
+            &[],
+        );
+        let aggregate = AggregateSignature::aggregate(&[&signature], true)
+            .map_err(|error| anyhow!("aggregate: {error:?}"))?;
+        let input = Input {
+            previous_output: bitcoin::OutPoint::null(),
+            input_index: 0,
+            x_only_pubkey: publisher_key,
+            insts: Insts {
+                ops: vec![inst],
+                aggregate: Some(AggregateInfo {
+                    signers: vec![AggregateSigner {
+                        identity: claim,
+                        nonce: 0,
+                        sponsored: true,
+                    }],
+                    signature: aggregate.to_signature().to_bytes().to_vec(),
+                }),
+            },
+        };
+        let before = snapshot(&conn).await?;
+        let errors = process_input(
+            &mut runtime,
+            &mut TxWalker::new(),
+            &input,
+            1,
+            None,
+            0,
+            new_mock_transaction(44).txid,
+            None,
+        )
+        .await?;
+        assert_eq!(errors.len(), 1);
+        assert!(
+            format!("{:#}", errors[0].as_ref().expect("invalid proof rejected"))
+                .contains("schnorr binding verification failed")
+        );
+        assert_eq!(
+            snapshot(&conn).await?,
+            before,
+            "invalid registration changed state, existing victim={existing_victim}"
+        );
+        assert_eq!(
+            get_identity(&conn, &victim_key.to_string())
+                .await?
+                .is_some(),
+            existing_victim
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn registration_retries_preserve_order_and_reject_conflicting_key_before_fee() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let conn = runtime.get_storage_conn();
+    let secp = Secp256k1::new();
+    let claimant = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[45; 32])?);
+    let key = claimant.x_only_public_key().0;
+    let identity = ensure_identity(&conn, &key.to_string(), 1).await?;
+    token::issue_to(
+        &mut runtime,
+        &Signer::Core(Box::new(Signer::Nobody)),
+        HolderRef::SignerId(identity.signer_id()),
+        Decimal::from("100"),
+    )
+    .await??;
+
+    let first_key = derive_test_key(46);
+    let second_key = derive_test_key(47);
+    let first_proof = RegistrationProof::new(&claimant, &first_key.to_bytes())?;
+    let second_proof = RegistrationProof::new(&claimant, &second_key.to_bytes())?;
+    let insts = vec![
+        Inst {
+            gas_limit: 10_000,
+            kind: InstKind::RegisterBlsKey {
+                bls_pubkey: first_proof.bls_pubkey.to_vec(),
+                schnorr_sig: first_proof.schnorr_sig.to_vec(),
+                bls_sig: first_proof.bls_sig.to_vec(),
+            },
+        },
+        Inst {
+            gas_limit: 10_000,
+            kind: InstKind::RegisterBlsKey {
+                bls_pubkey: first_proof.bls_pubkey.to_vec(),
+                schnorr_sig: vec![],
+                bls_sig: vec![],
+            },
+        },
+        Inst {
+            gas_limit: 10_000,
+            kind: InstKind::RegisterBlsKey {
+                bls_pubkey: second_proof.bls_pubkey.to_vec(),
+                schnorr_sig: second_proof.schnorr_sig.to_vec(),
+                bls_sig: second_proof.bls_sig.to_vec(),
+            },
+        },
+    ];
+    let claim = SignerRef::SignerId(identity.signer_id());
+    let signed: Vec<_> = insts
+        .iter()
+        .enumerate()
+        .map(|(index, inst)| {
+            let key = if index == 2 { &second_key } else { &first_key };
+            let msg = inst.aggregate_signing_message(&claim, index as u64, true)?;
+            Ok(key.sign(&msg, KONTOR_BLS_DST, &[]))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let signed_refs: Vec<_> = signed.iter().collect();
+    let aggregate = AggregateSignature::aggregate(&signed_refs, true)
+        .map_err(|error| anyhow!("aggregate: {error:?}"))?;
+    let input = Input {
+        previous_output: bitcoin::OutPoint::null(),
+        input_index: 0,
+        x_only_pubkey: key,
+        insts: Insts {
+            ops: insts,
+            aggregate: Some(AggregateInfo {
+                signers: (0..3)
+                    .map(|nonce| AggregateSigner {
+                        identity: claim.clone(),
+                        nonce,
+                        sponsored: true,
+                    })
+                    .collect(),
+                signature: aggregate.to_signature().to_bytes().to_vec(),
+            }),
+        },
+    };
+    let errors = process_input(
+        &mut runtime,
+        &mut TxWalker::new(),
+        &input,
+        1,
+        None,
+        0,
+        new_mock_transaction(45).txid,
+        None,
+    )
+    .await?;
+    assert_eq!(errors.len(), 3);
+    assert!(errors[0].is_none(), "first registration must succeed");
+    assert!(errors[1].is_none(), "same-key retry remains idempotent");
+    assert!(
+        format!(
+            "{:#}",
+            errors[2].as_ref().expect("conflicting key rejected")
+        )
+        .contains("BLS pubkey already registered for signer")
+    );
+    assert_eq!(identity.next_nonce(&conn).await?, 2);
+    assert_eq!(
+        identity.bls_pubkey(&conn).await?,
+        Some(first_proof.bls_pubkey.to_vec())
+    );
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_results WHERE func = 'registered' AND height = 1",
+            (),
+        )
+        .await?;
+    assert_eq!(rows.next().await?.expect("result count").get::<u64>(0)?, 2);
+    Ok(())
+}

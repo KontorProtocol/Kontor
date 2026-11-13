@@ -1,23 +1,15 @@
 use std::path::Path;
 
 use crate::runtime::GenesisParameters;
-use anyhow::{Context, Result, anyhow, ensure};
-use bitcoin::absolute::LockTime;
+use anyhow::{Result, ensure};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::hashes::Hash;
-use bitcoin::opcodes::{
-    OP_0, OP_FALSE,
-    all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
-};
-use bitcoin::script::{Builder, PushBytesBuf};
-use bitcoin::secp256k1::{Keypair, Secp256k1};
-use bitcoin::taproot::{LeafVersion, TaprootBuilder};
-use bitcoin::transaction::Version;
+use bitcoin::script::Builder;
+use bitcoin::secp256k1::Keypair;
 use bitcoin::{
-    Amount, Block, BlockHash, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
-    Txid, Witness,
+    Amount, Block, BlockHash, Network, OutPoint, ScriptBuf, Transaction, TxOut, Txid, Witness,
 };
-use indexer_types::{Insts, serialize};
+use indexer_types::Insts;
 use malachitebft_app_channel::app::types::ProposedValue;
 use malachitebft_core_types::{CommitSignature, NilOrVal, Round, Validity};
 use tokio::sync::{mpsc, watch};
@@ -34,6 +26,7 @@ use crate::database::Writer;
 use crate::database::certified_history::proposals;
 use crate::runtime::ownership::OwnerService;
 use crate::stopper::Shutdown;
+use crate::test_utils::signed_launch_transaction;
 
 pub(super) async fn reactor(
     directory: &Path,
@@ -194,42 +187,16 @@ pub(super) async fn proposal(
 }
 
 pub(super) fn transaction(key: &Keypair, instructions: Insts, nonce: u32) -> Result<Transaction> {
-    let secp = Secp256k1::new();
-    let public = key.x_only_public_key().0;
-    let mut script = Builder::new()
-        .push_slice(public.serialize())
-        .push_opcode(OP_CHECKSIG)
-        .push_opcode(OP_FALSE)
-        .push_opcode(OP_IF)
-        .push_slice(b"kon")
-        .push_opcode(OP_0);
-    for chunk in serialize(&instructions)?.chunks(520) {
-        script = script.push_slice(PushBytesBuf::try_from(chunk.to_vec())?);
-    }
-    let script = script.push_opcode(OP_ENDIF).into_script();
-    let spend = TaprootBuilder::new()
-        .add_leaf(0, script.clone())?
-        .finalize(&secp, public)
-        .map_err(|_| anyhow!("fixture taproot tree"))?;
-    let control = spend
-        .control_block(&(script.clone(), LeafVersion::TapScript))
-        .context("fixture control block")?;
-    let witness = Witness::from_slice(&[vec![0; 64], script.into_bytes(), control.serialize()]);
-    Ok(Transaction {
-        version: Version::TWO,
-        lock_time: LockTime::from_consensus(nonce),
-        input: vec![TxIn {
-            previous_output: OutPoint {
-                txid: Txid::from_byte_array([1; 32]),
-                vout: nonce,
-            },
-            script_sig: ScriptBuf::new(),
-            sequence: Sequence::MAX,
-            witness,
-        }],
-        output: vec![TxOut {
+    signed_launch_transaction(
+        key,
+        instructions,
+        OutPoint {
+            txid: Txid::from_byte_array([1; 32]),
+            vout: nonce,
+        },
+        TxOut {
             value: Amount::ZERO,
             script_pubkey: ScriptBuf::new(),
-        }],
-    })
+        },
+    )
 }

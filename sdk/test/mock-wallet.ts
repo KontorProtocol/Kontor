@@ -6,7 +6,7 @@
  * a browser test can also register it under `window.btc_providers`.
  */
 import { base64 } from "@scure/base";
-import { SigHash } from "@scure/btc-signer";
+import { SigHash, Transaction } from "@scure/btc-signer";
 import type { LocalKey } from "../src/local-key.js";
 import type { SighashKind } from "../src/signing.js";
 import type {
@@ -63,12 +63,15 @@ export function mockWalletRequest(
         const p = params as {
           psbt: string;
           signInputs: Record<string, number[]>;
-          allowedSignHash?: number;
         };
         const indexes = p.signInputs[signing.identity.address] ?? [];
-        const sighash = allowedSignHashToKind(p.allowedSignHash);
-        const signed = await signing.psbt(base64.decode(p.psbt), {
-          inputs: indexes.map((index) => ({ index, sighash })),
+        const bytes = base64.decode(p.psbt);
+        const tx = Transaction.fromPSBT(bytes);
+        const signed = await signing.psbt(bytes, {
+          inputs: indexes.map((index) => ({
+            index,
+            sighash: sighashKind(tx.getInput(index).sighashType),
+          })),
         });
         return { status: "success", result: { psbt: base64.encode(signed) } };
       }
@@ -82,9 +85,10 @@ export function mockWalletRequest(
   };
 }
 
-function allowedSignHashToKind(n: number | undefined): SighashKind {
+function sighashKind(n: number | undefined): SighashKind {
   if (n == null) return "default";
   if (n === SigHash.ALL) return "all";
+  if (n === SigHash.ALL_ANYONECANPAY) return "all-anyonecanpay";
   if (n === SigHash.SINGLE_ANYONECANPAY) return "single-anyonecanpay";
-  throw new Error(`mock wallet: unsupported allowedSignHash ${n}`);
+  throw new Error(`mock wallet: unsupported PSBT sighash ${n}`);
 }

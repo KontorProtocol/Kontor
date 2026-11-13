@@ -15,8 +15,8 @@ use crate::database::certified_history;
 use crate::database::certified_history::{closure, control};
 use crate::database::confirmation::set_confirmation_position;
 use crate::database::queries::{
-    confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
-    select_block_at_height, select_block_latest,
+    confirm_transaction, executed_wtxid, get_transaction_by_txid, insert_batch, insert_block,
+    insert_transaction, select_block_at_height, select_block_latest,
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::protocol::canonical_application::ApplicationSource;
@@ -230,11 +230,23 @@ impl<E: Executor> ExecutionContext<E> {
         let mut failures: Vec<Vec<Vec<Option<String>>>> =
             Vec::with_capacity(block.transactions.len());
         for (i, t) in block.transactions.iter().enumerate() {
-            if get_transaction_by_txid(&self.db_conn(), &t.txid.to_string())
+            let wtxid = block
+                .wtxids
+                .as_ref()
+                .and_then(|wtxids| wtxids.get(t.index as usize));
+            if let Some(previous) = get_transaction_by_txid(&self.db_conn(), &t.txid.to_string())
                 .await
                 .context("get_transaction_by_txid failed")?
-                .is_some()
             {
+                if let (Some(_), Some(wtxid)) = (previous.batch_height, wtxid) {
+                    let retained = executed_wtxid(&self.db_conn(), previous.id)
+                        .await?
+                        .context("executed batch witness is unavailable at confirmation")?;
+                    ensure!(
+                        retained == *wtxid,
+                        "canonical witness differs from optimistic execution"
+                    );
+                }
                 confirm_transaction(&self.db_conn(), &t.txid.to_string(), block.height, i as u32)
                     .await
                     .context("confirm_transaction failed")?;
@@ -686,6 +698,7 @@ impl<E: Executor> ExecutionContext<E> {
         let block = PreparedBlock {
             height,
             input: None,
+            wtxids: None,
             hash: new_mock_block_hash(height as u32),
             prev_hash: block_row
                 .as_ref()

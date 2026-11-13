@@ -339,7 +339,95 @@ export type InstKind =
       bls_sig: Array<number>;
     };
   }
-  | "Sponsor";
+  | "Sponsor"
+  | {
+    "SponsorBound": {
+      target_input_index: number;
+      /**
+       * Consensus outpoint bytes. Fixed width keeps fee sizing stable
+       * when compose fills a Build target after its commit.
+       */
+      target_txid: [
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+      ];
+      target_vout_le: [number, number, number, number];
+      target_leaf_hash: [
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+      ];
+      max_total_gas_le: [
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+      ];
+    };
+  };
 
 export type Insts = { ops: Array<Inst>; aggregate: AggregateInfo | null };
 
@@ -637,6 +725,11 @@ export type RevealOutputs = {
 export type RevealParticipant = {
   x_only_public_key: string;
   commit_insts: Insts;
+  /**
+   * Defaults to ALL|ANYONECANPAY. An offline seller uses
+   * SINGLE|ANYONECANPAY to bind its paired output.
+   */
+  sighash_type: number | null;
   /**
    * Optional. The common seller-offer pattern (chained envelope +
    * change in extras) leaves this unset; the marketplace swap sets

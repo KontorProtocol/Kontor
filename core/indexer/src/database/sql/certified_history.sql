@@ -96,6 +96,31 @@ CREATE TABLE IF NOT EXISTS closure_plans (
     record BLOB NOT NULL
 );
 
+-- A conflict or exact-deadline healing proof remains branch-bound after its
+-- affected execution is rolled back or restored.
+CREATE TABLE IF NOT EXISTS closure_reconcile_reasons (
+    seed_id BLOB PRIMARY KEY CHECK (length(seed_id) = 32),
+    kind INTEGER NOT NULL CHECK (kind IN (0, 1)),
+    a_decision BLOB NOT NULL REFERENCES certified_decisions(height),
+    a_txid BLOB NOT NULL CHECK (length(a_txid) = 32),
+    a_anchor BLOB NOT NULL CHECK (length(a_anchor) = 8),
+    b_decision BLOB NOT NULL REFERENCES certified_decisions(height),
+    b_height BLOB NOT NULL CHECK (length(b_height) = 8),
+    record BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_closure_reconcile_reason_b_height
+    ON closure_reconcile_reasons (b_height);
+CREATE INDEX IF NOT EXISTS idx_closure_reconcile_reason_a_decision
+    ON closure_reconcile_reasons (kind, a_decision);
+CREATE INDEX IF NOT EXISTS idx_closure_reconcile_reason_a_txid
+    ON closure_reconcile_reasons (kind, a_txid);
+
+CREATE TABLE IF NOT EXISTS closure_reconcile_seeds (
+    height BLOB NOT NULL REFERENCES closure_plans(height),
+    seed_id BLOB NOT NULL REFERENCES closure_reconcile_reasons(seed_id),
+    PRIMARY KEY (height, seed_id)
+);
+
 CREATE TABLE IF NOT EXISTS closure_work_plans (
     plan_key BLOB PRIMARY KEY CHECK (length(plan_key) = 32),
     height BLOB NOT NULL REFERENCES closure_plans(height),
@@ -136,6 +161,41 @@ CREATE TABLE IF NOT EXISTS closure_finality_plans (
     CHECK ((seed_after_decision IS NULL) = (seed_after_txid IS NULL)),
     CHECK ((replay_height IS NULL) = (replay_decision IS NULL)),
     CHECK ((phase = 3) = (record IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS closure_reconcile_plans (
+    plan_key BLOB PRIMARY KEY REFERENCES closure_work_plans(plan_key),
+    phase INTEGER NOT NULL CHECK (phase BETWEEN 0 AND 3),
+    scan_height BLOB CHECK (scan_height IS NULL OR length(scan_height) = 8),
+    scan_decision BLOB CHECK (scan_decision IS NULL OR length(scan_decision) = 8),
+    evidence_count BLOB NOT NULL CHECK (length(evidence_count) = 8),
+    evidence_digest BLOB NOT NULL CHECK (length(evidence_digest) = 32),
+    exclusion_done INTEGER NOT NULL DEFAULT 0 CHECK (exclusion_done IN (0, 1)),
+    exclusion_after_decision BLOB CHECK (exclusion_after_decision IS NULL OR length(exclusion_after_decision) = 8),
+    exclusion_after_txid TEXT,
+    replay_height BLOB CHECK (replay_height IS NULL OR length(replay_height) = 8),
+    replay_decision BLOB CHECK (replay_decision IS NULL OR length(replay_decision) = 8),
+    record BLOB,
+    CHECK ((replay_height IS NULL) = (replay_decision IS NULL)),
+    CHECK ((scan_height IS NULL) = (scan_decision IS NULL)),
+    CHECK ((exclusion_after_decision IS NULL) = (exclusion_after_txid IS NULL)),
+    CHECK ((phase = 3) = (record IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS closure_reconcile_confirmed (
+    plan_key BLOB NOT NULL REFERENCES closure_reconcile_plans(plan_key),
+    txid BLOB NOT NULL CHECK (length(txid) = 32),
+    wtxid BLOB NOT NULL CHECK (length(wtxid) = 32),
+    bitcoin_height BLOB NOT NULL CHECK (length(bitcoin_height) = 8),
+    decision BLOB NOT NULL REFERENCES certified_decisions(height),
+    input_id BLOB NOT NULL CHECK (length(input_id) = 32),
+    PRIMARY KEY (plan_key, txid, decision)
+);
+
+CREATE TABLE IF NOT EXISTS closure_reconcile_unavailable (
+    plan_key BLOB NOT NULL REFERENCES closure_reconcile_plans(plan_key),
+    txid BLOB NOT NULL CHECK (length(txid) = 32),
+    PRIMARY KEY (plan_key, txid)
 );
 
 CREATE TABLE IF NOT EXISTS closure_finality_seeds (

@@ -25,12 +25,7 @@ import { SigHash, Transaction } from "@scure/btc-signer";
 import { HolderRef } from "../canonical/HolderRef.js";
 import { SignerError } from "../errors.js";
 import type { Identity } from "../identity.js";
-import type {
-  Signing,
-  SighashKind,
-  SignInput,
-  SignPsbtOptions,
-} from "../signing.js";
+import type { Signing, SighashKind, SignPsbtOptions } from "../signing.js";
 import type { Chain } from "../chains.js";
 
 /** A sats-connect-style RPC response envelope. */
@@ -95,10 +90,10 @@ export async function connect(opts: ConnectOptions): Promise<Signing> {
   );
 }
 
-/** `SighashKind` → the numeric sighash sats-connect's `allowedSignHash` wants.
- *  `default` is absent — a default-sighash call omits `allowedSignHash`. */
+/** `SighashKind` → the per-input PSBT sighash flag. */
 const SIGHASH_NUMBER: Record<Exclude<SighashKind, "default">, number> = {
   all: SigHash.ALL,
+  "all-anyonecanpay": SigHash.ALL_ANYONECANPAY,
   "single-anyonecanpay": SigHash.SINGLE_ANYONECANPAY,
 };
 
@@ -161,30 +156,20 @@ class SatsConnectSigning implements Signing {
       return psbt;
     }
 
-    const kind = resolveSighashKind(opts.inputs);
-
-    // Pin the sighash onto the PSBT inputs (like LocalKey does), not just on
-    // sats-connect's `allowedSignHash`. Some wallets derive the sighash to
-    // sign with from PSBT_IN_SIGHASH_TYPE, not from allowedSignHash; without
-    // the field they'd sign a non-default input (e.g. a SIGHASH_SINGLE|
-    // ANYONECANPAY marketplace detach) with the default taproot sighash and
-    // produce an invalid signature. Setting both covers either mechanism.
-    let outgoing = psbt;
-    if (kind !== "default") {
-      const flag = SIGHASH_NUMBER[kind];
-      const tx = Transaction.fromPSBT(psbt);
-      for (const i of opts.inputs)
-        tx.updateInput(i.index, { sighashType: flag });
-      outgoing = tx.toPSBT();
+    const tx = Transaction.fromPSBT(psbt);
+    for (const input of opts.inputs) {
+      const kind = input.sighash ?? "default";
+      if (kind !== "default") {
+        tx.updateInput(input.index, { sighashType: SIGHASH_NUMBER[kind] });
+      }
     }
+    const outgoing = tx.toPSBT();
 
     const params: Record<string, unknown> = {
       psbt: base64.encode(outgoing),
       signInputs: { [this.identity.address]: opts.inputs.map((i) => i.index) },
       broadcast: false,
     };
-    if (kind !== "default") params.allowedSignHash = SIGHASH_NUMBER[kind];
-
     const result = unwrap(
       await this.request("signPsbt", params),
       "signPsbt",
@@ -232,20 +217,4 @@ function normalizeXOnly(publicKey: string): string {
     `sats-connect: unexpected public key length (${h.length} hex chars)`,
     { docsPath: "/sdk/wallets/sats-connect" },
   );
-}
-
-/** sats-connect carries a single per-request `allowedSignHash`, so every
- *  input in one call must share a sighash. Our flows do (each party signs
- *  its own inputs under one sighash); a mix is a programming error. */
-function resolveSighashKind(inputs: SignInput[]): SighashKind {
-  const kinds = new Set(inputs.map((i) => i.sighash ?? "default"));
-  if (kinds.size > 1) {
-    throw new SignerError(
-      "sats-connect.psbt: one signPsbt call can't mix sighash types — " +
-        "sats-connect's allowedSignHash is per-request",
-      { docsPath: "/sdk/wallets/sats-connect" },
-    );
-  }
-  const [kind] = kinds as Set<SighashKind>;
-  return kind;
 }

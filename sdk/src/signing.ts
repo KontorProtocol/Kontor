@@ -23,7 +23,8 @@ import type { Identity } from "./identity.js";
  *   only this input and the output at its index. The marketplace seller
  *   signs the detach input this way.
  */
-export type SighashKind = "default" | "all" | "single-anyonecanpay";
+export type SighashKind =
+  "default" | "all" | "all-anyonecanpay" | "single-anyonecanpay";
 
 /** One input to sign, and the sighash to sign it under. */
 export interface SignInput {

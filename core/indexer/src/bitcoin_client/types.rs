@@ -188,8 +188,8 @@ impl TestMempoolAcceptResultFees {
 
 /// A single mempool entry returned by `getmempoolentry` or the verbose form
 /// of `getrawmempool`. Only the fields we actually consume are modeled;
-/// Bitcoin Core returns additional metadata (`weight`, `wtxid`, descendant
-/// info, etc.) that we ignore.
+/// Bitcoin Core returns additional metadata (`weight`, descendant info, etc.)
+/// that we ignore.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MempoolEntry {
     /// Sigop-adjusted virtual size in vbytes. Bitcoin Core computes this
@@ -203,6 +203,9 @@ pub struct MempoolEntry {
     /// Sigop-adjusted vsize for this tx + all in-mempool ancestors.
     /// Same adjustment applies; see `vsize` doc.
     pub ancestorsize: u64,
+    /// Missing witness identity is not sufficient for exact-witness admission.
+    #[serde(default)]
+    pub wtxid: Option<Txid>,
     pub fees: MempoolEntryFees,
     /// In-mempool parent txids (direct ancestors, not transitive).
     #[serde(default)]

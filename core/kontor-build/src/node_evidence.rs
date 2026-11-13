@@ -59,6 +59,7 @@ pub enum Request {
         root: PathBuf,
         observations: Value,
         expected_graphs: Vec<String>,
+        link_set: Option<String>,
     },
     Certified {
         root: PathBuf,
@@ -95,7 +96,8 @@ pub fn run(request: Request) -> Result<Value> {
             root,
             observations,
             expected_graphs,
-        } => return semantics::verify(&observations, &root, &expected_graphs),
+            link_set,
+        } => return semantics::verify(&observations, &root, &expected_graphs, link_set.as_deref()),
         Request::Certified {
             root,
             observations,

@@ -38,6 +38,7 @@ pub(crate) enum WorkItem {
     Rollback { height: u64 },
     Finality,
     Observe,
+    Reconcile,
 }
 
 impl WorkItem {
@@ -62,6 +63,7 @@ impl WorkItem {
             }
             Self::Finality => output.tag(2)?,
             Self::Observe => output.tag(3)?,
+            Self::Reconcile => output.tag(6)?,
         }
         Ok(())
     }
@@ -83,6 +85,7 @@ impl WorkItem {
             5 => Self::Activate {
                 decision: input.u64()?,
             },
+            6 => Self::Reconcile,
             _ => anyhow::bail!("unknown closure work item"),
         })
     }
@@ -96,10 +99,21 @@ pub(crate) struct ClosurePlan {
     pub(crate) previous_closure: [u8; 32],
     pub(crate) input: CanonicalPosition,
     pub(crate) replacement_rollback: Option<u64>,
+    pub(crate) reconciliation: Option<ReconciliationPlan>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReconciliationPlan {
+    pub(crate) from_height: u64,
+    pub(crate) seed_count: u64,
+    pub(crate) seed_digest: [u8; 32],
 }
 
 impl ClosurePlan {
     pub(crate) fn initial_work(&self) -> Vec<WorkItem> {
+        if self.reconciliation.is_some() {
+            return vec![WorkItem::Reconcile];
+        }
         let mut work = Vec::new();
         if let Some(height) = self.replacement_rollback {
             work.push(WorkItem::Rollback { height });
@@ -117,7 +131,11 @@ impl ClosurePlan {
             "invalid closure plan position"
         );
         let mut output = Encoder::default();
-        output.fixed(b"KCP1")?;
+        output.fixed(if self.reconciliation.is_some() {
+            b"KCP2"
+        } else {
+            b"KCP1"
+        })?;
         self.context.encode(&mut output)?;
         output.u64(self.height)?;
         output.fixed(&self.decision)?;
@@ -134,13 +152,24 @@ impl ClosurePlan {
                 output.u64(height)?;
             }
         }
+        if let Some(reconciliation) = self.reconciliation {
+            ensure!(
+                reconciliation.from_height > 0
+                    && reconciliation.from_height <= self.input.storage_height,
+                "invalid reconciliation rollback boundary"
+            );
+            output.u64(reconciliation.from_height)?;
+            output.u64(reconciliation.seed_count)?;
+            output.fixed(&reconciliation.seed_digest)?;
+        }
         Ok(output.finish())
     }
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         let mut input = Decoder::new(bytes);
+        let version = input.fixed::<4>()?;
         ensure!(
-            input.fixed::<4>()? == *b"KCP1",
+            version == *b"KCP1" || version == *b"KCP2",
             "unknown closure plan encoding"
         );
         let plan = Self {
@@ -154,6 +183,15 @@ impl ClosurePlan {
                 1 => Some(input.u64()?),
                 _ => anyhow::bail!("invalid replacement rollback tag"),
             },
+            reconciliation: if version == *b"KCP2" {
+                Some(ReconciliationPlan {
+                    from_height: input.u64()?,
+                    seed_count: input.u64()?,
+                    seed_digest: input.fixed()?,
+                })
+            } else {
+                None
+            },
         };
         input.finish()?;
         plan.encode()?;
@@ -161,7 +199,14 @@ impl ClosurePlan {
     }
 
     pub(crate) fn id(&self) -> Result<[u8; 32]> {
-        Ok(domain_digest(b"kontor/closure-plan/v1", &self.encode()?))
+        Ok(domain_digest(
+            if self.reconciliation.is_some() {
+                b"kontor/closure-plan/v2".as_slice()
+            } else {
+                b"kontor/closure-plan/v1".as_slice()
+            },
+            &self.encode()?,
+        ))
     }
 }
 
@@ -175,6 +220,7 @@ pub(crate) enum StageOutcome {
     FinalityEvaluated,
     Observed,
     NoActivation,
+    Reconciled,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -209,6 +255,7 @@ impl StageRecord {
                         | StageOutcome::RetractedControl
                 ) | (WorkItem::Rollback { .. }, StageOutcome::RolledBack)
                     | (WorkItem::Finality, StageOutcome::FinalityEvaluated)
+                    | (WorkItem::Reconcile, StageOutcome::Reconciled)
                     | (WorkItem::Observe, StageOutcome::Observed)
                     | (
                         WorkItem::Activate { .. },
@@ -299,6 +346,7 @@ impl StageRecord {
             StageOutcome::ReplacedAnchorBatch => 5,
             StageOutcome::RetractedControl => 6,
             StageOutcome::NoActivation => 7,
+            StageOutcome::Reconciled => 8,
         })?;
         output.count(self.applications.len())?;
         for application in &self.applications {
@@ -331,6 +379,7 @@ impl StageRecord {
             5 => StageOutcome::ReplacedAnchorBatch,
             6 => StageOutcome::RetractedControl,
             7 => StageOutcome::NoActivation,
+            8 => StageOutcome::Reconciled,
             _ => anyhow::bail!("unknown closure stage outcome"),
         };
         let count = input.count(4)?;

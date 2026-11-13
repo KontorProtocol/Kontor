@@ -1,6 +1,9 @@
+use bitcoin::Txid;
 use libsql::{Connection, params};
 
 use super::Error;
+use super::executed_wtxid;
+use crate::database::certified_history::{Status, frontier, load_verified_input};
 use crate::database::types::BatchQueryResult;
 
 pub async fn insert_batch(
@@ -366,23 +369,18 @@ pub async fn select_applicable_exclusions(
 ) -> Result<std::collections::HashMap<u64, std::collections::HashSet<String>>, Error> {
     let mut rows = conn
         .query(
-            "SELECT e.batch_height, e.txid \
-             FROM excluded_batch_txids e \
-             WHERE NOT EXISTS ( \
-               SELECT 1 FROM transactions t \
-                WHERE t.txid = e.txid \
-                  AND t.confirmed_height IS NOT NULL \
-                  AND t.confirmed_height <= e.deadline \
-                  AND (t.batch_height IS NULL OR t.batch_height = e.batch_height))",
+            "SELECT e.batch_height, e.txid, e.deadline FROM excluded_batch_txids e",
             (),
         )
         .await?;
     let mut out: std::collections::HashMap<u64, std::collections::HashSet<String>> =
         std::collections::HashMap::new();
     while let Some(row) = rows.next().await? {
-        out.entry(row.get::<u64>(0)?)
-            .or_default()
-            .insert(row.get::<String>(1)?);
+        let batch_height = row.get::<u64>(0)?;
+        let txid = row.get::<String>(1)?;
+        if !exact_confirmation(conn, batch_height, &txid, row.get(2)?).await? {
+            out.entry(batch_height).or_default().insert(txid);
+        }
     }
     Ok(out)
 }
@@ -393,19 +391,63 @@ pub(crate) async fn select_decision_exclusions(
 ) -> Result<Vec<String>, Error> {
     let mut rows = conn
         .query(
-            "SELECT DISTINCT e.txid FROM excluded_batch_txids e WHERE e.batch_height = ?1
-         AND NOT EXISTS (
-             SELECT 1 FROM transactions t WHERE t.txid = e.txid
-             AND t.confirmed_height IS NOT NULL AND t.confirmed_height <= e.deadline
-             AND (t.batch_height IS NULL OR t.batch_height = e.batch_height))",
+            "SELECT e.txid, e.deadline FROM excluded_batch_txids e WHERE e.batch_height = ?1",
             [height],
         )
         .await?;
     let mut txids = Vec::new();
     while let Some(row) = rows.next().await? {
-        txids.push(row.get(0)?);
+        let txid = row.get::<String>(0)?;
+        if !exact_confirmation(conn, height, &txid, row.get(1)?).await? {
+            txids.push(txid);
+        }
     }
     Ok(txids)
+}
+
+pub(crate) async fn exact_confirmation(
+    conn: &Connection,
+    batch_height: u64,
+    txid: &str,
+    deadline: u64,
+) -> Result<bool, Error> {
+    let row = conn.query(
+        "SELECT id, batch_height FROM transactions WHERE txid = ?1 AND confirmed_height IS NOT NULL AND confirmed_height <= ?2",
+        params![txid, deadline],
+    ).await?.next().await?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+    let owner_batch = row.get::<Option<u64>>(1)?;
+    if owner_batch.is_some_and(|owner| owner != batch_height) {
+        return Ok(false);
+    }
+    let executed = executed_wtxid(conn, row.get(0)?).await?;
+    let Some(executed) = executed else {
+        return Ok(false);
+    };
+    let state = frontier(conn)
+        .await
+        .map_err(|error| Error::InvalidData(error.to_string()))?;
+    if state.status != Status::Ready {
+        return Ok(false);
+    }
+    let retained = load_verified_input(conn, batch_height)
+        .await
+        .map_err(|error| Error::InvalidData(error.to_string()))?;
+    let txid = txid
+        .parse::<Txid>()
+        .map_err(|error| Error::InvalidData(error.to_string()))?;
+    let expected = retained
+        .input()
+        .transactions()
+        .map_err(|error| Error::InvalidData(error.to_string()))?
+        .into_iter()
+        .find(|raw| raw.compute_txid() == txid)
+        .ok_or_else(|| {
+            Error::InvalidData("excluded transaction absent from certified batch".to_string())
+        })?;
+    Ok(expected.compute_wtxid() == executed)
 }
 
 /// Record what a finality pass dropped, as `(consensus_height, txid, deadline)`.

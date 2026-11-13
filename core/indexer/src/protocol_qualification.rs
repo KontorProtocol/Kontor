@@ -130,8 +130,12 @@ async fn retained_canonical_history_adapters() -> Result<()> {
 #[cfg(any(not(kontor_linked), kontor_observer))]
 pub async fn certified_decision_callbacks() -> Result<Value> {
     let service = OwnerService::new();
-    let result =
-        certified::qualification::run(session_factory(NETWORK, None)?, &service, genesis()).await;
+    let result = Box::pin(certified::qualification::run(
+        session_factory(NETWORK, None)?,
+        &service,
+        genesis(),
+    ))
+    .await;
     service.shutdown();
     result
 }

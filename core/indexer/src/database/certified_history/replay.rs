@@ -3,6 +3,7 @@ use bitcoin::{BlockHash, hashes::Hash};
 use libsql::{Connection, Row, params};
 
 use super::{fixed, frontier};
+use crate::database::queries::exact_confirmation;
 use crate::protocol::coordinator::certified_decision::Decision;
 use crate::protocol::coordinator::certified_input::CommandKind;
 
@@ -174,25 +175,28 @@ pub(crate) async fn exclusion_page(
     let (height, txid) = after.map_or((0, ""), |cursor| (cursor.decision, cursor.txid.as_str()));
     let mut rows = conn
         .query(
-            "SELECT e.batch_height, e.txid FROM excluded_batch_txids e
+            "SELECT e.batch_height, e.txid, e.deadline FROM excluded_batch_txids e
          WHERE (e.batch_height, e.txid) > (?1, ?2) AND e.batch_height <= ?3
-           AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.txid = e.txid
-             AND t.confirmed_height IS NOT NULL AND t.confirmed_height <= e.deadline
-             AND (t.batch_height IS NULL OR t.batch_height = e.batch_height))
          ORDER BY e.batch_height, e.txid LIMIT ?4",
             params![height, txid, verdict, PAGE_DECISIONS as u64],
         )
         .await?;
     let mut candidates = Vec::new();
     while let Some(row) = rows.next().await? {
-        candidates.push(ExclusionCursor {
-            decision: u64::try_from(row.get::<i64>(0)?).context("negative exclusion height")?,
-            txid: row.get(1)?,
-        });
+        candidates.push((
+            ExclusionCursor {
+                decision: u64::try_from(row.get::<i64>(0)?).context("negative exclusion height")?,
+                txid: row.get(1)?,
+            },
+            row.get::<u64>(2)?,
+        ));
     }
-    let next = (candidates.len() == PAGE_DECISIONS).then(|| candidates.last().unwrap().clone());
+    let next = (candidates.len() == PAGE_DECISIONS).then(|| candidates.last().unwrap().0.clone());
     let mut entries = Vec::new();
-    for entry in candidates {
+    for (entry, deadline) in candidates {
+        if exact_confirmation(conn, entry.decision, &entry.txid, deadline).await? {
+            continue;
+        }
         if let Some(selected) = eligible(conn, verdict, entry.decision).await? {
             ensure!(
                 selected.kind == CommandKind::Batch,

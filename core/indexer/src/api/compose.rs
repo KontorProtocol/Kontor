@@ -1,10 +1,11 @@
 use anyhow::{Result, anyhow};
 use bitcoin::{
-    Address, AddressType, Amount, FeeRate, KnownHrp, OutPoint, Psbt, ScriptBuf, TxOut, Witness,
+    Address, AddressType, Amount, FeeRate, KnownHrp, Network, OutPoint, Psbt, ScriptBuf,
+    TapLeafHash, TapSighashType, TxOut, Witness,
     absolute::LockTime,
     consensus::encode::serialize as serialize_tx,
     opcodes::{
-        OP_0, OP_FALSE,
+        OP_FALSE,
         all::{OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN},
     },
     script::{Builder, PushBytesBuf},
@@ -14,9 +15,10 @@ use bitcoin::{
 };
 
 use bitcoin::Txid;
+use bitcoin::hashes::Hash;
 use bitcoin::key::constants::SCHNORR_SIGNATURE_SIZE;
 use indexer_types::{
-    CommitSource, Funding, Reveal, RevealOutput, RevealOutputInfo, RevealOutputs,
+    CommitSource, Funding, Inst, InstKind, Reveal, RevealOutput, RevealOutputInfo, RevealOutputs,
     RevealParticipant, TapLeafScript, serialize,
 };
 use std::{collections::HashSet, str::FromStr};
@@ -30,9 +32,11 @@ const MAX_OP_RETURN_BYTES: usize = 80; // Standard policy
 const MIN_ENVELOPE_SATS: u64 = 330; // P2TR dust floor
 const MAX_UTXOS_PER_PARTICIPANT: usize = 64; // Hard cap per participant
 const P2TR_OUTPUT_SIZE: usize = 34; // P2TR script pubkey size in bytes
-const PROTOCOL_TAG: &[u8; 3] = b"kon"; // Protocol envelope marker
+const PROTOCOL_TAG: &[u8; 3] = b"kon";
+const MAX_MONEY_SATS: u64 = 2_100_000_000_000_000;
 
-pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
+pub fn compose_reveal(reveal: Reveal, network: Network) -> Result<RevealOutputs> {
+    validate_sponsor_structure(&reveal)?;
     if reveal.participants.is_empty() && reveal.extra_inputs.is_empty() {
         return Err(anyhow!("Reveal must have at least one input"));
     }
@@ -65,7 +69,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
             }
         };
         let (x_only_public_key, script, control_block) =
-            participant_tap_data(p).map_err(|e| anyhow!("participant {}: {}", i, e))?;
+            participant_tap_data(p, network).map_err(|e| anyhow!("participant {}: {}", i, e))?;
         resolved.push(ResolvedParticipant {
             x_only_public_key,
             outpoint,
@@ -78,6 +82,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
             output: p.output.clone(),
         });
     }
+    validate_sponsor_pairs(&reveal, &resolved)?;
 
     // Compute the output layout. Shared with `estimate_reveal_vbytes` so
     // the commit's sizing matches the actual reveal exactly — if these
@@ -108,7 +113,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
     // with `estimate_reveal_vbytes` so the commit's sizing reflects the
     // same outputs the reveal will actually emit — script construction
     // lives in `plan_resolved_outputs` only, never duplicated.
-    let resolved_outputs = plan_resolved_outputs(&reveal, &layout)?;
+    let resolved_outputs = plan_resolved_outputs(&reveal, &layout, network)?;
 
     // Total input value (used to resolve Change later)
     let total_input_value: u64 = resolved
@@ -138,7 +143,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
     // (PSBT_IN_TAP_LEAF_SCRIPT, BIP 371) carries the leaf script the
     // SDK script-spends through. With both populated, wallets that
     // speak taproot PSBT can sign without any client-side fixup.
-    for rp in &resolved {
+    for (participant_index, rp) in resolved.iter().enumerate() {
         psbt.unsigned_tx.input.push(TxIn {
             previous_output: rp.outpoint,
             ..Default::default()
@@ -157,6 +162,9 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
             witness_utxo: Some(rp.prevout.clone()),
             tap_internal_key: Some(rp.x_only_public_key),
             tap_scripts,
+            sighash_type: Some(
+                participant_sighash(&reveal.participants[participant_index])?.into(),
+            ),
             ..Default::default()
         });
     }
@@ -342,6 +350,165 @@ struct ResolvedParticipant {
     output: Option<RevealOutput>,
 }
 
+fn participant_sighash(p: &RevealParticipant) -> Result<TapSighashType> {
+    match p.sighash_type.unwrap_or(0x81) {
+        0x81 => Ok(TapSighashType::AllPlusAnyoneCanPay),
+        0x83 if p.output.is_some() => Ok(TapSighashType::SinglePlusAnyoneCanPay),
+        0x83 => Err(anyhow!("SINGLE|ANYONECANPAY requires a paired output")),
+        other => Err(anyhow!("unsupported participant sighash type {other}")),
+    }
+}
+
+fn sponsor_instruction(p: &RevealParticipant) -> Result<Option<&Inst>> {
+    if p.commit_insts
+        .ops
+        .iter()
+        .any(|inst| matches!(inst.kind, InstKind::Sponsor))
+    {
+        return Err(anyhow!("unbound Sponsor is not a launch operation"));
+    }
+    let mut sponsors = p
+        .commit_insts
+        .ops
+        .iter()
+        .filter(|inst| matches!(inst.kind, InstKind::SponsorBound { .. }));
+    let first = sponsors.next();
+    if sponsors.next().is_some() {
+        return Err(anyhow!("one participant cannot contain multiple Sponsors"));
+    }
+    Ok(first)
+}
+
+fn validate_sponsor_structure(reveal: &Reveal) -> Result<()> {
+    for (index, participant) in reveal.participants.iter().enumerate() {
+        let Some(sponsor) = sponsor_instruction(participant)? else {
+            continue;
+        };
+        if participant_sighash(participant)? != TapSighashType::AllPlusAnyoneCanPay {
+            return Err(anyhow!("Sponsor requires ALL|ANYONECANPAY"));
+        }
+        if participant.commit_insts.aggregate.is_some() {
+            return Err(anyhow!("Sponsor cannot be an aggregate instruction"));
+        }
+        let InstKind::SponsorBound {
+            target_input_index, ..
+        } = &sponsor.kind
+        else {
+            unreachable!("filtered SponsorBound")
+        };
+        if usize::try_from(*target_input_index).ok() != Some(index + 1) {
+            return Err(anyhow!("Sponsor must name the next participant input"));
+        }
+        let target = reveal
+            .participants
+            .get(index + 1)
+            .ok_or_else(|| anyhow!("Sponsor target is missing"))?;
+        if sponsor_instruction(target)?.is_some() || target.commit_insts.ops.is_empty() {
+            return Err(anyhow!("Sponsor target has invalid operations"));
+        }
+    }
+    Ok(())
+}
+
+fn fill_build_sponsor(
+    participants: &mut [RevealParticipant],
+    index: usize,
+    network: Network,
+) -> Result<()> {
+    let target = participants
+        .get(index + 1)
+        .ok_or_else(|| anyhow!("Sponsor target is missing"))?;
+    let CommitSource::Existing { outpoint, .. } = &target.commit_source else {
+        return Err(anyhow!("Sponsor target commit must be resolved first"));
+    };
+    let (_, script, _) = participant_tap_data(target, network)?;
+    let target_point = serialize_tx(outpoint);
+    let target_txid: [u8; 32] = target_point[..32]
+        .try_into()
+        .map_err(|_| anyhow!("invalid Sponsor target txid encoding"))?;
+    let target_vout_le: [u8; 4] = target_point[32..]
+        .try_into()
+        .map_err(|_| anyhow!("invalid Sponsor target vout encoding"))?;
+    let target_leaf_hash =
+        TapLeafHash::from_script(&script, LeafVersion::TapScript).to_byte_array();
+    let target_op_count = target.commit_insts.ops.len() as u64;
+    let sponsor = participants[index]
+        .commit_insts
+        .ops
+        .iter_mut()
+        .find(|inst| matches!(inst.kind, InstKind::SponsorBound { .. }))
+        .ok_or_else(|| anyhow!("missing Sponsor instruction"))?;
+    let total_gas = sponsor
+        .gas_limit
+        .checked_mul(target_op_count)
+        .ok_or_else(|| anyhow!("Sponsor total gas overflows"))?;
+    let InstKind::SponsorBound {
+        target_txid: committed_txid,
+        target_vout_le: committed_vout,
+        target_leaf_hash: committed_leaf,
+        max_total_gas_le,
+        ..
+    } = &mut sponsor.kind
+    else {
+        unreachable!("filtered SponsorBound")
+    };
+    *committed_txid = target_txid;
+    *committed_vout = target_vout_le;
+    *committed_leaf = target_leaf_hash;
+    *max_total_gas_le = total_gas.to_le_bytes();
+    Ok(())
+}
+
+fn validate_sponsor_pairs(reveal: &Reveal, resolved: &[ResolvedParticipant]) -> Result<()> {
+    let mut sponsored = vec![false; reveal.participants.len()];
+    for (index, participant) in reveal.participants.iter().enumerate() {
+        let Some(sponsor) = sponsor_instruction(participant)? else {
+            continue;
+        };
+        let InstKind::SponsorBound {
+            target_input_index,
+            target_txid,
+            target_vout_le,
+            target_leaf_hash,
+            max_total_gas_le,
+        } = &sponsor.kind
+        else {
+            unreachable!("filtered SponsorBound")
+        };
+        let target_index = usize::try_from(*target_input_index)
+            .map_err(|_| anyhow!("Sponsor target index out of range"))?;
+        if target_index != index + 1 {
+            return Err(anyhow!("Sponsor must name the next participant input"));
+        }
+        let target = resolved
+            .get(target_index)
+            .ok_or_else(|| anyhow!("Sponsor target is missing"))?;
+        let expected_gas = sponsor
+            .gas_limit
+            .checked_mul(reveal.participants[target_index].commit_insts.ops.len() as u64)
+            .ok_or_else(|| anyhow!("Sponsor total gas overflows"))?;
+        let target_point = serialize_tx(&target.outpoint);
+        if target_point[..32] != target_txid[..]
+            || target_point[32..] != target_vout_le[..]
+            || TapLeafHash::from_script(&target.tap_leaf_script.script, LeafVersion::TapScript)
+                .to_byte_array()
+                != *target_leaf_hash
+            || u64::from_le_bytes(*max_total_gas_le) != expected_gas
+        {
+            return Err(anyhow!("Sponsor target or gas scope differs"));
+        }
+        sponsored[target_index] = true;
+    }
+    for (index, participant) in reveal.participants.iter().enumerate() {
+        if participant_sighash(participant)? == TapSighashType::SinglePlusAnyoneCanPay
+            && !sponsored[index]
+        {
+            return Err(anyhow!("SINGLE|ANYONECANPAY requires a bound Sponsor"));
+        }
+    }
+    Ok(())
+}
+
 /// Parse + size-validate a participant's tap-leaf data. Returns the
 /// parsed x-only key, the leaf script, and its control block — the
 /// inputs both `compose_reveal` (for real PSBT inputs + witness
@@ -350,7 +517,9 @@ struct ResolvedParticipant {
 /// per-participant validation can't silently miss either path.
 fn participant_tap_data(
     p: &RevealParticipant,
+    network: Network,
 ) -> Result<(XOnlyPublicKey, ScriptBuf, ControlBlock)> {
+    participant_sighash(p)?;
     let x_only_pk = XOnlyPublicKey::from_str(&p.x_only_public_key)
         .map_err(|e| anyhow!("invalid x_only_public_key: {}", e))?;
     let insts_bytes =
@@ -358,7 +527,19 @@ fn participant_tap_data(
     if insts_bytes.is_empty() || insts_bytes.len() > MAX_SCRIPT_BYTES {
         return Err(anyhow!("leaf script data size invalid"));
     }
-    let (script, _, control_block) = build_tap_script_and_script_address(x_only_pk, insts_bytes)?;
+    let amount = match &p.commit_source {
+        CommitSource::Existing { prevout, .. } => prevout.value.to_sat(),
+        CommitSource::Build { .. } => 0,
+    };
+    let (script, address, control_block) =
+        build_tap_script_and_script_address(x_only_pk, insts_bytes, amount, network)?;
+    if let CommitSource::Existing { prevout, .. } = &p.commit_source
+        && prevout.script_pubkey != address.script_pubkey()
+    {
+        return Err(anyhow!(
+            "previous output does not commit to the signed leaf"
+        ));
+    }
     Ok((x_only_pk, script, control_block))
 }
 
@@ -367,7 +548,7 @@ fn participant_tap_data(
 /// sizing only; the real witness is built at signing time.
 fn placeholder_tap_script_witness(script_bytes: &[u8], control_block_bytes: &[u8]) -> Witness {
     let mut w = Witness::new();
-    w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
+    w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE + 1]);
     w.push(script_bytes);
     w.push(control_block_bytes);
     w
@@ -488,6 +669,7 @@ enum ResolvedOutputValue {
 fn plan_resolved_outputs(
     reveal: &Reveal,
     layout: &[LayoutSlot],
+    network: Network,
 ) -> Result<Vec<ResolvedOutputValue>> {
     let mut resolved_outputs = Vec::with_capacity(layout.len());
     for slot in layout {
@@ -524,7 +706,7 @@ fn plan_resolved_outputs(
                     return Err(anyhow!("ChainedEnvelope leaf data size invalid"));
                 }
                 let (script, addr, control_block) =
-                    build_tap_script_and_script_address(internal_pk, insts_bytes)?;
+                    build_tap_script_and_script_address(internal_pk, insts_bytes, *value, network)?;
                 ResolvedOutputValue::ChainedEnvelope {
                     script: addr.script_pubkey(),
                     value: *value,
@@ -576,7 +758,7 @@ fn push_resolved_output_to_dummy(dummy: &mut Transaction, output: &ResolvedOutpu
 /// block for tap-leaf participants; Schnorr sig for key-path extras).
 /// Used by both `compose_commit` (to size Build tap outputs) and
 /// `compose_reveal` (to compute the actual reveal fee).
-fn estimate_reveal_vbytes(reveal: &Reveal) -> Result<u64> {
+fn estimate_reveal_vbytes(reveal: &Reveal, network: Network) -> Result<u64> {
     let mut dummy = Transaction {
         version: Version(2),
         lock_time: LockTime::ZERO,
@@ -586,7 +768,7 @@ fn estimate_reveal_vbytes(reveal: &Reveal) -> Result<u64> {
 
     // Participants — tap-leaf script-spend inputs
     for p in &reveal.participants {
-        let (_, script, control_block) = participant_tap_data(p)?;
+        let (_, script, control_block) = participant_tap_data(p, network)?;
         let txin = TxIn {
             witness: placeholder_tap_script_witness(script.as_bytes(), &control_block.serialize()),
             ..Default::default()
@@ -607,7 +789,7 @@ fn estimate_reveal_vbytes(reveal: &Reveal) -> Result<u64> {
     // uses, so per-variant script construction lives in one place and
     // sizing matches the reveal's actual output set.
     let layout = compute_output_layout(reveal)?;
-    let plan = plan_resolved_outputs(reveal, &layout)?;
+    let plan = plan_resolved_outputs(reveal, &layout, network)?;
     for output in &plan {
         push_resolved_output_to_dummy(&mut dummy, output);
     }
@@ -657,9 +839,10 @@ fn empty_op_return_script() -> ScriptBuf {
 /// `reveal` to `compose_reveal` to build the reveal PSBT.
 pub async fn compose_commit(
     reveal: Reveal,
-    network: bitcoin::Network,
+    network: Network,
     bitcoin_client: &Client,
 ) -> Result<indexer_types::CommitOutputs> {
+    validate_sponsor_structure(&reveal)?;
     if reveal.participants.is_empty() {
         return Err(anyhow!("Reveal must have at least one participant"));
     }
@@ -713,7 +896,7 @@ pub async fn compose_commit(
     }
 
     // Estimate future reveal fee
-    let reveal_vbytes = estimate_reveal_vbytes(&reveal)?;
+    let reveal_vbytes = estimate_reveal_vbytes(&reveal, network)?;
     let reveal_fee = fee_rate
         .fee_vb(reveal_vbytes)
         .ok_or_else(|| anyhow!("reveal fee overflow"))?
@@ -767,12 +950,29 @@ pub async fn compose_commit(
     let base_share = total_build_contribution / n_builds;
     let remainder = total_build_contribution % n_builds;
 
-    // Standalone commit tx per Build participant
-    let mut commits: Vec<indexer_types::CommitTx> = Vec::with_capacity(build_indices.len());
+    // A Sponsor may name a Build recipient. Build that independent target
+    // commit first, then put its exact outpoint and leaf hash into the
+    // Sponsor's signed leaf before constructing the Sponsor commit.
+    let mut ordered_builds = Vec::with_capacity(build_indices.len());
+    let mut sponsor_builds = Vec::new();
+    for (build_order, &build_idx) in build_indices.iter().enumerate() {
+        if sponsor_instruction(&reveal.participants[build_idx])?.is_some() {
+            sponsor_builds.push((build_order, build_idx));
+        } else {
+            ordered_builds.push((build_order, build_idx));
+        }
+    }
+    ordered_builds.extend(sponsor_builds);
+
+    let mut commits_by_order: Vec<Option<indexer_types::CommitTx>> =
+        (0..build_indices.len()).map(|_| None).collect();
     let mut updated_participants = reveal.participants.clone();
 
-    for (build_order, &build_idx) in build_indices.iter().enumerate() {
-        let participant = &reveal.participants[build_idx];
+    for (build_order, build_idx) in ordered_builds {
+        if sponsor_instruction(&updated_participants[build_idx])?.is_some() {
+            fill_build_sponsor(&mut updated_participants, build_idx, network)?;
+        }
+        let participant = &updated_participants[build_idx];
         let (build_addr_str, funding) = match &participant.commit_source {
             CommitSource::Build { address, funding } => (address, funding),
             _ => unreachable!(),
@@ -795,7 +995,8 @@ pub async fn compose_commit(
         // so by here the leaf data is known-good.
         let x_only_pk = XOnlyPublicKey::from_str(&participant.x_only_public_key)?;
         let insts_bytes = serialize(&participant.commit_insts)?;
-        let (_, tap_addr, _) = build_tap_script_and_script_address(x_only_pk, insts_bytes)?;
+        let (_, tap_addr, _) =
+            build_tap_script_and_script_address(x_only_pk, insts_bytes, tap_output_value, network)?;
 
         // Bound the funding list before the RPC — a malformed request
         // with thousands of outpoints shouldn't trigger a bitcoind
@@ -873,7 +1074,7 @@ pub async fn compose_commit(
         let commit_tx_hex = hex::encode(serialize_tx(&commit_tx));
         let commit_psbt_hex = psbt.serialize_hex();
 
-        commits.push(indexer_types::CommitTx {
+        commits_by_order[build_order] = Some(indexer_types::CommitTx {
             transaction: commit_tx,
             transaction_hex: commit_tx_hex,
             psbt_hex: commit_psbt_hex,
@@ -893,6 +1094,10 @@ pub async fn compose_commit(
             },
         };
     }
+    let commits = commits_by_order
+        .into_iter()
+        .map(|commit| commit.expect("every Build participant was visited"))
+        .collect();
 
     // Propagate the resolved fee rate (the original may have been
     // `None`, in which case we filled it from `default_sat_per_vbyte`)
@@ -916,7 +1121,7 @@ pub async fn compose_commit(
 /// resulting all-Existing Reveal.
 pub async fn compose(
     reveal: Reveal,
-    network: bitcoin::Network,
+    network: Network,
     bitcoin_client: &Client,
 ) -> Result<(Vec<indexer_types::CommitTx>, RevealOutputs)> {
     let has_build = reveal
@@ -931,7 +1136,7 @@ pub async fn compose(
         (Vec::new(), reveal)
     };
 
-    let reveal_outputs = compose_reveal(reveal_to_build)?;
+    let reveal_outputs = compose_reveal(reveal_to_build, network)?;
     Ok((commits, reveal_outputs))
 }
 
@@ -940,7 +1145,12 @@ pub async fn compose(
 pub fn build_tap_script_and_script_address(
     x_only_public_key: XOnlyPublicKey,
     data: Vec<u8>,
+    amount: u64,
+    network: Network,
 ) -> Result<(ScriptBuf, Address, ControlBlock)> {
+    if amount > MAX_MONEY_SATS {
+        return Err(anyhow!("previous-output amount exceeds Bitcoin supply"));
+    }
     let secp = Secp256k1::new();
 
     let mut builder = Builder::new()
@@ -949,7 +1159,8 @@ pub fn build_tap_script_and_script_address(
         .push_opcode(OP_FALSE)
         .push_opcode(OP_IF)
         .push_slice(PROTOCOL_TAG)
-        .push_opcode(OP_0);
+        .push_slice(amount.to_be_bytes())
+        .push_slice(network.magic().to_bytes());
 
     const MAX_SCRIPT_ELEMENT_SIZE: usize = 520;
 
@@ -962,6 +1173,9 @@ pub fn build_tap_script_and_script_address(
     }
 
     let tap_script = builder.push_opcode(OP_ENDIF).into_script();
+    if tap_script.len() > MAX_SCRIPT_BYTES {
+        return Err(anyhow!("complete leaf exceeds size limit"));
+    }
 
     let taproot_spend_info = TaprootBuilder::new()
         .add_leaf(0, tap_script.clone())
@@ -970,7 +1184,12 @@ pub fn build_tap_script_and_script_address(
         .map_err(|e| anyhow!("Failed to finalize Taproot tree: {:?}", e))?;
 
     let output_key = taproot_spend_info.output_key();
-    let script_spendable_address = Address::p2tr_tweaked(output_key, KnownHrp::Mainnet);
+    let hrp = match network {
+        Network::Bitcoin => KnownHrp::Mainnet,
+        Network::Regtest => KnownHrp::Regtest,
+        _ => KnownHrp::Testnets,
+    };
+    let script_spendable_address = Address::p2tr_tweaked(output_key, hrp);
 
     let control_block = taproot_spend_info
         .control_block(&(tap_script.clone(), LeafVersion::TapScript))
@@ -1209,14 +1428,13 @@ async fn get_utxos(bitcoin_client: &Client, funding: &Funding) -> Result<Vec<(Ou
 
 #[cfg(test)]
 mod tests {
+    use super::{MAX_SCRIPT_BYTES, build_tap_script_and_script_address};
     use anyhow::Result;
     use bitcoin::key::{Keypair, Secp256k1, XOnlyPublicKey, rand};
     use bitcoin::opcodes::all::OP_ENDIF;
     use bitcoin::script::Instruction;
-    use bitcoin::taproot::{LeafVersion, TaprootBuilder};
-    use tracing::info;
-
-    use super::build_tap_script_and_script_address;
+    use bitcoin::taproot::{ControlBlock, LeafVersion, TaprootBuilder};
+    use bitcoin::{Network, ScriptBuf};
 
     fn generate_test_key() -> XOnlyPublicKey {
         let secp = Secp256k1::new();
@@ -1224,11 +1442,7 @@ mod tests {
         keypair.x_only_public_key().0
     }
 
-    fn verify_control_block(
-        key: XOnlyPublicKey,
-        script: &bitcoin::ScriptBuf,
-        control_block: &bitcoin::taproot::ControlBlock,
-    ) {
+    fn verify_control_block(key: XOnlyPublicKey, script: &ScriptBuf, control_block: &ControlBlock) {
         let secp = Secp256k1::new();
         let tap_info = TaprootBuilder::new()
             .add_leaf(0, script.clone())
@@ -1251,7 +1465,7 @@ mod tests {
     #[test]
     fn test_build_tap_script_and_script_address_empty() {
         let key = generate_test_key();
-        let result = build_tap_script_and_script_address(key, vec![]);
+        let result = build_tap_script_and_script_address(key, vec![], 1000, Network::Regtest);
         assert!(result.is_err(), "Data cannot be empty");
     }
 
@@ -1259,11 +1473,13 @@ mod tests {
     fn test_build_tap_script_and_script_address_519_bytes() -> Result<()> {
         let key = generate_test_key();
         let data = vec![0xFF; 519];
-        let (script, _, control_block) = build_tap_script_and_script_address(key, data)?;
+        let (script, address, control_block) =
+            build_tap_script_and_script_address(key, data, 1000, Network::Regtest)?;
+        assert!(address.to_string().starts_with("bcrt1p"));
         verify_control_block(key, &script, &control_block);
         let instructions: Vec<_> = script.instructions().collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(instructions.len(), 8);
-        let push_bytes: Vec<_> = instructions.into_iter().skip(6).collect();
+        assert_eq!(instructions.len(), 9);
+        let push_bytes: Vec<_> = instructions.into_iter().skip(7).collect();
         if let [Instruction::PushBytes(data), Instruction::Op(op)] = push_bytes.as_slice() {
             assert_eq!(data.len(), 519);
             assert_eq!(*op, OP_ENDIF);
@@ -1277,11 +1493,12 @@ mod tests {
     fn test_build_tap_script_and_script_address_520_bytes() -> Result<()> {
         let key = generate_test_key();
         let data = vec![0xFF; 520];
-        let (script, _, control_block) = build_tap_script_and_script_address(key, data)?;
+        let (script, _, control_block) =
+            build_tap_script_and_script_address(key, data, 1000, Network::Regtest)?;
         verify_control_block(key, &script, &control_block);
         let instructions: Vec<_> = script.instructions().collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(instructions.len(), 8);
-        let push_bytes: Vec<_> = instructions.into_iter().skip(6).collect();
+        assert_eq!(instructions.len(), 9);
+        let push_bytes: Vec<_> = instructions.into_iter().skip(7).collect();
         if let [Instruction::PushBytes(data), Instruction::Op(op)] = push_bytes.as_slice() {
             assert_eq!(data.len(), 520);
             assert_eq!(*op, OP_ENDIF);
@@ -1295,11 +1512,12 @@ mod tests {
     fn test_build_tap_script_and_script_address_521_bytes() -> Result<()> {
         let key = generate_test_key();
         let data = vec![0xFF; 521];
-        let (script, _, control_block) = build_tap_script_and_script_address(key, data)?;
+        let (script, _, control_block) =
+            build_tap_script_and_script_address(key, data, 1000, Network::Regtest)?;
         verify_control_block(key, &script, &control_block);
         let instructions: Vec<_> = script.instructions().collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(instructions.len(), 9);
-        let push_bytes: Vec<_> = instructions.into_iter().skip(6).collect();
+        assert_eq!(instructions.len(), 10);
+        let push_bytes: Vec<_> = instructions.into_iter().skip(7).collect();
         if let [
             Instruction::PushBytes(d1),
             Instruction::PushBytes(d2),
@@ -1319,11 +1537,12 @@ mod tests {
     fn test_build_tap_script_and_script_address_small_chunking() -> Result<()> {
         let key = generate_test_key();
         let data = vec![0xFF; 1000];
-        let (script, _, control_block) = build_tap_script_and_script_address(key, data)?;
+        let (script, _, control_block) =
+            build_tap_script_and_script_address(key, data, 1000, Network::Regtest)?;
         verify_control_block(key, &script, &control_block);
         let instructions: Vec<_> = script.instructions().collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(instructions.len(), 9);
-        let push_bytes: Vec<_> = instructions.into_iter().skip(6).collect();
+        assert_eq!(instructions.len(), 10);
+        let push_bytes: Vec<_> = instructions.into_iter().skip(7).collect();
         if let [
             Instruction::PushBytes(d1),
             Instruction::PushBytes(d2),
@@ -1343,11 +1562,12 @@ mod tests {
     fn test_build_tap_script_and_script_address_large_chunking() -> Result<()> {
         let key = generate_test_key();
         let data = vec![0xFF; 2700];
-        let (script, _, control_block) = build_tap_script_and_script_address(key, data)?;
+        let (script, _, control_block) =
+            build_tap_script_and_script_address(key, data, 1000, Network::Regtest)?;
         verify_control_block(key, &script, &control_block);
         let instructions: Vec<_> = script.instructions().collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(instructions.len(), 13);
-        let push_bytes: Vec<_> = instructions.into_iter().skip(6).collect();
+        assert_eq!(instructions.len(), 14);
+        let push_bytes: Vec<_> = instructions.into_iter().skip(7).collect();
         if let [
             Instruction::PushBytes(d1),
             Instruction::PushBytes(d2),
@@ -1371,38 +1591,33 @@ mod tests {
     }
 
     #[test]
-    fn test_build_tap_script_progressive_size_limit() -> Result<()> {
+    fn test_build_tap_script_complete_leaf_size_limit() -> Result<()> {
         let key = generate_test_key();
-        crate::logging::setup();
-
-        let mut current_size = 500_000;
-        let increment = 100_000;
-        let max_size = 5_500_000;
-
-        while current_size <= max_size {
-            let data = vec![0xFF; current_size];
-            let (script, _, control_block) = build_tap_script_and_script_address(key, data)?;
-
-            let cb_bytes = control_block.serialize();
-            assert!(cb_bytes.len() >= 33);
-            assert_eq!(control_block.leaf_version, LeafVersion::TapScript);
-
-            let instructions = script.instructions().collect::<Result<Vec<_>, _>>()?;
-            assert!(instructions.len() > 6);
-
-            let expected_chunks = current_size.div_ceil(520);
-            let actual_chunks = instructions.len() - 7;
-            info!(
-                "expected_chunks: {}, actual_chunks: {}",
-                expected_chunks, actual_chunks
-            );
-            assert_eq!(actual_chunks, expected_chunks);
-            assert!(script.len() > current_size);
-
-            current_size += increment;
+        let mut accepted = 1;
+        let mut rejected = MAX_SCRIPT_BYTES;
+        while rejected - accepted > 1 {
+            let candidate = (accepted + rejected) / 2;
+            if build_tap_script_and_script_address(
+                key,
+                vec![0xff; candidate],
+                1000,
+                Network::Regtest,
+            )
+            .is_ok()
+            {
+                accepted = candidate;
+            } else {
+                rejected = candidate;
+            }
         }
-
-        assert!(current_size > 5_000_000);
+        let (script, _, _) =
+            build_tap_script_and_script_address(key, vec![0xff; accepted], 1000, Network::Regtest)?;
+        assert!(script.len() <= MAX_SCRIPT_BYTES);
+        assert!(accepted < MAX_SCRIPT_BYTES);
+        assert!(
+            build_tap_script_and_script_address(key, vec![0xff; rejected], 1000, Network::Regtest,)
+                .is_err()
+        );
         Ok(())
     }
 }

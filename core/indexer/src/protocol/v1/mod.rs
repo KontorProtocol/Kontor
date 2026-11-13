@@ -1,3 +1,4 @@
+pub(crate) mod authorization;
 #[cfg(not(kontor_node))]
 pub(crate) mod committee;
 pub(crate) mod definition;

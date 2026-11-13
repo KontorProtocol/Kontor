@@ -17,7 +17,7 @@
 import { hex } from "@scure/base";
 import { p2tr } from "@scure/btc-signer";
 
-import type { Reveal } from "./bindings.js";
+import type { Reveal, TapLeafScript } from "./bindings.js";
 import { toRevealOutputs, type ExtraOutput } from "./outputs.js";
 import { instToWire, type Inst } from "./inst.js";
 import type { WireInsts } from "./json-codec.js";
@@ -91,14 +91,17 @@ export class Attachment<T> {
     // Route through `submitReveal` so utxos/compose/sign/broadcast/track
     // run as one atomic block under the account's lock — no race with
     // a concurrent `submit` or marketplace flow on the same account.
-    const { composed, revealHex: attachRevealHex } =
-      await transport.submitReveal(async (utxos) => {
+    let detachLeaf!: TapLeafScript;
+    let detachPsbt!: string;
+    const { revealHex: attachRevealHex } = await transport.submitReveal(
+      async (utxos) => {
         const reveal: Reveal = {
           sat_per_vbyte: this.session.feeRate,
           participants: [
             {
               x_only_public_key: identity.xOnlyPubKey,
               commit_insts: attachWire,
+              sighash_type: null,
               output: null,
               commit_source: {
                 Build: {
@@ -122,31 +125,30 @@ export class Attachment<T> {
             { Change: { script_pubkey: sellerScriptPubKey } },
           ],
         };
-        return transport.composeAndSign(reveal);
-      });
-
-    // The chained detach leaf script (for the future buyer to spend the
-    // escrow output) lives on output 0 of the reveal — same position as
-    // the ChainedEnvelope we declared in extra_outputs.
-    const firstOutputInfo = composed.reveal.output_info[0];
-    if (
-      firstOutputInfo == null ||
-      typeof firstOutputInfo === "string" ||
-      !("ChainedEnvelope" in firstOutputInfo)
-    ) {
-      throw new TransportError(
-        "offer: compose returned no ChainedEnvelope at reveal output 0",
-        { docsPath: "/sdk/attach" },
-      );
-    }
-    const detachLeaf = firstOutputInfo.ChainedEnvelope.tap_leaf_script;
-
-    const detachPsbt = await buildSellerDetachPsbt(signing, {
-      attachRevealHex,
-      detachLeaf,
-      price: opts.price,
-      network: this.session.chain.network,
-    });
+        const prepared = await transport.composeAndSign(reveal, utxos);
+        const info = prepared.composed.reveal.output_info[0];
+        if (
+          info == null ||
+          typeof info === "string" ||
+          !("ChainedEnvelope" in info)
+        ) {
+          throw new TransportError(
+            "offer: compose returned no ChainedEnvelope at reveal output 0",
+            { docsPath: "/sdk/attach" },
+          );
+        }
+        detachLeaf = info.ChainedEnvelope.tap_leaf_script;
+        // A wallet that cannot sign the 0x83 offer fails before the attach
+        // package is broadcast and before assets enter the escrow output.
+        detachPsbt = await buildSellerDetachPsbt(signing, {
+          attachRevealHex: hex.encode(prepared.revealTx.extract()),
+          detachLeaf,
+          price: opts.price,
+          network: this.session.chain.network,
+        });
+        return prepared;
+      },
+    );
 
     const data: OfferData = {
       v: 1,

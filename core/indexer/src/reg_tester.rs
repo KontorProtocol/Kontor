@@ -33,8 +33,8 @@ use crate::{
 };
 use anyhow::{Result, anyhow, bail};
 use bitcoin::{
-    Address, Amount, BlockHash, CompressedPublicKey, Network, OutPoint, Transaction, TxIn, TxOut,
-    Txid, XOnlyPublicKey,
+    Address, Amount, BlockHash, CompressedPublicKey, Network, OutPoint, TapSighashType,
+    Transaction, TxIn, TxOut, Txid, XOnlyPublicKey,
     absolute::LockTime,
     bip32::{DerivationPath, Xpriv},
     consensus::serialize as serialize_tx,
@@ -595,6 +595,7 @@ impl RegTesterInner {
             participants: vec![indexer_types::RevealParticipant {
                 x_only_public_key: ident.x_only_public_key().to_string(),
                 commit_insts: insts,
+                sighash_type: None,
                 output: Some(indexer_types::RevealOutput::Change {
                     script_pubkey: hex::encode(ident.address.script_pubkey().as_bytes()),
                 }),
@@ -637,7 +638,7 @@ impl RegTesterInner {
             .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
             .finalize(&secp, ident.x_only_public_key())
             .map_err(|e| anyhow!("Failed to finalize Taproot tree: {:?}", e))?;
-        test_utils::sign_script_spend(
+        test_utils::sign_script_spend_with_sighash(
             &secp,
             &taproot_spend_info,
             &tap_script,
@@ -645,6 +646,7 @@ impl RegTesterInner {
             &[commit_transaction.output[0].clone()],
             &ident.keypair,
             0,
+            TapSighashType::AllPlusAnyoneCanPay,
         )?;
 
         let commit_tx_hex = hex::encode(serialize_tx(&commit_transaction));

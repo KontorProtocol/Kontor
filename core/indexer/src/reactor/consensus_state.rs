@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
@@ -30,8 +30,9 @@ use crate::consensus::{
 };
 use crate::database::certified_history::{self, Status, eras};
 use crate::database::queries::{
-    get_checkpoint_latest, get_transaction_by_txid, min_unsettled_batch_tx_height,
-    select_block_at_height, select_existing_txids, select_unfinalized_batches,
+    consumed_outpoints, get_checkpoint_latest, get_transaction_by_txid,
+    min_unsettled_batch_tx_height, select_block_at_height, select_existing_txids,
+    select_unfinalized_batches,
 };
 use crate::protocol::coordinator::certified_input::EraContext;
 pub use crate::protocol::coordinator::decision::DeferredDecision;
@@ -787,6 +788,17 @@ impl ConsensusState {
             .context("Failed to query existing txids")?;
         if !existing.is_empty() {
             return Ok(Some("contains already-processed transactions"));
+        }
+        let mut seen = HashSet::new();
+        if transactions
+            .iter()
+            .flat_map(|tx| tx.input.iter().map(|input| input.previous_output))
+            .any(|outpoint| !seen.insert(outpoint))
+        {
+            return Ok(Some("contains duplicate Bitcoin outpoints"));
+        }
+        if !consumed_outpoints(conn, transactions).await?.is_empty() {
+            return Ok(Some("contains already-executed Bitcoin outpoints"));
         }
         Ok(None)
     }

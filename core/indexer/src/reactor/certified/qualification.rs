@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::serialize;
-use bitcoin::{BlockHash, Network, hashes::Hash};
+use bitcoin::{BlockHash, Network, OutPoint, hashes::Hash};
 use indexer_types::{BlockRow, Event};
 use libsql::{Connection, params};
 use malachitebft_app_channel::app::types::ProposedValue;
@@ -21,7 +21,7 @@ use tempfile::TempDir;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use self::fixture::issuance_transaction;
+use self::fixture::{issuance_transaction, issuance_transaction_at};
 use crate::bitcoin_client::Client;
 use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_follower::event::BlockEvent;
@@ -321,8 +321,8 @@ pub(crate) async fn run(
     let stopped = engine
         .stop_and_wait(None, Some(Duration::from_secs(5)))
         .await;
-    stopped.context("qualification engine shutdown")?;
     let (evidence, reactor) = result?;
+    stopped.context("qualification engine shutdown")?;
     qualify_engine_free_recovery(reactor.execution, &factory, dir.path()).await?;
     #[cfg(all(kontor_managed, not(test)))]
     let evidence = {
@@ -374,9 +374,10 @@ async fn qualify_finality(
     let network = reactor.execution.network;
     let parent = issuance_transaction()?;
     let parent_id = parent.compute_txid();
-    let mut child = parent.clone();
-    child.input[0].previous_output.txid = parent_id;
-    child.input[0].previous_output.vout = 0;
+    let child = issuance_transaction_at(OutPoint {
+        txid: parent_id,
+        vout: 0,
+    })?;
     let child_id = child.compute_txid();
     let mut next_height = 5;
     let mut tip = reactor
@@ -702,13 +703,27 @@ async fn qualify_batches(
                     let draft = work::begin(&conn, origin).await?;
                     let mut bad = frozen.clone();
                     bad.interval_since = 2;
-                    ensure!(replay_input::insert(&conn, &bad).await.is_err());
+                    ensure!(
+                        replay_input::insert(&conn, &bad, replay_input::PlanningCause::Finality)
+                            .await
+                            .is_err()
+                    );
                     bad = frozen.clone();
                     bad.exclusions.direct = vec![[44; 32]];
                     bad.exclusions.effective = bad.exclusions.direct.clone();
-                    ensure!(replay_input::insert(&conn, &bad).await.is_err());
-                    let input = replay_input::insert(&conn, &frozen).await?;
-                    ensure!(replay_input::insert(&conn, &frozen).await? == input);
+                    ensure!(
+                        replay_input::insert(&conn, &bad, replay_input::PlanningCause::Finality)
+                            .await
+                            .is_err()
+                    );
+                    let input =
+                        replay_input::insert(&conn, &frozen, replay_input::PlanningCause::Finality)
+                            .await?;
+                    ensure!(
+                        replay_input::insert(&conn, &frozen, replay_input::PlanningCause::Finality)
+                            .await?
+                            == input
+                    );
                     let mut wrong_origin = origin;
                     wrong_origin.previous = [71; 32];
                     ensure!(
@@ -717,7 +732,9 @@ async fn qualify_batches(
                             .is_err()
                     );
                     ensure!(replay_input::get(&conn, input, origin, 2).await.is_err());
-                    let empty_input = replay_input::insert(&conn, &empty).await?;
+                    let empty_input =
+                        replay_input::insert(&conn, &empty, replay_input::PlanningCause::Finality)
+                            .await?;
                     let draft = work::append(
                         &conn,
                         draft,
@@ -748,7 +765,11 @@ async fn qualify_batches(
                     )
                     .await?;
                     let cursor = work::publish(&conn, draft).await?;
-                    ensure!(replay_input::insert(&conn, &frozen).await.is_err());
+                    ensure!(
+                        replay_input::insert(&conn, &frozen, replay_input::PlanningCause::Finality)
+                            .await
+                            .is_err()
+                    );
                     Ok(((), StageOutcome::FinalityEvaluated, cursor))
                 }
                 .await;

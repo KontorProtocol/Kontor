@@ -23,9 +23,9 @@ use crate::consensus::{Address, CommitCertificate, Ctx, Height, ProposalData, Va
 use crate::database::canonical_history::{self, HistoryState};
 use crate::database::certified_history::{self, branch, control, proposals, replay_input, work};
 use crate::database::queries::{
-    delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids, insert_transaction,
-    insert_unconfirmed_batch_tx, min_unfinalized_batch_height, select_block_at_height,
-    select_decision_exclusions, select_existing_txids,
+    consumed_outpoints, delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids,
+    insert_transaction, insert_unconfirmed_batch_tx, min_unfinalized_batch_height,
+    select_block_at_height, select_decision_exclusions, select_existing_txids,
 };
 use crate::metrics::{CONSENSUS_HEIGHT, DEFERRED_DECISIONS, ITEMS_INDEXED};
 use crate::protocol::canonical_application::{ApplicationSource, DecisionExclusions};
@@ -441,6 +441,26 @@ impl<E: Executor> ExecutionContext<E> {
             parsed
         };
 
+        let mut seen = HashSet::new();
+        let duplicate = batch_txs
+            .iter()
+            .flat_map(|tx| tx.input.iter().map(|input| input.previous_output))
+            .any(|outpoint| !seen.insert(outpoint));
+        if duplicate || !consumed_outpoints(&conn, batch_txs).await?.is_empty() {
+            let outcome = self
+                .record_batch_for_sync(
+                    &conn,
+                    consensus_height,
+                    anchor_height,
+                    anchor_hash,
+                    certificate,
+                    batch_txs,
+                    certified,
+                )
+                .await?;
+            return Ok((outcome, StageOutcome::UnrecognizedBatch, 0usize, 0u64));
+        }
+
         let input = CanonicalInput::bitcoin(certified.unwrap_or(batch_txs))?;
         let exclusions = if let Some(exclusions) = frozen_exclusions {
             exclusions
@@ -792,6 +812,21 @@ impl<E: Executor> Reactor<E> {
         for txid in &invalid_txids {
             self.consensus.mempool.suppress(txid);
         }
+        if txs.is_empty() {
+            return Ok(None);
+        }
+        let consumed = consumed_outpoints(&conn, &txs).await?;
+        let mut selected_outpoints = HashSet::new();
+        txs.retain(|tx| {
+            let outpoints: Vec<_> = tx.input.iter().map(|input| input.previous_output).collect();
+            if outpoints.iter().any(|outpoint| {
+                consumed.contains(outpoint) || selected_outpoints.contains(outpoint)
+            }) {
+                return false;
+            }
+            selected_outpoints.extend(outpoints);
+            true
+        });
         if txs.is_empty() {
             return Ok(None);
         }

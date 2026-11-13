@@ -54,7 +54,6 @@ fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result
     let ledger = ctx.model().ledger();
 
     let src_amt = ledger.get(&src).unwrap_or_default();
-    let dst_amt = ledger.get(&dst).unwrap_or_default();
 
     if src_amt < amt {
         return Err(Error::Message("insufficient funds".to_string()));
@@ -70,6 +69,7 @@ fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result
     }
 
     ledger.set(&src, remaining);
+    let dst_amt = ledger.get(&dst).unwrap_or_default();
     ledger.set(&dst, dst_amt.add(amt)?);
     Ok(Transfer {
         src: src.into(),

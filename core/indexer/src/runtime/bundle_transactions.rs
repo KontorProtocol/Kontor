@@ -121,6 +121,7 @@ impl Runtime {
     pub(crate) fn recognizer(&self) -> RecognitionCall {
         let version = self.executor_version().tag();
         let network = self.network.magic().to_bytes();
+        let bitcoin_network = self.network;
         Arc::new(move |selection, raw| {
             if selection.0 != version || selection.1 != network {
                 return Err((2, "recognizer selection does not match executor".into()));
@@ -138,16 +139,18 @@ impl Runtime {
                 Ok(raw) => raw,
                 Err(error) => return Ok(Err(error)),
             };
-            Ok(Ok(transactions::filter_map((0, raw)).map(
-                |transaction| -> RecognizedEnvelope {
-                    RecognizedTransaction {
-                        version,
-                        network,
-                        transaction,
-                    }
-                    .envelope()
-                },
-            )))
+            Ok(Ok(transactions::filter_map_for_network(
+                (0, raw),
+                bitcoin_network,
+            )
+            .map(|transaction| -> RecognizedEnvelope {
+                RecognizedTransaction {
+                    version,
+                    network,
+                    transaction,
+                }
+                .envelope()
+            })))
         })
     }
 }

@@ -1,9 +1,9 @@
 {
-  "historical_source": "3f2438465d4e2ab506b4e1b1c3d7d007ac5f4789",
+  "capture_source": "b53557abf6d1210d562fc5cb1b435fd7e8ea973c",
   "inputs": {
     "counter_sha256": "d80c38b9852d7be9e373d0ded5278c47ec2229d61bda673ac7389be925adc749",
     "proxy_sha256": "e44ced451f07e33041c6f411cf60cd77ba7cc6661ee0e0d996c7eff2ee84a190",
-    "raw_sha256": "2b92e8f4769216941a785e6ec32c0a77731a9f0d62c975763112b32f369ac2e1"
+    "raw_sha256": "a203e1d35dddd9dc0a8b1a45066754224aae5a1b25e9b6081eb5a7e912e624fb"
   },
   "observations": {
     "active_set": {
@@ -36,7 +36,7 @@
       ],
       "contract_provenance": [
         5,
-        "68cdb33a2877bad07d96ad47fcc384508a6349e08bafe33d182b6b0e747d00bf"
+        "a1653208facce9fa0789a783ae818638c1d03d626dd283753c558f2af4d49072"
       ],
       "contract_results": [
         8,
@@ -48,7 +48,7 @@
       ],
       "contracts": [
         5,
-        "da248c385b8455446bbaa587341882c950b5825ed50f3ffeaa05801a7a1c1f80"
+        "2af2dcff2e09db80a266a1aeb246acf590dab73eb9e43c9910a16746dce54dd7"
       ],
       "current_contract_state": [
         42,
@@ -82,7 +82,7 @@
     "lifecycle": {
       "block_execution_usage": [
         1,
-        "9117cf930b4adc63e5ce3f28e7d61c0e1968389f8b9ad496b5b8ae146cb33548"
+        "e48c14efb8ebfcbed3be11a1f0245d3ff41704e58c454ff2a9b3a72a4a23b9f7"
       ],
       "blocks": [
         3,
@@ -94,7 +94,7 @@
       ],
       "contract_provenance": [
         5,
-        "68cdb33a2877bad07d96ad47fcc384508a6349e08bafe33d182b6b0e747d00bf"
+        "a1653208facce9fa0789a783ae818638c1d03d626dd283753c558f2af4d49072"
       ],
       "contract_results": [
         18,
@@ -106,7 +106,7 @@
       ],
       "contracts": [
         5,
-        "da248c385b8455446bbaa587341882c950b5825ed50f3ffeaa05801a7a1c1f80"
+        "2af2dcff2e09db80a266a1aeb246acf590dab73eb9e43c9910a16746dce54dd7"
       ],
       "current_contract_state": [
         43,
@@ -174,7 +174,7 @@
       "state": {
         "block_execution_usage": [
           1,
-          "9117cf930b4adc63e5ce3f28e7d61c0e1968389f8b9ad496b5b8ae146cb33548"
+          "e48c14efb8ebfcbed3be11a1f0245d3ff41704e58c454ff2a9b3a72a4a23b9f7"
         ],
         "blocks": [
           4,
@@ -186,7 +186,7 @@
         ],
         "contract_provenance": [
           7,
-          "155bf548104c92e73adfcec3c88f3bdd47f6f6a8ebefc36597b167b5d79c31a4"
+          "91139ba93cac5a8223861add66337a38aa861ff38c61003afe7b62539878cf29"
         ],
         "contract_results": [
           28,
@@ -198,7 +198,7 @@
         ],
         "contracts": [
           7,
-          "1c5dbd273adf15a3fd020efa832fff4fdcc638c087b407c5ab2c33fd28a8a52c"
+          "714689f054eae9f919eb09514b079da1f49178220f0aaaad362855bbd7f4bd62"
         ],
         "current_contract_state": [
           53,
@@ -218,7 +218,7 @@
         ],
         "transaction_execution_usage": [
           1,
-          "b34f788c41f60315f84f789b3b910fe6e569fa293d9b45ceb704e8316357cbd6"
+          "20bf0227febc2254c950a2f7bd1d7560ade6722a0250e6565c3e309d9ca1a389"
         ],
         "transactions": [
           1,
@@ -231,23 +231,32 @@
       },
       "usage": [
         282834,
-        5680112,
+        5680048,
         118000
       ]
     }
   },
   "provenance": {
+    "binary_sha256": "943cb1127edc9eed8e889ccb6496e7825a72027938737379ace2b203619e0c8c",
+    "cases": 25,
+    "command": "timeout 300 /home/wilfred/Documents/Kontor/.build-cache/local-shared/slot-1/protocol/kontor qualify-executors",
     "compiler": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: aarch64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+    "core_lock_sha256": "3ef662614aa21312e4ba98e958dc25de148c8adc124e0283bd7dde0a3da48800",
     "fixture_sources": {
-      "core/indexer/src/protocol_qualification/fixture.rs": "a268dc436b4ebc85da05c20881fbf25b77ab6ed002b8c3a7bf9c537538ed1d3e",
-      "tools/protocol-bundles/historical_semantics.rs": "add22266048a9c706488586d6a2962b0e6b58ef8ed73e8ca6c8ade3677f863e0"
+      "core/indexer/src/protocol_qualification/fixture.rs": "0fa00789954d8c7eceaffbb3fee1d82814f1f8d3002405794685e5e7a064e824"
     },
-    "historical_base": "e7361411fcf812602a736370577267db81a1ceb0",
-    "historical_lock_sha256": "6e7ea3f1f76c383f267f9b00125a86dc01de45f7f3a2e5082da89598265b525f",
-    "log_sha256": "186184009e4ecf78985a42ec6190c85dc0943abec667a307fa77d5292624f6d2",
-    "profile": "dev",
-    "test": "historical_semantics::historical_semantic_supplement",
-    "test_binary_sha256": "74fc509c653bde7e1f60b9ee4dbeba1e28e066070da92aadeb50a64e93799822"
+    "link_set": "managed-node",
+    "log_sha256": "131eee8b78fd5872fcfeac4fd00a329757a161033ce7add19488b9f225ead625",
+    "network": "local loopback available; no external service",
+    "node_build_report_sha256": "0a0581ae09ede6a6b9d26aab4cc0d02057d72da593888c1b98271fde97aa6e2f",
+    "node_lock_sha256": "375358e7217ff727c73136ef8a9fb0229790ac24f41d2ea05a757a782b43b365",
+    "node_source_inputs_sha256": "989df705c4678eff73914679716a70a1205c613fef4f420a6ce3af128d99c008",
+    "profile": "release",
+    "stderr_sha256": "8636da77a9569bf8f83266a3735d206c734f7e3edc476476452ac4ab10c3c097",
+    "stdout_sha256": "131eee8b78fd5872fcfeac4fd00a329757a161033ce7add19488b9f225ead625",
+    "target": "aarch64-unknown-linux-gnu",
+    "tmpdir": "/home/wilfred/Documents/Kontor/security-fixes-evidence/tmp",
+    "working_directory": "/home/wilfred/Documents/Kontor/security-launch-review"
   },
-  "schema": 1
+  "schema": 2
 }

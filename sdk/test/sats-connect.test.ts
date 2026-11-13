@@ -2,7 +2,7 @@
  * Tier-1 unit tests for the sats-connect wallet adapter (Node, no browser).
  * Drives the adapter through a `LocalKey`-backed mock provider so signatures are
  * real: PSBTs go in, valid/finalizable PSBTs come out — exercising all the
- * marshaling (base64, signInputs, sighash→allowedSignHash, the RPC
+ * marshaling (base64, signInputs, per-input PSBT sighash, the RPC
  * envelope) without a wallet extension or prompts.
  */
 import { test, expect } from "vitest";
@@ -106,35 +106,40 @@ test("signPsbt: produces a valid, finalizable signed PSBT", async () => {
   expect(reparsed.isFinal).toBe(true);
 });
 
-test("signPsbt: maps single-anyonecanpay to allowedSignHash 131", async () => {
-  const { local, request, calls } = fixture();
-  const acct = await connect({ chain: signet, request });
-  const psbt = taprootPsbt(local.identity.xOnlyPubKey, local.identity.address);
+test.each([
+  ["all-anyonecanpay", 0x81],
+  ["single-anyonecanpay", 0x83],
+] as const)(
+  "signPsbt: pins %s on the selected PSBT input",
+  async (kind, flag) => {
+    const { local, request, calls } = fixture();
+    const acct = await connect({ chain: signet, request });
+    const psbt = taprootPsbt(
+      local.identity.xOnlyPubKey,
+      local.identity.address,
+    );
 
-  const signed = await acct.psbt(psbt, {
-    inputs: [{ index: 0, sighash: "single-anyonecanpay" }],
-  });
+    const signed = await acct.psbt(psbt, {
+      inputs: [{ index: 0, sighash: kind }],
+    });
 
-  // The request carried allowedSignHash 131 (= SIGHASH_SINGLE|ANYONECANPAY).
-  const signPsbtCall = calls.find((c) => c.method === "signPsbt")!;
-  const params = signPsbtCall.params as {
-    psbt: string;
-    allowedSignHash?: number;
-    signInputs: Record<string, number[]>;
-  };
-  expect(params.allowedSignHash).toBe(0x83);
-  // signInputs is keyed by the account address.
-  expect(params.signInputs[local.identity.address]).toEqual([0]);
+    const signPsbtCall = calls.find((c) => c.method === "signPsbt")!;
+    const params = signPsbtCall.params as {
+      psbt: string;
+      allowedSignHash?: number;
+      signInputs: Record<string, number[]>;
+    };
+    expect(params.allowedSignHash).toBeUndefined();
+    // signInputs is keyed by the account address.
+    expect(params.signInputs[local.identity.address]).toEqual([0]);
 
-  // The sighash is ALSO pinned on the PSBT we hand the wallet (not only via
-  // allowedSignHash), so wallets that read PSBT_IN_SIGHASH_TYPE sign 0x83.
-  expect(
-    Transaction.fromPSBT(base64.decode(params.psbt)).getInput(0).sighashType,
-  ).toBe(0x83);
+    expect(
+      Transaction.fromPSBT(base64.decode(params.psbt)).getInput(0).sighashType,
+    ).toBe(flag);
 
-  // And the returned signed input is pinned to 0x83.
-  expect(Transaction.fromPSBT(signed).getInput(0).sighashType).toBe(0x83);
-});
+    expect(Transaction.fromPSBT(signed).getInput(0).sighashType).toBe(flag);
+  },
+);
 
 test("signPsbt: default sighash omits allowedSignHash", async () => {
   const { local, request, calls } = fixture();
@@ -149,14 +154,36 @@ test("signPsbt: default sighash omits allowedSignHash", async () => {
   expect("allowedSignHash" in (call.params as object)).toBe(false);
 });
 
-test("signPsbt: rejects a mixed-sighash request", async () => {
-  const { local, request } = fixture();
+test("signPsbt: signs mixed per-input sighashes in one request", async () => {
+  const { local, request, calls } = fixture();
   const acct = await connect({ chain: signet, request });
-  await expect(
-    acct.psbt(taprootPsbt(local.identity.xOnlyPubKey, local.identity.address), {
-      inputs: [{ index: 0 }, { index: 1, sighash: "single-anyonecanpay" }],
-    }),
-  ).rejects.toThrow(/can't mix sighash/);
+  const tx = Transaction.fromPSBT(
+    taprootPsbt(local.identity.xOnlyPubKey, local.identity.address),
+  );
+  const payment = p2tr(
+    xOnlyBytes(local.identity.xOnlyPubKey),
+    undefined,
+    signet.network,
+  );
+  tx.addInput({
+    txid: "11".repeat(32),
+    index: 1,
+    witnessUtxo: { script: payment.script, amount: 100_000n },
+    tapInternalKey: payment.tapInternalKey,
+  });
+  const signed = await acct.psbt(tx.toPSBT(), {
+    inputs: [{ index: 0 }, { index: 1, sighash: "all-anyonecanpay" }],
+  });
+  const result = Transaction.fromPSBT(signed);
+  expect(result.getInput(0).tapKeySig).toBeDefined();
+  expect(result.getInput(1).tapKeySig).toBeDefined();
+  expect(result.getInput(1).sighashType).toBe(0x81);
+  const call = calls.find((c) => c.method === "signPsbt")!;
+  expect(
+    (call.params as { signInputs: Record<string, number[]> }).signInputs[
+      local.identity.address
+    ],
+  ).toEqual([0, 1]);
 });
 
 test("signPsbt: empty inputs no-ops without calling the wallet", async () => {

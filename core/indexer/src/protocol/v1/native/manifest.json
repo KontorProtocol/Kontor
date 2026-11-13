@@ -1,12 +1,12 @@
 {
   "schema": 1,
   "definition": "legacy-p1-native-genesis",
-  "source_commit": "dfacbefdac22b898c5bad5b2cae5e2513e147afd",
+  "source_commit": "9d81bb482f9ace5a13d63cd843fd3bf9152defe4",
   "contracts": [
     {
       "id": 1,
       "name": "token",
-      "sha256": "4b5a443f5b26740e61c0ac8fe6bab0b1132b7d6a0f4ae21036166beacb01e500",
+      "sha256": "f52c2bb311418814e58610da59155cf1a12d17cd1074036a1ece15751cc68d84",
       "privileged": true,
       "deposit_exempt": true,
       "unrecorded_results": [
@@ -55,8 +55,8 @@
   "files": {
     "build.json": "9d927b68696a24aa94bf1d873bbbda7fa77158c6de277f555a58b08150bc0997",
     "toolchain.json": "3db02c6cec87ef86895528f2d2e966427e2281875e350d787942da919926cb9c",
-    "provenance.json": "e63c00f17f4d235c4e79f539288277cac5cef52ba16aa6c1f5c1db35d7ce927d",
-    "provenance.bin": "466b7ef1f1b0922a48d1d4b385ce9a16e677e7dff1074ddd834e85073f6fd120"
+    "provenance.json": "08b7b6511955a06b593a45e0f55f45e0f0d476c8d2faa721b5ce5fc1cf150235",
+    "provenance.bin": "566b1a27b6d9a5c1bc31c3b99bedbdfca5825e048a2e998c73c6c713d98f07cf"
   },
   "core_signer_id": 1
 }

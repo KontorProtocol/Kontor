@@ -71,7 +71,7 @@ pub async fn test_taproot_transaction_regtest(reg_tester: &mut RegTester) -> Res
         .finalize(&secp, internal_key)
         .expect("Failed to finalize Taproot tree");
 
-    test_utils::sign_script_spend(
+    test_utils::sign_script_spend_with_sighash(
         &secp,
         &taproot_spend_info,
         &tap_script,
@@ -79,6 +79,7 @@ pub async fn test_taproot_transaction_regtest(reg_tester: &mut RegTester) -> Res
         &spend_tx_prevouts,
         &keypair,
         0,
+        TapSighashType::AllPlusAnyoneCanPay,
     )?;
 
     let attach_tx_hex = hex::encode(serialize_tx(&attach_tx));

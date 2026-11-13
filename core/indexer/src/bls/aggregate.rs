@@ -7,12 +7,11 @@ use indexer_types::{InstKind, Insts, SignerRef};
 use super::{
     BLS_SIGNATURE_BYTES, KONTOR_BLS_DST, MAX_BLS_BULK_OPS, MAX_BLS_BULK_TOTAL_MESSAGE_BYTES,
 };
-use crate::runtime::{ExecutionError, Runtime};
+use crate::runtime::Runtime;
 
 use AggregateVerificationError::{Infrastructure, Rejected};
 
-/// Resolved signer_id → x_only_pubkey mapping returned by [`verify_aggregate`]
-/// so the block handler can look up signers without redundant registry calls.
+/// Cached signer_id → x_only_pubkey mapping used during read-only verification.
 pub type SignerMap = HashMap<u64, String>;
 
 /// Database failures must abort processing rather than become input rejections.
@@ -167,7 +166,7 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
             // Sponsor is a unilateral payer designation — by construction
             // it can have only one signer (the input it rides on) and is
             // not aggregatable across BLS co-signers.
-            InstKind::Sponsor => {
+            InstKind::Sponsor | InstKind::SponsorBound { .. } => {
                 return Err(anyhow!(
                     "aggregate path does not support Sponsor (not aggregatable)"
                 ));
@@ -177,30 +176,31 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
     Ok(agg)
 }
 
-/// Resolved aggregate output: per-op `signer_id` (after `SignerRef`
-/// resolution) paired with the `signer_id → x_only_pubkey` map so the caller
-/// can avoid redundant registry lookups during op execution.
+/// A registration may name a new x-only key. Keep it unresolved until its
+/// ownership proof succeeds, so verification cannot create the claimed signer.
+#[derive(Debug)]
+pub struct VerifiedSigner {
+    pub existing_id: Option<u64>,
+    pub x_only_pubkey: String,
+}
+
+/// The verified BLS envelope still contains only read-only signer claims.
 #[derive(Debug)]
 pub struct AggregateResolved {
-    pub signer_ids: Vec<u64>,
-    pub signer_map: SignerMap,
+    pub signers: Vec<VerifiedSigner>,
 }
 
 /// Verify the BLS aggregate signature on an `Insts` envelope.
 ///
-/// Resolves each `SignerRef` to an internal `signer_id`
-/// (`SignerRef::SignerId` direct, `SignerRef::XOnlyPubkey` via
-/// `get_or_create_identity`), sources the verification BLS pubkey
+/// Resolves each `SignerRef` without writes, sources the verification BLS pubkey
 /// per-op-kind (DB lookup for `Call`; payload bytes for `RegisterBlsKey`,
 /// since the registrant has no prior bls_keys row), and verifies the
-/// aggregate signature against the per-op signing message
-/// `postcard((signer_id, nonce, inst))`.
+/// aggregate signature against each per-op signing message.
 ///
 /// For `RegisterBlsKey` ops: aggregate verify proves the supplied
 /// bls_pubkey's owner consented to this op, but does NOT establish the
 /// x_only_pubkey ↔ bls_pubkey binding — that's the job of
-/// `runtime.register_bls_key`'s `RegistrationProof::verify` during op
-/// execution.
+/// the read-only registration preflight before any nonce or payment effect.
 pub async fn verify_aggregate(
     runtime: &mut Runtime,
     insts: &Insts,
@@ -219,7 +219,7 @@ pub async fn verify_aggregate(
     let mut resolver = SignerResolver::new();
     let mut msgs: Vec<Vec<u8>> = Vec::with_capacity(insts.ops.len());
     let mut pks: Vec<BlsPublicKey> = Vec::with_capacity(insts.ops.len());
-    let mut signer_ids: Vec<u64> = Vec::with_capacity(insts.ops.len());
+    let mut signers: Vec<VerifiedSigner> = Vec::with_capacity(insts.ops.len());
     let mut total_message_bytes: usize = 0;
 
     for (inst, agg_signer) in insts.ops.iter().zip(agg.signers.iter()) {
@@ -238,24 +238,19 @@ pub async fn verify_aggregate(
         }
 
         let (signer_id, claim_pubkey) = match &agg_signer.identity {
-            SignerRef::SignerId(id) => (*id, None),
+            SignerRef::SignerId(id) => (Some(*id), None),
             SignerRef::XOnlyPubkey(pk) => {
-                let identity = runtime
-                    .get_or_create_identity(&pk.to_string())
+                let x_only = pk.to_string();
+                let existing_id = runtime
+                    .storage
+                    .lookup_identity(&x_only)
                     .await
-                    .map_err(|error| match error {
-                        ExecutionError::NonDeterministic(error) => {
-                            Infrastructure(error.context("resolving SignerRef::XOnlyPubkey"))
-                        }
-                        error @ ExecutionError::Deterministic(_) => {
-                            Rejected(anyhow!("resolving SignerRef::XOnlyPubkey: {error}"))
-                        }
-                    })?;
-                (identity.signer_id(), Some(pk.to_string()))
+                    .map_err(|error| Infrastructure(error.context("looking up x-only signer")))?;
+                (existing_id, Some(x_only))
             }
         };
 
-        let pk = match &inst.kind {
+        let (pk, x_only_pubkey) = match &inst.kind {
             InstKind::RegisterBlsKey { bls_pubkey, .. } => {
                 // The registrant has no bls_keys row yet — verify against the
                 // bls_pubkey they're submitting. A valid aggregate-sig
@@ -268,23 +263,36 @@ pub async fn verify_aggregate(
                         "invalid bls_pubkey bytes in RegisterBlsKey (subgroup check): {e:?}"
                     ))
                 })?;
-                // Always populate signer_map. PubKey claim gives us the x_only
-                // directly; Id claim requires a registry lookup (an existing
-                // signer is re-registering or first-registering a BLS key).
-                // Downstream `process_aggregate_input` checks this map and
-                // silently drops ops whose signer_id isn't in it, so missing
-                // an entry would cause a verified op to be skipped.
-                resolver
-                    .ensure_x_only(runtime, signer_id, claim_pubkey)
-                    .await?;
-                validated
+                // An Id claim needs its registered x-only key. A fresh x-only
+                // claim stays unresolved until its proof succeeds.
+                let x_only = match signer_id {
+                    Some(id) => {
+                        resolver.ensure_x_only(runtime, id, claim_pubkey).await?;
+                        resolver.signer_map[&id].clone()
+                    }
+                    None => claim_pubkey.ok_or_else(|| {
+                        Rejected(anyhow!("new registration lacks an x-only claim"))
+                    })?,
+                };
+                (validated, x_only)
             }
-            _ => resolver.resolve(runtime, signer_id).await?,
+            _ => {
+                let id = signer_id.ok_or_else(|| {
+                    Rejected(anyhow!(
+                        "unregistered x-only signer cannot make an aggregate Call"
+                    ))
+                })?;
+                let pk = resolver.resolve(runtime, id).await?;
+                (pk, resolver.signer_map[&id].clone())
+            }
         };
 
         pks.push(pk);
         msgs.push(msg);
-        signer_ids.push(signer_id);
+        signers.push(VerifiedSigner {
+            existing_id: signer_id,
+            x_only_pubkey,
+        });
     }
 
     let msg_refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
@@ -297,8 +305,5 @@ pub async fn verify_aggregate(
         )));
     }
 
-    Ok(AggregateResolved {
-        signer_ids,
-        signer_map: resolver.signer_map,
-    })
+    Ok(AggregateResolved { signers })
 }

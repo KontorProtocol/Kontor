@@ -5,7 +5,7 @@ use indexer_types::Payment;
 use libsql::params;
 use wasmtime::Trap;
 
-use super::{CallOutcome, InvocationStore};
+use super::{CallOutcome, InvocationPurpose, InvocationStore};
 
 use crate::protocol::coordinator::selection::select_test_block;
 use crate::protocol::v1::types::Identity;
@@ -31,6 +31,7 @@ mod guest_memory;
 #[cfg(target_os = "linux")]
 mod guest_memory_failure;
 mod holder_errors;
+mod native_init;
 mod native_stack;
 mod native_stack_resource;
 mod p1_publication;
@@ -38,6 +39,7 @@ mod p1_transaction_publication;
 mod preparation_fees;
 mod results;
 mod sequential_chains;
+mod token_transfer;
 mod wave_costs;
 
 async fn funded(runtime: &mut Runtime) -> Result<Signer> {
@@ -646,6 +648,7 @@ async fn funded_in_store(
                         Some(payment),
                         expr,
                         false,
+                        InvocationPurpose::Ordinary,
                     )
                     .await?;
                 let remaining_fuel = store.get_fuel().map_err(anyhow::Error::from)?;
@@ -659,7 +662,15 @@ async fn funded_in_store(
         Ok((outcome.result, slot.unwrap()))
     } else {
         runtime
-            .invoke_in_store(store, target, Some(signer), payment, expr, false)
+            .invoke_in_store(
+                store,
+                target,
+                Some(signer),
+                payment,
+                expr,
+                false,
+                InvocationPurpose::Ordinary,
+            )
             .await
     }
 }

@@ -18,7 +18,7 @@ use crate::api::{
     error::{Error as ApiError, HttpError},
     result::Result,
 };
-use crate::block::{filter_map, inspect};
+use crate::block::{filter_map_for_network, inspect};
 use crate::database::queries::{get_transaction_by_txid, get_transactions_paginated};
 use crate::database::types::TransactionQuery;
 use crate::protocol_info::SimulationReport;
@@ -67,7 +67,7 @@ pub async fn post_transaction_hex_inspect(
 ) -> Result<Vec<InspectedOp>> {
     let btx = encode::deserialize_hex::<bitcoin::Transaction>(&hex)
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
-    let tx = filter_map((0, btx))
+    let tx = filter_map_for_network((0, btx), env.config.network)
         .ok_or_else(|| HttpError::BadRequest("Not a valid Kontor transaction".to_string()))?;
     let conn = env.reader.connection().await?;
     let snapshot = conn
@@ -86,7 +86,7 @@ pub async fn get_transaction_inspect(
     let txid = bitcoin::Txid::from_str(&txid)
         .map_err(|e| HttpError::BadRequest(format!("Invalid txid: {}", e)))?;
     let btx = env.bitcoin.get_raw_transaction(&txid).await?;
-    let tx = filter_map((0, btx))
+    let tx = filter_map_for_network((0, btx), env.config.network)
         .ok_or_else(|| HttpError::BadRequest("Not a valid Kontor transaction".to_string()))?;
     let conn = env.reader.connection().await?;
     let snapshot = conn
