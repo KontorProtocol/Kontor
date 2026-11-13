@@ -272,3 +272,5 @@ routes accept the same ordered transaction hex array. Reconciliation uses fresh
 Bitcoin observations, including confirmed transactions when Bitcoin Core has
 `txindex=1`. Without an available index, an unlocatable confirmed transaction stays
 unknown. No compatibility fallback to the old `{ txid }` relay response is provided.
+Immediately after confirmation, txindex may briefly lag; reconcile again rather
+than treating that temporary unknown result as nonpublication.
