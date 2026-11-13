@@ -62,8 +62,12 @@ generator rejects a changed pin pair until that overlay is reviewed again.
 links only P1. `--node-qualification` explicitly selects `managed-node`, adding
 the generated P2. Only that feature enables successor registration, discovery
 and activation. `tools/kontor qualify-node` selects it automatically. The SDK
-continues to target the unchanged launch transaction format. This prerequisite
-does not adopt the security draft's new transaction format or resolve its findings.
+targets the `kon2` launch transaction format in both P1 and qualification P2.
+Direct and aggregate publisher inputs require signed operation consent, and
+the SDK validates composed transactions before signing. Marketplace sellers use
+`SINGLE|ANYONECANPAY` with a bound Sponsor, while ordinary participants use
+`ALL|ANYONECANPAY`. Neither executor accepts the old shape-only input as fresh
+launch authorization.
 
 Changing these unreleased identities can require explicit recreation of local
 development databases. Back up any needed data first. Nodes do not silently reset

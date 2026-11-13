@@ -25,7 +25,7 @@ use crate::consensus::{Ctx, Height, Value as ConsensusValue};
 use crate::database::certified_history::{self, closure, reconcile, work};
 use crate::database::confirmation::get_confirmation_position;
 use crate::database::connection::new_connection;
-use crate::database::queries::get_transaction_by_txid;
+use crate::database::queries::{executed_wtxid, get_transaction_by_txid};
 use crate::database::receipt_stream::{recovery_boundary, stream_state};
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::token::api as token_api;
@@ -820,6 +820,187 @@ async fn late_exact_inclusion_executes_as_new_block_work() -> Result<()> {
 #[tokio::test]
 async fn ineligible_batch_anchor_cannot_heal_on_exact_block_inclusion() -> Result<()> {
     run_deadline_case(DeadlineCase::IneligibleAnchor).await
+}
+
+#[tokio::test]
+async fn optimistic_batches_reserve_spent_outpoints_before_a_block() -> Result<()> {
+    let owner = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[74; 32])?);
+    let key = PrivateKey::from([17; 32]);
+    let genesis = test_genesis(&[GenesisValidator {
+        x_only_pubkey: owner.x_only_public_key().0.to_string(),
+        ed25519_pubkey: key.public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }]);
+    let dir = TempDir::new()?;
+    let mut reactor = certified_fixture::reactor(dir.path(), &genesis, key, 1).await?;
+    let cleanup = StopEngine(reactor.consensus.engine.legacy_handle().actor.clone());
+    let conn = reactor.db_conn();
+    let result = async {
+        let setup = certified_fixture::transaction(
+            &owner,
+            Insts::direct(vec![
+                Inst {
+                    gas_limit: 100_000,
+                    kind: InstKind::Issuance,
+                },
+                Inst {
+                    gas_limit: 100_000,
+                    kind: InstKind::Publish {
+                        name: "confirmation-fixture".into(),
+                        bytes: include_bytes!(
+                            "../../../../test-contracts/binaries/error_test.wasm.br"
+                        )
+                        .to_vec(),
+                        provenance: sample_provenance(),
+                    },
+                },
+            ]),
+            0,
+        )?;
+        let block = certified_fixture::block(
+            1,
+            certified_fixture::empty_block(1).prev_hash,
+            0,
+            vec![setup],
+        );
+        let anchor = block.hash;
+        let value =
+            ConsensusValue::from_input(block.exact_input(reactor.consensus.protocol_context)?)?;
+        let (height, next) = start_decision(&mut reactor, value).await?;
+        assert_eq!(finish_decision(&mut reactor, height, next).await?, [(1, 2)]);
+
+        let address = ContractAddress {
+            name: "confirmation-fixture".into(),
+            height: 1,
+            tx_index: 1,
+        };
+        let first = signed_confirmation_call(&owner, address.clone())?;
+        let competing = signed_launch_transaction(
+            &owner,
+            Insts::direct(vec![Inst {
+                gas_limit: 100_000,
+                kind: InstKind::Call {
+                    contract: address.clone(),
+                    expr: "write-result-payload(1)".into(),
+                },
+            }]),
+            first.input[0].previous_output,
+            TxOut {
+                value: Amount::from_sat(899_999),
+                script_pubkey: ScriptBuf::new(),
+            },
+        )?;
+        assert_ne!(first.compute_txid(), competing.compute_txid());
+        let first_id = first.compute_txid().to_string();
+        let competing_id = competing.compute_txid().to_string();
+        let outpoint = first.input[0].previous_output;
+        let baseline_effects = effects(&conn).await?;
+        let baseline_balances = token_balances(&mut reactor, &owner).await?;
+
+        assert_eq!(
+            reactor
+                .consensus
+                .validate_batch(
+                    &conn,
+                    1,
+                    anchor,
+                    &[first.clone(), competing.clone()],
+                    1,
+                    anchor
+                )
+                .await?,
+            Some("contains duplicate Bitcoin outpoints")
+        );
+        let value = ConsensusValue::new_batch_raw(
+            reactor.consensus.protocol_context,
+            1,
+            anchor,
+            vec![first.clone(), competing.clone()],
+        )?;
+        let (height, next) = start_decision(&mut reactor, value).await?;
+        finish_decision(&mut reactor, height, next).await?;
+        assert!(get_transaction_by_txid(&conn, &first_id).await?.is_none());
+        assert!(
+            get_transaction_by_txid(&conn, &competing_id)
+                .await?
+                .is_none()
+        );
+        assert!(!marker_exists(&conn, outpoint).await?);
+        assert_eq!(effects(&conn).await?, baseline_effects);
+        assert_eq!(
+            token_balances(&mut reactor, &owner).await?,
+            baseline_balances
+        );
+
+        let value = ConsensusValue::new_batch_raw(
+            reactor.consensus.protocol_context,
+            1,
+            anchor,
+            vec![first.clone()],
+        )?;
+        let (height, next) = start_decision(&mut reactor, value).await?;
+        finish_decision(&mut reactor, height, next).await?;
+        let first_row = get_transaction_by_txid(&conn, &first_id)
+            .await?
+            .context("first optimistic execution missing")?;
+        assert_eq!(first_row.batch_height, Some(height));
+        assert_successful_write(
+            &mut *reactor.execution.test_runtime().await,
+            &first_id,
+            &address,
+        )
+        .await?;
+        assert!(marker_exists(&conn, outpoint).await?);
+        assert_eq!(
+            executed_wtxid(&conn, first_row.id).await?,
+            Some(first.compute_wtxid())
+        );
+        let paid_effects = effects(&conn).await?;
+        let paid_balances = token_balances(&mut reactor, &owner).await?;
+        let fee = sub_decimal(baseline_balances.0, paid_balances.0)?;
+        assert!(fee > Decimal::from("0"));
+        assert_eq!(sub_decimal(paid_balances.1, baseline_balances.1)?, fee);
+
+        assert_eq!(
+            reactor
+                .consensus
+                .validate_batch(&conn, 1, anchor, &[competing.clone()], 1, anchor)
+                .await?,
+            Some("contains already-executed Bitcoin outpoints")
+        );
+        let value = ConsensusValue::new_batch_raw(
+            reactor.consensus.protocol_context,
+            1,
+            anchor,
+            vec![competing],
+        )?;
+        let (height, next) = start_decision(&mut reactor, value).await?;
+        finish_decision(&mut reactor, height, next).await?;
+        assert!(
+            get_transaction_by_txid(&conn, &competing_id)
+                .await?
+                .is_none()
+        );
+        assert_eq!(
+            get_transaction_by_txid(&conn, &first_id).await?.unwrap().id,
+            first_row.id
+        );
+        assert_eq!(
+            executed_wtxid(&conn, first_row.id).await?,
+            Some(first.compute_wtxid())
+        );
+        assert_eq!(effects(&conn).await?, paid_effects);
+        assert_eq!(token_balances(&mut reactor, &owner).await?, paid_balances);
+        Ok(())
+    }
+    .await;
+    cleanup.0.stop(None);
+    timeout(
+        Duration::from_secs(30),
+        &mut reactor.consensus.engine.legacy_handle_mut().handle,
+    )
+    .await??;
+    result
 }
 
 async fn marker_exists(conn: &Connection, outpoint: OutPoint) -> Result<bool> {
