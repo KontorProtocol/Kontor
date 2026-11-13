@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::serialize;
-use bitcoin::{BlockHash, Network, hashes::Hash};
+use bitcoin::{BlockHash, Network, OutPoint, hashes::Hash};
 use indexer_types::{BlockRow, Event};
 use libsql::{Connection, params};
 use malachitebft_app_channel::app::types::ProposedValue;
@@ -21,7 +21,7 @@ use tempfile::TempDir;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use self::fixture::issuance_transaction;
+use self::fixture::{issuance_transaction, issuance_transaction_at};
 use crate::bitcoin_client::Client;
 use crate::bitcoin_follower::block::BlockInput;
 use crate::bitcoin_follower::event::BlockEvent;
@@ -374,9 +374,10 @@ async fn qualify_finality(
     let network = reactor.execution.network;
     let parent = issuance_transaction()?;
     let parent_id = parent.compute_txid();
-    let mut child = parent.clone();
-    child.input[0].previous_output.txid = parent_id;
-    child.input[0].previous_output.vout = 0;
+    let child = issuance_transaction_at(OutPoint {
+        txid: parent_id,
+        vout: 0,
+    })?;
     let child_id = child.compute_txid();
     let mut next_height = 5;
     let mut tip = reactor

@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::NETWORK;
-use super::confirmation::{assert_paid_mint, finish_block, transaction};
+use super::confirmation::{assert_paid_mint, finish_block, transaction, transaction_at};
 use super::fixture::{append, open, snapshot, unscheduled};
 use crate::consensus::signing::PrivateKey;
 use crate::database::certified_history::{
@@ -154,8 +154,9 @@ async fn exercise(service: &OwnerService) -> Result<Value> {
     )
     .await?;
     let paid = transaction()?;
-    let mut missing = paid.clone();
-    missing.input[0].previous_output.vout = 1;
+    let mut missing_outpoint = paid.input[0].previous_output;
+    missing_outpoint.vout = 1;
+    let missing = transaction_at(missing_outpoint, paid.lock_time)?;
     let batch = ExactInput::batch(
         second,
         ACTIVATION_HEIGHT,

@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, ensure};
+use bitcoin::absolute::LockTime;
 use bitcoin::{
-    Amount, Block, ScriptBuf, Transaction, TxOut, Witness, consensus::serialize, hashes::Hash,
+    Amount, Block, OutPoint, ScriptBuf, Transaction, TxOut, Witness, consensus::serialize,
+    hashes::Hash,
 };
 use indexer_types::{ContractAddress, Inst, InstKind, Insts};
 use libsql::Connection;
@@ -16,32 +18,40 @@ use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplica
 use crate::protocol::coordinator::certified_input::ExactInput;
 use crate::protocol::identity::ExecutionIdentity;
 use crate::protocol_qualification::snapshot::full_state;
-use crate::reactor::certified::qualification::fixture::raw_transaction;
+use crate::reactor::certified::qualification::fixture::raw_transaction_at_with_lock_time;
 use crate::reactor::execution::ExecutionStep;
 use crate::runtime::Decimal;
 use crate::runtime::ownership::OwnerService;
 use crate::stopper::Shutdown;
 
 pub(super) fn transaction() -> Result<Transaction> {
-    let mut transaction = raw_transaction(Insts::direct(vec![
-        Inst {
-            gas_limit: 100_000,
-            kind: InstKind::Issuance,
-        },
-        Inst {
-            gas_limit: 100_000,
-            kind: InstKind::Call {
-                contract: ContractAddress {
-                    name: "token".into(),
-                    height: 0,
-                    tx_index: 0,
-                },
-                expr: format!("mint({})", to_wave_expr(Decimal::from("1"))),
+    let mut previous = OutPoint::null();
+    previous.vout = 0;
+    transaction_at(previous, LockTime::ZERO)
+}
+
+pub(super) fn transaction_at(previous: OutPoint, lock_time: LockTime) -> Result<Transaction> {
+    raw_transaction_at_with_lock_time(
+        Insts::direct(vec![
+            Inst {
+                gas_limit: 100_000,
+                kind: InstKind::Issuance,
             },
-        },
-    ]))?;
-    transaction.input[0].previous_output.vout = 0;
-    Ok(transaction)
+            Inst {
+                gas_limit: 100_000,
+                kind: InstKind::Call {
+                    contract: ContractAddress {
+                        name: "token".into(),
+                        height: 0,
+                        tx_index: 0,
+                    },
+                    expr: format!("mint({})", to_wave_expr(Decimal::from("1"))),
+                },
+            },
+        ]),
+        previous,
+        lock_time,
+    )
 }
 
 pub(super) fn finish_block(block: &mut Block) -> Result<()> {

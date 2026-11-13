@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
-use bitcoin::{Transaction, blockdata::constants::genesis_block, consensus::serialize};
+use bitcoin::{OutPoint, Transaction, blockdata::constants::genesis_block, consensus::serialize};
 use indexer_types::{ContractAddress, Inst, InstKind, Insts};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -14,31 +14,34 @@ use crate::database::certified_history::{
 use crate::database::queries::get_transaction_by_txid;
 use crate::protocol::coordinator::certified_input::ExactInput;
 use crate::protocol_qualification::snapshot::full_state;
-use crate::reactor::certified::qualification::fixture::raw_transaction;
+use crate::reactor::certified::qualification::fixture::raw_transaction_at;
 use crate::reactor::consensus_state::certified_startup;
 use crate::runtime::ownership::OwnerService;
 use crate::stopper::Shutdown;
 
 pub(super) fn exit_transaction() -> Result<Transaction> {
-    let mut exit = raw_transaction(Insts::direct(vec![
-        Inst {
-            gas_limit: 100_000,
-            kind: InstKind::Issuance,
-        },
-        Inst {
-            gas_limit: 100_000,
-            kind: InstKind::Call {
-                contract: ContractAddress {
-                    name: "staking".into(),
-                    height: 0,
-                    tx_index: 0,
-                },
-                expr: "leave-validation()".into(),
+    let mut previous = OutPoint::null();
+    previous.vout = 0;
+    raw_transaction_at(
+        Insts::direct(vec![
+            Inst {
+                gas_limit: 100_000,
+                kind: InstKind::Issuance,
             },
-        },
-    ]))?;
-    exit.input[0].previous_output.vout = 0;
-    Ok(exit)
+            Inst {
+                gas_limit: 100_000,
+                kind: InstKind::Call {
+                    contract: ContractAddress {
+                        name: "staking".into(),
+                        height: 0,
+                        tx_index: 0,
+                    },
+                    expr: "leave-validation()".into(),
+                },
+            },
+        ]),
+        previous,
+    )
 }
 
 // Exit is an ordinary paid staking call. Its twelve-block delay expires in H's
