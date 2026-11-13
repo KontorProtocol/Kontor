@@ -20,6 +20,8 @@ use crate::protocol::coordinator::replay_input::ReplayInput;
 use crate::protocol::coordinator::v1::{FINALITY_WINDOW, deadline_for};
 use crate::protocol::identity::domain_digest;
 
+type FrozenInclusionBlock = (u64, u64, [u8; 32], HashSet<([u8; 32], [u8; 32])>);
+
 struct ProofIndex {
     id: [u8; 32],
     input: [u8; 32],
@@ -740,7 +742,7 @@ async fn evidence_commitment(conn: &Connection, origin: WorkOrigin) -> Result<(u
     ).await?;
     let mut count = 0u64;
     let mut digest = evidence_start(origin)?;
-    let mut block: Option<(u64, u64, [u8; 32], HashSet<([u8; 32], [u8; 32])>)> = None;
+    let mut block: Option<FrozenInclusionBlock> = None;
     while let Some(row) = rows.next().await? {
         let txid = fixed::<32>(row.get(0)?)?;
         let wtxid = fixed::<32>(row.get(1)?)?;

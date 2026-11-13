@@ -220,10 +220,10 @@ pub(crate) async fn publish(conn: &Connection, expected: Draft) -> Result<WorkCu
     ensure!(draft == expected, "work draft changed before publication");
     verify(conn, draft).await?;
     if draft.published.is_none() {
-        if let Some(verdict) = draft.verdict {
-            if !reconcile::has_plan(conn, draft.origin).await? {
-                finality::publish_seeds(conn, draft.origin, verdict).await?;
-            }
+        if let Some(verdict) = draft.verdict
+            && !reconcile::has_plan(conn, draft.origin).await?
+        {
+            finality::publish_seeds(conn, draft.origin, verdict).await?;
         }
         let id = plan_id(draft.origin, draft.count, draft.digest, draft.verdict)?;
         conn.execute(

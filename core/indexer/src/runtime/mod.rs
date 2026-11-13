@@ -1050,20 +1050,19 @@ impl Runtime {
         schnorr_sig: &[u8],
         bls_sig: &[u8],
     ) -> Result<(), ExecutionError> {
-        if let Some(id) = existing_id {
-            if let Some(existing) = self
+        if let Some(id) = existing_id
+            && let Some(existing) = self
                 .storage
                 .identity_bls_key(id)
                 .await
                 .map_err(ExecutionError::NonDeterministic)?
-            {
-                if existing == bls_pubkey {
-                    return Ok(());
-                }
-                return Err(ExecutionError::Deterministic(anyhow!(
-                    "BLS pubkey already registered for signer"
-                )));
+        {
+            if existing == bls_pubkey {
+                return Ok(());
             }
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "BLS pubkey already registered for signer"
+            )));
         }
         Self::registration_proof(x_only_pubkey, bls_pubkey, schnorr_sig, bls_sig)?;
         Ok(())
@@ -1075,7 +1074,7 @@ impl Runtime {
         schnorr_sig: &[u8],
         bls_sig: &[u8],
     ) -> Result<RegistrationProof, ExecutionError> {
-        let x_only_pk = XOnlyPublicKey::from_str(&x_only_pubkey)
+        let x_only_pk = XOnlyPublicKey::from_str(x_only_pubkey)
             .map_err(|e| ExecutionError::Deterministic(anyhow!("invalid x-only pubkey: {e}")))?;
 
         let bls_pubkey: [u8; 96] = bls_pubkey.try_into().map_err(|_| {

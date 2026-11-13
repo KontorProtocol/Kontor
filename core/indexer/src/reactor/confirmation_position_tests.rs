@@ -1,3 +1,4 @@
+use std::slice::from_ref;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -964,7 +965,7 @@ async fn optimistic_batches_reserve_spent_outpoints_before_a_block() -> Result<(
         assert_eq!(
             reactor
                 .consensus
-                .validate_batch(&conn, 1, anchor, &[competing.clone()], 1, anchor)
+                .validate_batch(&conn, 1, anchor, from_ref(&competing), 1, anchor)
                 .await?,
             Some("contains already-executed Bitcoin outpoints")
         );
