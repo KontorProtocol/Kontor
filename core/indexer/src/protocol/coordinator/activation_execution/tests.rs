@@ -225,16 +225,15 @@ pub(crate) async fn fixture() -> Result<(TempDir, LinkedSession, OwnerService, M
     stage
         .finish(Ok(((), StageOutcome::Applied, remaining)))
         .await?;
-    while !finality::step(&conn, 1).await? {}
+    while !finality::step(&conn, 1).await?.is_ready() {}
     let progress = closure::progress(&conn, 1).await?;
-    let draft = work::for_origin(&conn, progress.work_origin()?).await?;
+    let sealed = work::for_origin(&conn, progress.work_origin()?, work::WorkKind::Finality)
+        .await?
+        .sealed()?;
     let stage = begin_stage(&service, &session, Network::Regtest, 1)
         .await?
         .unwrap();
-    let remaining = work::publish(&conn, draft).await?;
-    stage
-        .finish(Ok(((), StageOutcome::FinalityEvaluated, remaining)))
-        .await?;
+    stage.publish_replacement(sealed).await?;
     assert_eq!(
         closure::recover(&conn, 1).await?.next.map(|next| next.0),
         Some(WorkItem::Activate { decision: 1 })

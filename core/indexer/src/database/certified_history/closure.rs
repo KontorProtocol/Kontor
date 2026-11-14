@@ -33,6 +33,9 @@ pub(crate) struct Progress {
 pub(crate) struct StageTicket(Progress);
 
 impl StageTicket {
+    pub(crate) fn work_origin(&self) -> Result<WorkOrigin> {
+        self.0.work_origin()
+    }
     pub(crate) fn action(&self) -> WorkItem {
         self.0.next.expect("admitted stage has work").0
     }
@@ -74,7 +77,7 @@ pub(crate) async fn canonical_position(
     })
 }
 
-async fn plan(conn: &Connection, height: u64) -> Result<ClosurePlan> {
+pub(super) async fn plan(conn: &Connection, height: u64) -> Result<ClosurePlan> {
     let row = conn
         .query(
             "SELECT plan_id, record FROM closure_plans WHERE height = ?1",
@@ -132,7 +135,7 @@ impl Progress {
     }
 }
 
-fn initial_origin(plan: &ClosurePlan) -> Result<WorkOrigin> {
+pub(super) fn initial_origin(plan: &ClosurePlan) -> Result<WorkOrigin> {
     Ok(WorkOrigin {
         height: plan.height,
         closure: plan.id()?,
@@ -143,14 +146,14 @@ fn initial_origin(plan: &ClosurePlan) -> Result<WorkOrigin> {
 
 async fn initial_progress(conn: &Connection, plan: ClosurePlan) -> Result<Progress> {
     let origin = initial_origin(&plan)?;
-    let draft = work::for_origin(conn, origin).await?;
+    let draft = work::initial(conn, &plan).await?.published()?;
     let initial = plan.initial_work();
     let mut digest = origin.key()?;
     for (index, item) in initial.iter().enumerate() {
         digest = item_digest(digest, index as u64, *item)?;
     }
     ensure!(
-        draft.count == initial.len() as u64 && draft.digest == digest,
+        draft.summary() == (initial.len() as u64, digest),
         "initial work differs from closure plan"
     );
     let remaining = draft.cursor()?;
@@ -182,8 +185,14 @@ async fn advance(conn: &Connection, previous: &Progress, record: &StageRecord) -
             "ordinary stage changed work plan or finality discarded pending work"
         );
         let replacement = work::published(conn, record.remaining.plan).await?;
+        work::check_replacement(
+            conn,
+            &replacement,
+            work::WorkKind::replacement(record.action)?,
+        )
+        .await?;
         ensure!(
-            replacement.origin == previous.work_origin()?
+            replacement.origin() == previous.work_origin()?
                 && replacement.cursor()? == record.remaining,
             "replacement work plan has stale origin or skips items"
         );
@@ -320,9 +329,9 @@ pub(crate) async fn begin(conn: &Connection, height: u64) -> Result<Progress> {
             reconcile::persist(&tx, height, seeds).await?;
             reconcile::verify_plan(&tx, height, *summary).await?;
         }
-        let draft = work::begin(&tx, initial_origin(&plan)?).await?;
+        let draft = work::begin_initial(&tx, &plan).await?;
         let draft = work::append(&tx, draft, &plan.initial_work()).await?;
-        work::publish(&tx, draft).await?;
+        work::publish_initial(&tx, draft, &plan).await?;
     }
     let result = progress(&tx, height).await?;
     ensure!(
@@ -404,7 +413,7 @@ async fn validate_application_source(conn: &Connection, record: &StageRecord) ->
     let (height, frozen) = match record.action {
         WorkItem::Execute { decision } => (decision, None),
         WorkItem::Replay { decision, input } => {
-            let origin = work::published(conn, record.remaining.plan).await?.origin;
+            let origin = work::published(conn, record.remaining.plan).await?.origin();
             let frozen = replay_input::get(conn, input, origin, decision).await?;
             ensure!(
                 record.outcome != StageOutcome::ReplacedAnchorBatch,
@@ -641,7 +650,12 @@ pub(crate) async fn recover(conn: &Connection, height: u64) -> Result<Progress> 
     if let Some(reconciliation) = progress.plan.reconciliation {
         reconcile::verify_plan(conn, height, reconciliation).await?;
     }
-    work::verify(conn, work::published(conn, progress.remaining.plan).await?).await?;
+    work::verify(
+        conn,
+        work::published(conn, progress.remaining.plan).await?,
+        work::WorkKind::Initial,
+    )
+    .await?;
     let certified = load_verified_input(conn, height).await?;
     ensure!(
         certified.decision().id()? == progress.plan.decision
@@ -677,7 +691,12 @@ pub(crate) async fn recover(conn: &Connection, height: u64) -> Result<Progress> 
         observation.verify_successor(Some(&previous_observation))?;
         validate_application_source(conn, &record).await?;
         if record.remaining.plan != progress.remaining.plan {
-            work::verify(conn, work::published(conn, record.remaining.plan).await?).await?;
+            work::verify(
+                conn,
+                work::published(conn, record.remaining.plan).await?,
+                work::WorkKind::replacement(record.action)?,
+            )
+            .await?;
         }
         progress = advance(conn, &progress, &record).await?;
         previous_observation = observation;

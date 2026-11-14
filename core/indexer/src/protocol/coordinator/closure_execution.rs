@@ -9,7 +9,7 @@ use super::linked::{begin_canonical_unit, finish_canonical_unit, observe_registr
 use super::registration_history::RegistrationSnapshot;
 use super::selection::{ApplicationPosition, ExecutionSelection, select_canonical};
 use crate::database::certified_history::{
-    activation, closure, load, load_verified_input, registrations,
+    activation, closure, load, load_verified_input, registrations, work,
 };
 use crate::runtime::ownership::{LinkedCanonicalRootLease, OwnerService};
 use crate::runtime::pool::LinkedSession;
@@ -23,6 +23,20 @@ pub(crate) struct OwnedClosureStage {
 }
 
 impl OwnedClosureStage {
+    pub(crate) async fn publish_replacement(self, sealed: work::SealedPlan) -> Result<StageRecord> {
+        let result = async {
+            let outcome = match self.action() {
+                WorkItem::Finality => StageOutcome::FinalityEvaluated,
+                WorkItem::Reconcile => StageOutcome::Reconciled,
+                _ => anyhow::bail!("ordinary stage cannot publish replacement work"),
+            };
+            let cursor =
+                work::publish_replacement(&self.session.conn, sealed, &self.ticket).await?;
+            Ok(((), outcome, cursor))
+        }
+        .await;
+        self.finish(result).await.map(|(_, record)| record)
+    }
     pub(crate) fn selection(&self) -> &ExecutionSelection {
         &self.selection
     }

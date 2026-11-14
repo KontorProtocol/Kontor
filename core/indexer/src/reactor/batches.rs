@@ -293,7 +293,7 @@ impl<E: Executor> ExecutionContext<E> {
             let frozen = match stage.action() {
                 WorkItem::Execute { decision } if decision == consensus_height.as_u64() => None,
                 WorkItem::Replay { decision, input } if decision == consensus_height.as_u64() => {
-                    let origin = work::published(&conn, remaining.plan).await?.origin;
+                    let origin = work::published(&conn, remaining.plan).await?.origin();
                     Some(replay_input::get(&conn, input, origin, decision).await?)
                 }
                 _ => bail!("batch application differs from closure work item"),

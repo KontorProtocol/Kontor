@@ -192,20 +192,15 @@ impl<E: Executor> ExecutionContext<E> {
             self.select_session(&selection).await?;
             let outcome: Result<ExecutionStep> = match action {
                 WorkItem::Reconcile => {
-                    if !reconcile::step(&conn, height).await? {
+                    let work::PlanStep::Ready(sealed) = reconcile::step(&conn, height).await?
+                    else {
                         return Ok(ExecutionStep::Planning);
-                    }
-                    let draft = work::for_origin(&conn, progress.work_origin()?).await?;
+                    };
                     let stage =
                         begin_stage(&self.owner_service, &self.session, self.network, height)
                             .await?
                             .context("reconciliation stage disappeared")?;
-                    let result = async {
-                        let cursor = work::publish(&conn, draft).await?;
-                        Ok(((), StageOutcome::Reconciled, cursor))
-                    }
-                    .await;
-                    stage.finish(result).await?;
+                    stage.publish_replacement(sealed).await?;
                     Ok(ExecutionStep::Planning)
                 }
                 WorkItem::Activate { .. } => {
@@ -270,7 +265,7 @@ impl<E: Executor> ExecutionContext<E> {
                             let selected = if let WorkItem::Replay { input, .. } = action {
                                 let origin = work::published(&conn, progress.remaining.plan)
                                     .await?
-                                    .origin;
+                                    .origin();
                                 Some(
                                     replay_input::get(&conn, input, origin, decision)
                                         .await?
@@ -302,20 +297,14 @@ impl<E: Executor> ExecutionContext<E> {
                     }
                 }
                 WorkItem::Finality => {
-                    if !finality::step(&conn, height).await? {
+                    let work::PlanStep::Ready(sealed) = finality::step(&conn, height).await? else {
                         return Ok(ExecutionStep::Planning);
-                    }
-                    let draft = work::for_origin(&conn, progress.work_origin()?).await?;
+                    };
                     let stage =
                         begin_stage(&self.owner_service, &self.session, self.network, height)
                             .await?
                             .context("finality stage disappeared")?;
-                    let result = async {
-                        let cursor = work::publish(&conn, draft).await?;
-                        Ok(((), StageOutcome::FinalityEvaluated, cursor))
-                    }
-                    .await;
-                    stage.finish(result).await?;
+                    stage.publish_replacement(sealed).await?;
                     Ok(ExecutionStep::Finality)
                 }
                 WorkItem::Observe => {
