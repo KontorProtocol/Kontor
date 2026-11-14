@@ -22,6 +22,9 @@ use crate::protocol::identity::domain_digest;
 
 type FrozenInclusionBlock = (u64, u64, [u8; 32], HashSet<([u8; 32], [u8; 32])>);
 
+mod phase;
+use phase::Phase;
+
 struct ProofIndex {
     id: [u8; 32],
     input: [u8; 32],
@@ -1313,27 +1316,20 @@ pub(crate) async fn step(conn: &Connection, height: u64) -> Result<bool> {
     )
     .await?;
     let row = tx.query(
-        "SELECT phase, scan_height, scan_decision, exclusion_done, exclusion_after_decision, exclusion_after_txid, replay_height, replay_decision FROM closure_reconcile_plans WHERE plan_key = ?1",
+        "SELECT phase, scan_height, scan_decision, exclusion_done, exclusion_after_decision, exclusion_after_txid, replay_height, replay_decision, record FROM closure_reconcile_plans WHERE plan_key = ?1",
         [key.to_vec()],
     ).await?.next().await?.context("reconciliation plan disappeared")?;
-    match row.get::<u64>(0)? {
-        0 => scan_one(&tx, origin, summary.from_height, position(&row, 1, 2)?).await?,
-        1 if row.get::<i64>(3)? == 0 => {
-            let after = row
-                .get::<Option<Vec<u8>>>(4)?
-                .map(|bytes| -> Result<_> {
-                    Ok(replay::ExclusionCursor {
-                        decision: u64::from_be_bytes(fixed(bytes)?),
-                        txid: row.get::<String>(5)?,
-                    })
-                })
-                .transpose()?;
+    match Phase::decode(&row)? {
+        Phase::ScanEvidence { after } => scan_one(&tx, origin, summary.from_height, after).await?,
+        Phase::CaptureUnavailable { after } => {
             capture_early_unavailable(&tx, origin, summary.from_height, after).await?;
         }
-        1 => initialize_replay(&tx, origin, summary.from_height).await?,
-        2 => build_one(&tx, origin, summary, position(&row, 6, 7)?).await?,
-        3 => (),
-        _ => anyhow::bail!("invalid reconciliation phase"),
+        Phase::InitializeReplay => initialize_replay(&tx, origin, summary.from_height).await?,
+        Phase::Build { after } => build_one(&tx, origin, summary, after).await?,
+        Phase::Sealed(verdict) => ensure!(
+            verdict.origin == origin,
+            "sealed reconciliation origin differs"
+        ),
     }
     let ready = work::for_origin(&tx, origin).await?.verdict.is_some();
     tx.commit().await?;

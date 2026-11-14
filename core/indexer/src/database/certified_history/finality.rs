@@ -18,6 +18,9 @@ use crate::protocol::identity::domain_digest;
 
 const PAGE: usize = 64;
 
+mod phase;
+use phase::Phase;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Verdict {
     origin: WorkOrigin,
@@ -396,52 +399,15 @@ pub(crate) async fn step(conn: &Connection, height: u64) -> Result<bool> {
         [key.to_vec()],
     )
     .await?;
-    let row = tx.query("SELECT phase, probe_after, seed_after_decision, seed_after_txid, replay_height, replay_decision, from_height FROM closure_finality_plans WHERE plan_key = ?1", [key.to_vec()])
+    let row = tx.query("SELECT phase, probe_after, seed_after_decision, seed_after_txid, replay_height, replay_decision, from_height, record FROM closure_finality_plans WHERE plan_key = ?1", [key.to_vec()])
         .await?.next().await?.context("missing finality plan")?;
-    let from = row
-        .get::<Option<Vec<u8>>>(6)?
-        .map(|bytes| fixed(bytes).map(u64::from_be_bytes))
-        .transpose()?;
-    match row.get::<u64>(0)? {
-        0 => probe(&tx, origin, row.get(1)?, from).await?,
-        1 => {
-            let after = row
-                .get::<Option<Vec<u8>>>(2)?
-                .map(|bytes| -> Result<_> {
-                    Ok(replay::ExclusionCursor {
-                        decision: u64::from_be_bytes(fixed(bytes)?),
-                        txid: row.get::<String>(3)?,
-                    })
-                })
-                .transpose()?;
-            capture(
-                &tx,
-                origin,
-                from.context("exclusion scan lacks rollback anchor")?,
-                after,
-            )
-            .await?;
+    match Phase::decode(&row)? {
+        Phase::Probe { after, from } => probe(&tx, origin, after, from).await?,
+        Phase::Capture { from, after } => capture(&tx, origin, from, after).await?,
+        Phase::Build { from, after } => build_one(&tx, origin, from, after).await?,
+        Phase::Sealed(verdict) => {
+            ensure!(verdict.origin == origin, "sealed finality origin differs")
         }
-        2 => {
-            let after = row
-                .get::<Option<Vec<u8>>>(4)?
-                .map(|bytes| -> Result<_> {
-                    Ok(replay::ReplayPosition {
-                        bitcoin_height: u64::from_be_bytes(fixed(bytes)?),
-                        decision: u64::from_be_bytes(fixed(row.get(5)?)?),
-                    })
-                })
-                .transpose()?;
-            build_one(
-                &tx,
-                origin,
-                from.context("replay lacks rollback anchor")?,
-                after,
-            )
-            .await?;
-        }
-        3 => (),
-        _ => anyhow::bail!("invalid finality plan phase"),
     }
     let draft = work::for_origin(&tx, origin).await?;
     let ready = draft.verdict.is_some();

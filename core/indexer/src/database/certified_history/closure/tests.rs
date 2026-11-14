@@ -1,4 +1,7 @@
+use crate::database::certified_history::finality;
+use crate::database::queries::insert_block;
 use bitcoin::{Network, blockdata::constants::genesis_block, consensus::serialize};
+use indexer_types::BlockRow;
 use tempfile::TempDir;
 
 use super::*;
@@ -114,6 +117,52 @@ async fn apply(conn: &Connection, applications: &[CanonicalApplication]) -> Resu
     .await?;
     unit.commit().await?;
     Ok(record)
+}
+
+#[tokio::test]
+async fn fixed_identity_planning_snapshot() -> Result<()> {
+    let (_directory, conn, applications) = fixture().await?;
+    apply(&conn, &applications).await?;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(1)
+            .hash(genesis_block(Network::Regtest).block_hash())
+            .build(),
+    )
+    .await?;
+    while !finality::step(&conn, 1).await? {}
+    for (name, sql) in [
+        (
+            "work",
+            "SELECT hex(plan_key), hex(origin), hex(item_count), hex(digest), hex(plan_id), hex(verdict) FROM closure_work_plans ORDER BY plan_key",
+        ),
+        (
+            "items",
+            "SELECT hex(plan_key), hex(ordinal), hex(item), hex(previous), hex(digest) FROM closure_work_items ORDER BY plan_key, ordinal",
+        ),
+        (
+            "inputs",
+            "SELECT hex(input_id), hex(plan_key), hex(decision), hex(record) FROM closure_replay_inputs ORDER BY input_id",
+        ),
+        (
+            "finality",
+            "SELECT hex(plan_key), phase, hex(record) FROM closure_finality_plans ORDER BY plan_key",
+        ),
+        (
+            "reconcile",
+            "SELECT hex(plan_key), phase, hex(record) FROM closure_reconcile_plans ORDER BY plan_key",
+        ),
+    ] {
+        let mut rows = conn.query(sql, ()).await?;
+        while let Some(row) = rows.next().await? {
+            let values = (0..row.column_count())
+                .map(|i| row.get_value(i))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            println!("R6_SNAPSHOT {name} {values:?}");
+        }
+    }
+    Ok(())
 }
 
 #[tokio::test]
