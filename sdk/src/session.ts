@@ -82,7 +82,7 @@ export interface KontorSessionOptions {
   /**
    * Where the default transport gets spendable UTXOs (and reports back
    * spent/change). Use `inMemoryFunding([utxo])` for optimistic chaining
-   * or `queryFunding(fetch)` for a stateless wallet/indexer source. Omit
+   * or `queryFunding(fetch)` for authoritative wallet snapshots. Omit
    * for read-only sessions (submit/inspect/simulate then throw). Ignored
    * when a custom `transport` is supplied — that factory owns funding.
    */
@@ -538,14 +538,16 @@ export class KontorSession {
    * event iterator, so calling ready() first preserves recovery and history.
    */
   ready(): Promise<void> {
-    this.poller.start(); // idempotent — lazy-starts the loop on first use
     return this.poller.ready();
   }
 
   /**
-   * Stop the background poller. A `KontorSession` owns a polling loop
-   * from construction, so call this once done with the session — e.g.
-   * to let a Node process exit cleanly.
+   * Permanently close receipt observation and cancel its requests and timers.
+   * Repeated close is safe. events(), ready(), and observed submit flows reject
+   * afterward; create a new session to resume. An in-flight receipt wait ends
+   * with an event-stream-ended error. Stateless views and transaction() lookups
+   * remain available. Buffered events are discarded, so persist your own resume
+   * token as each event is processed.
    */
   close(): void {
     this.poller.stop();

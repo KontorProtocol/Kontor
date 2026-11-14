@@ -1,127 +1,143 @@
-/**
- * `FundingSource` — where a transport gets spendable UTXOs for a submit,
- * and where it reports back what it spent and what change it created. The
- * SDK core holds NO funding state and NO lock; it just drives this small
- * protocol around each broadcast:
- *
- *   take() → compose/sign/broadcast → settle({ spent, change })   (success)
- *   take() → …                      → release(taken)              (failure)
- *
- * Two shipped implementations, both with identical `await token.x()`
- * ergonomics — pick by passing one as `KontorSession`'s `funding`:
- *
- *   - `inMemoryFunding(pool)` — optimistic chaining: a submit's change is
- *     available to the next submit immediately (no waiting for
- *     confirmation). For tests / high-throughput sequential use. Lock-free:
- *     `take()` reserves synchronously (single-threaded JS → no interleave),
- *     and FAILS FAST on genuine concurrency rather than queuing.
- *
- *   - `queryFunding(fetch)` — stateless: `take()` re-queries the wallet /
- *     indexer for the current spendable set; `settle`/`release` are no-ops.
- *     The real-app default (the wallet owns coin management).
- */
-
 import { ChainError } from "./errors.js";
 import type { Utxo } from "./json-codec.js";
 
-export interface FundingSource {
-  /** Candidate spendable UTXOs for the upcoming tx. May reserve them. */
-  take(): Promise<Utxo[]>;
-  /** After a successful broadcast: `spent` inputs are gone, `change`
-   *  outputs are new spendable UTXOs. */
-  settle(result: { spent: Utxo[]; change: Utxo[] }): void;
-  /** On a failed submit (nothing broadcast): undo any reservation. */
-  release(taken: Utxo[]): void;
+export interface FundingDelta {
+  spent: Utxo[];
+  change: Utxo[];
 }
 
-const keyOf = (u: { txid: string; vout: number }): string =>
-  `${u.txid}:${u.vout}`;
+/** One reservation. Its terminal methods cannot affect a later reservation. */
+export interface FundingLease {
+  readonly utxos: readonly Utxo[];
+  /** Before publication, release candidates absent from the exact signed package. */
+  retain(used: readonly Utxo[]): void;
+  /** Only when this submission has not attempted publication. */
+  release(): void;
+  /** Retire spent/at-risk candidates and admit verified usable change. */
+  settle(delta: FundingDelta): void;
+}
 
-/** Order UTXOs smallest-value-first. `take()` hands the pool to the
- *  indexer's greedy head-walking selector, so dust at the head gets pulled
- *  in alongside the next larger UTXO and consolidated — rather than letting
- *  dust outputs (the 330-sat reveal change) accumulate over many submits.
- *  Value is sats (`bigint`); compare directly, no `Number()` precision risk. */
+export interface FundingSource {
+  reserve(): Promise<FundingLease>;
+}
+
+const keyOf = (utxo: Utxo): string => `${utxo.txid.toLowerCase()}:${utxo.vout}`;
+const copy = (utxos: readonly Utxo[]): Utxo[] =>
+  utxos.map((utxo) => ({ ...utxo }));
+
 function dustFirst(utxos: Utxo[]): Utxo[] {
-  return [...utxos].sort((a, b) =>
+  return utxos.sort((a, b) =>
     a.value < b.value ? -1 : a.value > b.value ? 1 : 0,
   );
 }
 
-/**
- * An in-memory chaining pool. `take()` hands out (and reserves) the whole
- * pool, **smallest-value-first** so the indexer consolidates dust; `settle()`
- * drops the spent inputs and folds in the change, re-sorting. Single
- * in-flight reservation: a second `take()` before the first settles fails
- * fast rather than risking a double-spend (you can't chain off one
- * unconfirmed coin twice). In the await-each pattern that never trips,
- * because `take()` 2 runs after `settle()` 1.
- *
- * The dust-first ordering is *this source's* policy — other `FundingSource`
- * implementations (e.g. `queryFunding`) keep whatever order their backend
- * returns.
- */
-export function inMemoryFunding(initial: Utxo[]): FundingSource {
-  let pool: Utxo[] = dustFirst(initial);
-  let outstanding: Utxo[] | null = null;
-
+function lease(
+  candidates: Utxo[],
+  finish: (delta: FundingDelta, retained: readonly Utxo[]) => void,
+  releaseUnused: (unused: readonly Utxo[]) => void,
+): FundingLease {
+  let owned = copy(candidates);
+  let keys = new Set(owned.map(keyOf));
+  if (keys.size !== owned.length)
+    throw new ChainError("funding returned duplicate outpoints");
+  let open = true;
+  const settle = (delta: FundingDelta): void => {
+    if (!open) return;
+    if (delta.spent.some((utxo) => !keys.has(keyOf(utxo))))
+      throw new ChainError("funding settlement spends an unreserved outpoint");
+    finish({ spent: copy(delta.spent), change: copy(delta.change) }, owned);
+    open = false;
+  };
   return {
-    take(): Promise<Utxo[]> {
-      if (outstanding !== null) {
-        return Promise.reject(
-          new ChainError(
-            "inMemoryFunding: a prior submit is still in flight — funding is " +
-              "single-flight; await each submit before the next",
-            { docsPath: "/sdk/funding" },
-          ),
-        );
-      }
-      if (pool.length === 0) {
-        return Promise.reject(
-          new ChainError(
-            "inMemoryFunding: no spendable UTXOs left in the pool",
-            {
-              docsPath: "/sdk/funding",
-            },
-          ),
-        );
-      }
-      // Reserve synchronously — no await between read and remove, so two
-      // takes can't hand out the same coins.
-      outstanding = pool;
-      pool = [];
-      return Promise.resolve(outstanding);
+    get utxos() {
+      return Object.freeze(owned.map((utxo) => Object.freeze({ ...utxo })));
     },
+    retain(used) {
+      if (!open) throw new ChainError("funding lease is already settled");
+      const retainedKeys = new Set(used.map(keyOf));
+      if (used.some((utxo) => !keys.has(keyOf(utxo))))
+        throw new ChainError("cannot retain an unreserved outpoint");
+      releaseUnused(owned.filter((utxo) => !retainedKeys.has(keyOf(utxo))));
+      owned = owned.filter((utxo) => retainedKeys.has(keyOf(utxo)));
+      keys = retainedKeys;
+    },
+    release: () => settle({ spent: [], change: [] }),
+    settle,
+  };
+}
 
-    settle({ spent, change }): void {
-      const spentKeys = new Set(spent.map(keyOf));
-      const unspent = (outstanding ?? []).filter(
-        (u) => !spentKeys.has(keyOf(u)),
+/** Dust-first optimistic chaining with one outstanding reservation. */
+export function inMemoryFunding(initial: Utxo[]): FundingSource {
+  let pool = dustFirst(copy(initial));
+  let reserved = false;
+  return {
+    async reserve(): Promise<FundingLease> {
+      if (reserved)
+        throw new ChainError(
+          "inMemoryFunding: prior submission unresolved; single-flight funding requires recovery or completion",
+          { docsPath: "/sdk/funding" },
+        );
+      if (!pool.length)
+        throw new ChainError(
+          "inMemoryFunding: no spendable UTXOs left in the pool",
+          { docsPath: "/sdk/funding" },
+        );
+      const taken = pool;
+      const reservation = lease(
+        taken,
+        ({ spent, change }, retained) => {
+          const spentKeys = new Set(spent.map(keyOf));
+          pool = dustFirst([
+            ...pool,
+            ...retained.filter((utxo) => !spentKeys.has(keyOf(utxo))),
+            ...change,
+          ]);
+          reserved = false;
+        },
+        (unused) => {
+          pool = dustFirst([...pool, ...unused]);
+        },
       );
-      pool = dustFirst([...change, ...unspent]);
-      outstanding = null;
-    },
-
-    release(): void {
-      if (outstanding !== null) {
-        pool = dustFirst([...outstanding, ...pool]);
-        outstanding = null;
-      }
+      reserved = true;
+      pool = [];
+      return reservation;
     },
   };
 }
 
 /**
- * A stateless funding source: every `take()` re-queries `fetch` for the
- * current spendable set; `settle`/`release` are no-ops. Use when the
- * wallet / indexer is the source of truth (the real-app default) — there's
- * no chaining state to protect, so no lock, ever. You can't spend a tx's
- * own change until it confirms and `fetch` reports it.
+ * Query-backed funding, without an optimistic change cache. fetch must return a
+ * complete authoritative wallet snapshot. Reservations and spent-outpoint filters
+ * are shared by this source instance, not across processes or separate wallets.
  */
 export function queryFunding(fetch: () => Promise<Utxo[]>): FundingSource {
+  const reserved = new Set<string>();
+  const retired = new Set<string>();
   return {
-    take: () => fetch(),
-    settle: () => {},
-    release: () => {},
+    async reserve(): Promise<FundingLease> {
+      const snapshot = copy(await fetch());
+      const present = new Set(snapshot.map(keyOf));
+      for (const key of retired) if (!present.has(key)) retired.delete(key);
+      const taken = snapshot.filter(
+        (utxo) => !reserved.has(keyOf(utxo)) && !retired.has(keyOf(utxo)),
+      );
+      if (!taken.length)
+        throw new ChainError(
+          "queryFunding: no unreserved spendable UTXOs; recover unresolved submissions or refresh the wallet",
+        );
+      const reservation = lease(
+        taken,
+        ({ spent }, retained) => {
+          for (const utxo of spent) retired.add(keyOf(utxo));
+          for (const utxo of retained) reserved.delete(keyOf(utxo));
+        },
+        (unused) => {
+          for (const utxo of unused) reserved.delete(keyOf(utxo));
+        },
+      );
+      // No await between filtering and reservation, even when queries overlap.
+      for (const utxo of taken) reserved.add(keyOf(utxo));
+      return reservation;
+    },
   };
 }

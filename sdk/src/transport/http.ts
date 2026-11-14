@@ -39,6 +39,7 @@ import {
   verifyFinalizedTaprootTransaction,
 } from "./signing.js";
 import { validateComposeResponse } from "./compose-validation.js";
+import { PendingSubmission, type BroadcastReport } from "./submission.js";
 import { toRevealOutputs, type ExtraOutput } from "../outputs.js";
 import type {
   BroadcastResult,
@@ -86,10 +87,10 @@ export interface HttpTransportOptions {
   headers?: Record<string, string>;
 
   /**
-   * Where submits get spendable UTXOs and report back spent/change. The
-   * transport holds no funding state itself — see `FundingSource`
-   * (`inMemoryFunding` for optimistic chaining, `queryFunding` for a
-   * stateless wallet/indexer source). Omit for read-only transports;
+   * Where submits reserve spendable UTXOs and settle spent/change. The
+   * transport retains uncertain signed submissions for recovery. Use
+   * `inMemoryFunding` for optimistic chaining or `queryFunding` for
+   * authoritative wallet snapshots. Omit for read-only transports;
    * `submit`/`inspect`/`simulate` then throw.
    */
   funding?: FundingSource;
@@ -123,6 +124,12 @@ export class HttpTransport implements KontorTransport {
   /** Indexer API base, trailing slash trimmed (so `${base}/contracts/…`). */
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly pending = new Set<PendingSubmission>();
+
+  /** Recover unresolved submissions even if their original error was discarded. */
+  pendingSubmissions(): readonly PendingSubmission[] {
+    return [...this.pending];
+  }
 
   constructor(private readonly opts: HttpTransportOptions) {
     this.baseUrl = (opts.url ?? opts.chain.urls.http).replace(/\/+$/, "");
@@ -442,14 +449,8 @@ export class HttpTransport implements KontorTransport {
    * the reveal txid; per-Inst results are resolved later by the
    * session's poller.
    *
-   * Serialized via `lock` so concurrent callers don't race on funding
-   * selection — submit 2 sees submit 1's broadcast reflected in
-   * `trackedFunding` / `recentlySpent` before picking inputs.
-   *
-   * On success, advances `trackedFunding` to the broadcast's change
-   * outputs (array mode) and records the actually-used input outpoints
-   * in `recentlySpent` (callback mode's filter). On broadcast failure,
-   * neither is touched — those UTXOs aren't actually spent.
+   * Each submit owns a funding lease. Once publication is attempted, an
+   * uncertain outcome retains that lease and exposes exact-byte recovery.
    */
   async submit(
     insts: WireInsts,
@@ -467,52 +468,72 @@ export class HttpTransport implements KontorTransport {
   }
 
   /**
-   * The blessed broadcast path for funding-spending txs. `take()` from
-   * the funding source, hand the candidates to `prepare` (which shapes
-   * the Reveal + compose+signs, and may inject a foreign reveal witness),
-   * extract → broadcast, then `settle()` the funding source with what was
-   * spent and the change created. On failure before broadcast, `release()`
-   * the reservation. No lock — serialization (if any) is the funding
-   * source's concern.
+   * Preparation may return recovery data, such as a signed marketplace offer.
+   * Only failures before publication release the lease. Later failures retain
+   * an exact signed package in pendingSubmissions() and SubmissionError.recovery.
    */
-  async submitReveal(
+  async submitReveal<T = undefined>(
     prepare: (utxos: Utxo[]) => Promise<{
       commitHexes: string[];
       revealTx: Transaction;
       composed: ComposeOutputs;
+      value?: T;
     }>,
   ): Promise<{
     result: BroadcastResult;
     commitHexes: string[];
     revealHex: string;
     composed: ComposeOutputs;
+    value?: T;
   }> {
-    const funding = this.funding();
-    const taken = await funding.take();
-    let commitHexes: string[];
-    let revealHex: string;
-    let composed: ComposeOutputs;
-    let result: BroadcastResult;
-    let fundingDelta: { spent: Utxo[]; change: Utxo[] };
+    const lease = await this.funding().reserve();
+    const taken = lease.utxos.map((utxo) => ({ ...utxo }));
+    let submission: PendingSubmission<{
+      result: BroadcastResult;
+      commitHexes: string[];
+      revealHex: string;
+      composed: ComposeOutputs;
+      value?: T;
+    }>;
     try {
       const prepared = await prepare(taken);
-      commitHexes = prepared.commitHexes;
-      composed = prepared.composed;
+      const commitHexes = [...prepared.commitHexes];
+      const composed = prepared.composed;
       verifyFinalizedTaprootTransaction(prepared.revealTx);
-      revealHex = hex.encode(prepared.revealTx.extract());
-      fundingDelta = this.computeFundingDelta({
+      const revealHex = hex.encode(prepared.revealTx.extract());
+      const fundingDelta = this.computeFundingDelta({
         suppliedUtxos: taken,
         composed,
         commitHexes,
         revealHex,
       });
-      result = await this.broadcast([...commitHexes, revealHex]);
+      lease.retain(fundingDelta.spent);
+      const value = {
+        result: { txid: prepared.revealTx.id },
+        commitHexes,
+        revealHex,
+        composed,
+        value: prepared.value,
+      };
+      submission = new PendingSubmission(
+        [...commitHexes, revealHex],
+        value,
+        lease,
+        fundingDelta,
+        (mode, raw) =>
+          this.postJson<BroadcastReport>(`/transactions/${mode}`, {
+            transactions: raw,
+          }),
+        () => {
+          this.pending.delete(submission);
+        },
+      );
     } catch (err) {
-      funding.release(taken);
+      lease.release();
       throw err;
     }
-    funding.settle(fundingDelta);
-    return { result, commitHexes, revealHex, composed };
+    this.pending.add(submission);
+    return submission.retry();
   }
 
   /**
@@ -595,8 +616,8 @@ export class HttpTransport implements KontorTransport {
    * order, as one package. The attach/detach runtime composes and signs
    * its commit/reveal txs by hand, then hands the finished package here.
    */
-  broadcast(transactions: string[]): Promise<BroadcastResult> {
-    return this.postJson<BroadcastResult>("/transactions/broadcast", {
+  broadcast(transactions: string[]): Promise<BroadcastReport> {
+    return this.postJson<BroadcastReport>("/transactions/broadcast", {
       transactions,
     });
   }
@@ -609,8 +630,8 @@ export class HttpTransport implements KontorTransport {
    * reservation rather than settling.
    */
   async inspect(insts: WireInsts): Promise<OpResultRaw[]> {
-    const funding = this.funding();
-    const taken = await funding.take();
+    const lease = await this.funding().reserve();
+    const taken = lease.utxos.map((utxo) => ({ ...utxo }));
     try {
       const reveal = await this.buildSimpleReveal(insts, taken);
       const { revealTx } = await this.composeAndSign(reveal, taken);
@@ -619,7 +640,7 @@ export class HttpTransport implements KontorTransport {
       });
       return ops.map(opWithResultToRaw);
     } finally {
-      funding.release(taken);
+      lease.release();
     }
   }
 
@@ -654,8 +675,8 @@ export class HttpTransport implements KontorTransport {
     insts: WireInsts,
     path: string,
   ): Promise<T> {
-    const funding = this.funding();
-    const taken = await funding.take();
+    const lease = await this.funding().reserve();
+    const taken = lease.utxos.map((utxo) => ({ ...utxo }));
     try {
       const reveal = await this.buildSimpleReveal(insts, taken);
       const { revealTx } = await this.composeAndSign(reveal, taken);
@@ -663,7 +684,7 @@ export class HttpTransport implements KontorTransport {
         hex: hex.encode(revealTx.extract()),
       });
     } finally {
-      funding.release(taken);
+      lease.release();
     }
   }
 }

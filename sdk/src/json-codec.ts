@@ -36,6 +36,10 @@
  * appear together.
  */
 import type { Transaction } from "@scure/btc-signer";
+import type {
+  BroadcastReport,
+  PendingSubmission,
+} from "./transport/submission.js";
 
 import type { ContractAddress } from "./canonical/ContractAddress.js";
 import type { ContractError } from "./errors.js";
@@ -208,15 +212,17 @@ export interface KontorTransport {
    * runtime, which builds its txs (e.g. the seller's pre-signed detach
    * PSBT, the buyer's swap reveal) outside the generic `submit` path.
    */
-  broadcast(transactions: string[]): Promise<BroadcastResult>;
+  broadcast(transactions: string[]): Promise<BroadcastReport>;
+
+  /** Recover unresolved publications even if the original error was discarded. */
+  pendingSubmissions(): readonly PendingSubmission[];
 
   /**
    * Compose a Reveal and sign all participant inputs that belong to
    * this transport's account, returning the prepared package. Pure:
    * does NOT broadcast and does NOT update funding tracking. Callers
-   * that will broadcast (now or later) should also call
-   * `advanceTracking` so subsequent `utxos()` reflects the spent
-   * inputs + change outputs.
+   * that spend funding should use `submitReveal` to own the reservation
+   * through preparation, publication and recovery.
    *
    * `submit` is the simple-Reveal shorthand (single Build participant
    * with Change). Higher-level flows (attach: ChainedEnvelope +
@@ -241,27 +247,29 @@ export interface KontorTransport {
   }>;
 
   /**
-   * The blessed broadcast path for funding-spending txs. `take()`s from
-   * the transport's `FundingSource`, hands the candidates to `prepare`
+   * Reserves a per-submission funding lease and hands its candidates to `prepare`
    * (which shapes the Reveal, compose+signs via `composeAndSign`, and may
    * inject a foreign reveal witness on `revealTx`), then extracts,
    * broadcasts `[...commitHexes, revealHex]` as a Bitcoin package, and
-   * `settle()`s the funding source with what was spent + the change. On
-   * failure before broadcast, the reservation is `release()`d.
+   * settles the lease with what was spent and the change on acceptance.
+   * Preparation failures release the lease. Uncertain publication retains it
+   * in a recovery handle with the exact signed bytes and optional prepared value.
    *
    * Multi-commit (0..N) is supported in the API shape; today every SDK
    * flow has 0 or 1 commits (`revoke` is the no-commit case).
    */
-  submitReveal(
+  submitReveal<T = undefined>(
     prepare: (utxos: Utxo[]) => Promise<{
       commitHexes: string[];
       revealTx: Transaction;
       composed: ComposeOutputs;
+      value?: T;
     }>,
   ): Promise<{
     result: BroadcastResult;
     commitHexes: string[];
     revealHex: string;
     composed: ComposeOutputs;
+    value?: T;
   }>;
 }

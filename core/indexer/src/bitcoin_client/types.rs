@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use bitcoin::{Amount, Network, Txid};
+use bitcoin::{Amount, Network, Txid, Wtxid};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -137,6 +137,8 @@ pub struct SubmitPackageResult {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SubmitPackageTxResult {
     pub txid: Txid,
+    #[serde(rename = "other-wtxid", default)]
+    pub other_wtxid: Option<Wtxid>,
     /// Per-transaction rejection reason, when this tx specifically failed.
     pub error: Option<String>,
 }

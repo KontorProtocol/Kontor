@@ -109,6 +109,7 @@ function mockSession(viewResponses: Record<string, string>): {
     compose: notUsed,
     composeReveal: notUsed,
     broadcast: notUsed,
+    pendingSubmissions: () => [],
   };
   const session = new KontorSession({
     chain: signet,

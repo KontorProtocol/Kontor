@@ -40,6 +40,9 @@ import {
   Decimal,
   KontorSession,
   LocalKey,
+  Offer,
+  SubmissionError,
+  HttpTransport,
   inMemoryFunding,
   type Utxo,
 } from "@kontor/sdk";
@@ -360,10 +363,36 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
   // ─── Phase 5 — marketplace: offer + revoke ──────────────────────
   {
     const { signing, fundingUtxo } = regtest.accounts[5]!;
+    let lostResponse = false;
+    let relayRequests = 0;
+    let reconcileRequests = 0;
     const session = new KontorSession({
       chain,
       signing,
-      funding: inMemoryFunding([fundingUtxo]),
+      transport: (options) =>
+        new HttpTransport({
+          ...options,
+          feeRate: options.feeRate ?? undefined,
+          funding: inMemoryFunding([fundingUtxo]),
+          fetch: async (url, init) => {
+            const response = await fetch(url, init);
+            if (String(url).endsWith("/transactions/reconcile"))
+              reconcileRequests++;
+            if (String(url).endsWith("/transactions/broadcast")) {
+              relayRequests++;
+              if (!lostResponse) {
+                expect((await response.clone().json()).result.outcome).toBe(
+                  "accepted",
+                );
+                lostResponse = true;
+                throw new Error(
+                  "injected lost response after Bitcoin acceptance",
+                );
+              }
+            }
+            return response;
+          },
+        }),
     });
     try {
       await session.ready();
@@ -378,9 +407,35 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // seller), so `detach` credits the asset back. Balance ends a
       // hair below `before` due to gas — never 2 tokens short, which
       // a broken detach (asset stranded) would leave.
-      const offer = await token.attachment(Decimal.from("2")).offer({
-        price: 600n,
-      });
+      await expect(
+        token.attachment(Decimal.from("2")).offer({
+          price: 600n,
+        }),
+      ).rejects.toBeInstanceOf(SubmissionError);
+      expect(lostResponse).toBe(true);
+      const [pending] = session.transport.pendingSubmissions();
+      expect(pending).toBeDefined();
+      // Mine before read-only recovery to exercise exact confirmed lookup,
+      // not just a second observation of the mempool response we discarded.
+      await regtest.mine();
+      let recovered: { value: Offer } | undefined;
+      for (let attempt = 0; attempt < 50; attempt++) {
+        try {
+          recovered = (await pending!.reconcile()) as { value: Offer };
+          break;
+        } catch (error) {
+          if (!(error instanceof SubmissionError) || attempt === 49)
+            throw error;
+          // Bitcoin's txindex can lag the block after mempool removal.
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
+      expect(recovered).toBeDefined();
+      const offer = recovered!.value;
+      expect(offer).toBeInstanceOf(Offer);
+      expect(reconcileRequests).toBeGreaterThanOrEqual(1);
+      expect(relayRequests).toBe(1);
+      expect(session.transport.pendingSubmissions()).toHaveLength(0);
       await offer.revoke();
 
       let after: Decimal | null = null;

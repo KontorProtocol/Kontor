@@ -32,13 +32,22 @@ interface Consumer {
   done: boolean;
 }
 
+type PollerState =
+  | { kind: "idle" }
+  | {
+      kind: "starting" | "running";
+      controller: AbortController;
+      task: Promise<void>;
+    }
+  | { kind: "closed"; task?: Promise<void> }
+  | { kind: "failed"; error: Error; task: Promise<void> };
+
 export class ResultsPoller {
   private readonly consumers = new Set<Consumer>();
   private completedToken: string | undefined;
   private signature = "";
-  private running = false;
+  private state: PollerState = { kind: "idle" };
   private subscriberWake: (() => void) | undefined;
-  private fatal: Error | null = null;
   private readonly backoff: number;
   private readonly readyPromise: Promise<void>;
   private readyResolve!: () => void;
@@ -77,24 +86,68 @@ export class ResultsPoller {
    * awaits this as a connectivity / config check.
    */
   ready(): Promise<void> {
+    try {
+      this.start();
+    } catch (error) {
+      return Promise.reject(error);
+    }
     return this.readyPromise;
   }
 
   /** Start the polling loop (idempotent). */
   start(): void {
-    if (this.running) return;
-    this.running = true;
-    void this.loop().catch((e: unknown) => {
-      this.fatal = e instanceof Error ? e : new Error(String(e));
-      this.wakeAll();
-    });
+    this.assertOpen();
+    if (this.state.kind !== "idle") return;
+    const controller = new AbortController();
+    // Install ownership before the loop can complete or fail synchronously.
+    const task = Promise.resolve()
+      .then(() => this.loop(controller.signal))
+      .catch((error: unknown) => this.fail(error));
+    this.state = { kind: "starting", controller, task };
   }
 
-  /** Stop the loop and close every `events()` iterator. */
+  /** Permanently stop receipt observation and close every iterator. */
   stop(): void {
-    this.running = false;
+    if (this.state.kind === "closed") return;
+    const previous = this.state;
+    this.state = {
+      kind: "closed",
+      task: "task" in previous ? previous.task : undefined,
+    };
+    this.readyReject(this.closedError());
+    if ("controller" in previous) previous.controller.abort();
     this.subscriberWake?.();
-    for (const c of this.consumers) c.done = true;
+    this.subscriberWake = undefined;
+    for (const c of this.consumers) {
+      c.done = true;
+      c.queue.length = 0;
+    }
+    this.wakeAll();
+    this.consumers.clear();
+  }
+
+  private closedError(): TransportError {
+    return new TransportError(
+      "receipt observation is closed; create a new session",
+    );
+  }
+
+  private assertOpen(): void {
+    if (this.state.kind === "closed") throw this.closedError();
+    if (this.state.kind === "failed") throw this.state.error;
+  }
+
+  private isActive(): boolean {
+    return this.state.kind === "starting" || this.state.kind === "running";
+  }
+
+  private fail(cause: unknown): void {
+    const previous = this.state;
+    if (!("controller" in previous)) return;
+    const error = cause instanceof Error ? cause : new Error(String(cause));
+    this.state = { kind: "failed", error, task: previous.task };
+    previous.controller.abort();
+    this.readyReject(error);
     this.wakeAll();
   }
 
@@ -103,6 +156,7 @@ export class ResultsPoller {
    * this poller's single loop; each gets its own buffered queue.
    */
   events(): AsyncIterableIterator<ChainEvent> {
+    this.assertOpen();
     const consumer: Consumer = { queue: [], wake: null, done: false };
     this.consumers.add(consumer);
     this.subscriberWake?.();
@@ -113,10 +167,10 @@ export class ResultsPoller {
       },
       async next(): Promise<IteratorResult<ChainEvent>> {
         for (;;) {
+          if (consumer.done) return { value: undefined, done: true };
           const ev = consumer.queue.shift();
           if (ev !== undefined) return { value: ev, done: false };
-          if (poller.fatal) throw poller.fatal;
-          if (consumer.done) return { value: undefined, done: true };
+          if (poller.state.kind === "failed") throw poller.state.error;
           await new Promise<void>((r) => {
             consumer.wake = r;
           });
@@ -125,24 +179,22 @@ export class ResultsPoller {
       async return(): Promise<IteratorResult<ChainEvent>> {
         poller.consumers.delete(consumer);
         consumer.done = true;
+        consumer.queue.length = 0;
+        consumer.wake?.();
+        consumer.wake = null;
         return { value: undefined, done: true };
       },
     };
   }
 
-  private async loop(): Promise<void> {
-    try {
-      await this.bootstrap();
-    } catch (e) {
-      const error = e instanceof Error ? e : new Error(String(e));
-      this.fatal = error;
-      this.readyReject(error);
-      this.wakeAll();
-      return;
-    }
+  private async loop(signal: AbortSignal): Promise<void> {
+    if (!this.isActive()) return;
+    await this.bootstrap(signal);
+    if (this.state.kind !== "starting") return;
+    this.state.kind = "running";
     this.readyResolve();
     let failures = 0;
-    while (this.running) {
+    while (this.isActive()) {
       try {
         const resuming = this.consumers.size === 0;
         if (resuming) {
@@ -151,53 +203,71 @@ export class ResultsPoller {
           });
           this.subscriberWake = undefined;
         }
-        if (!this.running) break;
+        if (!this.isActive()) break;
         const info =
           failures > 0 || resuming
-            ? await this.getInfo()
-            : await this.longPoll();
-        if (!this.running) break;
+            ? await this.getInfo(signal)
+            : await this.longPoll(signal);
+        if (!this.isActive()) break;
         // Rollback may keep both the height and maximum result ID unchanged.
-        await this.drainResults();
+        await this.drainResults(signal);
+        if (!this.isActive()) break;
         this.signature = info.signature;
         failures = 0;
       } catch (e) {
+        if (!this.isActive()) return;
         if (e instanceof ReceiptStreamError) throw e;
         failures += 1;
         await this.sleep(
           Math.min(this.backoff * failures, MAX_RETRY_BACKOFF_MS),
+          signal,
         );
       }
     }
   }
 
-  private async bootstrap(): Promise<void> {
+  private async bootstrap(signal: AbortSignal): Promise<void> {
     let lastError: Error = new Error("indexer unreachable");
     for (let attempt = 1; attempt <= BOOTSTRAP_ATTEMPTS; attempt++) {
+      if (!this.isActive()) return;
       try {
-        const info = await this.getInfo();
+        const info = await this.getInfo(signal);
+        if (!this.isActive()) return;
         if (this.completedToken === undefined) {
           const response = await this.getStream(
             new URLSearchParams({ start: this.opts.start ?? "tip" }),
+            signal,
           );
+          if (!this.isActive()) return;
           if (response.kind !== "start") throw this.invalidResponse();
           this.completedToken = this.requireToken(response.resume_token);
         }
-        await this.drainResults();
+        await this.drainResults(signal);
+        if (!this.isActive()) return;
         this.signature = info.signature;
         return;
       } catch (e) {
+        if (!this.isActive()) return;
         if (e instanceof ReceiptStreamError) throw e;
         lastError = e instanceof Error ? e : new Error(String(e));
         if (attempt < BOOTSTRAP_ATTEMPTS)
-          await this.sleep(this.backoff * attempt);
+          await this.sleep(this.backoff * attempt, signal);
       }
     }
     throw lastError;
   }
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private sleep(ms: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, ms);
+      signal.addEventListener("abort", finish, { once: true });
+    });
   }
 
   private invalidResponse(): ReceiptStreamError {
@@ -222,18 +292,18 @@ export class ResultsPoller {
     this.completedToken = last.resume_token;
   }
 
-  private async drainResults(): Promise<void> {
+  private async drainResults(signal: AbortSignal): Promise<void> {
     let pending: StreamReceipt[] = [];
     let pageToken: string | undefined;
     let previousId: number | undefined;
-    while (this.running && this.consumers.size > 0) {
+    while (this.isActive() && this.consumers.size > 0) {
       const params = new URLSearchParams({
         from: this.completedToken!,
         limit: String(DRAIN_PAGE_LIMIT),
       });
       if (pageToken !== undefined) params.set("page", pageToken);
-      const response = await this.getStream(params);
-      if (!this.running || this.consumers.size === 0) return;
+      const response = await this.getStream(params, signal);
+      if (!this.isActive() || this.consumers.size === 0) return;
       if (response.kind === "recovery") {
         const resumeToken = this.requireToken(response.resume_token);
         if (
@@ -373,10 +443,18 @@ export class ResultsPoller {
     }
   }
 
-  private async fetchResponse(path: string): Promise<Response> {
+  private async fetchResponse(
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     let res: Response;
     try {
-      res = await this.opts.fetch(`${this.opts.baseUrl}${path}`);
+      signal?.throwIfAborted();
+      res = await this.opts.fetch(
+        `${this.opts.baseUrl}${path}`,
+        signal ? { signal } : undefined,
+      );
+      signal?.throwIfAborted();
     } catch (e) {
       throw new TransportError("indexer poll request failed", {
         cause: e instanceof Error ? e : undefined,
@@ -396,8 +474,13 @@ export class ResultsPoller {
     return body.result;
   }
 
-  private async fetchResult<T>(path: string): Promise<T> {
-    return this.readResult<T>(await this.fetchResponse(path), path);
+  private async fetchResult<T>(path: string, signal: AbortSignal): Promise<T> {
+    const result = await this.readResult<T>(
+      await this.fetchResponse(path, signal),
+      path,
+    );
+    signal.throwIfAborted();
+    return result;
   }
 
   /** Fresh metadata without starting the event loop. A missing transaction is null. */
@@ -410,18 +493,20 @@ export class ResultsPoller {
     );
   }
 
-  private getInfo(): Promise<Info> {
-    return this.fetchResult<Info>("");
+  private getInfo(signal: AbortSignal): Promise<Info> {
+    return this.fetchResult<Info>("", signal);
   }
 
-  private longPoll(): Promise<Info> {
+  private longPoll(signal: AbortSignal): Promise<Info> {
     return this.fetchResult<Info>(
       `?wait=${LONG_POLL_MS}&since=${encodeURIComponent(this.signature)}`,
+      signal,
     );
   }
 
   private async getStream(
     params: URLSearchParams,
+    signal: AbortSignal,
   ): Promise<ReceiptStreamResponse> {
     const filter = this.opts.filter;
     if (filter?.contract !== undefined) params.set("contract", filter.contract);
@@ -429,7 +514,7 @@ export class ResultsPoller {
     if (filter?.signerId !== undefined)
       params.set("signer_id", String(filter.signerId));
     const path = `/receipt-stream?${params}`;
-    const response = await this.fetchResponse(path);
+    const response = await this.fetchResponse(path, signal);
     if (response.status === 404)
       throw new ReceiptStreamError(
         "unsupported_server",
@@ -441,6 +526,7 @@ export class ResultsPoller {
         "The node rejected the receipt resume token or stream options",
       );
     const result = await this.readResult<ReceiptStreamResponse>(response, path);
+    signal.throwIfAborted();
     if (!result || typeof result !== "object") throw this.invalidResponse();
     if (result.kind === "reset_required") {
       throw new ReceiptStreamError(

@@ -1,4 +1,5 @@
 mod blocks;
+mod broadcast;
 mod checkpoints;
 mod compose;
 mod contracts;
@@ -13,6 +14,7 @@ mod transactions;
 mod upgrades;
 
 pub use blocks::*;
+pub use broadcast::*;
 pub use checkpoints::*;
 pub use compose::*;
 pub use contracts::*;
