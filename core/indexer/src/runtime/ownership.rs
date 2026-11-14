@@ -54,9 +54,10 @@ mod settlement;
 
 pub(super) use admission::ChildContext;
 use blocking::BlockingRegistry;
+use leases::CanonicalRequests;
 #[cfg(not(kontor_node))]
 pub(crate) use leases::CanonicalRootLease;
-pub(crate) use leases::{LinkedCanonicalRootLease, OwnedRootHandle};
+pub(crate) use leases::{DrainedCanonicalRoot, LinkedCanonicalRootLease, OwnedRootHandle};
 pub(crate) use sessions::LinkedStatefulSession;
 #[cfg(not(kontor_node))]
 pub(crate) use sessions::{OwnedRuntimeSession, StatefulSession};
@@ -884,30 +885,21 @@ impl OwnerService {
                 return Err(anyhow!("linked canonical root hook construction panicked"));
             }
         }
-        let (finish, finished) = oneshot::channel();
-        let (drained_sender, drained) = oneshot::channel();
         let (ready_sender, ready) = oneshot::channel::<Result<()>>();
-        let (settlement_signal, mut settlement_request) = oneshot::channel();
-        let (complete_signal, complete_request) = oneshot::channel();
-        let (released_signal, released) = oneshot::channel();
-        let (completed_sender, completed) = oneshot::channel();
-        let lease = LinkedCanonicalRootLease {
-            keeper: keeper.clone(),
-            registry: self.registry.clone(),
+        let (lease, requests) = LinkedCanonicalRootLease::new(
+            keeper.clone(),
+            self.registry.clone(),
             adapter,
             root_alive,
-            finish: Some(finish),
-            drained,
-            settlement_signal: Some(settlement_signal),
-            drained_success: false,
-            requires_settlement: false,
-            settled: false,
-            settlement_in_flight: false,
-            complete_signal: Some(complete_signal),
-            released_signal: Some(released_signal),
-            completed: Some(completed),
-            complete: false,
-        };
+        );
+        let CanonicalRequests {
+            finished,
+            drained: drained_sender,
+            settlement: mut settlement_request,
+            complete: complete_request,
+            released,
+            completed: completed_sender,
+        } = requests;
         let registry = self.registry.clone();
         let session = session.clone();
         permit.send(Box::new(move || {

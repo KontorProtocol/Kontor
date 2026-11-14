@@ -154,7 +154,7 @@ async fn begin_inner<'a>(
         .begin_linked_migration_reserved(session, capacity, selection.clone(), input.clone())
         .await?;
     if let Err(error) = begin_unit(session, selection, network).await {
-        abort_failed_begin(lease, session).await?;
+        abort_failed_begin(lease).await?;
         return Err(error);
     }
     Ok(OwnedMigration {

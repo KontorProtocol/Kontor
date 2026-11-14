@@ -73,7 +73,9 @@ use crate::runtime::ownership::adapter::{
     SessionFactory,
 };
 use crate::runtime::ownership::read_snapshot::AdmittedRead;
-use crate::runtime::ownership::{LinkedCanonicalRootLease, LinkedOperation, OwnerService};
+use crate::runtime::ownership::{
+    DrainedCanonicalRoot, LinkedCanonicalRootLease, LinkedOperation, OwnerService,
+};
 use crate::runtime::pool::{LinkedManager, LinkedSession, new_linked};
 #[cfg(not(kontor_node))]
 use crate::runtime::{ComponentCache, Runtime, Storage};
@@ -576,32 +578,28 @@ pub(crate) async fn begin_canonical_unit(
         .begin_linked_canonical_reserved(session, capacity, selection.clone(), simulation)
         .await?;
     if let Err(error) = begin_unit(session, selection, network).await {
-        abort_failed_begin(lease, session).await?;
+        abort_failed_begin(lease).await?;
         return Err(error);
     }
     Ok(lease)
 }
 
-pub(crate) async fn abort_failed_begin(
-    mut lease: LinkedCanonicalRootLease,
-    session: &LinkedSession,
-) -> Result<()> {
-    lease.drain().await?;
+pub(crate) async fn abort_failed_begin(lease: LinkedCanonicalRootLease) -> Result<()> {
     // Admission can fail before opening its transaction.
-    if !session.conn.is_autocommit() {
-        lease.settle(false).await?;
-    }
-    lease.complete().await?;
-    Ok(())
+    let ready = match lease.drain().await? {
+        DrainedCanonicalRoot::NeedsSettlement(root) => root.settle(false).await?,
+        DrainedCanonicalRoot::NoTransaction(root) => root,
+    };
+    ready.complete().await
 }
 
 pub(crate) async fn finish_canonical_unit<T>(
-    mut lease: LinkedCanonicalRootLease,
+    lease: LinkedCanonicalRootLease,
     result: Result<T>,
     commit: bool,
 ) -> Result<T> {
-    lease.drain().await?;
-    lease.settle(commit && result.is_ok()).await?;
+    let lease = lease.drain().await?.require_settlement()?;
+    let lease = lease.settle(commit && result.is_ok()).await?;
     lease.complete().await?;
     result
 }
@@ -1152,7 +1150,7 @@ mod tests {
         );
         for commit in [false, true] {
             let capacity = service.reserve_root_capacity().await?;
-            let mut lease = service
+            let lease = service
                 .begin_linked_canonical_reserved(&session, capacity, selection.clone(), false)
                 .await?;
             assert!(
@@ -1190,8 +1188,8 @@ mod tests {
             assert_eq!(lifecycle_state(&conn).await?, unchanged);
             run_block_lifecycle(&session, &selection, Network::Regtest, &block).await?;
             assert_eq!(lifecycle_state(&conn).await?, expected);
-            lease.drain().await?;
-            lease.settle(commit).await?;
+            let lease = lease.drain().await?.require_settlement()?;
+            let lease = lease.settle(commit).await?;
             lease.complete().await?;
             assert!(conn.is_autocommit());
             assert_eq!(
@@ -1250,7 +1248,7 @@ mod tests {
         );
         for commit in [false, true] {
             let capacity = service.reserve_root_capacity().await?;
-            let mut lease = service
+            let lease = service
                 .begin_linked_canonical_reserved(&session, capacity, selection.clone(), false)
                 .await?;
             assert!(
@@ -1305,8 +1303,8 @@ mod tests {
                 .await?,
                 registration_before
             );
-            lease.drain().await?;
-            lease.settle(commit).await?;
+            let lease = lease.drain().await?.require_settlement()?;
+            let lease = lease.settle(commit).await?;
             lease.complete().await?;
             assert!(conn.is_autocommit());
             assert_eq!(service.active_roots().await, 0);
@@ -1329,15 +1327,15 @@ mod tests {
         )
         .await?;
         let capacity = service.reserve_root_capacity().await?;
-        let mut lease = service
+        let lease = service
             .begin_linked_canonical_reserved(&session, capacity, reconstruct.clone(), false)
             .await?;
         begin_unit(&session, &reconstruct, Network::Regtest).await?;
         maintenance(session.executor.owner.clone(), reconstruct.envelope())
             .await
             .map_err(HostFailure::from)?;
-        lease.drain().await?;
-        lease.settle(true).await?;
+        let lease = lease.drain().await?.require_settlement()?;
+        let lease = lease.settle(true).await?;
         lease.complete().await?;
         assert!(conn.is_autocommit());
         assert_eq!(lifecycle_state(&conn).await?, before);
@@ -1463,7 +1461,7 @@ mod tests {
                 .is_err()
         );
         let capacity = service.reserve_root_capacity().await?;
-        let mut lease = service
+        let lease = service
             .begin_linked_canonical_reserved(&session, capacity, selection.clone(), false)
             .await?;
         begin_unit(&session, &selection, Network::Regtest).await?;
@@ -1474,8 +1472,8 @@ mod tests {
         );
         let committee = derive_committee(&session, &selection, Network::Regtest).await?;
         assert_eq!(committee.validators.as_ref(), &[Validator::new(key, 100)]);
-        lease.drain().await?;
-        lease.settle(false).await?;
+        let lease = lease.drain().await?.require_settlement()?;
+        let lease = lease.settle(false).await?;
         lease.complete().await?;
         assert!(session.conn.is_autocommit());
         Ok(())

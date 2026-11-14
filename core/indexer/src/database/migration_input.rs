@@ -417,7 +417,7 @@ mod tests {
             },
         )
         .await?;
-        let mut lease = service
+        let lease = service
             .begin_linked_migration_reserved(
                 &session,
                 service.reserve_root_capacity().await?,
@@ -438,7 +438,6 @@ mod tests {
             }
         })))?;
         assert!(lease.drain().await.is_err());
-        assert!(lease.settle(true).await.is_err());
         assert!(service.is_fatal());
         assert_eq!(service.quarantined_roots().await, 1);
         assert!(!writer.is_autocommit());

@@ -14,7 +14,7 @@ use libsql::{Connection, params};
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
-use super::{read_only_factory, read_snapshot};
+use super::{begin_canonical_unit, finish_canonical_unit, read_only_factory, read_snapshot};
 use crate::database::canonical_history::{self, HistoryState};
 use crate::database::certified_history;
 use crate::protocol::canonical_application::{ApplicationSource, CanonicalApplication};
@@ -22,6 +22,7 @@ use crate::protocol::coordinator::activation_execution::tests::fixture;
 use crate::protocol::coordinator::selection::{
     ApplicationPosition, select_canonical, select_view_in_snapshot,
 };
+use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::{LinkedSession, new_linked};
 
@@ -30,6 +31,25 @@ const LIMIT: Duration = Duration::from_secs(10);
 async fn advance(writer: &LinkedSession) -> Result<()> {
     let conn = &writer.conn;
     conn.execute("BEGIN", ()).await?;
+    record_advance(writer).await?;
+    conn.execute("COMMIT", ()).await?;
+    Ok(())
+}
+
+async fn advance_owned(writer: &LinkedSession, service: &OwnerService) -> Result<()> {
+    let selected = select_canonical(
+        &writer.conn,
+        Network::Regtest,
+        ApplicationPosition::Committee,
+    )
+    .await?;
+    let lease = begin_canonical_unit(service, writer, &selected, Network::Regtest, false).await?;
+    let result = record_advance(writer).await;
+    finish_canonical_unit(lease, result, true).await
+}
+
+async fn record_advance(writer: &LinkedSession) -> Result<()> {
+    let conn = &writer.conn;
     let selected = select_canonical(conn, Network::Regtest, ApplicationPosition::View).await?;
     let HistoryState::Ready(cursor) = canonical_history::state(conn).await? else {
         return Err(anyhow!("missing fixture cursor"));
@@ -51,7 +71,6 @@ async fn advance(writer: &LinkedSession) -> Result<()> {
     )
     .await?;
     conn.execute("UPDATE read_probe SET value = 2", ()).await?;
-    conn.execute("COMMIT", ()).await?;
     Ok(())
 }
 
@@ -67,6 +86,15 @@ async fn value(conn: &Connection) -> Result<i64> {
 
 #[tokio::test]
 async fn concurrent_readers_keep_their_snapshot_while_writer_commits() -> Result<()> {
+    concurrent_readers(false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_linked_readers_progress_during_canonical_finalization() -> Result<()> {
+    concurrent_readers(true).await
+}
+
+async fn concurrent_readers(canonical: bool) -> Result<()> {
     let (dir, writer, service, _) = Box::pin(fixture()).await?;
     writer
         .conn
@@ -110,7 +138,13 @@ async fn concurrent_readers_keep_their_snapshot_while_writer_commits() -> Result
         timeout(LIMIT, entered.notified()).await?;
     }
     assert_eq!(service.active_roots().await, 2);
-    timeout(LIMIT, advance(&writer)).await??;
+    if canonical {
+        timeout(LIMIT, advance_owned(&writer, &service)).await??;
+        assert!(!writer.canonical_busy.load(Ordering::SeqCst));
+        assert_eq!(service.active_roots().await, 2);
+    } else {
+        timeout(LIMIT, advance(&writer)).await??;
+    }
     release.notify_waiters();
     for reader in readers {
         timeout(LIMIT, reader).await???;
