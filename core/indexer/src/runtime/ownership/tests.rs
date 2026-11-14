@@ -709,7 +709,7 @@ async fn bundle_canonical_hooks_preserve_paid_settlement_and_rollback() -> Resul
         )
         .await?;
         let capacity = service.reserve_root_capacity().await?;
-        let mut lease = service
+        let lease = service
             .begin_linked_canonical_reserved(&session, capacity, selection, false)
             .await?;
         {
@@ -724,10 +724,10 @@ async fn bundle_canonical_hooks_preserve_paid_settlement_and_rollback() -> Resul
                     .await?;
             assert_eq!(result.receipt.1, "Ok");
         }
-        lease.drain().await?;
+        let lease = lease.drain().await?.require_settlement()?;
         assert!(!session.conn.is_autocommit());
         assert!(retained.runtime.lock().await.selected_context.is_some());
-        lease.settle(commit).await?;
+        let lease = lease.settle(commit).await?;
         assert!(retained.runtime.lock().await.selected_context.is_some());
         lease.complete().await?;
         assert!(session.conn.is_autocommit());
@@ -869,7 +869,7 @@ async fn bundle_typed_operations_preserve_views_and_committee() -> Result<()> {
     .await?;
     let envelope = selection.envelope();
     let capacity = service.reserve_root_capacity().await?;
-    let mut lease = service
+    let lease = service
         .begin_linked_canonical_reserved(&session, capacity, selection, false)
         .await?;
     retained.runtime.lock().await.storage.savepoint().await?;
@@ -880,8 +880,8 @@ async fn bundle_typed_operations_preserve_views_and_committee() -> Result<()> {
             .map_err(|error| anyhow!("{error:?}"))?,
         expected_committee
     );
-    lease.drain().await?;
-    lease.settle(false).await?;
+    let lease = lease.drain().await?.require_settlement()?;
+    let lease = lease.settle(false).await?;
     lease.complete().await?;
     assert!(committee(retained.clone(), envelope).await.is_err());
     assert_eq!(service.active_roots().await, 0);
@@ -3105,7 +3105,7 @@ async fn linked_canonical_cleanup_outlives_completion_caller() -> Result<()> {
     };
     let session = LinkedSession::new(runtime.storage.conn.clone(), executor);
     let service = OwnerService::new();
-    let mut lease = service
+    let lease = service
         .begin_linked_canonical_reserved(
             &session,
             service.reserve_root_capacity().await?,
@@ -3114,7 +3114,9 @@ async fn linked_canonical_cleanup_outlives_completion_caller() -> Result<()> {
         )
         .await?;
     assert!((lease.adapter().check_commit)(lease.adapter().root.clone()).is_ok());
-    lease.drain().await?;
+    let DrainedCanonicalRoot::NoTransaction(lease) = lease.drain().await? else {
+        return Err(anyhow!("unexpected transaction"));
+    };
     let complete = tokio::spawn(lease.complete());
     timeout(Duration::from_secs(2), async {
         while !gate.entered.load(Ordering::SeqCst) {
@@ -3190,7 +3192,7 @@ async fn linked_canonical_settlement_selects_rollback_or_commit_once() -> Result
     let session = LinkedSession::new(conn.clone(), executor);
     let service = OwnerService::new();
     for (id, commit) in [(1i64, false), (2i64, true)] {
-        let mut lease = service
+        let lease = service
             .begin_linked_canonical_reserved(
                 &session,
                 service.reserve_root_capacity().await?,
@@ -3203,9 +3205,8 @@ async fn linked_canonical_settlement_selects_rollback_or_commit_once() -> Result
             [id],
         )
         .await?;
-        lease.drain().await?;
-        lease.settle(commit).await?;
-        assert!(lease.settle(commit).await.is_err());
+        let lease = lease.drain().await?.require_settlement()?;
+        let lease = lease.settle(commit).await?;
         lease.complete().await?;
     }
     let mut rows = conn
@@ -3285,7 +3286,7 @@ async fn linked_canonical_admission_rejects_wrong_selection_purpose() -> Result<
         assert!(!session.canonical_busy.load(Ordering::SeqCst));
         assert_eq!(service.active_roots().await, 0);
     }
-    let mut lease = service
+    let lease = service
         .begin_linked_canonical_reserved(
             &session,
             service.reserve_root_capacity().await?,
@@ -3293,7 +3294,9 @@ async fn linked_canonical_admission_rejects_wrong_selection_purpose() -> Result<
             true,
         )
         .await?;
-    lease.drain().await?;
+    let DrainedCanonicalRoot::NoTransaction(lease) = lease.drain().await? else {
+        return Err(anyhow!("unexpected transaction"));
+    };
     lease.complete().await?;
     assert_eq!(service.active_roots().await, 0);
     Ok(())

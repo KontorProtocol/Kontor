@@ -74,7 +74,7 @@ async fn migration_root_releases_input_before_writer_settlement_with_one_availab
             )
             .await?;
             let capacity = service.reserve_root_capacity().await?;
-            let mut lease = service
+            let lease = service
                 .begin_linked_migration_reserved(
                     &session,
                     capacity,
@@ -92,10 +92,10 @@ async fn migration_root_releases_input_before_writer_settlement_with_one_availab
             if !reject_pin {
                 assert!(input.point(1, b"absent").await?.is_none());
             }
-            lease.drain().await?;
+            let lease = lease.drain().await?.require_settlement()?;
             assert!(!conn.is_autocommit(), "reader cleanup committed the writer");
             assert!(input.point(1, b"absent").await.is_err());
-            lease.settle(!reject_pin).await?;
+            let lease = lease.settle(!reject_pin).await?;
             lease.complete().await?;
             assert!(conn.is_autocommit());
             assert_eq!(service.active_roots().await, 0);
@@ -164,7 +164,7 @@ async fn migration_context_preserves_input_and_charges_rolled_back_duplicate_and
         },
     )
     .await?;
-    let mut lease = service
+    let lease = service
         .begin_linked_migration_reserved(
             &session,
             service.reserve_root_capacity().await?,
@@ -216,8 +216,8 @@ async fn migration_context_preserves_input_and_charges_rolled_back_duplicate_and
     assert!(context.input_point(1, b"a").await?.is_none());
     assert_eq!(context.finish()?, budget);
     drop(runtime);
-    lease.drain().await?;
-    lease.settle(true).await?;
+    let lease = lease.drain().await?.require_settlement()?;
+    let lease = lease.settle(true).await?;
     lease.complete().await?;
     assert!(session.conn.is_autocommit());
     Ok(())
@@ -236,7 +236,7 @@ async fn migration_budget_failure_is_sticky_and_outer_rollback_restores_input() 
         },
     )
     .await?;
-    let mut lease = service
+    let lease = service
         .begin_linked_migration_reserved(
             &session,
             service.reserve_root_capacity().await?,
@@ -275,8 +275,8 @@ async fn migration_budget_failure_is_sticky_and_outer_rollback_restores_input() 
     assert_eq!(context.used().write_bytes, 8);
     assert_eq!(context.finish(), Err(MigrationFailure::Budget));
     drop(runtime);
-    lease.drain().await?;
-    lease.settle(false).await?;
+    let lease = lease.drain().await?.require_settlement()?;
+    let lease = lease.settle(false).await?;
     lease.complete().await?;
     let value: Vec<u8> = session
         .conn
@@ -310,7 +310,7 @@ async fn retained_migration_operation_requires_exact_definition() -> Result<()> 
         },
     )
     .await?;
-    let mut lease = service
+    let lease = service
         .begin_linked_migration_reserved(
             &session,
             service.reserve_root_capacity().await?,
@@ -347,8 +347,8 @@ async fn retained_migration_operation_requires_exact_definition() -> Result<()> 
         .map_err(|(_, message, _)| anyhow!(message))?,
         Err((0, Some([0; 5])))
     );
-    lease.drain().await?;
-    lease.settle(false).await?;
+    let lease = lease.drain().await?.require_settlement()?;
+    let lease = lease.settle(false).await?;
     lease.complete().await?;
     Ok(())
 }
@@ -366,7 +366,7 @@ async fn migration_updates_depositor_footprints_with_nested_and_outer_rollback()
         },
     )
     .await?;
-    let mut lease = service
+    let lease = service
         .begin_linked_migration_reserved(
             &session,
             service.reserve_root_capacity().await?,
@@ -410,8 +410,8 @@ async fn migration_updates_depositor_footprints_with_nested_and_outer_rollback()
     let work = context.finish()?;
     assert_eq!((work.write_operations, work.write_bytes), (7, 73));
     drop(runtime);
-    lease.drain().await?;
-    lease.settle(false).await?;
+    let lease = lease.drain().await?.require_settlement()?;
+    let lease = lease.settle(false).await?;
     lease.complete().await?;
     let value: Vec<u8> = session
         .conn
@@ -441,7 +441,7 @@ async fn migration_rejects_large_value_before_issuing_byte_read() -> Result<()> 
         },
     )
     .await?;
-    let mut lease = service
+    let lease = service
         .begin_linked_migration_reserved(
             &session,
             service.reserve_root_capacity().await?,
@@ -485,8 +485,8 @@ async fn migration_rejects_large_value_before_issuing_byte_read() -> Result<()> 
     assert!(!called.load(Ordering::SeqCst));
     assert_eq!(context.finish(), Err(MigrationFailure::Budget));
     drop(runtime);
-    lease.drain().await?;
-    lease.settle(false).await?;
+    let lease = lease.drain().await?.require_settlement()?;
+    let lease = lease.settle(false).await?;
     lease.complete().await?;
     Ok(())
 }
@@ -518,7 +518,7 @@ async fn migration_footprint_overflow_fails_before_row_write() -> Result<()> {
         },
     )
     .await?;
-    let mut lease = service
+    let lease = service
         .begin_linked_migration_reserved(
             &session,
             service.reserve_root_capacity().await?,
@@ -557,8 +557,8 @@ async fn migration_footprint_overflow_fails_before_row_write() -> Result<()> {
     );
     assert!(runtime.storage.get(100, 1, b"c").await?.is_none());
     drop(runtime);
-    lease.drain().await?;
-    lease.settle(false).await?;
+    let lease = lease.drain().await?.require_settlement()?;
+    let lease = lease.settle(false).await?;
     lease.complete().await?;
     Ok(())
 }
@@ -590,7 +590,7 @@ async fn p2_contract_installation_is_atomic_and_does_not_scan_or_change_existing
             },
         )
         .await?;
-        let mut lease = service
+        let lease = service
             .begin_linked_migration_reserved(
                 &session,
                 service.reserve_root_capacity().await?,
@@ -651,8 +651,8 @@ async fn p2_contract_installation_is_atomic_and_does_not_scan_or_change_existing
             );
         }
         drop(runtime);
-        lease.drain().await?;
-        lease.settle(scenario == "valid").await?;
+        let lease = lease.drain().await?.require_settlement()?;
+        let lease = lease.settle(scenario == "valid").await?;
         lease.complete().await?;
         let installed = session
             .conn

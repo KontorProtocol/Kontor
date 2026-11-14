@@ -239,7 +239,7 @@ async fn recognized_transaction_preserves_execution_and_simulation() -> Result<(
         )
         .await?;
         let capacity = service.reserve_root_capacity().await?;
-        let mut lease = service
+        let lease = service
             .begin_linked_canonical_reserved(&session, capacity, selection.clone(), simulation)
             .await?;
         begin_unit(&session, &selection, Network::Regtest).await?;
@@ -267,8 +267,8 @@ async fn recognized_transaction_preserves_execution_and_simulation() -> Result<(
         .await?;
         assert_eq!(observed, expected_failures);
         assert_eq!(snapshot(&conn).await?, expected);
-        lease.drain().await?;
-        lease.settle(commit).await?;
+        let lease = lease.drain().await?.require_settlement()?;
+        let lease = lease.settle(commit).await?;
         lease.complete().await?;
         assert!(conn.is_autocommit());
         assert_eq!(
@@ -360,7 +360,7 @@ async fn simulation_restores_context_after_infrastructure_failure() -> Result<()
     .unwrap();
     let service = OwnerService::new();
     let capacity = service.reserve_root_capacity().await?;
-    let mut lease = service
+    let lease = service
         .begin_linked_canonical_reserved(&session, capacity, selection.clone(), true)
         .await?;
     begin_unit(&session, &selection, Network::Regtest).await?;
@@ -388,8 +388,8 @@ async fn simulation_restores_context_after_infrastructure_failure() -> Result<()
     .await;
     conn.authorizer(None)?;
     assert!(failure.is_err());
-    lease.drain().await?;
-    lease.settle(false).await?;
+    let lease = lease.drain().await?.require_settlement()?;
+    let lease = lease.settle(false).await?;
     lease.complete().await?;
     assert!(conn.is_autocommit());
     assert_eq!(snapshot(&conn).await?, before);

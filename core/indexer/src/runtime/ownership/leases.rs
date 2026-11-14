@@ -29,129 +29,187 @@ pub(crate) struct CanonicalRootLease {
 }
 
 pub(crate) struct LinkedCanonicalRootLease {
-    pub(super) keeper: Arc<RootKeeper>,
-    pub(super) registry: Arc<OwnerRegistry>,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Retained for ownership inspection in unit tests")
-    )]
-    pub(super) adapter: OwnerAdapter,
-    pub(super) root_alive: Arc<AtomicBool>,
-    pub(super) finish: Option<oneshot::Sender<()>>,
-    pub(super) drained: oneshot::Receiver<Result<bool>>,
-    pub(super) settlement_signal: Option<oneshot::Sender<(bool, oneshot::Sender<Result<()>>)>>,
-    pub(super) drained_success: bool,
-    pub(super) requires_settlement: bool,
-    pub(super) settled: bool,
-    pub(super) settlement_in_flight: bool,
-    pub(super) complete_signal: Option<oneshot::Sender<()>>,
-    pub(super) released_signal: Option<oneshot::Sender<()>>,
-    pub(super) completed: Option<oneshot::Receiver<Result<()>>>,
-    pub(super) complete: bool,
+    release: CanonicalRelease,
+    root_alive: Arc<AtomicBool>,
+    finish: oneshot::Sender<()>,
+    drained: oneshot::Receiver<Result<bool>>,
+    settlement: SettlementSignal,
+}
+
+type SettlementSignal = oneshot::Sender<(bool, oneshot::Sender<Result<()>>)>;
+
+pub(super) struct CanonicalRequests {
+    pub(super) finished: oneshot::Receiver<()>,
+    pub(super) drained: oneshot::Sender<Result<bool>>,
+    pub(super) settlement: oneshot::Receiver<(bool, oneshot::Sender<Result<()>>)>,
+    pub(super) complete: oneshot::Receiver<()>,
+    pub(super) released: oneshot::Receiver<()>,
+    pub(super) completed: oneshot::Sender<Result<()>>,
+}
+
+pub(crate) enum DrainedCanonicalRoot {
+    NeedsSettlement(CanonicalSettlement),
+    NoTransaction(CanonicalCompletion),
+}
+
+pub(crate) struct CanonicalSettlement {
+    release: CanonicalRelease,
+    settlement: SettlementSignal,
+}
+
+pub(crate) struct CanonicalCompletion {
+    release: CanonicalRelease,
+}
+
+struct CanonicalRelease {
+    guard: CanonicalGuard,
+    complete: oneshot::Sender<()>,
+    released: oneshot::Sender<()>,
+    completed: oneshot::Receiver<Result<()>>,
+}
+
+struct CanonicalGuard {
+    keeper: Arc<RootKeeper>,
+    registry: Arc<OwnerRegistry>,
+    _adapter: OwnerAdapter,
+    armed: bool,
+}
+
+impl Drop for CanonicalGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.keeper.quarantine();
+            self.registry.fatal.store(true, Ordering::SeqCst);
+            self.registry.capacity.close();
+        }
+    }
 }
 
 impl LinkedCanonicalRootLease {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Exercised by in-tree ownership compatibility tests"
+    pub(super) fn new(
+        keeper: Arc<RootKeeper>,
+        registry: Arc<OwnerRegistry>,
+        adapter: OwnerAdapter,
+        root_alive: Arc<AtomicBool>,
+    ) -> (Self, CanonicalRequests) {
+        let (finish, finished) = oneshot::channel();
+        let (drained_sender, drained) = oneshot::channel();
+        let (settlement, settlement_request) = oneshot::channel();
+        let (complete, complete_request) = oneshot::channel();
+        let (released, released_request) = oneshot::channel();
+        let (completed_sender, completed) = oneshot::channel();
+        (
+            Self {
+                release: CanonicalRelease {
+                    guard: CanonicalGuard {
+                        keeper,
+                        registry,
+                        _adapter: adapter,
+                        armed: true,
+                    },
+                    complete,
+                    released,
+                    completed,
+                },
+                root_alive,
+                finish,
+                drained,
+                settlement,
+            },
+            CanonicalRequests {
+                finished,
+                drained: drained_sender,
+                settlement: settlement_request,
+                complete: complete_request,
+                released: released_request,
+                completed: completed_sender,
+            },
         )
-    )]
-    pub(crate) fn adapter(&self) -> OwnerAdapter {
-        self.adapter.clone()
     }
 
-    pub(crate) async fn drain(&mut self) -> Result<()> {
-        self.finish
-            .take()
-            .context("canonical root already drained")?
+    #[cfg(test)]
+    pub(crate) fn adapter(&self) -> OwnerAdapter {
+        self.release.guard._adapter.clone()
+    }
+
+    pub(crate) async fn drain(self) -> Result<DrainedCanonicalRoot> {
+        let Self {
+            release,
+            root_alive,
+            finish,
+            drained,
+            settlement,
+        } = self;
+        finish
             .send(())
             .map_err(|_| anyhow!("canonical root supervisor disappeared"))?;
-        self.requires_settlement = (&mut self.drained)
+        let must_settle = drained
             .await
             .context("canonical root supervisor disappeared before drain")??;
-        self.root_alive.store(false, Ordering::SeqCst);
-        self.drained_success = true;
-        Ok(())
+        root_alive.store(false, Ordering::SeqCst);
+        if must_settle {
+            Ok(DrainedCanonicalRoot::NeedsSettlement(CanonicalSettlement {
+                release,
+                settlement,
+            }))
+        } else {
+            drop(settlement);
+            Ok(DrainedCanonicalRoot::NoTransaction(CanonicalCompletion {
+                release,
+            }))
+        }
     }
+}
 
-    pub(crate) async fn settle(&mut self, commit: bool) -> Result<()> {
-        ensure!(
-            self.drained_success,
-            "canonical settlement requires a drained root"
-        );
-        ensure!(
-            self.requires_settlement,
-            "canonical root has no transaction to settle"
-        );
-        ensure!(
-            !self.settlement_in_flight,
-            "canonical settlement is already running"
-        );
-        let signal = self
-            .settlement_signal
-            .take()
-            .context("canonical settlement already requested")?;
+impl DrainedCanonicalRoot {
+    pub(crate) fn require_settlement(self) -> Result<CanonicalSettlement> {
+        match self {
+            Self::NeedsSettlement(root) => Ok(root),
+            Self::NoTransaction(_) => Err(anyhow!("canonical root has no transaction to settle")),
+        }
+    }
+}
+
+impl CanonicalSettlement {
+    pub(crate) async fn settle(self, commit: bool) -> Result<CanonicalCompletion> {
+        let Self {
+            release,
+            settlement,
+        } = self;
         let (reply, result) = oneshot::channel();
-        self.settlement_in_flight = true;
-        signal
+        settlement
             .send((commit, reply))
             .map_err(|_| anyhow!("canonical settlement supervisor disappeared"))?;
         result
             .await
             .context("canonical settlement supervisor disappeared")??;
-        self.settlement_in_flight = false;
-        self.settled = true;
-        Ok(())
+        Ok(CanonicalCompletion { release })
     }
+}
 
-    pub(crate) async fn complete(mut self) -> Result<()> {
+impl CanonicalCompletion {
+    pub(crate) async fn complete(self) -> Result<()> {
+        let CanonicalRelease {
+            mut guard,
+            complete,
+            released,
+            completed,
+        } = self.release;
         ensure!(
-            self.drained_success,
-            "canonical completion requires a drained root"
-        );
-        ensure!(
-            !self.settlement_in_flight,
-            "canonical settlement has not finished"
-        );
-        ensure!(
-            !self.requires_settlement || self.settled,
-            "canonical transaction has not been settled"
-        );
-        ensure!(
-            RootState::load(&self.keeper.state) == RootState::Committing,
+            RootState::load(&guard.keeper.state) == RootState::Committing,
             "canonical root was not drained"
         );
-        self.complete_signal
-            .take()
-            .context("canonical completion already requested")?
+        complete
             .send(())
             .map_err(|_| anyhow!("canonical completion supervisor disappeared"))?;
-        let completed = self
-            .completed
-            .take()
-            .context("canonical completion receiver missing")?;
-        let released = self
-            .released_signal
-            .take()
-            .context("canonical release sender missing")?;
-        self.complete = true;
-        drop(self);
+        // No await may split disarming the caller from releasing its authority.
+        // Reset belongs to the supervisor even if the completion waiter disappears.
+        guard.armed = false;
+        drop(guard);
         let _ = released.send(());
         completed
             .await
             .context("canonical completion supervisor disappeared")?
-    }
-}
-
-impl Drop for LinkedCanonicalRootLease {
-    fn drop(&mut self) {
-        if !self.complete {
-            self.keeper.quarantine();
-            self.registry.fatal.store(true, Ordering::SeqCst);
-            self.registry.capacity.close();
-        }
     }
 }
 
@@ -243,3 +301,6 @@ impl<T> Drop for OwnedRootHandle<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
