@@ -200,7 +200,7 @@ impl<E: Executor> ExecutionContext<E> {
                         begin_stage(&self.owner_service, &self.session, self.network, height)
                             .await?
                             .context("reconciliation stage disappeared")?;
-                    stage.publish_replacement(sealed).await?;
+                    stage.publish_replacement(*sealed).await?;
                     Ok(ExecutionStep::Planning)
                 }
                 WorkItem::Activate { .. } => {
@@ -304,7 +304,7 @@ impl<E: Executor> ExecutionContext<E> {
                         begin_stage(&self.owner_service, &self.session, self.network, height)
                             .await?
                             .context("finality stage disappeared")?;
-                    stage.publish_replacement(sealed).await?;
+                    stage.publish_replacement(*sealed).await?;
                     Ok(ExecutionStep::Finality)
                 }
                 WorkItem::Observe => {

@@ -97,9 +97,10 @@ impl WorkState {
 
 pub(crate) enum PlanStep {
     More,
-    Ready(SealedPlan),
+    Ready(Box<SealedPlan>),
 }
 impl PlanStep {
+    #[cfg(any(test, feature = "protocol-qualification"))]
     pub(crate) fn is_ready(&self) -> bool {
         matches!(self, Self::Ready(_))
     }
@@ -386,7 +387,8 @@ pub(crate) async fn verify(conn: &Connection, plan: PublishedPlan, kind: WorkKin
     verify_contents(conn, plan.stored, kind).await
 }
 
-pub(crate) async fn verify_mutable(conn: &Connection, plan: &MutablePlan) -> Result<()> {
+#[cfg(feature = "protocol-qualification")]
+async fn verify_mutable(conn: &Connection, plan: &MutablePlan) -> Result<()> {
     verify_contents(conn, plan.stored, plan.kind).await
 }
 

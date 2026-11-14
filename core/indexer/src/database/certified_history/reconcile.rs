@@ -1339,7 +1339,7 @@ pub(crate) async fn step(conn: &Connection, height: u64) -> Result<work::PlanSte
     }
     let ready = match work::for_origin(&tx, origin, work::WorkKind::Reconcile).await? {
         work::WorkState::Building(_) => work::PlanStep::More,
-        work::WorkState::Sealed(plan) => work::PlanStep::Ready(plan),
+        work::WorkState::Sealed(plan) => work::PlanStep::Ready(Box::new(plan)),
         work::WorkState::Published(_) => anyhow::bail!("reconciliation stage already published"),
     };
     tx.commit().await?;

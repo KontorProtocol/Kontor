@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use bitcoin::Network;
+use futures_util::future::BoxFuture;
 use libsql::Connection;
 use tempfile::TempDir;
 
@@ -48,7 +49,17 @@ async fn open(
 
 // Both copies start at the same durable point before the failed parent's verdict.
 // They get fresh real executor sessions and never construct a consensus engine.
-pub(super) async fn compare(
+// Construct outside the caller's poll frame, which otherwise retains the large
+// temporary even when an inline Box::pin moves its future state to the heap.
+pub(super) fn compare<'a>(
+    source: &'a ExecutionContext<RuntimeExecutor>,
+    factory: &'a SessionFactory,
+    height: u64,
+) -> BoxFuture<'a, Result<()>> {
+    Box::pin(compare_inner(source, factory, height))
+}
+
+async fn compare_inner(
     source: &ExecutionContext<RuntimeExecutor>,
     factory: &SessionFactory,
     height: u64,

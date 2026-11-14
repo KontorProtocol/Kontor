@@ -11,6 +11,7 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::serialize;
 use bitcoin::{BlockHash, Network, OutPoint, hashes::Hash};
+use futures_util::future::BoxFuture;
 use indexer_types::{BlockRow, Event};
 use libsql::{Connection, params};
 use malachitebft_app_channel::app::types::ProposedValue;
@@ -332,7 +333,17 @@ async fn accept_for_closure(
     Ok(())
 }
 
-async fn qualify_finality(
+// Keep construction of this large fixture future out of the enclosing poll frame.
+fn qualify_finality<'a>(
+    reactor: &'a mut Reactor<RuntimeExecutor>,
+    reopened: &'a Connection,
+    service: &'a OwnerService,
+    factory: &'a SessionFactory,
+) -> BoxFuture<'a, Result<()>> {
+    Box::pin(qualify_finality_inner(reactor, reopened, service, factory))
+}
+
+async fn qualify_finality_inner(
     reactor: &mut Reactor<RuntimeExecutor>,
     reopened: &Connection,
     service: &OwnerService,

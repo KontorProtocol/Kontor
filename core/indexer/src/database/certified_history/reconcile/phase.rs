@@ -15,7 +15,7 @@ pub(super) enum Phase {
     Build {
         after: Option<replay::ReplayPosition>,
     },
-    Sealed(ReconcileVerdict),
+    Sealed(Box<ReconcileVerdict>),
 }
 
 impl Phase {
@@ -51,9 +51,9 @@ impl Phase {
             // The final capture page retains its cursor when it commits done=1.
             1 => Self::InitializeReplay,
             2 => Self::Build { after: replay },
-            3 => Self::Sealed(ReconcileVerdict::decode(
+            3 => Self::Sealed(Box::new(ReconcileVerdict::decode(
                 &record.context("reconciliation verdict unavailable")?,
-            )?),
+            )?)),
             _ => anyhow::bail!("invalid reconciliation phase"),
         })
     }
