@@ -18,6 +18,47 @@ pub(super) enum Phase {
     Sealed(ReconcileVerdict),
 }
 
+impl Phase {
+    pub(super) fn decode(row: &Row) -> Result<Self> {
+        let scan = position(row, 1, 2)?;
+        let replay = position(row, 6, 7)?;
+        let decision = row.get::<Option<Vec<u8>>>(4)?;
+        let txid = row.get::<Option<String>>(5)?;
+        ensure!(
+            decision.is_some() == txid.is_some(),
+            "incomplete early exclusion cursor"
+        );
+        let after = decision
+            .zip(txid)
+            .map(|(decision, txid)| -> Result<_> {
+                Ok(replay::ExclusionCursor {
+                    decision: u64::from_be_bytes(fixed(decision)?),
+                    txid,
+                })
+            })
+            .transpose()?;
+        let done = row.get::<u64>(3)?;
+        ensure!(done <= 1, "invalid early exclusion completion");
+        let record = row.get::<Option<Vec<u8>>>(8)?;
+        let phase = row.get::<u64>(0)?;
+        ensure!(
+            (phase == 3) == record.is_some(),
+            "reconciliation phase and verdict differ"
+        );
+        Ok(match phase {
+            0 => Self::ScanEvidence { after: scan },
+            1 if done == 0 => Self::CaptureUnavailable { after },
+            // The final capture page retains its cursor when it commits done=1.
+            1 => Self::InitializeReplay,
+            2 => Self::Build { after: replay },
+            3 => Self::Sealed(ReconcileVerdict::decode(
+                &record.context("reconciliation verdict unavailable")?,
+            )?),
+            _ => anyhow::bail!("invalid reconciliation phase"),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,46 +133,5 @@ mod tests {
         row[8] = Value::Blob(vec![0]);
         assert!(decode(row).await.is_err());
         Ok(())
-    }
-}
-
-impl Phase {
-    pub(super) fn decode(row: &Row) -> Result<Self> {
-        let scan = position(row, 1, 2)?;
-        let replay = position(row, 6, 7)?;
-        let decision = row.get::<Option<Vec<u8>>>(4)?;
-        let txid = row.get::<Option<String>>(5)?;
-        ensure!(
-            decision.is_some() == txid.is_some(),
-            "incomplete early exclusion cursor"
-        );
-        let after = decision
-            .zip(txid)
-            .map(|(decision, txid)| -> Result<_> {
-                Ok(replay::ExclusionCursor {
-                    decision: u64::from_be_bytes(fixed(decision)?),
-                    txid,
-                })
-            })
-            .transpose()?;
-        let done = row.get::<u64>(3)?;
-        ensure!(done <= 1, "invalid early exclusion completion");
-        let record = row.get::<Option<Vec<u8>>>(8)?;
-        let phase = row.get::<u64>(0)?;
-        ensure!(
-            (phase == 3) == record.is_some(),
-            "reconciliation phase and verdict differ"
-        );
-        Ok(match phase {
-            0 => Self::ScanEvidence { after: scan },
-            1 if done == 0 => Self::CaptureUnavailable { after },
-            // The final capture page retains its cursor when it commits done=1.
-            1 => Self::InitializeReplay,
-            2 => Self::Build { after: replay },
-            3 => Self::Sealed(ReconcileVerdict::decode(
-                &record.context("reconciliation verdict unavailable")?,
-            )?),
-            _ => anyhow::bail!("invalid reconciliation phase"),
-        })
     }
 }
