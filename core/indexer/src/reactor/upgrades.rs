@@ -20,7 +20,7 @@ impl<E: Executor> Reactor<E> {
     }
 
     pub(super) async fn pending_upgrade_value(&mut self) -> Result<Option<Value>> {
-        let Some(proposal) = self.consensus.pending_proposal.as_ref() else {
+        let Some(proposal) = self.proposal_builder.request() else {
             return Ok(None);
         };
         let inclusion = proposal.height.as_u64();

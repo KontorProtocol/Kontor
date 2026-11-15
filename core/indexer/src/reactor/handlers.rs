@@ -56,16 +56,7 @@ impl<E: Executor> Reactor<E> {
         // recomputation (the validator set is refreshed per block and unordered).
         self.consensus.current_proposer = Some(proposer);
 
-        if let Some(pending) = &self.consensus.pending_proposal
-            && (pending.height != height || pending.round != round)
-        {
-            info!(
-                pending_height = %pending.height,
-                pending_round = %pending.round,
-                "Clearing stale pending proposal"
-            );
-            self.consensus.pending_proposal = None;
-        }
+        self.proposal_builder.on_round(height, round);
 
         let proposals: Vec<_> = proposals::normal(
             &self.db_conn(),

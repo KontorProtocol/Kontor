@@ -50,14 +50,6 @@ pub enum ConsensusResult {
     BatchProcessed { txids: Vec<String> },
 }
 
-/// A GetValue reply that we're holding until transactions arrive.
-pub struct PendingProposal {
-    pub height: Height,
-    pub round: Round,
-    pub reply: tokio::sync::oneshot::Sender<LocallyProposedValue<Ctx>>,
-    pub hard_deadline: Instant,
-}
-
 /// All consensus-related state for the reactor.
 pub struct ConsensusState {
     pub(super) promotion_floor: Option<u64>,
@@ -97,9 +89,6 @@ pub struct ConsensusState {
 
     // Consensus timeouts — defaults to LinearTimeouts::default() (3s propose).
     pub timeouts: LinearTimeouts,
-
-    // Held GetValue reply — waiting for pending_transactions to arrive.
-    pub pending_proposal: Option<PendingProposal>,
 
     // A decided block may arrive after its certificate; finish its lifecycle
     // before choosing the next height's validator set.
@@ -384,7 +373,6 @@ impl ConsensusState {
             current_validator_set,
             observation: None,
             timeouts: LinearTimeouts::default(),
-            pending_proposal: None,
             pending_next_height: None,
             early_proposals: Vec::new(),
             engine,

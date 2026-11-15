@@ -83,7 +83,7 @@ async fn closed_height_rejects_late_round_and_proposal_requests() -> Result<()> 
         .handle_get_value(height, round, Duration::from_secs(1), reply)
         .await?;
     assert!(received.await.is_err());
-    assert!(reactor.consensus.pending_proposal.is_none());
+    assert!(reactor.proposal_builder.request().is_none());
 
     let (reply, next) = oneshot::channel();
     reactor.handle_finalized(proof, reply).await?;
