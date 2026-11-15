@@ -1,13 +1,15 @@
 use std::future::pending;
 use std::slice;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, ensure};
+use anyhow::{Result, anyhow, ensure};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::Hash;
 use bitcoin::{Network, OutPoint, Transaction as BitcoinTransaction, Witness};
+use futures_util::{future::BoxFuture, poll};
 use indexer_types::Transaction;
 use malachitebft_core_types::Round;
 use malachitebft_engine::host::Next;
@@ -17,11 +19,12 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
 use super::Reactor;
-use super::batches::IoApply;
+use super::batches::{IncomingProposal, ValidationJob};
 use super::certified_fixture;
-use super::consensus_state::PendingProposal;
 use super::executor::{Executor, RecognizedTransaction, RuntimeExecutor, TxPolicy};
 use super::mempool::MempoolPreparation;
+use super::proposal_builder::PendingProposal;
+use super::proposal_builder::{BuildContext, Verdicts};
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Address, Height, ProposalData, Value};
@@ -168,8 +171,8 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
     trial.consensus.mempool.insert(recognized(current.clone()));
     for verdict in [TxPolicy::Accepted, TxPolicy::Rejected("old witness".into())] {
         trial
-            .apply_io_verdicts(
-                IoApply::BuildProposal {
+            .apply_build_verdicts(
+                BuildContext {
                     selection: trial.preparation_selection().await?,
                     anchor_height: 1,
                     anchor_hash,
@@ -177,12 +180,12 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
                 Ok(vec![(old.clone(), verdict)]),
             )
             .await?;
-        ensure!(trial.validated_candidates.is_none());
+        ensure!(!trial.proposal_builder.has_banked());
         ensure!(trial.consensus.mempool.contains_candidate(&current));
     }
     trial
-        .apply_io_verdicts(
-            IoApply::BuildProposal {
+        .apply_build_verdicts(
+            BuildContext {
                 selection: trial.preparation_selection().await?,
                 anchor_height: 1,
                 anchor_hash,
@@ -190,11 +193,11 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
             Ok(vec![(current.clone(), TxPolicy::Accepted)]),
         )
         .await?;
-    ensure!(trial.validated_candidates.is_some());
+    ensure!(trial.proposal_builder.has_banked());
     // Change the witness after banking, before the next proposal consumes it.
     trial.consensus.mempool.insert(recognized(old.clone()));
     let (reply, mut receive) = oneshot::channel();
-    trial.consensus.pending_proposal = Some(PendingProposal {
+    trial.proposal_builder.start_request(PendingProposal {
         height: Height::new(2),
         round: Round::new(0),
         reply,
@@ -205,9 +208,9 @@ async fn delayed_verdicts_cannot_accept_or_remove_a_replacement_witness() -> Res
         receive.try_recv().is_err(),
         "stale banked witness was proposed"
     );
-    ensure!(trial.validated_candidates.is_none());
+    ensure!(!trial.proposal_builder.has_banked());
     ensure!(
-        trial.io_jobs.len() == 1,
+        trial.proposal_builder.build_in_flight(),
         "replacement needs fresh validation"
     );
     Ok(())
@@ -229,8 +232,8 @@ async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Resu
         TxPolicy::Rejected("before rollback".into()),
     ] {
         trial
-            .apply_io_verdicts(
-                IoApply::BuildProposal {
+            .apply_build_verdicts(
+                BuildContext {
                     selection: before.clone(),
                     anchor_height: 1,
                     anchor_hash,
@@ -238,7 +241,7 @@ async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Resu
                 Ok(vec![(raw.clone(), verdict)]),
             )
             .await?;
-        ensure!(trial.validated_candidates.is_none());
+        ensure!(!trial.proposal_builder.has_banked());
         ensure!(trial.consensus.mempool.contains_candidate(&raw));
     }
     // An identical proposal is accepted with a fresh selection. This makes a
@@ -249,8 +252,8 @@ async fn rollback_invalidates_delayed_verdicts_even_at_the_same_anchor() -> Resu
     ] {
         let (reply, receive) = oneshot::channel();
         trial
-            .apply_io_verdicts(
-                IoApply::ValidateProposal {
+            .apply_validation_verdicts(
+                IncomingProposal {
                     value: Value::new_batch_raw(
                         trial.consensus.protocol_context,
                         1,
@@ -295,8 +298,8 @@ async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()
     let raw = genesis_block(Network::Regtest).txdata.remove(0);
     trial.consensus.mempool.insert(recognized(raw.clone()));
     trial
-        .apply_io_verdicts(
-            IoApply::BuildProposal {
+        .apply_build_verdicts(
+            BuildContext {
                 selection: trial.preparation_selection().await?,
                 anchor_height: 1,
                 anchor_hash,
@@ -304,10 +307,10 @@ async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()
             Ok(vec![(raw.clone(), TxPolicy::Accepted)]),
         )
         .await?;
-    ensure!(trial.validated_candidates.is_some());
+    ensure!(trial.proposal_builder.has_banked());
     rollback_to_height(&trial.db_conn(), 1).await?;
     let (reply, mut receive) = oneshot::channel();
-    trial.consensus.pending_proposal = Some(PendingProposal {
+    trial.proposal_builder.start_request(PendingProposal {
         height: Height::new(2),
         round: Round::new(0),
         reply,
@@ -315,9 +318,9 @@ async fn rollback_invalidates_banked_verdicts_before_proposal_use() -> Result<()
     });
     ensure!(!trial.try_fulfill_pending_proposal().await?);
     ensure!(receive.try_recv().is_err());
-    ensure!(trial.validated_candidates.is_none());
+    ensure!(!trial.proposal_builder.has_banked());
     ensure!(
-        trial.io_jobs.len() == 1,
+        trial.proposal_builder.build_in_flight(),
         "rollback requires fresh validation"
     );
     ensure!(trial.consensus.mempool.contains_candidate(&raw));
@@ -424,7 +427,7 @@ async fn production_preparation_uses_retained_recognition_and_proposal_bytes() -
         "proposal used cached batch eligibility for another witness"
     );
     ensure!(
-        trial.io_jobs.is_empty(),
+        trial.validation_jobs.is_empty() && !trial.proposal_builder.build_in_flight(),
         "ineligible proposal reached Bitcoin RPC validation"
     );
     ensure!(trial.consensus.mempool.contains_candidate(&raw));
@@ -472,8 +475,8 @@ async fn competing_validation_completions_preserve_first_accepted_slot() -> Resu
         let id = value.id();
         let (reply, received) = oneshot::channel();
         trial
-            .apply_io_verdicts(
-                IoApply::ValidateProposal {
+            .apply_validation_verdicts(
+                IncomingProposal {
                     value,
                     selection: selection.clone(),
                     height: Height::new(2),
@@ -514,5 +517,388 @@ async fn competing_validation_completions_preserve_first_accepted_slot() -> Resu
             );
         }
     }
+    Ok(())
+}
+
+struct CountDrop(Arc<AtomicUsize>);
+
+impl Drop for CountDrop {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+fn gated_verdicts(
+    verdicts: Verdicts,
+    entered: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
+    drops: Arc<AtomicUsize>,
+) -> BoxFuture<'static, Verdicts> {
+    let guard = CountDrop(drops);
+    Box::pin(async move {
+        let _guard = guard;
+        let _ = entered.send(());
+        release.await?;
+        verdicts
+    })
+}
+
+#[tokio::test]
+async fn proposal_build_polling_cancellation_and_reset_preserve_ownership() -> Result<()> {
+    let (mut trial, _directory) = fixture().await?;
+    let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
+    let selection = trial.preparation_selection().await?;
+    let anchor_hash = trial.execution.last_hash.unwrap();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let (entered, mut started) = oneshot::channel();
+    let (release, waiting) = oneshot::channel();
+    trial.proposal_builder.start_build(
+        BuildContext {
+            selection: selection.clone(),
+            anchor_height: 1,
+            anchor_hash,
+        },
+        gated_verdicts(Ok(vec![]), entered, waiting, drops.clone()),
+    )?;
+    {
+        let mut polling = Box::pin(trial.proposal_builder.next_build());
+        assert!(poll!(&mut polling).is_pending());
+    }
+    started.try_recv()?;
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert!(trial.proposal_builder.build_in_flight());
+    assert!(
+        trial
+            .proposal_builder
+            .start_build(
+                BuildContext {
+                    selection: selection.clone(),
+                    anchor_height: 2,
+                    anchor_hash
+                },
+                Box::pin(async { Ok(vec![]) }),
+            )
+            .is_err()
+    );
+    release.send(()).unwrap();
+    let completed = trial.proposal_builder.next_build().await;
+    completed.verdicts?;
+    assert_eq!(completed.context.anchor_height, 1);
+    assert_eq!(completed.context.anchor_hash, anchor_hash);
+    assert!(
+        completed
+            .context
+            .selection
+            .can_reuse_preparation(&selection)
+    );
+    assert!(!trial.proposal_builder.build_in_flight());
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+
+    for polled in [false, true] {
+        let (entered, _started) = oneshot::channel();
+        let (_release, waiting) = oneshot::channel();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let (reply, mut receive) = oneshot::channel();
+        trial.proposal_builder.start_request(PendingProposal {
+            height: Height::new(2),
+            round: Round::new(0),
+            reply,
+            hard_deadline: Instant::now() + Duration::from_secs(60),
+        });
+        trial.proposal_builder.start_build(
+            BuildContext {
+                selection: selection.clone(),
+                anchor_height: 1,
+                anchor_hash,
+            },
+            gated_verdicts(Ok(vec![]), entered, waiting, drops.clone()),
+        )?;
+        if polled {
+            let mut polling = Box::pin(trial.proposal_builder.next_build());
+            assert!(poll!(&mut polling).is_pending());
+        }
+        trial.proposal_builder.reset();
+        assert!(!trial.proposal_builder.build_in_flight());
+        assert!(trial.proposal_builder.request().is_none());
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            receive.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ));
+    }
+    let (entered, _started) = oneshot::channel();
+    let (_release, waiting) = oneshot::channel();
+    let drops = Arc::new(AtomicUsize::new(0));
+    trial.proposal_builder.start_build(
+        BuildContext {
+            selection,
+            anchor_height: 1,
+            anchor_hash,
+        },
+        gated_verdicts(Ok(vec![]), entered, waiting, drops.clone()),
+    )?;
+    drop(trial);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn expired_proposal_banks_its_build_for_the_next_round() -> Result<()> {
+    let (mut trial, _directory) = fixture().await?;
+    let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
+    trial.consensus.current_round = Round::new(0);
+    trial.consensus.current_proposer = Some(trial.consensus.address);
+    let raw = genesis_block(Network::Regtest).txdata.remove(0);
+    trial.consensus.mempool.insert(recognized(raw.clone()));
+    let selection = trial.preparation_selection().await?;
+    let (entered, _started) = oneshot::channel();
+    let (release, waiting) = oneshot::channel();
+    let drops = Arc::new(AtomicUsize::new(0));
+    trial.proposal_builder.start_build(
+        BuildContext {
+            selection,
+            anchor_height: 1,
+            anchor_hash: trial.execution.last_hash.unwrap(),
+        },
+        gated_verdicts(
+            Ok(vec![(raw.clone(), TxPolicy::Accepted)]),
+            entered,
+            waiting,
+            drops.clone(),
+        ),
+    )?;
+    let (reply, receive) = oneshot::channel();
+    trial.proposal_builder.start_request(PendingProposal {
+        height: Height::new(2),
+        round: Round::new(0),
+        reply,
+        hard_deadline: Instant::now(),
+    });
+    assert!(trial.try_fulfill_pending_proposal().await?);
+    assert!(receive.await?.value.batch_raw_txs().is_empty());
+    assert!(trial.proposal_builder.build_in_flight());
+    release.send(()).unwrap();
+    let completed = trial.proposal_builder.next_build().await;
+    trial
+        .apply_build_verdicts(completed.context, completed.verdicts)
+        .await?;
+    assert!(trial.proposal_builder.has_banked());
+    trial.consensus.current_round = Round::new(1);
+    let (reply, receive) = oneshot::channel();
+    trial
+        .handle_get_value(
+            Height::new(2),
+            Round::new(1),
+            Duration::from_secs(60),
+            reply,
+        )
+        .await?;
+    assert_eq!(receive.await?.value.batch_raw_txs(), vec![raw]);
+    assert!(!trial.proposal_builder.has_banked());
+    assert!(!trial.proposal_builder.build_in_flight());
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn stale_build_releases_its_slot_before_resnapshot_and_errors_stay_fatal() -> Result<()> {
+    let (mut trial, _directory) = fixture().await?;
+    let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
+    let raw = genesis_block(Network::Regtest).txdata.remove(0);
+    trial.consensus.mempool.insert(recognized(raw.clone()));
+    let selection = trial.preparation_selection().await?;
+    let anchor_hash = trial.execution.last_hash.unwrap();
+    trial.proposal_builder.start_build(
+        BuildContext {
+            selection: selection.clone(),
+            anchor_height: 1,
+            anchor_hash,
+        },
+        Box::pin(async move { Ok(vec![(raw, TxPolicy::Accepted)]) }),
+    )?;
+    rollback_to_height(&trial.db_conn(), 1).await?;
+    let (reply, mut receive) = oneshot::channel();
+    trial.proposal_builder.start_request(PendingProposal {
+        height: Height::new(2),
+        round: Round::new(0),
+        reply,
+        hard_deadline: Instant::now() + Duration::from_secs(60),
+    });
+    let completed = trial.proposal_builder.next_build().await;
+    assert!(!trial.proposal_builder.build_in_flight());
+    trial
+        .apply_build_verdicts(completed.context, completed.verdicts)
+        .await?;
+    assert!(trial.proposal_builder.build_in_flight());
+    assert!(!trial.try_fulfill_pending_proposal().await?);
+    assert!(trial.proposal_builder.build_in_flight());
+    assert!(receive.try_recv().is_err());
+    // Even an obsolete selection cannot turn infrastructure failure into a retry.
+    assert!(
+        trial
+            .apply_build_verdicts(
+                BuildContext {
+                    selection,
+                    anchor_height: 1,
+                    anchor_hash
+                },
+                Err(anyhow!("validation infrastructure failed")),
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("validation infrastructure failed")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn stalled_local_build_does_not_delay_an_incoming_validation_reply() -> Result<()> {
+    let (mut trial, _directory) = fixture().await?;
+    let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
+    trial.consensus.current_round = Round::new(0);
+    trial.consensus.current_proposer = Some(trial.consensus.address);
+    let anchor_hash = trial.execution.last_hash.unwrap();
+    let selection = trial.preparation_selection().await?;
+    let drops = Arc::new(AtomicUsize::new(0));
+    let (entered, started) = oneshot::channel();
+    let (_release, waiting) = oneshot::channel();
+    trial.proposal_builder.start_build(
+        BuildContext {
+            selection: selection.clone(),
+            anchor_height: 1,
+            anchor_hash,
+        },
+        gated_verdicts(Ok(vec![]), entered, waiting, drops.clone()),
+    )?;
+    let raw = genesis_block(Network::Regtest).txdata.remove(0);
+    let (reply, receive) = oneshot::channel();
+    let (release_incoming, waiting) = oneshot::channel();
+    let transaction = raw.clone();
+    trial.validation_jobs.push_back(ValidationJob {
+        verdicts: Box::pin(async move {
+            waiting.await?;
+            Ok(vec![(transaction, TxPolicy::Accepted)])
+        }),
+        proposal: IncomingProposal {
+            value: Value::new_batch_raw(
+                trial.consensus.protocol_context,
+                1,
+                anchor_hash,
+                vec![raw.clone()],
+            )?,
+            selection,
+            height: Height::new(2),
+            round: Round::new(0),
+            proposer: trial.consensus.address,
+            anchor_height: 1,
+            anchor_hash,
+            parsed: vec![recognized(raw).parsed.unwrap()],
+            reply,
+        },
+    });
+    let shutdown = Shutdown::new();
+    trial.shutdown = shutdown.signal();
+    let drive = async {
+        let result: Result<()> = async {
+            timeout(Duration::from_secs(5), started).await??;
+            release_incoming.send(()).unwrap();
+            assert!(timeout(Duration::from_secs(5), receive).await??.is_some());
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
+            Ok(())
+        }
+        .await;
+        shutdown.cancel();
+        result
+    };
+    let (running, driven) = tokio::join!(trial.run_event_loop(), drive);
+    driven?;
+    running?;
+    assert!(trial.proposal_builder.build_in_flight());
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    trial.proposal_builder.reset();
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_build_banks_while_an_incoming_validation_is_stalled() -> Result<()> {
+    let (mut trial, _directory) = fixture().await?;
+    let _engine = StopEngine(trial.consensus.engine.legacy_handle().actor.clone());
+    trial.consensus.current_round = Round::new(0);
+    trial.consensus.current_proposer = Some(trial.consensus.address);
+    let anchor_hash = trial.execution.last_hash.unwrap();
+    let selection = trial.preparation_selection().await?;
+    let raw = genesis_block(Network::Regtest).txdata.remove(0);
+    trial.consensus.mempool.insert(recognized(raw.clone()));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let (entered, started) = oneshot::channel();
+    let (_release, waiting) = oneshot::channel();
+    let (reply, mut receive) = oneshot::channel();
+    trial.validation_jobs.push_back(ValidationJob {
+        verdicts: gated_verdicts(Ok(vec![]), entered, waiting, drops.clone()),
+        proposal: IncomingProposal {
+            value: Value::new_batch_raw(
+                trial.consensus.protocol_context,
+                1,
+                anchor_hash,
+                vec![raw.clone()],
+            )?,
+            selection: selection.clone(),
+            height: Height::new(2),
+            round: Round::new(0),
+            proposer: trial.consensus.address,
+            anchor_height: 1,
+            anchor_hash,
+            parsed: vec![recognized(raw.clone()).parsed.unwrap()],
+            reply,
+        },
+    });
+    let (release_local, waiting) = oneshot::channel();
+    let (completed, observed) = oneshot::channel();
+    trial.proposal_builder.start_build(
+        BuildContext {
+            selection,
+            anchor_height: 1,
+            anchor_hash,
+        },
+        Box::pin(async move {
+            waiting.await?;
+            let _ = completed.send(());
+            Ok(vec![(raw, TxPolicy::Accepted)])
+        }),
+    )?;
+    let (simulate, incoming) = mpsc::channel(1);
+    trial.simulate_rx = Some(incoming);
+    let shutdown = Shutdown::new();
+    trial.shutdown = shutdown.signal();
+    let drive = async {
+        let result: Result<()> = async {
+            timeout(Duration::from_secs(5), started).await??;
+            release_local.send(()).unwrap();
+            timeout(Duration::from_secs(5), observed).await??;
+            // This request is a barrier through the next reactor iteration.
+            let (reply, receive) = oneshot::channel();
+            simulate.send((vec![0], reply)).await?;
+            assert!(timeout(Duration::from_secs(5), receive).await???.is_err());
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
+            Ok(())
+        }
+        .await;
+        shutdown.cancel();
+        result
+    };
+    let (running, driven) = tokio::join!(trial.run_event_loop(), drive);
+    driven?;
+    running?;
+    assert!(trial.proposal_builder.has_banked());
+    assert!(!trial.proposal_builder.build_in_flight());
+    assert_eq!(trial.validation_jobs.len(), 1);
+    assert!(matches!(
+        receive.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    trial.validation_jobs.clear();
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
     Ok(())
 }

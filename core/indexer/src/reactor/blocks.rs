@@ -417,7 +417,7 @@ impl<E: Executor> Reactor<E> {
     }
 
     pub(super) async fn observe_rollback(&mut self, height: u64) {
-        self.validated_candidates = None;
+        self.proposal_builder.invalidate_banked();
         if let Err(error) = self
             .consensus
             .refresh_finality_observation(&self.db_conn(), height)

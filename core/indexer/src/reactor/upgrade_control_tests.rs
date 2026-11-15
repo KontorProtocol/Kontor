@@ -1,4 +1,4 @@
-use super::consensus_state::PendingProposal;
+use super::proposal_builder::PendingProposal;
 use crate::consensus::{Height, ProposalData, Value};
 use crate::upgrade_control::{
     PrepareUpgrade, RequestedUpgrade, SubmissionError, SubmitUpgrade, UpgradeSubmission,
@@ -559,7 +559,7 @@ async fn operator_queue_proposes_exact_approval_before_pending_block_and_drops_c
     let block = certified_fixture::block(2, first.hash, 0, vec![]);
     reactor.consensus.pending_blocks.insert(2, block);
     let (reply, proposed) = oneshot::channel();
-    reactor.consensus.pending_proposal = Some(PendingProposal {
+    reactor.proposal_builder.start_request(PendingProposal {
         height: Height::new(3),
         round: Round::new(0),
         reply,

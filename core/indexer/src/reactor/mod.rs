@@ -28,6 +28,7 @@ mod mempool_tests;
 pub(crate) mod message;
 #[cfg(test)]
 pub mod mock_bitcoin;
+mod proposal_builder;
 #[cfg(test)]
 mod pruning_tests;
 #[cfg(feature = "protocol-qualification")]
@@ -120,6 +121,7 @@ use execution::ExecutionContext;
 use executor::Executor;
 use mempool::MempoolPreparation;
 use mempool_fee_index::FeeProjection;
+use proposal_builder::ProposalBuilder;
 
 /// High-water mark on `consensus_state::pending_blocks`: the reactor stops
 /// draining `block_rx` once this many blocks are buffered ahead of consensus,
@@ -181,10 +183,8 @@ pub(crate) struct Reactor<E: Executor> {
     /// Validation runs outside the reactor loop. Results are checked against the
     /// current selection and round before durable proposal admission; a stale
     /// completion must not overwrite an accepted proposal.
-    io_jobs: VecDeque<batches::IoJob>,
-    /// Verdicts that outlived their proposal, banked for the next one — see
-    /// `batches::ValidatedCandidates`.
-    validated_candidates: Option<batches::ValidatedCandidates>,
+    validation_jobs: VecDeque<batches::ValidationJob>,
+    proposal_builder: ProposalBuilder,
     /// An in-flight off-loop mempool fee projection (`spawn_blocking`). The
     /// periodic tick starts one from a snapshot rather than projecting inline;
     /// its result is applied when this completes. `None` when idle — one at a
@@ -311,9 +311,9 @@ impl<E: Executor> Reactor<E> {
             event_tx,
             consensus,
             consensus_listen_addr,
-            io_jobs: VecDeque::new(),
+            validation_jobs: VecDeque::new(),
             runtime_status: None,
-            validated_candidates: None,
+            proposal_builder: ProposalBuilder::default(),
             fee_recompute: None,
             mempool_preparation: None,
         }
@@ -394,7 +394,7 @@ impl<E: Executor> Reactor<E> {
                     .await
                     .context("advance failed after block insert")?;
                 // A pending block may be what we're waiting to propose
-                if self.consensus.pending_proposal.is_some() {
+                if self.proposal_builder.request().is_some() {
                     self.try_fulfill_pending_proposal()
                         .await
                         .context("try_fulfill_pending_proposal failed after block insert")?;
@@ -406,7 +406,7 @@ impl<E: Executor> Reactor<E> {
                 self.consensus
                     .pending_blocks
                     .retain(|height, _| *height <= to_height);
-                self.validated_candidates = None;
+                self.proposal_builder.invalidate_banked();
                 info!(
                     to_height,
                     "Bitcoin reorg invalidated local block candidates"
@@ -418,9 +418,6 @@ impl<E: Executor> Reactor<E> {
 
     async fn run_event_loop(&mut self) -> Result<()> {
         self.ready_tx.take().map(|tx| tx.send(true));
-
-        let debounce_duration = std::time::Duration::from_millis(500);
-        let mut debounce_deadline: Option<tokio::time::Instant> = None;
 
         // Periodic recompute + publish of fee tiers. 2s matches
         // mempool.space's POLL_RATE_MS in production; staleness ≤2s is
@@ -471,7 +468,8 @@ impl<E: Executor> Reactor<E> {
             // either of those paths would go stale precisely when it is needed.
             gauge!(PENDING_BLOCKS).set(self.consensus.pending_blocks.len() as f64);
 
-            let hard_deadline_instant = self.consensus.pending_proposal.as_ref().map(|p| {
+            let debounce_deadline = self.proposal_builder.debounce_deadline();
+            let hard_deadline_instant = self.proposal_builder.request().map(|p| {
                 let deadline = p.hard_deadline;
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 tokio::time::Instant::now() + remaining
@@ -499,24 +497,21 @@ impl<E: Executor> Reactor<E> {
 
             let consensus_rx = self.consensus.engine.next();
 
-            // EVERY in-flight I/O job's verdict future, raced — or never.
-            // All of them, not just the front: a stalled BuildProposal against
-            // a slow bitcoind must not park a ValidateProposal whose oneshot
-            // reply the consensus engine is waiting on, or the node stops
-            // voting for the front job's whole retry budget. Polling through
-            // `&mut` retains each future's progress when another arm wins the
-            // select; dropping the loop (shutdown) drops the in-flight RPCs.
-            let io_verdicts = async {
-                if self.io_jobs.is_empty() {
+            // A build can outlive its request. Race it independently from every
+            // incoming validation, preserving each owned future when another arm wins.
+            let build_verdicts = self.proposal_builder.next_build();
+            let incoming_verdicts = async {
+                if self.validation_jobs.is_empty() {
                     pending().await
                 } else {
-                    future::select_all(self.io_jobs.iter_mut().map(|j| &mut j.verdicts)).await
+                    future::select_all(self.validation_jobs.iter_mut().map(|j| &mut j.verdicts))
+                        .await
                 }
             };
 
             // The off-loop fee projection's result, or never. Same shape as
-            // `io_verdicts`: polled through `&mut` so it survives losing the
-            // select, dropped with the loop at shutdown.
+            // incoming verdicts: polled through `&mut` so it survives losing
+            // the select.
             let fee_recompute = async {
                 match self.fee_recompute.as_mut() {
                     Some(handle) => handle.await,
@@ -569,8 +564,8 @@ impl<E: Executor> Reactor<E> {
                             });
                             self.consensus.mempool_fee_index.sync(fees, mempool_min_fee_sat_per_vb);
                             info!("MempoolSync: recognition started");
-                            if self.consensus.pending_proposal.is_some() {
-                                debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
+                            if self.proposal_builder.request().is_some() {
+                                self.proposal_builder.on_mempool_activity(tokio::time::Instant::now());
                             }
                         },
                         MempoolEvent::TransactionAdded { txid, tx, fee } => {
@@ -608,12 +603,12 @@ impl<E: Executor> Reactor<E> {
                     for transaction in prepared {
                         recognized |= self.consensus.mempool.finish(transaction);
                     }
-                    if recognized && self.consensus.pending_proposal.is_some() {
-                        debounce_deadline = Some(tokio::time::Instant::now() + debounce_duration);
+                    if recognized && self.proposal_builder.request().is_some() {
+                        self.proposal_builder.on_mempool_activity(tokio::time::Instant::now());
                     }
                 }
                 _ = debounce_sleep => {
-                    debounce_deadline = None;
+                    self.proposal_builder.consume_debounce();
                     self.try_fulfill_pending_proposal().await
                         .context("try_fulfill_pending_proposal failed (debounce)")?;
                 }
@@ -688,14 +683,19 @@ impl<E: Executor> Reactor<E> {
                         }
                     }
                 }
-                (verdicts, index, _) = io_verdicts => {
+                completed = build_verdicts => {
+                    self.apply_build_verdicts(completed.context, completed.verdicts)
+                        .await.context("apply_build_verdicts failed")?;
+                    self.advance().await.context("advance failed after proposal build completed")?;
+                }
+                (verdicts, index, _) = incoming_verdicts => {
                     let job = self
-                        .io_jobs
+                        .validation_jobs
                         .remove(index)
                         .expect("io arm fired with this job's index");
-                    self.apply_io_verdicts(job.apply, verdicts)
+                    self.apply_validation_verdicts(job.proposal, verdicts)
                         .await
-                        .context("apply_io_verdicts failed")?;
+                        .context("apply_validation_verdicts failed")?;
                     self.advance().await.context("advance failed after proposal input became available")?;
                 }
                 _ = fee_publish_ticker.tick() => {
