@@ -66,9 +66,9 @@ sudo apt install cmake pkgconf libevent-dev libboost-all-dev libzmq3-dev brotli
 
 If rust tooling is not installed follow steps from [rust-lang.org](https://rust-lang.org/tools/install/)
 
-Host builds use Rust 1.100.0, pinned in `rust-toolchain.toml`. Rustup selects it automatically in this checkout. CI and the linked-node builder use the same version.
+Host builds use Rust 1.100.0, pinned in CI and the linked-node builder. Install it with `rustup toolchain install 1.100.0 --component rustfmt,clippy,llvm-tools-preview`. For local Cargo commands, select it with `RUSTUP_TOOLCHAIN=1.100.0` (including when using the shared `local-build` helper).
 
-Reproducible contract and SDK component generation uses the separately pinned image in `tools/build.json`. Its compiler and existing artifact provenance remain unchanged by a host toolchain upgrade.
+Reproducible contract and SDK component generation uses the separately pinned image in `tools/build.json`. Its compiler and existing artifact provenance remain unchanged by a host toolchain upgrade. A repository-wide toolchain override would also affect that mounted container, so host selection stays explicit.
 
 Add wasm compile target:
 ```bash
