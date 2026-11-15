@@ -61,11 +61,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     env:
-      RUSTUP_TOOLCHAIN: "1.99.1"
+      RUSTUP_TOOLCHAIN: "1.100.0"
       RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt, clippy
       - uses: actions/cache@v6

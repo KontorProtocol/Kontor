@@ -249,7 +249,7 @@ fn fixture() -> TempDir {
             }
             let mut report = json!({"schema_version":6,"cell":format!("{cell}/{profile}"),"source_sha":"a".repeat(40),"lockfile_sha256":"b".repeat(64),"binary_sha256":"c".repeat(64),
                 "wasmtime_revision":FORK_REVISION,"wasmtime_features":{"production":expected_features("production"),"qualification":expected_features("qualification")},
-                "feature_logs":feature_logs(),"cargo_log":"cargo.json","binary":format!("core/target/{}/deps/indexer-test",if profile=="dev" {"debug"} else {"release"}),"rustc_version_verbose":"rustc 1.99.1\n","host":"fixture",
+                "feature_logs":feature_logs(),"cargo_log":"cargo.json","binary":format!("core/target/{}/deps/indexer-test",if profile=="dev" {"debug"} else {"release"}),"rustc_version_verbose":"rustc 1.100.0\n","host":"fixture",
                 "cases":CASES.iter().map(|kind|case(kind,os,arch)).collect::<Vec<_>>(),"chains":chains,"owned_chains":owned,"chain_log":"chains.log","owned_chain_log":"owned-chains.log","ownership_log":"ownership.log"});
             write_evidence(&directory, &mut report);
         }

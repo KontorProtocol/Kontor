@@ -165,7 +165,7 @@ fn setup() -> (TempDir, Environment) {
     );
     executable(
         &root.join("target/tools/rustc"),
-        "printf 'rustc 1.99.1\\nhost: x86_64-unknown-linux-gnu\\n'",
+        "printf 'rustc 1.100.0\\nhost: x86_64-unknown-linux-gnu\\n'",
     );
     let binary = root.join("target/debug/deps/indexer-capture");
     let cargo = [

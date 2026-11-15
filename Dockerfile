@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG CHEF_IMAGE=docker.io/lukemathwalker/cargo-chef:0.1.78-rust-1.99.1-slim-trixie
+ARG CHEF_IMAGE=docker.io/lukemathwalker/cargo-chef:0.1.78-rust-1.100.0-slim-trixie
 
 FROM ${CHEF_IMAGE} AS builder-base
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -8,8 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libboost-system-dev libboost-thread-dev libboost-chrono-dev \
     ca-certificates binutils git \
     && rm -rf /var/lib/apt/lists/*
-RUN rustup component add --toolchain 1.99.1 llvm-tools-preview
-ENV RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER="" CCACHE_DISABLE=1 CARGO_BUILD_JOBS=2
+RUN rustup component add --toolchain 1.100.0 llvm-tools-preview
+ENV RUSTUP_TOOLCHAIN=1.100.0 RUSTC_WRAPPER="" CCACHE_DISABLE=1 CARGO_BUILD_JOBS=2
 WORKDIR /build
 
 # Cache fetched sources, not unified-workspace compilation. Each retained graph

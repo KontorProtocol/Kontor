@@ -44,14 +44,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      RUSTUP_TOOLCHAIN: "1.99.1"
+      RUSTUP_TOOLCHAIN: "1.100.0"
       RUSTC_WRAPPER: ""
       CCACHE_DISABLE: "1"
       CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-kontor-tools
-      - run: rustup component add --toolchain 1.99.1 rustfmt clippy llvm-tools-preview
+      - run: rustup component add --toolchain 1.100.0 rustfmt clippy llvm-tools-preview
       - name: Check formats and ownership negative controls
         run: |
           rustfmt --edition 2024 --check protocol-bundles/proof/*.rs
@@ -75,7 +75,7 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
         profile: ${{ fromJSON(needs.scope.outputs.profile_policy == 'full' && '["release", "dev"]' || '["release"]') }}
     env:
-      RUSTUP_TOOLCHAIN: "1.99.1"
+      RUSTUP_TOOLCHAIN: "1.100.0"
       RUSTC_WRAPPER: ""
       CCACHE_DISABLE: "1"
       CARGO_BUILD_JOBS: "2"
@@ -88,7 +88,7 @@ jobs:
           # These SDKs are unused by this job; retain Rust, Docker and build caches.
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
           df -h /
-      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt, clippy, llvm-tools-preview
       - uses: ./.github/actions/setup-kontor-tools
@@ -107,9 +107,9 @@ jobs:
         with:
           path: |
             target/protocol-evidence/**/target
-          key: node-graphs-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.99.1-${{ matrix.profile }}-${{ hashFiles('Dockerfile', 'core/**/Cargo.toml', 'core/Cargo.lock', 'protocol-bundles/**', 'core/kontor-build/src/**') }}-${{ github.sha }}
+          key: node-graphs-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.100.0-${{ matrix.profile }}-${{ hashFiles('Dockerfile', 'core/**/Cargo.toml', 'core/Cargo.lock', 'protocol-bundles/**', 'core/kontor-build/src/**') }}-${{ github.sha }}
           restore-keys: |
-            node-graphs-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.99.1-${{ matrix.profile }}-${{ hashFiles('Dockerfile', 'core/**/Cargo.toml', 'core/Cargo.lock', 'protocol-bundles/**', 'core/kontor-build/src/**') }}-
+            node-graphs-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.100.0-${{ matrix.profile }}-${{ hashFiles('Dockerfile', 'core/**/Cargo.toml', 'core/Cargo.lock', 'protocol-bundles/**', 'core/kontor-build/src/**') }}-
       - name: Check compiler and linker output capture before the full build
         run: cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test linker_wrapper --test object_tools -j2 -- --include-ignored
       - name: Install node dependencies (macOS)

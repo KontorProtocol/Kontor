@@ -80,7 +80,7 @@ pub(super) fn report(path: &Path, cell: &str, os: &str, arch: &str) -> Result<(V
             .split_whitespace()
             .take(2)
             .collect::<Vec<_>>()
-            == ["rustc", "1.99.1"],
+            == ["rustc", "1.100.0"],
         "wrong compiler"
     );
     ensure!(!string(&report["host"])?.is_empty(), "missing host");

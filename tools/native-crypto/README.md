@@ -27,12 +27,12 @@ From the repository root:
 
 ```sh
 ./tools/kontor native-crypto-vendor
-RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor check-native-helper-lock
+RUSTUP_TOOLCHAIN=1.100.0 RUSTC_WRAPPER= ./tools/kontor check-native-helper-lock
 cargo test --locked --manifest-path core/vendor/kontor-native-build/Cargo.toml -j2
 ./tools/kontor qualify-native-crypto --output /absolute/path/to/new-evidence-directory
 ```
 
-The qualification harness uses Rust 1.99.1 and cached Cargo dependencies. Fetch
+The qualification harness uses Rust 1.100.0 and cached Cargo dependencies. Fetch
 the locked dependencies for `core/kontor-build/Cargo.toml`, `core/Cargo.toml`,
 `core/vendor/kontor-native-build/Cargo.toml`, and
 `tools/native-crypto/object-report/Cargo.toml` before running on a fresh machine.
@@ -93,7 +93,7 @@ belong to their own graph. Final live crypto entry points have distinct addresse
 Comparator negative controls:
 
 ```sh
-RUSTUP_TOOLCHAIN=1.99.1 cargo test --locked --manifest-path tools/native-crypto/object-report/Cargo.toml -j2
+RUSTUP_TOOLCHAIN=1.100.0 cargo test --locked --manifest-path tools/native-crypto/object-report/Cargo.toml -j2
 ```
 
 The tests deliberately change instructions, initialized data, zero-fill size,

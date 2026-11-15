@@ -12,10 +12,21 @@ for path in "$@"; do
         # The final node link must regenerate compiler/linker audit records that
         # live outside target. Cached dependencies remain usable independently.
         find "$path" -type d -path '*/.fingerprint/kontor-node-*' -prune -exec rm -rf {} +
+        find "$path" -type d -path '*/build/kontor-node/*/fingerprint' -prune -exec rm -rf {} +
         if [[ "${PRUNE_TEST_EXECUTABLES:-false}" == true ]]; then
             # Keep proc-macro libraries; test programs are relinked from the
             # current checkout and need not occupy the shared cache quota.
             find "$path" -type f -path '*/deps/*' ! -path '*/build/*' -perm -u+x ! -name '*.so' ! -name '*.dylib' -delete
+            # Cargo 1.100 separates each compilation unit's fingerprint and
+            # output. Select test units so build-script generators survive.
+            while IFS= read -r -d '' fingerprint; do
+                out="${fingerprint%/fingerprint/*}/out"
+                for executable in "$out"/*; do
+                    if [[ -f "$executable" && -x "$executable" && "$executable" != *.so && "$executable" != *.dylib ]]; then
+                        rm -- "$executable"
+                    fi
+                done
+            done < <(find "$path" -type f -path '*/fingerprint/test-*' ! -name '*.json' -print0)
         fi
         kib=$(du -sk "$path" | cut -f1)
         size=$((size + kib))

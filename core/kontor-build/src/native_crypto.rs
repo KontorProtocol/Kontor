@@ -43,7 +43,7 @@ fn environment() -> Environment {
         env.remove(&OsString::from(name));
     }
     for (key, value) in [
-        ("RUSTUP_TOOLCHAIN", "1.99.1"),
+        ("RUSTUP_TOOLCHAIN", "1.100.0"),
         ("CCACHE_DISABLE", "1"),
         ("CC_ENABLE_DEBUG_OUTPUT", "1"),
     ] {

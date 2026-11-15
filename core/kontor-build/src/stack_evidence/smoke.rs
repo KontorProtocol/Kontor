@@ -98,7 +98,7 @@ pub fn validate_report(
         .as_str()
         .context("missing smoke compiler")?;
     ensure!(
-        compiler.split_whitespace().take(2).collect::<Vec<_>>() == ["rustc", "1.99.1"],
+        compiler.split_whitespace().take(2).collect::<Vec<_>>() == ["rustc", "1.100.0"],
         "wrong smoke compiler"
     );
     ensure!(
