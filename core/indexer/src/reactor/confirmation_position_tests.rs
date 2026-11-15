@@ -28,6 +28,9 @@ use crate::database::confirmation::get_confirmation_position;
 use crate::database::connection::new_connection;
 use crate::database::queries::{executed_wtxid, get_transaction_by_txid};
 use crate::database::receipt_stream::{recovery_boundary, stream_state};
+use crate::protocol::canonical_application::ApplicationSource;
+use crate::protocol::coordinator::application_closure::WorkItem;
+use crate::protocol::coordinator::certified_input::Command;
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::token::api as token_api;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -510,12 +513,12 @@ async fn run_conflict_case(replace_conflict: bool, resume_planner: bool) -> Resu
             let reopened = new_connection(dir.path(), "certified-fixture.db").await?;
             let frozen = closure::recover(&reopened, height).await?;
             for _ in 0..5 {
-                assert!(!reconcile::step(&reopened, height).await?);
+                assert!(!reconcile::step(&reopened, height).await?.is_ready());
             }
             assert!(
-                work::for_origin(&reopened, frozen.work_origin()?)
+                work::for_origin(&reopened, frozen.work_origin()?, work::WorkKind::Reconcile)
                     .await?
-                    .cursor()
+                    .published()
                     .is_err()
             );
             assert_eq!(closure::recover(&conn, height).await?, frozen);
@@ -533,6 +536,80 @@ async fn run_conflict_case(replace_conflict: bool, resume_planner: bool) -> Resu
             assert_eq!(
                 closure::recover(&reopened, height).await?,
                 closure::progress(&conn, height).await?
+            );
+            let mut checked_frozen = false;
+            for _ in 0..8 {
+                let pending = closure::progress(&conn, height).await?;
+                if let Some((WorkItem::Replay { decision, input }, _)) = pending.next {
+                    let origin = work::published(&conn, pending.remaining.plan)
+                        .await?
+                        .origin();
+                    let frozen =
+                        certified_history::replay_input::get(&conn, input, origin, decision)
+                            .await?;
+                    let retained = certified_history::load(&conn, decision).await?;
+                    let Command::Batch {
+                        anchor_height,
+                        anchor_hash,
+                    } = retained.decision().descriptor.command
+                    else {
+                        anyhow::bail!("frozen replay is not a batch");
+                    };
+                    let original = retained.input().transactions()?;
+                    assert!(!frozen.exclusions.direct.is_empty());
+                    for txid in &frozen.exclusions.direct {
+                        assert!(
+                            conn.query(
+                                "SELECT 1 FROM excluded_batch_txids WHERE txid=?1",
+                                [Txid::from_byte_array(*txid).to_string()]
+                            )
+                            .await?
+                            .next()
+                            .await?
+                            .is_none()
+                        );
+                    }
+                    assert!(
+                        reactor
+                            .process_decided_batch(
+                                anchor_height,
+                                anchor_hash,
+                                Height::new(decision),
+                                retained.proof(),
+                                &original,
+                                None
+                            )
+                            .await
+                            .is_err()
+                    );
+                    assert_eq!(closure::recover(&conn, height).await?, pending);
+                    let selected = frozen.transactions(&original)?;
+                    reactor
+                        .process_decided_batch(
+                            anchor_height,
+                            anchor_hash,
+                            Height::new(decision),
+                            retained.proof(),
+                            &selected,
+                            Some(&original),
+                        )
+                        .await?;
+                    let replayed = closure::stage(&conn, height, pending.stage + 1).await?;
+                    let [application] = replayed.applications.as_slice() else {
+                        anyhow::bail!("missing frozen batch application");
+                    };
+                    let ApplicationSource::Batch { exclusions, .. } = &application.source else {
+                        anyhow::bail!("wrong frozen application kind");
+                    };
+                    assert_eq!(exclusions, &frozen.exclusions);
+                    checked_frozen = true;
+                    break;
+                }
+                reactor.execution.step_certified_closure(height).await?;
+            }
+            assert!(
+                checked_frozen,
+                "conflict fixture did not consume a frozen replay input"
             );
         }
         finish_decision(&mut reactor, height, next).await?;

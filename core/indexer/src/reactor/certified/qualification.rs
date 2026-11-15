@@ -11,6 +11,7 @@ use anyhow::{Context, Result, ensure};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::serialize;
 use bitcoin::{BlockHash, Network, OutPoint, hashes::Hash};
+use futures_util::future::BoxFuture;
 use indexer_types::{BlockRow, Event};
 use libsql::{Connection, params};
 use malachitebft_app_channel::app::types::ProposedValue;
@@ -241,38 +242,6 @@ pub(crate) async fn run(
         ensure!(foreign_stage.finish(Ok(((), StageOutcome::FinalityEvaluated, foreign_cursor))).await.is_err());
         ensure!(closure::recover(&reopened, 1).await? == applied);
 
-        // Inject a replay plan to test the stage/cursor mechanism independently
-        // of the automatic finality policy.
-        for interrupt in [true, false] {
-            if interrupt {
-                conn.execute_batch("CREATE TRIGGER interrupt_replay_plan BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected replay plan publication failure'); END").await?;
-            }
-            let stage = begin_stage(service, &reactor.execution.session, network, 1).await?.context("missing finality plan stage")?;
-            let result = async {
-                let draft = work::begin(&conn, applied.work_origin()?).await?;
-                let draft = work::append(&conn, draft, &[
-                    WorkItem::Rollback { height: 99 }, WorkItem::Execute { decision: 1 }, WorkItem::Finality,
-                ]).await?;
-                let cursor = work::publish(&conn, draft).await?;
-                Ok(((), StageOutcome::FinalityEvaluated, cursor))
-            }.await;
-            let finished = stage.finish(result).await;
-            if interrupt {
-                ensure!(finished.is_err());
-                ensure!(work::for_origin(&reopened, applied.work_origin()?).await.is_err());
-                ensure!(closure::recover(&reopened, 1).await? == applied);
-                conn.execute_batch("DROP TRIGGER interrupt_replay_plan").await?;
-            } else {
-                finished?;
-            }
-        }
-        let planned = closure::recover(&reopened, 1).await?;
-        ensure!(planned.stage == 2 && planned.next.map(|next| next.0) == Some(WorkItem::Rollback { height: 99 }));
-        reactor.rollback(99).await?;
-        ensure!(closure::recover(&reopened, 1).await?.next.map(|next| next.0) == Some(WorkItem::Execute { decision: 1 }));
-        reactor.handle_block(BlockInput::from_exact(value.input())?, &decision).await?;
-        ensure!(closure::canonical_position(&conn, baseline.context.chain).await? == applied.position);
-
         ensure!(completion::publish(&conn, 1).await.is_err());
         ensure!(reactor.consensus.closed_next_height(&conn, Height::new(1)).await?.is_none());
         // The first block has no batch obligations. Exercise the owned finality
@@ -292,7 +261,7 @@ pub(crate) async fn run(
         ensure!(closure::progress(&conn, 1).await?.remaining.is_empty());
         conn.execute_batch("DROP TRIGGER interrupt_closure").await?;
         let completed = completion::publish(&conn, 1).await?;
-        ensure!(completed.stages == 5 && completed.output == applied.position);
+        ensure!(completed.stages == 2 && completed.output == applied.position);
         ensure!(completion::publish(&conn, 1).await? == completed);
         ensure!(completion::completed(&reopened, 1).await? == completed);
         ensure!(certified_startup(&reopened).await?.1 == Height::new(2));
@@ -304,7 +273,7 @@ pub(crate) async fn run(
     }.await;
     let result = match result {
         Ok((mut reactor, reopened, decision, completed)) => async {
-            qualify_batches(&mut reactor, &reopened, service, &decision, &completed).await?;
+            qualify_batches(&mut reactor, &reopened, service, &completed).await?;
             qualify_replacement(&mut reactor, &reopened, service, &decision, &completed).await?;
             qualify_finality(&mut reactor, &reopened, service, &factory).await?;
             qualify_live_closure(&mut reactor).await?;
@@ -364,7 +333,17 @@ async fn accept_for_closure(
     Ok(())
 }
 
-async fn qualify_finality(
+// Keep construction of this large fixture future out of the enclosing poll frame.
+fn qualify_finality<'a>(
+    reactor: &'a mut Reactor<RuntimeExecutor>,
+    reopened: &'a Connection,
+    service: &'a OwnerService,
+    factory: &'a SessionFactory,
+) -> BoxFuture<'a, Result<()>> {
+    Box::pin(qualify_finality_inner(reactor, reopened, service, factory))
+}
+
+async fn qualify_finality_inner(
     reactor: &mut Reactor<RuntimeExecutor>,
     reopened: &Connection,
     service: &OwnerService,
@@ -417,10 +396,14 @@ async fn qualify_finality(
                 ensure!(finality::step(&conn, next_height).await.is_err());
                 ensure!(conn.is_autocommit());
                 ensure!(closure::progress(reopened, next_height).await? == before);
-                ensure!(work::for_origin(reopened, origin).await.is_err());
+                ensure!(
+                    work::for_origin(reopened, origin, work::WorkKind::Finality)
+                        .await
+                        .is_err()
+                );
                 conn.execute_batch("DROP TRIGGER interrupt_finality_seed")
                     .await?;
-                ensure!(!finality::step(&conn, next_height).await?);
+                ensure!(!finality::step(&conn, next_height).await?.is_ready());
                 ensure!(closure::progress(reopened, next_height).await? == before);
                 ensure!(
                     conn.query(
@@ -433,12 +416,12 @@ async fn qualify_finality(
                     .is_none()
                 );
                 let mut steps = 1;
-                while !finality::step(reopened, next_height).await? {
+                while !finality::step(reopened, next_height).await?.is_ready() {
                     steps += 1;
                     ensure!(steps < 30, "bounded fixture planner failed to finish");
                 }
-                let draft = work::for_origin(&conn, origin).await?;
-                ensure!(draft.cursor().is_err());
+                let draft = work::for_origin(&conn, origin, work::WorkKind::Finality).await?;
+                ensure!(draft.published().is_err());
                 let snapshot = conn.query("SELECT input_id FROM closure_replay_inputs WHERE plan_key = ?1 AND decision = ?2", params![origin.key()?.to_vec(), 7u64.to_be_bytes().to_vec()]).await?.next().await?.context("child replay input missing")?;
                 let id: [u8; 32] = snapshot
                     .get::<Vec<u8>>(0)?
@@ -450,9 +433,28 @@ async fn qualify_finality(
                         && child_input.exclusions.effective == vec![child_id.to_byte_array()]
                         && child_input.dropped_positions == vec![0]
                 );
+                let sealed = work::for_origin(&conn, origin, work::WorkKind::Finality)
+                    .await?
+                    .sealed()?;
+                let stage = begin_stage(service, &reactor.execution.session, network, next_height)
+                    .await?
+                    .context("missing corrupt-input publication stage")?;
+                conn.execute(
+                    "UPDATE closure_replay_inputs SET record=x'00' WHERE input_id=?1",
+                    [id.to_vec()],
+                )
+                .await?;
+                ensure!(stage.publish_replacement(sealed).await.is_err());
+                ensure!(replay_input::get(reopened, id, origin, 7).await? == child_input);
+                ensure!(closure::progress(reopened, next_height).await? == before);
                 conn.execute_batch("CREATE TRIGGER interrupt_finality_publish BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected finality publication failure'); END").await?;
                 ensure!(reactor.apply_certified_closure(next_height).await.is_err());
-                ensure!(work::for_origin(reopened, origin).await?.cursor().is_err());
+                ensure!(
+                    work::for_origin(reopened, origin, work::WorkKind::Finality)
+                        .await?
+                        .published()
+                        .is_err()
+                );
                 ensure!(closure::progress(reopened, next_height).await? == before);
                 ensure!(
                     conn.query(
@@ -468,6 +470,49 @@ async fn qualify_finality(
                     .await?;
             }
             reactor.apply_certified_closure(next_height).await?;
+            if bitcoin_height == 106 {
+                let mut rows = conn
+                    .query(
+                        "SELECT stage FROM closure_stages WHERE height=?1 ORDER BY stage",
+                        [next_height.to_be_bytes().to_vec()],
+                    )
+                    .await?;
+                let mut checked = false;
+                while let Some(row) = rows.next().await? {
+                    let stage_bytes: Vec<u8> = row.get(0)?;
+                    let stage_index = u64::from_be_bytes(
+                        stage_bytes
+                            .try_into()
+                            .map_err(|_| anyhow::anyhow!("invalid stage index"))?,
+                    );
+                    let record = closure::stage(&conn, next_height, stage_index).await?;
+                    if let WorkItem::Replay { decision: 7, input } = record.action {
+                        let origin = work::published(&conn, record.remaining.plan)
+                            .await?
+                            .origin();
+                        let frozen = replay_input::get(&conn, input, origin, 7).await?;
+                        let [application] = record.applications.as_slice() else {
+                            anyhow::bail!("missing replayed child application");
+                        };
+                        let ApplicationSource::Batch { exclusions, .. } = &application.source
+                        else {
+                            anyhow::bail!("child replay changed application kind");
+                        };
+                        ensure!(*exclusions == frozen.exclusions);
+                        conn.execute_batch("BEGIN IMMEDIATE").await?;
+                        let inserted = replay_input::insert(
+                            &conn,
+                            &frozen,
+                            replay_input::PlanningCause::Finality,
+                        )
+                        .await;
+                        conn.execute_batch("ROLLBACK").await?;
+                        ensure!(inserted.is_err());
+                        checked = true;
+                    }
+                }
+                ensure!(checked, "real child replay was not checked");
+            }
             ensure!(
                 reactor
                     .consensus
@@ -542,7 +587,6 @@ async fn qualify_batches(
     reactor: &mut Reactor<RuntimeExecutor>,
     reopened: &Connection,
     service: &OwnerService,
-    decision: &DeferredDecision,
     completed: &ClosureRecord,
 ) -> Result<()> {
     let conn = reactor.db_conn();
@@ -690,181 +734,49 @@ async fn qualify_batches(
                     effective: vec![],
                 },
             };
-            // The planner is not wired yet. Supply an explicit attempt to
-            // exercise frozen subsets through actual rollback and execution.
-            for interrupt in [true, false] {
-                if interrupt {
-                    conn.execute_batch("CREATE TRIGGER interrupt_frozen_plan BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected frozen plan failure'); END").await?;
-                }
-                let stage = begin_stage(service, &reactor.execution.session, network, height)
-                    .await?
-                    .context("missing freeze stage")?;
-                let result = async {
-                    let draft = work::begin(&conn, origin).await?;
-                    let mut bad = frozen.clone();
-                    bad.interval_since = 2;
-                    ensure!(
-                        replay_input::insert(&conn, &bad, replay_input::PlanningCause::Finality)
-                            .await
-                            .is_err()
-                    );
-                    bad = frozen.clone();
-                    bad.exclusions.direct = vec![[44; 32]];
-                    bad.exclusions.effective = bad.exclusions.direct.clone();
-                    ensure!(
-                        replay_input::insert(&conn, &bad, replay_input::PlanningCause::Finality)
-                            .await
-                            .is_err()
-                    );
-                    let input =
-                        replay_input::insert(&conn, &frozen, replay_input::PlanningCause::Finality)
-                            .await?;
-                    ensure!(
-                        replay_input::insert(&conn, &frozen, replay_input::PlanningCause::Finality)
-                            .await?
-                            == input
-                    );
-                    let mut wrong_origin = origin;
-                    wrong_origin.previous = [71; 32];
-                    ensure!(
-                        replay_input::get(&conn, input, wrong_origin, height)
-                            .await
-                            .is_err()
-                    );
-                    ensure!(replay_input::get(&conn, input, origin, 2).await.is_err());
-                    let empty_input =
-                        replay_input::insert(&conn, &empty, replay_input::PlanningCause::Finality)
-                            .await?;
-                    let draft = work::append(
-                        &conn,
-                        draft,
-                        &[
-                            WorkItem::Rollback { height: 99 },
-                            WorkItem::Execute { decision: 1 },
-                            WorkItem::Replay {
-                                decision: 2,
-                                input: empty_input,
-                            },
-                            WorkItem::Replay {
-                                decision: height,
-                                input,
-                            },
-                            WorkItem::Finality,
-                        ],
-                    )
-                    .await?;
-                    conn.execute_batch("SAVEPOINT corrupt_replay_input").await?;
-                    conn.execute(
-                        "UPDATE closure_replay_inputs SET record = ?2 WHERE input_id = ?1",
-                        params![input.to_vec(), empty.encode()?],
-                    )
-                    .await?;
-                    ensure!(work::publish(&conn, draft).await.is_err());
-                    conn.execute_batch(
-                        "ROLLBACK TO corrupt_replay_input; RELEASE corrupt_replay_input",
-                    )
-                    .await?;
-                    let cursor = work::publish(&conn, draft).await?;
-                    ensure!(
-                        replay_input::insert(&conn, &frozen, replay_input::PlanningCause::Finality)
-                            .await
-                            .is_err()
-                    );
-                    Ok(((), StageOutcome::FinalityEvaluated, cursor))
-                }
-                .await;
-                let finished = stage.finish(result).await;
-                if interrupt {
-                    ensure!(finished.is_err());
-                    ensure!(
-                        replay_input::get(reopened, frozen.id()?, origin, height)
-                            .await
-                            .is_err()
-                    );
-                    ensure!(closure::recover(reopened, height).await? == before);
-                    conn.execute_batch("DROP TRIGGER interrupt_frozen_plan")
-                        .await?;
-                } else {
-                    finished?;
-                }
-            }
-            ensure!(replay_input::get(reopened, frozen.id()?, origin, height).await? == frozen);
-            reactor.rollback(99).await?;
-            reactor
-                .handle_block(BlockInput::from_exact(decision.value.input())?, decision)
-                .await?;
-            reactor
-                .process_decided_batch(
-                    100,
-                    genesis_block(network).block_hash(),
-                    Height::new(2),
-                    old_batch.proof(),
-                    &[],
-                    None,
-                )
-                .await?;
-            // No live direct-exclusion rows exist. Re-derivation would lose
-            // the saved direct receipt; trying the original subset must fail.
+            // Input validation is independent of policy publication. Keep its writes
+            // inside a rolled-back unit; genuine planner fixtures cover publication.
+            conn.execute_batch("BEGIN IMMEDIATE").await?;
+            work::begin_cause(&conn, &before, work::WorkKind::Finality).await?;
+            let mut bad = frozen.clone();
+            bad.interval_since = 2;
             ensure!(
-                conn.query("SELECT 1 FROM excluded_batch_txids", ())
-                    .await?
-                    .next()
-                    .await?
-                    .is_none()
-            );
-            let pending = closure::recover(reopened, height).await?;
-            ensure!(
-                reactor
-                    .process_decided_batch(
-                        100,
-                        genesis_block(network).block_hash(),
-                        Height::new(height),
-                        &proof_bytes,
-                        &raw,
-                        None
-                    )
+                replay_input::insert(&conn, &bad, replay_input::PlanningCause::Finality)
                     .await
                     .is_err()
             );
-            ensure!(closure::recover(reopened, height).await? == pending);
-            conn.execute_batch("CREATE TRIGGER interrupt_frozen_batch BEFORE INSERT ON closure_stages BEGIN SELECT RAISE(ABORT, 'injected frozen batch failure'); END").await?;
+            bad = frozen.clone();
+            bad.exclusions.direct = vec![[44; 32]];
+            bad.exclusions.effective = bad.exclusions.direct.clone();
             ensure!(
-                reactor
-                    .process_decided_batch(
-                        100,
-                        genesis_block(network).block_hash(),
-                        Height::new(height),
-                        &proof_bytes,
-                        &[],
-                        Some(&raw)
-                    )
+                replay_input::insert(&conn, &bad, replay_input::PlanningCause::Finality)
                     .await
                     .is_err()
             );
-            ensure!(closure::recover(reopened, height).await? == pending);
-            conn.execute_batch("DROP TRIGGER interrupt_frozen_batch")
-                .await?;
+            let input =
+                replay_input::insert(&conn, &frozen, replay_input::PlanningCause::Finality).await?;
             ensure!(
-                reactor
-                    .process_decided_batch(
-                        100,
-                        genesis_block(network).block_hash(),
-                        Height::new(height),
-                        &proof_bytes,
-                        &[],
-                        Some(&raw)
-                    )
-                    .await?
-                    == BatchOutcome::Executed
+                replay_input::insert(&conn, &frozen, replay_input::PlanningCause::Finality).await?
+                    == input
             );
-            let replayed = closure::stage(&conn, height, pending.stage + 1).await?;
-            let ApplicationSource::Batch { exclusions, .. } = &replayed.applications[0].source
-            else {
-                anyhow::bail!("missing replay batch application");
-            };
-            ensure!(*exclusions == frozen.exclusions);
-            ensure!(replay_input::get(reopened, frozen.id()?, origin, height).await? == frozen);
+            let mut wrong_origin = origin;
+            wrong_origin.previous = [71; 32];
+            ensure!(
+                replay_input::get(&conn, input, wrong_origin, height)
+                    .await
+                    .is_err()
+            );
+            ensure!(replay_input::get(&conn, input, origin, 2).await.is_err());
+            replay_input::insert(&conn, &empty, replay_input::PlanningCause::Finality).await?;
+            ensure!(replay_input::get(&conn, frozen.id()?, origin, height).await? == frozen);
+            conn.execute_batch("ROLLBACK").await?;
+            ensure!(
+                replay_input::get(reopened, frozen.id()?, origin, height)
+                    .await
+                    .is_err()
+            );
         }
+
         let stage = begin_stage(service, &reactor.execution.session, network, height)
             .await?
             .context("missing batch finality stage")?;

@@ -1,3 +1,4 @@
+use crate::database::certified_history::finality;
 use bitcoin::{Network, blockdata::constants::genesis_block, consensus::serialize};
 use tempfile::TempDir;
 
@@ -26,10 +27,12 @@ async fn commit_stage(
     }
     let remaining = if expected == items {
         ordinary
+    } else if !matches!(ticket.action(), WorkItem::Finality | WorkItem::Reconcile) {
+        // Reach advance's ordinary-stage guard, rather than fail in a cause constructor.
+        work::published(conn, ordinary.plan).await?.cursor()?
     } else {
-        let draft = work::begin(conn, ticket.0.work_origin()?).await?;
-        let draft = work::append(conn, draft, &items).await?;
-        work::publish(conn, draft).await?
+        let sealed = finality::lineage_test_plan(conn, ticket.work_origin()?, &items).await?;
+        work::publish_replacement(conn, sealed, &ticket).await?
     };
     super::commit_stage(conn, ticket, outcome, remaining, observation).await
 }
@@ -114,6 +117,112 @@ async fn apply(conn: &Connection, applications: &[CanonicalApplication]) -> Resu
     .await?;
     unit.commit().await?;
     Ok(record)
+}
+
+#[tokio::test]
+async fn replacement_publication_rejects_unsealed_and_conflicting_causes() -> Result<()> {
+    let (_directory, conn, applications) = fixture().await?;
+    apply(&conn, &applications).await?;
+    let before = progress(&conn, 1).await?;
+    let origin = before.work_origin()?;
+    let unit = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    let ticket = prepare(&unit, 1).await?.unwrap();
+    let building = work::begin_cause(&unit, &before, work::WorkKind::Finality).await?;
+    assert!(building.sealed().is_err());
+    assert!(
+        work::begin_cause(&unit, &before, work::WorkKind::Reconcile)
+            .await
+            .is_err()
+    );
+    assert!(
+        work::for_origin(
+            &unit,
+            initial_origin(&before.plan)?,
+            work::WorkKind::Finality
+        )
+        .await
+        .is_err()
+    );
+    let sealed = finality::lineage_test_plan(&unit, origin, &[]).await?;
+    reconcile::initialize_plan(&unit, origin).await?;
+    assert!(
+        work::publish_replacement(&unit, sealed, &ticket)
+            .await
+            .is_err()
+    );
+    unit.rollback().await?;
+    assert_eq!(recover(&conn, 1).await?, before);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sealed_snapshot_is_rechecked_at_publication() -> Result<()> {
+    let (_directory, conn, applications) = fixture().await?;
+    apply(&conn, &applications).await?;
+    let before = progress(&conn, 1).await?;
+    let origin = before.work_origin()?;
+    let unit = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    let ticket = prepare(&unit, 1).await?.unwrap();
+    let sealed = finality::lineage_test_plan(&unit, origin, &[]).await?;
+    unit.execute(
+        "UPDATE closure_work_plans SET digest=?2 WHERE plan_key=?1",
+        params![origin.key()?.to_vec(), vec![77u8; 32]],
+    )
+    .await?;
+    assert!(
+        work::publish_replacement(&unit, sealed, &ticket)
+            .await
+            .is_err()
+    );
+    unit.rollback().await?;
+    assert_eq!(recover(&conn, 1).await?, before);
+    Ok(())
+}
+
+#[tokio::test]
+async fn recovery_rechecks_the_sealed_kind_of_historical_replacements() -> Result<()> {
+    let (_directory, conn, applications) = fixture().await?;
+    apply(&conn, &applications).await?;
+    let origin = progress(&conn, 1).await?.work_origin()?;
+    let unit = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    let ticket = prepare(&unit, 1).await?.unwrap();
+    let observed = observation(&unit, &ticket).await?;
+    commit_stage(
+        &unit,
+        ticket,
+        StageOutcome::FinalityEvaluated,
+        vec![WorkItem::Observe],
+        &observed,
+    )
+    .await?;
+    unit.commit().await?;
+    let published = recover(&conn, 1).await?;
+    assert_eq!(published.next.map(|next| next.0), Some(WorkItem::Observe));
+    for conflicting_cause in [false, true] {
+        let unit = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await?;
+        if conflicting_cause {
+            reconcile::initialize_plan(&unit, origin).await?;
+        } else {
+            unit.execute(
+                "UPDATE closure_finality_plans SET phase=0, record=NULL WHERE plan_key=?1",
+                [origin.key()?.to_vec()],
+            )
+            .await?;
+        }
+        assert!(progress(&unit, 1).await.is_err());
+        assert!(recover(&unit, 1).await.is_err());
+        unit.rollback().await?;
+        assert_eq!(recover(&conn, 1).await?, published);
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -255,11 +364,16 @@ async fn closure_stage_rejects_substituted_inputs_and_invented_work() -> Result<
         } else {
             StageOutcome::Applied
         };
-        assert!(
-            commit_stage(&unit, ticket, outcome, work, &observed)
-                .await
-                .is_err()
-        );
+        let error = commit_stage(&unit, ticket, outcome, work, &observed)
+            .await
+            .unwrap_err();
+        if variant == 2 || variant == 4 {
+            assert!(
+                error
+                    .to_string()
+                    .contains("ordinary stage changed work plan")
+            );
+        }
         unit.rollback().await?;
     }
     assert_eq!(recover(&conn, 1).await?.stage, 0);

@@ -279,13 +279,9 @@ pub(crate) async fn run() -> Result<()> {
     conn.execute("INSERT INTO batches (consensus_height, anchor_height, anchor_hash, certificate, is_block) VALUES (9, 100, ?1, ?2, 0)", params![a.block_hash().to_string(), Vec::<u8>::new()]).await?;
     conn.execute("INSERT INTO transactions (height, confirmed_height, batch_height, txid) VALUES (100, 101, 9, ?1), (100, 101, NULL, ?2)", params![seed.clone(), healed.clone()]).await?;
     let applicable = replay::exclusion_page(&conn, 77, first.next.as_ref()).await?;
-    ensure!(
-        applicable.entries
-            == vec![replay::ExclusionCursor {
-                decision: 6,
-                txid: seed
-            }]
-    );
+    // These bare SQL rows have no executed witness or authenticated retained input,
+    // so neither a batch nor a block confirmation can authorize exclusion healing.
+    ensure!(applicable.entries == second.entries);
     conn.execute("UPDATE transactions SET confirmed_height = NULL", ())
         .await?;
     ensure!(

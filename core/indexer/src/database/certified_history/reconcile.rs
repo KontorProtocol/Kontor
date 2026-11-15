@@ -22,6 +22,9 @@ use crate::protocol::identity::domain_digest;
 
 type FrozenInclusionBlock = (u64, u64, [u8; 32], HashSet<([u8; 32], [u8; 32])>);
 
+mod phase;
+use phase::Phase;
+
 struct ProofIndex {
     id: [u8; 32],
     input: [u8; 32],
@@ -799,16 +802,22 @@ async fn evidence_commitment(conn: &Connection, origin: WorkOrigin) -> Result<(u
     Ok((count, digest))
 }
 
-pub(super) async fn has_plan(conn: &Connection, origin: WorkOrigin) -> Result<bool> {
-    Ok(conn
+pub(super) async fn sealed_id(conn: &Connection, origin: WorkOrigin) -> Result<[u8; 32]> {
+    let row = conn
         .query(
-            "SELECT 1 FROM closure_reconcile_plans WHERE plan_key = ?1",
+            "SELECT record FROM closure_reconcile_plans WHERE plan_key=?1 AND phase=3",
             [origin.key()?.to_vec()],
         )
         .await?
         .next()
         .await?
-        .is_some())
+        .context("reconciliation verdict unavailable")?;
+    let verdict = ReconcileVerdict::decode(&row.get::<Vec<u8>>(0)?)?;
+    ensure!(
+        verdict.origin == origin,
+        "reconciliation verdict origin differs"
+    );
+    verdict.id()
 }
 
 pub(super) async fn verify(conn: &Connection, origin: WorkOrigin, id: [u8; 32]) -> Result<()> {
@@ -822,19 +831,18 @@ pub(super) async fn verify(conn: &Connection, origin: WorkOrigin, id: [u8; 32]) 
         .await?
         .context("reconcile verdict is unavailable")?;
     let verdict = ReconcileVerdict::decode(&row.get::<Vec<u8>>(0)?)?;
-    let progress = closure::progress(conn, origin.height).await?;
-    let summary = progress
-        .plan
+    let plan = closure::plan(conn, origin.height).await?;
+    let summary = plan
         .reconciliation
         .context("closure lacks reconciliation summary")?;
-    let draft = work::for_origin(conn, origin).await?;
+    let (count, digest) = work::summary(conn, origin).await?;
     ensure!(
         verdict.id()? == id
             && verdict.origin == origin
             && verdict.from_height == summary.from_height
             && verdict.seed_digest == summary.seed_digest
-            && verdict.work_count == draft.count
-            && verdict.work_digest == draft.digest,
+            && verdict.work_count == count
+            && verdict.work_digest == digest,
         "reconcile verdict differs from frozen plan or work"
     );
     ensure!(
@@ -969,7 +977,9 @@ async fn initialize_replay(conn: &Connection, origin: WorkOrigin, from: u64) -> 
         from >= branch::boundary(conn, context).await?.first_height,
         "reconciliation rollback crosses baseline"
     );
-    let draft = work::for_origin(conn, origin).await?;
+    let draft = work::for_origin(conn, origin, work::WorkKind::Reconcile)
+        .await?
+        .building()?;
     work::append(conn, draft, &[WorkItem::Rollback { height: from - 1 }]).await?;
     conn.execute(
         "UPDATE closure_reconcile_plans SET phase = 2 WHERE plan_key = ?1",
@@ -1241,7 +1251,9 @@ async fn build_one(
     if selected.kind == CommandKind::Block {
         items.push(WorkItem::Activate { decision });
     }
-    let draft = work::for_origin(conn, origin).await?;
+    let draft = work::for_origin(conn, origin, work::WorkKind::Reconcile)
+        .await?
+        .building()?;
     work::append(conn, draft, &items).await?;
     conn.execute(
         "UPDATE closure_reconcile_plans SET replay_height = ?2, replay_decision = ?3 WHERE plan_key = ?1",
@@ -1251,7 +1263,9 @@ async fn build_one(
 }
 
 async fn seal(conn: &Connection, origin: WorkOrigin, summary: ReconciliationPlan) -> Result<()> {
-    let mut draft = work::for_origin(conn, origin).await?;
+    let mut draft = work::for_origin(conn, origin, work::WorkKind::Reconcile)
+        .await?
+        .building()?;
     draft = work::append(
         conn,
         draft,
@@ -1285,8 +1299,8 @@ async fn seal(conn: &Connection, origin: WorkOrigin, summary: ReconciliationPlan
         seed_digest: summary.seed_digest,
         evidence_count,
         evidence_digest,
-        work_count: draft.count,
-        work_digest: draft.digest,
+        work_count: draft.summary().0,
+        work_digest: draft.summary().1,
     };
     conn.execute(
         "UPDATE closure_reconcile_plans SET phase = 3, record = ?2 WHERE plan_key = ?1",
@@ -1297,7 +1311,7 @@ async fn seal(conn: &Connection, origin: WorkOrigin, summary: ReconciliationPlan
     Ok(())
 }
 
-pub(crate) async fn step(conn: &Connection, height: u64) -> Result<bool> {
+pub(crate) async fn step(conn: &Connection, height: u64) -> Result<work::PlanStep> {
     durable_writer(conn).await?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1305,37 +1319,35 @@ pub(crate) async fn step(conn: &Connection, height: u64) -> Result<bool> {
     let progress = closure::progress(&tx, height).await?;
     let origin = progress.work_origin()?;
     let summary = prestate(&tx, origin).await?;
-    work::begin(&tx, origin).await?;
+    work::begin_cause(&tx, &progress, work::WorkKind::Reconcile).await?;
     let key = origin.key()?;
-    tx.execute(
-        "INSERT OR IGNORE INTO closure_reconcile_plans (plan_key, phase, evidence_count, evidence_digest) VALUES (?1, 0, ?2, ?3)",
-        params![key.to_vec(), 0u64.to_be_bytes().to_vec(), evidence_start(origin)?.to_vec()],
-    )
-    .await?;
     let row = tx.query(
-        "SELECT phase, scan_height, scan_decision, exclusion_done, exclusion_after_decision, exclusion_after_txid, replay_height, replay_decision FROM closure_reconcile_plans WHERE plan_key = ?1",
+        "SELECT phase, scan_height, scan_decision, exclusion_done, exclusion_after_decision, exclusion_after_txid, replay_height, replay_decision, record FROM closure_reconcile_plans WHERE plan_key = ?1",
         [key.to_vec()],
     ).await?.next().await?.context("reconciliation plan disappeared")?;
-    match row.get::<u64>(0)? {
-        0 => scan_one(&tx, origin, summary.from_height, position(&row, 1, 2)?).await?,
-        1 if row.get::<i64>(3)? == 0 => {
-            let after = row
-                .get::<Option<Vec<u8>>>(4)?
-                .map(|bytes| -> Result<_> {
-                    Ok(replay::ExclusionCursor {
-                        decision: u64::from_be_bytes(fixed(bytes)?),
-                        txid: row.get::<String>(5)?,
-                    })
-                })
-                .transpose()?;
+    match Phase::decode(&row)? {
+        Phase::ScanEvidence { after } => scan_one(&tx, origin, summary.from_height, after).await?,
+        Phase::CaptureUnavailable { after } => {
             capture_early_unavailable(&tx, origin, summary.from_height, after).await?;
         }
-        1 => initialize_replay(&tx, origin, summary.from_height).await?,
-        2 => build_one(&tx, origin, summary, position(&row, 6, 7)?).await?,
-        3 => (),
-        _ => anyhow::bail!("invalid reconciliation phase"),
+        Phase::InitializeReplay => initialize_replay(&tx, origin, summary.from_height).await?,
+        Phase::Build { after } => build_one(&tx, origin, summary, after).await?,
+        Phase::Sealed(verdict) => ensure!(
+            verdict.origin == origin,
+            "sealed reconciliation origin differs"
+        ),
     }
-    let ready = work::for_origin(&tx, origin).await?.verdict.is_some();
+    let ready = match work::for_origin(&tx, origin, work::WorkKind::Reconcile).await? {
+        work::WorkState::Building(_) => work::PlanStep::More,
+        work::WorkState::Sealed(plan) => work::PlanStep::Ready(Box::new(plan)),
+        work::WorkState::Published(_) => anyhow::bail!("reconciliation stage already published"),
+    };
     tx.commit().await?;
     Ok(ready)
+}
+
+pub(super) async fn initialize_plan(conn: &Connection, origin: WorkOrigin) -> Result<()> {
+    conn.execute("INSERT OR IGNORE INTO closure_reconcile_plans (plan_key, phase, evidence_count, evidence_digest) VALUES (?1, 0, ?2, ?3)",
+        params![origin.key()?.to_vec(), 0u64.to_be_bytes().to_vec(), evidence_start(origin)?.to_vec()]).await?;
+    Ok(())
 }

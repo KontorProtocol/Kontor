@@ -18,6 +18,9 @@ use crate::protocol::identity::domain_digest;
 
 const PAGE: usize = 64;
 
+mod phase;
+use phase::Phase;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Verdict {
     origin: WorkOrigin,
@@ -218,7 +221,9 @@ async fn capture(
             from >= boundary.first_height,
             "finality rollback crosses baseline"
         );
-        let draft = work::for_origin(conn, origin).await?;
+        let draft = work::for_origin(conn, origin, work::WorkKind::Finality)
+            .await?
+            .building()?;
         work::append(conn, draft, &[WorkItem::Rollback { height: from - 1 }]).await?;
         conn.execute(
             "UPDATE closure_finality_plans SET phase = 2 WHERE plan_key = ?1",
@@ -314,7 +319,9 @@ async fn build_one(
                 .await?,
         }
     };
-    let draft = work::for_origin(conn, origin).await?;
+    let draft = work::for_origin(conn, origin, work::WorkKind::Finality)
+        .await?
+        .building()?;
     let mut items = vec![item];
     if selected.kind == CommandKind::Block {
         // Replay reconstructs execution selection before Batch(H), even when
@@ -345,7 +352,9 @@ async fn seed_commitment(conn: &Connection, origin: WorkOrigin) -> Result<(u64, 
 }
 
 async fn seal(conn: &Connection, origin: WorkOrigin, from: Option<u64>) -> Result<()> {
-    let mut draft = work::for_origin(conn, origin).await?;
+    let mut draft = work::for_origin(conn, origin, work::WorkKind::Finality)
+        .await?
+        .building()?;
     if from.is_some() {
         draft = work::append(conn, draft, &[WorkItem::Finality]).await?;
     } else {
@@ -381,7 +390,7 @@ async fn seal(conn: &Connection, origin: WorkOrigin, from: Option<u64>) -> Resul
 
 // Each call commits at most one bounded scan page or one bounded certified body.
 // Staging cannot change canonical effects, and a changed pre-state cannot resume it.
-pub(crate) async fn step(conn: &Connection, height: u64) -> Result<bool> {
+pub(crate) async fn step(conn: &Connection, height: u64) -> Result<work::PlanStep> {
     durable_writer(conn).await?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -389,64 +398,77 @@ pub(crate) async fn step(conn: &Connection, height: u64) -> Result<bool> {
     let progress = closure::progress(&tx, height).await?;
     let origin = progress.work_origin()?;
     prestate(&tx, origin).await?;
-    work::begin(&tx, origin).await?;
+    work::begin_cause(&tx, &progress, work::WorkKind::Finality).await?;
     let key = origin.key()?;
-    tx.execute(
-        "INSERT OR IGNORE INTO closure_finality_plans (plan_key, phase) VALUES (?1, 0)",
-        [key.to_vec()],
-    )
-    .await?;
-    let row = tx.query("SELECT phase, probe_after, seed_after_decision, seed_after_txid, replay_height, replay_decision, from_height FROM closure_finality_plans WHERE plan_key = ?1", [key.to_vec()])
+    let row = tx.query("SELECT phase, probe_after, seed_after_decision, seed_after_txid, replay_height, replay_decision, from_height, record FROM closure_finality_plans WHERE plan_key = ?1", [key.to_vec()])
         .await?.next().await?.context("missing finality plan")?;
-    let from = row
-        .get::<Option<Vec<u8>>>(6)?
-        .map(|bytes| fixed(bytes).map(u64::from_be_bytes))
-        .transpose()?;
-    match row.get::<u64>(0)? {
-        0 => probe(&tx, origin, row.get(1)?, from).await?,
-        1 => {
-            let after = row
-                .get::<Option<Vec<u8>>>(2)?
-                .map(|bytes| -> Result<_> {
-                    Ok(replay::ExclusionCursor {
-                        decision: u64::from_be_bytes(fixed(bytes)?),
-                        txid: row.get::<String>(3)?,
-                    })
-                })
-                .transpose()?;
-            capture(
-                &tx,
-                origin,
-                from.context("exclusion scan lacks rollback anchor")?,
-                after,
-            )
-            .await?;
+    match Phase::decode(&row)? {
+        Phase::Probe { after, from } => probe(&tx, origin, after, from).await?,
+        Phase::Capture { from, after } => capture(&tx, origin, from, after).await?,
+        Phase::Build { from, after } => build_one(&tx, origin, from, after).await?,
+        Phase::Sealed(verdict) => {
+            ensure!(verdict.origin == origin, "sealed finality origin differs")
         }
-        2 => {
-            let after = row
-                .get::<Option<Vec<u8>>>(4)?
-                .map(|bytes| -> Result<_> {
-                    Ok(replay::ReplayPosition {
-                        bitcoin_height: u64::from_be_bytes(fixed(bytes)?),
-                        decision: u64::from_be_bytes(fixed(row.get(5)?)?),
-                    })
-                })
-                .transpose()?;
-            build_one(
-                &tx,
-                origin,
-                from.context("replay lacks rollback anchor")?,
-                after,
-            )
-            .await?;
-        }
-        3 => (),
-        _ => anyhow::bail!("invalid finality plan phase"),
     }
-    let draft = work::for_origin(&tx, origin).await?;
-    let ready = draft.verdict.is_some();
+    let ready = match work::for_origin(&tx, origin, work::WorkKind::Finality).await? {
+        work::WorkState::Building(_) => work::PlanStep::More,
+        work::WorkState::Sealed(plan) => work::PlanStep::Ready(Box::new(plan)),
+        work::WorkState::Published(_) => anyhow::bail!("finality stage already published"),
+    };
     tx.commit().await?;
     Ok(ready)
+}
+
+pub(super) async fn initialize_plan(conn: &Connection, origin: WorkOrigin) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO closure_finality_plans (plan_key, phase) VALUES (?1, 0)",
+        [origin.key()?.to_vec()],
+    )
+    .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) async fn lineage_test_plan(
+    conn: &Connection,
+    origin: WorkOrigin,
+    items: &[WorkItem],
+) -> Result<work::SealedPlan> {
+    // Lineage scaffolding only: arbitrary items with an empty verdict are not policy-reachable.
+    let progress = closure::progress(conn, origin.height).await?;
+    ensure!(progress.work_origin()? == origin, "test origin differs");
+    let draft = work::begin_cause(conn, &progress, work::WorkKind::Finality)
+        .await?
+        .building()?;
+    let draft = work::append(conn, draft, items).await?;
+    let (seeds, seed_digest) = seed_commitment(conn, origin).await?;
+    let verdict = Verdict {
+        origin,
+        from: None,
+        seeds,
+        seed_digest,
+    };
+    conn.execute(
+        "UPDATE closure_finality_plans SET phase=3, record=?2 WHERE plan_key=?1",
+        params![origin.key()?.to_vec(), verdict.encode()?],
+    )
+    .await?;
+    work::bind_verdict(conn, draft, verdict.id()?).await
+}
+
+pub(super) async fn sealed_id(conn: &Connection, origin: WorkOrigin) -> Result<[u8; 32]> {
+    let row = conn
+        .query(
+            "SELECT record FROM closure_finality_plans WHERE plan_key=?1 AND phase=3",
+            [origin.key()?.to_vec()],
+        )
+        .await?
+        .next()
+        .await?
+        .context("finality verdict unavailable")?;
+    let verdict = Verdict::decode(&row.get::<Vec<u8>>(0)?)?;
+    ensure!(verdict.origin == origin, "finality verdict origin differs");
+    verdict.id()
 }
 
 pub(super) async fn verify(conn: &Connection, origin: WorkOrigin, id: [u8; 32]) -> Result<()> {

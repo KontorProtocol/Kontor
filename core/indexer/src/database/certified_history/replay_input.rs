@@ -49,8 +49,13 @@ pub(crate) async fn insert(
                 == input.origin.input,
         "replay input must be frozen at its planning pre-state"
     );
-    let draft = work::for_origin(conn, input.origin).await?;
-    ensure!(draft.cursor().is_err(), "replay plan is already published");
+    let kind = match cause {
+        PlanningCause::Finality => work::WorkKind::Finality,
+        PlanningCause::Reconcile => work::WorkKind::Reconcile,
+    };
+    work::for_origin(conn, input.origin, kind)
+        .await?
+        .building()?;
     validate(conn, input).await?;
     let id = input.id()?;
     conn.execute(
