@@ -49,14 +49,7 @@ fn parse_references(text: &str, darwin: bool) -> Result<Names> {
             "unrecognized nm undefined-symbol output: {line}"
         );
         let name = fields[fields.len() - 1];
-        names.insert(
-            if darwin {
-                name.strip_prefix('_').unwrap_or(name)
-            } else {
-                name
-            }
-            .into(),
-        );
+        names.insert(if darwin { name.trim_prefix('_') } else { name }.into());
     }
     Ok(names)
 }

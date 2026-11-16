@@ -242,7 +242,7 @@ pub fn verify_reservations(root: &Path, graphs: &Graphs) -> Result<()> {
             .and_then(|value| value.get("version"))
             .and_then(Toml::as_str)
             .context("historical Wasmtime version missing")?;
-        let version = version.strip_prefix('=').unwrap_or(version);
+        let version = version.trim_prefix('=');
         versions.insert(version.to_string());
         prefixes.insert(suffix(version));
     }

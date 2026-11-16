@@ -103,7 +103,7 @@ fn decimal(value: &Value) -> Result<BigRational> {
         .unwrap_or(0);
     ensure!(parts.next().is_none(), "invalid chain decimal");
     let negative = mantissa.starts_with('-');
-    let mantissa = mantissa.strip_prefix(['+', '-']).unwrap_or(mantissa);
+    let mantissa = mantissa.trim_prefix(['+', '-']);
     let mut parts = mantissa.split('.');
     let whole = parts.next().unwrap_or_default();
     let fraction = parts.next().unwrap_or_default();

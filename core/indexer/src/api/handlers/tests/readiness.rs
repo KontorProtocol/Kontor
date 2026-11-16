@@ -1,3 +1,4 @@
+use std::mem::DropGuard;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -63,7 +64,7 @@ async fn readiness_tracks_replay_without_adding_rpc_calls() -> Result<()> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let rpc_server = tokio::spawn(async move { axum::serve(listener, rpc).await.unwrap() });
-    scopeguard::defer! { rpc_server.abort(); }
+    let _rpc_server = DropGuard::new(rpc_server, |server| server.abort());
 
     let (mut env, _conn, _dir) = new_test_env().await?;
     let client = Client::new(format!("http://{address}"), "test".into(), "test".into())?;

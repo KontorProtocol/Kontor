@@ -211,11 +211,7 @@ pub fn parse_definitions(text: &str, darwin: bool) -> Result<Definitions> {
         if kind.eq_ignore_ascii_case("u") {
             continue;
         }
-        let name = if darwin {
-            name.strip_prefix('_').unwrap_or(name)
-        } else {
-            name
-        };
+        let name = if darwin { name.trim_prefix('_') } else { name };
         // Bitcode owns a symbol even though it has no linked address yet.
         symbols.insert(
             name.into(),
