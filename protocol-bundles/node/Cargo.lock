@@ -3626,7 +3626,6 @@ dependencies = [
  "rayon",
  "regex",
  "reqwest",
- "scopeguard",
  "serde",
  "serde_json",
  "serde_with",
@@ -4819,7 +4818,6 @@ dependencies = [
 name = "numerics"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "fastnum",
  "num",
 ]

@@ -37,7 +37,7 @@ pub enum ChallengeStatusModel<__S> {
     Proven,
     Failed(u64),
     #[doc(hidden)]
-    __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
+    __Phantom(core::marker::PhantomData<__S>, !),
 }
 #[doc(hidden)]
 pub type __ChallengeStatusModelFor<__S> = ChallengeStatusModel<__S>;
@@ -89,7 +89,7 @@ pub enum ChallengeStatusWriteModel<__S: stdlib::HasViewStorage> {
     Proven,
     Failed(u64),
     #[doc(hidden)]
-    __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
+    __Phantom(core::marker::PhantomData<__S>, !),
 }
 #[doc(hidden)]
 pub type __ChallengeStatusWriteModelFor<__S> = ChallengeStatusWriteModel<__S>;
@@ -152,7 +152,7 @@ unsafe impl ::core::clone::TrivialClone for ChallengeStatusKind {}
 #[automatically_derived]
 impl ::core::clone::Clone for ChallengeStatusKind {
     #[inline]
-    fn clone(&self) -> ChallengeStatusKind {
+    fn clone(&self) -> Self {
         *self
     }
 }
@@ -163,19 +163,13 @@ impl ::core::marker::StructuralPartialEq for ChallengeStatusKind {}
 #[automatically_derived]
 impl ::core::cmp::PartialEq for ChallengeStatusKind {
     #[inline]
-    fn eq(&self, other: &ChallengeStatusKind) -> bool {
-        let __self_discr = ::core::intrinsics::discriminant_value(self);
-        let __arg1_discr = ::core::intrinsics::discriminant_value(other);
-        __self_discr == __arg1_discr
+    fn eq(&self, other: &Self) -> bool {
+        ::core::intrinsics::discriminant_value(self)
+            == ::core::intrinsics::discriminant_value(other)
     }
 }
 #[automatically_derived]
-impl ::core::cmp::Eq for ChallengeStatusKind {
-    #[inline]
-    #[doc(hidden)]
-    #[coverage(off)]
-    fn assert_fields_are_eq(&self) {}
-}
+impl ::core::cmp::Eq for ChallengeStatusKind {}
 #[automatically_derived]
 impl ::core::fmt::Debug for ChallengeStatusKind {
     #[inline]

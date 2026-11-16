@@ -6,6 +6,74 @@ use bitcoin::locktime::absolute::LockTime;
 use bitcoin::transaction::Version;
 use bitcoin::{Amount, TxIn, Witness};
 use indexer_types::Block;
+use std::future::pending;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
+use tokio::sync::oneshot;
+
+fn waiting_socket_thread(token: CancellationToken, finished: Arc<AtomicUsize>) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !token.is_cancelled() {
+            assert!(Instant::now() < deadline, "socket cleanup did not cancel");
+            thread::park_timeout(Duration::from_millis(1));
+        }
+        finished.fetch_add(1, Ordering::SeqCst);
+    })
+}
+
+#[tokio::test]
+async fn socket_threads_are_joined_after_partial_setup_failure() {
+    let token = CancellationToken::new();
+    let finished = Arc::new(AtomicUsize::new(0));
+    let result: Result<()> = async {
+        let mut threads = socket_threads(token.clone());
+        threads.push(waiting_socket_thread(token.clone(), finished.clone()));
+        Err(anyhow!("connection setup failed"))
+    }
+    .await;
+
+    assert!(result.is_err());
+    assert!(token.is_cancelled());
+    assert_eq!(finished.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn socket_threads_are_joined_when_the_session_future_is_cancelled() {
+    let token = CancellationToken::new();
+    let finished = Arc::new(AtomicUsize::new(0));
+    let (started_tx, started_rx) = oneshot::channel();
+    let task = tokio::spawn({
+        let token = token.clone();
+        let finished = finished.clone();
+        async move {
+            let mut threads = socket_threads(token.clone());
+            threads.push(waiting_socket_thread(token.clone(), finished.clone()));
+            threads.push(waiting_socket_thread(token, finished));
+            started_tx.send(()).unwrap();
+            pending::<()>().await;
+        }
+    });
+
+    started_rx.await.unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(token.is_cancelled());
+    assert_eq!(finished.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_panicked_socket_thread_does_not_skip_joining_the_other_thread() {
+    let token = CancellationToken::new();
+    let finished = Arc::new(AtomicUsize::new(0));
+    let mut threads = socket_threads(token.clone());
+    threads.push(waiting_socket_thread(token.clone(), finished.clone()));
+    threads.push(thread::spawn(|| panic!("socket worker failed")));
+
+    drop(threads);
+    assert!(token.is_cancelled());
+    assert_eq!(finished.load(Ordering::SeqCst), 1);
+}
 
 /// Minimal mempool entry for listener tests — values don't matter except
 /// for the fee index plumbing.

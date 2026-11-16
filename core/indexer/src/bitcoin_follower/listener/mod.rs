@@ -1,5 +1,6 @@
+use std::mem::DropGuard;
 use std::sync::Arc;
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -118,20 +119,20 @@ async fn run_session<C: BitcoinRpc>(
     monitor_socket.set_rcvhwm(0)?;
     monitor_socket.set_rcvtimeo(1000)?;
 
-    let monitor_handle =
-        run_monitor_socket(monitor_socket, socket_cancel_token.clone(), monitor_tx);
+    // Register each thread before the next fallible setup step so a failed
+    // connection also cancels and joins the already-running monitor.
+    let mut threads = socket_threads(socket_cancel_token.clone());
+    threads.push(run_monitor_socket(
+        monitor_socket,
+        socket_cancel_token.clone(),
+        monitor_tx,
+    ));
 
     socket
         .connect(zmq_address)
         .context("Could not connect to ZMQ address")?;
 
-    let socket_handle = run_data_socket(socket, socket_cancel_token.clone(), socket_tx);
-
-    // Clean up threads when this function exits (for any reason)
-    let _cleanup = CleanupGuard {
-        cancel_token: socket_cancel_token,
-        handles: vec![socket_handle, monitor_handle],
-    };
+    threads.push(run_data_socket(socket, socket_cancel_token, socket_tx));
 
     run_event_loop(bitcoin, event_tx, socket_rx, monitor_rx, poll_notify).await
 }
@@ -444,7 +445,7 @@ fn run_data_socket(
     socket: Socket,
     cancel_token: CancellationToken,
     tx: UnboundedSender<Result<(u32, DataMessage)>>,
-) -> thread::JoinHandle<()> {
+) -> JoinHandle<()> {
     thread::spawn(move || {
         loop {
             if cancel_token.is_cancelled() {
@@ -472,7 +473,7 @@ fn run_monitor_socket(
     socket: Socket,
     cancel_token: CancellationToken,
     tx: UnboundedSender<Result<MonitorMessage>>,
-) -> thread::JoinHandle<()> {
+) -> JoinHandle<()> {
     thread::spawn(move || {
         loop {
             if cancel_token.is_cancelled() {
@@ -498,24 +499,22 @@ fn run_monitor_socket(
     })
 }
 
-/// Cancels the socket threads and joins them on drop.
-struct CleanupGuard {
-    cancel_token: CancellationToken,
-    handles: Vec<thread::JoinHandle<()>>,
-}
+type SocketThreads = Vec<JoinHandle<()>>;
 
 #[allow(clippy::disallowed_methods)] // scoped resource-cleanup token for the
 // blocking ZMQ threads, which cannot be drop-cancelled; it never leaves this
 // file and stops sockets, not the node.
-impl Drop for CleanupGuard {
-    fn drop(&mut self) {
-        self.cancel_token.cancel();
-        for handle in self.handles.drain(..) {
+fn socket_threads(
+    cancel_token: CancellationToken,
+) -> DropGuard<SocketThreads, impl FnOnce(SocketThreads)> {
+    DropGuard::new(Vec::with_capacity(2), move |handles| {
+        cancel_token.cancel();
+        for handle in handles.into_iter().rev() {
             if handle.join().is_err() {
                 error!("Socket thread panicked on join");
             }
         }
-    }
+    })
 }
 
 #[cfg(test)]

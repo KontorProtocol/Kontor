@@ -65,7 +65,7 @@ three dev smoke cells added. `native-stack.yml` is now a manual entry point into
 that same workflow, including optional exhaustive dev qualification.
 
 Each cell owns one Cargo target directory. The compiler and runners are pinned
-to the qualification configuration: Rust 1.99.1, Ubuntu 24.04 and macOS 15.
+to the qualification configuration: Rust 1.100.0, Ubuntu 24.04 and macOS 15.
 Compatible dependencies compile once. Ordinary tests retain sccache support.
 
 When a release cell runs both suites, it builds all workspace test targets

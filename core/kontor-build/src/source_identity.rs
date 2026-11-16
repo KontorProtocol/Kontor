@@ -254,9 +254,7 @@ pub fn verify_git_tree(directory: &Path, revision: &str) -> Result<Value> {
         directory.display()
     );
     let raw = git(directory, &["rev-parse", "--git-path", "info/grafts"], None)?;
-    let grafts = PathBuf::from(OsString::from_vec(
-        raw.strip_suffix(b"\n").unwrap_or(&raw).to_vec(),
-    ));
+    let grafts = PathBuf::from(OsString::from_vec(raw.trim_suffix(b"\n").to_vec()));
     let grafts = directory.join(grafts);
     ensure!(
         !grafts.exists(),

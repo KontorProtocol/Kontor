@@ -26,9 +26,9 @@ use crate::test_utils::test_runtime;
 
 const BORROW_ERROR: &str = "borrow handles still remain at the end of the call";
 const ORIGINAL_RAW_SHA256: &str =
-    "b45d937af90aa9d68d19e0908f9862030b24a620a02966cbc73dce170ab471e0";
+    "a0baab5a112f662229b3d2f576c9f4f1698fcb757a3d309ad62206548cfb9e2b";
 const ORIGINAL_COMPRESSED_SHA256: &str =
-    "8610f85f6abdd1bdeb0d32c0916cf154493535299d2c4d8fa0e053f0ee2df875";
+    "b7b66b69ccd700a03970a2d089de9933b23238f582e3a85c65048ca35786a4a0";
 
 #[derive(Clone, Copy)]
 enum Fault {

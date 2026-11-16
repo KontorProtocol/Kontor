@@ -174,7 +174,10 @@ fn prepare(compiler: &Path, arguments: &mut Vec<OsString>, spec: &Spec) -> Resul
             arg.to_str()
                 .and_then(|arg| arg.strip_prefix("extra-filename="))
         })
-        .context("missing node codegen artifact identity")?;
+        // Cargo 1.100 puts binary identity in the unit's output directory
+        // instead of extra-filename. The full output path is still bound to
+        // the linker record and the captured object's content hash below.
+        .unwrap_or_default();
     stem.push(extra);
     arguments.push("-Csave-temps".into());
     Ok(Some(Capture { directory, stem }))
@@ -465,6 +468,25 @@ mod tests {
     }
 
     #[test]
+    fn binary_without_filename_suffix_uses_its_unit_output_directory() -> Result<()> {
+        let (directory, value) = fixture()?;
+        let spec: Spec = serde_json::from_value(value)?;
+        let output = directory.path().join("build/kontor-node/abcd/out");
+        let mut args = vec![
+            "--crate-name".into(),
+            "kontor".into(),
+            "--out-dir".into(),
+            output.as_os_str().into(),
+            "-Cmetadata=abcd".into(),
+        ];
+        let capture = prepare(&spec.compiler, &mut args, &spec)?.unwrap();
+        assert_eq!(capture.directory, output);
+        assert_eq!(capture.stem, "kontor");
+        assert!(args.contains(&"-Csave-temps".into()));
+        Ok(())
+    }
+
+    #[test]
     fn supported_link_sets_require_exact_roles_and_order() -> Result<()> {
         let (directory, mut value) = fixture()?;
         let prototype = value["graphs"][0].clone();
@@ -612,6 +634,7 @@ mod tests {
             "kontor-test.1.rcgu.o",
             "kontor-test.2.rcgu.o",
             "kontor-test-other.1.rcgu.o",
+            "kontor.1.rcgu.o",
             "unrelated.rcgu.o",
         ] {
             fs::write(directory.path().join(name), "object")?;
@@ -621,6 +644,14 @@ mod tests {
             stem: "kontor-test".into(),
         };
         assert_eq!(objects(&capture)?.len(), 2);
+        let capture = Capture {
+            directory: directory.path().into(),
+            stem: "kontor".into(),
+        };
+        assert_eq!(
+            objects(&capture)?,
+            [directory.path().join("kontor.1.rcgu.o")]
+        );
         Ok(())
     }
 }

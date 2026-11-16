@@ -25,7 +25,7 @@ fn real_compiler_rejects_foreign_plugins_in_both_directions() -> Result<()> {
     let directory = tempdir()?;
     let root = directory.path().canonicalize()?;
     let output = Command::new("rustup")
-        .args(["which", "--toolchain", "1.99.1", "rustc"])
+        .args(["which", "--toolchain", "1.100.0", "rustc"])
         .output()?;
     assert!(output.status.success());
     let compiler = String::from_utf8(output.stdout)?.trim().to_owned();

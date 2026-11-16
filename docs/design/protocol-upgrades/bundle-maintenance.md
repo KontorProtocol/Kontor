@@ -332,7 +332,7 @@ an explicit missing-support assumption, not different live node binaries.
 proof orchestration, audits and installation in Rust. Docker's production build
 and the node qualification launcher use this entry point directly.
 
-Run `RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor protocol-bundles` from
+Run `RUSTUP_TOOLCHAIN=1.100.0 RUSTC_WRAPPER= ./tools/kontor protocol-bundles` from
 the checkout. The command builds the two graphs sequentially with at most two
 compiler jobs, links their exact current artifacts into one native executable,
 audits ownership, then runs the real VM, crypto and consensus qualification.
@@ -357,7 +357,7 @@ including failures; it does not upload build caches or treat a cache hit as
 qualification.
 
 Install the pinned symbol reader with
-`rustup component add --toolchain 1.99.1 llvm-tools-preview` before a local run.
+`rustup component add --toolchain 1.100.0 llvm-tools-preview` before a local run.
 CI and the qualification image install it explicitly. The audit uses that
 toolchain's `llvm-nm`, including for Darwin standard-library LLVM bitcode that
 older platform readers cannot decode. Addressless bitcode definitions still

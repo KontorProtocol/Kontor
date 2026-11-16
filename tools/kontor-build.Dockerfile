@@ -1,7 +1,7 @@
 # Publish this image, then pin its digest in tools/build.json. Builds use that
 # published image, not a locally rebuilt substitute. SDK tool archives are
 # separately checksum-pinned in tools/build.json.
-FROM rust:1.99.1-slim-trixie@sha256:4df2ae8cfdfebdfc13a65da7f253b73d68983dc0339f2719bc17a279c913b13d
+FROM rust:1.100.0-slim-trixie@sha256:e9d95b74296f7126a83ae3d041aeaba1ff4c478f13abc5cc034fcf7c131c3d4a
 
 # Pinned binaryen release providing wasm-opt. Both the cargo toolchain and the
 # wasm-opt binary are part of the wasm's identity, so the wasm-opt version is

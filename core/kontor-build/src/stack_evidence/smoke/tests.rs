@@ -43,7 +43,7 @@ fn fixture(directory: &Path, cell: &str, target: &str, binary: &str) -> Value {
     fs::write(directory.join("tests.log"), group_log(TESTS)).unwrap();
     let mut report = json!({"schema_version":2, "cell":cell,"source_sha":"a".repeat(40),"lockfile_sha256":"b".repeat(64),
         "wasmtime_revision":FORK_REVISION,"binary":binary,"binary_sha256":"c".repeat(64),"cargo_log":"cargo.json",
-        "rustc_version_verbose":format!("rustc 1.99.1\nhost: {target}\n"),"wasmtime_features":features,"feature_logs":feature_logs(),"tests":tests});
+        "rustc_version_verbose":format!("rustc 1.100.0\nhost: {target}\n"),"wasmtime_features":features,"feature_logs":feature_logs(),"tests":tests});
     rehash(directory, &mut report);
     write_json(&directory.join("smoke.json"), &report).unwrap();
     report
@@ -137,7 +137,7 @@ fn smoke_rejects_stale_identity_profile_compiler_logs_and_test_results() {
         ("binary_sha256", json!("invalid")),
         (
             "rustc_version_verbose",
-            json!("rustc 1.99.1\nhost: aarch64-apple-darwin\n"),
+            json!("rustc 1.100.0\nhost: aarch64-apple-darwin\n"),
         ),
         (
             "rustc_version_verbose",
@@ -378,7 +378,7 @@ fn capture_uses_checkout_paths_filters_guest_overrides_and_invalidates_stale_suc
     );
     executable(
         &tools.join("rustc"),
-        "printf 'rustc 1.99.1\\nhost: x86_64-unknown-linux-gnu\\n'",
+        "printf 'rustc 1.100.0\\nhost: x86_64-unknown-linux-gnu\\n'",
     );
     let mut environment: Environment = env::vars().collect();
     environment.insert(

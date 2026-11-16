@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(inputs.matrix) }}
     env:
-      RUSTUP_TOOLCHAIN: '1.99.1'
+      RUSTUP_TOOLCHAIN: '1.100.0'
       RUSTC_WRAPPER: ''
       CCACHE_DISABLE: '1'
       CARGO_BUILD_JOBS: '2'
@@ -47,10 +47,10 @@ jobs:
         with:
           path: |
             core/target
-          key: rust-tests-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.99.1-${{ matrix.profile }}-${{ hashFiles('core/Cargo.lock', 'core/**/Cargo.toml', 'core/**/build.rs', 'core/.cargo/**') }}
+          key: rust-tests-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.100.0-${{ matrix.profile }}-${{ hashFiles('core/Cargo.lock', 'core/**/Cargo.toml', 'core/**/build.rs', 'core/.cargo/**') }}
           # Seed the new dependency cache from existing per-commit entries once.
           restore-keys: |
-            rust-tests-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.99.1-${{ matrix.profile }}-${{ hashFiles('core/Cargo.lock', 'core/**/Cargo.toml', 'core/**/build.rs', 'core/.cargo/**') }}-
+            rust-tests-v1-${{ steps.environment.outputs.image }}-${{ matrix.os }}-${{ runner.arch }}-1.100.0-${{ matrix.profile }}-${{ hashFiles('core/Cargo.lock', 'core/**/Cargo.toml', 'core/**/build.rs', 'core/.cargo/**') }}-
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |

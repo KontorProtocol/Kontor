@@ -198,7 +198,7 @@ pub fn parse_references(text: &str, darwin: bool) -> Result<References> {
                 .with_context(|| format!("unknown Darwin undefined-symbol attributes: {line}"))?;
             let name = captures.get(2).unwrap().as_str();
             (
-                name.strip_prefix('_').unwrap_or(name),
+                name.trim_prefix('_'),
                 if captures.get(1).is_some() { "w" } else { "U" },
             )
         } else {

@@ -5,29 +5,29 @@
     "repo": "Kontor",
     "commit": {
       "Sha1": [
-        157,
-        129,
-        187,
-        72,
-        47,
-        154,
-        206,
-        90,
+        95,
+        152,
+        248,
         19,
-        214,
-        60,
-        216,
-        67,
-        253,
-        59,
+        50,
+        169,
+        191,
+        74,
+        153,
         249,
-        21,
-        45,
-        239,
-        228
+        162,
+        193,
+        207,
+        35,
+        214,
+        139,
+        25,
+        206,
+        51,
+        48
       ]
     }
   },
-  "image": "docker.io/kontorprotocol/kontor-build@sha256:c6a881f42d4dc05483041271040d56abc8f0af18a448db7221846a0e8c6640f7",
+  "image": "docker.io/kontorprotocol/kontor-build@sha256:53f2be7d48a15f8fa92e1f9decdb514671ece3c7cfe26849f00383b60385ee39",
   "platform": "LinuxArm64"
 }

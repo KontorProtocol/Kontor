@@ -14,7 +14,7 @@ struct Challenge {
 #[automatically_derived]
 impl ::core::clone::Clone for Challenge {
     #[inline]
-    fn clone(&self) -> Challenge {
+    fn clone(&self) -> Self {
         Challenge {
             prover: ::core::clone::Clone::clone(&self.prover),
             status: ::core::clone::Clone::clone(&self.status),

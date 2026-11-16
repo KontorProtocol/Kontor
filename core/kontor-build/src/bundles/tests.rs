@@ -140,7 +140,7 @@ fn targets_require_supported_native_execution() -> Result<()> {
         "aarch64-unknown-linux-gnu",
         "aarch64-apple-darwin",
     ] {
-        let compiler = format!("rustc 1.99.1\nhost: {host}\nrelease: 1.99.1\n");
+        let compiler = format!("rustc 1.100.0\nhost: {host}\nrelease: 1.100.0\n");
         assert_eq!(native_target(&compiler, None)?, host);
         assert_eq!(native_target(&compiler, Some(host))?, host);
         assert!(native_target(&compiler, Some("wasm32-unknown-unknown")).is_err());

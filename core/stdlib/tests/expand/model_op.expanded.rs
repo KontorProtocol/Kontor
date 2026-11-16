@@ -15,7 +15,7 @@ pub enum OpModel<__S> {
     Mul(__OperandModelFor<__S>),
     Div(__OperandModelFor<__S>),
     #[doc(hidden)]
-    __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
+    __Phantom(core::marker::PhantomData<__S>, !),
 }
 #[doc(hidden)]
 pub type __OpModelFor<__S> = OpModel<__S>;
@@ -83,7 +83,7 @@ pub enum OpWriteModel<__S: stdlib::HasViewStorage> {
     Mul(__OperandWriteModelFor<__S>),
     Div(__OperandWriteModelFor<__S>),
     #[doc(hidden)]
-    __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
+    __Phantom(core::marker::PhantomData<__S>, !),
 }
 #[doc(hidden)]
 pub type __OpWriteModelFor<__S> = OpWriteModel<__S>;
@@ -153,7 +153,7 @@ struct Operand {
 #[automatically_derived]
 impl ::core::clone::Clone for Operand {
     #[inline]
-    fn clone(&self) -> Operand {
+    fn clone(&self) -> Self {
         Operand {
             y: ::core::clone::Clone::clone(&self.y),
         }

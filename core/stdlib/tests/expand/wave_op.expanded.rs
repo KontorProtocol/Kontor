@@ -96,7 +96,7 @@ struct Operand {
 #[automatically_derived]
 impl ::core::clone::Clone for Operand {
     #[inline]
-    fn clone(&self) -> Operand {
+    fn clone(&self) -> Self {
         Operand {
             y: ::core::clone::Clone::clone(&self.y),
         }
