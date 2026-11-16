@@ -16,7 +16,7 @@
       "bitcoin_height": "1",
       "checkpoint_hash": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
       "checkpoint_height": "1",
-      "execution_definition": "3f5bcdc973985ced93d0f7d98c56dbad36b36d624d0fed0610970dfb9caad7ef",
+      "execution_definition": "b2529cd8407d0a82b0150adc404940eb95dd4cdae6c3ed24514cb4e3b178b325",
       "lineage": "1111111111111111111111111111111111111111111111111111111111111111",
       "protocol_id": "1111111111111111111111111111111111111111111111111111111111111111",
       "receipt_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -29,7 +29,7 @@
       "bitcoin_height": "2",
       "checkpoint_hash": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
       "checkpoint_height": "2",
-      "execution_definition": "185a0931c7b71fdcf37c2dc6693b1bfbec082e55067468df00677415e35012a4",
+      "execution_definition": "388b5ea95e5bfd4900c56410f07412d9d266c97170cd98414ac0d94c05ab24b2",
       "lineage": "2222222222222222222222222222222222222222222222222222222222222222",
       "protocol_id": "2222222222222222222222222222222222222222222222222222222222222222",
       "receipt_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -42,7 +42,7 @@
       "bitcoin_height": "1",
       "checkpoint_hash": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
       "checkpoint_height": "1",
-      "execution_definition": "3f5bcdc973985ced93d0f7d98c56dbad36b36d624d0fed0610970dfb9caad7ef",
+      "execution_definition": "b2529cd8407d0a82b0150adc404940eb95dd4cdae6c3ed24514cb4e3b178b325",
       "lineage": "3333333333333333333333333333333333333333333333333333333333333333",
       "protocol_id": "1111111111111111111111111111111111111111111111111111111111111111",
       "receipt_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -55,7 +55,7 @@
       "bitcoin_height": "2",
       "checkpoint_hash": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
       "checkpoint_height": "2",
-      "execution_definition": "185a0931c7b71fdcf37c2dc6693b1bfbec082e55067468df00677415e35012a4",
+      "execution_definition": "388b5ea95e5bfd4900c56410f07412d9d266c97170cd98414ac0d94c05ab24b2",
       "lineage": "4444444444444444444444444444444444444444444444444444444444444444",
       "protocol_id": "2222222222222222222222222222222222222222222222222222222222222222",
       "receipt_epoch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -75,7 +75,7 @@
   "native_provenance": {
     "publication": {
       "effective_artifact": {
-        "execution_definition": "3f5bcdc973985ced93d0f7d98c56dbad36b36d624d0fed0610970dfb9caad7ef",
+        "execution_definition": "b2529cd8407d0a82b0150adc404940eb95dd4cdae6c3ed24514cb4e3b178b325",
         "protocol_id": "1111111111111111111111111111111111111111111111111111111111111111",
         "published_sha256": "f52c2bb311418814e58610da59155cf1a12d17cd1074036a1ece15751cc68d84",
         "sha256": "f52c2bb311418814e58610da59155cf1a12d17cd1074036a1ece15751cc68d84",
@@ -91,7 +91,7 @@
     "unaffected_native_uses_publication": true,
     "upgraded": {
       "effective_artifact": {
-        "execution_definition": "185a0931c7b71fdcf37c2dc6693b1bfbec082e55067468df00677415e35012a4",
+        "execution_definition": "388b5ea95e5bfd4900c56410f07412d9d266c97170cd98414ac0d94c05ab24b2",
         "protocol_id": "2222222222222222222222222222222222222222222222222222222222222222",
         "published_sha256": "f52c2bb311418814e58610da59155cf1a12d17cd1074036a1ece15751cc68d84",
         "sha256": "f52c2bb311418814e58610da59155cf1a12d17cd1074036a1ece15751cc68d84",

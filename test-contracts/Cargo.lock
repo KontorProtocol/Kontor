@@ -361,7 +361,6 @@ dependencies = [
 name = "numerics"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "fastnum",
  "num",
 ]
