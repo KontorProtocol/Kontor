@@ -853,8 +853,8 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
     );
 
     // Enum models are UNIFORMLY generic over the storage handle: payload
-    // models hold the handle, and the hidden `__Phantom` variant —
-    // uninstantiable via `Infallible` — keeps `__S` used even for unit-only
+    // models hold the handle, and the hidden `__Phantom` variant,
+    // uninstantiable via `!`, keeps `__S` used even for unit-only
     // enums (an unused parameter is E0392; a parameter-dropping alias is
     // E0091, so conditional genericity would force every cross-type referrer
     // to know each enum's shape).
@@ -870,7 +870,7 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
     };
     let phantom_variant = quote! {
         #[doc(hidden)]
-        __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
+        __Phantom(core::marker::PhantomData<__S>, !),
     };
     let phantom_load_arm = quote! { Self::__Phantom(_, i) => match *i {}, };
 

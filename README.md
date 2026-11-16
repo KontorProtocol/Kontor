@@ -68,7 +68,7 @@ If rust tooling is not installed follow steps from [rust-lang.org](https://rust-
 
 Host builds use Rust 1.100.0, pinned in CI and the linked-node builder. Install it with `rustup toolchain install 1.100.0 --component rustfmt,clippy,llvm-tools-preview`. For local Cargo commands, select it with `RUSTUP_TOOLCHAIN=1.100.0` (including when using the shared `local-build` helper).
 
-Reproducible contract and SDK component generation uses the separately pinned image in `tools/build.json`. Its compiler and existing artifact provenance remain unchanged by a host toolchain upgrade. A repository-wide toolchain override would also affect that mounted container, so host selection stays explicit.
+Reproducible contract and SDK component generation also uses Rust 1.100.0, through the published image pinned in `tools/build.json`. Keep the host and reproducible build compiler versions aligned when upgrading Rust, regenerate the outputs, and verify them with `./tools/kontor build --check`. Host selection stays explicit so local toolchain overrides cannot silently replace the compiler pinned inside the build container.
 
 Add wasm compile target:
 ```bash

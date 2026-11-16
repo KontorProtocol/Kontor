@@ -87,7 +87,7 @@ impl<K: KeyElement + Clone + 'static, S: ReadStorage + 'static, V> KeyRange<K, S
     }
 
     pub fn rev(mut self) -> Self {
-        self.descending = !self.descending;
+        self.descending.toggle();
         self
     }
 
@@ -206,7 +206,7 @@ where
         self.len() == 0
     }
     pub fn rev(mut self) -> Self {
-        self.descending = !self.descending;
+        self.descending.toggle();
         self
     }
     pub fn range(self, range: impl RangeBounds<K>) -> KeyRange<K, Src::Storage> {
@@ -303,7 +303,7 @@ where
         self.len() == 0
     }
     pub fn rev(mut self) -> Self {
-        self.descending = !self.descending;
+        self.descending.toggle();
         self
     }
     pub fn range(self, range: impl RangeBounds<T>) -> SortedRange<K, T, Src::Storage> {
@@ -411,7 +411,7 @@ where
         self.len() == 0
     }
     pub fn rev(mut self) -> Self {
-        self.descending = !self.descending;
+        self.descending.toggle();
         self
     }
     pub fn range(self, range: impl RangeBounds<K>) -> CoveringRange<K, V, Src::Storage> {
@@ -532,7 +532,7 @@ where
         self.len() == 0
     }
     pub fn rev(mut self) -> Self {
-        self.descending = !self.descending;
+        self.descending.toggle();
         self
     }
     pub fn range(self, range: impl RangeBounds<T>) -> SortedCoveringRange<K, T, V, Src::Storage> {
