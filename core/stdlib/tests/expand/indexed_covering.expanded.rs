@@ -1021,7 +1021,7 @@ pub struct ListingCheapestValue {
 #[automatically_derived]
 impl ::core::clone::Clone for ListingCheapestValue {
     #[inline]
-    fn clone(&self) -> ListingCheapestValue {
+    fn clone(&self) -> Self {
         ListingCheapestValue {
             price: ::core::clone::Clone::clone(&self.price),
             title: ::core::clone::Clone::clone(&self.title),
@@ -1050,7 +1050,7 @@ impl ::core::marker::StructuralPartialEq for ListingCheapestValue {}
 #[automatically_derived]
 impl ::core::cmp::PartialEq for ListingCheapestValue {
     #[inline]
-    fn eq(&self, other: &ListingCheapestValue) -> bool {
+    fn eq(&self, other: &Self) -> bool {
         self.price == other.price && self.seller == other.seller
             && self.title == other.title
     }
@@ -1079,7 +1079,7 @@ pub struct ListingBySellerValue {
 #[automatically_derived]
 impl ::core::clone::Clone for ListingBySellerValue {
     #[inline]
-    fn clone(&self) -> ListingBySellerValue {
+    fn clone(&self) -> Self {
         ListingBySellerValue {
             price: ::core::clone::Clone::clone(&self.price),
         }
@@ -1102,7 +1102,7 @@ impl ::core::marker::StructuralPartialEq for ListingBySellerValue {}
 #[automatically_derived]
 impl ::core::cmp::PartialEq for ListingBySellerValue {
     #[inline]
-    fn eq(&self, other: &ListingBySellerValue) -> bool {
+    fn eq(&self, other: &Self) -> bool {
         self.price == other.price
     }
 }

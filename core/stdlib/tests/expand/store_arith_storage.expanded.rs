@@ -16,14 +16,14 @@ enum Op {
 #[automatically_derived]
 impl ::core::clone::Clone for Op {
     #[inline]
-    fn clone(&self) -> Op {
+    fn clone(&self) -> Self {
         Op::Id
     }
 }
 pub enum OpModel<__S> {
     Id,
     #[doc(hidden)]
-    __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
+    __Phantom(core::marker::PhantomData<__S>, !),
 }
 #[doc(hidden)]
 pub type __OpModelFor<__S> = OpModel<__S>;
@@ -64,7 +64,7 @@ impl<__S: stdlib::ReadStorage + 'static> OpModel<__S> {
 pub enum OpWriteModel<__S: stdlib::HasViewStorage> {
     Id,
     #[doc(hidden)]
-    __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
+    __Phantom(core::marker::PhantomData<__S>, !),
 }
 #[doc(hidden)]
 pub type __OpWriteModelFor<__S> = OpWriteModel<__S>;

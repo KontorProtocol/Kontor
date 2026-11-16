@@ -13,7 +13,7 @@ struct Agreement {
 #[automatically_derived]
 impl ::core::clone::Clone for Agreement {
     #[inline]
-    fn clone(&self) -> Agreement {
+    fn clone(&self) -> Self {
         Agreement {
             active: ::core::clone::Clone::clone(&self.active),
             challenge: ::core::clone::Clone::clone(&self.challenge),

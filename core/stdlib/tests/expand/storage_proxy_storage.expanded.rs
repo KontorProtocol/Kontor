@@ -134,7 +134,7 @@ struct ContractAddress {
 #[automatically_derived]
 impl ::core::clone::Clone for ContractAddress {
     #[inline]
-    fn clone(&self) -> ContractAddress {
+    fn clone(&self) -> Self {
         ContractAddress {
             name: ::core::clone::Clone::clone(&self.name),
             height: ::core::clone::Clone::clone(&self.height),

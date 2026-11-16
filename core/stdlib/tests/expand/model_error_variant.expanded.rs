@@ -6,7 +6,7 @@ enum Error {
 pub enum ErrorModel<__S> {
     Message(String),
     #[doc(hidden)]
-    __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
+    __Phantom(core::marker::PhantomData<__S>, !),
 }
 #[doc(hidden)]
 pub type __ErrorModelFor<__S> = ErrorModel<__S>;
@@ -52,7 +52,7 @@ impl<__S: stdlib::ReadStorage + 'static> ErrorModel<__S> {
 pub enum ErrorWriteModel<__S: stdlib::HasViewStorage> {
     Message(String),
     #[doc(hidden)]
-    __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
+    __Phantom(core::marker::PhantomData<__S>, !),
 }
 #[doc(hidden)]
 pub type __ErrorWriteModelFor<__S> = ErrorWriteModel<__S>;
