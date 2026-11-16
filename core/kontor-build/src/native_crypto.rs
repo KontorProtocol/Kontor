@@ -246,12 +246,11 @@ pub fn qualify(root: &Path, args: QualifyArgs) -> Result<String> {
         .arg(&executable);
     for graph in &graphs {
         link.arg("--extern")
-            .arg(format!("crypto_{}={}", graph.graph, graph.facade.display()))
-            .arg("-L")
-            .arg(format!(
-                "dependency={}",
-                graph.project.join("target/release/deps").display()
-            ));
+            .arg(format!("crypto_{}={}", graph.graph, graph.facade.display()));
+        for directory in &graph.dependency_directories {
+            link.arg("-L")
+                .arg(format!("dependency={}", directory.display()));
+        }
     }
     run(&mut link, &output.join("link.log"))?;
     symbols::audit_final(&executable, &graphs, &names, &output)?;

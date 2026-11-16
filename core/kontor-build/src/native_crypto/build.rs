@@ -19,6 +19,7 @@ pub(super) struct Graph {
     pub native: BTreeMap<String, PathBuf>,
     pub inputs: BTreeSet<PathBuf>,
     pub facade: PathBuf,
+    pub dependency_directories: BTreeSet<PathBuf>,
     pub lock_sha256: String,
 }
 
@@ -41,6 +42,30 @@ enum Message {
 #[derive(Deserialize)]
 struct Target {
     name: String,
+}
+
+fn dependency_directories(messages: &[Message]) -> Result<BTreeSet<PathBuf>> {
+    // Cargo 1.100 splits library outputs across compilation units. Proc-macro
+    // libraries remain needed for metadata loading even in the final host link.
+    messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::Artifact { filenames, .. } => Some(filenames),
+            _ => None,
+        })
+        .flatten()
+        .filter(|path| {
+            matches!(
+                path.extension().and_then(|ext| ext.to_str()),
+                Some("rlib" | "so" | "dylib" | "dll")
+            )
+        })
+        .map(|path| {
+            path.parent()
+                .map(Path::to_path_buf)
+                .context("library parent directory")
+        })
+        .collect()
 }
 
 fn messages(log: &Path) -> Result<Vec<Message>> {
@@ -273,13 +298,12 @@ pub(super) fn build(
                 .context("unknown build-script package")?
                 .name;
             if CRATES.contains(&name.as_str()) {
-                fs::copy(
-                    out_dir
-                        .parent()
-                        .context("build-script parent")?
-                        .join("output"),
-                    project.join(format!("native-{name}.log")),
-                )?;
+                let stdout = out_dir
+                    .parent()
+                    .context("build-script parent")?
+                    .join("run/stdout");
+                fs::copy(&stdout, project.join(format!("native-{name}.log")))
+                    .with_context(|| format!("copy build-script stdout {}", stdout.display()))?;
             }
         }
     }
@@ -299,6 +323,7 @@ pub(super) fn build(
         native,
         inputs,
         facade,
+        dependency_directories: dependency_directories(&messages)?,
         lock_sha256,
     })
 }

@@ -3,6 +3,35 @@ use serde_json::json;
 use tempfile::tempdir;
 
 #[test]
+fn dependency_search_includes_reported_proc_macros_and_unit_libraries() -> Result<()> {
+    let messages = vec![Message::Artifact {
+        target: Target {
+            name: "crypto_first".into(),
+        },
+        filenames: [
+            "release/libcrypto_first.rlib",
+            "release/build/ring/unit/out/libring.rlib",
+            "release/build/derive/linux/out/libderive.so",
+            "release/build/derive/macos/out/libderive.dylib",
+            "release/vector-output",
+            "release/build/script/out/libnative.a",
+        ]
+        .map(PathBuf::from)
+        .into(),
+    }];
+    assert_eq!(
+        dependency_directories(&messages)?,
+        BTreeSet::from([
+            PathBuf::from("release"),
+            PathBuf::from("release/build/ring/unit/out"),
+            PathBuf::from("release/build/derive/linux/out"),
+            PathBuf::from("release/build/derive/macos/out"),
+        ])
+    );
+    Ok(())
+}
+
+#[test]
 fn lock_allows_only_facade_and_exact_source_packages() -> Result<()> {
     let dir = tempdir()?;
     let source = dir.path().join("source.lock");
