@@ -23,10 +23,13 @@ use super::executor::RuntimeExecutor;
 use crate::bitcoin_follower::block::BlockInput;
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Ctx, Height, Value as ConsensusValue};
-use crate::database::certified_history::{self, closure, reconcile, work};
+use crate::database::certified_history::{self, closure, reconcile, replay, work};
 use crate::database::confirmation::get_confirmation_position;
 use crate::database::connection::new_connection;
-use crate::database::queries::{executed_wtxid, get_transaction_by_txid};
+use crate::database::queries::{
+    executed_wtxid, get_transaction_by_txid, insert_batch, insert_excluded_batch_txids,
+    select_applicable_exclusions, select_decision_exclusions,
+};
 use crate::database::receipt_stream::{recovery_boundary, stream_state};
 use crate::protocol::canonical_application::ApplicationSource;
 use crate::protocol::coordinator::application_closure::WorkItem;
@@ -200,6 +203,68 @@ fn certified_confirmation_block(
     certified_fixture::block(2, parent, position as u32, transactions)
 }
 
+async fn assert_exact_confirmation_owner_binding(
+    conn: &Connection,
+    raw: &Transaction,
+    anchor: BlockHash,
+    verdict: u64,
+) -> Result<()> {
+    let txid = raw.compute_txid().to_string();
+    let before = closure::recover(conn, verdict).await?;
+    let row = get_transaction_by_txid(conn, &txid)
+        .await?
+        .context("confirmed batch execution")?;
+    assert_eq!(row.batch_height, Some(2));
+    assert_eq!(row.confirmed_height, Some(2));
+    assert_eq!(
+        executed_wtxid(conn, row.id).await?,
+        Some(raw.compute_wtxid())
+    );
+    let retained = certified_history::load_verified_input(conn, 2).await?;
+    assert_eq!(retained.input().transactions()?, from_ref(raw));
+
+    // Vary only attribution, keeping real certified input and executed witness
+    // authority. Missing authority must not make the owner-mismatch case pass.
+    conn.execute_batch("SAVEPOINT confirmation_owner").await?;
+    insert_batch(conn, 99, 1, &anchor.to_string(), b"foreign-owner", false).await?;
+    insert_excluded_batch_txids(conn, &[(2, txid.clone(), 7)]).await?;
+    for (owner, excluded) in [
+        (Some(2_i64), false),
+        (Some(99), true),
+        (None, false),
+        (Some(2), false),
+    ] {
+        conn.execute(
+            "UPDATE transactions SET batch_height=?1 WHERE txid=?2",
+            params![owner, txid.clone()],
+        )
+        .await?;
+        assert_eq!(
+            select_decision_exclusions(conn, 2).await?.contains(&txid),
+            excluded,
+            "decision exclusion with owner {owner:?}"
+        );
+        assert_eq!(
+            select_applicable_exclusions(conn)
+                .await?
+                .get(&2)
+                .is_some_and(|ids| ids.contains(&txid)),
+            excluded,
+            "applicable exclusion with owner {owner:?}"
+        );
+        let page = replay::exclusion_page(conn, verdict, None).await?;
+        assert_eq!(page.entries.len(), usize::from(excluded));
+        if excluded {
+            assert_eq!(page.entries[0].decision, 2);
+            assert_eq!(page.entries[0].txid, txid);
+        }
+    }
+    conn.execute_batch("ROLLBACK TO confirmation_owner; RELEASE confirmation_owner")
+        .await?;
+    assert_eq!(closure::recover(conn, verdict).await?, before);
+    Ok(())
+}
+
 async fn run_case(batched: bool, conflict: bool) -> Result<()> {
     let owner = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&[71; 32])?);
     let key = PrivateKey::from([17; 32]);
@@ -348,6 +413,7 @@ async fn run_case(batched: bool, conflict: bool) -> Result<()> {
         let applied = effects(&conn).await?;
         assert_ne!(applied, original);
         if batched {
+            assert_exact_confirmation_owner_binding(&conn, &raw, anchor, height).await?;
             assert_eq!(
                 applied, before_confirmation,
                 "confirmation must not execute or charge again"
@@ -500,6 +566,51 @@ async fn run_conflict_case(replace_conflict: bool, resume_planner: bool) -> Resu
                 .is_some()
         );
 
+        let unaffected = if resume_planner {
+            let raw = signed_launch_transaction(
+                &owner,
+                Insts::direct(vec![Inst {
+                    gas_limit: 100_000,
+                    kind: InstKind::Publish {
+                        name: "unaffected-replay".into(),
+                        bytes: include_bytes!(
+                            "../../../../test-contracts/binaries/error_test.wasm.br"
+                        )
+                        .to_vec(),
+                        provenance: sample_provenance(),
+                    },
+                }]),
+                OutPoint {
+                    txid: Txid::from_byte_array([3; 32]),
+                    vout: 0,
+                },
+                TxOut {
+                    value: Amount::ZERO,
+                    script_pubkey: ScriptBuf::new(),
+                },
+            )?;
+            let txid = raw.compute_txid().to_string();
+            let wtxid = raw.compute_wtxid();
+            let value = ConsensusValue::new_batch_raw(
+                reactor.consensus.protocol_context,
+                1,
+                anchor,
+                vec![raw],
+            )?;
+            let (decision, next) = start_decision(&mut reactor, value).await?;
+            finish_decision(&mut reactor, decision, next).await?;
+            assert!(
+                conn.query("SELECT 1 FROM contracts WHERE name='unaffected-replay'", ())
+                    .await?
+                    .next()
+                    .await?
+                    .is_some()
+            );
+            Some((decision, txid, wtxid))
+        } else {
+            None
+        };
+
         let conflict = certified_fixture::block(2, anchor, 0, vec![replacement]);
         let conflict_hash = conflict.hash;
         let value =
@@ -537,7 +648,22 @@ async fn run_conflict_case(replace_conflict: bool, resume_planner: bool) -> Resu
                 closure::recover(&reopened, height).await?,
                 closure::progress(&conn, height).await?
             );
+            let (unaffected_decision, unaffected_txid, unaffected_wtxid) =
+                unaffected.as_ref().context("missing unaffected batch")?;
+            assert!(
+                get_transaction_by_txid(&conn, unaffected_txid)
+                    .await?
+                    .is_none()
+            );
+            assert!(
+                conn.query("SELECT 1 FROM contracts WHERE name='unaffected-replay'", ())
+                    .await?
+                    .next()
+                    .await?
+                    .is_none()
+            );
             let mut checked_frozen = false;
+            let mut checked_empty = false;
             for _ in 0..8 {
                 let pending = closure::progress(&conn, height).await?;
                 if let Some((WorkItem::Replay { decision, input }, _)) = pending.next {
@@ -556,6 +682,55 @@ async fn run_conflict_case(replace_conflict: bool, resume_planner: bool) -> Resu
                         anyhow::bail!("frozen replay is not a batch");
                     };
                     let original = retained.input().transactions()?;
+                    if decision == *unaffected_decision {
+                        assert!(
+                            checked_frozen,
+                            "unaffected replay must follow the conflicting batch"
+                        );
+                        assert_eq!(original.len(), 1);
+                        assert_eq!(original[0].compute_txid().to_string(), *unaffected_txid);
+                        assert!(frozen.exclusions.direct.is_empty());
+                        assert!(frozen.exclusions.effective.is_empty());
+                        assert!(frozen.dropped_positions.is_empty());
+                        assert_eq!(frozen.transactions(&original)?, original);
+                        assert!(matches!(
+                            reactor.execution.step_certified_closure(height).await?,
+                            ExecutionStep::Batch { .. }
+                        ));
+                        let replayed = closure::stage(&conn, height, pending.stage + 1).await?;
+                        let [application] = replayed.applications.as_slice() else {
+                            anyhow::bail!("missing unaffected batch application");
+                        };
+                        let ApplicationSource::Batch { exclusions, .. } = &application.source
+                        else {
+                            anyhow::bail!("wrong unaffected application kind");
+                        };
+                        assert_eq!(exclusions, &frozen.exclusions);
+                        let row = get_transaction_by_txid(&conn, unaffected_txid)
+                            .await?
+                            .context("empty-exclusion replay did not execute")?;
+                        assert_eq!(row.batch_height, Some(decision));
+                        assert_eq!(
+                            executed_wtxid(&conn, row.id).await?,
+                            Some(*unaffected_wtxid)
+                        );
+                        assert!(
+                            conn.query(
+                                "SELECT 1 FROM contracts WHERE name='unaffected-replay'",
+                                ()
+                            )
+                            .await?
+                            .next()
+                            .await?
+                            .is_some()
+                        );
+                        assert_eq!(
+                            closure::recover(&reopened, height).await?,
+                            closure::progress(&conn, height).await?
+                        );
+                        checked_empty = true;
+                        break;
+                    }
                     assert!(!frozen.exclusions.direct.is_empty());
                     for txid in &frozen.exclusions.direct {
                         assert!(
@@ -603,13 +778,17 @@ async fn run_conflict_case(replace_conflict: bool, resume_planner: bool) -> Resu
                     };
                     assert_eq!(exclusions, &frozen.exclusions);
                     checked_frozen = true;
-                    break;
+                    continue;
                 }
                 reactor.execution.step_certified_closure(height).await?;
             }
             assert!(
                 checked_frozen,
                 "conflict fixture did not consume a frozen replay input"
+            );
+            assert!(
+                checked_empty,
+                "conflict fixture did not execute an empty-exclusion replay"
             );
         }
         finish_decision(&mut reactor, height, next).await?;
